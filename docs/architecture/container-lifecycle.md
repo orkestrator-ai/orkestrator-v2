@@ -1368,6 +1368,71 @@ many containers run the 1 s poll (`fallback`), lifetime demotions by reason
 content-free: no container id. The demotion log line still names the
 container.
 
+A poll is adopted for every running container, but it runs the 1 s cadence
+only while the container can run terminal Claude: a terminal shell in it or a
+claude-tmux tab of its environment (`terminalClaudeDemand`, re-evaluated by the
+2 s reconciliation). Otherwise, after one read on adoption that settles any
+stale stored state, it keeps the 30 s safety read even on an image without the
+doorbell, since nothing in the container can write the state file (to-do 1202,
+BG-7). A terminal or tab opening reads at once and returns to 1 s.
+
+## claude-tmux hook doorbell (`tmux-hook-signal=1`)
+
+A claude-tmux tab learns about hooks from files its hook script writes into
+the session's `pending` and `timeout` directories. Its poll loop
+(`TmuxSession.spawnPollLoop`) reads them, the transcript size, the expected
+transcript (`<session id>.jsonl`, so an unbound tab binds without a search),
+`tmux has-session` and, when due, the pane in **one** `docker exec`
+(`pollSnapshotScript`). The pane is framed by a per-call nonce, because it is
+the one section container output can fill with arbitrary text.
+
+On an image with the capability, the container's hook script runs
+`orkestrator-state-signal hook` after writing a hook file. That rings
+`/tmux-hook-signal` with a per-container credential from its own config,
+`/tmp/.orkestrator-tmux-hook-signal`, and writes no Claude state.
+`TmuxHookSignalManager` (`tmux-hook-signal.ts`) arms it as the Claude state
+signal is armed (capability check, host preparation, config from stdin, probe
+ring) once per container, and a ring wakes every tab loop of that container.
+
+| Tab state | Doorbell confirmed | Cadence |
+| --- | --- | --- |
+| Busy, or within eight quiet ticks of activity | either | one snapshot every 250 ms |
+| Idle | no (older image, unarmed, demoted) | one snapshot a second; liveness every other one |
+| Idle | yes | a ring reads at once; otherwise one safety snapshot every 2.5 s with liveness and the pane (`TMUX_SIGNALLED_IDLE_INTERVAL_MS`) |
+
+A ring only ends a wait early, and a woken loop still keeps 250 ms after its
+previous read, so a container can never cause more reads than the per-tick
+poll. A safety read that finds a hook file no ring announced, with still no
+ring by the next read, revokes the credential (`missed-change`); the container
+is armed again after 5 min. Diagnostics report it as the `tmux-hook-signal`
+signal source. Host tabs have no doorbell (their listings are syscalls).
+
+Measured with `apps/backend/scripts/tmux-exec-count.ts` (the real loop against
+a fake container, 600 simulated seconds per tab): idle 1.85 execs/s before,
+1.01/s on an older image and 0.42/s with the doorbell; unbound idle 2.57/s,
+1.12/s and 0.52/s; busy 6.50/s and 4.00/s.
+`apps/backend/tests/tmux-hook-signal-docker.test.ts` proves the image side and
+counts a real idle tab: 4 execs in 10 s.
+
+## Container lifecycle events
+
+The backend's `docker events` follower (`container-oom-events.ts`) reports
+`start`, `die`, `stop` and `destroy` for its own containers. Each event
+invalidates the shared `docker ps` snapshot, and `ContainerLifecycleReactor`
+(`container-lifecycle-events.ts`) acts on it:
+
+- On `die`, `stop` or `destroy`, the loops keyed by the container retire at
+  once: its Claude state poll and tmux hook doorbell, and every tmux tab in it,
+  which checks liveness on its next read and leaves through its stopped path.
+- Unless a lifecycle operation owns the environment, its stored status is
+  reconciled with one `docker inspect` (`syncStoredEnvironmentStatus`), then
+  the diff and PR loops and the Claude state polls reconcile against storage.
+  A start outside the app re-adopts them the same way.
+
+Events for one container coalesce, so a `die`/`stop`/`destroy` burst
+reconciles at most twice. A replayed event after a follower restart is a
+second reconciliation and nothing more.
+
 ## Container worktree signal (`container-worktree-signal=1`)
 
 A container's Files panel and diff counts have no host-side watcher. Without

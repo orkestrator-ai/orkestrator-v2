@@ -1161,8 +1161,16 @@ are skipped without one:
 ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
   bun test apps/backend/tests/claude-state-signal-docker.test.ts \
   apps/backend/tests/claude-terminal-failed-turn-docker.test.ts \
-  apps/backend/tests/container-worktree-signal-docker.test.ts
+  apps/backend/tests/container-worktree-signal-docker.test.ts \
+  apps/backend/tests/tmux-hook-signal-docker.test.ts
 ```
+
+`tmux-hook-signal-docker.test.ts` proves the claude-tmux hook doorbell
+(to-do 1202, task 8) with a fake doorbell on the container's loopback: the
+manifest declares `tmux-hook-signal=1`, the install's probe and the hook
+script's ring arrive with the right token, and a real tab loop against a real
+tmux session in the container stays within six execs in 10 s idle. Like the
+failed-turn test it needs no route from the container to the host.
 
 `claude-terminal-failed-turn-docker.test.ts` runs the image's own Claude CLI,
 with the hooks its entrypoint installs, against a fake API on the container's
@@ -1171,7 +1179,7 @@ normal turn must still ring `agent_waiting` (to-do 1200). It reads through
 `docker exec` only, so unlike the other two it also passes on a host whose
 containers cannot reach the backend.
 
-The Linux Engine workflow runs all three tests and the exec-cost script on every
+The Linux Engine workflow runs all four tests and the exec-cost script on every
 run (`exec-cost-<platform>.json` in the benchmark artifact). The worktree
 test's `change-to-scan` line is not a clean latency: it follows a writer
 whose close rang just before, so it likely waits out part of the 2 s hint

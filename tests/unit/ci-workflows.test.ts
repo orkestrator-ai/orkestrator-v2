@@ -131,6 +131,7 @@ describe("CI workflow contracts", () => {
       "claude-state-signal-docker",
       "claude-terminal-failed-turn-docker",
       "container-worktree-signal-docker",
+      "tmux-hook-signal-docker",
     ])
       expect(source).toContain(`./tests/${suite}.test.ts --parallel=1`);
     expect(source).toContain(

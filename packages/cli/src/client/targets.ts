@@ -1,4 +1,5 @@
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isIPv4 } from "node:net";
 import {
@@ -118,18 +119,85 @@ export async function readTokenFile(file: string, requirePrivate: boolean): Prom
   return token.trim();
 }
 
-export async function readDescriptor(file: string): Promise<BackendInstanceDescriptor> {
-  let text: string;
+/**
+ * Why a descriptor file must not be trusted, or null when it may be. The
+ * descriptor names the URL the client sends the bearer token to, so it has to
+ * come from the current user's own backend: owned by that user, with no
+ * permission bits for anyone else (the backend publishes it mode 0600). A
+ * platform without POSIX ownership (`currentUid` undefined) skips both checks.
+ */
+export function descriptorTrustRefusal(
+  stat: { uid: number; mode: number },
+  currentUid: number | undefined,
+): string | null {
+  if (currentUid === undefined) return null;
+  if (stat.uid !== currentUid) {
+    return `it is owned by another user (uid ${stat.uid}, you are uid ${currentUid})`;
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    return `it is accessible to other users (mode ${(stat.mode & 0o777).toString(8).padStart(4, "0")}); if your own backend published it, restrict it with chmod 600`;
+  }
+  return null;
+}
+
+// O_NOFOLLOW refuses a symlink at the final component; O_NONBLOCK keeps a FIFO
+// planted in its place from blocking the open. Both are absent on Windows.
+const DESCRIPTOR_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+
+/** Marks a descriptor that exists but was refused, as opposed to one that is absent. */
+const UNTRUSTED_DESCRIPTOR = "untrusted";
+
+function refuseDescriptor(file: string, reason: string): CliError {
+  return new CliError(
+    "connection-failed",
+    `Refusing to use the backend instance descriptor ${file}: ${reason}`,
+    { details: { descriptor: UNTRUSTED_DESCRIPTOR } },
+  );
+}
+
+/** True for a descriptor that was present but refused; callers must not fall back past it. */
+export function isDescriptorRefusal(error: unknown): boolean {
+  return error instanceof CliError && error.details?.descriptor === UNTRUSTED_DESCRIPTOR;
+}
+
+export async function readDescriptor(
+  file: string,
+  currentUid: number | undefined = process.getuid?.(),
+): Promise<BackendInstanceDescriptor> {
+  let handle: FileHandle;
   try {
-    const stat = await fs.lstat(file);
-    if (!stat.isFile()) throw new Error("not a file");
-    if (stat.size > BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES) throw new Error("too large");
-    text = await fs.readFile(file, "utf8");
-  } catch {
+    handle = await fs.open(file, DESCRIPTOR_OPEN_FLAGS);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw refuseDescriptor(file, "it is a symbolic link, not a regular file");
+    }
     throw new CliError(
       "connection-failed",
       `No running backend published ${path.basename(file)} at the selected location`,
     );
+  }
+  let text: string;
+  try {
+    // Checked on the opened file, so a swap after the check cannot change
+    // what is read.
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw refuseDescriptor(file, "it is not a regular file");
+    const refusal = descriptorTrustRefusal(stat, currentUid);
+    if (refusal) throw refuseDescriptor(file, refusal);
+    if (stat.size > BACKEND_INSTANCE_DESCRIPTOR_MAX_BYTES) {
+      throw refuseDescriptor(file, "it is too large");
+    }
+    text = await handle.readFile("utf8");
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    throw new CliError(
+      "connection-failed",
+      `No running backend published ${path.basename(file)} at the selected location`,
+    );
+  } finally {
+    await handle.close();
   }
   try {
     return parseBackendInstanceDescriptor(JSON.parse(text));
@@ -141,12 +209,17 @@ export async function readDescriptor(file: string): Promise<BackendInstanceDescr
   }
 }
 
+/**
+ * Whether `pid` is a live process this user can signal. `EPERM` means the pid
+ * now belongs to another user, so it is not our backend: counting it as alive
+ * would let a stale descriptor send the token to whoever took over its port.
+ */
 export function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+  } catch {
+    return false;
   }
 }
 
@@ -160,7 +233,7 @@ function descriptorTarget(
   if (!processIsAlive(descriptor.pid)) {
     throw new CliError(
       "connection-failed",
-      `The backend for ${kind} '${name}' is not running (its descriptor is stale)`,
+      `The backend for ${kind} '${name}' is not running as your user (its descriptor is stale)`,
     );
   }
   if (expectedInstallationId && descriptor.installationId !== expectedInstallationId) {
@@ -283,7 +356,12 @@ export async function resolveProfile(
   const refresh = () => resolveProfile(profileName, env);
   if (manifest.dataDir) {
     const descriptorFile = path.join(manifest.dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE);
-    const descriptor = await readDescriptor(descriptorFile).catch(() => null);
+    // A missing descriptor means a backend that predates it; a refused one
+    // must stop here rather than fall back to the manifest's endpoint.
+    const descriptor = await readDescriptor(descriptorFile).catch((error: unknown) => {
+      if (isDescriptorRefusal(error)) throw error;
+      return null;
+    });
     if (descriptor) {
       if (descriptor.pid !== backendPid) {
         throw new CliError(

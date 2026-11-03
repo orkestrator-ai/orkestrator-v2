@@ -78,6 +78,16 @@ listener starts, stops or fails to bind. It is removed on graceful shutdown if
 it still describes that generation. A descriptor whose PID is gone is stale and
 is refused.
 
+The descriptor decides where the client sends the bearer token, so the client
+trusts only one its own user's backend could have written. On POSIX hosts it
+opens the file without following a symlink and refuses it (`connection-failed`,
+naming the file and the reason) when it is not a regular file, is owned by
+another user, or has any group or other permission bit set. A refused
+descriptor is never skipped: a profile whose descriptor is refused does not
+fall back to the manifest's endpoint. A PID that answers `EPERM` belongs to
+another user, so it counts as gone: a stale descriptor whose port a co-tenant
+now holds is refused rather than handed the token.
+
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;
 the client rejects an answer from a different installation than the one it

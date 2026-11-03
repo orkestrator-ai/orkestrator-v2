@@ -749,7 +749,13 @@ export function statusOnNode(
   return {
     ...status,
     details: [`Runs on ${nodeName} (nodeId ${nodeId}).`, ...status.details],
-    tools: status.tools.map((tool) => tool.replace(/^(\w+) \{ /, `$1 { "nodeId": "${nodeId}", `)),
+    tools: status.tools.map((tool) =>
+      tool.replace(
+        /^(\w+) \{\s*/,
+        (_match, name: string) =>
+          `${name} { "nodeId": ${JSON.stringify(nodeId)}${/^\w+ \{\s*\}/.test(tool) ? " " : ", "}`,
+      ),
+    ),
   };
 }
 

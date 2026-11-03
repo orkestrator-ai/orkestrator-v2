@@ -14,9 +14,10 @@ import { prReadingFrom, WORKER_OUTCOME_AWARENESS } from "./coordinator-pr-status
 import type { CoordinatorRemoteAccess, RemotePullRequestReading } from "./coordinator-remote.js";
 import {
   COORDINATOR_STATUS_COALESCE_MS,
+  statusOnNode,
   type CoordinatorStatusWakeTimers,
 } from "./coordinator-status-wakes.js";
-import { workerOutcomeNotice } from "./coordinator-worker-outcomes.js";
+import { CoordinatorWorkerOutcomes, workerOutcomeNotice } from "./coordinator-worker-outcomes.js";
 import type { Environment } from "./models.js";
 
 class ManualTimers implements CoordinatorStatusWakeTimers {
@@ -189,10 +190,7 @@ describe("worker outcome wakes", () => {
       prUrl: PR_URL,
       prState: "open",
     });
-    await settle(current);
-    expect(current.wakes(coordinator)).toBe(0);
-
-    // The merge write and the deletion land before any observation runs.
+    // The merge and deletion precede even the first pipeline worker discovery.
     await current.storage.updateEnvironment(worker.environmentId, { prState: "merged" });
     await deleteWorker(current, worker);
     await settle(current);
@@ -234,6 +232,50 @@ describe("worker outcome wakes", () => {
     expect(deleted!.body).toContain(WORKER_OUTCOME_AWARENESS);
   });
 
+  test("an open-PR deletion with a live PR follow produces exactly one deletion notice", async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("follow-open-delete");
+    await delegated(current, worker, "launch-follow-open-delete");
+    await current.storage.coordinators.followCoordinatorPullRequest({
+      projectId: current.projectId,
+      coordinatorId: current.coordinatorId,
+      conversationId: coordinator.conversationId!,
+      environmentId: worker.environmentId,
+      requestId: "follow-open-delete",
+      source: "create-pr",
+    });
+    await current.storage.updateEnvironment(worker.environmentId, {
+      prUrl: PR_URL,
+      prState: "open",
+    });
+    await settle(current);
+    await current.finishTurn(coordinator);
+    await deleteWorker(current, worker);
+    await settle(current);
+    await current.restart();
+    await settle(current);
+    expect(states(current, coordinator).filter((state) => state === "deleted")).toEqual([
+      "deleted",
+    ]);
+  });
+
+  for (const prState of ["merged", "closed"] as const) {
+    test(`first observation reports an immediate ${prState} outcome`, async () => {
+      const current = await createWorld();
+      const coordinator = await current.main();
+      const worker = await current.addEnvironment("immediate-outcome");
+      await delegated(current, worker, "immediate");
+      await current.storage.updateEnvironment(worker.environmentId, { prUrl: PR_URL, prState });
+      await settle(current);
+      await current.restart();
+      await settle(current);
+      expect(states(current, coordinator)).toEqual([
+        prState === "merged" ? "pr-merged" : "pr-closed",
+      ]);
+    });
+  }
+
   test("a merge a PR follow reports is not reported a second time", async () => {
     const current = await createWorld();
     const coordinator = await current.main();
@@ -262,7 +304,7 @@ describe("worker outcome wakes", () => {
     expect(states(current, coordinator)).toEqual(["pr-opened", "pr-merged"]);
   });
 
-  test("an outcome reached before the worker was ever watched is old news", async () => {
+  test("an outcome on a day-old unobserved association is old news", async () => {
     const current = await createWorld();
     const coordinator = await current.main();
     const merged = await current.addEnvironment("merged-env");
@@ -274,6 +316,7 @@ describe("worker outcome wakes", () => {
     await current.storage.removeEnvironment(gone.environmentId);
     await delegated(current, merged, "launch-merged");
     await delegated(current, gone, "launch-gone");
+    timers.advance(24 * 60 * 60 * 1_000 + 1);
 
     await settle(current);
     expect(current.wakes(coordinator)).toBe(0);
@@ -370,6 +413,188 @@ describe("worker outcome wakes", () => {
     expect((await watch())?.ended).toBeUndefined();
   });
 
+  test("a stale open read cannot overwrite a merged deletion capture", async () => {
+    const current = await createWorld();
+    const worker = await current.addEnvironment("racing-delete");
+    await delegated(current, worker, "racing-delete");
+    await current.storage.updateEnvironment(worker.environmentId, {
+      prUrl: PR_URL,
+      prState: "open",
+    });
+    const delivered: string[] = [];
+    const outcomes = new CoordinatorWorkerOutcomes({
+      storage: current.storage,
+      now: timers.now,
+      remote: () => null,
+      statusOnNode,
+      deliver: async (_workspaces, _owner, _resource, status) => {
+        delivered.push(status.headline);
+        return true;
+      },
+    });
+    const state = await current.storage.coordinators.getCoordinatorReconciliationState();
+    const original = current.storage.getEnvironment.bind(current.storage);
+    const stale = await original(worker.environmentId);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let first = true;
+    current.storage.getEnvironment = async (id) => {
+      if (id === worker.environmentId && first) {
+        first = false;
+        entered();
+        await gate;
+        return stale;
+      }
+      return original(id);
+    };
+    const sweep = outcomes.reconcile(state.workspaces, state.workflows, "settled");
+    await started;
+    await current.storage.updateEnvironment(worker.environmentId, { prState: "merged" });
+    await outcomes.captureDeleted((await original(worker.environmentId))!);
+    await current.storage.removeEnvironment(worker.environmentId);
+    release();
+    await sweep;
+    const after = await current.storage.coordinators.getCoordinatorReconciliationState();
+    await outcomes.reconcile(after.workspaces, after.workflows, "settled");
+    expect(delivered).toEqual(["was merged and its environment deleted"]);
+    expect(after.workflows[0]!.workerOutcome).toMatchObject({
+      prState: "merged",
+      ended: { notified: true },
+    });
+    await current.restart();
+    await settle(current);
+    expect(delivered).toHaveLength(1);
+  });
+
+  test("a deletion capture after observation survives the batched bookkeeping flush", async () => {
+    const current = await createWorld();
+    const worker = await current.addEnvironment("batched-delete");
+    const blocker = await current.addEnvironment("blocked-read");
+    await delegated(current, worker, "batched-delete");
+    await delegated(current, blocker, "blocked-read");
+    await current.storage.updateEnvironment(worker.environmentId, {
+      prUrl: PR_URL,
+      prState: "open",
+    });
+    const delivered: string[] = [];
+    const outcomes = new CoordinatorWorkerOutcomes({
+      storage: current.storage,
+      now: timers.now,
+      remote: () => null,
+      statusOnNode,
+      deliver: async (_workspaces, _owner, _resource, status) => {
+        delivered.push(status.headline);
+        return true;
+      },
+    });
+    const original = current.storage.getEnvironment.bind(current.storage);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let first = true;
+    current.storage.getEnvironment = async (id) => {
+      if (id === blocker.environmentId && first) {
+        first = false;
+        entered();
+        await gate;
+      }
+      return original(id);
+    };
+    const state = await current.storage.coordinators.getCoordinatorReconciliationState();
+    const sweep = outcomes.reconcile(state.workspaces, state.workflows, "settled");
+    await started;
+    await current.storage.updateEnvironment(worker.environmentId, { prState: "merged" });
+    await outcomes.captureDeleted((await original(worker.environmentId))!);
+    await current.storage.removeEnvironment(worker.environmentId);
+    release();
+    await sweep;
+    const after = await current.storage.coordinators.getCoordinatorReconciliationState();
+    expect(after.workflows[0]!.workerOutcome).toMatchObject({
+      prState: "merged",
+      deletedAt: expect.any(String),
+    });
+    await outcomes.reconcile(after.workspaces, after.workflows, "settled");
+    await current.restart();
+    await settle(current);
+    expect(delivered).toEqual(["was merged and its environment deleted"]);
+  });
+
+  for (const trigger of ["reconcile", "observeWorker"] as const) {
+    for (const failure of ["read", "delivery"] as const) {
+      test(`${trigger} isolates an owner's ${failure} failure and persists other owners`, async () => {
+        const current = await createWorld();
+        const worker = await current.addEnvironment("failure-isolation");
+        await delegated(current, worker, "owner-first");
+        await delegated(current, worker, "owner-failing");
+        await delegated(current, worker, "owner-last");
+        const initial = await current.storage.coordinators.getCoordinatorReconciliationState();
+        // Separate coordinators may own the same worker; each gets its own notice.
+        await current.storage.coordinators.updateCoordinatorWorkflowAssociations(
+          initial.workflows.map((owner, index) => ({
+            associationId: owner.id,
+            mutate: (item) => {
+              item.coordinatorId = `owner-${index}`;
+              return true;
+            },
+          })),
+        );
+        await current.storage.updateEnvironment(worker.environmentId, {
+          prUrl: PR_URL,
+          prState: "merged",
+        });
+        const original = current.storage.getEnvironment.bind(current.storage);
+        let reads = 0;
+        current.storage.getEnvironment = async (id) => {
+          if (id === worker.environmentId && ++reads === 2 && failure === "read")
+            throw new Error("read failed");
+          return original(id);
+        };
+        const delivered: string[] = [];
+        const outcomes = new CoordinatorWorkerOutcomes({
+          storage: current.storage,
+          now: timers.now,
+          remote: () => null,
+          statusOnNode,
+          deliver: async (_workspaces, owner) => {
+            if (owner.coordinatorId === "owner-1" && failure === "delivery")
+              throw new Error("delivery failed");
+            delivered.push(owner.coordinatorId);
+            return true;
+          },
+        });
+        const state = await current.storage.coordinators.getCoordinatorReconciliationState();
+        if (trigger === "reconcile")
+          await outcomes.reconcile(state.workspaces, state.workflows, "settled");
+        else
+          await outcomes.observeWorker(
+            state.workspaces,
+            state.workflows,
+            worker.environmentId,
+            undefined,
+            "settled",
+          );
+        expect(delivered).toEqual(["owner-0", "owner-2"]);
+        const after = await current.storage.coordinators.getCoordinatorReconciliationState();
+        expect(after.workflows.map((owner) => owner.workerOutcome?.ended?.notified)).toEqual([
+          true,
+          undefined,
+          true,
+        ]);
+      });
+    }
+  }
+
   test("Finished work only sends no outcome notices", async () => {
     const current = await createWorld({ coordinatorStatusWakes: "off" });
     const coordinator = await current.main();
@@ -388,6 +613,21 @@ describe("worker outcome wakes", () => {
 
 describe("workerOutcomeNotice", () => {
   const base = { gone: false, deleting: false, prUrl: PR_URL, prState: "open" as const };
+
+  test("remote deletion tool hints contain valid node-qualified JSON", () => {
+    const notice = workerOutcomeNotice("env", { ...base, gone: true })!;
+    const status = statusOnNode(notice.notice.status, 'node"quoted', "Build node");
+    expect(status.tools[0]!.split(" ")[0]).toBe("list_workflows");
+    expect(JSON.parse(status.tools[0]!.slice("list_workflows ".length))).toEqual({
+      nodeId: 'node"quoted',
+    });
+    const merged = workerOutcomeNotice("env", { ...base, prState: "merged" })!;
+    const hint = statusOnNode(merged.notice.status, "leaf", "Build node").tools[0]!;
+    expect(JSON.parse(hint.slice("get_environment ".length))).toEqual({
+      nodeId: "leaf",
+      environmentId: "env",
+    });
+  });
 
   test("an open PR, or a deletion still running, is no outcome yet", () => {
     expect(workerOutcomeNotice("env", base)).toBeNull();

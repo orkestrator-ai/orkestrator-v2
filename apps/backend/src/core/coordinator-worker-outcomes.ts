@@ -16,10 +16,10 @@
  * association (`workerOutcome`), so it adds no records. It ends at the first
  * merge, close or deletion. A merge or close a live PR follow will report (or
  * already did) ends it silently, so the coordinator hears each outcome once.
- * The first observation of a worker records its state: an outcome already
- * reached then is old news (a worker from before this watch existed) and
- * wakes nobody, while a deletion captured as it happens always does.
+ * First observations of recent associations report terminal outcomes too;
+ * only day-old, unobserved associations are backfilled silently.
  */
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type {
   CoordinatorWorkerOutcome,
   CoordinatorWorkflowAssociation,
@@ -67,6 +67,9 @@ type Mutation = {
   associationId: string;
   mutate: (association: CoordinatorWorkflowAssociation) => boolean;
 };
+
+const log = createLogger("coordinator");
+const BACKFILL_LIMIT_MS = 24 * 60 * 60 * 1_000;
 
 const PR_STATES: ReadonlySet<unknown> = new Set(["open", "closed", "merged"]);
 
@@ -250,7 +253,8 @@ export class CoordinatorWorkerOutcomes {
     );
     const mutations: Mutation[] = [];
     for (const group of owners.values()) {
-      for (const owner of group) await this.observe(workspaces, resolved, owner, mode, mutations);
+      for (const owner of group)
+        await this.observeSafely(workspaces, resolved, owner, mode, mutations);
     }
     await this.host.storage.coordinators.updateCoordinatorWorkflowAssociations(mutations);
   }
@@ -265,7 +269,8 @@ export class CoordinatorWorkerOutcomes {
   ): Promise<void> {
     const group = workerOutcomeOwners(workflows).get(watchKey(environmentId, nodeId)) ?? [];
     const mutations: Mutation[] = [];
-    for (const owner of group) await this.observe(workspaces, workflows, owner, mode, mutations);
+    for (const owner of group)
+      await this.observeSafely(workspaces, workflows, owner, mode, mutations);
     await this.host.storage.coordinators.updateCoordinatorWorkflowAssociations(mutations);
   }
 
@@ -277,7 +282,8 @@ export class CoordinatorWorkerOutcomes {
    */
   async captureDeleted(environment: Environment): Promise<boolean> {
     const state = await this.host.storage.coordinators.getCoordinatorReconciliationState();
-    const group = workerOutcomeOwners(state.workflows).get(watchKey(environment.id, undefined));
+    const resolved = await this.resolvePipelineWorkers(state.workflows);
+    const group = workerOutcomeOwners(resolved).get(watchKey(environment.id, undefined));
     const live = (group ?? []).filter((owner) => !owner.workerOutcome?.ended);
     if (live.length === 0) return false;
     const deletedAt = new Date(this.host.now()).toISOString();
@@ -291,8 +297,8 @@ export class CoordinatorWorkerOutcomes {
           current.workerOutcome = {
             ...current.workerOutcome,
             ...(current.kind === "build-pipeline" ? { environmentId: environment.id } : {}),
-            ...(prUrl ? { prUrl } : {}),
-            ...(prState ? { prState } : {}),
+            prUrl,
+            prState,
             name: environment.name,
             deletedAt,
           };
@@ -404,6 +410,20 @@ export class CoordinatorWorkerOutcomes {
     };
   }
 
+  private async observeSafely(
+    workspaces: CoordinatorWorkspace[],
+    workflows: readonly CoordinatorWorkflowAssociation[],
+    owner: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+    mutations: Mutation[],
+  ): Promise<void> {
+    try {
+      await this.observe(workspaces, workflows, owner, mode, mutations);
+    } catch (error) {
+      log.warn("wake.worker-outcomes-failed", { error: formatLogError(error) });
+    }
+  }
+
   private async observe(
     workspaces: CoordinatorWorkspace[],
     workflows: readonly CoordinatorWorkflowAssociation[],
@@ -412,10 +432,28 @@ export class CoordinatorWorkerOutcomes {
     mutations: Mutation[],
   ): Promise<void> {
     const environmentId = workerOf(owner);
-    const watch = owner.workerOutcome ?? {};
+    let watch = owner.workerOutcome ?? {};
     if (!environmentId || watch.ended) return;
-    const reading = await this.read(owner, environmentId);
+    let reading = await this.read(owner, environmentId);
     if (!reading) return;
+    // A deletion can capture the final PR while the environment read is in flight.
+    // Its complete snapshot takes precedence over that older read.
+    const current = (
+      await this.host.storage.coordinators.getCoordinatorReconciliationState()
+    ).workflows.find((item) => item.id === owner.id);
+    if (!current || current.workerOutcome?.ended) return;
+    watch = current.workerOutcome ?? watch;
+    if (watch.deletedAt) {
+      const latest = await this.read(current, environmentId);
+      if (!latest) return;
+      reading = {
+        ...latest,
+        deleting: true,
+        prUrl: watch.prUrl ?? null,
+        prState: watch.prState ?? null,
+        name: watch.name,
+      };
+    }
     const at = new Date(this.host.now()).toISOString();
     const end = (key: string, notified: boolean) => ({ key, at, notified });
     const seen: CoordinatorWorkerOutcome = {
@@ -427,8 +465,13 @@ export class CoordinatorWorkerOutcomes {
     };
     const outcome = workerOutcomeNotice(environmentId, reading);
     let ended: CoordinatorWorkerOutcome["ended"];
-    if (outcome && !watch.observedAt && !watch.deletedAt) {
-      // Already merged, closed or gone before it was ever watched: old news.
+    if (
+      outcome &&
+      !watch.observedAt &&
+      !watch.deletedAt &&
+      this.host.now() - Date.parse(owner.createdAt) > BACKFILL_LIMIT_MS
+    ) {
+      // Only old associations are silent backfill; recent work can finish before a sweep.
       ended = end(outcome.key, false);
     } else if (outcome) {
       const covered =
@@ -460,9 +503,9 @@ export class CoordinatorWorkerOutcomes {
       associationId: owner.id,
       mutate: (current) => {
         if (current.workerOutcome?.ended) return false;
-        // A deletion captured since this read is kept for the next observation.
-        const deletedAt = current.workerOutcome?.deletedAt;
-        current.workerOutcome = { ...next, ...(deletedAt && !ended ? { deletedAt } : {}) };
+        // A newer capture owns the whole snapshot, not just its timestamp.
+        if (current.workerOutcome?.deletedAt !== watch.deletedAt) return false;
+        current.workerOutcome = next;
         return true;
       },
     });

@@ -570,7 +570,9 @@ mock.module("@/components/settings", () => ({
     ) : null,
 }));
 
+let useRealSelection = false;
 mock.module("@/stores", () => ({
+  ...realStoresSnapshot,
   useConfigStore: <T,>(
     selector?: (state: {
       config: {
@@ -641,6 +643,7 @@ mock.module("@/stores", () => ({
               : environment,
           ),
           deletingEnvironments: currentDeletingEnvironments,
+          isDeleting: (id: string) => currentDeletingEnvironments.has(id),
           getEnvironmentById: (environmentId: string) =>
             environmentId === currentEnvironment.id
               ? {
@@ -726,21 +729,23 @@ mock.module("@/stores", () => ({
       toggleSidebar: () => void;
     }) => T,
   ) =>
-    selectState(
-      {
-        selectedEnvironmentId: currentSelectedEnvironmentId,
-        selectedProjectId: currentSelectedProjectId,
-        selectEnvironment: selectEnvironmentMock,
-        selectProject: selectProjectMock,
-        selectProjectAndEnvironment: selectProjectAndEnvironmentMock,
-        setProjectCollapsed: setProjectCollapsedMock,
-        projectBoardTab: currentProjectBoardTab,
-        setProjectBoardTab: setProjectBoardTabMock,
-        sidebarOpen: currentSidebarOpen,
-        toggleSidebar: toggleSidebarMock,
-      },
-      selector,
-    ),
+    useRealSelection
+      ? realStoresSnapshot.useUIStore(selector as never)
+      : selectState(
+          {
+            selectedEnvironmentId: currentSelectedEnvironmentId,
+            selectedProjectId: currentSelectedProjectId,
+            selectEnvironment: selectEnvironmentMock,
+            selectProject: selectProjectMock,
+            selectProjectAndEnvironment: selectProjectAndEnvironmentMock,
+            setProjectCollapsed: setProjectCollapsedMock,
+            projectBoardTab: currentProjectBoardTab,
+            setProjectBoardTab: setProjectBoardTabMock,
+            sidebarOpen: currentSidebarOpen,
+            toggleSidebar: toggleSidebarMock,
+          },
+          selector,
+        ),
   useMultiReviewStore: {
     getState: () => ({
       replaceWorkflow: installMultiReviewWorkflowMock,
@@ -6805,7 +6810,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
     test("opens the same merge dialog and merges through it", async () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       render(<ActionBar />);
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
 
       act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
 
@@ -6818,7 +6823,71 @@ describe("ActionBar successful cleanup and merge actions", () => {
         expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
       );
       expect(useMergePrRequestStore.getState().request).toBeNull();
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+    });
+
+    test("selects a different row through real selection state and merges its PR", async () => {
+      const { EnvironmentItem } = await import("@/components/environments/EnvironmentItem");
+      const target = { ...selectedEnvironment, id: "env-target", prState: "open" as const };
+      currentOtherEnvironments = [target];
+      currentEnvironment = target;
+      realStoresSnapshot.useUIStore.setState({
+        selectedEnvironmentId: "env-original",
+        selectedProjectId: target.projectId,
+      });
+      useRealSelection = true;
+      try {
+        render(
+          <>
+            <EnvironmentItem
+              environment={target}
+              isSelected={false}
+              onSelect={(id) => realStoresSnapshot.useUIStore.getState().selectEnvironment(id)}
+              onDelete={() => {}}
+              onStart={() => {}}
+              onStop={() => {}}
+              onRestart={() => {}}
+            />
+            <ActionBar />
+          </>,
+        );
+        fireEvent.contextMenu(screen.getByText(target.name));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Merge PR" }));
+        expect(realStoresSnapshot.useUIStore.getState().selectedEnvironmentId).toBe(target.id);
+        expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+          "Merge Pull Request",
+        );
+        fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+        await waitFor(() =>
+          expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(target.id, "squash", true, false),
+        );
+      } finally {
+        cleanup();
+        useRealSelection = false;
+      }
+    });
+
+    test("keeps an admitted dialog open when readiness and conflict data change", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      const { rerender } = render(<ActionBar />);
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      currentEnvironment = { ...currentEnvironment, status: "stopped", hasMergeConflicts: true };
+      rerender(<ActionBar />);
+      expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+        "Merge Pull Request",
+      );
+    });
+
+    test("reopens a menu-originated confirmation with the merge error", async () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      mergeEnvironmentPrMock.mockRejectedValueOnce(new Error("Merge refused"));
+      render(<ActionBar />);
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+      await waitFor(() =>
+        expect(screen.getByTestId("alert-dialog-content").textContent).toContain("Merge refused"),
+      );
+      expect(useMergePrRequestStore.getState().request).toBeNull();
     });
 
     test("cancelling closes the dialog for good", () => {
@@ -6830,7 +6899,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
       rerender(<ActionBar />);
 
       expect(useMergePrRequestStore.getState().request).toBeNull();
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
       expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
     });
 
@@ -6839,13 +6908,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
       const { rerender } = render(<ActionBar />);
 
       act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
       expect(useMergePrRequestStore.getState().request).toBeNull();
 
       // Once the container runs, nothing pops up on its own.
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       rerender(<ActionBar />);
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
     });
 
     test("ignores a request for an environment that is not selected", () => {
@@ -6854,7 +6923,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
       act(() => useMergePrRequestStore.getState().requestMergePr("env-other"));
 
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
       expect(useMergePrRequestStore.getState().request).toBeNull();
     });
   });

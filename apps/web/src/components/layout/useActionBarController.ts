@@ -184,8 +184,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [mergeDialogOpenState, setMergeDialogOpenState] = useState(false);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   // A row's "Merge PR" menu item selects its environment and asks for the
-  // dialog the green button opens; it opens only while that button could be
-  // pressed, and a request that cannot be honoured is dropped (below).
+  // dialog the green button opens. Eligibility is checked once on admission;
+  // an admitted dialog has the same lifetime as one opened with the button.
   const mergePrRequest = useMergePrRequestStore((state) => state.request);
   const selectedMergePrControl = selectedEnvironment
     ? mergePrControl(selectedEnvironment, {
@@ -197,7 +197,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     mergePrRequest !== null &&
     mergePrRequest.environmentId === selectedEnvironmentId &&
     selectedMergePrControl?.disabled === false;
-  const mergeDialogOpen = mergeDialogOpenState || mergePrRequested;
+  const [handledMergePrNonce, setHandledMergePrNonce] = useState<number | null>(null);
+  // Adjust this component's state before committing a new request, so later
+  // readiness updates cannot dismiss a confirmation the user is reading.
+  if (mergePrRequest && mergePrRequest.nonce !== handledMergePrNonce) {
+    setHandledMergePrNonce(mergePrRequest.nonce);
+    if (mergePrRequested) setMergeDialogOpenState(true);
+  }
+  const mergeDialogOpen = mergeDialogOpenState;
   const setMergeDialogOpen = useCallback((open: boolean) => {
     setMergeDialogOpenState(open);
     if (open) return;
@@ -205,10 +212,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     if (request) useMergePrRequestStore.getState().clearMergePrRequest(request.nonce);
   }, []);
   useEffect(() => {
-    if (mergePrRequest && !mergePrRequested) {
+    if (mergePrRequest) {
       useMergePrRequestStore.getState().clearMergePrRequest(mergePrRequest.nonce);
     }
-  }, [mergePrRequest, mergePrRequested]);
+  }, [mergePrRequest]);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
 

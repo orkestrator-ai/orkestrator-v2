@@ -58,6 +58,14 @@ function installBackend() {
         environmentType: "local",
         status: "running",
         setupPhase: "ready",
+        ...(new URLSearchParams(location.search).has("merge")
+          ? {
+              worktreePath: "/fixture/settings-project/worktree",
+              prUrl: "https://github.com/fixture/project/pull/7",
+              prState: "open",
+              hasMergeConflicts: false,
+            }
+          : {}),
         networkAccessMode: "restricted",
         createdAt: "2026-10-16T00:00:00.000Z",
       } as Environment,

@@ -159,9 +159,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       }}
       onActivate={(modifiers) => onSelect(environment.id, modifiers)}
       actions={{
-        // The dialog lives in `AppDialogHost`, not in this row: in the mobile
-        // projects drawer the row unmounts with the drawer, and a modal opened
-        // from inside the drawer would be trapped behind it.
         // Opens the environment and then the action bar's own merge dialog,
         // exactly as clicking its green Merge PR button would.
         ...(mergePr
@@ -175,6 +172,9 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               },
             }
           : {}),
+        // The dialog lives in `AppDialogHost`, not in this row: in the mobile
+        // projects drawer the row unmounts with the drawer, and a modal opened
+        // from inside the drawer would be trapped behind it.
         openSettings: () =>
           useAppDialogStore
             .getState()

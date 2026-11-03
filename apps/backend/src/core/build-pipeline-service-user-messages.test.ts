@@ -560,6 +560,74 @@ describe("BuildPipelineService queued steer", () => {
     });
   });
 
+  for (const outcome of ["applied", "unknown"] as const) {
+    test(`retains a durable attempt after ${outcome} delivery and a failed final save`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const { built, sessionId, messageId } = await startWithQueued(service, storage, provider);
+        const sentBefore = provider.sent.length;
+        const originalSave = storage.saveBuildPipeline.bind(storage);
+        let delivered = false;
+        storage.saveBuildPipeline = async (...args) => {
+          if (delivered) throw new Error("injected post-delivery save failure");
+          return originalSave(...args);
+        };
+        const originalAction = provider.performSessionAction.bind(provider);
+        provider.performSessionAction = async (...args) => {
+          const stored = await snapshot(storage, built.id);
+          expect(stored.pendingUserMessages).toBeUndefined();
+          expect(stored.pendingUserSteers?.[0]?.requestId).toBe(args[1].requestId);
+          const result = await originalAction(...args);
+          delivered = true;
+          return result;
+        };
+        provider.steerOutcome = { outcome, requestId: "r" };
+        try {
+          await expect(service.steerQueuedMessage(built.id, messageId)).rejects.toThrow("injected");
+        } finally {
+          storage.saveBuildPipeline = originalSave;
+        }
+        const recovered = await snapshot(storage, built.id);
+        expect(recovered.pendingUserMessages).toBeUndefined();
+        expect(recovered.pendingUserSteers?.[0]?.text).toBe("use the existing helper");
+        // A fresh service reads only persisted state, as after a backend restart.
+        await service.shutdown();
+        const restarted = new BuildPipelineService(storage, async <T>() => undefined as T, {
+          autoAdvance: false,
+          provider: async () => provider,
+        });
+        try {
+          provider.markIdle(sessionId);
+          await restarted.advanceNow(built.id);
+          expect(provider.sent.slice(sentBefore).map((entry) => entry.prompt)).not.toContain(
+            "use the existing helper",
+          );
+          expect(provider.steers).toHaveLength(1);
+        } finally {
+          await restarted.shutdown();
+        }
+      });
+    });
+  }
+
+  test("does not contact the provider if the attempt cannot be persisted", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const { built, messageId } = await startWithQueued(service, storage, provider);
+      const save = storage.saveBuildPipeline.bind(storage);
+      storage.saveBuildPipeline = async () => {
+        throw new Error("disk unavailable");
+      };
+      try {
+        await expect(service.steerQueuedMessage(built.id, messageId)).rejects.toThrow(
+          "disk unavailable",
+        );
+      } finally {
+        storage.saveBuildPipeline = save;
+      }
+      expect(provider.steers).toHaveLength(0);
+      expect((await snapshot(storage, built.id)).pendingUserMessages?.[0]?.id).toBe(messageId);
+    });
+  });
+
   test("steers only the requested message and keeps the rest in order", async () => {
     await withService(async ({ service, storage, provider }) => {
       const { built } = await startRunning(service, storage, provider);
@@ -610,7 +678,7 @@ describe("BuildPipelineService queued steer", () => {
 
   test("keeps a refused message queued and says why", async () => {
     await withService(async ({ service, storage, provider }) => {
-      const { built, messageId } = await startWithQueued(service, storage, provider);
+      const { built, sessionId, messageId } = await startWithQueued(service, storage, provider);
       provider.steerOutcome = {
         outcome: "rejected",
         requestId: "r",
@@ -621,6 +689,10 @@ describe("BuildPipelineService queued steer", () => {
 
       expect(result.delivery).toBe("queued");
       expect(result.notice).toContain("cannot accept more steering");
+      expect(result.pipeline.pendingUserSteers).toBeUndefined();
+      provider.markIdle(sessionId);
+      await service.advanceNow(built.id);
+      expect(provider.sent.at(-1)?.prompt).toBe("use the existing helper");
       expect(result.pipeline.pendingUserMessages?.map((entry) => entry.id)).toEqual([messageId]);
     });
   });

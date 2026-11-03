@@ -18,6 +18,7 @@ import {
   steerQueuedMock,
   tabData,
 } from "./build-chat-tab-test-support";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { queuedSteerNotice } from "./PipelineMessageComposer";
 
 afterAll(restoreBuildChatTabMocks);
@@ -101,6 +102,24 @@ describe("Auto-steer on", () => {
     expect(box.value).toBe("");
     expect(currentQueue()).toEqual([]);
     expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+  });
+
+  test("steers the new row when older text is identical", async () => {
+    const box = renderComposer({ ...running, pendingUserMessages: [queuedMessage] });
+    sendText(box, queuedMessage.text);
+    await waitFor(() => expect(steerQueuedMock).toHaveBeenCalledWith(running.id, "queued-1"));
+  });
+
+  test("never steers an old matching row when the send reply omits the new row", async () => {
+    sendMessageMock.mockImplementationOnce(async () => ({
+      ...running,
+      pendingUserMessages: [queuedMessage],
+    }));
+    const box = renderComposer({ ...running, pendingUserMessages: [queuedMessage] });
+    sendText(box, queuedMessage.text);
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
+    expect(steerQueuedMock).not.toHaveBeenCalled();
+    expect(currentQueue()).toEqual([queuedMessage.text]);
   });
 
   test("a refused steer leaves the message queued and says so", async () => {
@@ -363,6 +382,10 @@ describe("Auto-steer off", () => {
       expect(mockToastError).toHaveBeenCalledWith("Delivery could not be confirmed."),
     );
     expect(box.value).toBe("half written");
+    expect(
+      screen.getByText("Retained message — check the transcript before sending again"),
+    ).toBeTruthy();
+    expect(screen.getByText(queuedMessage.text)).toBeTruthy();
   });
 
   test("no Steer button between turns, on a paused build, or for a command", () => {
@@ -399,6 +422,56 @@ describe("Auto-steer off", () => {
 
     await waitFor(() => expect(box.value).toBe("use the helper"));
     expect(currentQueue()).toEqual([]);
+  });
+
+  test("Edit retains text typed while removal is pending", async () => {
+    let finish!: (value: { pipeline: BuildPipeline; removed: boolean }) => void;
+    removeQueuedMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const box = renderComposer({ ...running, pendingUserMessages: [queuedMessage] });
+    fireEvent.click(screen.getByRole("button", { name: /^Edit queued prompt/ }));
+    await waitFor(() => expect(removeQueuedMock).toHaveBeenCalled());
+    fireEvent.change(box, { target: { value: "new typing" } });
+    finish({ pipeline: { ...running, backendRevision: 50 }, removed: true });
+    await waitFor(() => expect(screen.getByText(queuedMessage.text)).toBeTruthy());
+    expect(box.value).toBe("new typing");
+  });
+
+  test("retained steer text rehydrates alongside an occupied draft", () => {
+    const box = renderComposer({
+      ...running,
+      pendingUserSteers: [{ ...queuedMessage, requestId: "attempt-1" }],
+    });
+    fireEvent.change(box, { target: { value: "new draft" } });
+    expect(screen.getByText(queuedMessage.text)).toBeTruthy();
+    expect(box.value).toBe("new draft");
+  });
+
+  test("validation blocks send and steer but keeps edit and remove available", () => {
+    setAutoSteer(true);
+    const box = renderComposer({
+      ...running,
+      pendingUserMessages: [queuedMessage],
+      validationRun: newReviewValidationRun("validation", {
+        headRef: "1".repeat(40),
+        commands: [],
+        limitations: ["Fixture validation"],
+      }),
+    });
+    expect(box.disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Send message" }).getAttribute("title")).toContain(
+      "Validation",
+    );
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Edit queued prompt/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Remove queued prompt/ })).toBeTruthy();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(steerQueuedMock).not.toHaveBeenCalled();
   });
 
   test("Edit refuses to overwrite a draft", () => {

@@ -92,6 +92,8 @@ export interface PipelineComposerState {
   draft: string;
   setDraft: (draft: string) => void;
   sendPending: boolean;
+  messageBlocked: boolean;
+  recoveredTexts: string[];
   send: () => Promise<void>;
   sendTitle: string;
   queue: NativeComposeQueueState;
@@ -120,7 +122,18 @@ export function usePipelineMessageComposer({
 }): PipelineComposerState {
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const autoSteerEnabled = useConfigStore((state) => state.config.global.autoSteer === true);
-  const [draft, setDraft] = useState("");
+  const [draft, updateDraft] = useState("");
+  const draftRef = useRef("");
+  const setDraft = (text: string) => {
+    draftRef.current = text;
+    updateDraft(text);
+  };
+  const [recoveredTexts, setRecoveredTexts] = useState<string[]>([]);
+  const retainText = (text: string) => {
+    if (!draftRef.current.trim()) setDraft(text);
+    else setRecoveredTexts((current) => (current.includes(text) ? current : [...current, text]));
+  };
+  const messageBlocked = Boolean(pipeline.validationRun && !pipeline.reviewPackage);
   const [sendPending, setSendPending] = useState(false);
 
   const turnRunning =
@@ -128,6 +141,7 @@ export function usePipelineMessageComposer({
   // The same gate the backend applies before it steers. A bridge that turns out
   // not to support steering is reported by the backend, and the message stays queued.
   const steerAvailable =
+    !messageBlocked &&
     turnRunning &&
     !pipeline.pendingPromptAttempt &&
     isAgentPlatform(agent) &&
@@ -151,7 +165,7 @@ export function usePipelineMessageComposer({
     replacePipeline(result.pipeline);
     showNotice(queuedSteerNotice(result, agentLabel, source));
     if (result.delivery === "unconfirmed") {
-      setDraft((current) => (current.trim() ? current : text));
+      retainText(text);
     }
   };
 
@@ -160,7 +174,10 @@ export function usePipelineMessageComposer({
     // The backend owns the message from here on, so whatever happens to the steer
     // it must not also stay in the box to be sent again.
     setDraft("");
-    const message = queued.pendingUserMessages?.findLast((entry) => entry.text === text);
+    const priorIds = new Set(pipeline.pendingUserMessages?.map((entry) => entry.id));
+    const message = queued.pendingUserMessages?.findLast(
+      (entry) => entry.text === text && !priorIds.has(entry.id),
+    );
     if (!message) {
       replacePipeline(queued);
       showNotice(queuedSteerNotice({ delivery: "gone" }, agentLabel, "auto-steer"));
@@ -179,7 +196,7 @@ export function usePipelineMessageComposer({
 
   const send = async (): Promise<void> => {
     const text = draft.trim();
-    if (!text || sendPending) return;
+    if (!text || sendPending || messageBlocked) return;
     // `/steer` reaches the turn the agent is running now. Queueing it like a
     // message would hold it until the agent goes idle, which in a pipeline is
     // when the stage ends and the work moves on to review.
@@ -244,7 +261,7 @@ export function usePipelineMessageComposer({
       toast.error(COMPOSER_OCCUPIED_MESSAGE);
       return;
     }
-    if (await removeQueued(message.id)) setDraft(message.text);
+    if (await removeQueued(message.id)) retainText(message.text);
   };
 
   const queued = pipeline.pendingUserMessages ?? [];
@@ -253,14 +270,23 @@ export function usePipelineMessageComposer({
     draft,
     setDraft,
     sendPending,
+    messageBlocked,
+    recoveredTexts: Array.from(
+      new Set([
+        ...(pipeline.pendingUserSteers ?? []).map((entry) => entry.text),
+        ...recoveredTexts,
+      ]),
+    ),
     send,
-    sendTitle: !turnRunning
-      ? "Send message"
-      : command?.name === "/steer"
-        ? `Send to the current ${agentLabel} turn`
-        : willAutoSteer(draft)
-          ? `Steer the current ${agentLabel} turn`
-          : "Add to queue",
+    sendTitle: messageBlocked
+      ? "Validation is running against a fixed snapshot"
+      : !turnRunning
+        ? "Send message"
+        : command?.name === "/steer"
+          ? `Send to the current ${agentLabel} turn`
+          : willAutoSteer(draft)
+            ? `Steer the current ${agentLabel} turn`
+            : "Add to queue",
     queue: {
       length: queued.length,
       items: queued.map((message) => ({
@@ -283,7 +309,8 @@ export function usePipelineMessageComposer({
  * that shape, with the same queued-prompt strips on top of it.
  */
 export function PipelineMessageComposer({ state }: { state: PipelineComposerState }) {
-  const { draft, setDraft, sendPending, send, sendTitle, queue } = state;
+  const { draft, setDraft, sendPending, send, sendTitle, queue, messageBlocked, recoveredTexts } =
+    state;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const queueStackRef = useRef<QueuedPromptStackHandle>(null);
   // Where the caret was when ArrowUp moved focus to the queued messages.
@@ -324,12 +351,19 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
 
   return (
     <div className="mx-auto w-full max-w-[56rem]">
+      {recoveredTexts.map((text) => (
+        <details key={text} className="mb-2 rounded-lg border border-border bg-input-surface p-3">
+          <summary>Retained message — check the transcript before sending again</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words select-text">{text}</p>
+        </details>
+      ))}
       <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
       <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
         <div className="flex items-end gap-2">
           <Textarea
             ref={inputRef}
             value={draft}
+            disabled={messageBlocked}
             onChange={(event) => setDraft(event.target.value)}
             maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
             rows={2}
@@ -344,7 +378,7 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
             className="h-7 w-7 rounded-lg transition-colors"
             title={sendTitle}
             aria-label="Send message"
-            disabled={sendPending || draft.trim().length === 0}
+            disabled={messageBlocked || sendPending || draft.trim().length === 0}
             onClick={() => void send()}
           >
             {sendPending ? (

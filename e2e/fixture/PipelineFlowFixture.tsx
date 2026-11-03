@@ -561,13 +561,25 @@ function installBackend(pipeline: BuildPipeline) {
               notice: "This turn cannot accept more steering.",
             } as T;
           }
+          const uncertain = new URLSearchParams(window.location.search).get("steer") === "unknown";
+          const message = current.pendingUserMessages?.find(
+            (entry) => entry.id === args?.messageId,
+          );
           return {
             pipeline: next({
+              ...(uncertain && message
+                ? {
+                    pendingUserSteers: [
+                      ...(current.pendingUserSteers ?? []),
+                      { ...message, requestId: "fixture-steer" },
+                    ],
+                  }
+                : {}),
               pendingUserMessages: current.pendingUserMessages?.filter(
                 (message) => message.id !== args?.messageId,
               ),
             }),
-            delivery: "steered",
+            delivery: uncertain ? "unconfirmed" : "steered",
           } as T;
         }
         case "remove_queued_build_pipeline_message":

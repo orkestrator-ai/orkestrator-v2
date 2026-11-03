@@ -1425,6 +1425,8 @@ export interface BuildPipeline {
    * so a message survives an unmounted tab, a paused pipeline and a restart.
    */
   pendingUserMessages?: PipelineUserMessage[];
+  /** Attempted steers retained for inspection only; never automatically dispatched. */
+  pendingUserSteers?: (PipelineUserMessage & { requestId: string })[];
   /** Set by the retry-review control; consumed by the next supervisor pass. */
   reviewRetryRequested?: boolean;
   /** Selected historical stage to start again on the next supervisor pass. */
@@ -2333,6 +2335,13 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       (!Array.isArray(value.pendingUserMessages) ||
         value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES ||
         !value.pendingUserMessages.every(isUserMessage))) ||
+    (value.pendingUserSteers !== undefined &&
+      (!Array.isArray(value.pendingUserSteers) ||
+        value.pendingUserSteers.length > MAX_PIPELINE_USER_MESSAGES ||
+        !value.pendingUserSteers.every(
+          (entry: unknown) =>
+            isUserMessage(entry) && isRecord(entry) && isNonBlankString(entry.requestId),
+        ))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
     (value.skipRequest !== undefined && !isPipelineSkipRequest(value.skipRequest)) ||

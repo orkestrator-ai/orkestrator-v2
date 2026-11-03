@@ -84,3 +84,25 @@ test("a queued message can be edited back into the box or removed", async ({ pag
   await expect(composer(page)).toHaveValue("First thought");
   await expect(strip).toHaveCount(0);
 });
+
+test("uncertain steering retains both texts after reload", async ({ page }, testInfo) => {
+  await page.goto("/pipeline-flow?scenario=building&steer=unknown");
+  await sendMessage(page, "Use the existing helper instead");
+  await composer(page).fill("Keep this separate draft");
+  await page.screenshot({
+    path: `output/visual-previews/steer-before-${testInfo.project.name}.png`,
+  });
+  await page.getByRole("button", { name: /^Steer queued prompt 1 of 1/ }).click();
+  await expect(composer(page)).toHaveValue("Keep this separate draft");
+  const retained = page.locator("details").filter({ hasText: "Retained message" });
+  await retained.locator("summary").click();
+  await expect(retained).toContainText("Use the existing helper instead");
+  await page.screenshot({
+    path: `output/visual-previews/steer-retained-${testInfo.project.name}.png`,
+  });
+  await page.goto("/pipeline-flow?scenario=building&restore=1&view=build");
+  await expect(page.locator("details").filter({ hasText: "Retained message" })).toContainText(
+    "Use the existing helper instead",
+  );
+  await expect(page.getByTestId("compose-queue-strip")).toHaveCount(0);
+});

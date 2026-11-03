@@ -1758,6 +1758,25 @@ describe("build pipeline protocol", () => {
     }
   });
 
+  test("validates and bounds retained steering attempts", () => {
+    const attempt = {
+      id: "m",
+      text: "check this",
+      createdAt: "2026-07-29T00:00:00.000Z",
+      requestId: "r",
+    };
+    expect(isBuildPipeline({ ...snapshot(), pendingUserSteers: [attempt] })).toBe(true);
+    for (const invalid of [
+      "bad",
+      [{ ...attempt, requestId: "" }],
+      [{ ...attempt, requestId: undefined }],
+      [{ ...attempt, text: "" }],
+      Array.from({ length: MAX_PIPELINE_USER_MESSAGES + 1 }, () => attempt),
+    ]) {
+      expect(isBuildPipeline({ ...snapshot(), pendingUserSteers: invalid })).toBe(false);
+    }
+  });
+
   test("validates the review-retry request flag", () => {
     expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: true })).toBe(true);
     expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: false })).toBe(true);

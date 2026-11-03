@@ -200,27 +200,49 @@ export class BuildPipelineUserMessages {
       }
       rejection = userMessageRejection(candidate);
       if (rejection) return;
-      let result: LiveSteerResult;
-      try {
-        result = await this.steerLiveTurn(candidate, message.text);
-      } catch (error) {
-        rejection = error instanceof Error ? error : new Error(String(error));
+      if ((candidate.pendingUserSteers?.length ?? 0) >= MAX_PIPELINE_USER_MESSAGES) {
+        rejection = new Error(
+          "Too many unconfirmed steering instructions. Check the retained instructions before steering more.",
+        );
         return;
+      }
+      // Publish the transfer before any external delivery. An interrupted attempt
+      // remains inspectable, but cannot become a normal queued prompt on recovery.
+      const originalQueue = candidate.pendingUserMessages!;
+      const requestId = randomUUID();
+      removeUserMessage(candidate, messageId);
+      candidate.pendingUserSteers = [
+        ...(candidate.pendingUserSteers ?? []),
+        { ...message, requestId },
+      ];
+      // A crash after delivery must not leave a previously submitted preparation
+      // result authoritative either. Invalidate conservatively before delivery.
+      const phase = resumablePhase(candidate.phase);
+      const session = sessionForCurrentPhase(candidate);
+      if (session && (phase === "building" || phase === "fixing"))
+        discardPreparationResult(session);
+      await this.ctx.save(candidate, candidate.backendRevision);
+      const result = await this.steerLiveTurn(candidate, message.text, requestId);
+      if (result.kind !== "unconfirmed") {
+        candidate.pendingUserSteers = candidate.pendingUserSteers.filter(
+          (entry) => entry.requestId !== requestId,
+        );
+        if (!candidate.pendingUserSteers.length) delete candidate.pendingUserSteers;
       }
       switch (result.kind) {
         case "steered":
-          removeUserMessage(candidate, messageId);
           delivery = "steered";
           return;
         case "unconfirmed":
-          removeUserMessage(candidate, messageId);
           delivery = "unconfirmed";
           notice = result.error.message;
           return;
         case "refused":
           notice = result.error.message;
+          candidate.pendingUserMessages = originalQueue;
           return;
         default:
+          candidate.pendingUserMessages = originalQueue;
           return;
       }
     });
@@ -249,7 +271,11 @@ export class BuildPipelineUserMessages {
    * Steers the current session's running turn. `not-sent` means there is no turn
    * that can be steered right now.
    */
-  private async steerLiveTurn(pipeline: BuildPipeline, text: string): Promise<LiveSteerResult> {
+  private async steerLiveTurn(
+    pipeline: BuildPipeline,
+    text: string,
+    requestId = randomUUID(),
+  ): Promise<LiveSteerResult> {
     const phase = resumablePhase(pipeline.phase);
     const session = sessionForCurrentPhase(pipeline);
     if (!phase || !session || session.status !== "running" || !pipeline.environmentId) {
@@ -268,7 +294,6 @@ export class BuildPipelineUserMessages {
     const active = await provider.activeSteerRun(session.sdkSessionId).catch(() => undefined);
     if (active?.state !== "running") return { kind: "not-sent" };
 
-    const requestId = randomUUID();
     const unconfirmed = (): LiveSteerResult => {
       if (phase === "building" || phase === "fixing") discardPreparationResult(session);
       return {

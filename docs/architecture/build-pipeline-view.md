@@ -437,7 +437,17 @@ pipeline has no catalogue to classify them against. The transfer happens under
 the pipeline lock: a message the agent refused, or that arrived after the turn
 ended, stays queued in its place; one whose delivery cannot be confirmed leaves
 the queue and returns to the box with a warning, because the queue would
-otherwise deliver it a second time. A typed `/steer` still goes straight to the
+otherwise deliver it a second time. Before contacting the provider, the backend
+saves the message and stable request id in `pendingUserSteers`, outside the
+dispatch queue. A crash or failed result save leaves that attempt retained for
+inspection, never automatically retried. Confirmed delivery removes the attempt;
+definite non-delivery restores the original queue order. Retained attempts are
+bounded by the queue count and message length limits; capacity refuses further
+steering rather than evicting uncertain text. The composer shows retained text in
+expandable notices, including after reload, and keeps an occupied draft intact.
+If typing races an Edit response, the withdrawn text appears in a retained notice.
+Validation against a fixed snapshot disables sending and steering, while queued
+messages can still be edited or removed. A typed `/steer` still goes straight to the
 live turn (`steer_build_pipeline`).
 
 Actions sit in each node's context menu and in the inspector: open the session

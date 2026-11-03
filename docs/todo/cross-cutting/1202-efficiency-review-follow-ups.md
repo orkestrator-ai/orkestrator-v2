@@ -34,7 +34,7 @@ governs, marked "Decided".
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
-9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
+9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
@@ -337,9 +337,15 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
 
 **Problem.** Every open PR costs one `gh` process and one GraphQL query every 20 s for as long as it stays open; ten PRs use about 2,400 queries an hour of the 5,000-point budget.
 
-**Context.** Decided 2026-11-01: batch PRs into one GraphQL query per host first; then back off only PRs with no pending checks and auto-merge off, because a finishing check may not change `updatedAt`. Auto-merge (#1494) shipped after the report and relies on this monitor. BG-13 (`get_environments` triggering a whole-installation sync) belongs here too.
+**Context.** Decided 2026-11-01: batch PRs into one GraphQL query per host first; then back off only PRs with no pending checks and auto-merge off, because a finishing check may not change `updatedAt`. Auto-merge (#1494) shipped after the report and relies on this monitor. BG-13 (`get_environments` triggering a whole-installation sync) belongs here too. Done 2026-11-03:
 
-**Investigation.** Not checked: whether batching works when `gh` runs inside a container, where each container has its own credentials and host.
+- BG-6 batching (`commands-pr-monitor-batch.ts`): a local known-PR lookup reads every open PR of its (GitHub host, Settings credential source) group in one aliased `gh api graphql` query, rollup included, at most 25 per query. Other members' background polls in the next 10 s use that reading without a process; concurrent polls share the query in flight. A user refresh, pending mode or agent completion asks fresh. Anything the batch cannot answer (another host, a PR GitHub left out, a renamed repository, a failed or unparseable batch, a rollup over one page) takes today's per-PR `gh pr view`; a failed batch suspends its group for 5 min, and rate limits and timeouts reach the monitor's cooldown instead of a per-PR retry. Credential rotation (`rotateScope("local-gh")`) drops the group's readings. Containers stay on the per-PR path.
+- BG-6 backoff (`pr-monitor.ts`, `pr-monitor-policy.ts`): an open PR whose reading (state, mergeability, head, `updatedAt`, rollup counts, GitHub auto-merge) has not moved for 15 min, whose last rollup succeeded with nothing pending, whose mergeability is known and with neither Orkestrator's `autoMerge` nor GitHub's auto-merge on, is polled every 2 min (+ up to 15 s jitter). Any wake, a changed reading, turning auto-merge on, or a change a batch saw for that PR returns it to 20 s at once. The per-PR lookup now also asks for `updatedAt,autoMergeRequest`.
+- BG-13 (`pr-monitor-runtime.ts`): a sync queued behind the running one that has not read storage yet answers every later caller, so a burst of `get_environments` costs at most one running and one queued reconciliation. The project-scoped sync was not done.
+
+Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary through a fake `gh` on PATH), `tests/pr-monitor-quiet.test.ts`, `pr-monitor-policy.test.ts`, `pr-monitor-runtime.test.ts`.
+
+**Investigation.** Containers: each sources its own runtime credential inside the container, which the backend cannot prove equal to another's, so the recommended option below was taken and containers keep one lookup per PR (they gain only the backoff). Not checked live: GitHub's real response to a batch where one alias is inaccessible (`gh api` is expected to exit non-zero and still print the answered aliases, which the reader parses), and the before-and-after query counts (task 1).
 
 **Decisions.**
 
@@ -858,6 +864,17 @@ both blobs, so a different or pruned store still reports `body-unavailable`.
 Eight quiet ticks (2 s) before polling at 1 s; liveness every two idle ticks, so
 an ended session is still noticed in about 2 s. A hook can take one idle
 interval to be seen, within the 2 s approval budget.
+
+### Task 9: batch freshness and quiet thresholds
+
+Made on 2026-11-03. A background poll accepts a group reading up to 10 s old
+(half the 20 s cadence), so a change can be seen up to 10 s later than
+before; anything a user or agent waits on asks fresh. Quiet starts after
+15 min without a change (the report suggested an hour; 15 min still saves
+most polls of PRs that wait hours for review) and polls every 2 min, inside
+the report's 2–5 min range, because a GitHub-side merge or close is then
+seen within about 2 min. Unknown GitHub auto-merge, unknown mergeability and
+a failed rollup all count as "not quiet".
 
 ### Task 10: paused messaging
 

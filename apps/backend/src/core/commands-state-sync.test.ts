@@ -6220,10 +6220,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
+      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName",
     );
     expect(
       parsePrMonitorDetectionResponse(

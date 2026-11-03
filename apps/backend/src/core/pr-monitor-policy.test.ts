@@ -28,6 +28,17 @@ function delay(overrides: Partial<DelayInput>): number {
 }
 
 describe("PR monitor policy", () => {
+  test("a quiet open PR polls at the quiet cadence, never while errors back off", () => {
+    expect(delay({ quiet: true })).toBe(policy.quietIntervalMs);
+    expect(delay({ quiet: true, random: 0.5 })).toBe(
+      policy.quietIntervalMs + Math.floor(0.5 * policy.quietJitterMs),
+    );
+    expect(delay({ quiet: true, consecutiveErrors: 1 })).toBe(40_000);
+    // Only an open PR can be quiet.
+    expect(delay({ policy: "create-pending", mode: "create-pending", quiet: true })).toBe(5_000);
+    expect(resolvePrMonitorPolicy({ quietIntervalMs: 1 }).quietIntervalMs).toBe(20_000);
+  });
+
   test("preserves the open and pending cadences exactly", () => {
     expect(delay({ policy: "open", random: 0.99 })).toBe(20_000);
     expect(delay({ policy: "create-pending", mode: "create-pending", random: 0.99 })).toBe(5_000);

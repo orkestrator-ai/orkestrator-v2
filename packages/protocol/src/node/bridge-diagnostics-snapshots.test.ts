@@ -80,37 +80,39 @@ afterEach(() => {
 });
 
 describe("change-driven snapshots at info", () => {
-  test("healthy tools pending at successive looks write at most once per minute at info", () => {
+  test("a healthy turn's changes at info write only its lifecycle and the keepalive", () => {
     const h = harness();
     try {
       h.scope.sent("run-1");
-      for (let minute = 0; minute < 12; minute++) {
+      // Each minute a different tool is held across the look, the phase moves and
+      // every counter crosses its threshold: all of it is what a healthy turn does.
+      const phases = ["following", "draining", "following"] as const;
+      for (let minute = 0; minute < 9; minute++) {
         if (minute > 0) h.scope.tool(`call-${minute - 1}`, "shell", "completed");
         h.scope.tool(`call-${minute}`, "shell", "started");
-        // Tool churn itself never writes; the periodic look samples it.
-        expect(h.events()).toHaveLength(2 + minute);
+        h.scope.checkpoint(phases[minute % phases.length]!);
+        for (const [counter, threshold] of Object.entries(COUNTER_CHANGE_THRESHOLDS))
+          if (Number.isFinite(threshold)) h.scope.count(counter as never, threshold);
         h.run(TICK);
-        expect(h.events()).toHaveLength(3 + minute);
-        expect(h.written.at(-1)).toMatchObject({
-          event: "heartbeat",
-          phase: "following",
-          pendingToolCount: 1,
-          lastDeltaAgoMs: 0,
-          tickDelayMs: 0,
-        });
-        expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(TICK);
       }
-      h.scope.tool("call-11", "shell", "completed");
+      expect(h.events()).toEqual(["send-started", "send-resolved"]);
+      // The keepalive, ten minutes after the last snapshot written.
+      h.scope.tool("call-8", "shell", "completed");
       h.run(TICK);
-      expect(h.events()).toHaveLength(15);
-      expect(h.written.at(-1)!.pendingToolCount).toBe(0);
-      h.run(BRIDGE_DIAGNOSTICS_KEEPALIVE_MS - TICK);
-      expect(h.events()).toHaveLength(15);
+      expect(h.events()).toEqual(["send-started", "send-resolved", "heartbeat"]);
+      expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 0, completedTools: 9 });
+      for (let minute = 0; minute < 9; minute++) {
+        h.scope.tool(`later-${minute}`, "read", "started");
+        h.run(TICK);
+        h.scope.tool(`later-${minute}`, "read", "completed");
+      }
+      expect(h.events()).toHaveLength(3);
       h.run(TICK);
-      expect(h.events()).toHaveLength(16);
+      expect(h.events()).toHaveLength(4);
     } finally {
       h.scope.close();
     }
+    expect(h.events().at(-1)).toBe("closed");
   });
 
   test("a healthy turn writes its lifecycle and the keepalive, and no other look", () => {
@@ -187,17 +189,15 @@ describe("change-driven snapshots at info", () => {
     const h = harness();
     try {
       h.scope.checkpoint("attached");
-      // Attaching is a phase change, written once; idling after it is not a stall.
+      // Idling after attaching is not a stall, and attaching is not stall evidence.
       for (let minute = 0; minute < 5; minute++) h.tick();
-      expect(h.events()).toEqual(["send-started", "heartbeat"]);
-      expect(h.written.at(-1)).toMatchObject({ phase: "attached", pendingToolCount: 0 });
+      expect(h.events()).toEqual(["send-started"]);
       // A request sent after a long idle spell waits from when it was sent.
       h.scope.tool("request-1", "session/prompt", "started");
       h.tick();
-      expect(h.events()).toHaveLength(3);
-      expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1, lastDeltaAgoMs: null });
+      expect(h.events()).toHaveLength(1);
       h.tick();
-      expect(h.events()).toHaveLength(4);
+      expect(h.events()).toHaveLength(2);
       expect(h.written.at(-1)).toMatchObject({
         phase: "attached",
         pendingToolCount: 1,
@@ -212,12 +212,12 @@ describe("change-driven snapshots at info", () => {
     const h = harness();
     try {
       h.scope.sent("run-1");
-      h.run(TICK);
+      h.run(5 * TICK);
       h.scope.tool("long-build", "shell", "started");
       h.run(9 * TICK);
-      // Only the tool appearing so far: it is a change, not yet a stall.
+      // The tool appearing is not stall evidence; only the keepalive at ten minutes.
       expect(h.events()).toEqual(["send-started", "send-resolved", "heartbeat"]);
-      expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(TICK);
+      expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(5 * TICK);
       h.run(TICK);
       expect(h.events()).toHaveLength(4);
       expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(STALL_TOOL_PENDING_MS);
@@ -228,9 +228,11 @@ describe("change-driven snapshots at info", () => {
         h.run(TICK);
       }
       expect(h.events()).toHaveLength(4);
-      // A second tool is written when it appears and again when it crosses the threshold.
+      // A second tool is written when it crosses the threshold (after a keepalive).
       h.scope.tool("second", "shell", "started");
-      h.run(STALL_TOOL_PENDING_MS);
+      h.run(STALL_TOOL_PENDING_MS - TICK);
+      expect(h.events()).toHaveLength(5);
+      h.run(TICK);
       expect(h.events()).toHaveLength(6);
       expect(h.written.at(-1)!.pendingTools[1].ageMs).toBe(STALL_TOOL_PENDING_MS);
       // The stall clearing is written.
@@ -399,96 +401,24 @@ describe("change-driven snapshots at info", () => {
       return h;
     }
 
-    test("of phase is written once; the unchanged phase is not written again", () => {
+    test("of phase, pending tools or a counter in a moving turn is not written at info", () => {
       const h = moving();
       try {
         h.scope.terminalSettled("resolved");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(3);
-        expect(h.written.at(-1)).toMatchObject({
-          event: "heartbeat",
-          phase: "draining",
-          terminal: "resolved",
-        });
-        h.run(3 * TICK);
-        expect(h.events()).toHaveLength(3);
-        h.scope.checkpoint("cancelling");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(4);
-        expect(h.written.at(-1)!.phase).toBe("cancelling");
-      } finally {
-        h.scope.close();
-      }
-    });
-
-    test("of the pending tools is written: a tool appearing, being replaced or finishing", () => {
-      const h = moving();
-      try {
         h.scope.tool("call-1", "shell", "started");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(3);
-        expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1 });
-        // Still pending and under its threshold: nothing new to say.
+        h.scope.count("timeouts");
+        h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes);
         h.run(3 * TICK);
-        expect(h.events()).toHaveLength(3);
-        // Same count, different tool: the set changed.
+        h.scope.checkpoint("cancelling");
         h.scope.tool("call-1", "shell", "completed");
-        h.scope.tool("call-2", "read", "started");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(4);
-        expect(h.written.at(-1)!.pendingTools).toMatchObject([{ kind: "read" }]);
-        h.scope.tool("call-2", "read", "completed");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(5);
-        expect(h.written.at(-1)!.pendingToolCount).toBe(0);
-        h.run(TICK);
-        expect(h.events()).toHaveLength(5);
-      } finally {
-        h.scope.close();
-      }
-    });
-
-    test("of a counter over its threshold is written; under it is not", () => {
-      const h = moving();
-      try {
-        h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
-        h.run(TICK);
-        expect(h.events()).toHaveLength(2);
-        h.scope.count("stderrBytes", 1);
-        h.run(TICK);
-        expect(h.events()).toHaveLength(3);
-        // The delta is measured from the last snapshot, not from the scope's start.
-        h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
-        h.run(TICK);
-        expect(h.events()).toHaveLength(3);
-        for (const counter of [
-          "timeouts",
-          "protocolErrors",
-          "requestsSent",
-          "responsesReceived",
-        ] as const) {
-          h.scope.count(counter);
-          h.run(TICK);
-          expect(h.written.at(-1)!.counters[counter]).toBe(1);
-        }
-        expect(h.events()).toHaveLength(7);
-      } finally {
-        h.scope.close();
-      }
-    });
-
-    test("notifications are the delta stream, not a change", () => {
-      const h = moving();
-      try {
-        h.scope.count("notificationsReceived", 10_000);
-        h.run(TICK);
+        h.run(3 * TICK);
         expect(h.events()).toHaveLength(2);
       } finally {
         h.scope.close();
       }
     });
 
-    test("is written during a stall too, and an unchanged stall is not", () => {
+    test("is written during a silent stall, and an unchanged stall is not", () => {
       const h = harness();
       try {
         h.scope.sent("run-1");
@@ -503,23 +433,45 @@ describe("change-driven snapshots at info", () => {
         expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1 });
         h.tick();
         expect(h.events()).toHaveLength(4);
+        h.scope.checkpoint("draining");
+        h.tick();
+        expect(h.events()).toHaveLength(5);
+        expect(h.written.at(-1)!.phase).toBe("draining");
+        h.scope.count("timeouts");
+        h.tick();
+        expect(h.events()).toHaveLength(6);
+        expect(h.written.at(-1)!.counters.timeouts).toBe(1);
+        h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
+        h.tick();
+        expect(h.events()).toHaveLength(6);
       } finally {
         h.scope.close();
       }
     });
 
-    test("an unchanged, moving turn writes nothing between keepalives", () => {
-      const h = moving();
+    test("costs no queued work below trace", () => {
+      const original = globalThis.queueMicrotask;
+      let queued = 0;
+      globalThis.queueMicrotask = (callback) => {
+        queued++;
+        original(callback);
+      };
       try {
-        h.scope.tool("long-call", "task", "started");
-        h.run(TICK);
-        expect(h.events()).toHaveLength(3);
-        h.scope.count("stderrBytes", 100);
-        // Short of the keepalive and of the tool's pending threshold.
-        h.run(BRIDGE_DIAGNOSTICS_KEEPALIVE_MS - 2 * TICK);
-        expect(h.events()).toHaveLength(3);
+        configureLogger({ areaLevels: { "bridge.diagnostics": "debug" } });
+        const h = moving();
+        try {
+          for (let index = 0; index < 50; index++) {
+            h.scope.tool(`call-${index}`, "shell", "started");
+            h.scope.checkpoint(index % 2 ? "following" : "draining");
+            h.scope.count("requestsSent");
+            h.scope.tool(`call-${index}`, "shell", "completed");
+          }
+        } finally {
+          h.scope.close();
+        }
+        expect(queued).toBe(0);
       } finally {
-        h.scope.close();
+        globalThis.queueMicrotask = original;
       }
     });
   });
@@ -542,6 +494,152 @@ describe("change-driven snapshots at info", () => {
     } finally {
       h.scope.close();
     }
+  });
+});
+
+describe("change snapshots at trace", () => {
+  /** Lets the queued comparison run: it waits for the producer's synchronous work. */
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  /** A moving turn at trace; `changes()` are its `change` snapshots. */
+  function traced() {
+    configureLogger({ areaLevels: { "bridge.diagnostics": "trace" } });
+    const h = harness(() => bridgeDiagnosticsStreamEnabled("pi"));
+    h.scope.sent("run-1");
+    return {
+      ...h,
+      changes: () => h.written.filter((entry) => entry.event === "change"),
+    };
+  }
+
+  test("a change of phase is written once; the unchanged phase is not", async () => {
+    const h = traced();
+    try {
+      h.scope.terminalSettled("resolved");
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      expect(h.changes().at(-1)).toMatchObject({
+        phase: "draining",
+        terminal: "resolved",
+        tickDelayMs: 0,
+      });
+      h.scope.checkpoint("draining");
+      h.scope.terminalSettled("resolved");
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      h.scope.checkpoint("cancelling");
+      await settle();
+      expect(h.changes()).toHaveLength(2);
+      expect(h.changes().at(-1)!.phase).toBe("cancelling");
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test("a change of the pending tools is written: appearing, replaced, finishing", async () => {
+    const h = traced();
+    try {
+      h.scope.tool("call-1", "shell", "started");
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      expect(h.changes().at(-1)).toMatchObject({ pendingToolCount: 1 });
+      // The same tool moving from partial to started is not a new set.
+      h.scope.tool("call-1", "shell", "started");
+      h.scope.activity("tool_execution_update");
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      // Replaced in one burst: one snapshot, showing the new tool.
+      h.scope.tool("call-1", "shell", "completed");
+      h.scope.tool("call-2", "read", "started");
+      await settle();
+      expect(h.changes()).toHaveLength(2);
+      expect(h.changes().at(-1)!.pendingTools).toMatchObject([{ kind: "read" }]);
+      h.scope.tool("call-2", "read", "completed");
+      await settle();
+      expect(h.changes()).toHaveLength(3);
+      expect(h.changes().at(-1)!.pendingToolCount).toBe(0);
+      // Started and finished in one burst: the pending set is unchanged.
+      h.scope.tool("call-3", "read", "started");
+      h.scope.tool("call-3", "read", "completed");
+      await settle();
+      expect(h.changes()).toHaveLength(3);
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test("a counter over its threshold is written; under it, and notifications, are not", async () => {
+    const h = traced();
+    try {
+      h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
+      h.scope.count("notificationsReceived", 10_000);
+      await settle();
+      expect(h.changes()).toHaveLength(0);
+      h.scope.count("stderrBytes", 1);
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      // Measured from the last snapshot written, not from the scope's start.
+      h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      for (const counter of [
+        "timeouts",
+        "protocolErrors",
+        "requestsSent",
+        "responsesReceived",
+      ] as const) {
+        h.scope.count(counter);
+        await settle();
+        expect(h.changes().at(-1)!.counters[counter]).toBe(1);
+      }
+      expect(h.changes()).toHaveLength(5);
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test("an unchanged turn writes no change, and the minute stream carries on", async () => {
+    const h = traced();
+    try {
+      h.scope.tool("call-1", "shell", "started");
+      await settle();
+      h.run(3 * TICK);
+      await settle();
+      expect(h.changes()).toHaveLength(1);
+      expect(h.events().filter((event) => event === "heartbeat")).toHaveLength(3);
+      // A change snapshot is not a timer firing: the next look is not late.
+      expect(h.written.at(-1)).toMatchObject({ event: "heartbeat", tickDelayMs: 0 });
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test("the level changed mid-turn applies to the running turn, up and down", async () => {
+    const h = harness(() => bridgeDiagnosticsStreamEnabled("pi"));
+    try {
+      h.scope.sent("run-1");
+      configureLogger({ areaLevels: { "bridge.diagnostics": "debug" } });
+      h.scope.tool("call-1", "shell", "started");
+      await settle();
+      expect(h.events()).not.toContain("change");
+      configureLogger({ areaLevels: { bridge: "trace" } });
+      h.scope.tool("call-2", "shell", "started");
+      await settle();
+      expect(h.events().filter((event) => event === "change")).toHaveLength(1);
+      configureLogger({ areaLevels: {} });
+      h.scope.tool("call-3", "shell", "started");
+      await settle();
+      expect(h.events().filter((event) => event === "change")).toHaveLength(1);
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test("a change queued before close is not written after it", async () => {
+    const h = traced();
+    h.scope.tool("call-1", "shell", "started");
+    h.scope.close();
+    await settle();
+    expect(h.events()).toEqual(["send-started", "send-resolved", "closed"]);
   });
 });
 

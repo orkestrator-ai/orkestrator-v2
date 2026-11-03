@@ -247,6 +247,15 @@ export function safeDiagnosticMetrics(
   return result;
 }
 
+/**
+ * Whether a bridge writes a `change` snapshot as soon as the phase, the pending
+ * tools or a counter past its threshold changes: `bridge.diagnostics` at trace.
+ * Read per call, so it applies to a turn already running.
+ */
+export function bridgeDiagnosticsChangesEnabled(): boolean {
+  return log.isEnabled("trace");
+}
+
 /** One snapshot: nested JSON is not a logger field, so `payload` carries it as one string. */
 export interface BridgeDiagnosticEntry {
   bridge: BridgeName;
@@ -308,8 +317,11 @@ function writeDiagnostic(
  * Lifecycle events are written whenever `bridge.diagnostics` allows `info`. A
  * look is written every minute while `active()` says the per-minute stream is
  * on (`bridge.diagnostics` at debug); otherwise only when a stall signal starts
- * or clears, when the phase, pending tools or a counter changes, or as a keepalive.
- * docs/architecture/bridge-diagnostics.md, "When a snapshot is written".
+ * or clears, when something changes during a silent stall, or as a keepalive.
+ * At trace a change of phase, pending tools or a counter is also written as a
+ * `change` snapshot as soon as it happens. A healthy turn's changes are never
+ * written at info. docs/architecture/bridge-diagnostics.md, "When a snapshot is
+ * written".
  *
  * A scope counts whether or not it is writing. Turning detail on mid-turn is how
  * someone looks at a stuck agent, so the first snapshot has to cover the turn so
@@ -346,6 +358,8 @@ export class BridgeRunDiagnostics {
   private closed = false;
   private wasActive: boolean;
   private baseline?: Baseline;
+  /** A `change` snapshot is queued for the end of the producer's synchronous work. */
+  private changeQueued = false;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(
@@ -400,7 +414,7 @@ export class BridgeRunDiagnostics {
       return;
     }
     if (stage === "completed") {
-      this.pending.delete(key);
+      if (this.pending.delete(key)) this.changed();
       this.completedTools++;
       return;
     }
@@ -415,14 +429,19 @@ export class BridgeRunDiagnostics {
       stage: stage === "started" || existing?.stage === "started" ? "started" : "partial",
       nested,
     });
+    if (!existing) this.changed();
   }
 
   checkpoint(phase: Phase): void {
     if (phase === "attached") this.processScope = true;
+    if (phase === this.phase) return;
     this.phase = phase;
+    this.changed();
   }
   count(key: Counter, amount = 1): void {
-    if (!this.closed && Number.isSafeInteger(amount) && amount >= 0) this.counters[key] += amount;
+    if (this.closed || !Number.isSafeInteger(amount) || amount < 0) return;
+    this.counters[key] += amount;
+    if (amount > 0 && Number.isFinite(COUNTER_CHANGE_THRESHOLDS[key])) this.changed();
   }
 
   translationFailed(): void {
@@ -438,7 +457,10 @@ export class BridgeRunDiagnostics {
   }
   terminalSettled(outcome: Outcome): void {
     this.terminal = outcome;
-    if (outcome === "resolved") this.phase = "draining";
+    if (outcome === "resolved" && this.phase !== "draining") {
+      this.phase = "draining";
+      this.changed();
+    }
   }
 
   requestCancellation(reason: CancellationReason = "user"): void {
@@ -470,13 +492,50 @@ export class BridgeRunDiagnostics {
   ): void {
     if (this.closed) return;
     const now = this.now();
-    const age = (time: number | undefined) => (time === undefined ? null : Math.max(0, now - time));
     const tickDelayMs =
       event === "heartbeat" ? Math.max(0, now - this.lastTick - this.intervalMs) : 0;
     if (event === "heartbeat") this.lastTick = now;
     if (!bridgeDiagnosticsActive()) return;
     const stall = this.stallState(now, tickDelayMs);
     if (event === "heartbeat" && !this.active() && !this.periodicDue(now, stall)) return;
+    this.writeSnapshot(event, now, tickDelayMs, stall);
+  }
+
+  /**
+   * Something a `change` snapshot compares may have moved. Below trace this is one
+   * level check and nothing else. At trace the comparison and the write wait for
+   * the producer's synchronous work to finish, so a burst of updates (a tool
+   * replaced by another, a batch of requests) is one snapshot, and a tool that
+   * starts and finishes in one burst changes nothing.
+   */
+  private changed(): void {
+    if (this.closed || this.changeQueued || !bridgeDiagnosticsChangesEnabled()) return;
+    this.changeQueued = true;
+    queueMicrotask(() => {
+      this.changeQueued = false;
+      this.reportChange();
+    });
+  }
+
+  private reportChange(): void {
+    if (this.closed || !bridgeDiagnosticsChangesEnabled() || !bridgeDiagnosticsActive()) return;
+    const last = this.baseline;
+    if (last && !this.changedSince(last)) return;
+    const now = this.now();
+    try {
+      this.writeSnapshot("change", now, 0, this.stallState(now, 0));
+    } catch {
+      // A diagnostic sink must never fail an agent turn.
+    }
+  }
+
+  private writeSnapshot(
+    event: BridgeDiagnosticEntry["event"],
+    now: number,
+    tickDelayMs: number,
+    stall: StallState,
+  ): void {
+    const age = (time: number | undefined) => (time === undefined ? null : Math.max(0, now - time));
     const pendingTools = Array.from(this.pending.entries())
       .slice(0, MAX_REPORTED_TOOLS)
       .map(([id, tool]) => ({
@@ -533,11 +592,13 @@ export class BridgeRunDiagnostics {
   }
 
   /**
-   * Off the per-minute stream, a look is written only when it says something the
-   * last snapshot did not: a stall signal started or cleared (or another tool
-   * crossed the pending threshold); the phase, the set of pending tools or a
-   * counter past its threshold changed; or the keepalive is due. Ages growing and
-   * deltas arriving are not changes: they are what a healthy turn does.
+   * Off the per-minute stream, a look is written only when it is stall evidence
+   * the last snapshot did not carry: the timer fired late; a stall signal started
+   * or cleared (or another tool crossed the pending threshold); or, while the turn
+   * is silent (no delta), the phase, the set of pending tools or a counter past
+   * its threshold changed. Otherwise only the keepalive. A healthy turn's changes
+   * are not written at info: they are what a healthy turn does (`change`, at trace,
+   * writes them).
    */
   private periodicDue(now: number, stall: StallState): boolean {
     // Each late firing is a separate observation, not an age of a persistent stall.
@@ -546,7 +607,7 @@ export class BridgeRunDiagnostics {
     if (!last) return true;
     if (!sameSet(stall.signals, last.stall.signals) || !sameSet(stall.tools, last.stall.tools))
       return true;
-    if (this.changedSince(last)) return true;
+    if (stall.signals.has("no-delta") && this.changedSince(last)) return true;
     return now - last.at >= BRIDGE_DIAGNOSTICS_KEEPALIVE_MS;
   }
 

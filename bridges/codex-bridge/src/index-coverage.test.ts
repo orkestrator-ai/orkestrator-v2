@@ -505,11 +505,10 @@ describe("codex bridge private boundary coverage", () => {
       quiet?.report("heartbeat");
       quiet?.report("heartbeat");
       quiet?.close();
-      // Off, the process scope writes its lifecycle and the look that sees it
-      // attached (a phase change), and no per-minute look after it.
+      // Off, the process scope writes its lifecycle and no look: attaching is
+      // not stall evidence, and an idle process is not stalled.
       expect(bridgeDiagnosticPayloads(lines).map((entry) => entry.event)).toEqual([
         "send-started",
-        "heartbeat",
         "closed",
       ]);
       lines.length = 0;

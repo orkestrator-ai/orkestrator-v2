@@ -3,8 +3,8 @@
 Status: Living — shared bridge debug logging.
 
 At the default level (`info`) every bridge writes the lifecycle of each turn or
-process scope and snapshots for stalls and sampled state changes, plus a keepalive
-every ten minutes.
+process scope and snapshots for stalls, plus a keepalive every ten minutes. A
+healthy turn writes nothing else, however much it changes.
 [When a snapshot is written](#when-a-snapshot-is-written) has the rules. For a
 snapshot every minute, as before, set `bridge` or `bridge.diagnostics` to Debug or
 Trace in **Settings → Debug → Log Detail**, or the default level to either. It
@@ -25,20 +25,28 @@ never silences lifecycle or stall snapshots: `bridge.diagnostics=warn` does that
 
 Each open scope has one timer. Once a minute it looks at the scope and decides
 whether to write. It is unreferenced, so it never keeps a process alive, and closing
-the scope clears it.
+the scope clears it. Change snapshots (trace only) are the one kind not written by
+a look; they need no timer.
 
 | Kind | Event | Written | Detail it needs |
 | --- | --- | --- | --- |
 | Lifecycle | `send-started`, `send-resolved`, `cancel-requested`, `cancel-settled`, `closed`, `snapshot-overflow` | At the boundary, as before. | `info` |
-| Stall | `heartbeat` | At the first look where a stall signal starts or clears, another tool crosses the pending threshold, or any timer firing reaches the late-timer threshold. | `info` |
-| Change | `heartbeat` | At a look where the phase, the set of pending tools, or a counter by at least its threshold changed since the last snapshot, stalled or not. | `info` |
+| Stall | `heartbeat` | At the first look where a stall signal starts or clears, another tool crosses the pending threshold, or any timer firing reaches the late-timer threshold; and, while the no-delta signal holds, at a look where the scope changed (see Changes). | `info` |
 | Keepalive | `heartbeat` | When ten minutes (`BRIDGE_DIAGNOSTICS_KEEPALIVE_MS`) have passed since the scope's last snapshot of any kind. | `info` |
-| Per-minute | `heartbeat` | At every look, changed or not. This is the stream as it was before. | `debug` or `trace` |
+| Per-minute | `heartbeat` | At every look, changed or not. This is the stream as it was before, unchanged. | `debug` (or `trace`) |
+| Change | `change` | As soon as the phase, the set of pending tools, or a counter by at least its threshold changes, compared with the last snapshot written. Not tied to a look. | `trace` |
+
+So at `info` a healthy turn writes its lifecycle and the keepalive, and nothing
+else: the phase moving, tools coming and going and counters climbing are what a
+healthy turn does. At `debug` every look is written, so every change is in the
+minute stream anyway. At `trace` a change is also written the moment it happens,
+on top of the minute stream, which is the only level where a change on its own
+produces a snapshot.
 
 Every entry is still written at `info`, so `bridge.diagnostics=warn` silences them
 all and a text line looks the same whatever made it. The decision is made at each
-look from the level in force then, so changing `bridge.diagnostics` mid-turn applies
-to a turn already running, in both directions.
+look (or, for a change, at each change) from the level in force then, so changing
+`bridge.diagnostics` mid-turn applies to a turn already running, in both directions.
 
 **Stall signals.** Each comes from fields the snapshot already carries.
 
@@ -48,48 +56,55 @@ to a turn already running, in both directions.
 | Tool pending | One entry in `pendingTools` has been pending for the threshold, even while deltas still arrive. | `STALL_TOOL_PENDING_MS`, 10 minutes | The app's own stall warning (Multi Review, the build pipeline) is ten minutes. A pending tool alone is weaker evidence than silence: builds and subagents run long, and unmatched starts are common ([cursor-diagnostics.md](cursor-diagnostics.md)). A tool that is pending *and* silent trips the no-delta signal first. |
 | Late timer | `tickDelayMs` reaches the threshold. | `STALL_TICK_DELAY_MS`, 10 seconds | The event-loop monitor's threshold for a stall that is always logged at `error`. |
 
-**Changes.** A look compares the scope with the last snapshot written, of any
-kind, and writes when one of these differs:
+**Changes.** A scope is compared with the last snapshot written, of any kind, and
+has changed when one of these differs:
 
 - the phase (for example `following` to `draining` when the terminal settles, a
   process scope becoming `attached`, or `cancelling`);
-- the set of pending tools: a tool that appeared, finished or was replaced. Tools
-  that start and finish between two looks leave the set as it was, so a turn of
-  short tools writes nothing;
+- the set of pending tools: a tool that appeared, finished or was replaced;
 - a counter, by at least its threshold in `COUNTER_CHANGE_THRESHOLDS`: one timeout,
   protocol error, request sent or response received, or 4 KiB of stderr.
   `notificationsReceived` never counts: notifications are the delta stream itself
   (every ACP `session/update`), and their silence is what the no-delta signal watches.
 
 Ages growing, deltas arriving and the other counters (`deltaCount`, `completedTools`
-and so on) moving are not changes: that is what a healthy turn does. A look writes at
-most one snapshot, so a scope writes at most one change snapshot a minute.
+and so on) moving are never changes.
 
-Change snapshots apply to healthy turns too, as required by acceptance criterion
-ac-3. A healthy tool-heavy turn with a different tool pending at each look can
-therefore write every minute at info. Tools that start and finish between looks
-produce no pending-set change; the savings depend on what each look observes,
-not just whether the turn is healthy. Moving change snapshots behind a stall or
-debug gate would remove the evidence required by ac-3.
+At `info` a change is written only while the no-delta signal holds: a silent turn
+whose tools, phase or error counters still move is evidence of where it is stuck,
+and it is written at the next look (at most one a minute). Outside a silent stall a
+change is not written at `info`, whatever it is.
+
+At `trace` every change is written as a `change` snapshot when it happens. The
+bridge's callback only notes that something moved; the comparison and the write run
+once the producer's synchronous work has finished (a microtask, not a timer), so a
+burst of updates is one snapshot, a tool replaced by another is one snapshot, and a
+tool that starts and finishes in the same burst changes nothing and writes nothing.
+An unchanged scope writes no `change`. Below `trace` the callback does one level
+check and queues nothing, and builds no arguments. A `change` carries `tickDelayMs: 0`
+and does not move the timer's own reference, so the next look's delay is unaffected.
 
 A persistent no-delta or tool-pending stall is written when it starts and again when
-it clears. In between, it is written again only for a change as above. An unchanged
-stall is not repeated: its ages are what the last snapshot implies plus the time
-since. Every qualifying late timer firing is written independently, including
-consecutive late firings: its delay describes that firing and cannot be inferred from
-an earlier snapshot. Process scopes retain their identity across cancellation, so an
-idle process without a pending request does not acquire a no-delta stall.
+it clears. In between, it is written again only for a change during a silent stall
+as above. An unchanged stall is not repeated: its ages are what the last snapshot
+implies plus the time since. Every qualifying late timer firing is written
+independently, including consecutive late firings: its delay describes that firing
+and cannot be inferred from an earlier snapshot. Process scopes retain their identity
+across cancellation, so an idle process without a pending request does not acquire a
+no-delta stall.
 
 Only a successful snapshot write (including an overflow record) advances the
 comparison baseline. A failed write is retried at the next qualifying look.
 
-**Reading a gap.** With the stream off, a scope that wrote `send-started` and then
-nothing is either moving normally or its diagnostic timer has died. The keepalive
-bounds that: no snapshot for more than ten minutes (plus one look) from an open
-scope means the timer is not running. Any snapshot followed by nothing (before the
-keepalive) means its phase, pending tools and thresholded counters stayed as they
-were at every look since, and so did its stall signals; a change or a clearing would
-have been written.
+**Reading a gap.** At `info`, a scope that wrote `send-started` and then nothing
+is either healthy or its diagnostic timer has died. The keepalive bounds that: no
+snapshot for more than ten minutes (plus one look) from an open scope means the
+timer is not running. Any snapshot followed by nothing (before the keepalive) means
+no stall signal started or cleared at any look since and no timer firing was late.
+It says nothing about what the turn did meanwhile: its phase, tools and counters may
+have changed freely, and only the next snapshot (a keepalive, a stall or `closed`)
+shows where they ended up. For that history, use `debug` (each minute) or `trace`
+(each change).
 
 **Restoring the per-minute stream.** Set `bridge.diagnostics=debug` (or `bridge`, or
 the default level) in Log Detail, or `ORKESTRATOR_LOG_LEVEL=bridge.diagnostics=debug`

@@ -1722,34 +1722,42 @@ Before R4 the snapshots had one switch. With `bridge.diagnostics` below `debug`
 it wrote the lifecycle plus a snapshot every minute. The sampled 2026-10-28 log was
 the second case: `debugLogging` on before the split meant bridge snapshots.
 
-| Kind | Before, at `info` | Before, at `debug` | After, at `info` | After, at `debug` |
-| --- | --- | --- | --- | --- |
-| Lifecycle (`send-started`, `send-resolved`, `cancel-*`, `closed`, `snapshot-overflow`) | Not written | Written | Written | Written |
-| Stall onset and clearing | Not written | In the minute stream | Written | In the minute stream |
-| Change of phase, pending tools or a thresholded counter | Not written | In the minute stream | Written | In the minute stream |
-| Keepalive, 10 minutes after the last snapshot | Not written | In the minute stream | Written | In the minute stream |
-| Every other minute | Not written | Written | Not written | Written, unchanged |
-| Cursor `sdk-snapshot`, Claude `debug-events` | Not written | Written | Not written | Written |
+| Kind | Before, at `info` | Before, at `debug` | After, at `info` | After, at `debug` | After, at `trace` |
+| --- | --- | --- | --- | --- | --- |
+| Lifecycle (`send-started`, `send-resolved`, `cancel-*`, `closed`, `snapshot-overflow`) | Not written | Written | Written | Written | Written |
+| Stall onset and clearing, late timer | Not written | In the minute stream | Written | In the minute stream | In the minute stream |
+| Change during a silent (no-delta) stall | Not written | In the minute stream | Written at the next look | In the minute stream | In the minute stream, and as `change` |
+| Change of phase, pending tools or a thresholded counter otherwise | Not written | In the minute stream | Not written | In the minute stream | Written as it happens (`change`) |
+| Keepalive, 10 minutes after the last snapshot | Not written | In the minute stream | Written | In the minute stream | In the minute stream |
+| Every other minute | Not written | Written | Not written | Written, unchanged | Written, unchanged |
+| Cursor `sdk-snapshot`, Claude `debug-events` | Not written | Written | Not written | Written | Written |
 
 Every entry is written at the `info` record level, as before, so the per-minute
 stream is byte-for-byte the same shape and `bridge.diagnostics=warn` still
-silences everything. Change snapshots are written at `info` whether or not the
-turn is stalled. What keeps a healthy turn quiet is what counts as a change: the
-pending set is compared look to look, so tools that start and finish between two
-looks change nothing; ages, deltas and progress counters never count; and
-notifications (the delta stream itself) never count. A turn that holds a tool across
-a look writes one snapshot when the tool appears and one when it is gone.
+silences everything.
 
-The default therefore writes **more** than before for someone with saving on and
-Log Detail untouched: three lifecycle snapshots per turn (about 1.9 KB for Claude),
-one per process scope start and end for Codex and ACP, one change snapshot when a
-process scope attaches, one when a tool or request held across a look appears or
-finishes (an ACP turn's `session/prompt` request does this, so about two per ACP
-turn), one per timeout, protocol error or 4 KiB of stderr, a keepalive every ten minutes
-per open scope (a Codex bridge's process scope is open for the bridge's whole life:
-about 100 KB a day), and the stall snapshots. A healthy turn whose phase, pending
-set and thresholded counters are the same at every look writes no other periodic
-snapshot.
+**Where change snapshots sit.** The ticket asks for both "a healthy turn at the
+default level writes no periodic snapshot, apart from lifecycle events and the
+keepalive" and "a change in phase, pending tools or a counter delta over its
+threshold produces a snapshot, and an unchanged state does not". At `info` these
+cannot both hold, because a healthy turn's phase, tools and request counters
+change all the time; at `debug` every look is written, so a change is not
+distinguishable from no change. The ticket left the level of change snapshots to
+this work, so they sit at `trace`: there each change is written as a `change`
+snapshot as soon as it happens (coalesced to the end of the producer's synchronous
+work), on top of the unchanged minute stream, and an unchanged scope writes no
+`change`. At `info` a change is written only while the turn is silent (the no-delta
+signal), where it is stall evidence. An earlier round wrote changes at `info` for
+healthy turns too; a turn with a different tool held across each look then wrote
+every minute, which failed the first criterion.
+
+The default therefore writes, for someone with saving on and Log Detail untouched:
+three lifecycle snapshots per turn (about 1.9 KB for Claude), one per process scope
+start and end for Codex and ACP, a keepalive every ten minutes per open scope (a
+Codex bridge's process scope is open for the bridge's whole life: about 100 KB a
+day), and the stall snapshots. That is more than the old default (nothing), and
+far less than the old per-minute stream. A healthy turn writes no other snapshot,
+however much it changes.
 
 ### Thresholds
 
@@ -1759,7 +1767,7 @@ snapshot.
 | `STALL_TOOL_PENDING_MS` | 10 min | The app's own stall warning (`DEFAULT_STALL_WARNING_MS` in Multi Review and the build pipeline). A tool pending while deltas arrive is weak evidence: builds, test suites and subagent `task` tools run for many minutes, and the Cursor investigation found unmatched starts in healthy runs. A tool that is pending and silent trips the two-minute signal first. |
 | `STALL_TICK_DELAY_MS` | 10 s | `EVENT_LOOP_STALL_ALWAYS_LOG_MS`: the length at which the event-loop monitor writes a stall at `error` whatever the level. |
 | `BRIDGE_DIAGNOSTICS_KEEPALIVE_MS` | 10 min | Agreed in the ticket. Bounds how long "healthy" and "the timer died" are indistinguishable. |
-| `COUNTER_CHANGE_THRESHOLDS` | 1 for timeouts, protocol errors, requests and responses; 4 KiB for stderr; never for notifications | Any timeout or protocol error is news, and requests and responses are few per turn (ACP sends them alongside its pending-request set, which already changes). Stderr is counted in pages so a trickle accumulates instead of writing every minute. Notifications are the delta stream (every ACP `session/update`): counting them would write every minute of a streaming turn, and their silence is the no-delta signal. |
+| `COUNTER_CHANGE_THRESHOLDS` | 1 for timeouts, protocol errors, requests and responses; 4 KiB for stderr; never for notifications | Used by `change` snapshots (trace) and by changes during a silent stall (info). Any timeout or protocol error is news, and requests and responses are few per turn (ACP sends them alongside its pending-request set, which already changes). Stderr is counted in pages so a trickle accumulates instead of writing on every line. Notifications are the delta stream (every ACP `session/update`): counting them would write on every update, and their silence is the no-delta signal. |
 
 Every signal is computed at the look from fields the snapshot already carries
 (`lastDeltaAgoMs` or the turn's start, `pendingTools[].ageMs`, `tickDelayMs`,
@@ -1790,36 +1798,43 @@ default showed nothing at all, so nothing is lost against it):
    `completedTools`, `elapsedMs`, `revision` and `activeSubagents` between
    `send-resolved` and `closed`. Only the lifecycle totals and the keepalive remain,
    so the rate of progress during a turn cannot be read back.
-2. **Short pauses.** A silence of 60 to 119 seconds, visible in the old stream as a
+2. **A healthy turn's changes.** Its phase moving (`following` to `draining`), the
+   tools and requests it holds across a minute, and its counters (requests,
+   responses, a timeout or protocol error, stderr) moving while deltas still arrive.
+   The old stream showed each of these at the next minute; the new default shows
+   only where they ended up, in the next keepalive, stall or `closed` snapshot. A
+   timeout or protocol error in a turn that then recovers is visible only in
+   `closed`'s counters. `trace` writes every one of them as it happens.
+3. **Short pauses.** A silence of 60 to 119 seconds, visible in the old stream as a
    growing `lastDeltaAgoMs`, writes nothing. A stall is reported from two minutes,
    at the first look after it (so between 2 and 3 minutes after the last delta).
-3. **A persistent no-delta or tool-pending stall's repeats.** While it lasts unchanged, the minute snapshots that
+4. **A persistent no-delta or tool-pending stall's repeats.** While it lasts unchanged, the minute snapshots that
    confirmed it and showed the timer alive are gone; the keepalive replaces them
    every ten minutes. The ages in them were implied by the first one.
-4. **Tools that start and finish between two looks.** The old stream showed them
+5. **Tools that start and finish between two looks.** The old stream showed them
    only if one happened to be pending at a look, and so does the new default, but
    the old stream also showed `completedTools` climbing minute by minute; now only
    the next written snapshot carries the total.
-5. **A held tool's age between snapshots.** The old stream showed each look's
-   `pendingTools` with its age. Now a tool appears when it first spans a look and
-   again when it crosses ten minutes or finishes; its age in between is implied.
-6. **Timer delays under ten seconds.** `tickDelayMs` of 1 to 9,999 ms, a sign of a
+6. **A held tool's existence and age before it is a stall.** The old stream showed
+   each look's `pendingTools` with its age. Now a tool held while deltas arrive is
+   written only when it crosses ten minutes (or in a keepalive that happens to
+   catch it); one held for under ten minutes in a moving turn is not written.
+7. **Timer delays under ten seconds.** `tickDelayMs` of 1 to 9,999 ms, a sign of a
    busy bridge event loop, is written only inside another snapshot.
-7. **Process health between keepalives.** Codex's sampled `metrics` (generation,
+8. **Process health between keepalives.** Codex's sampled `metrics` (generation,
    restarts, circuit state, queue depth and high-water mark, RPC counters) and ACP's
    `pendingRequests` and transport counters were sampled every minute. A Codex
-   process scope is never waiting and does not count its RPC traffic, so after
-   the look that sees it attached it reports only a late timer and the keepalive; a restart or an open circuit between keepalives is not in a snapshot
+   process scope is never waiting and does not count its RPC traffic, so it
+   reports only a late timer and the keepalive; a restart or an open circuit between keepalives is not in a snapshot
    (the Codex bridge's own `bridge.codex` lines still record those).
-8. **When, within the minute, a change happened.** A phase change, a tool appearing
-   or a counter crossing its threshold is written at the next look, up to a minute
-   later, and several changes in one minute share one snapshot. The old stream had
-   the same resolution, so this is no loss against it, but notifications moving
-   (ACP's `notificationsReceived`) are no longer written on their own.
-9. **Cursor SDK snapshots and Claude's batched debug events.** As before, these are
+9. **Notification volume on its own.** ACP's `notificationsReceived` moving is
+   never a change, at any level; it is visible only inside another snapshot. (At
+   `trace` the timing of changes is finer than the old stream's minute, so nothing
+   is lost there.)
+10. **Cursor SDK snapshots and Claude's batched debug events.** As before, these are
    written only with the per-minute stream; a default Cursor stall snapshot has no
    `sdk-snapshot` beside it, because the SDK seam installs only when detail is on.
-10. **The timer's death, for up to ten minutes.** A gap shorter than the keepalive
+11. **The timer's death, for up to ten minutes.** A gap shorter than the keepalive
     cannot be told from a healthy turn.
 
 ### The buffered debug logger

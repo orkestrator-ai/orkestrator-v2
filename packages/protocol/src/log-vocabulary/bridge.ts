@@ -6,14 +6,16 @@ export const MAX_BRIDGE_DIAGNOSTIC_BYTES = 8192;
 export const BRIDGE_LOG_AREAS = defineLogAreas({
   "bridge.diagnostics": {
     description:
-      "Metadata snapshots of bridge turns and processes: lifecycle, stalls and a keepalive at info, every minute at debug. docs/architecture/bridge-diagnostics.md reads them.",
+      "Metadata snapshots of bridge turns and processes: lifecycle, stalls and a keepalive at info, every minute at debug, and each change at trace. docs/architecture/bridge-diagnostics.md reads them.",
     // Support recipes and docs/architecture/bridge-diagnostics.md search for this.
     tag: "bridge-diagnostics",
     // A snapshot is allowlisted and bounded where it is built, so it is written whole.
     maxStringChars: MAX_BRIDGE_DIAGNOSTIC_BYTES,
     events: {
       heartbeat:
-        "A periodic snapshot of an open turn or process: every minute at debug; at info on a stall, a change of phase, pending tools or a counter, or the keepalive.",
+        "A periodic snapshot of an open turn or process: every minute at debug; at info only as stall evidence (a stall starting or clearing, a late timer, a change during a silent stall) or the ten-minute keepalive.",
+      change:
+        "At trace only: a snapshot written as soon as the phase, the pending tools or a counter past its threshold changes.",
       "send-started": "A turn or process diagnostic scope began.",
       "send-resolved": "The provider accepted a dispatch.",
       "cancel-requested": "Cancellation of a turn was requested.",

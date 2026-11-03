@@ -472,13 +472,15 @@ interrupts a running agent.
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
 ([bridge-diagnostics.md](bridge-diagnostics.md#when-a-snapshot-is-written)) are
-change-driven at `info`: each scope's lifecycle, a snapshot when a turn stalls (no
-delta for 2 minutes, a tool pending for 10, or a diagnostic timer 10 seconds late),
-a snapshot when the phase, the set of pending tools or a counter past its threshold
-changes, and a keepalive every 10 minutes. When the level in
-force for `bridge.diagnostics` is `debug` or `trace` (`bridge=debug` or a global
+stall-driven at `info`: each scope's lifecycle, a snapshot when a turn stalls (no
+delta for 2 minutes, a tool pending for 10, or a diagnostic timer 10 seconds late)
+or stops stalling, a snapshot for a change while a turn is silent, and a keepalive
+every 10 minutes. A healthy turn writes only its lifecycle and the keepalive. When
+the level in force for `bridge.diagnostics` is `debug` (`bridge=debug` or a global
 `debug` also does it) they add the per-minute stream: one snapshot every minute,
-changed or not. `bridge.diagnostics=warn` silences them all.
+changed or not, as before. At `trace` each change of phase, pending tools or a
+counter past its threshold is also written as it happens (`event=change`).
+`bridge.diagnostics=warn` silences them all.
 
 Renderer-only areas (`web.*` and `terminal.setup`) stay registered in
 the vocabulary but are absent from these live override choices. They follow the

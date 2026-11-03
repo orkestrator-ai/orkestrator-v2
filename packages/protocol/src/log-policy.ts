@@ -129,7 +129,7 @@ const BRIDGE_DETAIL_AREAS: readonly LogDetailArea[] = [
   {
     area: BRIDGE_DIAGNOSTICS_LOG_AREA,
     description:
-      "Metadata snapshots of agent turns and bridge processes. Info writes lifecycle, stalls and a ten-minute keepalive; Debug or Trace adds one every minute, including for turns already running.",
+      "Metadata snapshots of agent turns and bridge processes. Info writes lifecycle, stalls and a ten-minute keepalive; Debug adds one every minute, including for turns already running; Trace also writes each change as it happens.",
   },
 ];
 

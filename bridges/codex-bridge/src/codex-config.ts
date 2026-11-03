@@ -20,6 +20,8 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 
+import { configuredShellExclusions } from "./shell-exclusions.js";
+
 import { ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC } from "./engine/mcp-tool-availability.js";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -544,6 +546,7 @@ export const CODEX_COORDINATOR_SHELL_EXCLUDE: readonly string[] = Object.freeze(
 export function codexAppServerConfigOverrides(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
+  const userExclusions = configuredShellExclusions(env);
   const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
   const overrides: Record<string, string> = {
     // Do not force `features.mcp_2026_07_28`. Codex CLI leaves that flag off
@@ -569,10 +572,13 @@ export function codexAppServerConfigOverrides(
     // run turns the bridge never dispatched (`live-network-lock.test.ts`).
     "features.goals": "false",
     // Every session's commands lose the bridge-control credentials. A
-    // coordinator replaces this with its wider list below. A thread that
+    // coordinator adds its wider list below; configured exclusions survive
+    // both. A thread that
     // withholds the GitHub credential repeats it (`codexProcessShellExclude`),
     // because a thread value replaces the process value.
-    "shell_environment_policy.exclude": JSON.stringify(CODEX_SESSION_SHELL_EXCLUDE),
+    "shell_environment_policy.exclude": JSON.stringify([
+      ...new Set([...userExclusions, ...CODEX_SESSION_SHELL_EXCLUDE]),
+    ]),
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
@@ -701,7 +707,9 @@ export function codexAppServerConfigOverrides(
     // runtime identities explicitly.
     overrides["shell_environment_policy.inherit"] = JSON.stringify("core");
     overrides["shell_environment_policy.ignore_default_excludes"] = "false";
-    overrides["shell_environment_policy.exclude"] = JSON.stringify(CODEX_COORDINATOR_SHELL_EXCLUDE);
+    overrides["shell_environment_policy.exclude"] = JSON.stringify([
+      ...new Set([...userExclusions, ...CODEX_COORDINATOR_SHELL_EXCLUDE]),
+    ]);
   }
   if (rawUrl && token) {
     try {

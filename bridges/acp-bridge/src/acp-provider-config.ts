@@ -228,13 +228,6 @@ export function emptyGhConfigDir(): string {
 }
 
 /**
- * The environment a provider child is spawned with. Each session runs its own
- * child, so `withholdGitHub` (a policy that denies `github.write`, every
- * graph agent node; item 209) strips the GitHub credential from that child
- * alone: token variables, `gh`'s stored login (`ghConfigDir` is an empty
- * directory) and Git's credential helpers.
- */
-/**
  * The bridge's own control credentials: its HTTP token and the
  * environment-wide agent MCP credential. The bridge hands the agent its MCP
  * connection in `session/new` (`configuredAcpMcpServers`), so neither the
@@ -256,6 +249,13 @@ export function withoutBridgeControlEnvironment(env: NodeJS.ProcessEnv): NodeJS.
   return scrubbed;
 }
 
+/**
+ * The environment a provider child is spawned with. Each session runs its own
+ * child, so `withholdGitHub` (a policy that denies `github.write`, every
+ * graph agent node; item 209) strips the GitHub credential from that child
+ * alone: token variables, `gh`'s stored login (`ghConfigDir` is an empty
+ * directory) and Git's credential helpers.
+ */
 export function providerEnv(
   config: AcpProviderConfig,
   options: { trustProject?: boolean; withholdGitHub?: { ghConfigDir: string } },

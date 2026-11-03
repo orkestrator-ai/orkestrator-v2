@@ -69,6 +69,7 @@ const FAKE_BRIDGE_CONTROL = {
   ACP_BRIDGE_TOKEN: "orkestrator-live-probe-acp-bridge",
   ORKESTRATOR_AGENT_MCP_TOKEN: "orkestrator-live-probe-agent-mcp",
   CODEX_API_KEY: "orkestrator-live-probe-codex-api-key",
+  CUSTOMER_CREDENTIAL: "orkestrator-live-probe-customer-credential",
 } as const;
 
 /** Prints the command environment, one `NAME=value` per line. */
@@ -182,6 +183,10 @@ describeLive("live GitHub credential withholding", () => {
       JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
       { mode: 0o600 },
     );
+    await writeFile(
+      join(codexHome, "config.toml"),
+      '[shell_environment_policy]\nexclude = ["CUSTOMER_CREDENTIAL"]\n',
+    );
     // app-server inherits the bridge's environment at spawn.
     const previous = Object.fromEntries(
       Object.keys({ ...FAKE_CREDENTIALS, ...FAKE_BRIDGE_CONTROL }).map((name) => [
@@ -198,7 +203,7 @@ describeLive("live GitHub credential withholding", () => {
       clientInfo: CLIENT_INFO,
       ghConfigDir: async () => ghConfigDir,
       configOverrides: {
-        ...codexAppServerConfigOverrides({}),
+        ...codexAppServerConfigOverrides({ CODEX_HOME: codexHome, CWD: workspace }),
         openai_base_url: JSON.stringify(responses.baseUrl),
       },
       supervisorOverrides: { pidFileEnabled: false },
@@ -238,8 +243,10 @@ describeLive("live GitHub credential withholding", () => {
       };
       const handle = await runTurn(graphConfig);
       await runTurn(graphConfig, handle);
-      await runTurn({ ...base, policy: graphPolicy({ deny: [] }) });
-      expect(responses.outputs).toHaveLength(3);
+      const ordinary = { ...base, policy: graphPolicy({ deny: [] }) };
+      const ordinaryHandle = await runTurn(ordinary);
+      await runTurn(ordinary, ordinaryHandle);
+      expect(responses.outputs).toHaveLength(4);
       const [withheld, resumed, control] = responses.outputs as [string, string, string];
 
       for (const output of [withheld, resumed]) {
@@ -267,7 +274,7 @@ describeLive("live GitHub credential withholding", () => {
 
       // No thread's commands see the bridge-control credentials, whether or
       // not its policy withholds GitHub (the withheld thread repeats them).
-      for (const output of [withheld, resumed, control]) {
+      for (const output of responses.outputs) {
         for (const value of Object.values(FAKE_BRIDGE_CONTROL)) {
           expect(output).not.toContain(value);
         }

@@ -251,10 +251,12 @@ replay shows it as the card, never as a message the user typed. See
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Every session's commands lose the bridge-control credentials: the process
-  sets `shell_environment_policy.exclude` to `CODEX_SESSION_SHELL_EXCLUDE`
+  unions configured shell exclusions with `CODEX_SESSION_SHELL_EXCLUDE` in
+  `shell_environment_policy.exclude`
   (bridge tokens, the agent MCP credential, `CODEX_API_KEY`), and a
   coordinator widens it to `CODEX_COORDINATOR_SHELL_EXCLUDE` under `core`
-  inheritance. Do not add the broad `*_TOKEN`/`*_KEY`/`*_SECRET` families
+  inheritance. Preserve user, system and ancestor project exclusions, including
+  profile exclusions; unreadable or invalid config must refuse launch. Do not add the broad `*_TOKEN`/`*_KEY`/`*_SECRET` families
   for ordinary sessions: their commands use `GH_TOKEN` to push and the
   project's own variables. Re-prove with `live-github-credential.test.ts`.
 - A thread whose policy denies `github.write` (every graph agent node) gets a

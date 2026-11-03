@@ -213,10 +213,10 @@ export class AcpClientMethods {
     const terminalId = randomBytes(16).toString("hex");
     const child = this.spawnTerminalImpl(request.command, request.args ?? [], {
       cwd,
-      env: {
-        ...withoutBridgeControlEnvironment(process.env),
+      env: withoutBridgeControlEnvironment({
+        ...process.env,
         ...Object.fromEntries((request.env ?? []).map((entry) => [entry.name, entry.value])),
-      },
+      }),
     });
     let resolveExit!: (status: { exitCode?: number | null; signal?: string | null }) => void;
     const exited = new Promise<{ exitCode?: number | null; signal?: string | null }>((resolve) => {

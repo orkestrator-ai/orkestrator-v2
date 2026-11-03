@@ -868,3 +868,46 @@ describe("coordinator skills", () => {
     expect(overrides["features.skill_env_var_dependency_prompt"]).toBe("false");
   });
 });
+
+describe("configured shell exclusion preservation", () => {
+  test("unions user, profile and project exclusions with the mandatory list", async () => {
+    const home = await mkdtemp(join(tmpdir(), "codex-exclude-"));
+    try {
+      await mkdir(join(home, ".codex"));
+      await writeFile(
+        join(home, "config.toml"),
+        '[shell_environment_policy]\nexclude = ["CUSTOMER_CREDENTIAL", "AWS_*"]\n[profiles.private.shell_environment_policy]\nexclude = ["PROFILE_CREDENTIAL"]\n',
+      );
+      await writeFile(
+        join(home, ".codex", "config.toml"),
+        '[shell_environment_policy]\nexclude = ["PROJECT_CREDENTIAL"]\n',
+      );
+      for (const env of [
+        { CODEX_HOME: home, CWD: home },
+        { ...COORDINATOR_ENV, CODEX_HOME: home },
+      ]) {
+        const exclude = JSON.parse(
+          codexAppServerConfigOverrides(env)["shell_environment_policy.exclude"]!,
+        );
+        for (const name of [
+          ...CODEX_SESSION_SHELL_EXCLUDE,
+          "CUSTOMER_CREDENTIAL",
+          "AWS_*",
+          "PROFILE_CREDENTIAL",
+        ])
+          expect(exclude).toContain(name);
+        if (env.CWD === home) expect(exclude).toContain("PROJECT_CREDENTIAL");
+      }
+      await writeFile(join(home, "config.toml"), "[shell_environment_policy]\nexclude = 5");
+      expect(() => codexAppServerConfigOverrides({ CODEX_HOME: home })).toThrow(
+        "Cannot load Codex shell exclusions",
+      );
+      await writeFile(join(home, "config.toml"), "#".repeat(1024 * 1024 + 1));
+      expect(() => codexAppServerConfigOverrides({ CODEX_HOME: home })).toThrow(
+        "Cannot load Codex shell exclusions",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});

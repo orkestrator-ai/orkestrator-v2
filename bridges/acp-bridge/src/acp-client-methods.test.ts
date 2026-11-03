@@ -236,6 +236,10 @@ describe("ACP client methods under a denying policy", () => {
         sessionId: "session-1",
         command: "env",
         cwd,
+        env: [
+          ...names.map((name) => ({ name, value: "agent-supplied" })),
+          { name: "PROJECT_VALUE", value: "kept" },
+        ],
       });
     } finally {
       for (const [name, value] of Object.entries(previous)) {
@@ -249,6 +253,7 @@ describe("ACP client methods under a denying policy", () => {
     for (const name of names) expect(spawned[0]!.env[name]).toBeUndefined();
     // The managed GitHub credential is the session's to use.
     expect(spawned[0]!.env.GH_TOKEN).toBe("fake-gh");
+    expect(spawned[0]!.env.PROJECT_VALUE).toBe("kept");
   });
 });
 

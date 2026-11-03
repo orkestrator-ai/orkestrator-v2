@@ -767,7 +767,16 @@ body[data-orkestrator-dev-profile]::before {
 
 .environment-working-spinner {
   --environment-working-head: #d8dae0;
+  --environment-working-body: rgb(170 170 178 / 0.9);
+  --environment-working-tail: rgb(113 113 122 / 0.45);
   --environment-working-stroke: 1.5px;
+}
+
+/* For a ring on a surface the greys cannot be read against, such as a filled tab. */
+.environment-working-spinner-text-colored {
+  --environment-working-head: currentColor;
+  --environment-working-body: color-mix(in srgb, currentColor 90%, transparent);
+  --environment-working-tail: color-mix(in srgb, currentColor 45%, transparent);
 }
 
 .environment-working-spinner::before {
@@ -778,8 +787,8 @@ body[data-orkestrator-dev-profile]::before {
   background: conic-gradient(
     from var(--environment-working-angle),
     rgb(255 255 255 / 0) 40deg,
-    rgb(113 113 122 / 0.45) 140deg,
-    rgb(170 170 178 / 0.9) 260deg,
+    var(--environment-working-tail) 140deg,
+    var(--environment-working-body) 260deg,
     var(--environment-working-head) 340deg
   );
 }

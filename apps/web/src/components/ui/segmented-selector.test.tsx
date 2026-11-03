@@ -46,4 +46,28 @@ describe("SegmentedSelector", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "GitHub" }), { key: "Home" });
     expect(select).toHaveBeenLastCalledWith("coordinator");
   });
+
+  test("hosts an option's overlay on that option alone, without changing its name", () => {
+    const select = mock(() => undefined);
+    render(
+      <SegmentedSelector
+        value="kanban"
+        ariaLabel="Project navigation"
+        onValueChange={select}
+        options={[
+          {
+            value: "coordinator",
+            label: "Coordinator",
+            overlay: <span aria-hidden="true" data-testid="overlay" />,
+          },
+          { value: "kanban", label: "Kanban" },
+        ]}
+      />,
+    );
+    const coordinator = screen.getByRole("button", { name: "Coordinator" });
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+    expect(screen.getByTestId("overlay").parentElement === coordinator).toBe(true);
+    expect(coordinator.className).toContain("relative");
+    expect(kanban.className).not.toContain("relative");
+  });
 });

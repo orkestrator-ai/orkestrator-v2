@@ -68,7 +68,10 @@ import {
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
 import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
-import { CoordinatorActivityIcon } from "@/components/projects/CoordinatorActivityIcon";
+import {
+  CoordinatorActivityIcon,
+  CoordinatorWorkingOutline,
+} from "@/components/projects/CoordinatorActivityIcon";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -585,11 +588,15 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             {
               value: "coordinator",
               label: "Coordinator",
+              // Working circles the whole tab; waiting stays a halo on the icon.
               icon: (
-                <CoordinatorActivityIcon state={coordinatorActivity}>
+                <CoordinatorActivityIcon
+                  state={coordinatorActivity === "waiting" ? "waiting" : null}
+                >
                   <MessagesSquare className="size-3.5" />
                 </CoordinatorActivityIcon>
               ),
+              overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
               panelId: "project-panel-coordinator",
             },
             {
@@ -632,6 +639,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             value: ProjectBoardTab;
             label: string;
             icon: ReactNode;
+            overlay?: ReactNode;
             panelId: string;
           }>
         }

@@ -27,6 +27,7 @@ import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
@@ -1404,6 +1405,57 @@ describe("ActionBar grid presentation", () => {
     expect(hideFiles.className).toContain("bg-elevated");
     expect(hideFiles.className).toContain("text-foreground");
     expect(hideFiles.className).not.toContain("text-blue");
+  });
+});
+
+describe("ActionBar coordinator tab activity", () => {
+  afterEach(() => {
+    cleanup();
+    useCoordinatorActivityStore.getState().reset();
+  });
+
+  const renderTab = (state?: "working" | "waiting") => {
+    useCoordinatorActivityStore.setState({
+      projects: new Map(state ? [[selectedProject.id, state]] : []),
+    });
+    render(<ActionBar presentation="grid" />);
+    const tab = screen.getByRole("button", { name: "Coordinator" });
+    return {
+      outline: tab.querySelector('[data-testid="coordinator-working-outline"]'),
+      icon: tab.querySelector('[data-testid="coordinator-activity-icon"]')!,
+      iconRing: tab.querySelector('[data-testid="coordinator-activity-ring"]')!,
+      tab,
+    };
+  };
+
+  test("while working the spinner is on the tab and the icon has no ring", () => {
+    const { outline, icon, iconRing, tab } = renderTab("working");
+    expect(outline?.parentElement === tab).toBe(true);
+    expect(tab.className).toContain("relative");
+    expect(icon.getAttribute("data-state")).toBe("idle");
+    expect(iconRing.className).toContain("hidden");
+    expect(iconRing.className).not.toContain("environment-working-spinner");
+  });
+
+  test("while waiting the halo stays on the icon", () => {
+    const { outline, icon, iconRing, tab } = renderTab("waiting");
+    expect(outline === null).toBe(true);
+    expect(tab.className).not.toContain("relative");
+    expect(icon.getAttribute("data-state")).toBe("waiting");
+    expect(iconRing.className).toContain("animate-pulse");
+  });
+
+  test("idle shows nothing, and only the coordinator tab ever hosts the outline", () => {
+    const { outline, icon, iconRing } = renderTab();
+    expect(outline === null).toBe(true);
+    expect(icon.getAttribute("data-state")).toBe("idle");
+    expect(iconRing.className).toContain("hidden");
+    cleanup();
+
+    renderTab("working");
+    expect(screen.getAllByTestId("coordinator-working-outline")).toHaveLength(1);
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+    expect(kanban.className).not.toContain("relative");
   });
 });
 

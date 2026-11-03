@@ -128,6 +128,7 @@ function sources(overrides: Partial<CoordinatorWorkSources> = {}): CoordinatorWo
     nodes: [],
     remotePipelines: new Map(),
     remoteReviews: new Map(),
+    remoteGraphRuns: new Map(),
     promptEnvironmentIds: new Set(),
     now: NOW,
     ...overrides,
@@ -266,6 +267,64 @@ describe("deriveCoordinatorWorkItems", () => {
       stage: "Build · Review",
       target: { type: "remote", nodeId: "node-b", environmentId: "remote-build-env" },
     });
+  });
+
+  test("a graph run on another node shows its stage and opens its environment there", () => {
+    const workflows = [
+      association({ kind: "graph-run", resourceId: "g", nodeId: "node-b", createdAt: at(-HOUR) }),
+    ];
+    const nodes = [node("node-b", "Studio", [{ environmentId: "remote-graph-env" }])];
+    const remoteGraphRuns = (extra: Partial<GraphRun>) =>
+      new Map([
+        [
+          remoteWorkKey("node-b", "g"),
+          graphRun("g", { environmentId: "remote-graph-env", ...extra }),
+        ],
+      ]);
+    const [running] = deriveCoordinatorWorkItems(
+      sources({ workflows, nodes, remoteGraphRuns: remoteGraphRuns({}) }),
+    );
+    expect(running).toMatchObject({
+      kind: "graph-run",
+      name: "Ship it",
+      machine: "Studio",
+      bucket: "running",
+      stage: "Graph run · running",
+      target: {
+        type: "remote",
+        nodeId: "node-b",
+        projectId: "remote-project",
+        environmentId: "remote-graph-env",
+        title: "Ship it",
+      },
+    });
+    const [waiting] = deriveCoordinatorWorkItems(
+      sources({ workflows, nodes, remoteGraphRuns: remoteGraphRuns({ status: "waiting" }) }),
+    );
+    expect(waiting).toMatchObject({ bucket: "needs-you", stage: "Graph run · waiting for you" });
+    const [failed] = deriveCoordinatorWorkItems(
+      sources({
+        workflows,
+        nodes,
+        remoteGraphRuns: remoteGraphRuns({ status: "failed", error: "API error" }),
+      }),
+    );
+    expect(failed).toMatchObject({ bucket: "needs-you", stage: "Failed: API error" });
+    // Finished work expires 24 hours after the run finished, not after it started.
+    const complete = remoteGraphRuns({ status: "complete", finishedAt: at(-2 * HOUR) });
+    expect(
+      deriveCoordinatorWorkItems(sources({ workflows, nodes, remoteGraphRuns: complete }))[0],
+    ).toMatchObject({ bucket: "finished", stage: "Graph run complete" });
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({ workflows, nodes, remoteGraphRuns: complete, now: NOW + 21 * HOUR }),
+      ),
+    ).toHaveLength(1);
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({ workflows, nodes, remoteGraphRuns: complete, now: NOW + 22 * HOUR }),
+      ),
+    ).toEqual([]);
   });
 
   test("orders work that needs the user first, then running, then finished", () => {
@@ -568,12 +627,26 @@ describe("review fixes", () => {
       expect(deriveCoordinatorWorkItems(sources({ workflows, missingResources }))).toEqual([]);
     },
   );
-  test("unreadable remote graphs never inflate running counts and expire", () => {
+  test("a remote graph run is loading until read, and finished once its node says it is gone", () => {
     const workflows = [
       association({ kind: "graph-run", resourceId: "g", nodeId: "node-b", createdAt: at(-HOUR) }),
     ];
-    const items = deriveCoordinatorWorkItems(sources({ workflows }));
-    expect(countCoordinatorWork(items).running).toBe(0);
-    expect(deriveCoordinatorWorkItems(sources({ workflows, now: NOW + 24 * HOUR }))).toEqual([]);
+    const nodes = [node("node-b", "Studio", [])];
+    const [loading] = deriveCoordinatorWorkItems(sources({ workflows, nodes }));
+    expect(loading).toMatchObject({
+      machine: "Studio",
+      bucket: "running",
+      stage: "Graph run · loading",
+      target: null,
+    });
+    const missingResources = new Set([`graph-run:${remoteWorkKey("node-b", "g")}`]);
+    const [gone] = deriveCoordinatorWorkItems(sources({ workflows, nodes, missingResources }));
+    expect(gone).toMatchObject({ machine: "Studio", bucket: "finished", target: null });
+    expect(countCoordinatorWork([gone!]).running).toBe(0);
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({ workflows, nodes, missingResources, now: NOW + 24 * HOUR }),
+      ),
+    ).toEqual([]);
   });
 });

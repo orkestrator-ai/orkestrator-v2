@@ -128,31 +128,99 @@ test("remote failed pipeline refreshes after retry and survives a read error wit
   }
 });
 
-test("expiry clock removes unreadable old remote graphs without a resource event", async () => {
+test("remote graph run is read through its node, follows changes, and expires on the clock", async () => {
   let tick: (() => void) | undefined;
+  // Only the panel's clock is captured; waitFor keeps its own polling timer.
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
   const interval = spyOn(globalThis, "setInterval").mockImplementation(((
     callback: () => void,
     delay: number,
   ) => {
-    expect(delay).toBe(WORK_PANEL_CLOCK_MS);
+    if (delay !== WORK_PANEL_CLOCK_MS) return realSetInterval(callback, delay);
     tick = callback;
     return 123;
   }) as typeof setInterval);
-  const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+  const clear = spyOn(globalThis, "clearInterval").mockImplementation(((
+    id: ReturnType<typeof setInterval>,
+  ) => {
+    if (id !== (123 as never)) realClearInterval(id);
+  }) as typeof clearInterval);
   const date = spyOn(Date, "now").mockReturnValue(now);
+  let status = "running";
+  let offline = false;
+  const read = spyOn(portalStore, "invokeOnNode").mockImplementation(async () => {
+    if (offline) throw new Error("offline");
+    return {
+      status: "changed",
+      run: {
+        id: "r",
+        projectId: "remote-project",
+        environmentId: "remote-env",
+        status,
+        plan: { template: { name: "Ship it" } },
+        createdAt: new Date(now).toISOString(),
+        updatedAt: new Date(now).toISOString(),
+        ...(status === "complete" ? { finishedAt: new Date(now).toISOString() } : {}),
+      },
+    } as never;
+  });
+  portalStore.store.setState({
+    nodes: [
+      {
+        nodeId: "remote",
+        loadedAt: 1,
+        available: true,
+        view: { displayName: "Studio" },
+        environments: [],
+      },
+    ] as never,
+  });
   try {
     const snap = snapshot("graph-run", "remote");
     const hook = renderHook(() => useCoordinatorWorkItems(snap, empty));
-    expect(hook.result.current.items).toHaveLength(1);
+    await waitFor(() => expect(hook.result.current.items[0]?.stage).toBe("Graph run · running"));
+    expect(read).toHaveBeenCalledWith("remote", "graph_run_get", { runId: "r" });
+    expect(hook.result.current.items[0]).toMatchObject({
+      machine: "Studio",
+      target: { type: "remote", nodeId: "remote", environmentId: "remote-env" },
+    });
+    expect(hook.result.current.counts.running).toBe(1);
+    // A failed read keeps the last stage.
+    offline = true;
+    await act(async () => requestViewSafetyChecks("interval"));
+    expect(hook.result.current.items[0]?.stage).toBe("Graph run · running");
+    // The run finishes while the coordinator is idle; a safety check re-reads it.
+    offline = false;
+    status = "complete";
+    await act(async () => requestViewSafetyChecks("interval"));
+    await waitFor(() => expect(hook.result.current.items[0]?.stage).toBe("Graph run complete"));
+    expect(hook.result.current.counts.finished).toBe(1);
+    // It drops off 24 hours after it finished, with no resource event.
     date.mockReturnValue(now + 25 * 60 * 60 * 1000);
     act(() => tick!());
     expect(hook.result.current.items).toHaveLength(0);
     hook.unmount();
     expect(clear).toHaveBeenCalledWith(123);
   } finally {
+    read.mockRestore();
     interval.mockRestore();
     clear.mockRestore();
     date.mockRestore();
+  }
+});
+
+test("a remote graph run its node no longer has becomes finished", async () => {
+  const read = spyOn(portalStore, "invokeOnNode").mockImplementation(async () => {
+    throw Object.assign(new Error("The graph run does not exist"), { code: "not-found" });
+  });
+  try {
+    const snap = snapshot("graph-run", "remote");
+    const hook = renderHook(() => useCoordinatorWorkItems(snap, empty));
+    await waitFor(() => expect(hook.result.current.counts.finished).toBe(1));
+    expect(hook.result.current.items[0]?.stage).toBe("Work no longer available");
+  } finally {
+    read.mockRestore();
   }
 });
 

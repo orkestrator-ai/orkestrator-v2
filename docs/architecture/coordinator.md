@@ -1001,13 +1001,19 @@ events: the coordinator snapshot (whose delegation waiting episodes announce a
 (hydrated app-wide; missing records are retried on resource changes, resync and safety checks), the PR monitor, the
 project's tickets, and the command node's summaries of other machines. Graph
 runs are read on demand (`graph_run_get`) when the panel mounts, when a
-`graph-run` change names one, and on resync and safety checks. A build or
-Multi Review on another node is read through that node's link with the reads
-the backend coordinator already uses (`get_build_pipeline`,
-`get_multi_review_workflow`), again whenever the node's summaries refresh and
-on resync and safety checks, including after a failure that can be retried. A graph run on another
-node is named but not followed, since no routed read command serves it; its
-row says so and its Open button is disabled. These unreadable graph rows do not count as running and expire 24 hours after association creation. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
+`graph-run` change names one, and on resync and safety checks. A build,
+Multi Review or graph run on another node is read through that node's link
+(`invokeOnNode`) with the same reads its own views use (`get_build_pipeline`,
+`get_multi_review_workflow`, `graph_run_get`), again whenever the node's
+summaries refresh and on resync and safety checks, including after a failure
+that can be retried. A failed read keeps the last reading. `graph_run_get` is
+listed by name in `isNodeReadCommand` (`packages/protocol/src/command-nodes.ts`)
+because its verb comes last: a routed read is never recorded as an
+outcome-unknown write and does not refresh the node's summaries. A remote graph
+row therefore has the same stage words, buckets and expiry (from the run's
+`finishedAt`) as a local one, names its machine, and opens the run's
+environment on that node. A remote run its node reports `not-found` is
+unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
 **Layout.** At 1280px and wider the panel is open by default beside the
 conversation. Narrower, it is a strip with the running and needs-you counts;
@@ -2457,7 +2463,10 @@ guarantee, not by one end-to-end scenario replayed per platform:
   Open navigation (`coordinator-work-navigation.test.ts`); the wide panel,
   narrow strip and keyboard use (`CoordinatorWorkPanel.test.tsx`); every
   conversation's work and a waiting episode moving a row to Needs you without
-  a coordinator turn (`CoordinatorPanel.test.tsx`)
+  a coordinator turn (`CoordinatorPanel.test.tsx`); remote build and graph run
+  reads, retries, missing records and the expiry clock
+  (`useCoordinatorWorkItems.test.tsx`); `graph_run_get` as a routed read
+  (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator-surface-actions.test.ts`
 - saved graphs: the four tools and no authoring tool, admission before

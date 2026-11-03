@@ -115,9 +115,14 @@ export interface CoordinatorWorkSources {
   /** Builds and Multi Reviews on other nodes, keyed by {@link remoteWorkKey}. */
   remotePipelines: ReadonlyMap<string, BuildPipeline>;
   remoteReviews: ReadonlyMap<string, MultiReviewWorkflow>;
+  /** Graph runs on other nodes, keyed by {@link remoteWorkKey}. */
+  remoteGraphRuns: ReadonlyMap<string, GraphRun>;
   /** Environments with a question, approval or input waiting on the user. */
   promptEnvironmentIds: ReadonlySet<string>;
-  /** Successful reads that confirmed a local resource no longer exists. */
+  /**
+   * Successful reads that confirmed a resource no longer exists:
+   * `<kind>:<id>` locally, `graph-run:<remoteWorkKey>` on another node.
+   */
   missingResources?: ReadonlySet<string>;
   now: number;
 }
@@ -634,30 +639,22 @@ function graphRunItem(
 ): CoordinatorWorkItem {
   const nodeId = association.nodeId;
   const createdAt = time(association.createdAt) ?? 0;
+  const run = nodeId
+    ? sources.remoteGraphRuns.get(remoteWorkKey(nodeId, association.resourceId))
+    : sources.graphRuns.get(association.resourceId);
+  const remote = nodeId ? nodeLookup(sources, nodeId, run?.environmentId ?? undefined) : undefined;
   const base = {
     key: `graph-run:${nodeId ?? ""}:${association.resourceId}`,
     kind: "graph-run" as const,
+    ...(remote ? { machine: remote.machine } : {}),
     openDelegations: 0,
     prOpen: false,
   };
-  if (nodeId) {
-    // Graph runs have no read command another node routes as a read, so a
-    // remote run is named but not followed from here.
-    return {
-      ...base,
-      name: "Graph run",
-      machine: nodeLookup(sources, nodeId).machine,
-      bucket: "finished",
-      finishedAt: createdAt,
-      stage: "Graph run · stage not readable from here",
-      target: null,
-      unavailableReason: "Open it on its own machine.",
-      sortAt: createdAt,
-    };
-  }
-  const run = sources.graphRuns.get(association.resourceId);
   if (!run) {
-    if (sources.missingResources?.has(`graph-run:${association.resourceId}`))
+    const missingKey = nodeId
+      ? `graph-run:${remoteWorkKey(nodeId, association.resourceId)}`
+      : `graph-run:${association.resourceId}`;
+    if (sources.missingResources?.has(missingKey))
       return missingItem({ ...base, name: "Graph run" }, createdAt);
     return {
       ...base,
@@ -665,7 +662,9 @@ function graphRunItem(
       bucket: "running",
       stage: "Graph run · loading",
       target: null,
-      unavailableReason: "The run is not loaded yet.",
+      unavailableReason: nodeId
+        ? `Reading the run from ${remote?.machine ?? nodeId}.`
+        : "The run is not loaded yet.",
       sortAt: createdAt,
     };
   }
@@ -710,15 +709,24 @@ function graphRunItem(
   const finishedAt = terminal
     ? (time(run.finishedAt) ?? time(run.updatedAt) ?? createdAt)
     : undefined;
-  const target: CoordinatorWorkTarget | null = run.environmentId
-    ? {
-        type: "graph-run",
-        projectId: run.projectId,
-        environmentId: run.environmentId,
-        runId: run.id,
-        title: name,
-      }
-    : null;
+  const target: CoordinatorWorkTarget | null = !run.environmentId
+    ? null
+    : nodeId
+      ? remoteTarget(
+          nodeId,
+          {
+            projectId: remote?.environment?.projectId ?? run.projectId,
+            environmentId: run.environmentId,
+          },
+          name,
+        )
+      : {
+          type: "graph-run",
+          projectId: run.projectId,
+          environmentId: run.environmentId,
+          runId: run.id,
+          title: name,
+        };
   return {
     ...base,
     prOpen: environmentPrOpen(sources, association, run.environmentId ?? undefined),

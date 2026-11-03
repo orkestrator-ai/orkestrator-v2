@@ -26,7 +26,7 @@ import { portalStore } from "@/lib/portal/portal-store";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useGraphRunStore } from "@/stores/graphRunStore";
+import { isGraphRunNotFound, useGraphRunStore } from "@/stores/graphRunStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
@@ -39,12 +39,34 @@ const EMPTY_TICKETS: ReadonlyMap<string, WorkTicket> = new Map();
 interface RemoteRecords {
   pipelines: Map<string, BuildPipeline>;
   reviews: Map<string, MultiReviewWorkflow>;
+  graphRuns: Map<string, GraphRun>;
+  /** `graph-run:<remoteWorkKey>` for runs the node said do not exist. */
+  missing: Set<string>;
 }
+
+type RemoteKind = "build-pipeline" | "multi-review" | "graph-run";
+
+/** The node read for each remote kind: the same reads its own views use. */
+const REMOTE_READS: Record<RemoteKind, { command: string; args: (id: string) => object }> = {
+  "build-pipeline": { command: "get_build_pipeline", args: (pipelineId) => ({ pipelineId }) },
+  "multi-review": { command: "get_multi_review_workflow", args: (workflowId) => ({ workflowId }) },
+  "graph-run": { command: "graph_run_get", args: (runId) => ({ runId }) },
+};
 
 function remoteSnapshot(value: unknown): unknown {
   return value && typeof value === "object" && "snapshot" in value
     ? (value as { snapshot: unknown }).snapshot
     : undefined;
+}
+
+/** A `graph_run_get` answer's run, when it is this run's snapshot. */
+function remoteGraphRun(value: unknown, runId: string): GraphRun | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result = value as { status?: unknown; run?: unknown };
+  if (result.status !== "changed" || !result.run || typeof result.run !== "object")
+    return undefined;
+  const run = result.run as Partial<GraphRun>;
+  return run.id === runId && typeof run.status === "string" ? (run as GraphRun) : undefined;
 }
 
 /**
@@ -55,10 +77,11 @@ function remoteSnapshot(value: unknown): unknown {
  * Reviews, the PR monitor, node summaries), so a row moves while the
  * coordinator is idle and while this panel was unmounted. Graph runs are the
  * one source loaded on demand: this hook reads the coordinator's own runs and
- * re-reads one when the backend announces it changed. Builds and Multi
- * Reviews on another node are read through that node's link with the same
- * reads the backend's coordinator uses, again on safety checks and whenever
- * the node's summaries refresh.
+ * re-reads one when the backend announces it changed. Builds, Multi Reviews
+ * and graph runs on another node are read through that node's link with the
+ * same reads their own views use (`graph_run_get` is classified as a routed
+ * read), again on resync, safety checks and whenever the node's summaries
+ * refresh.
  */
 export function useCoordinatorWorkItems(
   snapshot: CoordinatorSnapshot | null,
@@ -79,6 +102,8 @@ export function useCoordinatorWorkItems(
   const [remote, setRemote] = useState<RemoteRecords>(() => ({
     pipelines: new Map(),
     reviews: new Map(),
+    graphRuns: new Map(),
+    missing: new Set(),
   }));
 
   useEffect(() => {
@@ -195,13 +220,21 @@ export function useCoordinatorWorkItems(
     }
   }, [needsTickets, projectId]);
 
-  // Builds and Multi Reviews on other nodes.
+  // Builds, Multi Reviews and graph runs on other nodes.
   const remoteRefs = useMemo(
     () =>
       associations.flatMap((association) =>
         association.nodeId &&
-        (association.kind === "build-pipeline" || association.kind === "multi-review")
-          ? [{ kind: association.kind, nodeId: association.nodeId, id: association.resourceId }]
+        (association.kind === "build-pipeline" ||
+          association.kind === "multi-review" ||
+          association.kind === "graph-run")
+          ? [
+              {
+                kind: association.kind as RemoteKind,
+                nodeId: association.nodeId,
+                id: association.resourceId,
+              },
+            ]
           : [],
       ),
     [associations],
@@ -230,15 +263,26 @@ export function useCoordinatorWorkItems(
     void Promise.all(
       remoteRefs.map(async (ref) => {
         const key = remoteWorkKey(ref.nodeId, ref.id);
+        const read = REMOTE_READS[ref.kind];
         try {
           const value = await portalStore.invokeOnNode<unknown>(
             ref.nodeId as BackendId,
-            ref.kind === "build-pipeline" ? "get_build_pipeline" : "get_multi_review_workflow",
-            ref.kind === "build-pipeline" ? { pipelineId: ref.id } : { workflowId: ref.id },
+            read.command,
+            read.args(ref.id) as Record<string, unknown>,
           );
-          return { key, kind: ref.kind, snapshot: remoteSnapshot(value) };
-        } catch {
-          return null;
+          return {
+            key,
+            kind: ref.kind,
+            missing: false,
+            snapshot:
+              ref.kind === "graph-run" ? remoteGraphRun(value, ref.id) : remoteSnapshot(value),
+          };
+        } catch (error) {
+          // A run the node says does not exist is finished; any other error
+          // keeps the last reading.
+          return ref.kind === "graph-run" && isGraphRunNotFound(error)
+            ? { key, kind: ref.kind, missing: true, snapshot: undefined }
+            : null;
         }
       }),
     ).then((results) => {
@@ -246,6 +290,8 @@ export function useCoordinatorWorkItems(
       setRemote((current) => {
         let pipelinesNext: Map<string, BuildPipeline> | null = null;
         let reviewsNext: Map<string, MultiReviewWorkflow> | null = null;
+        let runsNext: Map<string, GraphRun> | null = null;
+        let missingNext: Set<string> | null = null;
         for (const result of results) {
           if (!result) continue;
           if (result.kind === "build-pipeline" && isBuildPipeline(result.snapshot)) {
@@ -254,12 +300,30 @@ export function useCoordinatorWorkItems(
           } else if (result.kind === "multi-review" && isMultiReviewWorkflow(result.snapshot)) {
             reviewsNext ??= new Map(current.reviews);
             reviewsNext.set(result.key, result.snapshot);
+          } else if (result.kind === "graph-run") {
+            const missingKey = `graph-run:${result.key}`;
+            if (result.missing) {
+              if (current.missing.has(missingKey) && !current.graphRuns.has(result.key)) continue;
+              runsNext ??= new Map(current.graphRuns);
+              runsNext.delete(result.key);
+              missingNext ??= new Set(current.missing);
+              missingNext.add(missingKey);
+            } else if (result.snapshot) {
+              runsNext ??= new Map(current.graphRuns);
+              runsNext.set(result.key, result.snapshot as GraphRun);
+              if (current.missing.has(missingKey)) {
+                missingNext ??= new Set(current.missing);
+                missingNext.delete(missingKey);
+              }
+            }
           }
         }
-        return pipelinesNext || reviewsNext
+        return pipelinesNext || reviewsNext || runsNext || missingNext
           ? {
               pipelines: pipelinesNext ?? current.pipelines,
               reviews: reviewsNext ?? current.reviews,
+              graphRuns: runsNext ?? current.graphRuns,
+              missing: missingNext ?? current.missing,
             }
           : current;
       });
@@ -307,10 +371,12 @@ export function useCoordinatorWorkItems(
       nodes,
       remotePipelines: remote.pipelines,
       remoteReviews: remote.reviews,
+      remoteGraphRuns: remote.graphRuns,
       promptEnvironmentIds,
       now,
       missingResources: new Set([
         ...missingLocal,
+        ...remote.missing,
         ...Array.from(runEntries)
           .filter(([, entry]) => entry.status === "missing")
           .map(([id]) => `graph-run:${id}`),

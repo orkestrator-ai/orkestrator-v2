@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded } from "./sidebar-project";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -15,6 +16,7 @@ import { enableExperimentalGraphs } from "./experimental-graphs";
  */
 
 test.use({ actionTimeout: 15_000 });
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 function devJson(command: string, profile: string) {
   return JSON.parse(

@@ -1,6 +1,7 @@
 import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import {
   appendNativeAgentPolicyNote,
+  nativeAgentDeniedCapabilities,
   readOnlyTurnReportedPolicy,
   withoutProviderSandbox,
   type NativeAgentExecutionPolicy,
@@ -91,4 +92,58 @@ export function acpSessionReportedPolicy(
     return readOnlyTurnReportedPolicy(acpReportedPolicy(coordinatorProcessPolicy(), agent));
   }
   return state.policy ? acpReportedPolicy(state.policy, agent) : undefined;
+}
+
+/**
+ * Denials (`capabilityPolicy`, or a Codex-named `toolPolicy` override) that
+ * rule out writing a file.
+ */
+export const ACP_FILE_MUTATION_DENIALS: readonly string[] = Object.freeze([
+  "file.write",
+  "file.patch",
+  "write",
+  "edit",
+  "apply_patch",
+]);
+
+/** Denials that rule out running a command. */
+export const ACP_SHELL_DENIALS: readonly string[] = Object.freeze(["shell", "shell.mutate"]);
+
+/** The ACP client methods a child may use: what it is advertised and what it is served. */
+export interface AcpClientMethodGrant {
+  writeTextFile: boolean;
+  terminal: boolean;
+}
+
+export const FULL_ACP_CLIENT_METHOD_GRANT: AcpClientMethodGrant = Object.freeze({
+  writeTextFile: true,
+  terminal: true,
+});
+
+/**
+ * Which of the bridge's own mutating client methods (`fs/write_text_file`,
+ * `terminal/*`) a child running under `policy` may use (security report M13).
+ *
+ * These calls never pass through a permission request, so without this the
+ * agent could write a file or run a command whatever the session's policy
+ * said, and read-only rested on the provider's own tool profile. A terminal
+ * is refused under `shell.mutate` as well as `shell`: the bridge cannot tell a
+ * reading command from a writing one. `approvals: "deny"` refuses both, as it
+ * removes Grok's own write and shell tools (`acp-readonly-profile.ts`). No
+ * policy (a probe) keeps the full grant; a coordinator process's probes
+ * already run under its policy (`effectiveExecutionPolicy`).
+ */
+export function acpClientMethodGrant(
+  policy: NativeAgentExecutionPolicy | undefined,
+): AcpClientMethodGrant {
+  if (!policy) return FULL_ACP_CLIENT_METHOD_GRANT;
+  if (policy.approvals === "deny") return { writeTextFile: false, terminal: false };
+  const denied = new Set<string>([
+    ...nativeAgentDeniedCapabilities(policy),
+    ...(policy.toolPolicy?.deny ?? []),
+  ]);
+  return {
+    writeTextFile: !ACP_FILE_MUTATION_DENIALS.some((name) => denied.has(name)),
+    terminal: !ACP_SHELL_DENIALS.some((name) => denied.has(name)),
+  };
 }

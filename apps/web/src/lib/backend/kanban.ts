@@ -9,6 +9,7 @@ import type {
   TicketSections,
   TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
+import type { TicketSyncMeta, TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
 /** PR detection result containing URL, state, and merge conflict status */
 
 // --- File System Utilities ---
@@ -75,6 +76,21 @@ export interface KanbanTask {
   prState?: PrState;
   /** Whether a merge/close comment has already been added */
   prMergeCommented?: boolean;
+  /**
+   * Sync with other machines: set on a leaf's copy of a command node's
+   * ticket (`replica`), and where the ticket's work runs when that is
+   * another machine (`work`). Absent from backends that predate sync.
+   */
+  sync?: TicketSyncMeta;
+}
+
+/**
+ * Where each machine with a copy of this project stands in syncing its
+ * tickets with this board. Empty on a backend without leaves, or one that
+ * predates ticket sync.
+ */
+export async function getTicketSyncStatus(projectId: string): Promise<TicketSyncStatusResult> {
+  return invoke<TicketSyncStatusResult>("get_ticket_sync_status", { projectId });
 }
 
 export interface ProjectNotes {

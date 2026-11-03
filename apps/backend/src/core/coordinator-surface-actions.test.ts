@@ -727,6 +727,43 @@ describe("feature plan launch", () => {
       }),
     ).rejects.toThrow("not found");
   });
+
+  test("records one feature-plan association naming its exchange, before planning starts", async () => {
+    const featurePlans = async () =>
+      (await storage.coordinators.listCoordinatorWorkflowAssociations(scope.projectId)).filter(
+        (association) => association.kind === "feature-plan",
+      );
+    const seenAtStart: number[] = [];
+    const startPlanning = mock(async (args: Record<string, unknown>) => {
+      seenAtStart.push((await featurePlans()).length);
+      return { featureId: args.featureId, phase: "dispatching" };
+    });
+    const operation = (index: number) => startPlanning.mock.calls[index]![0].operationId as string;
+    commands.set("start_feature_planning", startPlanning as unknown as CommandHandler);
+    const input = { requestId: "plan", message: "Add dark mode" };
+    const launched = await call<{ featureId: string }>("launch_coordinator_feature_plan", {
+      input,
+    });
+    await call("launch_coordinator_feature_plan", { input });
+    expect(seenAtStart).toEqual([1]);
+    expect(await featurePlans()).toEqual([
+      expect.objectContaining({
+        coordinatorId: scope.coordinatorId,
+        conversationId: scope.conversationId,
+        resourceId: launched.featureId,
+        requestId: "feature-plan:plan",
+        featurePlan: { operationId: operation(0) },
+      }),
+    ]);
+    // A second message to the same plan is its own exchange.
+    await call("launch_coordinator_feature_plan", {
+      input: { requestId: "answer", message: "All screens", featureId: launched.featureId },
+    });
+    expect((await featurePlans()).map((association) => association.featurePlan)).toEqual([
+      { operationId: operation(0) },
+      { operationId: operation(1) },
+    ]);
+  });
 });
 
 describe("request_coordinator_root_changes", () => {

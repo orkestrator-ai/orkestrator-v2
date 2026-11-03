@@ -13,6 +13,7 @@ import {
   withCommandIdentities,
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
+  compactInstructionsFromArguments,
   GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
@@ -44,8 +45,13 @@ export type NativeCommandSubmission =
       intent: SelectedCommandIntent;
       command?: NativeAgentSlashCommand;
     }
-  /** Orkestrator's compact action; never a prompt, never queued. */
-  | { kind: "compact"; command: NativeAgentSlashCommand }
+  /**
+   * Orkestrator's compact action; never a prompt, never queued.
+   * `instructions` is the trimmed text after the name. The row accepts any only
+   * where the platform honours them (`actions.compactInstructions`), so on
+   * every other platform text after `/compact` is refused before this.
+   */
+  | { kind: "compact"; command: NativeAgentSlashCommand; instructions?: string }
   /**
    * `/goal`: runs now whether or not a turn is running, and never queues.
    * `arguments` is what follows the name, as typed. With nothing to run
@@ -203,7 +209,8 @@ export function classifyNativeCommandSubmission(
         message: `${command.name} runs only while ${input.agentLabel} is idle. Wait for the current turn to finish, then retry.`,
       };
     }
-    return { kind: "compact", command };
+    const instructions = compactInstructionsFromArguments(resolution.token.arguments);
+    return { kind: "compact", command, ...(instructions ? { instructions } : {}) };
   }
   if (command.id === GOAL_COMMAND_ID) {
     const goalArguments = resolution.token.arguments;

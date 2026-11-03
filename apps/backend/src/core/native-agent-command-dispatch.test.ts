@@ -174,6 +174,43 @@ describe("planCommandDispatch", () => {
     ).toBe("rejected");
   });
 
+  test("/compact carries instructions only where the platform honours them", () => {
+    for (const platform of ["pi", "claude"] as const) {
+      expect(
+        plan({
+          platform,
+          prompt: "/compact  keep the failing test names\nand the plan  ",
+          commands: withSessionActionSlashCommands([], nativeAgentCapabilities(platform)),
+        }),
+      ).toEqual({
+        kind: "session-action",
+        action: "compact",
+        commandName: "/compact",
+        instructions: "keep the failing test names\nand the plan",
+      });
+      // Whitespace alone is not an instruction.
+      expect(
+        plan({
+          platform,
+          prompt: "/compact   ",
+          commands: withSessionActionSlashCommands([], nativeAgentCapabilities(platform)),
+        }),
+      ).toEqual({ kind: "session-action", action: "compact", commandName: "/compact" });
+    }
+    for (const platform of ["codex", "opencode", "cursor", "grok"] as const) {
+      expect(
+        plan({
+          platform,
+          prompt: "/compact keep the plan",
+          commands: withSessionActionSlashCommands([], nativeAgentCapabilities(platform)),
+        }),
+      ).toEqual({
+        kind: "rejected",
+        message: "/compact takes no arguments. Remove the text after it and retry.",
+      });
+    }
+  });
+
   test("/steer on the prompt path keeps its legacy local reply", () => {
     expect(plan({ prompt: "/steer keep going" })).toMatchObject({
       kind: "prompt",

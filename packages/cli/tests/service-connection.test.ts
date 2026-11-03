@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { BackendInstanceDescriptor } from "@orkestrator/protocol/backend-instance";
@@ -167,6 +167,32 @@ describe("service connection", () => {
     await publish(dataDir, { pid: 2_147_483_646 });
     expect(await awaitServiceConnection(dataDir, null, instant())).toBeNull();
   });
+
+  test.skipIf(process.platform === "win32")(
+    "refuses insecure descriptors before polling or reading credentials",
+    async () => {
+      const dataDir = await dataDirectory();
+      const authFile = await publish(dataDir);
+      const file = path.join(dataDir, "backend-instance.json");
+      await chmod(file, 0o666);
+      // A missing credential must not hide the earlier descriptor refusal.
+      await rm(authFile);
+      const refusal = {
+        code: "connection-failed",
+        message: expect.stringContaining(file),
+        details: { descriptor: "untrusted" },
+      };
+      await expect(currentDescriptorGeneration(dataDir)).rejects.toMatchObject(refusal);
+      await expect(
+        awaitServiceConnection(dataDir, null, {
+          ...instant(),
+          sleep: async () => {
+            throw new Error("must refuse before sleeping");
+          },
+        }),
+      ).rejects.toMatchObject(refusal);
+    },
+  );
 
   test("returns null when nothing is published in time", async () => {
     const dataDir = await dataDirectory();

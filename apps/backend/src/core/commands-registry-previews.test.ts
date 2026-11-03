@@ -88,6 +88,52 @@ describe("preview commands", () => {
     expect((await harness.storage.previewServices.loadPreviewSettings()).transport).toBe(true);
   });
 
+  test("client metric reports join the preview diagnostics; malformed ones change nothing", async () => {
+    type Diagnostics = {
+      metrics: {
+        counters: Record<string, number>;
+        histograms: Record<string, { count: number; p50: number; max: number }>;
+      };
+    };
+    const report = {
+      counters: [
+        { name: "desktop.reconnect", category: "access-expired", count: 2 },
+        { name: "desktop.reconnect_failed", category: "capacity-exceeded", count: 1 },
+      ],
+      histograms: { "desktop.connect_ms": [10, 30], "desktop.first_byte_ms": [25] },
+    };
+    expect(await invoke("record_preview_client_metrics", { report })).toEqual({ recorded: true });
+    await invoke("record_preview_client_metrics", {
+      report: {
+        counters: [{ name: "desktop.reconnect", category: "access-expired", count: 1 }],
+        histograms: {},
+      },
+    });
+    const { metrics } = (await invoke("get_preview_diagnostics")) as Diagnostics;
+    expect(metrics.counters["desktop.reconnect{access-expired}"]).toBe(3);
+    expect(metrics.counters["desktop.reconnect_failed{capacity-exceeded}"]).toBe(1);
+    expect(metrics.histograms["desktop.connect_ms"]).toMatchObject({ count: 2, max: 30 });
+    expect(metrics.histograms["desktop.first_byte_ms"]).toMatchObject({ count: 1, p50: 25 });
+
+    for (const malformed of [
+      undefined,
+      {
+        counters: [{ name: "desktop.reconnect", category: "http://svc/?token=x", count: 1 }],
+        histograms: {},
+      },
+      { counters: [], histograms: { "desktop.connect_ms": [1], "/app?session=secret": [1] } },
+    ]) {
+      const error = await invoke("record_preview_client_metrics", { report: malformed }).catch(
+        (failure: unknown) => failure,
+      );
+      expect(previewErrorFromUnknown(error)?.category).toBe("invalid-request");
+    }
+    const after = (await invoke("get_preview_diagnostics")) as Diagnostics;
+    expect(after.metrics).toEqual(metrics);
+    expect(JSON.stringify(after)).not.toContain("secret");
+    expect(JSON.stringify(after)).not.toContain("token");
+  });
+
   test("backends without the runtime report unsupported", async () => {
     context = { storage: harness.storage } as unknown as CommandContext;
     const error = await invoke("get_preview_capabilities").catch((failure: unknown) => failure);

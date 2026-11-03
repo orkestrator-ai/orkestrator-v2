@@ -25,6 +25,8 @@ on:
       - "apps/backend/tests/container-worktree-signal-docker.test.ts"
       - "apps/backend/tests/container-start-docker.test.ts"
       - "apps/backend/tests/staged-input-relay-docker.test.ts"
+      - "apps/backend/tests/claude-config-filter-docker.test.ts"
+      - "apps/backend/src/core/claude-container-config.ts"
       - "apps/backend/src/core/container-start.ts"
       - "apps/backend/src/core/design/export-container.test.ts"
       - "apps/backend/src/core/design/export-writer.ts"
@@ -119,6 +121,10 @@ jobs:
       - name: Live staged mount consumers
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name staged-input-relay -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/staged-input-relay-docker.test.ts --parallel=1
+
+      - name: Live Claude config allowlist and Claude start (M8)
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name claude-config-filter -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/claude-config-filter-docker.test.ts --parallel=1
 
       - name: Live replacement (C14-C19)
         if: ${{ !cancelled() }}

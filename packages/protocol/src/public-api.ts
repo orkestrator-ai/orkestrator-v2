@@ -1608,6 +1608,8 @@ export interface PublicCapabilities {
     enqueue: boolean;
     /** `request.node` routes an action to a leaf node (and `all` aggregates reads). */
     nodeRouting?: boolean;
+    /** `session.transcript` takes `knownToken` and may answer `unchanged`. */
+    transcriptKnownToken?: boolean;
   };
 }
 

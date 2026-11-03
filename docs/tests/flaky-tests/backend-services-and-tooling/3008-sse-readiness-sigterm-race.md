@@ -1,6 +1,8 @@
 # SSE readiness probe shutdown race
 
-Status: open. Observed 2026-11-03 during main merge validation.
+- **ID:** 3008
+- **Status:** open
+- **Date observed:** 2026-11-03 during main merge validation.
 
 Owner: `apps/backend/src/gateway-result-channels.test.ts`.
 Test: `apps/backend/scripts/sse-route-probe.ts emits only its JSON readiness record on stdout`.

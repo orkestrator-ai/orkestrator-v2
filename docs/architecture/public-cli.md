@@ -78,6 +78,22 @@ listener starts, stops or fails to bind. It is removed on graceful shutdown if
 it still describes that generation. A descriptor whose PID is gone is stale and
 is refused.
 
+The descriptor decides where the client sends the bearer token, so the client
+trusts only one its own user's backend could have written. On POSIX hosts it
+opens the file without following a symlink and refuses it (`connection-failed`,
+naming the file and the reason) when it is not a regular file, is owned by
+another user, or has any group or other permission bit set. A refused
+descriptor is never skipped: a profile falls back to the manifest's endpoint
+only when opening the descriptor returns `ENOENT`. Access-denied, other I/O
+errors and invalid contents are refusals. Service startup and generation reads
+also surface refusals immediately. A failed PID probe, including `EPERM`, counts
+as gone, closing the cross-user PID-reuse case. A successful probe establishes
+only that the current user can signal a process with that PID: reuse by another
+process of the same user is not detected. The descriptor is not bound to the
+original process start time or the port's listener, so same-user PID reuse can
+still cause the credential to be sent to a stale port before response identity
+validation. L12 is therefore only partially fixed.
+
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;
 the client rejects an answer from a different installation than the one it
@@ -686,6 +702,18 @@ page holds; it stops at `--timeout` or Ctrl+C and never affects the session.
 Transcript reads are explicit content access; status reads and waits never
 read transcripts.
 
+A newest-page read may pass the `token` of the page it already holds as
+`knownToken`. Tokens are scoped to the session, effective `limit`, and live
+window revision. While the same newest page still has that token the action answers
+`{sessionId, status: "unchanged", token}` with no messages; otherwise it
+returns the page as usual, so a stale or unknown token costs nothing but the
+page. The window is still read fresh, and `knownToken` with `before` is
+`invalid-input` (older pages carry no token). A backend that accepts it
+advertises `features.transcriptKnownToken`; an older backend refuses unknown
+input, so `--follow` sends `knownToken` only when the answering backend (the
+`--node` leaf, when routed) advertises it, and otherwise skips a repeated page
+by comparing tokens itself.
+
 ### Changes
 
 `changes view ENV` reads the backend's change projection for the environment
@@ -946,9 +974,9 @@ Which test proves each scenario class is listed in
 ## Limitations and rollout
 
 - `capabilities.features` reports `projectCascadeRemove`, `localProjectInit`,
-  `promptAttachments`, `selectedSlashCommands` and `enqueue` as `true`; a
-  client must treat a missing or `false` entry (an older backend) as
-  unavailable. `transcriptFollow` stays `poll`.
+  `promptAttachments`, `selectedSlashCommands`, `enqueue`, `nodeRouting` and
+  `transcriptKnownToken` as `true`; a client must treat a missing or `false`
+  entry (an older backend) as unavailable. `transcriptFollow` stays `poll`.
 - Cascade removal is operator-only: a Control MCP credential, even one holding
   `projects`, is refused (`capability-unavailable`), because deleting
   environments is a separate destructive grant.

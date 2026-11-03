@@ -176,7 +176,7 @@ export class NativeAgentDeliveries {
         session = nativeAgentSessionWithControls(session, controlUpdate);
         sessions[key] = session;
         await this.repos.nativeAgentSessions.saveNativeAgentSession(key, session);
-        this.repos.nativeAgentSessions.announceNativeAgentRecord(session);
+        this.repos.nativeAgentSessions.announceNativeAgentRecord(session, "record-dispatch");
       }
 
       if (pendingDispatch || session.pendingDispatch?.mailRefused) {
@@ -212,7 +212,7 @@ export class NativeAgentDeliveries {
           // Persist proof of refusal before cleanup. A restart can release this
           // fence without interpreting a missing provider journal as unsent.
           await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
-          this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
+          this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
           return { session: updated, dispatched: false };
         }
         if (outcome.incompleteTurnNotice === undefined) {
@@ -232,7 +232,7 @@ export class NativeAgentDeliveries {
               key,
               requestId,
             );
-            this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
+            this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
             return { session: updated, dispatched: false };
           }
           return { session, dispatched: false };
@@ -250,7 +250,7 @@ export class NativeAgentDeliveries {
         sessions[key] = updated;
         await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
         await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-        this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
+        this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
         return { session: updated, dispatched: false };
       }
       const deliveredHandoffId = outcome?.dispatched ? outcome.deliveredAgentHandoffId : undefined;
@@ -284,7 +284,7 @@ export class NativeAgentDeliveries {
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
       const supersededResend = sessionSignInResend(session);
       if (supersededResend) await this.scrubSignInResendBackups(key, supersededResend.requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return { session: updated, dispatched: true };
     });
   }
@@ -334,7 +334,7 @@ export class NativeAgentDeliveries {
       }
       sessions[key] = { ...session, signInResend: resend, updatedAt: nowIso() };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
       return true;
     });
   }
@@ -358,7 +358,7 @@ export class NativeAgentDeliveries {
       sessions[key] = { ...session, signInResend: undefined, updatedAt: nowIso() };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
       await this.scrubSignInResendBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
       return held;
     });
   }
@@ -413,7 +413,7 @@ export class NativeAgentDeliveries {
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
       return true;
     });
   }
@@ -445,7 +445,7 @@ export class NativeAgentDeliveries {
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
       return true;
     });
   }
@@ -482,7 +482,7 @@ export class NativeAgentDeliveries {
       };
       await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
       return true;
     });
   }
@@ -648,7 +648,7 @@ export class NativeAgentDeliveries {
     };
     await this.repos.nativeAgentSessions.saveNativeAgentSession(session.key, saved);
     await this.scrubPendingNativeAgentSteerBackups(session.key, requestId);
-    this.repos.nativeAgentSessions.announceNativeAgentRecord(saved);
+    this.repos.nativeAgentSessions.announceNativeAgentRecord(saved, "record-dispatch");
   }
 
   /** The journal read shares dispatch's lock: an absent answer read before a
@@ -797,7 +797,7 @@ export class NativeAgentDeliveries {
           updatedAt: nowIso(),
         };
         await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
-        this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!);
+        this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
         return { ...outcome, requestId: pendingSteer.requestId };
       }
 

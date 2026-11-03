@@ -1,5 +1,8 @@
-import { createHash } from "node:crypto";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  coordinatorRuntimeId,
+  type CoordinatorWorkflowAssociation,
+} from "@orkestrator/protocol/coordinator";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
@@ -95,6 +98,31 @@ async function followPullRequest(
     ...(nodeId ? { nodeId } : {}),
   });
   context.coordinators?.statusWakes.notePullRequestFollowed(input.environmentId, nodeId);
+}
+
+/**
+ * Record that this coordinator waits on one planning exchange, so status wakes
+ * report its reply or its failure (`feature-plan` association; see
+ * `coordinator-feature-plan-status.ts`). Keyed by the request, so a retry
+ * finds the same record.
+ */
+async function followFeaturePlan(
+  context: CommandContext,
+  caller: CoordinatorCaller,
+  input: { featureId: string; operationId: string; requestId: string },
+): Promise<CoordinatorWorkflowAssociation> {
+  const reservation = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
+    id: randomUUID(),
+    projectId: caller.projectId,
+    coordinatorId: caller.coordinatorId,
+    conversationId: caller.conversationId,
+    kind: "feature-plan",
+    resourceId: input.featureId,
+    requestId: `feature-plan:${input.requestId}`,
+    featurePlan: { operationId: input.operationId },
+    createdAt: new Date().toISOString(),
+  });
+  return reservation.association;
 }
 
 /** The connected node `nodeId` names; none for this node, even by its own ID. */
@@ -383,19 +411,47 @@ export function registerCoordinatorSurfaceActions(
             )
           ).id;
         const operationId = `planning-coordinator-${key}`;
-        const plan = await context.storage.kanban.getFeaturePlan(id);
-        if (
-          plan?.planning?.operationId === operationId ||
-          plan?.messages.some((entry) => entry.id === operationId)
-        )
-          return { featureId: id, phase: plan.planning?.phase ?? null, reused: true };
-        const planning = await run<JsonRecord>(context, "start_feature_planning", {
+        // Before planning starts: a full workflow store refuses here, not after the turn began.
+        const association = await followFeaturePlan(context, caller, {
           featureId: id,
           operationId,
-          kind: "feature",
-          userMessage: message,
+          requestId,
         });
-        return { featureId: id, phase: planning.phase ?? null, reused: false };
+        const attached = (
+          plan: Awaited<ReturnType<typeof context.storage.kanban.getFeaturePlan>>,
+        ) =>
+          plan?.planning?.operationId === operationId ||
+          Boolean(plan?.messages.some((entry) => entry.id === operationId));
+        const plan = await context.storage.kanban.getFeaturePlan(id);
+        if (attached(plan)) {
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+            association.id,
+            id,
+          );
+          return { featureId: id, phase: plan?.planning?.phase ?? null, reused: true };
+        }
+        try {
+          const planning = await run<JsonRecord>(context, "start_feature_planning", {
+            featureId: id,
+            operationId,
+            kind: "feature",
+            userMessage: message,
+          });
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+            association.id,
+            id,
+          );
+          return { featureId: id, phase: planning.phase ?? null, reused: false };
+        } catch (error) {
+          // Release only a confirmed pre-start refusal. An attached exchange (or
+          // an unreadable plan) keeps its reservation for reconciliation/retry.
+          const current = await context.storage.kanban.getFeaturePlan(id);
+          if (!attached(current))
+            await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+              association.id,
+            );
+          throw error;
+        }
       },
     );
   });

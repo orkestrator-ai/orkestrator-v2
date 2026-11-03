@@ -56,9 +56,11 @@ describe("served executable document in Chromium", () => {
   let browser: Browser | undefined;
   let content: LoopbackArtifactContentServer | undefined;
   const parents: Server[] = [];
+  // A cold Chromium launch on a CI runner takes longer than Bun's 5 s default
+  // hook timeout (flake 0507); the tests themselves already allow 60 s.
   beforeAll(async () => {
     if (CHROMIUM) browser = await chromium.launch({ executablePath: CHROMIUM, headless: true });
-  });
+  }, 60_000);
   afterAll(async () => {
     await browser?.close();
     await content?.close();

@@ -1,5 +1,6 @@
 import * as shared from "./storage-shared.js";
 import path from "node:path";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
 import {
   nativeAgentSessionBackendTitle,
@@ -293,8 +294,10 @@ export class NativeAgentSessionsRepository {
 
   private displayTailStoreInstance: NativeAgentDisplayTailStore | null = null;
 
+  /** `cause` names the write, never its content (todo 0049 task 4). */
   announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
+    cause: NativeSessionInvalidationCause,
     deleted = false,
   ): void {
     this.context.changes.announce(
@@ -303,6 +306,7 @@ export class NativeAgentSessionsRepository {
       undefined,
       { agent: session.agent, logicalSessionKey: session.logicalSessionKey },
       deleted,
+      cause,
     );
   }
 
@@ -563,7 +567,7 @@ export class NativeAgentSessionsRepository {
       await this.saveNativeAgentSession(input.key, sessions[input.key], {
         requireLiveEnvironment: input.environmentId,
       });
-      this.announceNativeAgentRecord(saved);
+      this.announceNativeAgentRecord(saved, "record-created");
       return saved;
     });
   }
@@ -612,7 +616,7 @@ export class NativeAgentSessionsRepository {
         updatedAt: nowIso(),
       };
       await this.saveNativeAgentSession(expected.key, updated);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-policy");
     });
   }
 
@@ -713,7 +717,7 @@ export class NativeAgentSessionsRepository {
             };
             sessions[input.key] = updated;
             await this.saveNativeAgentSession(input.key, sessions[input.key]);
-            this.announceNativeAgentRecord(updated);
+            this.announceNativeAgentRecord(updated, "record-created");
             return updated;
           }
           return existing;
@@ -765,7 +769,7 @@ export class NativeAgentSessionsRepository {
           existing.pendingDispatch.requestId,
         );
       }
-      this.announceNativeAgentRecord(saved);
+      this.announceNativeAgentRecord(saved, "record-created");
       return saved;
     });
   }
@@ -803,7 +807,7 @@ export class NativeAgentSessionsRepository {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSession(key, updated);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-goal");
       return updated;
     });
   }
@@ -831,7 +835,7 @@ export class NativeAgentSessionsRepository {
       const updated = nativeAgentSessionWithControls(existing, update);
       sessions[key] = updated;
       await this.saveNativeAgentSession(key, sessions[key]);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-controls");
       return updated;
     });
   }
@@ -879,7 +883,7 @@ export class NativeAgentSessionsRepository {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSession(key, sessions[key]);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-controls");
       return updated;
     });
   }
@@ -963,7 +967,7 @@ export class NativeAgentSessionsRepository {
       };
       loaded.sessions[key] = updated;
       await this.saveNativeAgentSession(key, updated);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-title");
       return true;
     });
   }
@@ -986,7 +990,7 @@ export class NativeAgentSessionsRepository {
         this.files.nativeAgentSessionsFile(),
         (storedKey) => storedKey !== key,
       );
-      this.announceNativeAgentRecord(existing, true);
+      this.announceNativeAgentRecord(existing, "record-invalidated", true);
       return true;
     }).then(async (removed) => {
       if (removed) await this.deleteNativeAgentDisplayTail(key);
@@ -1076,7 +1080,16 @@ export class NativeAgentSessionsRepository {
         })) || removed;
     }
     // Only a real deletion is worth waking every client for.
-    if (removed) this.context.changes.announce("native-agent-session", environmentId);
+    if (removed) {
+      this.context.changes.announce(
+        "native-agent-session",
+        environmentId,
+        undefined,
+        undefined,
+        false,
+        "record-removed",
+      );
+    }
     // Unconditional: a retry after a partial failure finds the sessions
     // already gone, and must still clear the tails that failure left.
     await this.deleteNativeAgentDisplayTailsByEnvironment(environmentId);
@@ -1128,7 +1141,7 @@ export class NativeAgentSessionsRepository {
       };
       sessions[key] = updated;
       await this.saveNativeAgentSession(key, sessions[key]);
-      this.announceNativeAgentRecord(updated);
+      this.announceNativeAgentRecord(updated, "record-notice");
       return true;
     });
   }

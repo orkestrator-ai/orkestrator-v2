@@ -211,6 +211,8 @@ export async function createSandbox(): Promise<ClientSandbox> {
           appVersion: "test",
           publicApiSchemaVersion: 1,
         }),
+        // The backend publishes its descriptor 0600; the client refuses anything looser.
+        { mode: 0o600 },
       );
       return dataDir;
     },

@@ -2,9 +2,18 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createRealmRequestAuthInstaller,
   installRemoteGatewayRequestAuth,
+  type RemoteGatewayRequestAuthOptions,
 } from "../electron/remote-gateway-request-auth";
 
-function installHarness(options: { browserPreviewOnly?: boolean } = {}) {
+/** A dedicated preview session whose view 7 was opened on `viewUrl`. */
+function previewOnly(viewUrl: string): RemoteGatewayRequestAuthOptions {
+  return {
+    browserPreviewOnly: true,
+    previewViewUrl: (webContentsId) => (webContentsId === 7 ? viewUrl : undefined),
+  };
+}
+
+function installHarness(options: RemoteGatewayRequestAuthOptions = {}) {
   let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   const webRequest = {
@@ -264,12 +273,15 @@ describe("remote gateway renderer request authentication", () => {
   });
 
   test("limits a dedicated preview session to preview namespaces", () => {
-    const harness = installHarness({ browserPreviewOnly: true });
+    const harness = installHarness(
+      previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/"),
+    );
     const preview = mock(() => undefined);
     harness.beforeHeaders()(
       {
         url: "https://desk.example/__orkestrator/browser/loopback/3000/",
         resourceType: "mainFrame",
+        webContentsId: 7,
         frame: null,
         requestHeaders: {},
       },
@@ -287,6 +299,7 @@ describe("remote gateway renderer request authentication", () => {
       {
         url: "https://desk.example/__orkestrator/invoke",
         resourceType: "mainFrame",
+        webContentsId: 7,
         frame: null,
         requestHeaders: { Authorization: "Bearer ambient", Cookie: "gateway=ambient" },
       },
@@ -295,25 +308,43 @@ describe("remote gateway renderer request authentication", () => {
     expect(privileged).toHaveBeenCalledWith({ requestHeaders: {} });
   });
 
-  test("authorizes cross-scope main-frame navigation but not cross-scope subresources in a dedicated preview session", () => {
-    const harness = installHarness({ browserPreviewOnly: true });
+  test("authorizes a dedicated preview view only inside the namespace it was opened on (M2)", () => {
+    const harness = installHarness(
+      previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/app"),
+    );
     const previewFrame = {
       url: "https://desk.example/__orkestrator/browser/loopback/3000/app",
       parent: null,
     };
 
-    const mainFrame = mock(() => undefined);
+    // The page navigating its own main frame to another port gets no credential.
+    const crossPort = mock(() => undefined);
     harness.beforeHeaders()(
       {
         url: "https://desk.example/__orkestrator/browser/loopback/4000/next",
         resourceType: "mainFrame",
+        webContentsId: 7,
         referrer: previewFrame.url,
         frame: previewFrame,
         requestHeaders: { Authorization: "Bearer stale", Accept: "text/html" },
       },
-      mainFrame,
+      crossPort,
     );
-    expect(mainFrame).toHaveBeenCalledWith({
+    expect(crossPort).toHaveBeenCalledWith({ requestHeaders: { Accept: "text/html" } });
+
+    const samePort = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/next",
+        resourceType: "mainFrame",
+        webContentsId: 7,
+        referrer: previewFrame.url,
+        frame: previewFrame,
+        requestHeaders: { Accept: "text/html" },
+      },
+      samePort,
+    );
+    expect(samePort).toHaveBeenCalledWith({
       requestHeaders: {
         Accept: "text/html",
         Authorization: "Bearer gateway-token",
@@ -321,11 +352,32 @@ describe("remote gateway renderer request authentication", () => {
       },
     });
 
-    const xhr = mock(() => undefined);
+    const sameScopeXhr = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/api",
+        resourceType: "xhr",
+        webContentsId: 7,
+        referrer: previewFrame.url,
+        frame: previewFrame,
+        requestHeaders: { Accept: "application/json" },
+      },
+      sameScopeXhr,
+    );
+    expect(sameScopeXhr).toHaveBeenCalledWith({
+      requestHeaders: {
+        Accept: "application/json",
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+      },
+    });
+
+    const crossScopeXhr = mock(() => undefined);
     harness.beforeHeaders()(
       {
         url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
         resourceType: "xhr",
+        webContentsId: 7,
         referrer: previewFrame.url,
         frame: previewFrame,
         requestHeaders: {
@@ -334,13 +386,144 @@ describe("remote gateway renderer request authentication", () => {
           Accept: "application/json",
         },
       },
-      xhr,
+      crossScopeXhr,
     );
-    expect(xhr).toHaveBeenCalledWith({ requestHeaders: { Accept: "application/json" } });
+    expect(crossScopeXhr).toHaveBeenCalledWith({ requestHeaders: { Accept: "application/json" } });
+
+    // A view the manager does not know (or a request with no view) gets nothing.
+    for (const webContentsId of [8, undefined]) {
+      const unknownView = mock(() => undefined);
+      harness.beforeHeaders()(
+        {
+          url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+          resourceType: "mainFrame",
+          webContentsId,
+          frame: null,
+          requestHeaders: {},
+        },
+        unknownView,
+      );
+      expect(unknownView).toHaveBeenCalledWith({ requestHeaders: {} });
+    }
+  });
+
+  test("names the view's environment on the preview requests it authorizes (M2)", () => {
+    const harness = installHarness({
+      ...previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/app"),
+      previewViewEnvironment: (webContentsId) => (webContentsId === 7 ? "env-a" : null),
+    });
+    const previewFrame = {
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/app",
+      parent: null,
+    };
+
+    // A page cannot pick the environment: its own copy is replaced.
+    const subresource = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/api",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "X-Orkestrator-Preview-Environment": "env-b", Accept: "*/*" },
+      },
+      subresource,
+    );
+    expect(subresource).toHaveBeenCalledWith({
+      requestHeaders: {
+        Accept: "*/*",
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+        "x-orkestrator-preview-environment": "env-a",
+      },
+    });
+
+    // An unauthorized request carries neither the credential nor any environment.
+    const crossPort = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      crossPort,
+    );
+    expect(crossPort).toHaveBeenCalledWith({ requestHeaders: {} });
+
+    // Nor does a request to a host that is not the gateway.
+    const external = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://example.com/",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b", Accept: "*/*" },
+      },
+      external,
+    );
+    expect(external).toHaveBeenCalledWith({ requestHeaders: { Accept: "*/*" } });
+  });
+
+  test("a preview view attached without an environment names none", () => {
+    const harness = installHarness({
+      ...previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/"),
+      previewViewEnvironment: () => null,
+    });
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+        resourceType: "mainFrame",
+        webContentsId: 7,
+        frame: null,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      callback,
+    );
+    // The gateway refuses such a request rather than guessing an environment.
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: { Authorization: "Bearer gateway-token", Origin: "https://orkestrator.dev" },
+    });
+  });
+
+  test("the main renderer session never names a preview environment", () => {
+    const harness = installHarness({ previewViewEnvironment: () => "env-a" });
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/invoke",
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      callback,
+    );
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: { Authorization: "Bearer gateway-token", Origin: "https://orkestrator.dev" },
+    });
+  });
+
+  test("a preview-only session without a view lookup authorizes nothing", () => {
+    const harness = installHarness({ browserPreviewOnly: true });
+    const preview = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+        resourceType: "mainFrame",
+        webContentsId: 7,
+        frame: null,
+        requestHeaders: {},
+      },
+      preview,
+    );
+    expect(preview).toHaveBeenCalledWith({ requestHeaders: {} });
   });
 
   test("rewrites response CORS only for authorized dedicated-preview requests", () => {
-    const harness = installHarness({ browserPreviewOnly: true });
+    const harness = installHarness(
+      previewOnly("https://desk.example/__orkestrator/browser/loopback/4000/"),
+    );
     const previewFrame = {
       url: "https://desk.example/__orkestrator/browser/loopback/3000/",
       parent: null,
@@ -351,6 +534,7 @@ describe("remote gateway renderer request authentication", () => {
       {
         url: "https://desk.example/__orkestrator/browser/loopback/4000/",
         resourceType: "mainFrame",
+        webContentsId: 7,
         referrer: previewFrame.url,
         frame: previewFrame,
         responseHeaders: {
@@ -369,6 +553,7 @@ describe("remote gateway renderer request authentication", () => {
       {
         url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
         resourceType: "xhr",
+        webContentsId: 7,
         referrer: previewFrame.url,
         frame: previewFrame,
         responseHeaders: {

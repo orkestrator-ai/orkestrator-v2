@@ -384,6 +384,8 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
   "pull-request",
   /** A coordinator-owned worker environment (merged, closed or deleted); `id` is its id. */
   "environment",
+  /** A feature plan's planning exchange a coordinator started; `id` is the feature plan id. */
+  "feature-plan",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 

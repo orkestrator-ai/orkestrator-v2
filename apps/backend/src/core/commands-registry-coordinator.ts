@@ -12,6 +12,11 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_ACTIVITY_COMMAND,
+  coordinatorActivityByProject,
+  type CoordinatorActivitySnapshot,
+} from "@orkestrator/protocol/coordinator-activity";
 import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
@@ -136,6 +141,26 @@ export function registerCoordinatorCommands(
     const id = asNonBlankString(args.projectId, "projectId");
     return coordinatorViews.read(id, args, () => coordinators.get(id));
   });
+  // Every project's coordinator activity, for the spinner on its icon. Reads
+  // only the activity observer's retained answers: no provider read, bridge
+  // start, attach or liveness touch, so the sidebar can re-read it freely.
+  register(
+    COORDINATOR_ACTIVITY_COMMAND,
+    async (_args, context): Promise<CoordinatorActivitySnapshot> => {
+      const nativeAgents = context.nativeAgents;
+      if (!nativeAgents) return { projects: {} };
+      const workspaces = await context.storage.coordinators.listCoordinatorWorkspaces();
+      return {
+        projects: coordinatorActivityByProject(workspaces, (workspace, session) =>
+          nativeAgents.sessionActivitySnapshot(
+            coordinatorRuntimeId(workspace.id, session.conversationId),
+            session.agent,
+            session.logicalSessionKey,
+          ),
+        ),
+      };
+    },
+  );
   register(
     "create_coordinator_conversation",
     async ({ projectId, title, closeUnused }, context) => {

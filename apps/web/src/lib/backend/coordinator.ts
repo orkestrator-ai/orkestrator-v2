@@ -4,6 +4,11 @@ import type {
   ProjectGitSwitchConfirmation,
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_ACTIVITY_COMMAND,
+  parseCoordinatorActivitySnapshot,
+  type CoordinatorActivitySnapshot,
+} from "@orkestrator/protocol/coordinator-activity";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import { invoke } from "@/lib/native/backend";
@@ -29,6 +34,10 @@ export const getProjectCoordinatorView = (
     projectId,
     ...(known ? { knownGeneration: known.generation, knownRevision: known.revision } : {}),
   });
+
+/** Every project whose coordinator is working or waiting. Older backends answer "Unknown backend command". */
+export const listCoordinatorActivity = (): Promise<CoordinatorActivitySnapshot> =>
+  invoke<unknown>(COORDINATOR_ACTIVITY_COMMAND).then(parseCoordinatorActivitySnapshot);
 
 /**
  * `closeUnused` names unassigned side agents whose composer is empty here; the

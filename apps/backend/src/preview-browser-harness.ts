@@ -226,6 +226,9 @@ const gateway = new OrkestratorGateway({
   port: 0,
   env: { ORKESTRATOR_GATEWAY_TOKEN: crypto.randomUUID() },
   allowNonTailscaleBind: true,
+  // This gateway fronts no preview registry; the fixtures are its only targets.
+  legacyPreviewPortAccess: async (port) =>
+    Object.values(loopbackPorts).includes(port) ? "allowed" : "unknown",
 });
 const gatewayInfo = await gateway.start();
 if (!gatewayInfo) throw new Error("gateway did not start");

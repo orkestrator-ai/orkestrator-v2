@@ -26,6 +26,7 @@ import {
 } from "@orkestrator/protocol/login-snapshots";
 import { claudeContainerPluginSettings } from "@orkestrator/protocol/node/claude-plugin-set";
 import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
+import { claudeContainerConfig } from "./claude-container-config.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";
 
 /**
@@ -51,9 +52,10 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
 /**
  * Version 2 adds Cursor's `~/.cursor/mcp.json`; version 3 adds Claude's
  * `skills` and Grok's `commands`; version 4 withholds credentials in those trees;
- * version 5 adds the shared `~/.agents/skills` and stages a linked skill.
+ * version 5 adds the shared `~/.agents/skills` and stages a linked skill;
+ * version 6 stages `.claude.json` through `claudeContainerConfig`.
  */
-export const PORTABLE_INPUT_SPEC_VERSION = 5;
+export const PORTABLE_INPUT_SPEC_VERSION = 6;
 
 export type InputLimits = {
   fileBytes: number;
@@ -166,6 +168,8 @@ export interface InputFile {
   target: string;
   /** Host file. */
   source: string | null;
+  /** What a container may see of the file, or undefined to withhold it. */
+  filter?: (text: string) => string | undefined;
 }
 
 export interface ProviderInputSpec {
@@ -324,6 +328,9 @@ export function portableInputSpec(roots: InputSourceRoots): ProviderInputSpec[] 
           source: claudeAccountHome
             ? path.join(claudeAccountHome, ".claude.json")
             : join(hostHome, ".claude.json"),
+          // Only the identity, onboarding flags and container-safe MCP
+          // servers (security report M8); never project paths or keys.
+          filter: (text) => claudeContainerConfig(text, { hostHomes: [home, hostHome] }),
         },
       ],
     },
@@ -1067,7 +1074,7 @@ export async function stagePortableInputs(
         const real = await realpath(file.source).catch(() => null);
         if (!real) continue;
         const staged = path.join(partial, "files", file.stage);
-        await copier.file(path.dirname(real), path.basename(real), staged);
+        await copier.file(path.dirname(real), path.basename(real), staged, file.filter);
         const stagedFile = path.join(staged, path.basename(real));
         if (
           await lstat(stagedFile).then(

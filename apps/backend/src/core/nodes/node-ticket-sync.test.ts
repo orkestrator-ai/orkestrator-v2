@@ -1,0 +1,645 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import {
+  TICKET_SYNC_LIMITS,
+  TICKET_SYNC_OUTBOX_READY_EVENT,
+} from "@orkestrator/protocol/ticket-sync";
+
+import { seedStore, readStoredValue } from "../storage-test-support.js";
+import { emptyKanbanSyncStore, journalTicketOp } from "../storage-kanban-sync.js";
+import type { CommandContext, CommandHandler } from "../commands-context.js";
+import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
+import { createProject, StorageService } from "../storage.js";
+import { NodeTicketSync, type TicketSyncLink } from "./node-ticket-sync.js";
+
+/**
+ * Kanban sync between a command node and a leaf, each a real storage service
+ * in its own data directory, over an in-process link that runs the leaf's real
+ * sync commands. `link.connected = false` is a disconnected leaf.
+ */
+
+const COMMAND_ID = "bk_command";
+const LEAF_ID = "bk_leaf";
+const REPO = "https://github.com/acme/repo.git";
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+async function storageIn(name: string): Promise<StorageService> {
+  const dir = await mkdtemp(path.join(tmpdir(), `ork-ticket-sync-${name}-`));
+  const storage = new StorageService(dir);
+  await storage.init();
+  cleanups.push(async () => {
+    storage.close?.();
+    await rm(dir, { recursive: true, force: true });
+  });
+  return storage;
+}
+
+async function fleet(options: { capability?: boolean } = {}) {
+  const command = await storageIn("command");
+  const leaf = await storageIn("leaf");
+  const commandProject = await command.addProject(createProject(REPO));
+  const leafProject = await leaf.addProject(createProject(REPO));
+  const handlers = new Map<string, CommandHandler>();
+  registerTicketSyncCommands((name, handler) => handlers.set(name, handler));
+  const leafContext = {
+    storage: leaf,
+    nodes: { listControllers: () => [{ controllerId: COMMAND_ID, displayName: "Command" }] },
+  } as unknown as CommandContext;
+  const received: string[] = [];
+  const failNext = new Set<string>();
+  const link: TicketSyncLink & { connected: boolean } = {
+    connected: true,
+    hello: { capabilities: options.capability === false ? {} : { "ticket-sync": 1 } },
+    async invoke<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+      if (!link.connected) throw new Error("fetch failed");
+      received.push(name);
+      const handler = handlers.get(name);
+      if (!handler) throw new Error(`Unknown command: ${name}`);
+      const result = await handler(structuredClone(args), leafContext);
+      // An answer lost on the way back: the leaf acted, the command node never heard.
+      if (failNext.delete(name)) throw new Error("connection lost");
+      return structuredClone(result) as T;
+    },
+  };
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const sync = new NodeTicketSync({
+    selfId: async () => COMMAND_ID,
+    link: () => link,
+    nodes: async () => [
+      {
+        nodeId: LEAF_ID,
+        displayName: "Leaf machine",
+        available: link.connected,
+        projects: [{ projectId: leafProject.id, repositoryHint: "github.com/acme/repo" }],
+      },
+    ],
+    localProjects: () => command.loadProjects(),
+    kanban: command.kanban,
+    emit: (event, payload) => events.push({ event, payload }),
+    debounceMs: 1,
+    retryDelayMs: 60_000,
+  });
+  cleanups.push(async () => sync.dispose());
+  const leafTicket = async (id: string) => leaf.kanban.getKanbanTask(id);
+  const commandTicket = async (id: string) => command.kanban.getKanbanTask(id);
+  return {
+    command,
+    leaf,
+    commandProject,
+    leafProject,
+    link,
+    sync,
+    received,
+    failNext,
+    events,
+    leafTicket,
+    commandTicket,
+  };
+}
+
+describe("command node to leaf", () => {
+  test("a command node ticket reaches the leaf under the same id, and edits and deletion follow", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(
+      f.commandProject.id,
+      "Ship it",
+      "Do the thing",
+      {
+        acceptanceCriteria: "- It works",
+      },
+    );
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+    const copy = await f.leafTicket(ticket.id);
+    expect(copy).toMatchObject({
+      id: ticket.id,
+      projectId: f.leafProject.id,
+      title: "Ship it",
+      description: "Do the thing",
+      status: "backlog",
+    });
+    expect(copy?.sync?.replica).toMatchObject({
+      controllerId: COMMAND_ID,
+      sourceProjectId: f.commandProject.id,
+    });
+
+    await f.command.kanban.updateKanbanTask(ticket.id, { title: "Ship it now", status: "review" });
+    await f.command.kanban.addKanbanComment(ticket.id, "Looks good");
+    await f.sync.sync(LEAF_ID);
+    expect(await f.leafTicket(ticket.id)).toMatchObject({
+      title: "Ship it now",
+      status: "review",
+      comments: [expect.objectContaining({ text: "Looks good" })],
+    });
+    // Applying the command node's snapshot queues nothing back up.
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+
+    await f.command.kanban.deleteKanbanTask(ticket.id);
+    await f.sync.sync(LEAF_ID);
+    expect(await f.leafTicket(ticket.id)).toBeNull();
+    const status = await f.sync.status(f.commandProject.id);
+    expect(status.nodes).toEqual([expect.objectContaining({ nodeId: LEAF_ID, state: "in-sync" })]);
+  });
+
+  test("a leaf that reconnects after a gap catches up from its cursor, not the whole board", async () => {
+    const f = await fleet();
+    for (let index = 0; index < 5; index += 1) {
+      await f.command.kanban.addKanbanTask(f.commandProject.id, `Ticket ${index}`, "");
+    }
+    expect((await f.sync.sync(LEAF_ID)).sent).toBe(5);
+    f.link.connected = false;
+    const offline = await f.sync.sync(LEAF_ID);
+    expect(offline.state).toBe("offline");
+    expect(offline.message).toContain("reach it when it reconnects");
+    const later = await f.command.kanban.addKanbanTask(f.commandProject.id, "Later", "");
+    const tickets = await f.command.kanban.getKanbanTasks(f.commandProject.id);
+    await f.command.kanban.updateKanbanTask(tickets[0]!.id, { status: "done" });
+    expect((await f.sync.status(f.commandProject.id)).nodes[0]?.state).toBe("offline");
+    f.link.connected = true;
+    expect((await f.sync.status(f.commandProject.id)).nodes[0]?.state).toBe("behind");
+    const caughtUp = await f.sync.sync(LEAF_ID);
+    expect(caughtUp.sent).toBe(2);
+    expect(await f.leafTicket(later.id)).toMatchObject({ title: "Later" });
+    expect(await f.leafTicket(tickets[0]!.id)).toMatchObject({ status: "done" });
+    expect((await f.leaf.kanban.getKanbanTasks(f.leafProject.id)).length).toBe(6);
+  });
+
+  test("a cursor from another epoch is a full resync that removes copies the board no longer has", async () => {
+    const f = await fleet();
+    const kept = await f.command.kanban.addKanbanTask(f.commandProject.id, "Kept", "");
+    await f.sync.sync(LEAF_ID);
+    // A copy the board has never heard of, as after the command node's data was replaced.
+    await f.leaf.kanban.applyTicketSync({
+      controllerId: COMMAND_ID,
+      projectId: f.leafProject.id,
+      sourceProjectId: f.commandProject.id,
+      epoch: "another-epoch",
+      cursor: 999,
+      items: [
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          seq: 999,
+          revs: {},
+          title: "Stale",
+          description: "",
+          acceptanceCriteria: "",
+          status: "backlog",
+          comments: [],
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await f.sync.sync(LEAF_ID);
+    const titles = (await f.leaf.kanban.getKanbanTasks(f.leafProject.id)).map((task) => task.title);
+    expect(titles).toEqual(["Kept"]);
+    expect(await f.leafTicket(kept.id)).not.toBeNull();
+  });
+});
+
+describe("leaf to command node", () => {
+  test("edits to a copy on the leaf go up through its outbox and come back stamped", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Build", "");
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "in-progress", title: "Build v2" });
+    await f.leaf.kanban.addKanbanComment(ticket.id, "Started on the leaf");
+    const queued = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+    expect(queued.items.map((item) => item.op.kind)).toEqual([
+      "set-title",
+      "set-status",
+      "add-comment",
+    ]);
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result).toMatchObject({ state: "in-sync", applied: 3, conflicts: 0 });
+    expect(await f.commandTicket(ticket.id)).toMatchObject({
+      title: "Build v2",
+      status: "in-progress",
+      comments: [expect.objectContaining({ text: "Started on the leaf" })],
+    });
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    // A second edit from the leaf, before or after the snapshot, is not a conflict with its first.
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Build v3" });
+    expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
+    expect((await f.commandTicket(ticket.id))?.title).toBe("Build v3");
+  });
+
+  test("a ticket created on the leaf after sync began is adopted under its own id", async () => {
+    const f = await fleet();
+    const before = await f.leaf.kanban.addKanbanTask(
+      f.leafProject.id,
+      "Leaf only, from before",
+      "",
+    );
+    await f.sync.sync(LEAF_ID);
+    const created = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Made on the leaf", "Body");
+    expect(created.sync?.replica?.pendingCreate).toBe(true);
+    await f.sync.sync(LEAF_ID);
+    expect(await f.commandTicket(created.id)).toMatchObject({
+      projectId: f.commandProject.id,
+      title: "Made on the leaf",
+      description: "Body",
+    });
+    const copy = await f.leafTicket(created.id);
+    expect(copy?.sync?.replica?.pendingCreate).toBeUndefined();
+    expect(copy?.sync?.replica?.seq).toBeGreaterThan(0);
+    // Tickets from before sync stay on the leaf (not adopted).
+    expect(await f.commandTicket(before.id)).toBeNull();
+  });
+
+  test("criteria results and work on the leaf merge without conflicts and show where the work runs", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Verify me", "", {
+      acceptanceCriteria: "- First\n- Second",
+    });
+    await f.sync.sync(LEAF_ID);
+    const copy = (await f.leafTicket(ticket.id))!;
+    const first = copy.sections!.acceptanceCriteria![0]!;
+    await f.leaf.kanban.recordKanbanCriteriaChecks(ticket.id, [
+      {
+        id: first.id,
+        text: first.text,
+        check: {
+          status: "passed",
+          evidence: "test ran",
+          checkedAt: new Date().toISOString(),
+          source: "verify",
+        },
+      },
+    ]);
+    await f.leaf.kanban.updateKanbanTask(ticket.id, {
+      buildPipelineId: "pipeline-1",
+      environmentId: "environment-1",
+    });
+    // Meanwhile the command node edits the title: criteria results are not text, so no conflict.
+    await f.command.kanban.updateKanbanTask(ticket.id, { title: "Verify me (renamed)" });
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result.conflicts).toBe(0);
+    const board = (await f.commandTicket(ticket.id))!;
+    expect(board.sections?.acceptanceCriteria?.[0]?.check?.status).toBe("passed");
+    expect(board.sync?.work).toMatchObject({
+      nodeId: LEAF_ID,
+      nodeName: "Leaf machine",
+      buildPipelineId: "pipeline-1",
+      environmentId: "environment-1",
+    });
+    expect((await f.leafTicket(ticket.id))?.title).toBe("Verify me (renamed)");
+    expect((await f.leafTicket(ticket.id))?.sync?.work?.nodeId).toBe(LEAF_ID);
+  });
+
+  test("a leaf announces queued changes for the command node to collect", async () => {
+    const f = await fleet();
+    await f.command.kanban.addKanbanTask(f.commandProject.id, "Seen", "");
+    await f.sync.sync(LEAF_ID);
+    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([]);
+    const ticket = (await f.leaf.kanban.getKanbanTasks(f.leafProject.id))[0]!;
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "done" });
+    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([COMMAND_ID]);
+    f.sync.handleNodeEvent(TICKET_SYNC_OUTBOX_READY_EVENT, { controllerId: COMMAND_ID }, LEAF_ID);
+    for (
+      let round = 0;
+      round < 50 && (await f.commandTicket(ticket.id))?.status !== "done";
+      round++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((await f.commandTicket(ticket.id))?.status).toBe("done");
+  });
+});
+
+describe("disconnection", () => {
+  test("changes made on a disconnected leaf are kept in order and applied once on reconnect", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Offline work", "");
+    await f.sync.sync(LEAF_ID);
+    f.link.connected = false;
+    for (const status of ["in-progress", "review", "in-progress"] as const) {
+      await f.leaf.kanban.updateKanbanTask(ticket.id, { status });
+    }
+    await f.leaf.kanban.addKanbanComment(ticket.id, "first");
+    await f.leaf.kanban.addKanbanComment(ticket.id, "second");
+    const removed = await f.leaf.kanban.addKanbanComment(ticket.id, "never mind");
+    await f.leaf.kanban.deleteKanbanComment(ticket.id, removed.comments.at(-1)!.id);
+    // Every operation remains immutable until acknowledgement.
+    const queued = (await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items;
+    expect(queued.map((item) => item.op.kind)).toEqual([
+      "set-status",
+      "set-status",
+      "set-status",
+      "add-comment",
+      "add-comment",
+      "add-comment",
+      "delete-comment",
+    ]);
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("offline");
+
+    f.link.connected = true;
+    // The leaf applies the acknowledgement but the answer is lost: a retry must not duplicate.
+    f.failNext.add("ack_ticket_sync_outbox");
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+    await f.sync.sync(LEAF_ID);
+    const board = (await f.commandTicket(ticket.id))!;
+    expect(board.status).toBe("in-progress");
+    expect(board.comments.map((comment) => comment.text)).toEqual(["first", "second"]);
+  });
+
+  test("a lost acknowledgement is collected again and applied only once", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Once", "");
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.addKanbanComment(ticket.id, "only once");
+    // The ack never reaches the leaf, so the same items are collected again.
+    const original = f.link.invoke.bind(f.link);
+    let dropAck = true;
+    f.link.invoke = async <T>(name: string, args?: Record<string, unknown>) => {
+      if (name === "ack_ticket_sync_outbox" && dropAck) {
+        dropAck = false;
+        throw new Error("connection lost");
+      }
+      return original<T>(name, args);
+    };
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(1);
+    await f.sync.sync(LEAF_ID);
+    expect((await f.commandTicket(ticket.id))?.comments.map((comment) => comment.text)).toEqual([
+      "only once",
+    ]);
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toEqual([]);
+  });
+});
+
+describe("conflicts and tombstones", () => {
+  test("a field changed on both sides keeps the command node's value and records the leaf's", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Original", "");
+    await f.sync.sync(LEAF_ID);
+    f.link.connected = false;
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Leaf title", status: "review" });
+    await f.command.kanban.updateKanbanTask(ticket.id, { title: "Command title" });
+    f.link.connected = true;
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result.conflicts).toBe(1);
+    const board = (await f.commandTicket(ticket.id))!;
+    expect(board.title).toBe("Command title");
+    // The status changed only on the leaf, so it is applied.
+    expect(board.status).toBe("review");
+    expect(board.comments.at(-1)?.text).toContain("Sync conflict: Leaf machine changed the title");
+    expect(board.comments.at(-1)?.text).toContain("Leaf title");
+    const status = await f.sync.status(f.commandProject.id);
+    expect(status.conflicts).toEqual([
+      expect.objectContaining({
+        ticketId: ticket.id,
+        field: "title",
+        reason: "stale-revision",
+        fromNodeId: LEAF_ID,
+        value: "Leaf title",
+      }),
+    ]);
+    // The leaf converges on the command node's version, comment included.
+    const copy = (await f.leafTicket(ticket.id))!;
+    expect(copy.title).toBe("Command title");
+    expect(copy.status).toBe("review");
+    expect(copy.comments.at(-1)?.text).toContain("Sync conflict");
+  });
+
+  test("a ticket deleted on the command node while the leaf was offline stays deleted", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Doomed", "");
+    await f.sync.sync(LEAF_ID);
+    f.link.connected = false;
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Edited offline" });
+    await f.command.kanban.deleteKanbanTask(ticket.id);
+    f.link.connected = true;
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result.conflicts).toBe(1);
+    expect(await f.commandTicket(ticket.id)).toBeNull();
+    expect(await f.leafTicket(ticket.id)).toBeNull();
+    expect((await f.sync.status(f.commandProject.id)).conflicts).toEqual([
+      expect.objectContaining({ ticketId: ticket.id, reason: "ticket-deleted" }),
+    ]);
+    // Another round brings nothing back.
+    await f.sync.sync(LEAF_ID);
+    expect(await f.leafTicket(ticket.id)).toBeNull();
+    expect(await f.commandTicket(ticket.id)).toBeNull();
+  });
+
+  test("a ticket deleted on the leaf is deleted on the command node, and an old snapshot cannot revive it", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Remove me", "");
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.deleteKanbanTask(ticket.id);
+    // A snapshot sent before the leaf's deletion was collected does not bring it back.
+    const stale = await f.command.kanban.ticketSyncChangesSince(f.commandProject.id, 0, undefined);
+    await f.leaf.kanban.applyTicketSync({
+      controllerId: COMMAND_ID,
+      projectId: f.leafProject.id,
+      sourceProjectId: f.commandProject.id,
+      epoch: stale.epoch,
+      items: stale.items,
+      cursor: stale.cursor,
+    });
+    expect(await f.leafTicket(ticket.id)).toBeNull();
+    await f.sync.sync(LEAF_ID);
+    expect(await f.commandTicket(ticket.id)).toBeNull();
+    expect(await f.leafTicket(ticket.id)).toBeNull();
+  });
+});
+
+describe("older leaves", () => {
+  test("a leaf without ticket-sync is reported as needing an update and is never called", async () => {
+    const f = await fleet({ capability: false });
+    await f.command.kanban.addKanbanTask(f.commandProject.id, "Not for old leaves", "");
+    const result = await f.sync.sync(LEAF_ID);
+    expect(result.state).toBe("update-required");
+    expect(result.message).toContain("Update that machine");
+    expect(f.received).toEqual([]);
+    const status = await f.sync.status(f.commandProject.id);
+    expect(status.nodes[0]).toMatchObject({ state: "update-required" });
+  });
+
+  test("a detached command node's copies become the leaf's own tickets", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Keep me", "");
+    await f.sync.sync(LEAF_ID);
+    await f.leaf.kanban.forgetTicketSyncController(COMMAND_ID);
+    const copy = (await f.leafTicket(ticket.id))!;
+    expect(copy.title).toBe("Keep me");
+    expect(copy.sync?.replica).toBeUndefined();
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { title: "Mine now" });
+    expect(await f.leaf.kanban.ticketSyncOutboxControllers()).toEqual([]);
+    // New leaf tickets are no longer sent anywhere.
+    const fresh = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "Fresh", "");
+    expect(fresh.sync?.replica).toBeUndefined();
+  });
+});
+
+describe("outbox collection interleavings", () => {
+  for (const action of ["edit", "delete", "delete-comment"] as const) {
+    for (const appliedBefore of [false, true]) {
+      test(`${action} after collection, applied before mutation: ${appliedBefore}`, async () => {
+        const f = await fleet();
+        await f.sync.sync(LEAF_ID);
+        const task = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "A", "");
+        const comment = await f.leaf.kanban.addKanbanComment(task.id, "temporary");
+        const batch = await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0);
+        const apply = () =>
+          f.command.kanban.applyTicketSyncOps({
+            nodeId: LEAF_ID,
+            nodeName: "Leaf",
+            epoch: batch.epoch!,
+            items: batch.items,
+          });
+        if (appliedBefore) await apply();
+        if (action === "edit")
+          await f.leaf.kanban.updateKanbanTask(task.id, { title: "B", status: "review" });
+        if (action === "delete") await f.leaf.kanban.deleteKanbanTask(task.id);
+        if (action === "delete-comment")
+          await f.leaf.kanban.deleteKanbanComment(task.id, comment.comments.at(-1)!.id);
+        if (!appliedBefore) await apply();
+        await f.leaf.kanban.ackTicketSyncOutbox(COMMAND_ID, batch.epoch!, batch.items.at(-1)!.seq);
+        expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+        const board = await f.commandTicket(task.id);
+        if (action === "delete") expect(board).toBeNull();
+        if (action === "edit") expect(board).toMatchObject({ title: "B", status: "review" });
+        if (action === "delete-comment") expect(board?.comments).toEqual([]);
+        const copy = await f.leafTicket(task.id);
+        if (board)
+          expect(copy).toMatchObject({
+            title: board.title,
+            status: board.status,
+            comments: board.comments,
+          });
+        else expect(copy).toBeNull();
+      });
+    }
+  }
+
+  test("unknown project entries and everything after them remain queued", async () => {
+    const f = await fleet();
+    await f.sync.sync(LEAF_ID);
+    const a = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "known", "");
+    await f.leaf.kanban.addKanbanTask(f.leafProject.id, "unknown", "");
+    await f.leaf.kanban.addKanbanTask(f.leafProject.id, "later", "");
+    const invoke = f.link.invoke.bind(f.link);
+    f.link.invoke = async <T>(name: string, args?: Record<string, unknown>): Promise<T> => {
+      const result = await invoke<any>(name, args);
+      if (name === "collect_ticket_sync_outbox" && result.items[1])
+        result.items[1].sourceProjectId = "removed-project";
+      return result;
+    };
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("error");
+    expect(await f.commandTicket(a.id)).not.toBeNull();
+    expect((await f.leaf.kanban.collectTicketSyncOutbox(COMMAND_ID, 0)).items).toHaveLength(2);
+    f.link.invoke = invoke;
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+  });
+
+  test("oversized writes are refused atomically and later valid tickets sync", async () => {
+    const f = await fleet();
+    await f.sync.sync(LEAF_ID);
+    for (const [storage, project] of [
+      [f.command, f.commandProject],
+      [f.leaf, f.leafProject],
+    ] as const) {
+      await expect(
+        storage.kanban.addKanbanTask(project.id, "x".repeat(2001), ""),
+      ).rejects.toThrow();
+      const task = await storage.kanban.addKanbanTask(project.id, "valid", "");
+      const before = await storage.kanban.getKanbanTask(task.id);
+      await expect(
+        storage.kanban.updateKanbanTask(task.id, { title: "x".repeat(2001) }),
+      ).rejects.toThrow();
+      expect(await storage.kanban.getKanbanTask(task.id)).toEqual(before);
+      await expect(
+        storage.kanban.updateKanbanTask(task.id, { description: "x".repeat(200001) }),
+      ).rejects.toThrow();
+      await expect(storage.kanban.addKanbanComment(task.id, "x".repeat(200001))).rejects.toThrow();
+      expect(await storage.kanban.getKanbanTask(task.id)).toEqual(before);
+    }
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
+    expect(await f.command.kanban.getKanbanTasks(f.commandProject.id)).toHaveLength(2);
+  });
+});
+
+test("immutable create and later edit enforce the byte boundary without changing the queue", () => {
+  const store = emptyKanbanSyncStore();
+  const op = {
+    kind: "create" as const,
+    ticket: {
+      title: "A",
+      status: "backlog" as const,
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      createdAt: "now",
+    },
+  };
+  journalTicketOp(store, COMMAND_ID, "t", "p", op, "now");
+  store.outbox[COMMAND_ID]!.items[0]!.bytes = TICKET_SYNC_LIMITS.maxOutboxBytes;
+  const before = structuredClone(store);
+  expect(() =>
+    journalTicketOp(
+      store,
+      COMMAND_ID,
+      "t",
+      "p",
+      { kind: "set-title", value: "B", baseRev: 0 },
+      "now",
+    ),
+  ).toThrow();
+  expect(store).toEqual(before);
+});
+
+for (const collision of ["project", "controller"] as const) {
+  test(`snapshot ${collision} collision refuses without advancing the cursor`, async () => {
+    const f = await fleet();
+    const task = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "existing", "");
+    const project =
+      collision === "project"
+        ? await f.leaf.addProject(createProject("https://github.com/acme/other.git"))
+        : f.leafProject;
+    if (collision === "controller") await f.sync.sync(LEAF_ID);
+    const input = {
+      controllerId: collision === "controller" ? "other-controller" : COMMAND_ID,
+      projectId: project.id,
+      sourceProjectId: f.commandProject.id,
+      epoch: "epoch",
+      cursor: 1,
+      items: [{ id: task.id, seq: 1, deleted: true as const, deletedAt: "now" }],
+    };
+    // Give the existing row another controller when testing that ownership fence.
+    if (collision === "controller") {
+      await f.leaf.kanban.applyTicketSync({
+        ...input,
+        controllerId: COMMAND_ID,
+        items: [{ ...task, seq: 1, revs: {} }],
+      });
+    }
+    const beforeCursor = await f.leaf.kanban.getTicketSyncCursor(input.controllerId, project.id);
+    await expect(f.leaf.kanban.applyTicketSync(input)).rejects.toThrow("belongs to another");
+    expect(await f.leaf.kanban.getTicketSyncCursor(input.controllerId, project.id)).toEqual(
+      beforeCursor,
+    );
+    expect(await f.leafTicket(task.id)).not.toBeNull();
+  });
+}
+
+test("full outbox refuses an edit without committing board or outbox", async () => {
+  const f = await fleet();
+  await f.sync.sync(LEAF_ID);
+  const task = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "A", "");
+  const store = readStoredValue<any>(f.leaf.getDataDir(), "kanban-sync.json");
+  store.outbox[COMMAND_ID].items[0].bytes = TICKET_SYNC_LIMITS.maxOutboxBytes;
+  seedStore(f.leaf.getDataDir(), "kanban-sync.json", store);
+  const before = await f.leafTicket(task.id);
+  await expect(f.leaf.kanban.updateKanbanTask(task.id, { title: "B" })).rejects.toThrow(
+    "too many ticket changes",
+  );
+  expect(await f.leafTicket(task.id)).toEqual(before);
+  expect(readStoredValue(f.leaf.getDataDir(), "kanban-sync.json")).toEqual(store);
+});

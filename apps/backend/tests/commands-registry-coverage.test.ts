@@ -1151,6 +1151,7 @@ describe("direct backend command registry coverage", () => {
     });
     const context = contextWithStorage({
       getEnvironment: mock(async (id: string) => (id === local.id ? local : null)),
+      loadEnvironments: mock(async () => [local]),
     });
 
     await expect(

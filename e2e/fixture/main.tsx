@@ -1,4 +1,5 @@
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
+import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
 import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
@@ -162,6 +163,10 @@ const TerminalLinksFixture = lazy(async () => ({
 
 const ProjectNavigationFixture = lazy(async () => ({
   default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
+}));
+
+const CoordinatorActivityFixture = lazy(async () => ({
+  default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
 
 const MailTilesFixture = lazy(async () => ({
@@ -1850,6 +1855,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/coordinator-activity") {
+    return (
+      <Suspense fallback={null}>
+        <CoordinatorActivityFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>
@@ -1920,6 +1932,8 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/project-home-message-approval")
     return <ProjectHomeMessageApprovalFixture />;
+  if (window.location.pathname === "/worker-question-approval")
+    return <WorkerQuestionApprovalFixture />;
   if (window.location.pathname === "/agents-md-approval") return <AgentsMdApprovalFixture />;
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();

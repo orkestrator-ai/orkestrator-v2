@@ -31,7 +31,15 @@ export class ContainerLifecycleReactor {
   private readonly running = new Map<string, Promise<void>>();
   private readonly again = new Set<string>();
 
-  constructor(private readonly context: () => CommandContext | null) {}
+  private readonly syncStatus: typeof syncStoredEnvironmentStatus;
+
+  constructor(
+    private readonly context: () => CommandContext | null,
+    /** Test seam: the status reconciliation (one `docker inspect`). */
+    options: { syncStatus?: typeof syncStoredEnvironmentStatus } = {},
+  ) {
+    this.syncStatus = options.syncStatus ?? syncStoredEnvironmentStatus;
+  }
 
   handle(containerId: string, action: ContainerLifecycleAction): void {
     const context = this.context();
@@ -64,7 +72,7 @@ export class ContainerLifecycleReactor {
       const environment = findByContainerId(await context.storage.loadEnvironments(), containerId);
       if (!environment) return;
       if (context.runtime.environments.hasLifecycleWork(environment.id)) return;
-      await syncStoredEnvironmentStatus(environment, context);
+      await this.syncStatus(environment, context);
       await context.runtime.diffStats.sync(context);
       await context.runtime.prMonitor.sync(context);
       await context.runtime.tmux.claudeStatePolls.reconcile(context);

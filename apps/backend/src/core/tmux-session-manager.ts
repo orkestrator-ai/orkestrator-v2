@@ -706,20 +706,6 @@ export class TmuxSession {
           tick += 1;
           quietTicks += 1;
 
-          // The fallback search for a transcript Claude did not name after this
-          // session id. The expected file itself is checked by every snapshot.
-          if (!tail && Date.now() >= nextDiscoveryAt) {
-            try {
-              const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
-              if (transcriptPath) tail = new TranscriptTail(transcriptPath);
-              log.recovered("poll.discovery-failed", this.pollLogScope);
-            } catch (error) {
-              this.warnPollFailed("poll.discovery-failed", error);
-            }
-            nextDiscoveryAt = Date.now() + discoveryInterval;
-            discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
-          }
-
           // Liveness and the pane ride in the same round trip as the hook
           // listing: in a container each was its own `docker exec`.
           const livenessEvery = idle
@@ -762,6 +748,22 @@ export class TmuxSession {
             if (this.transcriptPath === this.expectedTranscriptPath()) {
               snapshot.transcriptSize = snapshot.candidateSize;
             }
+          }
+
+          // The fallback search for a transcript Claude did not name after this
+          // session id, on its backoff. The expected file is in every snapshot,
+          // so a tab it binds never searches. A transcript found here is
+          // tailed from the next tick.
+          if (!tail && Date.now() >= nextDiscoveryAt) {
+            try {
+              const transcriptPath = await this.discoverTranscriptPath({ exactChecked: true });
+              if (transcriptPath) tail = new TranscriptTail(transcriptPath);
+              log.recovered("poll.discovery-failed", this.pollLogScope);
+            } catch (error) {
+              this.warnPollFailed("poll.discovery-failed", error);
+            }
+            nextDiscoveryAt = Date.now() + discoveryInterval;
+            discoveryInterval = Math.min(discoveryInterval * 2, TMUX_DISCOVERY_MAX_INTERVAL_MS);
           }
 
           if (snapshot) {

@@ -6,6 +6,7 @@ import type { CommandContext } from "./commands.js";
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 test("transcript discovery backs off at 2/4/8/10 seconds, resets on a hook, then binds the tail", async () => {
+  // The fallback search; every snapshot also checks the expected file.
   let now = 0;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   let resume: (() => void) | undefined;
@@ -69,8 +70,10 @@ test("transcript discovery backs off at 2/4/8/10 seconds, resets on a hook, then
     );
     read.mockRestore();
     expect(discoveries.slice(-2)).toEqual([35001, 37001]);
-    expect(snapshot.mock.calls.at(-1)?.[1]).toBe("/fixture/transcript.jsonl");
+    // The search runs after the tick's snapshot, so the next snapshot is the
+    // first to carry the transcript it found.
     await step(100000);
+    expect(snapshot.mock.calls.at(-1)?.[1]).toBe("/fixture/transcript.jsonl");
     expect(discover).toHaveBeenCalledTimes(8);
   } finally {
     instance["stopRequested"] = true;

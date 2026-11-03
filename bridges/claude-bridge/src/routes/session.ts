@@ -93,6 +93,7 @@ import {
   type NativeAgentReadiness,
 } from "@orkestrator/protocol/native-agent";
 import { claudeReadiness } from "../services/claude-sign-in.js";
+import { executionPolicyWidenings } from "../services/execution-policy-narrowing.js";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
@@ -491,6 +492,35 @@ session.post("/:id/config", async (c) => {
   if (Object.hasOwn(body, "policy") && !isNativeAgentExecutionPolicy(body.policy)) {
     return c.json({ error: "Invalid execution policy" }, 400);
   }
+  const nextPolicy = effectiveExecutionPolicy(
+    isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+  );
+  // Narrow-only (H4). The agent this bridge runs can read the bridge token, so
+  // a token holder is not proof of the user's intent: a policy may only stay
+  // the same or get stricter here. Check before applying settings, and again
+  // after asynchronous SDK work before committing the policy.
+  const refusePolicyWidening = () => {
+    const widened = nextPolicy
+      ? executionPolicyWidenings(sessionData.executionPolicy, nextPolicy)
+      : [];
+    if (widened.length > 0) {
+      log.warn("session.policy-widening-refused", {
+        sessionId: sessionData.id,
+        widened: widened.join(","),
+      });
+      return c.json(
+        {
+          error:
+            "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
+          code: "policy-widening-refused",
+          widened,
+        },
+        403,
+      );
+    }
+  };
+  const refusal = refusePolicyWidening();
+  if (refusal) return refusal;
   const { effort, parameterValues } = resolveUltracodeEffort(
     typeof body.reasoningId === "string" ? body.reasoningId : undefined,
     body.parameterValues &&
@@ -523,9 +553,10 @@ session.post("/:id/config", async (c) => {
       sessionErrorStatus(error),
     );
   }
-  const nextPolicy = effectiveExecutionPolicy(
-    isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
-  );
+  // SDK control calls above yield. Another request may have narrowed the
+  // policy meanwhile; revalidate and commit together without another await.
+  const stalePolicyRefusal = refusePolicyWidening();
+  if (stalePolicyRefusal) return stalePolicyRefusal;
   if (nextPolicy) {
     sessionData.executionPolicy = structuredClone(nextPolicy);
   }

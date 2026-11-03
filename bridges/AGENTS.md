@@ -73,6 +73,20 @@ calls them (`apps/backend/src/core/http-bridge-provider*.ts`,
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
 
+## The bridge token is not proof of the user's intent
+
+The agent a bridge runs shares its uid and can read the bridge token (security
+H4; the rest is [todo 3930](../docs/todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+
+- **Delete the token from `process.env` at startup**, right where it is read,
+  as every bridge does. Spawn children through `node:child_process` or with an
+  explicit `env`: `Bun.spawn` with no `env` option passes the startup
+  environment, deleted token included.
+- **A token holder may only narrow a live session's policy.** Claude's
+  `POST /session/:id/config` refuses any wider policy with 403
+  `policy-widening-refused` (`executionPolicyWidenings`). Do not add a route
+  that widens a live session's policy.
+
 ## Logging settings route
 
 `POST /debug/log-policy` ([`logging.md`](../docs/architecture/logging.md#the-bridge-route))

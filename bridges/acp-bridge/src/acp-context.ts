@@ -690,6 +690,10 @@ export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+// The token authenticates callers of this bridge; nothing this process spawns
+// needs it. Captured once above and removed so the ACP agent child, and the
+// terminals it runs, cannot inherit the credential through process.env (H4).
+delete process.env.ACP_BRIDGE_TOKEN;
 export const executable = providerConfig.executable;
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;

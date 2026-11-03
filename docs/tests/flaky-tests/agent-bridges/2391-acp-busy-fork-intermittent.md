@@ -53,6 +53,25 @@ neither run reproduces the busy-fork defect on main, so independence is
 not claimed from these runs.
 
 
+## Fix — 2026-11-03, security H4 review
+
+Preparation at `2e57421e186fc12082f8ab62381df952bae1e701` again returned
+200 instead of 409 (483.13 ms) in `mise run test`. Evidence:
+`.orkestrator/review-artifacts/review-validation-48856735-cbac-4ef5-8681-5d3394fca749/validation-04.stdout.txt`.
+The unchanged owner passed alone (4.5 s):
+`mise run test:logged -- --name acp-fork-alone -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+The fake agent's `DIRECT:` branch returned `end_turn` immediately without
+consulting `FAKE_ACP_HOLD_TURN_FILE`. If it finished before the fork HTTP
+request arrived, the source was legitimately idle. This branch changed direct
+replies to use `whenReleased`, and made the busy-fork test explicitly observe
+`running` before asserting 409. Assertions and timeouts remained intact.
+The main-merge resolution below supersedes the direct-reply change.
+
+The complete owner passed ten repetitions (44.7 s):
+`mise run test:logged -- --name acp-fork-repaired -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --rerun-each=10 --only-failures`.
+This resolves the test's lifetime assumption rather than changing production
+fork admission. The fix is committed with the H4 concurrent-config repair.
 ## Feature-plan wake review repair — 2026-11-03
 
 - **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 1
@@ -108,3 +127,12 @@ before.
   errors, only six existing unused-import warnings in lines 1-11 of
   `fake-agent-prompt-start.ts`, which this change does not touch. The
   acp-bridge `bun run typecheck` reported no type errors.
+
+## Main-merge resolution — 2026-11-03
+
+Both branches fixed the same test lifetime assumption independently. The merge
+keeps main's explicit `HELD:` prompt and immediate `DIRECT:` replies, because
+other ACP tests require direct replies to finish even with a hold configured.
+The busy-fork test retains both branches' running-state assertions. The
+security review evidence above records the earlier branch implementation; the
+verification in the preceding section records main's implementation.

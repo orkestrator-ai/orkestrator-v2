@@ -52,7 +52,10 @@ type FakeHello = "answer" | "silent" | "wrong-nonce" | "oversized";
 class FakeRelayProcess extends EventEmitter {
   broken = false;
   killed: NodeJS.Signals | null = null;
+  /** While false, open requests are recorded in `requested` but never answered. */
+  answerOpens = true;
   readonly opened: number[] = [];
+  readonly requested: number[] = [];
   readonly stdout = new PassThrough();
   readonly stdin: Writable;
   private buffer = Buffer.alloc(0);
@@ -92,6 +95,8 @@ class FakeRelayProcess extends EventEmitter {
         const answer = this.hello === "answer" ? nonce : "0".repeat(nonce.length);
         this.stdout.write(frame(RELAY_FRAME.ready, 0, Buffer.from(answer)));
       } else if (type === RELAY_FRAME.open) {
+        this.requested.push(id);
+        if (!this.answerOpens) continue;
         this.opened.push(id);
         this.stdout.write(frame(RELAY_FRAME.opened, id));
       }
@@ -399,6 +404,113 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
     const again = await supervisor.connect(target, signal);
     expect(processes).toHaveLength(2);
     again.destroy();
+  });
+
+  /** Wait until the fake relay has been asked to open `count` channels. */
+  async function requested(fake: FakeRelayProcess, count: number): Promise<void> {
+    for (let attempt = 0; attempt < 200 && fake.requested.length < count; attempt += 1) {
+      await Bun.sleep(1);
+    }
+    expect(fake.requested).toHaveLength(count);
+  }
+
+  /**
+   * Feed one chunk straight to the backend's stdout listener, so a throw out
+   * of the handler surfaces here instead of somewhere in the stream machinery.
+   */
+  function feed(fake: FakeRelayProcess, chunk: Buffer): void {
+    const listeners = fake.stdout.listeners("data") as Array<(chunk: Buffer) => void>;
+    expect(listeners).toHaveLength(1);
+    expect(() => listeners[0]!(chunk)).not.toThrow();
+  }
+
+  for (const [label, type, length] of [
+    ["a 0-byte credit", RELAY_FRAME.credit, 0],
+    ["a 2-byte credit", RELAY_FRAME.credit, 2],
+    ["a 5-byte credit", RELAY_FRAME.credit, 5],
+    ["an eof with a payload", RELAY_FRAME.eof, 1],
+    ["an opened with a payload", RELAY_FRAME.opened, 1],
+    ["a close with a payload", RELAY_FRAME.close, 1],
+  ] as const) {
+    test(`${label} frame shuts the relay down instead of throwing`, async () => {
+      const channel = await supervisor.connect(target, signal);
+      const fake = processes[0]!;
+      const id = fake.opened[0]!;
+      let channelFailure: unknown;
+      channel.once("error", (error) => {
+        channelFailure = error;
+      });
+      const closed = new Promise<void>((resolve) => channel.once("close", () => resolve()));
+
+      fake.answerOpens = false;
+      const pending = rejection(supervisor.connect(target, signal));
+      await requested(fake, 2);
+
+      feed(fake, frame(type, id, Buffer.alloc(length)));
+      const malformed = {
+        category: "internal",
+        message: "The container relay sent a malformed frame.",
+      };
+      expect(previewErrorFromUnknown(await pending)).toMatchObject(malformed);
+      await closed;
+      expect(previewErrorFromUnknown(channelFailure)).toMatchObject(malformed);
+      expect(fake.killed).toBe("SIGTERM");
+      expect(fake.stdout.listenerCount("data")).toBe(0);
+      expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
+      expect(supervisor.healthy("env-a")).toBe(false);
+    });
+  }
+
+  test("a 4-byte credit frame grants credit to its channel", async () => {
+    const channel = await supervisor.connect(target, signal);
+    const fake = processes[0]!;
+    const id = fake.opened[0]!;
+    const granted = new Promise<void>((resolve) => channel.once("credit", () => resolve()));
+    const before = (channel as unknown as { sendCredit: number }).sendCredit;
+
+    const credit = Buffer.alloc(4);
+    credit.writeUInt32BE(1234, 0);
+    feed(fake, frame(RELAY_FRAME.credit, id, credit));
+    await granted;
+
+    expect((channel as unknown as { sendCredit: number }).sendCredit).toBe(before + 1234);
+    expect(fake.killed).toBeNull();
+    expect(supervisor.stats()).toMatchObject({ relays: 1, channels: 1, crashes: 0 });
+    channel.destroy();
+  });
+
+  test("an exception while handling a frame shuts the relay down, not the backend", async () => {
+    const channel = await supervisor.connect(target, signal);
+    const fake = processes[0]!;
+    const id = fake.opened[0]!;
+    // A consumer that throws while the frame is being handled.
+    channel.on("credit", () => {
+      throw new Error("consumer-secret-state");
+    });
+    let channelFailure: unknown;
+    channel.once("error", (error) => {
+      channelFailure = error;
+    });
+    const closed = new Promise<void>((resolve) => channel.once("close", () => resolve()));
+
+    fake.answerOpens = false;
+    const pending = rejection(supervisor.connect(target, signal));
+    await requested(fake, 2);
+
+    feed(fake, frame(RELAY_FRAME.credit, id, Buffer.alloc(4)));
+    const failure = {
+      category: "internal",
+      message: "The container relay sent a frame the backend could not handle.",
+    };
+    const error = await pending;
+    expect(previewErrorFromUnknown(error)).toMatchObject(failure);
+    expect(`${String(error)} ${JSON.stringify(previewErrorFromUnknown(error))}`).not.toContain(
+      "consumer-secret-state",
+    );
+    await closed;
+    expect(previewErrorFromUnknown(channelFailure)).toMatchObject(failure);
+    expect(fake.killed).toBe("SIGTERM");
+    expect(supervisor.stats()).toMatchObject({ relays: 0, channels: 0, crashes: 1 });
   });
 
   test("an oversized frame instead of ready fails the pending connect as malformed", async () => {

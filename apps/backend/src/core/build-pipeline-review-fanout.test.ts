@@ -631,7 +631,7 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("pause stops the panel and resume starts a fresh fan-out", async () => {
-    await withPipeline(async ({ service, read, provider }) => {
+    await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
       const started = await service.start(
@@ -653,11 +653,17 @@ describe("build pipeline multi-model review", () => {
       ).toBe(true);
       expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
 
+      const generated = packageGeneration.count;
+      const verified = packageGeneration.verificationCount;
       await service.resume(started.id);
       await service.advanceNow(started.id);
       const resumed = await read(started.id);
       expect(resumed.phase).toBe("reviewing");
       expect(resumed.pendingPromptAttempt).toBeUndefined();
+      // The panel reopens on the package it was reviewing: verified again, not
+      // rebuilt through another preparation round.
+      expect(packageGeneration.count).toBe(generated);
+      expect(packageGeneration.verificationCount).toBe(verified + 1);
       expect(
         resumed.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
       ).not.toEqual(firstPanel);

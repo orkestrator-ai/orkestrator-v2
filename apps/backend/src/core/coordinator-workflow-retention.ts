@@ -53,6 +53,9 @@ export interface CoordinatorWorkflowCleanupInput {
  *   exists, or for any remote environment, whose existence is unknown here;
  * - the newest delegation record per worker tab while the environment exists,
  *   which is what goal and tab actions read as the coordinator's ownership;
+ * - a record holding a live worker outcome watch (`workerOutcome` not yet
+ *   ended), which is what tells the coordinator its worker merged or was
+ *   deleted; the watch ends with that, and then the record can go;
  * - anything created inside the replay window, or with a recent/undated alias.
  * Current resource state overrides historical notifications: active and unknown
  * resources stay protected; confirmed missing or expired terminal local work
@@ -102,6 +105,7 @@ export function selectCoordinatorWorkflowsToClear(
       return;
     if (!isFinished(association) && state !== "missing" && state !== "finished") return;
     if (reviewsFollowed.has(association.id)) return;
+    if (association.workerOutcome && !association.workerOutcome.ended) return;
     if (association.kind === "environment") {
       const exists = association.nodeId ? true : input.environmentExists(association.resourceId);
       if (exists) {

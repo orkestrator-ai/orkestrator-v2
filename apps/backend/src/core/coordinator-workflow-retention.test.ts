@@ -112,6 +112,21 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     expect(select(workflows)).toEqual(new Set(["ended-follow-review", "ended-follow"]));
   });
 
+  test("keeps a finished pipeline whose worker outcome watch is still live", () => {
+    const pipeline = (id: string, workerOutcome: CoordinatorWorkflowAssociation["workerOutcome"]) =>
+      finished(id, { kind: "build-pipeline", resourceId: `pipeline-${id}`, workerOutcome });
+    const workflows = [
+      pipeline("watching", { environmentId: "env-1", observedAt: OLD, prState: "open" }),
+      pipeline("merged", {
+        environmentId: "env-2",
+        observedAt: OLD,
+        ended: { key: "merged:abc", at: OLD, notified: true },
+      }),
+      pipeline("never-watched", undefined),
+    ];
+    expect(select(workflows)).toEqual(new Set(["merged", "never-watched"]));
+  });
+
   test("keeps an existing environment's launch record and newest delegation per tab", () => {
     const delegation = (requestedAt: string, workerTabId = "tab") => ({
       requestedAt,

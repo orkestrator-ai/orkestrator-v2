@@ -1,4 +1,5 @@
-import { ensureProjectExpanded } from "./sidebar-project";
+import { closeDockerReachabilityNotice } from "./docker-reachability-notice";
+import { ensureProjectExpanded, sidebarEnvironmentRow } from "./sidebar-project";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -15,6 +16,7 @@ import { enableExperimentalGraphs } from "./experimental-graphs";
  */
 
 test.use({ actionTimeout: 15_000 });
+test.beforeEach(async ({ page }) => closeDockerReachabilityNotice(page));
 
 function devJson(command: string, profile: string) {
   return JSON.parse(
@@ -195,10 +197,10 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
 
     // Switching to another environment and back keeps the tab and its template.
     await dismissSidebarTooltip(page, project.name);
-    await page.getByRole("button", { name: other.name, exact: true }).click();
+    await sidebarEnvironmentRow(page, other.name).click();
     await expect(designer).toBeHidden();
     await dismissSidebarTooltip(page, project.name);
-    await page.getByRole("button", { name: env.name, exact: true }).click();
+    await sidebarEnvironmentRow(page, env.name).click();
     await expect(designer.locator("[data-graph-designer-title]")).toHaveText("QA too many rounds");
 
     // Project templates show trust; approving pins the digest shown.

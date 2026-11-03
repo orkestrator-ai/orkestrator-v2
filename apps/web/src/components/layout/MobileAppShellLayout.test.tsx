@@ -512,15 +512,18 @@ describe("MobileAppShellLayout", () => {
   test("closes the drawer for a merge request without changing the selected environment", () => {
     function MergeConfirmation() {
       const request = useMergePrRequestStore((state) => state.request);
-      return request ? (
-        <div role="alertdialog" aria-label="Merge Pull Request">
-          <button
-            onClick={() => useMergePrRequestStore.getState().clearMergePrRequest(request.nonce)}
-          >
-            Cancel merge
-          </button>
-        </div>
-      ) : null;
+      return request
+        ? createPortal(
+            <div role="alertdialog" aria-label="Merge Pull Request">
+              <button
+                onClick={() => useMergePrRequestStore.getState().clearMergePrRequest(request.nonce)}
+              >
+                Cancel merge
+              </button>
+            </div>,
+            document.body,
+          )
+        : null;
     }
     renderLayout(
       {

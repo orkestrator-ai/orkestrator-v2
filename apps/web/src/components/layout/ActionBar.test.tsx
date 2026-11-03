@@ -481,17 +481,19 @@ mock.module("@/components/ui/context-menu", () => ({
     children,
     disabled,
     onClick,
+    onSelect,
   }: {
     children: React.ReactNode;
     disabled?: boolean;
     onClick?: () => void;
+    onSelect?: () => void;
   }) => {
     const state = useContext(MockContextMenuState);
     return (
       <button
         disabled={disabled}
         onClick={() => {
-          onClick?.();
+          (onSelect ?? onClick)?.();
           state?.setOpen(false);
         }}
         type="button"
@@ -6852,7 +6854,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           </>,
         );
         fireEvent.contextMenu(screen.getByText(target.name));
-        fireEvent.click(screen.getByRole("menuitem", { name: "Merge PR" }));
+        fireEvent.click(screen.getByRole("button", { name: "Merge PR", exact: true }));
         expect(realStoresSnapshot.useUIStore.getState().selectedEnvironmentId).toBe(target.id);
         expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
           "Merge Pull Request",

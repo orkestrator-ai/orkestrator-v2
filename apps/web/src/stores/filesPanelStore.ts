@@ -137,6 +137,7 @@ interface FilesPanelState {
     ref: GitHubPullRequestRef,
     view?: GitHubPullRequestViewTab,
   ) => void;
+  movePullRequestTabs: (from: string, to: string) => void;
   closePullRequest: (targetId: string, key: string) => void;
   updatePullRequestTab: (
     targetId: string,
@@ -339,6 +340,21 @@ export const useFilesPanelStore = create<FilesPanelState>()(
             activeTab: `pull-request:${key}`,
             pullRequestTabs: boundedTargets(state.pullRequestTabs, targetId, next),
           };
+        }),
+      // Project-home activation changes the panel identity without changing
+      // the checkout the reader sees. Carry its PR tabs across that transition.
+      movePullRequestTabs: (from, to) =>
+        set((state) => {
+          const source = state.pullRequestTabs[from];
+          if (from === to || !source?.length) return {};
+          const keys = new Set(source.map((tab) => tab.key));
+          const merged = [
+            ...(state.pullRequestTabs[to] ?? []).filter((tab) => !keys.has(tab.key)),
+            ...source,
+          ].slice(-MAX_PULL_REQUEST_TABS_PER_TARGET);
+          const remaining = { ...state.pullRequestTabs };
+          delete remaining[from];
+          return { pullRequestTabs: boundedTargets(remaining, to, merged) };
         }),
       closePullRequest: (targetId, key) =>
         set((state) => {

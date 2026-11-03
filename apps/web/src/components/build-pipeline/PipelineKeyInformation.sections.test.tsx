@@ -158,6 +158,23 @@ describe("Key information panel section list", () => {
     expect(current(nav)).toBe("Decisions");
   });
 
+  test("releases the jump lock after one second without scrollend", async () => {
+    const { nav, scroller } = renderBody();
+    fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
+    await act(async () => {
+      scroller.scrollTop = 4 * SECTION_HEIGHT;
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(current(nav)).toBe("Tests");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1050));
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(current(nav)).toBe("Decisions");
+  });
+
   test("shows no section list before anything is recorded", () => {
     render(<KeyInformationBody keyInformation={undefined} />);
 

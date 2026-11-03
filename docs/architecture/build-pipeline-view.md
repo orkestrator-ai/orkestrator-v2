@@ -354,7 +354,10 @@ scrolls. Choosing a heading scrolls only that column (never the page under
 the panel) to the section, smoothly unless the user prefers reduced motion,
 and the heading of the section being read is marked current
 (`aria-current="location"`). The key information tab's "On this page" list
-uses the same behaviour (`key-information-section-nav.ts`).
+uses the same behaviour (`key-information-section-nav.ts`). When Context and
+Solution share a row in the wide tab, scrolling within that row keeps its
+selected heading current. Entering the row from another section defaults to
+its first heading, Context.
 
 Stage agents keep it through two agent tools, `get_key_information` and
 `update_key_information` (`build-pipeline-key-information-tools.ts`). They are

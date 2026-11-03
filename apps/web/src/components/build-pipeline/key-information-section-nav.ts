@@ -39,7 +39,7 @@ export function useKeyInformationSectionNav(
     const measure = () => {
       frame = 0;
       if (jumping.current !== null) return;
-      setScrolledKey(currentSection(scroller, sectionKeys, sectionId));
+      setScrolledKey((previous) => currentSection(scroller, sectionKeys, sectionId, previous));
     };
     const onScroll = () => {
       if (frame === 0) frame = requestAnimationFrame(measure);
@@ -103,6 +103,7 @@ function currentSection(
   scroller: HTMLElement,
   keys: string[],
   sectionId: (key: string) => string,
+  previous: string | undefined,
 ): string | undefined {
   if (keys.length === 0) return undefined;
   // Unscrolled, the reader is at the first section whatever the layout says;
@@ -112,14 +113,22 @@ function currentSection(
     return keys[keys.length - 1];
   }
   const line = scroller.getBoundingClientRect().top + JUMP_OFFSET_PX * 2;
-  let current = keys[0];
+  let row: string[] = [keys[0]!];
+  let rowTop = -Infinity;
   for (const key of keys) {
     const element = document.getElementById(sectionId(key));
     if (!element) continue;
-    if (element.getBoundingClientRect().top <= line) current = key;
-    else break;
+    const top = element.getBoundingClientRect().top;
+    if (top > line) break;
+    // Paired columns share a heading row. Keep its selected member until
+    // another row takes over; entering a row defaults to its first heading.
+    if (Math.abs(top - rowTop) <= 1) row.push(key);
+    else {
+      row = [key];
+      rowTop = top;
+    }
   }
-  return current;
+  return previous !== undefined && row.includes(previous) ? previous : row[0];
 }
 
 function prefersReducedMotion(): boolean {

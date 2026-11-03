@@ -23,6 +23,15 @@ import { runCommand } from "../src/core/shell";
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();
 const enabled = process.env.RUN_LIVE_DOCKER_TESTS === "1" && Boolean(image);
 
+// `test:agent:docker:isolated` requires this suite; a skip there would pass
+// review without the evidence it exists to provide.
+test.skipIf(enabled || process.env.ORKESTRATOR_QUALIFICATION_REQUIRED !== "1")(
+  "a required M8 qualification has an image to run against",
+  () => {
+    throw new Error("Set RUN_LIVE_DOCKER_TESTS=1 and ORKESTRATOR_QUALIFICATION_IMAGE");
+  },
+);
+
 /** Keys the entrypoint adds to the container's own copy. */
 const ENTRYPOINT_KEYS = ["bypassPermissionsModeAccepted", "hasCompletedOnboarding", "theme"];
 

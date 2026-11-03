@@ -488,7 +488,9 @@ directly (`commands-containers.ts`, no staged inputs) are not covered; they
 belong to M9. Servers kept on purpose still carry the keys the user put in
 their headers or environment, because delivering them is the point.
 Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
-opt-in, in the container live qualification workflow) stages a fake host file
+run by `mise run test:agent:docker:isolated` against the image it builds, so
+review of any image change runs it, and in the container live qualification
+workflow) stages a fake host file
 from a throwaway HOME, boots the image with no network and fake credentials,
 and checks that no `node`-readable copy holds anything outside the allowlist
 and that interactive Claude starts in `/workspace` with no first-run, trust or

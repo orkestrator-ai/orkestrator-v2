@@ -2,7 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { isolatedProfileArguments, runIsolatedBrowser } from "./isolated-browser.js";
+import {
+  IMAGE_QUALIFICATION_TESTS,
+  isolatedProfileArguments,
+  runIsolatedBrowser,
+} from "./isolated-browser.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -78,6 +82,27 @@ if (task === "dev:test") {
           },
       );
   return { root, env, events };
+}
+
+/** Records the image qualification's arguments and environment, then exits with `code`. */
+async function writeFakeBun(root: string, code = 0) {
+  await writeFile(
+    path.join(root, "bun"),
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const root = process.env.ORK_ISOLATED_TEST_ROOT;
+fs.writeFileSync(path.join(root, "bun-call"), JSON.stringify({
+  args: process.argv.slice(2),
+  live: process.env.RUN_LIVE_DOCKER_TESTS,
+  required: process.env.ORKESTRATOR_QUALIFICATION_REQUIRED,
+  image: process.env.ORKESTRATOR_QUALIFICATION_IMAGE,
+  launcherStarted: fs.existsSync(path.join(root, "launcher")),
+}));
+process.exit(${code});
+`,
+    { mode: 0o755 },
+  );
 }
 
 async function waitForFile(file: string) {
@@ -309,6 +334,7 @@ exit 0
     f.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL = "1";
     f.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN = "1";
     await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFakeBun(f.root);
     if (mode === "cleanup-fail")
       await expect(runIsolatedBrowser({ ...f, docker: true })).rejects.toThrow("cleanup failed");
     else
@@ -325,5 +351,34 @@ exit 0
     expect(tests.grokLogin).toBe("0");
     expect(await Bun.file(path.join(f.root, "docker-calls")).exists()).toBe(false);
     expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
+    // The image's live qualifications ran against the built image before the fixture.
+    const qualification = JSON.parse(await readFile(path.join(f.root, "bun-call"), "utf8"));
+    expect(qualification.args).toEqual([
+      "test",
+      "--cwd",
+      "apps/backend",
+      "--preload",
+      "../../tests/setup-node.ts",
+      ...IMAGE_QUALIFICATION_TESTS,
+      "--parallel=1",
+    ]);
+    expect(qualification.args).toContain("./tests/claude-config-filter-docker.test.ts");
+    expect(qualification.live).toBe("1");
+    expect(qualification.required).toBe("1");
+    expect(qualification.image).toMatch(/^orkestrator-v2:dev-/);
+    expect(qualification.launcherStarted).toBe(false);
   },
 );
+
+test("a failed image qualification stops before the fixture and still cleans up", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.root, "bash"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await writeFakeBun(f.root, 5);
+  await expect(runIsolatedBrowser({ ...f, docker: true })).rejects.toThrow(
+    "Docker qualification image tests failed",
+  );
+  const tasks = (await f.events()).map((event) => event.task);
+  expect(tasks).not.toContain("dev:test");
+  expect(tasks).not.toContain("playwright");
+  expect(tasks.slice(-2)).toEqual(["dev:stop", "dev:reset"]);
+});

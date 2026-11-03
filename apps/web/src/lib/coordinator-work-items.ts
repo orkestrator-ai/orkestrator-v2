@@ -839,7 +839,10 @@ function pullRequestItem(
   const follow =
     associations.map((association) => association.pullRequest).find((item) => item?.prUrl) ??
     first.pullRequest;
-  const final = associations.map((a) => a.pullRequest?.final).find(Boolean);
+  const final = associations
+    .map((a) => a.pullRequest?.final)
+    .filter((item) => item !== undefined)
+    .sort((a, b) => (time(b.at) ?? 0) - (time(a.at) ?? 0))[0];
   const remote = nodeId ? nodeLookup(sources, nodeId, environmentId) : undefined;
   const local = nodeId ? undefined : sources.environments.get(environmentId);
   const currentReading = nodeId
@@ -854,11 +857,23 @@ function pullRequestItem(
     : prReadingFor(sources, environmentId);
   const url = follow?.prUrl ?? final?.prUrl ?? currentReading?.prUrl ?? local?.prUrl ?? null;
   const reading = currentReading?.prUrl === url ? currentReading : undefined;
-  // With the worker gone, what the follow recorded is the only reading left.
-  const recorded =
-    associations
-      .map((association) => pullRequestStateFromNotice(association.statusNotice?.key))
-      .find(Boolean) ?? (final?.prUrl === url ? final?.prState : null);
+  // A new follow supersedes the previous episode, including when it has
+  // not observed a state yet. Later notices and deletion readings then win
+  // by observation time, independently of association store order.
+  const evidence = associations.flatMap((association) => {
+    const notice = pullRequestStateFromNotice(association.statusNotice?.key);
+    const captured = association.pullRequest?.final;
+    return [
+      { at: time(association.createdAt) ?? 0, state: null, priority: 0 },
+      ...(notice
+        ? [{ at: time(association.statusNotice?.notifiedAt) ?? 0, state: notice, priority: 1 }]
+        : []),
+      ...(captured?.prUrl === url && captured.prState !== null
+        ? [{ at: time(captured.at) ?? 0, state: captured.prState, priority: 2 }]
+        : []),
+    ];
+  });
+  const recorded = evidence.sort((a, b) => b.at - a.at || b.priority - a.priority)[0]?.state;
   const followEnded = associations.every((association) => association.terminalNotifiedAt);
   // Nothing watches an ended follow, so its last "open" may be long out of date.
   const prState =
@@ -877,12 +892,19 @@ function pullRequestItem(
     checkSummary: reading?.checkSummary ?? null,
   });
   const finished = prState === "merged" || prState === "closed" || noLongerFollowed;
+  // Deletion observes the outcome; it does not finish an already-ended
+  // follow again. Only use that observation time when no end was recorded.
   const finishedAt = finished
     ? (latest(
-        time(final?.at),
-        ...associations.map((association) => time(association.statusNotice?.notifiedAt)),
+        ...associations.map((association) =>
+          pullRequestStateFromNotice(association.statusNotice?.key)
+            ? time(association.statusNotice?.notifiedAt)
+            : undefined,
+        ),
         ...associations.map((association) => time(association.terminalNotifiedAt)),
-      ) ?? createdAt)
+      ) ??
+      time(final?.at) ??
+      createdAt)
     : undefined;
   return {
     key: `pull-request:${nodeId ?? ""}:${environmentId}:${url ?? first.id}`,

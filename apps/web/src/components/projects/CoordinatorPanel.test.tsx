@@ -61,6 +61,7 @@ const resume = mock(async (): Promise<CoordinatorSnapshot> => {
 const createConversation = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("create failed");
 });
+const hideWork = mock(async (): Promise<CoordinatorSnapshot> => snapshot);
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("close failed");
 });
@@ -286,6 +287,7 @@ mock.module("@/lib/backend", () => ({
   selectCoordinatorConversation: select,
   createCoordinatorConversation: createConversation,
   closeCoordinatorConversation: closeConversation,
+  hideCoordinatorWork: hideWork,
   assignCoordinatorConversationAgent: assignAgent,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   ensureNativeAgentSession: async (
@@ -1847,6 +1849,42 @@ describe("CoordinatorPanel", () => {
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByText(/No coordinator is open/);
     expectNoContextNotice();
+  });
+
+  test("Clear applies its snapshot and removes a failed attempt's error on retry", async () => {
+    const now = new Date().toISOString();
+    const finished = {
+      id: "finished-follow",
+      coordinatorId: snapshot.workspace.id,
+      projectId: "project-1",
+      kind: "pull-request" as const,
+      resourceId: "gone",
+      requestId: "finished",
+      createdAt: now,
+      terminalNotifiedAt: now,
+      statusNotice: { key: "merged:abc", notifiedAt: now },
+      pullRequest: { source: "create-pr" as const, prUrl: "https://github.com/o/r/pull/420" },
+    };
+    ensuredSnapshot = { ...snapshot, workflows: [finished] };
+    hideWork.mockClear();
+    hideWork.mockImplementationOnce(async () => {
+      throw new Error("Clear failed once");
+    });
+    hideWork.mockImplementationOnce(async () => ({
+      ...ensuredSnapshot,
+      workflows: [{ ...finished, workHiddenAt: now }],
+    }));
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Show work: 0 running, 0 need you" }));
+    fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
+    await screen.findByText("Clear failed once");
+    fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("Clear failed once")).toBeNull();
+      expect(screen.queryByText("PR #420")).toBeNull();
+    });
+    expect(hideWork).toHaveBeenLastCalledWith("project-1", ["finished-follow"]);
   });
 
   test("lists the work of every conversation in the Work panel, with no waiting chip", async () => {

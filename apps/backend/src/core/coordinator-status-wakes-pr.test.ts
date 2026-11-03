@@ -190,96 +190,104 @@ describe("followed-worker filter", () => {
 });
 
 describe("pull request status wakes", () => {
-  test("a PR raised with create_pr wakes once per state change, until it merges", async () => {
-    const current = await createWorld();
-    const coordinator = await current.main();
-    const worker = await current.addEnvironment("pr-env");
-    await follow(current, worker, "create-pr");
+  test.each([false, true])(
+    "a PR wakes once per state change until merge (hidden: %s)",
+    async (hidden) => {
+      const current = await createWorld();
+      const coordinator = await current.main();
+      const worker = await current.addEnvironment("pr-env");
+      await follow(current, worker, "create-pr");
+      if (hidden)
+        await current.storage.coordinators.hideCoordinatorWork(
+          current.projectId,
+          new Set([(await followOf(current, worker))!.id]),
+        );
 
-    // The PR tab is still working: no pull request, no news.
-    await settle(current);
-    expect(current.wakes(coordinator)).toBe(0);
+      // The PR tab is still working: no pull request, no news.
+      await settle(current);
+      expect(current.wakes(coordinator)).toBe(0);
 
-    await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
-    await settle(current);
-    expect(states(current, coordinator)).toEqual(["pr-opened"]);
-    const [opened] = current.carriers(coordinator)[0]!;
-    expect(opened).toMatchObject({
-      kind: "notice",
-      notice: {
-        resource: { kind: "pull-request", id: worker.environmentId, label: "pr-env" },
-        state: "pr-opened",
-        tone: "success",
-      },
-    });
-    expect(opened!.subject).toBe("Pull request pr-env is open");
-    expect(opened!.body).toContain(`Pull request: ${PR_URL}`);
-    expect(opened!.body).toContain(
-      `get_environment { "environmentId": "${worker.environmentId}" }`,
-    );
-    expect((await followOf(current, worker))?.pullRequest?.prUrl).toBe(PR_URL);
-    await current.finishTurn(coordinator);
+      await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+      await settle(current);
+      expect(states(current, coordinator)).toEqual(["pr-opened"]);
+      const [opened] = current.carriers(coordinator)[0]!;
+      expect(opened).toMatchObject({
+        kind: "notice",
+        notice: {
+          resource: { kind: "pull-request", id: worker.environmentId, label: "pr-env" },
+          state: "pr-opened",
+          tone: "success",
+        },
+      });
+      expect(opened!.subject).toBe("Pull request pr-env is open");
+      expect(opened!.body).toContain(`Pull request: ${PR_URL}`);
+      expect(opened!.body).toContain(
+        `get_environment { "environmentId": "${worker.environmentId}" }`,
+      );
+      expect((await followOf(current, worker))?.pullRequest?.prUrl).toBe(PR_URL);
+      await current.finishTurn(coordinator);
 
-    // The same reading again, however often, is not news.
-    await settle(current);
-    await settle(current);
-    expect(current.wakes(coordinator)).toBe(1);
+      // The same reading again, however often, is not news.
+      await settle(current);
+      await settle(current);
+      expect(current.wakes(coordinator)).toBe(1);
 
-    await monitor(current, worker, { hasMergeConflicts: true, prMergeability: "dirty" });
-    await settle(current);
-    expect(states(current, coordinator)).toEqual(["pr-opened", "pr-conflicts"]);
-    expect(current.received(coordinator)[1]).toContain(
-      `resolve_conflicts { "environmentId": "${worker.environmentId}" }`,
-    );
-    await current.finishTurn(coordinator);
+      await monitor(current, worker, { hasMergeConflicts: true, prMergeability: "dirty" });
+      await settle(current);
+      expect(states(current, coordinator)).toEqual(["pr-opened", "pr-conflicts"]);
+      expect(current.received(coordinator)[1]).toContain(
+        `resolve_conflicts { "environmentId": "${worker.environmentId}" }`,
+      );
+      await current.finishTurn(coordinator);
 
-    // Conflicts fixed, checks still running: recorded, not woken.
-    await monitor(
-      current,
-      worker,
-      { hasMergeConflicts: false, prMergeability: "blocked" },
-      { confirmed: true, checks: { passed: 1, total: 2, pending: 1 } },
-    );
-    await settle(current);
-    expect(current.wakes(coordinator)).toBe(2);
+      // Conflicts fixed, checks still running: recorded, not woken.
+      await monitor(
+        current,
+        worker,
+        { hasMergeConflicts: false, prMergeability: "blocked" },
+        { confirmed: true, checks: { passed: 1, total: 2, pending: 1 } },
+      );
+      await settle(current);
+      expect(current.wakes(coordinator)).toBe(2);
 
-    await monitor(
-      current,
-      worker,
-      { prMergeability: "blocked" },
-      { confirmed: true, checks: { passed: 1, total: 2, pending: 0 } },
-    );
-    await settle(current);
-    expect(states(current, coordinator).at(-1)).toBe("pr-checks-failed");
-    expect(current.received(coordinator)[2]).toContain("1 failed");
-    await current.finishTurn(coordinator);
+      await monitor(
+        current,
+        worker,
+        { prMergeability: "blocked" },
+        { confirmed: true, checks: { passed: 1, total: 2, pending: 0 } },
+      );
+      await settle(current);
+      expect(states(current, coordinator).at(-1)).toBe("pr-checks-failed");
+      expect(current.received(coordinator)[2]).toContain("1 failed");
+      await current.finishTurn(coordinator);
 
-    await monitor(
-      current,
-      worker,
-      { prMergeability: "clean" },
-      { confirmed: true, checks: { passed: 2, total: 2, pending: 0 } },
-    );
-    await settle(current);
-    expect(states(current, coordinator).at(-1)).toBe("pr-ready");
-    expect(current.received(coordinator)[3]).toContain("never merges");
-    await current.finishTurn(coordinator);
+      await monitor(
+        current,
+        worker,
+        { prMergeability: "clean" },
+        { confirmed: true, checks: { passed: 2, total: 2, pending: 0 } },
+      );
+      await settle(current);
+      expect(states(current, coordinator).at(-1)).toBe("pr-ready");
+      expect(current.received(coordinator)[3]).toContain("never merges");
+      await current.finishTurn(coordinator);
 
-    await monitor(current, worker, { prState: "merged" }, { confirmed: true });
-    await settle(current);
-    expect(states(current, coordinator)).toEqual([
-      "pr-opened",
-      "pr-conflicts",
-      "pr-checks-failed",
-      "pr-ready",
-      "pr-merged",
-    ]);
-    expect((await followOf(current, worker))?.terminalNotifiedAt).toBeDefined();
-    await current.finishTurn(coordinator);
-    await current.restart();
-    await settle(current);
-    expect(current.wakes(coordinator)).toBe(5);
-  });
+      await monitor(current, worker, { prState: "merged" }, { confirmed: true });
+      await settle(current);
+      expect(states(current, coordinator)).toEqual([
+        "pr-opened",
+        "pr-conflicts",
+        "pr-checks-failed",
+        "pr-ready",
+        "pr-merged",
+      ]);
+      expect((await followOf(current, worker))?.terminalNotifiedAt).toBeDefined();
+      await current.finishTurn(coordinator);
+      await current.restart();
+      await settle(current);
+      expect(current.wakes(coordinator)).toBe(5);
+    },
+  );
 
   test("a state that recurs after a fix wakes again; re-observing one episode does not", async () => {
     const current = await createWorld();
@@ -385,6 +393,8 @@ describe("pull request status wakes", () => {
     await settle(current);
     expect((await followOf(current, worker))?.terminalNotifiedAt).toBeDefined();
     const wakes = current.wakes(coordinator);
+    const terminalAt = (await followOf(current, worker))?.terminalNotifiedAt;
+    timers.advance(2 * 60 * 60_000);
 
     await current.coordinator.statusWakes.captureFinalPullRequest(
       (await current.storage.getEnvironment(worker.environmentId))!,
@@ -401,6 +411,7 @@ describe("pull request status wakes", () => {
       prState: "merged",
       name: "pr-env",
     });
+    expect((await followOf(current, worker))?.terminalNotifiedAt).toBe(terminalAt);
     expect((await followOf(current, replaced))?.pullRequest?.final).toBeUndefined();
     expect(current.wakes(coordinator)).toBe(wakes);
   });

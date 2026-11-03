@@ -873,6 +873,100 @@ describe("a followed pull request whose worker is gone", () => {
     });
   });
 
+  test.each([false, true])(
+    "newer final merge supersedes a closed notice (grouped: %s)",
+    (grouped) => {
+      const old = followed({
+        statusNotice: { key: "closed:abc", notifiedAt: at(-3 * HOUR) },
+        terminalNotifiedAt: at(-3 * HOUR),
+      });
+      const captured = { prUrl: url, prState: "merged" as const, at: at(-HOUR) };
+      const workflows = grouped
+        ? [
+            old,
+            followed(
+              { createdAt: at(-2 * HOUR), terminalNotifiedAt: at(-HOUR) },
+              { final: captured },
+            ),
+          ]
+        : [{ ...old, pullRequest: { ...old.pullRequest!, final: captured } }];
+      expect(deriveCoordinatorWorkItems(sources({ workflows }))[0]?.stage).toBe("PR merged");
+    },
+  );
+
+  test.each([false, true])(
+    "a newer follow supersedes old closed history (merged: %s)",
+    (isMerged) => {
+      const old = followed({
+        statusNotice: { key: "closed:abc", notifiedAt: at(-3 * HOUR) },
+        terminalNotifiedAt: at(-3 * HOUR),
+      });
+      const newer = followed({
+        createdAt: at(-2 * HOUR),
+        ...(isMerged ? merged : {}),
+      });
+      for (const workflows of [
+        [old, newer],
+        [newer, old],
+      ]) {
+        expect(deriveCoordinatorWorkItems(sources({ workflows }))[0]).toMatchObject({
+          bucket: isMerged ? "finished" : "running",
+          stage: isMerged ? "PR merged" : "PR · status unavailable",
+        });
+      }
+    },
+  );
+
+  test("capturing a deletion reading does not revive expired terminal history", () => {
+    const old = at(-FINISHED_WORK_RETENTION_MS - HOUR);
+    expect(
+      deriveCoordinatorWorkItems(
+        sources({
+          workflows: [
+            followed(
+              {
+                createdAt: old,
+                statusNotice: { key: "merged:abc", notifiedAt: old },
+                terminalNotifiedAt: old,
+              },
+              { final: { prUrl: url, prState: "merged", at: at(0) } },
+            ),
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a final outcome at creation time wins the timestamp tie", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(
+            {
+              createdAt: at(-HOUR),
+              terminalNotifiedAt: at(-HOUR),
+            },
+            { final: { prUrl: url, prState: "merged", at: at(-HOUR) } },
+          ),
+        ],
+      }),
+    );
+    expect(item?.stage).toBe("PR merged");
+  });
+
+  test("a deletion with unavailable state keeps the last known outcome", () => {
+    const [item] = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          followed(merged, {
+            final: { prUrl: url, prState: null, at: at(0) },
+          }),
+        ],
+      }),
+    );
+    expect(item?.stage).toBe("PR merged");
+  });
+
   test("is closed when its recorded notice says so", () => {
     const [item] = deriveCoordinatorWorkItems(
       sources({

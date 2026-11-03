@@ -499,6 +499,68 @@ describe("NativeAgentInteractionCard", () => {
     });
   });
 
+  test("⌘↵ in an answer field sends the answer", async () => {
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 2,
+    }));
+    render(<NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />);
+    const field = screen.getByLabelText("Access token response");
+    // Nothing typed yet: the answer is required, so the chord does nothing.
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    fireEvent.change(field, { target: { value: "abc" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onResolve).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0]).toMatchObject({
+      action: "answer",
+      answer: { answers: [{ questionId: "token", freeText: "abc" }] },
+    });
+  });
+
+  test("⌘↵ in plan feedback requests changes, and never approves from a button", async () => {
+    const request: AgentInteractionRequest = {
+      ...interaction(false),
+      provider: "claude",
+      kind: "plan-approval",
+      presentation: {
+        title: "Approve Claude's plan",
+        planAvailable: true,
+        questions: [],
+        confirmLabel: "Approve",
+        declineLabel: "Deny",
+      },
+    };
+    const onResolve = mock(async (resolution: AgentInteractionResolution) => ({
+      result: "applied" as const,
+      interactionId: resolution.interactionId,
+      sessionId: resolution.sessionId,
+      revision: 2,
+    }));
+    render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Approve" }), {
+      key: "Enter",
+      metaKey: true,
+    });
+    const feedback = screen.getByLabelText("Plan revision feedback");
+    fireEvent.keyDown(feedback, { key: "Enter", metaKey: true });
+    expect(onResolve).not.toHaveBeenCalled();
+
+    fireEvent.change(feedback, { target: { value: "Add rollback steps" } });
+    fireEvent.keyDown(feedback, { key: "Enter", metaKey: true });
+
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0]).toMatchObject({
+      action: "decline",
+      feedback: "Add rollback steps",
+    });
+  });
+
   test("shows unavailable plan copy as description without a plan disclosure", () => {
     render(
       <NativeAgentInteractionCard

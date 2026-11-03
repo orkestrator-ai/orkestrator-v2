@@ -216,6 +216,52 @@ describe("NativeAgentQuestionCard", () => {
     ]);
   });
 
+  test("⌘↵ moves to the next question, then submits on the last", async () => {
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
+    render(
+      <NativeAgentQuestionCard
+        interaction={request([
+          question({ id: "q0", prompt: "Which language?", options: TWO_OPTIONS }),
+          question({ id: "q1", prompt: "Which runtime?" }),
+        ])}
+        onResolve={onResolve}
+      />,
+    );
+
+    const typescript = screen.getByRole("button", { name: "TypeScript" });
+    fireEvent.click(typescript);
+    fireEvent.keyDown(typescript, { key: "Enter", metaKey: true });
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(screen.getByText("Which runtime?")).toBeTruthy();
+
+    const field = screen.getByLabelText("Which runtime? response");
+    fireEvent.change(field, { target: { value: "Bun" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onResolve).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0].answer?.answers).toEqual([
+      { questionId: "q0", optionIds: ["o0"] },
+      { questionId: "q1", freeText: "Bun" },
+    ]);
+  });
+
+  test("⌘↵ does not submit while a required question is unanswered", () => {
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
+    render(
+      <NativeAgentQuestionCard
+        interaction={request([question({ id: "q0" })])}
+        onResolve={onResolve}
+      />,
+    );
+    fireEvent.keyDown(screen.getByLabelText("Which approach? response"), {
+      key: "Enter",
+      metaKey: true,
+    });
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
   test("refuses to submit while a required question is unanswered", () => {
     render(
       <NativeAgentQuestionCard

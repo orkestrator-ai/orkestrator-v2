@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type KeyboardEvent } from "react";
 import { ExternalLink, Server } from "lucide-react";
 import {
   agentInteractionSourceScopeLabel,
@@ -14,6 +14,7 @@ import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { usePromptHold, type PromptHoldHandler } from "@/hooks/usePromptHold";
 import { openInBrowser } from "@/lib/backend";
+import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
 import { RememberRulePanel } from "@/components/native-agent/RememberRulePanel";
@@ -203,6 +204,31 @@ export function NativeAgentInteractionCard({
     }));
   };
 
+  const canAnswer =
+    !submitting &&
+    !rememberBusy &&
+    !expired &&
+    canSubmit &&
+    !interaction.presentation.confirmDisabled;
+  /**
+   * ⌘↵ / Ctrl+Enter in a typed field. Only the fields hold it, never the
+   * card: on an approval a focused button must not turn the chord into an
+   * approval the user did not click.
+   */
+  const onSubmitShortcut = (action: () => void) => (event: KeyboardEvent<HTMLElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    action();
+  };
+  const answerOnShortcut = onSubmitShortcut(() => {
+    if (canAnswer) void resolve("answer");
+  });
+  // The feedback box asks what to change, so sending it requests changes.
+  const requestChangesOnShortcut = onSubmitShortcut(() => {
+    if (!submitting && !expired && feedback.trim()) void resolve("decline", feedback);
+  });
+
   const actions = (
     <>
       {interaction.kind === "plan-approval" ? (
@@ -283,13 +309,7 @@ export function NativeAgentInteractionCard({
       ) : null}
       <Button
         size="sm"
-        disabled={
-          submitting ||
-          rememberBusy ||
-          expired ||
-          !canSubmit ||
-          interaction.presentation.confirmDisabled
-        }
+        disabled={!canAnswer}
         onClick={() => {
           void resolve("answer");
         }}
@@ -433,6 +453,7 @@ export function NativeAgentInteractionCard({
                       }
                       value={String(value ?? "")}
                       disabled={submitting || expired}
+                      onKeyDown={answerOnShortcut}
                       onChange={(event) =>
                         setValue(coerceNativeFormFieldValue(event.target.value, definition.type))
                       }
@@ -506,6 +527,7 @@ export function NativeAgentInteractionCard({
                       value={answer.freeText}
                       disabled={submitting || expired}
                       aria-label={`${question.prompt} response`}
+                      onKeyDown={answerOnShortcut}
                       onChange={(event) =>
                         setQuestionAnswer(question.id, true, (current) => ({
                           ...current,
@@ -521,6 +543,7 @@ export function NativeAgentInteractionCard({
                       aria-label={`${question.prompt} response`}
                       rows={3}
                       className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
+                      onKeyDown={answerOnShortcut}
                       onChange={(event) =>
                         setQuestionAnswer(question.id, false, (current) => ({
                           ...current,
@@ -545,6 +568,7 @@ export function NativeAgentInteractionCard({
               aria-label="Plan revision feedback"
               rows={3}
               className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
+              onKeyDown={requestChangesOnShortcut}
               onChange={(event) => setFeedback(event.target.value)}
             />
           </label>

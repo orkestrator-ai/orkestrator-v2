@@ -211,6 +211,67 @@ describe("NativeAsyncQuestionCard", () => {
     );
   });
 
+  test("⌘↵ or Ctrl+Enter in the text field sends the answer", async () => {
+    const respond = mock(async () => {});
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
+        <NativeAsyncQuestionCard part={part} />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+    const field = screen.getByLabelText("Custom answer for Any constraints?");
+    fireEvent.change(field, { target: { value: "No downtime" } });
+    // Plain and Shift+Enter keep inserting new lines.
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+    expect(respond).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+
+    await waitFor(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond).toHaveBeenCalledWith(
+      "item-1",
+      "Answers to your questions:\n\n- Which target?: Staging\n- Any constraints?: No downtime",
+    );
+  });
+
+  test("Ctrl+Enter on a picked option sends the answer once", async () => {
+    const respond = mock(async () => {});
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
+        <NativeAsyncQuestionCard
+          part={{
+            ...part,
+            asyncQuestion: { ...part.asyncQuestion, questions: [part.asyncQuestion.questions[0]!] },
+          }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+    const production = screen.getByRole("button", { name: "Production" });
+    fireEvent.click(production);
+    fireEvent.keyDown(production, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(production, { key: "Enter", ctrlKey: true });
+
+    await waitFor(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond).toHaveBeenCalledWith(
+      "item-1",
+      "Answers to your questions:\n\n- Which target?: Production",
+    );
+  });
+
+  test("⌘↵ does nothing while an answer is still missing", () => {
+    const respond = mock(async () => {});
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [], respond }}>
+        <NativeAsyncQuestionCard part={part} />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+    fireEvent.keyDown(screen.getByLabelText("Custom answer for Any constraints?"), {
+      key: "Enter",
+      metaKey: true,
+    });
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   test("rehydrates a sent response as a read-only card", () => {
     render(
       <AsyncQuestionResponseContext.Provider

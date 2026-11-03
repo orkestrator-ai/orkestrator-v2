@@ -5,6 +5,7 @@ import {
   detectShortcutPlatform,
   filterKeyboardShortcuts,
   isKeyboardShortcutsShortcut,
+  isSubmitShortcut,
 } from "./keyboard-shortcuts";
 
 function ids(groups: ReturnType<typeof filterKeyboardShortcuts>): string[] {
@@ -245,6 +246,23 @@ describe("isKeyboardShortcutsShortcut", () => {
       ),
     ).toBe(false);
     expect(isKeyboardShortcutsShortcut(keydown({ key: "?", code: "Slash", shiftKey: true }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("isSubmitShortcut", () => {
+  test("accepts ⌘↵ and Ctrl+Enter", () => {
+    expect(isSubmitShortcut(keydown({ key: "Enter", metaKey: true }))).toBe(true);
+    expect(isSubmitShortcut(keydown({ key: "Enter", ctrlKey: true }))).toBe(true);
+  });
+
+  test("ignores plain, Shift and Alt Enter, other keys and IME composition", () => {
+    expect(isSubmitShortcut(keydown({ key: "Enter" }))).toBe(false);
+    expect(isSubmitShortcut(keydown({ key: "Enter", metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isSubmitShortcut(keydown({ key: "Enter", ctrlKey: true, altKey: true }))).toBe(false);
+    expect(isSubmitShortcut(keydown({ key: "a", metaKey: true }))).toBe(false);
+    expect(isSubmitShortcut(keydown({ key: "Enter", metaKey: true, isComposing: true }))).toBe(
       false,
     );
   });

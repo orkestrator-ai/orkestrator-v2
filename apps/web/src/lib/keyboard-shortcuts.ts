@@ -399,6 +399,13 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         mac: ["⌘", "↵"],
         other: ["Ctrl", "Enter"],
       },
+      {
+        id: "answer-question",
+        description: "Send the answer to an agent's question",
+        mac: ["⌘", "↵"],
+        other: ["Ctrl", "Enter"],
+        keywords: ["submit", "reply", "ask", "question card"],
+      },
     ],
   },
   {
@@ -548,4 +555,23 @@ export function filterKeyboardShortcuts(
 /** ⌘⇧/ on macOS, Ctrl+Shift+/ elsewhere; either modifier is accepted, as with ⌘K. */
 export function isKeyboardShortcutsShortcut(event: KeyboardEvent): boolean {
   return isKeyboardShortcutsChord(event);
+}
+
+/**
+ * ⌘↵ / Ctrl+Enter: the "send this" chord for a multi-line field whose plain
+ * Enter inserts a new line (question cards, comments). Shift and Alt
+ * variants and keys pressed while an IME is composing do not count.
+ */
+export function isSubmitShortcut(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  nativeEvent?: { isComposing?: boolean };
+  isComposing?: boolean;
+}): boolean {
+  if (event.key !== "Enter" || event.altKey || event.shiftKey) return false;
+  if (!(event.metaKey || event.ctrlKey)) return false;
+  return !(event.isComposing || event.nativeEvent?.isComposing);
 }

@@ -871,7 +871,8 @@ function pullRequestItem(
     bucket: finished ? "finished" : "running",
     name,
     ...(remote ? { machine: remote.machine } : {}),
-    stage: url || prState ? stage : "PR · being opened",
+    stage:
+      url && !prState ? "PR · status unavailable" : url || prState ? stage : "PR · being opened",
     target: url ? { type: "pull-request", url } : null,
     ...(url ? {} : { unavailableReason: "The pull request has not been opened yet." }),
     openDelegations: 0,

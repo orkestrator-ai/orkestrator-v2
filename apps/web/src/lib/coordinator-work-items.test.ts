@@ -822,3 +822,22 @@ test("ready coverage gaps also need a decision", () => {
   );
   expect(items[0]?.bucket).toBe("needs-you");
 });
+
+test("an unqualified remote PR summary cannot label a followed URL with another PR state", () => {
+  const url = "https://github.com/o/r/pull/1";
+  const items = deriveCoordinatorWorkItems(
+    sources({
+      workflows: [
+        association({
+          kind: "pull-request",
+          resourceId: "e",
+          nodeId: "n",
+          pullRequest: { source: "create-pr", prUrl: url },
+        }),
+      ],
+      nodes: [node("n", "Remote", [{ environmentId: "e", prState: "merged" }])],
+    }),
+  );
+  expect(items[0]?.stage).toBe("PR · status unavailable");
+  expect(items[0]?.target).toEqual({ type: "pull-request", url });
+});

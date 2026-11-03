@@ -23,7 +23,8 @@ The first fake-Git process may exhaust the 200 ms timeout before recording its i
 
 `mise run test:logged -- --name repaired-full -- mise run test:full` failed
 against committed code at `5962671b5` (1293.4 seconds including 576.4 seconds
-waiting for the shared lease). Backend used two file workers. The same test
+waiting for the shared lease). Backend used two file workers (16,572 passed, 196 skipped, eight failed);
+the root group had 3,836 passed and two failed. The same test
 failed at line 1739 after 308.07 ms: only the fallback Git invocation was
 recorded, rather than the initial invocation followed by the fallback.
 Evidence: `output/agent-testing/merge-pr-fix-validation/repaired-full.log.gz`.

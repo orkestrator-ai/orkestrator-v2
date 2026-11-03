@@ -72,3 +72,17 @@
   page's module requests through `route.fetch()` for a diagnostic run. Do not
   add a new flake entry for the owning test unless its trace has neither
   symptom.
+
+## 2026-11-03: project-home approval review
+
+The six-worker `mise run test:logged -- --name review-browser -- mise run
+ test:browser` rerun overlapped an origin/main Docker qualification on the same
+Linux host. A separate one-worker `ProjectHomeMessageApproval.spec.ts` run had
+three failures and one pass: blank pages never displayed the dialog. Its mobile
+approve trace contains repeated `net::ERR_NETWORK_CHANGED` failures for local
+Vite modules (including `SettingsMachineStrip.tsx` and
+`VirtualizedMessageList.tsx`). This matches the cause above, rather than an
+approval assertion rejecting rendered content. The broad run was interrupted
+with SIGINT to its recorded Playwright child after 436.6 seconds so it could be
+rerun without Docker churn. Evidence is retained under
+`output/agent-testing/home-mail-review-fix/evidence/` in the review workspace.

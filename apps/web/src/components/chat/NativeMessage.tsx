@@ -45,6 +45,7 @@ import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
+import { PullRequestUpdateNotice } from "./PullRequestUpdateNotice";
 import { GoalStatusRow, GoalTurnTile } from "./GoalTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
@@ -197,9 +198,14 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   if (isPeerMail) {
+    const mail = message.peerMail ?? peerMailFromContent(message);
+    // A watched pull request's status change is awareness only: one quiet line.
+    if (mail.notice?.resource.kind === "watched-pull-request") {
+      return <PullRequestUpdateNotice mail={mail} timestampLabel={formatTime(message.createdAt)} />;
+    }
     return (
       <MailTile
-        mail={message.peerMail ?? peerMailFromContent(message)}
+        mail={mail}
         expansionKey={`peer-mail:${stableAgentExpansionScope}:${message.id}`}
         timestampLabel={formatTime(message.createdAt)}
       />

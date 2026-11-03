@@ -196,6 +196,35 @@ describe("NativeMessage peer mail", () => {
     fireEvent.click(screen.getByRole("button", { name: /Claude 3/ }));
   }
 
+  test("draws a watched pull request's status notice as one line, not a tile", () => {
+    const { container } = render(
+      <NativeMessage
+        message={createPeerMailNativeMessage({
+          id: "mail-pr",
+          from: {
+            kind: "system",
+            projectId: "project",
+            source: "workflow",
+            resourceId: "acme/app#12",
+          },
+          trust: "same-project",
+          subject: "PR #12 updated: Add the watch",
+          body: 'Pull request #12 "Add the watch" in acme/app: checks failing.\nURL: https://github.com/acme/app/pull/12',
+          notice: {
+            resource: { kind: "watched-pull-request", id: "acme/app#12", label: "Add the watch" },
+            state: "pr-checks-failed",
+            tone: "failure",
+          },
+          createdAt: "2026-09-26T23:36:00.000Z",
+        })}
+      />,
+    );
+    expect(container.querySelector("[data-mail-tile]")).toBeNull();
+    const row = container.querySelector<HTMLElement>("[data-pr-update-notice]")!;
+    expect(row.dataset.mailState).toBe("pr-checks-failed");
+    expect(row.textContent).toContain("PR #12updated· Add the watch· checks failing");
+  });
+
   test("renders a collapsed tile with the sender, subject and Markdown body", () => {
     const { container } = render(
       <NativeMessage

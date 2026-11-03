@@ -1,3 +1,4 @@
+import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
 import { startLogPolicyService } from "./log-policy-service.js";
@@ -2319,33 +2320,46 @@ export class OrkestratorBackend {
     let mailRetentionTick = 0;
     let coordinatorWorkflowTick = 0;
     let coordinatorWorkflowReconcileInFlight: Promise<void> | null = null;
-    const reconcileCoordinatorWorkflows = () => {
-      recurringWorkMetrics.requested("coordinator-repair");
-      if (coordinatorWorkflowReconcileInFlight) {
-        recurringWorkMetrics.coalesced("coordinator-repair");
-        return;
-      }
-      coordinatorWorkflowReconcileInFlight = recurringWorkMetrics
-        .observe("coordinator-repair", () =>
-          this.coordinators
-            .reconcileWorkflowNotifications()
-            // A delegation closed by an edge whose wake never reached the mail
-            // store — a crash, a storage fault — is finished here. The wake is
-            // idempotent on `wokenAt`, so a delivered one is not repeated.
-            .then(() => this.coordinators.reconcileWorkerDelegations()),
-        )
-        .then(() => activityLog.recovered("job.failed", `${this.logScope}:coordinator-workflows`))
-        .catch((error) => {
+    const reconcileCoordinatorWorkflows = () =>
+      runCoordinatorMaintenance(
+        () => {
+          recurringWorkMetrics.requested("coordinator-repair");
+          if (coordinatorWorkflowReconcileInFlight) {
+            recurringWorkMetrics.coalesced("coordinator-repair");
+            return;
+          }
+          coordinatorWorkflowReconcileInFlight = recurringWorkMetrics
+            .observe("coordinator-repair", () =>
+              this.coordinators
+                .reconcileWorkflowNotifications()
+                // A delegation closed by an edge whose wake never reached the mail
+                // store — a crash, a storage fault — is finished here. The wake is
+                // idempotent on `wokenAt`, so a delivered one is not repeated.
+                .then(() => this.coordinators.reconcileWorkerDelegations()),
+            )
+            .then(() =>
+              activityLog.recovered("job.failed", `${this.logScope}:coordinator-workflows`),
+            )
+            .catch((error) => {
+              activityLog.throttled("warn", "job.failed", {
+                scope: `${this.logScope}:coordinator-workflows`,
+                error,
+                fields: () => ({ error: formatLogError(error, { stack: false }) }),
+              });
+            })
+            .finally(() => {
+              coordinatorWorkflowReconcileInFlight = null;
+            });
+        },
+        () => this.coordinators.sweepWatchedPullRequests(),
+        (error) => {
           activityLog.throttled("warn", "job.failed", {
-            scope: `${this.logScope}:coordinator-workflows`,
+            scope: `${this.logScope}:coordinator-pr-watches`,
             error,
             fields: () => ({ error: formatLogError(error, { stack: false }) }),
           });
-        })
-        .finally(() => {
-          coordinatorWorkflowReconcileInFlight = null;
-        });
-    };
+        },
+      );
     if (this.keyedActivityJobs && !this.activityJobs) {
       // Step 08: every part of the former 2 s bundle and the 60 s maintenance
       // is its own named due job (see backend-activity-jobs.ts).

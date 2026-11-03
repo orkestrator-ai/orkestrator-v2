@@ -386,6 +386,12 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
   "environment",
   /** A feature plan's planning exchange a coordinator started; `id` is the feature plan id. */
   "feature-plan",
+  /**
+   * A pull request of the project's repository that appeared in a coordinator
+   * conversation and is watched for status changes; `id` is
+   * `owner/repo#number` and `label` its title. Drawn as a one-line notice.
+   */
+  "watched-pull-request",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 

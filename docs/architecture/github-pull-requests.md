@@ -133,6 +133,13 @@ monitor (`requestPrMonitorRefresh`) to re-check every environment whose stored
 `prUrl` is the same pull request. This is detached and best effort; it never
 delays or fails the GitHub action.
 
+A pull request link of the project's repository that a coordinator renders or
+opens is also watched for status changes until it settles, read through
+`getGitHubPullRequestStatus` and the same conditional cache (a 404 or 410 triggers
+`confirmGitHubPullRequestDeleted`; issue-endpoint 404s remain ambiguous even when
+repository metadata is readable); see
+[Watched pull requests](coordinator.md#watched-pull-requests).
+
 ## The Resolve button
 
 The action bar's Resolve button, its configure dialog and the `⌘⇧U` shortcut all

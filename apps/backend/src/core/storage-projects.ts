@@ -496,6 +496,8 @@ export class ProjectsRepository {
     this.repos.clientState.deleteProjectClientState(projectId);
     // So do the setup commands approved for it on this machine.
     this.repos.setupApprovals.deleteSetupApprovalsForProject(projectId);
+    // And the pull requests its coordinator watched.
+    this.repos.watchedPullRequests.deleteWatchedPullRequestsForProject(projectId);
     this.context.changes.announce("project", projectId, undefined, undefined, true);
   }
 

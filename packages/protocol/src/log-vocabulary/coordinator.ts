@@ -21,6 +21,14 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "wake.waiting-report-failed": "A waiting worker could not be reported.",
       "wake.worker-outcomes-failed":
         "Coordinator-owned workers' merges and deletions could not be checked; the next sweep retries.",
+      "pr-watch.added":
+        "A pull request a coordinator conversation showed joined the project's watch; `source` says how.",
+      "pr-watch.observe-failed":
+        "A watched pull request could not be observed; the next sweep retries.",
+      "pr-watch.read-failed":
+        "GitHub could not be read for a watched pull request; `code` is the error category.",
+      "pr-watch.removed":
+        "A watched pull request stopped being watched without a reading; `reason` is `deleted` (GitHub confirmed it is gone) or `unreadable` (not found for the give-up period).",
       "store.malformed": "The coordinator store was malformed and is treated as empty.",
       "store.unsupported-version":
         "The coordinator store has an unsupported version and is treated as empty.",

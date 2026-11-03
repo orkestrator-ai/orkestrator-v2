@@ -116,3 +116,31 @@ export const writeCoordinatorAttachment = (
   base64Data: string,
 ): Promise<string> =>
   invoke("write_coordinator_attachment", { environmentId, filename, base64Data });
+
+/** Why a pull request link a coordinator showed is, or is not, watched. */
+export type CoordinatorPullRequestWatchResult =
+  | { watched: true; added: boolean }
+  | {
+      watched: false;
+      reason:
+        "other-repository" | "no-repository" | "no-coordinator" | "settled" | "already-followed";
+    };
+
+/**
+ * A coordinator conversation of `projectId` rendered or opened this pull
+ * request: watch it for status changes while it is open. The backend ignores
+ * pull requests of other repositories. Older backends answer "Unknown backend
+ * command".
+ */
+export const watchCoordinatorPullRequest = (
+  projectId: string,
+  ref: { owner: string; repo: string; number: number },
+  source: "rendered" | "opened",
+): Promise<CoordinatorPullRequestWatchResult> =>
+  invoke("watch_coordinator_pull_request", {
+    projectId,
+    owner: ref.owner,
+    repo: ref.repo,
+    number: ref.number,
+    source,
+  });

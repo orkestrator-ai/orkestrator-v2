@@ -873,6 +873,99 @@ export async function getGitHubPullRequest(
   });
 }
 
+/** The few facts a watched pull request is compared on; see `coordinator-pr-watches.ts`. */
+export type GitHubPullRequestStatus = {
+  title: string;
+  htmlUrl: string;
+  state: GitHubPullRequestState;
+  isDraft: boolean;
+  checksState: GitHubPullRequestChecksState;
+  mergeability: GitHubPullRequestMergeability;
+  /** A change request outranks an approval; dismissed and commented reviews decide nothing. */
+  reviewDecision: "approved" | "changes-requested" | "none";
+};
+
+/**
+ * A pull request's state, checks, mergeability and review decision, without
+ * the comments, viewer identity or repository the detail view needs. Every
+ * read goes through the conditional cache, so an unchanged pull request costs
+ * only 304s, which GitHub does not count against the rate limit.
+ */
+export async function getGitHubPullRequestStatus(
+  token: string,
+  ref: GitHubPullRequestRef,
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<GitHubPullRequestStatus> {
+  assertPullRequestRef(ref);
+  const client = pullRequestClient(token, options);
+  const pull = await loadPullRequestRecord(client, ref);
+  const state = pullRequestState(pull);
+  const isDraft = pull.draft === true;
+  // A settled pull request's checks and reviews no longer matter.
+  const [checks, reviews] =
+    state === "open"
+      ? await Promise.all([
+          loadChecks(client, ref, pullHeadSha(pull)),
+          getList(client, `${pullPath(ref)}/reviews`, "load pull request reviews", MAX_REVIEWS),
+        ])
+      : [[], { values: [] as unknown[] }];
+  const reviewers = buildReviewers(ref, pull, reviews.values);
+  return {
+    title: stringValue(pull.title),
+    htmlUrl: stringValue(
+      pull.html_url,
+      `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`,
+    ),
+    state,
+    isDraft,
+    checksState: rollUpChecks(checks),
+    mergeability: mergeabilityFromApi(pull, state, isDraft),
+    reviewDecision: reviewers.some((reviewer) => reviewer.state === "changes-requested")
+      ? "changes-requested"
+      : reviewers.some((reviewer) => reviewer.state === "approved")
+        ? "approved"
+        : "none",
+  };
+}
+
+/**
+ * True only when GitHub positively shows that a pull request no longer exists,
+ * after its own read answered 404 or 410. A 404 alone cannot tell a deleted
+ * pull request from a token that lost access, so this reads the repository
+ * first: only when the repository is readable with the same credential and
+ * the number answers 410 (deleted) or an issue that is
+ * not a pull request does it count as gone. Any other answer, including an
+ * unreadable repository or one with issues turned off, is ambiguous and
+ * returns false.
+ */
+export async function confirmGitHubPullRequestDeleted(
+  token: string,
+  ref: GitHubPullRequestRef,
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<boolean> {
+  assertPullRequestRef(ref);
+  const client = pullRequestClient(token, options);
+  try {
+    const { data } = await getJson(client, repoPath(ref), "load repository", { cached: false });
+    // With issues turned off the issue endpoint answers 410 for every number.
+    if (!isRecord(data) || data.has_issues === false) return false;
+  } catch {
+    return false;
+  }
+  try {
+    const { data } = await getJson(client, issuePath(ref), `load issue #${ref.number}`, {
+      cached: false,
+    });
+    return (
+      isRecord(data) && numberValue(data.number) === ref.number && !isRecord(data.pull_request)
+    );
+  } catch (error) {
+    // Metadata access does not establish issue access: scoped tokens can hide
+    // existing issues with 404. Only an explicit Gone response proves deletion.
+    return error instanceof GitHubApiError && error.status === 410;
+  }
+}
+
 export function buildPullRequestDetail(
   ref: GitHubPullRequestRef,
   pull: Record<string, unknown>,

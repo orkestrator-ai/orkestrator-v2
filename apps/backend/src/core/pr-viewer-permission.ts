@@ -173,8 +173,19 @@ export class PrViewerPermissionCache {
     this.inFlight.delete(key);
   }
 
+  /**
+   * Called with the scope on every credential rotation, so other per-scope
+   * caches (the PR monitor's batch readings) are dropped with this one.
+   */
+  onScopeInvalidated: ((scope: string) => void) | undefined;
+
   /** Credential rotation invalidates every repository and pending lookup in the scope. */
   invalidateScope(scope: string): void {
+    try {
+      this.onScopeInvalidated?.(scope);
+    } catch {
+      // Another cache's failure must not keep this one's stale answers.
+    }
     const prefix = `${scope.toLowerCase()}\0`;
     for (const entries of [this.entries, this.inFlight]) {
       for (const key of entries.keys()) {

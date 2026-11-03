@@ -1,8 +1,13 @@
-import { withRelayController } from "./core/public-api/relay-context.js";
+import { withRelayController } from "./core/public-api/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
+import type { LegacyLoopbackPortAccess } from "./core/preview-runtime.js";
+import {
+  BROWSER_PREVIEW_ENVIRONMENT_HEADER,
+  browserPreviewEnvironmentId,
+} from "@orkestrator/protocol/browser-preview";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
@@ -427,6 +432,24 @@ export class GatewayHandlers {
       jsonResponse(response, 400, { error: "Invalid browser preview port" });
       return;
     }
+    // Only a verified preview target of the requesting environment may be
+    // opened, never a bridge, the gateway, another host-only service or
+    // another environment's application (security report M2). Electron main
+    // names the environment on the requests it authenticates.
+    const environmentId = browserPreviewEnvironmentId(
+      request.headers[BROWSER_PREVIEW_ENVIRONMENT_HEADER],
+    );
+    let access: LegacyLoopbackPortAccess;
+    try {
+      access = await this.ctx.legacyPreviewPortAccess(port, environmentId);
+    } catch {
+      jsonResponse(response, 503, { error: "Could not verify the browser preview port" });
+      return;
+    }
+    if (access !== "allowed") {
+      jsonResponse(response, 403, { error: legacyPreviewRefusal(access, port) });
+      return;
+    }
 
     const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
     const targetPath = `${restPath}${url.search}`;
@@ -437,5 +460,16 @@ export class GatewayHandlers {
       `${API_PREFIX}/browser/loopback/${port}`,
       true,
     );
+  }
+}
+
+function legacyPreviewRefusal(access: Exclude<LegacyLoopbackPortAccess, "allowed">, port: number) {
+  switch (access) {
+    case "reserved":
+      return `Port ${port} belongs to Orkestrator or Docker and cannot be previewed.`;
+    case "unscoped":
+      return "This preview request names no environment. Update the Orkestrator desktop app to preview this address.";
+    case "unknown":
+      return `Port ${port} is not an available preview service of this environment. Add it as a service to preview it.`;
   }
 }

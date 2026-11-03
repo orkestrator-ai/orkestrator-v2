@@ -704,6 +704,8 @@ for (const engine of ENGINES) {
     let context: BrowserContext | undefined;
     const results: Record<string, unknown> = {};
 
+    // A cold browser launch on a CI runner takes longer than Bun's 5 s default
+    // hook timeout (flake 0507); the tests themselves already allow 60 s.
     beforeAll(async () => {
       if (!engine.executablePath) return;
       browser = await engine.type.launch({
@@ -720,7 +722,7 @@ for (const engine of ENGINES) {
       });
       results.version = browser.version();
       report[engine.name] = results;
-    });
+    }, 60_000);
     /** Contexts opened by `openIsolated`, closed by `closeIsolated`. */
     const isolated: BrowserContext[] = [];
     afterAll(async () => {

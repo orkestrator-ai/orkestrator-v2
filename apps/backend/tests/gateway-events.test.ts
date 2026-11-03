@@ -86,6 +86,89 @@ import {
   writeRendererAsset,
 } from "./gateway-test-harness.js";
 
+type GzipWriterInternals = {
+  readonly writableLength: number;
+  compressor: { cork(): void; destroyed: boolean };
+};
+
+type TerminalSocketInternals = {
+  queuedBytes: number;
+  flushScheduled: boolean;
+  channels: Map<number, unknown>;
+  authTimer: unknown;
+  credentialExpiryTimer: unknown;
+  closeTimer: unknown;
+};
+
+type WireGaugeInternals = {
+  context: { proxyRequests: Set<unknown>; keepalive: unknown };
+  metrics: {
+    snapshot(): {
+      compression: { streamingActive: number };
+      stream: { open: number; connecting: number };
+      terminalWebSocket: { open: number; channelsOpen: number };
+    };
+  };
+  terminalWebSocket: {
+    sockets: Set<TerminalSocketInternals>;
+    upgradeSockets: Set<unknown>;
+    channelCount: number;
+    pendingOperationCount: number;
+    pendingOperationBytes: number;
+    sessionOperations: Map<string, unknown>;
+  };
+};
+
+/**
+ * Every gauge the Phase 1 exit criteria name, read from the gateway's own
+ * state: compressor leases, event and terminal sockets, channels, and the bytes
+ * queued on each (todo 0052, task 4).
+ */
+function wireGauges(gateway: OrkestratorGateway) {
+  const internals = gateway as unknown as WireGaugeInternals;
+  const metrics = internals.metrics.snapshot();
+  const terminal = internals.terminalWebSocket;
+  const writers = [...eventClients(gateway).keys()] as unknown as { writableLength: number }[];
+  const sockets = [...terminal.sockets];
+  return {
+    compressors: metrics.compression.streamingActive,
+    eventClients: writers.length,
+    eventQueuedBytes: writers.reduce((total, writer) => total + writer.writableLength, 0),
+    streamsOpen: metrics.stream.open,
+    streamsConnecting: metrics.stream.connecting,
+    proxyRequests: internals.context.proxyRequests.size,
+    terminalSockets: sockets.length,
+    terminalUpgrades: terminal.upgradeSockets.size,
+    terminalSocketsOpen: metrics.terminalWebSocket.open,
+    terminalChannels: terminal.channelCount,
+    terminalChannelsOpen: metrics.terminalWebSocket.channelsOpen,
+    terminalQueuedBytes: sockets.reduce((total, state) => total + state.queuedBytes, 0),
+    terminalOperations: terminal.pendingOperationCount,
+    terminalOperationBytes: terminal.pendingOperationBytes,
+    terminalOperationSessions: terminal.sessionOperations.size,
+  };
+}
+
+const HELD_INPUT = new TextEncoder().encode("held");
+
+const ZERO_WIRE_GAUGES: ReturnType<typeof wireGauges> = {
+  compressors: 0,
+  eventClients: 0,
+  eventQueuedBytes: 0,
+  streamsOpen: 0,
+  streamsConnecting: 0,
+  proxyRequests: 0,
+  terminalSockets: 0,
+  terminalUpgrades: 0,
+  terminalSocketsOpen: 0,
+  terminalChannels: 0,
+  terminalChannelsOpen: 0,
+  terminalQueuedBytes: 0,
+  terminalOperations: 0,
+  terminalOperationBytes: 0,
+  terminalOperationSessions: 0,
+};
+
 describe("gateway terminal WebSocket", () => {
   test("rejects missing origins and unsupported protocol versions before upgrade", async () => {
     const terminalGateway = new TerminalWebSocketGateway({
@@ -797,6 +880,145 @@ describe("gateway terminal WebSocket", () => {
     );
     await gateway.stop();
     await stopped;
+  });
+
+  // Phase 1 exit criterion (todo 0052, task 4): no compressor lease, socket,
+  // channel, timer or queued byte survives credential rotation or gateway stop.
+  test("returns compressor count and queued bytes to zero after credential rotation and gateway stop", async () => {
+    let releaseWrite: () => void = () => undefined;
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0 };
+        }
+        if (command === "terminal_write") {
+          await new Promise<void>((resolve) => {
+            releaseWrite = resolve;
+          });
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend, compression: "on", env: {} });
+    const internals = gateway as unknown as WireGaugeInternals;
+
+    // Real held bytes on the queues the gateway owns: a gzip SSE writer whose
+    // compressor has not taken its input, a terminal write the backend has
+    // accepted but not finished, and a socket still waiting to authenticate.
+    const load = async (token: string) => {
+      const stream = await openCompressedEventStream(gateway, { ...info, token });
+      const writer = stream.response as unknown as GzipWriterInternals;
+      writer.compressor.cork();
+      gateway.emit("environment-changed", { id: "queued", padding: "x".repeat(4096) });
+      expect(writer.writableLength).toBeGreaterThan(0);
+
+      const terminal = await openTerminalSocket({ ...info, token });
+      terminal.socket.send(
+        JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "queued" }),
+      );
+      const subscribed = await nextTerminalControl(terminal.inbox, "subscribed");
+      if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+      const state = [...internals.terminalWebSocket.sockets].find(
+        (entry) => entry.channels.size > 0,
+      );
+      if (!state) throw new Error("Expected terminal WebSocket state");
+      terminal.socket.send(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.input,
+          channelId: subscribed.channelId,
+          generation: 1,
+          revision: 1,
+          bytes: HELD_INPUT,
+        }),
+      );
+      await waitUntil(
+        () => internals.terminalWebSocket.pendingOperationBytes > 0,
+        "Terminal write never reached the backend",
+      );
+
+      await openTerminalSocket({ ...info, token }, { authenticate: false });
+      await waitUntil(
+        () => [...internals.terminalWebSocket.sockets].some((entry) => entry.authTimer),
+        "Unauthenticated socket never armed its timer",
+      );
+      const pendingState = [...internals.terminalWebSocket.sockets].find(
+        (entry) => entry.authTimer,
+      )!;
+      expect(wireGauges(gateway)).toMatchObject({
+        compressors: 1,
+        eventClients: 1,
+        terminalSockets: 2,
+        terminalChannels: 1,
+        terminalOperations: 1,
+      });
+      return { stream, writer, state, pendingState };
+    };
+
+    // Drain any earlier scheduled flush, then hold the scheduler latch so real
+    // channel bytes survive setToken's asynchronous token persistence. The
+    // retained state must be cleared by dispose, not a normal transport flush.
+    const queueTerminalOutput = async (
+      loaded: Awaited<ReturnType<typeof load>>,
+      revision: number,
+    ) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(loaded.state.flushScheduled).toBe(false);
+      loaded.state.flushScheduled = true;
+      gateway.emit("terminal-output-queued", { text: "y".repeat(8192), generation: 1, revision });
+      expect(loaded.state.queuedBytes).toBeGreaterThan(0);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(loaded.state.queuedBytes).toBeGreaterThan(0);
+    };
+
+    const expectReleased = async (loaded: Awaited<ReturnType<typeof load>>, phase: string) => {
+      await waitUntil(
+        () => wireGauges(gateway).terminalSockets === 0,
+        `${phase} left a terminal socket`,
+      );
+      await waitUntil(() => loaded.stream.aborted(), `${phase} left the event stream open`);
+      await waitUntil(
+        () => wireGauges(gateway).streamsOpen === 0,
+        `${phase} left an event stream gauge`,
+      );
+      // The backend still owns the write it accepted before the revocation; its
+      // operation bytes drain when that write settles, not when the socket goes.
+      expect(wireGauges(gateway)).toEqual({
+        ...ZERO_WIRE_GAUGES,
+        terminalOperations: 1,
+        terminalOperationBytes: HELD_INPUT.byteLength,
+        terminalOperationSessions: 1,
+      });
+      expect(loaded.writer.writableLength).toBe(0);
+      expect(loaded.writer.compressor.destroyed).toBe(true);
+      for (const state of [loaded.state, loaded.pendingState]) {
+        expect(state.queuedBytes).toBe(0);
+        expect(state.channels.size).toBe(0);
+        expect(state.authTimer).toBeNull();
+        expect(state.credentialExpiryTimer).toBeNull();
+        expect(state.closeTimer).toBeNull();
+      }
+      releaseWrite();
+      await waitUntil(
+        () => wireGauges(gateway).terminalOperations === 0,
+        `${phase}: a settled terminal write left queued operation bytes`,
+      );
+      expect(wireGauges(gateway)).toEqual(ZERO_WIRE_GAUGES);
+      loaded.stream.close();
+    };
+
+    const rotated = await load(info.token);
+    const replacement = "replacement-token-123456";
+    await queueTerminalOutput(rotated, 1);
+    await gateway.setToken(replacement);
+    await expectReleased(rotated, "Credential rotation");
+
+    const stopped = await load(replacement);
+    expect(internals.context.keepalive).not.toBeNull();
+    await queueTerminalOutput(stopped, 1);
+    await gateway.stop();
+    expect(internals.context.keepalive).toBeNull();
+    await expectReleased(stopped, "Gateway stop");
   });
 
   test("authenticates direct sockets and rejects a bad first credential", async () => {
@@ -3628,8 +3850,8 @@ describe("remote gateway", () => {
     // The upstream policy is replaced by a sandbox, so the preview stays an
     // opaque origin even when opened top-level, outside the client's iframe.
     expect(page.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
-    expect(page.headers["access-control-allow-origin"]).toBe("null");
-    expect(page.headers["access-control-allow-credentials"]).toBe("true");
+    expect(page.headers["access-control-allow-origin"]).toBe("*");
+    expect(page.headers["access-control-allow-credentials"]).toBeUndefined();
 
     const script = await requestUrl(new URL(`${prefix}/src/main.js`, info.url).toString(), {
       headers,

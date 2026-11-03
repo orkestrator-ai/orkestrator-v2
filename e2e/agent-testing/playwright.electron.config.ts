@@ -20,6 +20,7 @@ export default defineConfig({
     "web-annotations-electron.spec.ts",
     "terminal-input-resume-electron.spec.ts",
     "service-preview-electron.spec.ts",
+    "service-preview-seeded-electron.spec.ts",
     "artifact-host-electron.spec.ts",
     "design-canvas-electron.spec.ts",
     "workspace-realm-electron.spec.ts",

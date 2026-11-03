@@ -6,6 +6,7 @@ import {
   freshToolResults,
   shellOutputContainsMarker,
   gapHistogram,
+  invalidationCauseDelta,
   readCadence,
   readGaps,
   selectedCases,
@@ -17,6 +18,27 @@ describe("idle observation live support", () => {
     expect(selectedCases(undefined)).toEqual([...IDLE_OBSERVATION_CASES]);
     expect(selectedCases(" hidden , approval ")).toEqual(["approval", "hidden"]);
     expect(() => selectedCases("approval,typo")).toThrow("typo");
+  });
+
+  test("invalidation deltas count one provider's causes and environment-wide ones", () => {
+    const before = {
+      codex: { "discovery-renewal": 2, "content-revision": 1 },
+      claude: { "projection-read": 5 },
+      environment: { "model-catalog-refresh": 1 },
+    };
+    const after = {
+      codex: { "discovery-renewal": 6, "content-revision": 1, "projection-read": 3 },
+      claude: { "projection-read": 9 },
+      environment: { "model-catalog-refresh": 2 },
+    };
+    expect(invalidationCauseDelta(before, after, "codex")).toEqual({
+      "discovery-renewal": 4,
+      "projection-read": 3,
+      "environment:model-catalog-refresh": 1,
+      total: 8,
+    });
+    // An older backend reports no counters: nothing moved.
+    expect(invalidationCauseDelta(undefined, undefined, "codex")).toEqual({ total: 0 });
   });
 
   test("read cadence counts reads and the largest gap inside the window", () => {

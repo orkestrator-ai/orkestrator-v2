@@ -1341,6 +1341,13 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             maxLength: 2048,
             description: "Cursor from the previous page, to read older messages.",
           },
+          knownToken: {
+            type: "string",
+            minLength: 1,
+            maxLength: 256,
+            description:
+              'Token of the newest page already held. While it is still current the answer is {status: "unchanged"} with no messages. Not with before; advertised by features.transcriptKnownToken.',
+          },
         },
         ["sessionId"],
       ),

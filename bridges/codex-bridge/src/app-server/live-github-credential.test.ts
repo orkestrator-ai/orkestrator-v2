@@ -17,6 +17,10 @@
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-github-credential.test.ts
  *
+ * Every thread's commands also lose the bridge-control credentials
+ * (`CODEX_SESSION_SHELL_EXCLUDE`, security report M13), verified against
+ * 0.166.0.
+ *
  * Verified against 0.164.0: the withheld thread's command sees no token, no
  * credential file path, `GH_CONFIG_DIR` at the empty directory and the
  * helper resets numbered from 0, before and after the thread is resumed from
@@ -54,6 +58,18 @@ const FAKE_CREDENTIALS = {
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "credential.helper",
   GIT_CONFIG_VALUE_0: "orkestrator-live-probe-helper",
+} as const;
+
+/**
+ * Bridge-control credentials every session's commands lose (M13,
+ * `CODEX_SESSION_SHELL_EXCLUDE`), with or without a GitHub denial. Fake.
+ */
+const FAKE_BRIDGE_CONTROL = {
+  CODEX_BRIDGE_TOKEN: "orkestrator-live-probe-codex-bridge",
+  ACP_BRIDGE_TOKEN: "orkestrator-live-probe-acp-bridge",
+  ORKESTRATOR_AGENT_MCP_TOKEN: "orkestrator-live-probe-agent-mcp",
+  CODEX_API_KEY: "orkestrator-live-probe-codex-api-key",
+  CUSTOMER_CREDENTIAL: "orkestrator-live-probe-customer-credential",
 } as const;
 
 /** Prints the command environment, one `NAME=value` per line. */
@@ -167,11 +183,18 @@ describeLive("live GitHub credential withholding", () => {
       JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
       { mode: 0o600 },
     );
+    await writeFile(
+      join(codexHome, "config.toml"),
+      '[shell_environment_policy]\nexclude = ["CUSTOMER_CREDENTIAL"]\n',
+    );
     // app-server inherits the bridge's environment at spawn.
     const previous = Object.fromEntries(
-      Object.keys(FAKE_CREDENTIALS).map((name) => [name, process.env[name]]),
+      Object.keys({ ...FAKE_CREDENTIALS, ...FAKE_BRIDGE_CONTROL }).map((name) => [
+        name,
+        process.env[name],
+      ]),
     );
-    Object.assign(process.env, FAKE_CREDENTIALS);
+    Object.assign(process.env, FAKE_CREDENTIALS, FAKE_BRIDGE_CONTROL);
     const responses = startScriptedResponses();
     const engine = new AppServerEngine({
       codexPath: await resolveCodexBinary(),
@@ -180,7 +203,7 @@ describeLive("live GitHub credential withholding", () => {
       clientInfo: CLIENT_INFO,
       ghConfigDir: async () => ghConfigDir,
       configOverrides: {
-        ...codexAppServerConfigOverrides({}),
+        ...codexAppServerConfigOverrides({ CODEX_HOME: codexHome, CWD: workspace }),
         openai_base_url: JSON.stringify(responses.baseUrl),
       },
       supervisorOverrides: { pidFileEnabled: false },
@@ -220,8 +243,10 @@ describeLive("live GitHub credential withholding", () => {
       };
       const handle = await runTurn(graphConfig);
       await runTurn(graphConfig, handle);
-      await runTurn({ ...base, policy: graphPolicy({ deny: [] }) });
-      expect(responses.outputs).toHaveLength(3);
+      const ordinary = { ...base, policy: graphPolicy({ deny: [] }) };
+      const ordinaryHandle = await runTurn(ordinary);
+      await runTurn(ordinary, ordinaryHandle);
+      expect(responses.outputs).toHaveLength(4);
       const [withheld, resumed, control] = responses.outputs as [string, string, string];
 
       for (const output of [withheld, resumed]) {
@@ -246,6 +271,14 @@ describeLive("live GitHub credential withholding", () => {
       expect(control).toContain(FAKE_CREDENTIALS.GH_TOKEN);
       expect(control).toContain(FAKE_CREDENTIALS.GITHUB_TOKEN);
       expect(control).not.toContain(`GH_CONFIG_DIR=${ghConfigDir}`);
+
+      // No thread's commands see the bridge-control credentials, whether or
+      // not its policy withholds GitHub (the withheld thread repeats them).
+      for (const output of responses.outputs) {
+        for (const value of Object.values(FAKE_BRIDGE_CONTROL)) {
+          expect(output).not.toContain(value);
+        }
+      }
     } finally {
       await engine.stop();
       await responses.stop();

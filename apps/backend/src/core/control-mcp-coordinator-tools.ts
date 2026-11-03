@@ -40,6 +40,7 @@ import {
   pullRequestFollowSummary,
   thisNodePrHealth,
 } from "./coordinator-pr-status.js";
+import { featurePlanFollowSummary } from "./coordinator-feature-plan-status.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
 import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
@@ -122,7 +123,7 @@ export function registerCoordinatorWorkflowTools(
     {
       title: "List coordinator workflows",
       description:
-        "List durable worker, build-pipeline, multi-review, graph-run and pull-request associations for this project with bounded authoritative summaries. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge).",
+        "List durable worker, build-pipeline, multi-review, graph-run, feature-plan and pull-request associations for this project with bounded authoritative summaries. A feature-plan association is one launch_feature_plan request: its resource is the plan as get_feature_plan reads it, and its follow says whether the reply was reported. A pull-request association is a worker's pull request this conversation follows for status wakes: its follow (what started it, the PR URL, whether it is still followed, the last state reported, a Resolve tab's progress) and the worker with its PR fields (prHasMergeConflicts, prMergeability, prChecks, prReadyToMerge).",
       inputSchema: z.object({}),
       annotations: readAnnotations(),
     },
@@ -194,7 +195,14 @@ export function registerCoordinatorWorkflowTools(
                 runId: resourceId,
               });
               resource = isRecord(run) && isRecord(run.run) ? run.run : null;
+            } else if (kind === "feature-plan") {
+              const plan = await inv<unknown>("get_coordinator_feature_plan", {
+                scope: coordinatorScope,
+                featureId: resourceId,
+              });
+              resource = isRecord(plan) ? plan : null;
             }
+            // A kind this backend does not know keeps a null resource.
           } catch {
             resource = { id: resourceId, status: "unavailable" };
           }
@@ -208,6 +216,7 @@ export function registerCoordinatorWorkflowTools(
             baseCommit: association.baseCommit,
             createdAt: association.createdAt,
             ...(kind === "pull-request" ? { follow: pullRequestFollowSummary(association) } : {}),
+            ...(kind === "feature-plan" ? { follow: featurePlanFollowSummary(association) } : {}),
             resource,
           };
         }),
@@ -300,7 +309,7 @@ export function registerCoordinatorWorkflowTools(
           .min(1)
           .max(200)
           .describe(
-            "The id of a ticket in this project (on nodeId's copy when nodeId is set). The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none.",
+            "The id of a ticket in this project. The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none. With nodeId, a ticket of this board is synced to that node first and built there under the same id (no relay through that node's coordinator); a ticket made only on that node works too.",
           ),
         environmentType: z.enum(["local", "containerized"]).default("local"),
         baseBranch: z.string().trim().min(1).max(500),

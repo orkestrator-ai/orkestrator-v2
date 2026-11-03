@@ -22,7 +22,7 @@ import type { Environment, WorktreeMoveRecord, WorktreeMoveSubmodule } from "./m
 import { removeConfinedDirectory } from "./path-safety.js";
 import { checkoutAccessError } from "./project-git-root.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
+import { stopEnvironmentExecWorkers } from "./public-api/index.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { pathExists, runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";

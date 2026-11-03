@@ -21,9 +21,15 @@ import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-wor
  * | `merge-pending`      | a client asked for merge confirmation                       | detection             | 1 s                            |
  * | `create-pending`     | a client asked for creation confirmation                    | detection             | 5 s                            |
  * | `provisional`        | one-shot discovery after an agent completion edge           | detection             | immediate, then retired        |
- * | `open`               | an open PR (or one whose persistence is still pending)      | detection             | 20 s                           |
+ * | `open`               | an open PR (or one whose persistence is still pending)      | detection             | 20 s; 2 min once quiet (below) |
  * | `terminal-repair`    | merged/closed, local obligations not yet confirmed settled  | local repair (no gh)  | 20 s, own backoff              |
  * | `terminal-discovery` | merged/closed and every obligation settled                  | branch discovery      | 5 min (+ bounded jitter)       |
+ *
+ * An open PR is *quiet* when its reading has not moved for `quietAfterMs`, its
+ * last rollup succeeded with nothing pending, its mergeability is known and no
+ * auto-merge (Orkestrator's or GitHub's) waits on it. Quiet PRs are polled at
+ * `quietIntervalMs`; any wake, a changed reading, or a change seen in a
+ * shared batch reading returns them to 20 s at once.
  *
  * Every policy is recomputed from runtime state after each action; nothing
  * here is persisted. An immediate explicit refresh, a new pending intent and an
@@ -55,14 +61,35 @@ export interface PrMonitorPolicyConfig {
   /** Error backoff jitter: a fraction of the backed-off delay, capped. */
   errorJitterRatio: number;
   errorJitterMaxMs: number;
-  /** Cooldown after a rate-limit failure when `gh` gives no retry timing. */
+  /**
+   * Cooldown after a rate-limit failure when `gh` gives no retry timing. It
+   * doubles for each further rate limit in the same scope before a check
+   * there succeeds, up to {@link rateLimitCooldownMaxMs}.
+   */
   rateLimitCooldownMs: number;
+  rateLimitCooldownMaxMs: number;
+  /**
+   * Checks a cooldown held resume spread over this window, so a scope's
+   * entries do not all ask GitHub in the same second when it ends.
+   */
+  rateLimitResumeJitterMs: number;
+  /**
+   * How long a confirmed reading stays confirmed while rate limits stop the
+   * monitor from re-reading it. Past this, it counts as a failed check.
+   */
+  rateLimitGraceMs: number;
   /** Upper bound applied to any retry timing reported by the boundary. */
   maxRetryAfterMs: number;
   /** Per-entry bound on remembered task-reconciliation progress keys. */
   maxReconciliationKeys: number;
   /** Bound on remembered shared cooldown scopes. */
   maxCooldownScopes: number;
+  /** An open PR whose reading has not moved for this long may be polled slowly. */
+  quietAfterMs: number;
+  /** Poll interval of a quiet open PR. Never below the normal interval. */
+  quietIntervalMs: number;
+  /** Bounded jitter added to every quiet poll so quiet PRs do not align. */
+  quietJitterMs: number;
 }
 
 export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
@@ -72,9 +99,15 @@ export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
   errorJitterRatio: 0.1,
   errorJitterMaxMs: 30_000,
   rateLimitCooldownMs: 2 * 60_000,
+  rateLimitCooldownMaxMs: 30 * 60_000,
+  rateLimitResumeJitterMs: 30_000,
+  rateLimitGraceMs: 15 * 60_000,
   maxRetryAfterMs: 60 * 60_000,
   maxReconciliationKeys: 8,
   maxCooldownScopes: 64,
+  quietAfterMs: 15 * 60_000,
+  quietIntervalMs: 2 * 60_000,
+  quietJitterMs: 15_000,
 };
 
 export function resolvePrMonitorPolicy(
@@ -86,6 +119,7 @@ export function resolvePrMonitorPolicy(
   const positiveInteger = (value: number, fallback: number) =>
     Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
   const defaults = DEFAULT_PR_MONITOR_POLICY;
+  const rateLimitCooldownMs = nonNegative(merged.rateLimitCooldownMs, defaults.rateLimitCooldownMs);
   return {
     terminalDiscoveryIntervalMs: Math.max(
       PR_MONITOR_INTERVALS_MS.normal,
@@ -98,13 +132,28 @@ export function resolvePrMonitorPolicy(
     startupJitterMs: nonNegative(merged.startupJitterMs, defaults.startupJitterMs),
     errorJitterRatio: Math.min(1, nonNegative(merged.errorJitterRatio, defaults.errorJitterRatio)),
     errorJitterMaxMs: nonNegative(merged.errorJitterMaxMs, defaults.errorJitterMaxMs),
-    rateLimitCooldownMs: nonNegative(merged.rateLimitCooldownMs, defaults.rateLimitCooldownMs),
+    rateLimitCooldownMs,
+    rateLimitCooldownMaxMs: Math.max(
+      rateLimitCooldownMs,
+      nonNegative(merged.rateLimitCooldownMaxMs, defaults.rateLimitCooldownMaxMs),
+    ),
+    rateLimitResumeJitterMs: nonNegative(
+      merged.rateLimitResumeJitterMs,
+      defaults.rateLimitResumeJitterMs,
+    ),
+    rateLimitGraceMs: nonNegative(merged.rateLimitGraceMs, defaults.rateLimitGraceMs),
     maxRetryAfterMs: nonNegative(merged.maxRetryAfterMs, defaults.maxRetryAfterMs),
     maxReconciliationKeys: positiveInteger(
       merged.maxReconciliationKeys,
       defaults.maxReconciliationKeys,
     ),
     maxCooldownScopes: positiveInteger(merged.maxCooldownScopes, defaults.maxCooldownScopes),
+    quietAfterMs: nonNegative(merged.quietAfterMs, defaults.quietAfterMs),
+    quietIntervalMs: Math.max(
+      PR_MONITOR_INTERVALS_MS.normal,
+      nonNegative(merged.quietIntervalMs, defaults.quietIntervalMs),
+    ),
+    quietJitterMs: nonNegative(merged.quietJitterMs, defaults.quietJitterMs),
   };
 }
 
@@ -132,6 +181,8 @@ export interface DelayInput {
   repairFailures: number;
   /** First schedule after reconciliation restored or resumed the entry. */
   restored: boolean;
+  /** An open PR nobody is acting on (see the table above); only `open` reads it. */
+  quiet?: boolean;
   /** A uniform sample in [0, 1). */
   random: number;
 }
@@ -142,6 +193,9 @@ export interface DelayInput {
  */
 export function backgroundDelay(input: DelayInput, config: PrMonitorPolicyConfig): number {
   const sample = Math.min(Math.max(input.random, 0), 0.999_999);
+  if (input.policy === "open" && input.quiet && input.consecutiveErrors <= 0) {
+    return config.quietIntervalMs + Math.floor(sample * config.quietJitterMs);
+  }
   switch (input.policy) {
     case "terminal-discovery": {
       const backedOff = getEffectivePrMonitorInterval("normal", input.consecutiveErrors);
@@ -191,6 +245,21 @@ function restoreJitter(input: DelayInput, config: PrMonitorPolicyConfig): number
   return input.restored ? Math.floor(input.random * config.startupJitterMs) : 0;
 }
 
+/**
+ * Length of a rate-limit cooldown. Retry timing from the boundary wins
+ * (bounded); otherwise the default doubles per rate limit in a row
+ * (`strikes`, at least 1) in the scope, capped.
+ */
+export function rateLimitCooldown(
+  retryAfterMs: number | null,
+  strikes: number,
+  config: PrMonitorPolicyConfig,
+): number {
+  if (retryAfterMs !== null) return Math.min(retryAfterMs, config.maxRetryAfterMs);
+  const doublings = Math.min(Math.max(strikes, 1) - 1, 16);
+  return Math.min(config.rateLimitCooldownMs * 2 ** doublings, config.rateLimitCooldownMaxMs);
+}
+
 export type PrDetectionFailure =
   { kind: "rate-limited"; retryAfterMs: number | null } | { kind: "timeout" } | { kind: "failed" };
 
@@ -235,6 +304,8 @@ export function classifyPrDetectionFailure(error: unknown): PrDetectionFailure {
  */
 export class PrCooldownScopes {
   private readonly until = new Map<string, number>();
+  /** Rate limits in a row per scope since a check in it last succeeded. Bounded. */
+  private readonly strikes = new Map<string, { count: number; through: number }>();
 
   constructor(private readonly maxScopes: number) {}
 
@@ -250,6 +321,30 @@ export class PrCooldownScopes {
       if (oldest !== undefined) this.until.delete(oldest);
     }
     this.until.set(scope, untilMs);
+  }
+
+  /** Counts one more rate limit in a scope and returns how many in a row. */
+  strike(scope: string, detectionSequence?: number, latestDetectionSequence = 0): number {
+    const previous = this.strikes.get(scope);
+    // Every detection already in flight when a refusal arrives belongs to the
+    // same event (including readers of one rejected batch). A detection started
+    // afterwards can escalate, even when an interactive wake bypassed cooldown.
+    if (previous && detectionSequence !== undefined && detectionSequence <= previous.through) {
+      return previous.count;
+    }
+    const count = (previous?.count ?? 0) + 1;
+    this.strikes.delete(scope);
+    if (this.strikes.size >= this.maxScopes) {
+      const oldest = this.strikes.keys().next().value;
+      if (oldest !== undefined) this.strikes.delete(oldest);
+    }
+    this.strikes.set(scope, { count, through: latestDetectionSequence });
+    return count;
+  }
+
+  /** A check in the scope succeeded: the next rate limit starts afresh. */
+  clearStrikes(scope: string): void {
+    this.strikes.delete(scope);
   }
 
   /** Remaining cooldown in milliseconds, 0 when the scope may run. */
@@ -270,5 +365,6 @@ export class PrCooldownScopes {
 
   clear(): void {
     this.until.clear();
+    this.strikes.clear();
   }
 }

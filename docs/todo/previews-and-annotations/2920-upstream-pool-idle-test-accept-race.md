@@ -6,8 +6,8 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 
 ### Tasks
 
-1. **Pair each client with its own accepted peer**: make the test end the server-side socket that belongs to the pooled client. Status: open.
-2. **Check the other `accepted.at(-1)` uses**: the "chatty" case in the same test uses the same lookup. Status: open (depends on 1).
+1. **Pair each client with its own accepted peer**: make the test end the server-side socket that belongs to the pooled client. Status: done.
+2. **Check the other `accepted.at(-1)` uses**: the "chatty" case in the same test uses the same lookup. Status: done.
 
 ### 1. Pair each client with its own accepted peer
 
@@ -56,6 +56,29 @@ A standalone `node:net` script under the same Bun (connect, await the client's `
     - Pros: none.
     - Cons: a latent wrong-peer write.
 
+## Assumptions and decisions
+
+### Task 1: `socket()` returns the client and its own server peer
+
+Re-checked on `main` at `7b48c23fb` before changing anything: the case still
+failed five runs of five (`--rerun-each=5`), at lines 85/199 as described.
+
+Took the recommended option. `socket()` now resolves only after both the
+client's `connect` and the server's accept of that same connection, and returns
+`{ client, peer }`. The peer is matched by port: the server's connection
+callback files each accepted socket under its `remotePort`, and `socket()`
+claims the one equal to the client's `localPort`, waiting for it if the accept
+has not landed yet. Matching by port, rather than awaiting "the next
+connection", keeps the pairing correct for the bounds case, which opens four
+clients at once with `Promise.all`. No sleep, timeout or assertion changed.
+
+### Task 2: the chatty case writes to its own peer
+
+Fixed in the same change, as recommended: it writes to the `peer` returned
+with `chatty` instead of `accepted.at(-1)`. No `accepted.at(-1)` use remains;
+`accepted` is kept only so `afterEach` can destroy every server socket.
+
 ## Related
 
+- [2940-main-validation-failures-2026-11-02.md](../cross-cutting/2940-main-validation-failures-2026-11-02.md) task 1 and flake [3101](../../tests/flaky-tests/previews-annotations-and-gateway/3101-preview-upstream-idle-close-delay.md): the same failure, closed by this fix.
 - [1202-efficiency-review-follow-ups.md](../cross-cutting/1202-efficiency-review-follow-ups.md) (GW-8 introduced the upstream pool).

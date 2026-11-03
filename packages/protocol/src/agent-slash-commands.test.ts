@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  compactInstructionsFromArguments,
   idleSteerPromptReply,
   isProviderSlashCommand,
   parseLeadingSlashCommand,
@@ -173,6 +174,49 @@ describe("withSessionActionSlashCommands", () => {
     ]);
   });
 
+  test("the compact action takes instructions only where the platform honours them", () => {
+    const refusing = withSessionActionSlashCommands([], capabilities({ compact: true }));
+    expect(refusing[0]?.argumentHint).toBeUndefined();
+    const accepting = withSessionActionSlashCommands(
+      [],
+      capabilities({ compact: true, compactInstructions: true }),
+    );
+    expect(accepting).toEqual([
+      expect.objectContaining({
+        name: "/compact",
+        id: "orkestrator:compact",
+        argumentHint: "[instructions]",
+        inputPolicy: { arguments: "optional", attachments: "none", busy: "idle" },
+      }),
+    ]);
+    // The identity is unchanged, so a selection made before the capability
+    // arrived still binds to the same row.
+    expect(accepting[0]?.bindingRevision).toBe(refusing[0]?.bindingRevision);
+  });
+
+  test("resolves /compact arguments through the capability-gated policy", () => {
+    const text = "/compact keep the failing test names";
+    const refused = resolveCommandInvocation({
+      text,
+      intent: { kind: "typed" },
+      commands: withSessionActionSlashCommands([], capabilities({ compact: true })),
+    });
+    expect(refused).toMatchObject({ kind: "invalid-arguments" });
+    const accepted = resolveCommandInvocation({
+      text,
+      intent: { kind: "typed" },
+      commands: withSessionActionSlashCommands(
+        [],
+        capabilities({ compact: true, compactInstructions: true }),
+      ),
+    });
+    expect(accepted).toMatchObject({
+      kind: "command",
+      command: { id: "orkestrator:compact" },
+      token: { arguments: "keep the failing test names" },
+    });
+  });
+
   test("adds the action even when the provider discovered nothing", () => {
     expect(withSessionActionSlashCommands([], capabilities({ steer: true }))).toEqual([
       expect.objectContaining({ name: "/steer" }),
@@ -188,6 +232,16 @@ describe("withSessionActionSlashCommands", () => {
       capabilities({}),
     );
     expect(merged.map((command) => command.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("compactInstructionsFromArguments", () => {
+  test("trims the suffix and treats blank text as no instructions", () => {
+    expect(compactInstructionsFromArguments("")).toBeUndefined();
+    expect(compactInstructionsFromArguments("  \n\t ")).toBeUndefined();
+    expect(compactInstructionsFromArguments("  keep the plan\nand the diff  ")).toBe(
+      "keep the plan\nand the diff",
+    );
   });
 });
 

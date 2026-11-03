@@ -51,11 +51,13 @@ import type {
 import { registerPermissionRuleCommands } from "./commands-registry-permission-rules.js";
 import { registerBackendProfileCommands } from "./commands-registry-backend-profile.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { registerTicketSyncCommands } from "./commands-registry-ticket-sync.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
 import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import { registerCoordinatorNodeTicketCommands } from "./coordinator-node-tickets.js";
 import { registerCoordinatorCommandNodeMail } from "./coordinator-node-coordinator-mail.js";
 import { registerCoordinatorForkWorker } from "./coordinator-fork-worker.js";
 import { registerCoordinatorWorkerChanges } from "./coordinator-worker-changes.js";
@@ -86,7 +88,7 @@ import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerHostFileCommands } from "./commands-host-files.js";
 import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
-import { registerPublicApiCommands } from "./public-api/registry.js";
+import { registerPublicApiCommands } from "./public-api/index.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerUserCommandCommands } from "./commands-registry-user-commands.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
@@ -344,6 +346,7 @@ export function createCommandRegistry(
   registerCoordinatorCommands(register, dependencies);
   registerControllerWorkflowCommands(register, dependencies);
   registerCoordinatorNodeCommands(register);
+  registerCoordinatorNodeTicketCommands(register);
   registerCoordinatorCommandNodeMail(register);
   registerCoordinatorForkWorker(register, dependencies);
   registerCoordinatorWorkerChanges(register, dependencies);
@@ -355,6 +358,7 @@ export function createCommandRegistry(
   registerBackendProfileCommands(register);
   registerPermissionRuleCommands(register);
   registerNodeCommands(register);
+  registerTicketSyncCommands(register);
   registerHostFileCommands(register);
   registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);

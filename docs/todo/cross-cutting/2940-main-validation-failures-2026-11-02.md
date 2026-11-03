@@ -6,10 +6,10 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 
 ### Tasks
 
-1. **Preview upstream pool idle-expiry case fails deterministically**: `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`. Status: open.
+1. **Preview upstream pool idle-expiry case fails deterministically**: `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`. Status: done (fixed under [2920](../previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)).
 2. **Log Detail settings case fails in both viewports**: `e2e/GlobalSettings.spec.ts:3` `Log Detail offers only areas controlled by live policy`. Status: open.
 3. **Merged project list drag cases fail**: `e2e/MergedProjectList.spec.ts:168` `project/repository project and group drags ignore expanded environment rows`. Status: done (2026-11-03): the previous drag's card took the press during its drop animation (`0412ae2c4`); fixed under [2921](2921-component-browser-failures-on-main.md) task 2.
-4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: open.
+4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: done (2026-11-03, through 2921 task 3).
 
 ### 1. Preview upstream pool idle-expiry case fails deterministically
 
@@ -20,6 +20,13 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 **Investigation.** In a detached `origin/main` worktree at `d7cdfaa8b` with its own `bun install --frozen-lockfile`, `bun --cwd=apps/backend test ./src/preview-upstream-pool.test.ts` failed alone twice (6 pass, 1 fail; 654.67 ms and 668.24 ms for the case). It also failed the same way in that branch's aggregate run. Not a flake: it fails alone. The cause was not investigated.
 
 **Decisions.**
+
+**Resolution.** The pool was not at fault. The test ended `accepted.at(-1)`,
+which on macOS is usually the earlier, already-closed peer because the client's
+`connect` fires before the server's connection callback. Fixed under
+[2920](../previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)
+by having the test's `socket()` helper return each client with its own accepted
+peer; the poll budget was not widened.
 
 - **Where to start?**
   - **Check the idle timer against the 500 ms poll budget (recommended).** Read the pool's idle expiry and whether it closes the socket or only forgets it.
@@ -84,6 +91,17 @@ Resolved 2026-11-03 under [2921](2921-component-browser-failures-on-main.md) tas
   - **Update the expected texts to include the suffix.**
     - Pros: quick.
     - Cons: would encode instructions text in user-visible transcript expectations, which may be the bug.
+
+**Outcome (2026-11-03).** Done in [2921](2921-component-browser-failures-on-main.md) task 3. The suffix belongs in the provider prompt: the bridge sends it to the SDK and strips it from the user's stored text, and the stored-text paths were not at fault. The fake Cursor engine recorded the framed prompt as the user's text; it now strips the frame and keeps the sent text separately, and one spec assertion checks the frame is still sent. `:693` had a second cause, unrelated to the suffix: the backend's 30 s runtime-health cache. Its deadline now covers that cache. See 2921's Assumptions and decisions.
+## Assumptions and decisions
+
+### Task 1: fixed through 2920
+
+Closed by the test-only fix recorded in
+[2920](../previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md),
+whose investigation found the cause this task left open. The idle timer did
+not need to change: expiry already destroys the socket, and the failing step
+was the "application closes" half of the case, not idle expiry.
 
 ## Related
 

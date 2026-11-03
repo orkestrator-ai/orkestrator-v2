@@ -2,9 +2,12 @@ import type { WebClientStatus } from "@orkestrator/protocol/web-client";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  getTailscaleServeTargetPort,
+  DEFAULT_SERVE_TARGET_HOST,
+  getTailscaleServeTarget,
+  serveOwnershipRecord,
   TailscaleServeConflictError,
   TailscaleServeManager,
+  type TailscaleServeTargetHost,
 } from "./tailscale-serve.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -18,6 +21,8 @@ export type ManagedWebClientOwnership = {
   version: 1;
   targetPort: number;
   httpsPort: number;
+  /** Absent means `127.0.0.1`, the only target before `::1` was accepted. */
+  targetHost?: TailscaleServeTargetHost;
 };
 
 export type ManagedWebClientOwnershipStore = {
@@ -57,7 +62,10 @@ export function createFileOwnershipStore(filePath: string): ManagedWebClientOwne
         parsed.targetPort! > 65535 ||
         !Number.isInteger(parsed.httpsPort) ||
         parsed.httpsPort! < 1 ||
-        parsed.httpsPort! > 65535
+        parsed.httpsPort! > 65535 ||
+        (parsed.targetHost !== undefined &&
+          parsed.targetHost !== "127.0.0.1" &&
+          parsed.targetHost !== "::1")
       ) {
         throw new Error("Managed web client ownership file is invalid");
       }
@@ -133,7 +141,7 @@ export class ManagedWebClient {
       try {
         const ownership = await this.ownershipStore.load();
         if (ownership && this.serve.stopOwned) {
-          await this.serve.stopOwned(ownership.targetPort, ownership.httpsPort);
+          await this.stopOwnedServe(ownership);
         } else {
           await this.serve.stop();
         }
@@ -157,27 +165,28 @@ export class ManagedWebClient {
 
     let ownership: ManagedWebClientOwnership | null = null;
     try {
-      const targetPort = getTailscaleServeTargetPort(this.browserListenerUrl);
+      const target = getTailscaleServeTarget(this.browserListenerUrl);
       ownership = await this.ownershipStore.load();
       const canAdopt =
-        ownership?.targetPort === targetPort && ownership.httpsPort === this.httpsPort;
+        ownership?.targetPort === target.port &&
+        (ownership.targetHost ?? DEFAULT_SERVE_TARGET_HOST) === target.host &&
+        ownership.httpsPort === this.httpsPort;
       if (ownership && !canAdopt) {
         if (this.serve.stopOwned) {
-          await this.serve.stopOwned(ownership.targetPort, ownership.httpsPort);
+          await this.stopOwnedServe(ownership);
         } else {
           await this.serve.stop();
         }
         await this.ownershipStore.clear();
       }
 
-      const nextOwnership: ManagedWebClientOwnership = {
-        version: 1,
-        targetPort,
-        httpsPort: this.httpsPort,
-      };
+      const nextOwnership = serveOwnershipRecord(target, this.httpsPort);
       await this.ownershipStore.save(nextOwnership);
       ownership = nextOwnership;
-      this.url = await this.serve.start(targetPort, this.httpsPort, { adoptExisting: canAdopt });
+      this.url = await this.serve.start(target.port, this.httpsPort, {
+        adoptExisting: canAdopt,
+        ...(target.host === DEFAULT_SERVE_TARGET_HOST ? {} : { targetHost: target.host }),
+      });
     } catch (error) {
       this.url = null;
       this.error = error instanceof Error ? error.message : String(error);
@@ -226,6 +235,13 @@ export class ManagedWebClient {
     }
 
     return this.enabled ? this.applyEnabled(true) : this.getStatus();
+  }
+
+  /** Callers check `stopOwned` exists; an IPv4 record keeps the two-argument call. */
+  private async stopOwnedServe(ownership: ManagedWebClientOwnership): Promise<void> {
+    await (ownership.targetHost
+      ? this.serve.stopOwned!(ownership.targetPort, ownership.httpsPort, ownership.targetHost)
+      : this.serve.stopOwned!(ownership.targetPort, ownership.httpsPort));
   }
 }
 

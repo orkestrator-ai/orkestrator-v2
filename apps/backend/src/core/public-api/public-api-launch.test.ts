@@ -147,6 +147,16 @@ describe("session.transcript", () => {
     ]);
     expect(newest.result.messages.at(-1)!.textTruncated).toBe(true);
     expect(newest.result.olderCursor).toBeDefined();
+    expect(newest.result.token).toEqual(expect.any(String));
+    const conditionalOlder = await harness.call("session.transcript", {
+      sessionId: started.result.sessionId,
+      limit: 5,
+      before: newest.result.olderCursor,
+      knownToken: newest.result.token,
+    });
+    expect(!conditionalOlder.ok && conditionalOlder.error.code).toBe("invalid-input");
+    // The same valid cursor works without knownToken: rejection above must
+    // enforce mutual exclusion rather than merely reject a malformed cursor.
     const older = await harness.call<PublicTranscriptPage>("session.transcript", {
       sessionId: started.result.sessionId,
       limit: 5,
@@ -172,6 +182,144 @@ describe("session.transcript", () => {
       before: "not-a-cursor",
     });
     expect(!invalid.ok && invalid.error.code).toBe("invalid-input");
+  });
+
+  test("a still-current knownToken answers unchanged without the messages", async () => {
+    const { harness, stub } = await setup();
+    const capabilities = await harness.call<{ features: { transcriptKnownToken?: boolean } }>(
+      "capabilities",
+      {},
+    );
+    expect(capabilities.ok && capabilities.result.features.transcriptKnownToken).toBe(true);
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-known" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    stub.messages.push({
+      id: "m-0",
+      role: "user",
+      content: "secret words",
+      createdAt: new Date(0).toISOString(),
+      parts: [],
+    });
+    const first = await harness.call<PublicTranscriptPage>("session.transcript", { sessionId });
+    if (!first.ok) throw new Error(`${first.error.code}: ${first.error.message}`);
+    expect(first.result.messages.map((message) => message.id)).toEqual(["m-0"]);
+    const token = first.result.token;
+    expect(token).toEqual(expect.any(String));
+
+    const same = await harness.call("session.transcript", { sessionId, knownToken: token });
+    if (!same.ok) throw new Error(`${same.error.code}: ${same.error.message}`);
+    expect(same.result).toEqual({ sessionId, status: "unchanged", token });
+    expect(JSON.stringify(same)).not.toContain("secret words");
+
+    // A token that is not current, and a moved transcript, both get the page.
+    const stale = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      knownToken: "not-the-token",
+    });
+    expect(stale.ok && stale.result.messages.map((message) => message.id)).toEqual(["m-0"]);
+    stub.messages.push({
+      id: "m-1",
+      role: "assistant",
+      content: "reply",
+      createdAt: new Date(1_000).toISOString(),
+      parts: [],
+    });
+    const moved = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      knownToken: token,
+    });
+    if (!moved.ok) throw new Error(`${moved.error.code}: ${moved.error.message}`);
+    expect(moved.result.messages.map((message) => message.id)).toEqual(["m-0", "m-1"]);
+    expect(moved.result.token).not.toBe(token);
+  });
+
+  test("knownToken validates only the same newest-page limit; window history has no token", async () => {
+    const { harness, stub } = await setup();
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-page-token" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    for (let index = 0; index < 3; index += 1) {
+      stub.messages.push({
+        id: `page-${index}`,
+        role: "assistant",
+        content: `message ${index}`,
+        createdAt: new Date(index * 1_000).toISOString(),
+        parts: [],
+      });
+    }
+    const narrow = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 1,
+    });
+    if (!narrow.ok) throw new Error(narrow.error.message);
+    expect(narrow.result.messages.map((message) => message.id)).toEqual(["page-2"]);
+    expect(narrow.result.token).toEqual(expect.any(String));
+    const same = await harness.call("session.transcript", {
+      sessionId,
+      limit: 1,
+      knownToken: narrow.result.token,
+    });
+    expect(same.ok && same.result).toEqual({
+      sessionId,
+      status: "unchanged",
+      token: narrow.result.token,
+    });
+
+    const wide = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 100,
+      knownToken: narrow.result.token,
+    });
+    if (!wide.ok) throw new Error(wide.error.message);
+    expect(wide.result.messages.map((message) => message.id)).toEqual([
+      "page-0",
+      "page-1",
+      "page-2",
+    ]);
+    expect(wide.result.token).toEqual(expect.any(String));
+    expect(wide.result.token).not.toBe(narrow.result.token);
+    const sameWide = await harness.call("session.transcript", {
+      sessionId,
+      limit: 100,
+      knownToken: wide.result.token,
+    });
+    expect(sameWide.ok && sameWide.result).toEqual({
+      sessionId,
+      status: "unchanged",
+      token: wide.result.token,
+    });
+    const smaller = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 1,
+      knownToken: wide.result.token,
+    });
+    if (!smaller.ok) throw new Error(smaller.error.message);
+    expect(smaller.result.messages.map((message) => message.id)).toEqual(["page-2"]);
+    expect(smaller.result.token).toBe(narrow.result.token);
+
+    let before = narrow.result.olderCursor;
+    expect(before).toEqual(expect.any(String));
+    for (const id of ["page-1", "page-0"]) {
+      const older = await harness.call<PublicTranscriptPage>("session.transcript", {
+        sessionId,
+        limit: 1,
+        before,
+      });
+      if (!older.ok) throw new Error(older.error.message);
+      expect(older.result.messages.map((message) => message.id)).toEqual([id]);
+      expect(older.result.token).toBeNull();
+      before = older.result.olderCursor;
+    }
+    expect(before).toBeUndefined();
   });
 });
 

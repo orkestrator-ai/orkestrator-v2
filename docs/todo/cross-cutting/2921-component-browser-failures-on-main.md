@@ -8,7 +8,7 @@ Analysed 2026-11-02 against main at `fd679c0e2`.
 
 1. **Log Detail shows a `terminal` area**: open.
 2. **Merged project list group drags never start**: done (2026-11-03): the previous drag's card took the press; it no longer takes pointer input.
-3. **Cursor close-retention cases compare prompts without the appended system instructions**: open.
+3. **Cursor close-retention cases compare prompts without the appended system instructions**: done (2026-11-03; see Assumptions and decisions).
 
 ### 1. Log Detail shows a `terminal` area
 
@@ -81,6 +81,47 @@ The spec is right: two drags one after the other are a real user path, and a pre
 - **Wait in the spec until the card is gone.** This makes the spec pass but hides a defect a quick user hits: a second drag or a click within 250 ms of a drop is swallowed.
 
 The same run found `e2e/MergedProjectList.spec.ts:43` (`… opens the first shown fallback workspace without dragging`) failing on `main` on both viewports. The cause is test drift: `a4e6c3087` (#1624) made a repository heading with no command-node copy open the leaf's coordinator (`boardTab: "coordinator"`) and updated `project-landing.test.tsx` to expect that, but not this spec. The spec now expects the same intent, so the whole file passes.
+
+### Task 3: where the frame is stripped, and the steering case's second cause
+
+Rechecked on 2026-11-03 against `main` at `7b48c23fb`: the four desktop Cursor
+cases still failed (Cursor-only desktop run: 2 passed, 4 failed). The bridge's
+frame now comes from `cursorPromptText` in `bridges/cursor-bridge/src/prompt.ts`
+(`system-instructions.ts` no longer exists).
+
+- **Stripped in the fake engine, not the host's view.** The fixture vendor is
+  `bridges/cursor-bridge/src/testing/fake-engine-server.ts`. Each stored turn's
+  `prompt` is now the user's text (`stripSystemInstructions` from
+  `@orkestrator/protocol/review-evidence-frames`), and a new `sent` field keeps
+  the exact text the SDK was given. History replay (`listRuns`) still returns
+  `sent`, as the real vendor would, so the bridge's own strip on reload stays
+  exercised. The `Answer to:` reply and the `list` summary use the stripped
+  text. Stripping only in the host's `/vendor` view would have left the
+  framed text in every reply the page shows.
+- **One assertion proves the frame is still sent.** The `/vendor` view exposes
+  `sent` per Cursor agent, and the line 328 case asserts the first turn's `sent`
+  is the user's text, a blank line, then a complete
+  `<orkestrator-system-instructions>` frame.
+- **The steering case had a second, independent cause.** With the frame fixed it
+  still missed `agent-runtime-steer-saturated`. The fixture fills the steer
+  history at the bridge, so the backend sees it only after its cached runtime
+  health (`INTERACTIVE_RUNTIME_METADATA_TTL_MS`, 30 s) expires; the card
+  appeared 31.1 s after the panel opened. Options: raise that deadline to cover
+  the TTL (taken: one line, keeps what the case asserts, costs up to 30 s of
+  test time); have the backend refresh runtime health when the panel opens or
+  after a steer refusal (a product change outside this task, though a panel
+  that lags 30 s behind the bridge is arguably worth a to-do of its own); or
+  saturate through the backend (the fixture has no backend route for 1,024
+  steers). The deadline is now 60 s, with the reason in a comment. Flake
+  [0963](../../tests/flaky-tests/web-ui/0963-close-retention-cursor-cases-under-load.md)
+  records both causes; its separate `no running turn to steer` mode stays open.
+- **Verified on the final tree (head `08e817a45`).** On beelink, beside other
+  builds' Docker network churn, the Cursor-only desktop run failed twice from
+  `net::ERR_NETWORK_CHANGED` module loads after `page.reload()` (flake
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md#2026-11-03-a-private-network-namespace-avoids-it)).
+  Run in a private loopback-only network namespace (`unshare -rn`), all six
+  Cursor cases passed (51.3 s), and so did the whole file in both projects
+  (71.6 s).
 
 ## Related
 

@@ -19,9 +19,10 @@
 /** Applied in order; earlier rules consume the text later ones would match. */
 const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
   // scheme://user:password@host — the password is the point, but the username is
-  // identity, so both go.
+  // identity, so both go. Only start at the beginning of a scheme-character
+  // run: retrying at every character makes a long non-URL run quadratic.
   {
-    pattern: /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
+    pattern: /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
     replacement: "$1[redacted]@",
   },
   // Query credentials and OAuth state/code in a URL or a log line containing one.
@@ -49,13 +50,16 @@ const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
    *
    * The leading `(?:[A-Za-z0-9]+[_-])*` matters: `\bAPI_KEY` never matches inside
    * `OPENAI_API_KEY`, because `_` is a word character and there is no boundary
-   * before `API`. The lookahead keeps this from swallowing an auth *scheme* whose
+   * before `API`. The lookbehind prevents retrying at every hyphen in a
+   * long identifier run (quadratic on a failed match). Leading hyphens retain
+   * command-line flag redaction. The lookahead keeps this
+   * from swallowing an auth *scheme* whose
    * token an earlier rule has already replaced, and `&` is excluded from the
    * value so it stops at the end of one query parameter.
    */
   {
     pattern:
-      /\b((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|secret|client[_-]?secret|password|passwd|passphrase|authorization))("?\s*[:=]\s*)("?)(?!Bearer\b|Basic\b|\[redacted\])[^\s"',;)&]{6,}\3/gi,
+      /(?<![A-Za-z0-9_-])(-*\b(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|secret|client[_-]?secret|password|passwd|passphrase|authorization))("?\s*[:=]\s*)("?)(?!Bearer\b|Basic\b|\[redacted\])[^\s"',;)&]{6,}\3/gi,
     replacement: "$1$2[redacted]",
   },
 ];

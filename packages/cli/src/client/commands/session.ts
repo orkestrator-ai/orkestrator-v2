@@ -1,12 +1,14 @@
 import { PUBLIC_API_LIMITS, type PublicReceipt } from "@orkestrator/protocol/public-api";
-import type {
-  PublicAgentOptions,
-  PublicInteraction,
-  PublicInteractionAnswerInput,
-  PublicInteractionHold,
-  PublicSessionCommandList,
-  PublicSessionSummary,
-  PublicTranscriptPage,
+import {
+  isPublicTranscriptUnchanged,
+  type PublicAgentOptions,
+  type PublicInteraction,
+  type PublicInteractionAnswerInput,
+  type PublicInteractionHold,
+  type PublicSessionCommandList,
+  type PublicSessionSummary,
+  type PublicTranscriptPage,
+  type PublicTranscriptUnchanged,
 } from "@orkestrator/protocol/public-api-resources";
 import path from "node:path";
 import { CliError } from "../errors.js";
@@ -1005,7 +1007,7 @@ export const sessionCommands: CommandSpec[] = [
     action: "session.transcript",
     summary: "Read a bounded transcript page; --follow polls for new messages.",
     description:
-      "Pages are oldest-first and hold at most --limit messages (max 100). Pass the returned olderCursor as --before for earlier history. --follow --jsonl streams one record per new message by polling snapshots; it stops at --timeout or Ctrl+C and never affects the session.",
+      "Pages are oldest-first and hold at most --limit messages (max 100). Pass the returned olderCursor as --before for earlier history. --follow --jsonl streams one record per new message by polling snapshots (a backend that supports it answers an unchanged transcript without resending it); it stops at --timeout or Ctrl+C and never affects the session.",
     positionals: [{ name: "session", required: true }],
     options: [
       {
@@ -1060,6 +1062,9 @@ export const sessionCommands: CommandSpec[] = [
       }
       const seen = new Set<string>();
       let lastToken: string | null = null;
+      // Whether the answering backend takes `knownToken`; an older one refuses
+      // unknown input, so it gets the plain read and the token comparison below.
+      let conditional: boolean | null = null;
       let emitted = 0;
       const emit = (record: Record<string, unknown>) => {
         if (context.global.output === "jsonl") context.io.stdout(`${JSON.stringify(record)}\n`);
@@ -1071,10 +1076,17 @@ export const sessionCommands: CommandSpec[] = [
       try {
         await observe<never>(
           async () => {
-            const page = await session.read<PublicTranscriptPage>("session.transcript", {
-              ...input,
-              limit: PUBLIC_API_LIMITS.transcriptMaxMessages,
-            });
+            conditional ??= (await session.capabilities()).features.transcriptKnownToken === true;
+            const answer = await session.read<PublicTranscriptPage | PublicTranscriptUnchanged>(
+              "session.transcript",
+              {
+                ...input,
+                limit: PUBLIC_API_LIMITS.transcriptMaxMessages,
+                ...(conditional && lastToken !== null ? { knownToken: lastToken } : {}),
+              },
+            );
+            if (isPublicTranscriptUnchanged(answer)) return { done: false };
+            const page = answer;
             if (page.token !== null && page.token === lastToken) return { done: false };
             if (
               lastToken !== null &&

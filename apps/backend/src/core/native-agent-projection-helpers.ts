@@ -55,12 +55,21 @@ export function firstUserMessageOf(
   messages: readonly unknown[],
   window:
     Pick<NativeAgentMessageWindow, "truncated" | "omittedMessages" | "canLoadEarlier"> | undefined,
+  /**
+   * A row a provider's bound shed parts from. Once every part is gone the
+   * bound keeps only the tail of that row's content (`boundTranscriptResponse`),
+   * so its head, where the user's words and an annotation envelope's opening
+   * fence are, may be missing and the strip cannot remove what is left. It
+   * names nothing until it is read whole.
+   */
+  trimmedRowId?: string,
 ): { firstUserMessage?: string; reachesStart: boolean } {
   const reachesStart =
     !window?.truncated || ((window.omittedMessages ?? -1) === 0 && window.canLoadEarlier !== true);
   for (const candidate of messages) {
-    const message = candidate as { role?: unknown; content?: unknown };
+    const message = candidate as { id?: unknown; role?: unknown; content?: unknown };
     if (message.role !== "user" || typeof message.content !== "string") continue;
+    if (trimmedRowId !== undefined && message.id === trimmedRowId) continue;
     // A goal turn is the loop's text, never the user's words, even when it is
     // the first row of a new tab.
     if (isGoalCarrierContent(message.content)) continue;

@@ -14,6 +14,7 @@ export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
 import type { NativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/store.js";
@@ -223,12 +224,23 @@ export class StorageService {
     return this.context.changes.addEnvironmentAttentionListener(listener);
   }
 
-  /** Publish a provider-authoritative projection after its cache is committed. */
+  /**
+   * Publish a provider-authoritative projection after its cache is committed.
+   * `cause` names the announcing code path (content-free; todo 0049 task 4).
+   */
   announceNativeAgentSessionProjection(
     environmentId: string,
+    cause: NativeSessionInvalidationCause,
     scope?: { agent: string; logicalSessionKey: string },
   ): void {
-    this.context.changes.announce("native-agent-session", environmentId, undefined, scope);
+    this.context.changes.announce(
+      "native-agent-session",
+      environmentId,
+      undefined,
+      scope,
+      false,
+      cause,
+    );
   }
 
   /** The PR monitor health relayed in node summaries changed (runtime only). */

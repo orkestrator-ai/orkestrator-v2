@@ -255,7 +255,7 @@ depends = ["build:cli"]
 run = "bun packages/cli/scripts/run-scenarios.ts"
 
 [tasks."test:agent:docker:isolated"]
-description = "Build and smoke the image, run the credential-free Docker fixture, and reset its disposable profile"
+description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
 depends = ["playwright:install"]
 env = { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON = "1" }
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode"
@@ -275,7 +275,7 @@ bun test --cwd apps/backend ./src/core/preview-docker.test.ts ./src/preview-rela
 """
 
 [tasks."test:preview:browser"]
-description = "Opt-in Chromium, Firefox and WebKit private-origin checks (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR)"
+description = "Opt-in Chromium, Firefox and WebKit private-origin checks (set ORKESTRATOR_TEST_PREVIEW_VITE_DIR for HMR, ORKESTRATOR_TEST_PREVIEW_NEXT_DIR for the Next.js fixture)"
 raw_args = true
 run = "bunx playwright test --config e2e/preview/playwright.preview.config.ts"
 
@@ -304,7 +304,7 @@ description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
 
 [tasks."test:agent:electron:packaged"]
-description = "Run the Electron design spec against the packaged Linux app (build it with package:linux:unpacked)"
+description = "Run shipping package security smoke (macOS/Linux) and Linux packaged design journey; build shipping and packaged-test binaries first"
 run = "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts"
 
 [tasks."test:ios"]
@@ -450,6 +450,27 @@ run = [
   "mise run download:bun",
   "mise run build:all",
   "bunx electron-builder --linux --dir",
+]
+
+[tasks."package:linux:unpacked:test"]
+description = "Build the unpacked Linux application for the packaged Electron spec (inspect fuse on) under release/packaged-test without installing it"
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
+]
+
+[tasks."test:package:security"]
+description = "Build this host's unsigned shipping --dir package (macOS ad-hoc or Linux), read its fuses and run the shipping security smoke. Never signs with a Developer ID, notarizes, installs or publishes"
+env = { CSC_IDENTITY_AUTO_DISCOVERY = "false" }
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --$(if [ \"$(uname -s)\" = Darwin ]; then echo mac; else echo linux; fi) --dir --publish never",
+  "bun scripts/verify-packaged-security.ts",
+  "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts",
 ]
 
 [tasks."package:release"]

@@ -113,7 +113,8 @@ commands accept `kind` and `sections`. A `sections` update replaces only the
 sections it names; an empty value clears one. `description` and
 `acceptanceCriteria` are still accepted. Reads return `kind`, the text
 mirrors, `criteria` (id, text start, status, evidence; bounded) and
-`deliveryPolicy`.
+`deliveryPolicy`. A command node coordinator's ticket tools also take a
+`nodeId` ([Sync across machines](#sync-across-machines)).
 
 ## Verify
 
@@ -198,3 +199,93 @@ that is not superseded and says which round they came from; the node face shows
 `n/m criteria`. Board cards show the first prose section and, once Verify has
 run, a criteria tally. The verdict in a Verify transcript lists each criterion's
 result under the rationale.
+
+## Sync across machines
+
+A project's board is shared by every machine in a fleet that has a copy of
+the same repository (matched by repository identity, as everything else
+across nodes is). Code: `@orkestrator/protocol/ticket-sync` (wire shapes,
+limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
+`KanbanRepository` (the sync methods, under the Kanban lease),
+`nodes/node-ticket-sync.ts` (the command node's runs),
+`commands-registry-ticket-sync.ts` (the leaf commands) and
+`coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). The
+follow-up work is [3800](../todo/coordinator-and-multi-review/3800-fleet-ticket-sync-follow-ups.md).
+
+**One board, one id.** The command node's board is authoritative. A leaf
+holds a copy (a *replica*) of each of its tickets under the same id, so a
+ticket is recognisable on every machine and a coordinator never needs a
+leaf-local id. A replica row carries `sync.replica` (the command node, its
+project, and the revisions it last saw). Each command node project pairs with
+the first leaf project of the same repository; a second copy on the same leaf
+is left alone.
+
+**Down.** Every synced change to a ticket on any machine is stamped with that
+machine's next change sequence (`sync.seq`) and the revision of each field
+that changed (`sync.revs`: `title`, `content`, `status`). A deleted ticket
+leaves a tombstone with its own sequence. The command node sends a leaf every
+snapshot and tombstone after the leaf's cursor, in sequence order, 100 at a
+time (`apply_ticket_sync`); the leaf answers with its new cursor
+(`get_ticket_sync_cursor` reads it). A leaf that reconnects after any gap
+catches up from its cursor. A cursor from another store (`epoch`), or older
+than a pruned tombstone (5,000 are kept), gets a full resync that also
+removes copies the board no longer has. A field with a leaf change still
+queued keeps the leaf's value until the command node has decided it.
+
+**Up.** A change made on a leaf to a replica (edit, status, comment, criteria
+results, the build or environment linked to it, deletion) is queued in that
+leaf's ticket outbox for that command node in the same commit as the change.
+Every queued operation remains immutable until acknowledged: later edits and
+deletions receive new sequences, even for newly created tickets or comments.
+This preserves changes made while an earlier operation is in transit. The leaf announces queued changes (`ticket-sync-outbox-ready`);
+the command node collects them (`collect_ticket_sync_outbox`) on that event,
+on every connect and stream resync, and every 60 s, applies them in order,
+then acknowledges (`ack_ticket_sync_outbox`). Each outbox has an epoch and a
+sequence, and the command node records the last one it applied, so a lost
+acknowledgement or a retry never applies a change twice. Over 10,000 queued
+changes or 32 MiB the leaf refuses the edit with a message, rather than drop
+anything.
+
+**New tickets on a leaf.** A ticket created on a leaf after the command node
+first synced that project goes up under its own id and becomes the board's.
+Tickets that existed on the leaf before sync began stay on the leaf only.
+
+**Conflicts.** A leaf change to `title`, `content` or `status` made against
+the revision the board still has is applied. Against an older one (the field
+changed on the command node meanwhile) the board's value is kept, and the
+conflict is recorded: in the board's conflict list (`get_ticket_sync_status`,
+the last 200) and as a comment on the ticket naming the machine and quoting
+its value, which every machine then sees. A change that follows the same
+leaf's own earlier change is not a conflict. Comments merge by id; criteria
+results merge as Verify's do (by id and text), so they never conflict with a
+text edit. A change to a ticket deleted on the command node is recorded as a
+conflict and not applied; the deletion wins.
+
+**Deletes.** A deletion on either side removes the ticket everywhere. The
+tombstone stops a reconnecting leaf from bringing it back, and a leaf keeps
+its own so that a snapshot sent before its deletion was collected does not
+revive it.
+
+**Images are not synced.** Each machine keeps the images attached on it; a
+build's ticket snapshot carries the images the coordinator or the launcher
+send with it. See 3800 for syncing references or bytes.
+
+**Where the work runs.** A ticket whose build pipeline or environment runs on
+another machine carries `sync.work` (machine, pipeline, environment, pull
+request). `start_build_pipeline` with a `nodeId` records it at once; the
+leaf's own reports keep it current. The board's cards name that machine.
+
+**The board's sync line.** Above the columns the board names each machine
+that shares it, with its state: in sync, syncing, behind, offline (changes
+wait here), update needed (an older machine) or failed (retried), and how
+many leaf changes lost a conflict. Nothing shows on a board no other machine
+shares.
+
+**Older leaves.** A leaf that does not advertise `ticket-sync` is never sent
+tickets; the board says to update it. Coordinator tools with its `nodeId`
+work on its own board as before (see
+[coordinator.md](coordinator.md#tickets-on-other-machines)).
+
+**Detaching.** When a command node detaches, the leaf's copies of its tickets
+become the leaf's own, keeping what they say, and nothing more is queued for
+it.

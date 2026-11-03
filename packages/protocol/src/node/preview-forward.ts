@@ -70,6 +70,8 @@ export interface PreviewForwardHooks {
   takeIdle?(signal: AbortSignal): Promise<Duplex | null>;
   /** Called when a request is resent because its idle connection was closed. */
   onStaleRetry?(): void;
+  /** Called once at upstream response-head arrival, before streaming the body. */
+  onFirstByte?(milliseconds: number): void;
   /** Register the in-flight exchange for revocation; returns a release. */
   track?(close: () => void): () => void;
   /**
@@ -297,6 +299,7 @@ export async function forwardPreviewRequest(
         throw error;
       });
     result.firstByteMs = Date.now() - started;
+    hooks.onFirstByte?.(result.firstByteMs);
     const { headers } = downstreamResponseHeaders(upstreamResponse.headers, policy);
     const contentType = String(headers["content-type"] ?? "");
     const streaming = /^text\/event-stream/i.test(contentType);

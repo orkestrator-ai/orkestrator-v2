@@ -109,3 +109,41 @@ test("desktop picker scrolls model and reasoning columns independently", async (
     /Fixture effort 12/,
   );
 });
+
+for (const key of ["Enter", "Space"]) {
+  test(`Done supports Tab then ${key} and retains applied selections`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chromium", "desktop selection columns");
+    await page.goto("/agent-model-picker");
+    const trigger = page.getByTitle("Choose model, reasoning, and speed");
+    const picker = page.locator("[data-native-model-picker]");
+    await trigger.click();
+    await page.getByRole("button", { name: "codex models" }).click();
+    const model = page.getByRole("menuitemradio", { name: /Fixture model 3/ });
+    const reasoning = page.getByRole("menuitemradio", { name: /Fixture effort 2\b/ });
+    const fast = page.getByRole("menuitemradio", { name: /Fast/ });
+    await model.click();
+    await reasoning.click();
+    await fast.click();
+    await expect(model).toBeChecked();
+    await expect(reasoning).toBeChecked();
+    await expect(fast).toBeChecked();
+    const selection = await trigger.textContent();
+
+    await page.getByPlaceholder("Search models...").click();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Done", exact: true })).toBeFocused();
+    // Let Chromium perform native button activation. No focus() or click()
+    // manufactures the result of either keyboard action.
+    await page.keyboard.press(key);
+    await expect(picker).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveText(selection!);
+
+    await trigger.click();
+    await expect(model).toBeChecked();
+    await expect(reasoning).toBeChecked();
+    await expect(fast).toBeChecked();
+  });
+}

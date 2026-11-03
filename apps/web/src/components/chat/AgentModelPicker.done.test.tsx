@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { AgentModelPicker } from "./AgentModelPicker";
 
@@ -22,11 +23,14 @@ function setMobileViewport(mobile: boolean) {
 
 const TITLE = "Choose model, reasoning, and speed";
 
-const models = Array.from({ length: 3 }, (_, index) => ({
-  platform: "codex" as const,
-  id: `model-${index + 1}`,
-  label: `Model ${index + 1}`,
-}));
+const models = [
+  { platform: "claude" as const, id: "claude-model", label: "Claude model" },
+  ...Array.from({ length: 3 }, (_, index) => ({
+    platform: "codex" as const,
+    id: `model-${index + 1}`,
+    label: `Model ${index + 1}`,
+  })),
+];
 
 const reasoningOptions = [
   { id: "low", label: "Low" },
@@ -37,21 +41,29 @@ const reasoningOptions = [
 // Done leaves the choices made before it in place.
 function StatefulPicker({
   onModelChange,
+  onPlatformChange,
   onReasoningChange,
   onFastModeChange,
 }: {
   onModelChange: (modelId: string) => void;
+  onPlatformChange: (platform: AgentPlatform) => void;
   onReasoningChange: (reasoningId: string) => void;
   onFastModeChange: (enabled: boolean) => void;
 }) {
-  const [modelId, setModelId] = useState("model-1");
+  const [modelId, setModelId] = useState("claude-model");
+  const [platform, setPlatform] = useState<AgentPlatform>("claude");
   const [reasoningId, setReasoningId] = useState("high");
   const [fast, setFast] = useState(false);
   const reasoning = reasoningOptions.find((option) => option.id === reasoningId);
   return (
     <AgentModelPicker
       models={models}
-      selectedPlatform="codex"
+      selectedPlatform={platform}
+      enabledPlatforms={["claude", "codex"]}
+      onPlatformChange={(next) => {
+        setPlatform(next);
+        onPlatformChange(next);
+      }}
       selectedModelId={modelId}
       selectedModelLabel={models.find((model) => model.id === modelId)?.label ?? modelId}
       onModelChange={(id) => {
@@ -76,17 +88,19 @@ function StatefulPicker({
 }
 
 function renderPicker() {
+  const onPlatformChange = mock((_platform: AgentPlatform) => {});
   const onModelChange = mock((_modelId: string) => {});
   const onReasoningChange = mock((_reasoningId: string) => {});
   const onFastModeChange = mock((_enabled: boolean) => {});
   render(
     <StatefulPicker
       onModelChange={onModelChange}
+      onPlatformChange={onPlatformChange}
       onReasoningChange={onReasoningChange}
       onFastModeChange={onFastModeChange}
     />,
   );
-  return { onModelChange, onReasoningChange, onFastModeChange };
+  return { onModelChange, onPlatformChange, onReasoningChange, onFastModeChange };
 }
 
 function openPicker() {
@@ -136,14 +150,17 @@ describe("AgentModelPicker Done button", () => {
     expect(search.nextElementSibling).toBe(doneButton());
   });
 
-  test("closes the popover and keeps the model, reasoning and speed chosen before it", async () => {
+  test("closes the popover and keeps the agent, model, reasoning and speed chosen before it", async () => {
     setMobileViewport(false);
-    const { onModelChange, onReasoningChange, onFastModeChange } = renderPicker();
+    const { onModelChange, onPlatformChange, onReasoningChange, onFastModeChange } = renderPicker();
     const trigger = openPicker();
 
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 3/ }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
+    expect(onPlatformChange).toHaveBeenCalledWith("codex");
+    const platformCalls = onPlatformChange.mock.calls.length;
     expect(onModelChange).toHaveBeenCalledWith("model-3");
     expect(onReasoningChange).toHaveBeenCalledWith("low");
     expect(onFastModeChange).toHaveBeenCalledWith(true);
@@ -154,6 +171,14 @@ describe("AgentModelPicker Done button", () => {
     expect(onModelChange).toHaveBeenCalledTimes(1);
     expect(onReasoningChange).toHaveBeenCalledTimes(1);
     expect(onFastModeChange).toHaveBeenCalledTimes(1);
+    expect(onPlatformChange).toHaveBeenCalledTimes(platformCalls);
+    fireEvent.pointerDown(trigger);
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: /Model 3/ }).getAttribute("aria-checked"),
+    ).toBe("true");
     expect(trigger.textContent).toContain("Model 3");
     expect(trigger.textContent).toContain("Low");
     expect(trigger.textContent).toContain("⚡");
@@ -171,36 +196,22 @@ describe("AgentModelPicker Done button", () => {
     expect(onFastModeChange).not.toHaveBeenCalled();
   });
 
-  test("is reachable from search, activates from the keyboard and returns focus to the trigger", async () => {
+  test("leaves native keyboard defaults uncanceled on Done", () => {
     setMobileViewport(false);
     renderPicker();
-    const trigger = openPicker();
-    const search = screen.getByPlaceholderText("Search models...");
-    search.focus();
-
-    // The menu traps Tab; the search input lets it through to the next control.
-    const tab = fireEvent.keyDown(search, { key: "Tab" });
-    expect(tab).toBe(true);
-    const done = doneButton();
-    done.focus();
-    expect(document.activeElement).toBe(done);
-
-    // Enter and Space keep their native button behaviour rather than being
-    // consumed by the menu's typeahead or focus trap.
-    expect(fireEvent.keyDown(done, { key: "Enter" })).toBe(true);
-    expect(fireEvent.keyDown(done, { key: " " })).toBe(true);
-    expect(fireEvent.keyDown(done, { key: "Tab" })).toBe(true);
-
-    // The browser turns Enter or Space on a focused button into a click.
-    fireEvent.click(done);
-    await expectClosed();
-    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    openPicker();
+    // Native traversal, activation and focus return are exercised in the
+    // Playwright AgentModelPicker spec; happy-dom only dispatches events.
+    for (const key of ["Enter", " ", "Tab"]) {
+      expect(fireEvent.keyDown(doneButton(), { key })).toBe(true);
+    }
   });
 
   test("clears the search and reopens on the full list after Done", async () => {
     setMobileViewport(false);
     renderPicker();
     const trigger = openPicker();
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
       target: { value: "model 2" },
     });

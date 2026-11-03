@@ -253,9 +253,11 @@ export class GatewayAuth {
     const allowedHeaders = Array.isArray(requestedHeaders)
       ? requestedHeaders.join(", ")
       : requestedHeaders?.trim() || CORS_ALLOWED_HEADERS;
+    // A wildcard, never `null` with credentials: every sandboxed document
+    // shares the `null` origin, so a credentialed grant to it would let any
+    // preview read another port's authenticated responses (M2).
     response.writeHead(204, {
-      "access-control-allow-origin": "null",
-      "access-control-allow-credentials": "true",
+      "access-control-allow-origin": "*",
       "access-control-allow-methods": CORS_ALLOWED_METHODS,
       "access-control-allow-headers": allowedHeaders,
       "access-control-max-age": "600",
@@ -313,8 +315,7 @@ export class GatewayAuth {
     }
 
     if (isBrowserPreviewRequest && request.headers.origin === "null") {
-      response.setHeader("access-control-allow-origin", "null");
-      response.setHeader("access-control-allow-credentials", "true");
+      response.setHeader("access-control-allow-origin", "*");
       response.setHeader("vary", "Origin");
     } else if (
       url.pathname.startsWith(`${API_PREFIX}/`) &&
@@ -342,8 +343,7 @@ export class GatewayAuth {
           vary: appendVary(null, "Referer"),
         };
         if (request.headers.origin === "null") {
-          redirectHeaders["access-control-allow-origin"] = "null";
-          redirectHeaders["access-control-allow-credentials"] = "true";
+          redirectHeaders["access-control-allow-origin"] = "*";
           appendHeadersVary(redirectHeaders, "Origin");
         }
         response.writeHead(307, redirectHeaders);

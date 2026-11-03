@@ -1186,7 +1186,7 @@ describe("remote gateway", () => {
     expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
   });
 
-  test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {
+  test("answers null-origin browser preview preflights without credentials and forwards non-simple requests", async () => {
     const received = mock(
       (_method?: string, _url?: string, _header?: string | string[], _body?: string) => undefined,
     );
@@ -1223,8 +1223,10 @@ describe("remote gateway", () => {
       },
     });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers["access-control-allow-origin"]).toBe("null");
-    expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
+    // Every sandboxed document shares the null origin, so it never gets a
+    // credentialed grant (security report M2).
+    expect(preflight.headers["access-control-allow-origin"]).toBe("*");
+    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
     expect(preflight.headers["access-control-allow-headers"]).toBe("content-type, x-preview-test");
     expect(received).not.toHaveBeenCalled();
 
@@ -1240,8 +1242,8 @@ describe("remote gateway", () => {
     });
     expect(proxied.status).toBe(200);
     expect(proxied.json()).toEqual({ ok: true });
-    expect(proxied.headers["access-control-allow-origin"]).toBe("null");
-    expect(proxied.headers["access-control-allow-credentials"]).toBe("true");
+    expect(proxied.headers["access-control-allow-origin"]).toBe("*");
+    expect(proxied.headers["access-control-allow-credentials"]).toBeUndefined();
     expect(received).toHaveBeenCalledWith("POST", "/api", "forwarded", '{"message":"hello"}');
   });
 
@@ -1304,8 +1306,8 @@ describe("remote gateway", () => {
     expect(redirect.headers.location).toBe(
       "/__orkestrator/browser/loopback/3000/api/status?probe=1",
     );
-    expect(redirect.headers["access-control-allow-origin"]).toBe("null");
-    expect(redirect.headers["access-control-allow-credentials"]).toBe("true");
+    expect(redirect.headers["access-control-allow-origin"]).toBe("*");
+    expect(redirect.headers["access-control-allow-credentials"]).toBeUndefined();
     expect(redirect.headers["cache-control"]).toBe("no-store");
 
     const preflight = await requestUrl(`${info.url}api/status`, {
@@ -1318,7 +1320,8 @@ describe("remote gateway", () => {
       },
     });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers["access-control-allow-origin"]).toBe("null");
+    expect(preflight.headers["access-control-allow-origin"]).toBe("*");
+    expect(preflight.headers["access-control-allow-credentials"]).toBeUndefined();
     expect(preflight.headers["access-control-allow-headers"]).toBe("content-type");
 
     const unrelatedReferer = await requestUrl(`${info.url}api/status`, {
@@ -1368,6 +1371,7 @@ describe("remote gateway", () => {
         port: 0,
         env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
         allowNonTailscaleBind: true,
+        legacyPreviewPortAccess: async (port) => (port === targetPort ? "allowed" : "unknown"),
       });
       const info = await gateway.start();
       if (!info) throw new Error("Gateway did not start");

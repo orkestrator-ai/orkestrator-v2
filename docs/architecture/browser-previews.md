@@ -153,7 +153,11 @@ response:
   unauthenticated or embedded view.
 
 The legacy route (`/__orkestrator/browser/loopback/<port>/`) stays available
-for old clients and legacy URL tabs. A legacy URL tab whose loopback port
+for old clients and legacy URL tabs. It opens only a port that is the
+verified binding of an enabled service of some environment, and never a
+reserved port (`PreviewRuntime.legacyLoopbackPortAccess`); any other port
+answers 403, so a backend-host port must be registered as a service before a
+legacy tab can show it. A legacy URL tab whose loopback port
 belongs to exactly one enabled, available service of its own environment in
 the current backend epoch offers **Open as service**. The click re-reads the
 service list and converts the tab only if the same service still has the

@@ -22,7 +22,11 @@ import {
 import { PreviewReadinessProber } from "./preview-readiness.js";
 import { PreviewServiceRegistry, type PreviewRegistryStorage } from "./preview-service-registry.js";
 import type { ResolvedPreviewTarget } from "./preview-service-registry.js";
-import { PreviewTargetResolver, type DockerRunner } from "./preview-target-resolver.js";
+import {
+  PreviewTargetResolver,
+  isAlwaysReservedPort,
+  type DockerRunner,
+} from "./preview-target-resolver.js";
 import {
   DEFAULT_PREVIEW_SETTINGS,
   type PreviewServicesStorage,
@@ -65,6 +69,9 @@ export interface PreviewRuntimeOptions {
   /** Test seam replacing the `lsof`/`ps` listener check. */
   listenerOwnership?: ConstructorParameters<typeof PreviewTargetResolver>[0]["listenerOwnership"];
 }
+
+/** Answer for a legacy loopback-route port: see `PreviewRuntime.legacyLoopbackPortAccess`. */
+export type LegacyLoopbackPortAccess = "allowed" | "reserved" | "unknown";
 
 const defaultDockerRunner: DockerRunner = (args, { timeoutMs }) =>
   runCommand("docker", args, { timeoutMs });
@@ -215,6 +222,21 @@ export class PreviewRuntime {
       for (const port of localAgentPorts(environment)) ports.add(port);
     }
     return ports;
+  }
+
+  /**
+   * Whether the legacy `/__orkestrator/browser/loopback/<port>/` route may open
+   * this backend-host port. Only the verified binding of an enabled service
+   * qualifies, so the route can no longer reach a bridge, the gateway or an
+   * unrelated host-only service (security report M2). The request names no
+   * environment, so a port is admitted for whichever environment owns it.
+   */
+  async legacyLoopbackPortAccess(port: number): Promise<LegacyLoopbackPortAccess> {
+    if (isAlwaysReservedPort(port)) return "reserved";
+    if (this.registry.hostLoopbackTargetOwner(port) === null) return "unknown";
+    // A stopped environment's agent ports stay reserved while free, so a
+    // container could publish one; the reserved set wins over a binding.
+    return (await this.reservedPorts()).has(port) ? "reserved" : "allowed";
   }
 
   private envFlag(name: string): boolean | undefined {

@@ -752,6 +752,17 @@ export class BrowserPreviewManager {
     return [...this.previews.values()].some((preview) => preview.view.webContents.id === id);
   }
 
+  /**
+   * The URL the app last asked this view to load, kept current only by
+   * in-scope navigation. Gateway auth for the view is scoped to its namespace.
+   */
+  requestedUrlForWebContents(id: number): string | undefined {
+    for (const preview of this.previews.values()) {
+      if (preview.view.webContents.id === id) return preview.requestedUrl;
+    }
+    return undefined;
+  }
+
   webContentsIdForTab(tabId: string): number | undefined {
     return this.previews.get(tabId)?.view.webContents.id;
   }

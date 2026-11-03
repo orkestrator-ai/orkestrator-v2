@@ -147,6 +147,14 @@ export interface OrkestratorGatewayOptions {
   browserPreviewHeadersTimeoutMs?: number;
   /** Backend preview services; enables the desktop preview tunnel. */
   previews?: import("./core/preview-runtime.js").PreviewRuntime;
+  /**
+   * Which backend-host ports the legacy `browser/loopback/<port>/` route may
+   * open. Defaults to `previews.legacyLoopbackPortAccess`; with neither, the
+   * route refuses every port.
+   */
+  legacyPreviewPortAccess?: (
+    port: number,
+  ) => Promise<import("./core/preview-runtime.js").LegacyLoopbackPortAccess>;
   eventReplay?: {
     frameCapacity?: number;
     maxBytes?: number;

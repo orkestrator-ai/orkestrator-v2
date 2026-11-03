@@ -206,6 +206,86 @@ describe("gateway preview integration", () => {
     );
   });
 
+  test("legacy preview: only a verified service target is reachable (M2)", async () => {
+    const other = await startPreviewFixture({ marker: "unregistered" });
+    try {
+      await harness.runtime.registry.settle();
+      const { info } = await startGateway({ previews: harness.runtime });
+      const headers = { authorization: `Bearer ${info.token}` };
+
+      const known = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers },
+      );
+      expect(known.status).toBe(200);
+
+      // A listening port no environment registered as a service.
+      const unknown = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${other.port}/health`,
+        { headers },
+      );
+      expect(unknown.status).toBe(403);
+      expect(unknown.json()).toEqual({
+        error: `Port ${other.port} is not an available preview service of any environment. Add it as a service to preview it.`,
+      });
+      expect(other.requests).toHaveLength(0);
+
+      // A disabled service no longer opens its port.
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      const disabled = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers },
+      );
+      expect(disabled.status).toBe(403);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test("legacy preview: reserved ports are refused even when a service is bound there (M2)", async () => {
+    await harness.runtime.registry.settle();
+    const { info } = await startGateway({ previews: harness.runtime });
+    const headers = { authorization: `Bearer ${info.token}` };
+    const requestsBefore = fixture.requests.length;
+
+    harness.runtime.reservePorts("m2-test", [fixture.port]);
+    const reserved = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers },
+    );
+    expect(reserved.status).toBe(403);
+    expect(reserved.json()).toEqual({
+      error: `Port ${fixture.port} belongs to Orkestrator or Docker and cannot be previewed.`,
+    });
+    expect(fixture.requests.length).toBe(requestsBefore);
+
+    // The Docker daemon ports are refused without any registry lookup.
+    const docker = await requestUrl(`${info.url}__orkestrator/browser/loopback/2375/`, {
+      headers,
+    });
+    expect(docker.status).toBe(403);
+
+    // The gateway's own port: nothing ever registers it as a service.
+    const self = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${new URL(info.url).port}/__orkestrator/status`,
+      { headers },
+    );
+    expect(self.status).toBe(403);
+  });
+
+  test("legacy preview: a gateway without a preview registry refuses every port (M2)", async () => {
+    const { info } = await startGateway({ legacyPreviewPortAccess: undefined });
+    const response = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(response.status).toBe(403);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
   test("rollback drill: stop issuance, revoke, preserve services, re-enable and reconnect", async () => {
     // Driven by stored settings only: an environment override would pin the switch.
     const runtime = harness.newRuntime({ env: {} });

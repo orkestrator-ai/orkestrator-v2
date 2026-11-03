@@ -280,6 +280,7 @@ describe("browser preview startup wiring", () => {
       {
         url: "https://desk.example/__orkestrator/browser/loopback/3000/",
         resourceType: "mainFrame",
+        webContentsId: previewContents.id,
         requestHeaders: {},
       },
       previewRequestResult,
@@ -290,6 +291,19 @@ describe("browser preview startup wiring", () => {
         Origin: "https://orkestrator.dev",
       },
     });
+
+    // The view was opened on port 3000; another port gets no credential (M2).
+    const otherPortResult = mock(() => undefined);
+    beforeHeaders?.(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/4000/",
+        resourceType: "mainFrame",
+        webContentsId: previewContents.id,
+        requestHeaders: { Authorization: "Bearer ambient" },
+      },
+      otherPortResult,
+    );
+    expect(otherPortResult).toHaveBeenCalledWith({ requestHeaders: {} });
 
     const privilegedRequestResult = mock(() => undefined);
     beforeHeaders?.(
@@ -312,6 +326,7 @@ describe("browser preview startup wiring", () => {
       {
         url: "https://desk.example/__orkestrator/browser/loopback/3000/",
         resourceType: "mainFrame",
+        webContentsId: previewContents.id,
         responseHeaders: {
           "Access-Control-Allow-Origin": ["https://desk.example"],
         },

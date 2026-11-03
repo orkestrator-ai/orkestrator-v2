@@ -129,6 +129,8 @@ export function initializeBrowserPreviews({
   });
   installRemoteGatewayRequestAuth(browserSession.webRequest, getAuthorization, {
     browserPreviewOnly: true,
+    previewViewUrl: (webContentsId) =>
+      webContentsId === undefined ? undefined : manager.requestedUrlForWebContents(webContentsId),
   });
   return { manager, browserSession };
 }

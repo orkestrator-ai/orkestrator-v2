@@ -412,6 +412,22 @@ export class PreviewServiceRegistry {
       .map((definition) => ({ ...definition }));
   }
 
+  /**
+   * The environment owning an enabled service whose verified binding is this
+   * backend-host loopback port, or null. Only a binding the resolver verified
+   * counts (a published port of the environment's own container, or a
+   * loopback listener it accepted); relay targets have no host port.
+   */
+  hostLoopbackTargetOwner(port: number): string | null {
+    for (const [serviceId, entry] of this.runtime) {
+      const target = entry.target;
+      if (!target || target.transportKind === "container-relay" || target.port !== port) continue;
+      const definition = this.definitions.get(serviceId);
+      if (definition?.enabled) return definition.environmentId;
+    }
+    return null;
+  }
+
   diagnostics() {
     let available = 0;
     let unavailable = 0;

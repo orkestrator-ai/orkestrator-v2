@@ -3,6 +3,7 @@ import type { GatewayAuth } from "./gateway-auth.js";
 import type { GatewayContext } from "./gateway-context.js";
 import type { GatewayEvents } from "./gateway-events.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
+import type { LegacyLoopbackPortAccess } from "./core/preview-runtime.js";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
@@ -425,6 +426,24 @@ export class GatewayHandlers {
     const port = Number.parseInt(rawPort, 10);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       jsonResponse(response, 400, { error: "Invalid browser preview port" });
+      return;
+    }
+    // Only a verified preview target may be opened, never a bridge, the
+    // gateway or another host-only service (security report M2).
+    let access: LegacyLoopbackPortAccess;
+    try {
+      access = await this.ctx.legacyPreviewPortAccess(port);
+    } catch {
+      jsonResponse(response, 503, { error: "Could not verify the browser preview port" });
+      return;
+    }
+    if (access !== "allowed") {
+      jsonResponse(response, 403, {
+        error:
+          access === "reserved"
+            ? `Port ${port} belongs to Orkestrator or Docker and cannot be previewed.`
+            : `Port ${port} is not an available preview service of any environment. Add it as a service to preview it.`,
+      });
       return;
     }
 

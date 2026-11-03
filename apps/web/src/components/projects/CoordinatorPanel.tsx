@@ -5,7 +5,6 @@ import {
   AlertCircle,
   CheckCircle2,
   GitBranch,
-  Hourglass,
   Loader2,
   Pause,
   Play,
@@ -20,6 +19,11 @@ import {
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
+import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
+import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   COORDINATOR_COMPOSER_PLACEHOLDER,
   COORDINATOR_STARTER_PROMPTS,
@@ -69,8 +73,6 @@ import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { unusedCoordinatorConversationIds } from "@/lib/coordinator-unused-conversations";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useStore } from "zustand";
-import { portalStore } from "@/lib/portal/portal-store";
 import { useProjectStore } from "@/stores/projectStore";
 import {
   selectCoordinatorPaneLayout,
@@ -517,79 +519,58 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     return () => store.clear(projectId, selectedTabId);
   }, [projectId, selectedAgent, selectedId, selectedProviderSessionId, selectedTabId, workspaceId]);
   const environments = useEnvironmentStore((state) => state.environments);
-  // Workers on other nodes are named from the command node's summaries.
-  const nodes = useStore(portalStore.store, (state) => state.nodes);
+  const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const multiReviews = useMultiReviewStore((state) => state.workflows);
   /*
-   * Workers this coordinator is still owed an answer by.
-   *
-   * Derived from the snapshot's durable associations rather than anything this
-   * component observed, so it is correct on a fresh mount, after a reload, and
-   * after the page was closed for an hour — the coordinator keeps waiting while
-   * nobody is looking at it.
-   *
-   * Associations are project-wide, so the selected conversation identity is a
-   * load-bearing filter rather than presentation state.
-   *
-   * `needsPerson` is the delegation's waiting episode, which status wakes
-   * record from the worker tab's own turn activity (never the environment
-   * aggregate) and announce as a coordinator change when it starts or ends.
-   */
-  const awaitingWorkers = useMemo(() => {
-    if (!snapshot || !selected) return [];
-    return snapshot.workflows.flatMap((association) => {
-      if (
-        association.coordinatorId !== snapshot.workspace.id ||
-        association.conversationId !== selected.id ||
-        association.delegation?.state !== "running"
-      )
-        return [];
-      if (association.nodeId) {
-        const node = nodes.find((item) => item.nodeId === association.nodeId);
-        const remote = node?.environments.find(
-          (item) => item.ref.environmentId === association.resourceId,
-        );
-        return [
-          {
-            id: association.id,
-            environmentId: association.resourceId,
-            label: `${remote?.name ?? association.resourceId} on ${node?.view.displayName ?? association.nodeId}`,
-            needsPerson: Boolean(association.delegation.waiting),
-          },
-        ];
-      }
-      const environment = environments.find((item) => item.id === association.resourceId);
-      return [
-        {
-          id: association.id,
-          environmentId: association.resourceId,
-          label: environment?.name ?? association.resourceId,
-          needsPerson: Boolean(association.delegation.waiting),
-        },
-      ];
-    });
-  }, [snapshot, selected, environments, nodes]);
-  const workersNeedingPerson = awaitingWorkers.filter((worker) => worker.needsPerson).length;
-  /*
-   * Commands in this coordinator's workers that are waiting on the user — a
-   * sign-in link, a code, a password — shown here so the person talking to
-   * the coordinator sees them without opening the worker.
+   * Commands waiting on the user in this coordinator's work — a question, an
+   * approval, a sign-in link, a code — in its workers and in the environments
+   * its builds and reviews run in. Read once: the Work panel marks those rows
+   * as needing the user, and the banner shows the workers' own prompts so the
+   * person talking to the coordinator sees them without opening the worker.
    */
   const workerEnvironmentIds = useMemo(
     () =>
-      snapshot
-        ? snapshot.workflows
-            .filter(
-              (association) =>
-                association.kind === "environment" &&
-                association.coordinatorId === snapshot.workspace.id &&
-                !association.nodeId &&
-                !association.pending,
-            )
-            .map((association) => association.resourceId)
-        : [],
+      new Set(
+        snapshot
+          ? snapshot.workflows
+              .filter(
+                (association) =>
+                  association.kind === "environment" &&
+                  association.coordinatorId === snapshot.workspace.id &&
+                  !association.nodeId &&
+                  !association.pending,
+              )
+              .map((association) => association.resourceId)
+          : [],
+      ),
     [snapshot],
   );
-  const workerPrompts = useHumanPrompts(workerEnvironmentIds);
+  const workEnvironmentIds = useMemo(() => {
+    if (!snapshot) return [];
+    const ids = new Set(workerEnvironmentIds);
+    for (const association of snapshot.workflows) {
+      if (association.coordinatorId !== snapshot.workspace.id || association.nodeId) continue;
+      const environmentId =
+        association.kind === "build-pipeline"
+          ? pipelines.get(association.resourceId)?.environmentId
+          : association.kind === "multi-review"
+            ? multiReviews.get(association.resourceId)?.environmentId
+            : undefined;
+      if (environmentId) ids.add(environmentId);
+    }
+    return Array.from(ids);
+  }, [snapshot, workerEnvironmentIds, pipelines, multiReviews]);
+  const workPrompts = useHumanPrompts(workEnvironmentIds);
+  const workerPrompts = useMemo(
+    () => workPrompts.filter((entry) => workerEnvironmentIds.has(entry.environmentId)),
+    [workPrompts, workerEnvironmentIds],
+  );
+  const promptEnvironmentIds = useMemo(
+    () => new Set(workPrompts.map((entry) => entry.environmentId)),
+    [workPrompts],
+  );
+  // Everything this coordinator started, from every conversation and node.
+  const work = useCoordinatorWorkItems(snapshot, promptEnvironmentIds);
   const selectedSessionKey =
     snapshot && selected
       ? createSessionKey(coordinatorRuntimeId(snapshot.workspace.id, selected.id), selected.tabId)
@@ -899,30 +880,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             contextRevision={snapshot.workspace.repositoryContextRevision}
             advisoryPlatform={advisoryPlatform}
           />
-          {awaitingWorkers.length > 0 ? (
-            <span
-              className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
-              data-awaiting-workers={awaitingWorkers.length}
-              data-workers-need-person={workersNeedingPerson || undefined}
-              title={`Coordinator is idle. It will be woken once each of these workers finishes.\n${awaitingWorkers
-                .map((worker) =>
-                  worker.needsPerson
-                    ? `${worker.label}: waiting for you (an approval or a question in its tab)`
-                    : worker.label,
-                )
-                .join("\n")}`}
-            >
-              <Hourglass className="size-3" />
-              Waiting on {awaitingWorkers.length}{" "}
-              {awaitingWorkers.length === 1 ? "worker" : "workers"}
-              {workersNeedingPerson > 0 ? (
-                <span className="flex items-center gap-1 text-amber-300">
-                  <AlertCircle className="size-3" aria-hidden="true" />
-                  {workersNeedingPerson} {workersNeedingPerson === 1 ? "needs" : "need"} you
-                </span>
-              ) : null}
-            </span>
-          ) : null}
           <div className="min-w-3 flex-1" />
           <Select
             value={git?.branch ? `refs/heads/${git.branch}` : undefined}
@@ -1084,98 +1041,110 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         }
       />
 
-      <div className="relative min-h-0 flex-1">
-        {layout ? (
-          <CoordinatorPaneTree
-            layout={layout}
-            onLayoutChange={changeLayout}
-            onFocusPane={(paneId) =>
-              changeLayout((current) => focusCoordinatorPane(current, paneId))
-            }
-            conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
-            renderTab={(id, pane, paneFocused) => {
-              const item = conversationById.get(id);
-              if (!item) return null;
-              return (
-                <SortableCoordinatorTab
-                  key={id}
-                  conversationId={id}
-                  paneId={pane.id}
-                  isActive={pane.activeConversationId === id}
-                  isFocused={paneFocused}
-                  onClick={(event) => {
-                    // Selecting is the whole action; the pane's own focus
-                    // handler would only repeat it with the previous tab.
-                    event.stopPropagation();
-                    updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
-                    selectConversation(id);
-                  }}
-                  closeLabel={
-                    item.role === "main"
-                      ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
-                      : `Close ${item.title}`
-                  }
-                  onClose={() => {
-                    if (item.role === "main") {
-                      setPendingMainClose({ id: item.id, title: item.title });
-                      return;
+      <div className="relative flex min-h-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1">
+          {layout ? (
+            <CoordinatorPaneTree
+              layout={layout}
+              onLayoutChange={changeLayout}
+              onFocusPane={(paneId) =>
+                changeLayout((current) => focusCoordinatorPane(current, paneId))
+              }
+              conversationLabel={(id) => conversationById.get(id)?.title ?? "Conversation"}
+              renderTab={(id, pane, paneFocused) => {
+                const item = conversationById.get(id);
+                if (!item) return null;
+                return (
+                  <SortableCoordinatorTab
+                    key={id}
+                    conversationId={id}
+                    paneId={pane.id}
+                    isActive={pane.activeConversationId === id}
+                    isFocused={paneFocused}
+                    onClick={(event) => {
+                      // Selecting is the whole action; the pane's own focus
+                      // handler would only repeat it with the previous tab.
+                      event.stopPropagation();
+                      updateLayout((current) => focusCoordinatorPane(current, pane.id, id));
+                      selectConversation(id);
+                    }}
+                    closeLabel={
+                      item.role === "main"
+                        ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
+                        : `Close ${item.title}`
                     }
-                    closeConversation(item.id);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="flex max-w-44 items-center gap-1.5"
-                    // The badge is part of what identifies the tab, so it belongs in
-                    // the accessible name rather than being read as loose text after it.
-                    aria-label={
-                      item.agent
-                        ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
-                        : `${item.title}, no agent chosen yet`
-                    }
+                    onClose={() => {
+                      if (item.role === "main") {
+                        setPendingMainClose({ id: item.id, title: item.title });
+                        return;
+                      }
+                      closeConversation(item.id);
+                    }}
                   >
-                    {/* Which agent a conversation belongs to is fixed at its first
+                    <button
+                      type="button"
+                      className="flex max-w-44 items-center gap-1.5"
+                      // The badge is part of what identifies the tab, so it belongs in
+                      // the accessible name rather than being read as loose text after it.
+                      aria-label={
+                        item.agent
+                          ? `${item.title}, ${AGENT_PLATFORM_LABELS[item.agent]}`
+                          : `${item.title}, no agent chosen yet`
+                      }
+                    >
+                      {/* Which agent a conversation belongs to is fixed at its first
                         prompt and cannot be changed afterwards, so the tab strip is
                         where that has to be legible: the brand mark once assigned,
                         and an explicit prompt while it is not. */}
-                    {item.agent ? (
-                      <AgentPlatformIcon platform={item.agent} accent className={TAB_ICON_CLASS} />
-                    ) : (
-                      <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
-                    )}
-                    <span className="truncate">{item.title}</span>
-                    {item.agent ? null : (
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        Choose agent
-                      </span>
-                    )}
-                  </button>
-                </SortableCoordinatorTab>
-              );
-            }}
-            renderStripActions={(pane) => (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="ml-1 shrink-0"
-                disabled={operation !== null}
-                onClick={(event) => {
-                  // The new conversation joins the focused group, so focus
-                  // this one without selecting the tab it is about to replace.
-                  event.stopPropagation();
-                  updateLayout((current) => focusCoordinatorPane(current, pane.id));
-                  createConversation();
-                }}
-              >
-                <Plus className="size-3.5" />
-                {newConversationLabel}
-              </Button>
-            )}
-            renderContent={(pane, paneFocused) =>
-              renderConversation(pane.activeConversationId, paneFocused)
-            }
-          />
-        ) : null}
+                      {item.agent ? (
+                        <AgentPlatformIcon
+                          platform={item.agent}
+                          accent
+                          className={TAB_ICON_CLASS}
+                        />
+                      ) : (
+                        <MessagesSquare className={cn(TAB_ICON_CLASS, "text-muted-foreground")} />
+                      )}
+                      <span className="truncate">{item.title}</span>
+                      {item.agent ? null : (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          Choose agent
+                        </span>
+                      )}
+                    </button>
+                  </SortableCoordinatorTab>
+                );
+              }}
+              renderStripActions={(pane) => (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-1 shrink-0"
+                  disabled={operation !== null}
+                  onClick={(event) => {
+                    // The new conversation joins the focused group, so focus
+                    // this one without selecting the tab it is about to replace.
+                    event.stopPropagation();
+                    updateLayout((current) => focusCoordinatorPane(current, pane.id));
+                    createConversation();
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                  {newConversationLabel}
+                </Button>
+              )}
+              renderContent={(pane, paneFocused) =>
+                renderConversation(pane.activeConversationId, paneFocused)
+              }
+            />
+          ) : null}
+        </div>
+        <CoordinatorWorkPanel
+          items={work.items}
+          counts={work.counts}
+          openDelegations={work.openDelegations}
+          onOpen={(target) => openCoordinatorWorkTarget(target)}
+        />
       </div>
       <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
         Code changes, commands, builds and fixes run in build pipelines or prompt environments.

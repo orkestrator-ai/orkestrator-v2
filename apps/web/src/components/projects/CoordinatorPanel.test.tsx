@@ -1,6 +1,6 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
@@ -1849,7 +1849,7 @@ describe("CoordinatorPanel", () => {
     expectNoContextNotice();
   });
 
-  test("shows waiting workers only for the selected conversation", async () => {
+  test("lists the work of every conversation in the Work panel, with no waiting chip", async () => {
     const secondConversation = {
       ...snapshot.workspace.conversations[0]!,
       id: "conversation-2",
@@ -1857,6 +1857,21 @@ describe("CoordinatorPanel", () => {
       logicalSessionKey: "coordinator-coordinator-1:conversation-2",
       title: "Second",
     };
+    const delegation = (id: string, conversationId: string, resourceId: string) => ({
+      id,
+      coordinatorId: "coordinator-1",
+      projectId: "project-1",
+      conversationId,
+      kind: "environment" as const,
+      resourceId,
+      requestId: id,
+      createdAt: new Date().toISOString(),
+      delegation: {
+        requestedAt: new Date().toISOString(),
+        workerTabId: `${id}-tab`,
+        state: "running" as const,
+      },
+    });
     ensuredSnapshot = {
       ...snapshot,
       workspace: {
@@ -1865,47 +1880,28 @@ describe("CoordinatorPanel", () => {
         selectedConversationId: "conversation-1",
       },
       workflows: [
-        {
-          id: "first-worker",
-          coordinatorId: "coordinator-1",
-          projectId: "project-1",
-          conversationId: "conversation-1",
-          kind: "environment",
-          resourceId: "worker-for-first",
-          requestId: "first",
-          createdAt: new Date(0).toISOString(),
-          delegation: {
-            requestedAt: new Date(0).toISOString(),
-            workerTabId: "agent-1",
-            state: "running",
-          },
-        },
-        {
-          id: "second-worker",
-          coordinatorId: "coordinator-1",
-          projectId: "project-1",
-          conversationId: "conversation-2",
-          kind: "environment",
-          resourceId: "worker-for-second",
-          requestId: "second",
-          createdAt: new Date(0).toISOString(),
-          delegation: {
-            requestedAt: new Date(0).toISOString(),
-            workerTabId: "agent-2",
-            state: "running",
-          },
-        },
+        delegation("first", "conversation-1", "worker-for-first"),
+        delegation("second", "conversation-2", "worker-for-second"),
+        // Another coordinator's worker is not this panel's.
+        { ...delegation("other", "conversation-1", "worker-for-other"), coordinatorId: "other" },
       ],
     };
 
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    const badge = screen.getByText(/Waiting on 1 worker/);
-    expect(badge.getAttribute("title")).toContain("worker-for-first");
-    expect(badge.getAttribute("title")).not.toContain("worker-for-second");
+    expect(screen.queryByText(/Waiting on/)).toBeNull();
+    expect(document.querySelector("[data-awaiting-workers]")).toBeNull();
+    // The test window is narrow, so the panel starts as its strip.
+    const strip = screen.getByRole("button", { name: "Show work: 2 running, 0 need you" });
+    fireEvent.click(strip);
+    const panel = screen.getByRole("complementary", { name: "Work" });
+    expect(panel.getAttribute("data-open-delegations")).toBe("2");
+    expect(within(panel).getByText("Worker worker-for-first")).toBeTruthy();
+    expect(within(panel).getByText("Worker worker-for-second")).toBeTruthy();
+    expect(within(panel).queryByText("Worker worker-for-other")).toBeNull();
   });
 
-  test("marks a delegated worker waiting on a person once its episode is announced", async () => {
+  test("moves a worker to Needs you when its waiting episode is announced, without a coordinator turn", async () => {
     const delegation = (id: string, resourceId: string) => ({
       id,
       coordinatorId: "coordinator-1",
@@ -1914,9 +1910,9 @@ describe("CoordinatorPanel", () => {
       kind: "environment" as const,
       resourceId,
       requestId: id,
-      createdAt: new Date(0).toISOString(),
+      createdAt: new Date().toISOString(),
       delegation: {
-        requestedAt: new Date(0).toISOString(),
+        requestedAt: new Date().toISOString(),
         workerTabId: "startup-agent",
         state: "running" as const,
       },
@@ -1927,9 +1923,11 @@ describe("CoordinatorPanel", () => {
 
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    const badge = () => screen.getByText(/Waiting on 2 workers/);
-    expect(badge().textContent).not.toContain("needs you");
-    expect(badge().getAttribute("data-workers-need-person")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show work: 2 running, 0 need you" }));
+    const panel = screen.getByRole("complementary", { name: "Work" });
+    const row = (resourceId: string) =>
+      panel.querySelector(`[data-work-key="worker::${resourceId}"]`);
+    expect(row("worker-blocked")?.getAttribute("data-work-bucket")).toBe("running");
 
     ensuredSnapshot = {
       ...snapshot,
@@ -1937,7 +1935,7 @@ describe("CoordinatorPanel", () => {
         quiet,
         {
           ...blocked,
-          delegation: { ...blocked.delegation, waiting: { since: new Date(0).toISOString() } },
+          delegation: { ...blocked.delegation, waiting: { since: new Date().toISOString() } },
         },
       ],
     };
@@ -1949,13 +1947,17 @@ describe("CoordinatorPanel", () => {
         revision: 2,
       });
     });
-    await waitFor(() => expect(badge().textContent).toContain("1 needs you"));
-    expect(badge().getAttribute("data-workers-need-person")).toBe("1");
-    const title = badge().getAttribute("title") ?? "";
-    expect(title).toContain(
-      "worker-blocked: waiting for you (an approval or a question in its tab)",
+    await waitFor(() =>
+      expect(row("worker-blocked")?.getAttribute("data-work-bucket")).toBe("needs-you"),
     );
-    expect(title).not.toContain("worker-quiet: waiting for you");
+    expect(row("worker-blocked")?.textContent).toContain("Worker · waiting for you");
+    expect(row("worker-quiet")?.getAttribute("data-work-bucket")).toBe("running");
+    expect(within(panel).getByText("1 running, 1 needs you")).toBeTruthy();
+    // Needs you is listed before running work.
+    const order = Array.from(panel.querySelectorAll("[data-work-key]")).map((item) =>
+      item.getAttribute("data-work-key"),
+    );
+    expect(order).toEqual(["worker::worker-blocked", "worker::worker-quiet"]);
   });
 
   test("shows a side agent split into its own tab group beside the main coordinator", async () => {

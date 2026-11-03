@@ -71,6 +71,8 @@ export interface AgentNativeTabProps {
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   unassignedPlaceholder?: string;
   emptyPlatformsMessage?: string;
+  /** Example requests the unassigned composer offers while it is empty. */
+  unassignedStarterPrompts?: readonly string[];
   /** Open the shared resume dialog as soon as the controller mounts. */
   initialResumeOpen?: boolean;
 }

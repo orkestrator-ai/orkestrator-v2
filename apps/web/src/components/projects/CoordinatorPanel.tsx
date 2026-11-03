@@ -8,7 +8,6 @@ import {
   GitBranch,
   Hourglass,
   Loader2,
-  LockKeyhole,
   Pause,
   Play,
   Plus,
@@ -22,6 +21,13 @@ import {
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
+import {
+  COORDINATOR_COMPOSER_PLACEHOLDER,
+  COORDINATOR_STARTER_PROMPTS,
+  CoordinatorBanner,
+  CoordinatorErrorDetails,
+  CoordinatorIsolationBadge,
+} from "./CoordinatorPanelNotices";
 import {
   AGENT_PLATFORM_LABELS,
   AGENT_PLATFORMS,
@@ -118,6 +124,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     null,
   );
   const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
+  // Closing the main conversation is confirmed; side agents close at once.
+  const [pendingMainClose, setPendingMainClose] = useState<{ id: string; title: string } | null>(
+    null,
+  );
   // Asked before a message to the main coordinator when its checkout can merge
   // upstream commits it has not merged: it would otherwise read older code.
   const [upstreamMerge, setUpstreamMerge] = useState<{
@@ -846,54 +856,33 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     const providerState = conversation.agent
       ? snapshot.providerAvailability[conversation.agent]
       : undefined;
-    if (conversation.agent && !providerState?.available) {
-      return (
-        <div className="grid h-full place-items-center p-8 text-center">
-          <div className="max-w-lg">
-            <AlertCircle className="mx-auto mb-3 size-7 text-amber-300" />
-            <h2 className="font-semibold">
-              {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {providerState?.reason ?? snapshot.workspace.lastStartupError}
-            </p>
-          </div>
-        </div>
-      );
-    }
-    if (snapshot.workspace.lifecycleState === "error") {
-      return (
-        <div className="grid h-full place-items-center p-8 text-center">
-          <div className="max-w-lg">
-            <AlertCircle className="mx-auto mb-3 size-7 text-destructive" />
-            <h2 className="font-semibold">Coordinator startup failed</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
-            </p>
-            <Button className="mt-4" variant="outline" onClick={() => void load()}>
-              <RotateCcw className="size-4" />
-              Retry
-            </Button>
-          </div>
-        </div>
-      );
-    }
-    if (snapshot.workspace.lifecycleState === "paused") {
-      return (
-        <div className="grid h-full place-items-center text-center">
-          <div>
-            <Pause className="mx-auto mb-3 size-7 text-muted-foreground" />
-            <p>Coordination is paused. Messages and new turns will wait.</p>
-          </div>
-        </div>
-      );
-    }
+    // A banner over the transcript rather than a replacement for it: the
+    // conversation stays readable while its platform is unavailable.
+    const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
     // Scoped to the conversation that produced it, so another group cannot
     // replay one conversation's first prompt into its own.
     const launch = pendingLaunch?.conversationId === conversation.id ? pendingLaunch : null;
     const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     return (
       <div key={conversation.id} className="flex h-full min-h-0 flex-col">
+        {providerUnavailable && conversation.agent ? (
+          <CoordinatorBanner
+            tone="warning"
+            action={
+              <Button size="sm" variant="outline" onClick={() => void load()}>
+                <RotateCcw className="size-3.5" />
+                Retry
+              </Button>
+            }
+          >
+            <span className="font-medium">
+              {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
+            </span>{" "}
+            <span className="text-muted-foreground">
+              {providerState?.reason ?? snapshot.workspace.lastStartupError}
+            </span>
+          </CoordinatorBanner>
+        ) : null}
         <AgentMailBanner
           environmentId={environmentId}
           tabId={conversation.tabId}
@@ -915,7 +904,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             coordinatorWorkspacePath={snapshot.projectPath}
             availablePlatforms={availablePlatforms}
             platformNotes={platformNotes}
-            unassignedPlaceholder="Ask the coordinator to inspect or plan…"
+            unassignedPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
+            // Only the main coordinator delegates, so only it is offered work
+            // that has to run in a pipeline or environment.
+            {...(conversation.role === "main"
+              ? { unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS }
+              : {})}
             emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
             onAssignPlatform={
               conversation.agent
@@ -944,6 +938,40 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;
   const syncDisabled = branchSwitchDisabled || dirty;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
+  const paused = snapshot.workspace.lifecycleState === "paused";
+  const setPaused = (pause: boolean) => {
+    setOperation("conversation");
+    setError(null);
+    const action = pause ? backend.pauseProjectCoordinator : backend.resumeProjectCoordinator;
+    void action(projectId)
+      .then(setSnapshot)
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : "Could not update Coordinator"),
+      )
+      .finally(() => setOperation(null));
+  };
+  const closeConversation = (conversationId: string) => {
+    setOperation("conversation");
+    void backend
+      .closeCoordinatorConversation(projectId, conversationId)
+      .then(setSnapshot)
+      .catch((cause) =>
+        setError(cause instanceof Error ? cause.message : "Could not close conversation"),
+      )
+      .finally(() => setOperation(null));
+  };
+  // The badge speaks for the conversation in front: its platform's read-only
+  // boundary is either enforced or only something the agent is asked to keep.
+  const selectedQualification = selected?.agent
+    ? snapshot.providerAvailability[selected.agent]
+    : undefined;
+  const advisoryPlatform =
+    selected?.agent && selectedQualification && selectedQualification.tier !== "enforced"
+      ? AGENT_PLATFORM_LABELS[selected.agent]
+      : null;
+  const gitError = git?.lastError ? git.lastError.stderr || git.lastError.message : null;
+  // An action failure that only repeats the repository's own error is shown once.
+  const coordinatorError = error && error !== gitError ? error : null;
 
   return (
     <div
@@ -954,22 +982,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     >
       <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
-            <LockKeyhole className="size-3.5" />
-            Read-only coordinator
-          </span>
-          <code
-            className="max-w-[28rem] truncate text-xs text-muted-foreground"
-            title={snapshot.projectPath}
-          >
-            {snapshot.projectPath}
-          </code>
-          <span
-            className="rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
-            title="Branch or HEAD changes increment this context. Earlier analysis may describe an older revision."
-          >
-            Context r{snapshot.workspace.repositoryContextRevision}
-          </span>
+          <CoordinatorIsolationBadge
+            projectPath={snapshot.projectPath}
+            contextRevision={snapshot.workspace.repositoryContextRevision}
+            advisoryPlatform={advisoryPlatform}
+          />
           {awaitingWorkers.length > 0 ? (
             <span
               className="flex items-center gap-1.5 rounded bg-elevated px-1.5 py-1 text-[11px] text-muted-foreground"
@@ -1107,32 +1124,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           >
             <RefreshCw className={cn("size-4", operation === "fetch" && "animate-spin")} />
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={operation !== null}
-            onClick={() => {
-              setOperation("conversation");
-              setError(null);
-              const action =
-                snapshot.workspace.lifecycleState === "paused"
-                  ? backend.resumeProjectCoordinator
-                  : backend.pauseProjectCoordinator;
-              void action(projectId)
-                .then(setSnapshot)
-                .catch((cause) =>
-                  setError(cause instanceof Error ? cause.message : "Could not update Coordinator"),
-                )
-                .finally(() => setOperation(null));
-            }}
-          >
-            {snapshot.workspace.lifecycleState === "paused" ? (
-              <Play className="size-3.5" />
-            ) : (
+          {/* While paused, the banner below the header offers Resume. */}
+          {paused ? null : (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={operation !== null}
+              onClick={() => setPaused(true)}
+            >
               <Pause className="size-3.5" />
-            )}
-            {snapshot.workspace.lifecycleState === "paused" ? "Resume" : "Pause"}
-          </Button>
+              Pause
+            </Button>
+          )}
         </div>
         {dirty ? (
           <p className="mt-1 text-xs text-amber-300">
@@ -1147,13 +1150,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             {preferenceError}
           </p>
         ) : null}
-        {git?.lastError || error ? (
-          <details className="mt-1 text-xs text-red-300">
-            <summary className="cursor-pointer">Repository or coordinator error</summary>
-            <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap">
-              {git?.lastError?.stderr ?? git?.lastError?.message ?? error}
-            </pre>
-          </details>
+        {gitError ? <CoordinatorErrorDetails label="Repository error" message={gitError} /> : null}
+        {coordinatorError ? (
+          <CoordinatorErrorDetails label="Coordinator error" message={coordinatorError} />
         ) : null}
         {!snapshot.controlMcp.enabled || !snapshot.controlMcp.running ? (
           <p className="mt-1 text-xs text-amber-300">
@@ -1163,6 +1162,42 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </p>
         ) : null}
       </div>
+
+      {snapshot.workspace.lifecycleState === "error" ? (
+        <CoordinatorBanner
+          tone="error"
+          action={
+            <Button size="sm" variant="outline" onClick={() => void load()}>
+              <RotateCcw className="size-3.5" />
+              Retry
+            </Button>
+          }
+        >
+          <span className="font-medium">Coordinator startup failed.</span>{" "}
+          <span className="text-red-200/80">
+            {snapshot.workspace.lastStartupError ?? "The coordinator could not be started."}
+          </span>
+        </CoordinatorBanner>
+      ) : null}
+      {paused ? (
+        <CoordinatorBanner
+          tone="info"
+          icon={<Pause className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={operation !== null}
+              onClick={() => setPaused(false)}
+            >
+              <Play className="size-3.5" />
+              Resume
+            </Button>
+          }
+        >
+          Coordination is paused. Messages will wait until you resume.
+        </CoordinatorBanner>
+      ) : null}
 
       <HumanPromptBanner
         prompts={workerPrompts}
@@ -1203,16 +1238,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       : `Close ${item.title}`
                   }
                   onClose={() => {
-                    setOperation("conversation");
-                    void backend
-                      .closeCoordinatorConversation(projectId, item.id)
-                      .then(setSnapshot)
-                      .catch((cause) =>
-                        setError(
-                          cause instanceof Error ? cause.message : "Could not close conversation",
-                        ),
-                      )
-                      .finally(() => setOperation(null));
+                    if (item.role === "main") {
+                      setPendingMainClose({ id: item.id, title: item.title });
+                      return;
+                    }
+                    closeConversation(item.id);
                   }}
                 >
                   <button
@@ -1270,8 +1300,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ) : null}
       </div>
       <div className="shrink-0 border-t border-border/60 px-3 py-1 text-center text-[11px] text-muted-foreground">
-        Coordinator can inspect and plan against this checkout. Code changes, commands, builds, and
-        fixes run in disposable worker environments.
+        The coordinator reads this checkout and never changes it. Code changes, commands, builds and
+        fixes run in build pipelines or prompt environments.
       </div>
       <AlertDialog
         open={pendingSwitch !== null}
@@ -1306,6 +1336,34 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               }}
             >
               Discard and switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={pendingMainClose !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingMainClose(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close the main conversation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingMainClose?.title ?? "The main conversation"} will close. The next message to
+              the coordinator starts a new main conversation with the default agent.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep open</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = pendingMainClose;
+                setPendingMainClose(null);
+                if (target) closeConversation(target.id);
+              }}
+            >
+              Close conversation
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

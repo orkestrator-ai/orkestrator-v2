@@ -422,6 +422,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             {...(props.emptyPlatformsMessage
               ? { emptyPlatformsMessage: props.emptyPlatformsMessage }
               : {})}
+            {...(props.unassignedStarterPrompts
+              ? { starterPrompts: props.unassignedStarterPrompts }
+              : {})}
           />
         </div>
       </div>

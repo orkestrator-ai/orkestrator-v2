@@ -63,11 +63,7 @@ import {
   canPrepareWorker,
   localWorkerPinFile,
   prepareWorkerImage,
-  publishedMatchesBuildContext,
-  readPublishedWorkerImage,
-  resolvePublishedPinFile,
   resolveWorkerBuildContext,
-  type PublishedWorkerImage,
 } from "./preview-worker-prepare.js";
 import type {
   PreviewJob,
@@ -105,8 +101,6 @@ export interface TranscriptArtifactRuntimeOptions {
   developmentOrigins?: readonly string[];
   /** Image pin file candidates (tests); defaults to `resolveImagePinFile`. */
   imagePinFile?: string | null;
-  /** Published (registry digest) pin file (tests); defaults to `resolvePublishedPinFile`. */
-  publishedPinFile?: string | null;
   /** Worker build context (tests); defaults to `resolveWorkerBuildContext`. */
   workerBuildContext?: { context: string | null; stageScript: string | null };
   /** Test seam for worker preparation's Docker commands. */
@@ -417,9 +411,6 @@ export async function createTranscriptArtifactRuntime(
   );
   const docker = env.ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER?.trim() || "docker";
   const explicitImage = env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE?.trim() || undefined;
-  const published: PublishedWorkerImage | null = readPublishedWorkerImage(
-    options.publishedPinFile === undefined ? resolvePublishedPinFile() : options.publishedPinFile,
-  );
   const buildContext = options.workerBuildContext ?? resolveWorkerBuildContext();
   const pinFile = () =>
     options.imagePinFile === undefined
@@ -435,49 +426,16 @@ export async function createTranscriptArtifactRuntime(
       AUTO_DETECT_TIMEOUT_MS,
     ).catch(() => ({ code: null, stdout: "" }));
 
-  // A published, digest-pinned worker that is present locally is preferred
-  // over the local tag when it was built from this backend's shipped or staged context
-  // (a pin left over from another context is ignored); an explicit
-  // ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins.
-  let configuredImage = explicitImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
+  // An explicit ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE wins over the local tag.
+  const configuredImage = explicitImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
   let dockerAnswered: boolean | null = null;
-  if (
-    !explicitImage &&
-    published &&
-    isolationSetting !== "process" &&
-    isolationSetting !== "disabled"
-  ) {
-    const present = await inspectImage(published.reference);
-    dockerAnswered = present.code !== null;
-    const matches = () =>
-      buildContext.context
-        ? shippedContextDigest(buildContext.context).then(
-            (digest) => digest === published.contextDigest,
-          )
-        : publishedMatchesBuildContext(published, buildContext);
-    if (present.code === 0 && (await matches())) {
-      const label = await runDocker(
-        docker,
-        [
-          "image",
-          "inspect",
-          "--format",
-          `{{index .Config.Labels "${WORKER_CONTEXT_LABEL}"}}`,
-          published.reference,
-        ],
-        AUTO_DETECT_TIMEOUT_MS,
-      ).catch(() => ({ code: null, stdout: "" }));
-      if (label.code === 0 && label.stdout.trim() === published.contextDigest)
-        configuredImage = published.reference;
-    }
-  }
 
   // The default tag names a worker prepared on this host. A packaged install
   // ships the context it should have been built from, so one prepared before
   // an upgrade (another context, or no context label) is outdated. A source
   // checkout ships no context; its build.sh pin is trusted as before.
   const shippedContext = buildContext.context;
-  const checksLocalWorker = !explicitImage && configuredImage === DEFAULT_PREVIEW_WORKER_IMAGE;
+  const checksLocalWorker = !explicitImage;
   let outdatedWorker = false;
   const resolveConfiguredImage = async () => {
     const image = await resolveWorkerImage(configuredImage, docker, pinFile());
@@ -708,15 +666,10 @@ export async function createTranscriptArtifactRuntime(
       docker,
       tag: DEFAULT_PREVIEW_WORKER_IMAGE,
       dataDir: options.dataDir,
-      published,
       buildContext,
       ...(options.prepareDocker ? { runDocker: options.prepareDocker } : {}),
     });
     const finishedAt = new Date().toISOString();
-    if (outcome.publishedSkipped)
-      options.logger?.info?.(
-        `[transcript-artifacts] published preview worker image not used (${outcome.publishedSkipped}); building locally`,
-      );
     if (!outcome.ok) {
       preparationState = {
         available: true,

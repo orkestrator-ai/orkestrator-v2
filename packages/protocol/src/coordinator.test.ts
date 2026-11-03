@@ -61,6 +61,40 @@ describe("coordinator runtime identities", () => {
         ],
       }),
     ).toBe(false);
+    // Context events record where HEAD came from and what moved it; events
+    // from older releases have neither.
+    const event = {
+      revision: 2,
+      branch: "main",
+      headCommit: "a".repeat(40),
+      occurredAt: new Date(0).toISOString(),
+    };
+    expect(
+      isCoordinatorWorkspace({
+        ...workspace,
+        repositoryContextEvents: [
+          event,
+          {
+            ...event,
+            previousBranch: null,
+            previousHeadCommit: "b".repeat(40),
+            source: "upstream",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isCoordinatorWorkspace({
+        ...workspace,
+        repositoryContextEvents: [{ ...event, source: "x" }],
+      }),
+    ).toBe(false);
+    expect(
+      isCoordinatorWorkspace({
+        ...workspace,
+        repositoryContextEvents: [{ ...event, previousHeadCommit: 1 }],
+      }),
+    ).toBe(false);
   });
 });
 

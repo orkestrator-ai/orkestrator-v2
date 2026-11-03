@@ -899,6 +899,24 @@ HEAD change, the repository-context revision increments and is supplied before
 the next turn so the agent does not assume its old analysis still describes the
 checkout.
 
+Each change is also recorded as a repository context event
+(`repositoryContextEvents`, the newest 32) with the branch and commit it moved
+from and its source: `upstream` for a fast-forward, `switch` for the branch
+picker, `external` for anything Orkestrator did not do itself. A conversation's
+first turn after the checkout moved gets a **checkout update** notice inside its
+context block (`coordinator-checkout-update.ts`), whatever started the turn (a
+typed message, mail, a timer): what moved it, the old and new commit, and up to
+20 new commits (subject lines) and 40 changed paths from
+`ProjectGitService.checkoutChanges`, with totals. It tells the coordinator its
+earlier reads may be stale and to check whether the changes bear on the
+request. "Since its previous turn" is the revision the conversation's newest
+dispatched turn carried (`repositoryContextRevisionAcknowledged`), so the
+notice is shown once, is repeated if that turn was refused, and is not shown on
+a conversation's first turn. When the starting commit is no longer known (the
+event was evicted, or written by an older release) the notice still says the
+checkout moved and where it is now. Commit subjects and paths are repository
+content, so each is kept to one line and cannot close the context block.
+
 ### Keeping the checkout on its upstream
 
 The coordinator reads the project's own checkout, so the backend keeps it on

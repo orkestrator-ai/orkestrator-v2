@@ -87,6 +87,7 @@ import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import type { StorageService } from "./storage.js";
+import type { CheckoutChanges } from "./project-git-service.js";
 import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
 import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
@@ -517,6 +518,18 @@ export interface NativeAgentServiceOptions {
    * answered from current code. Bounded, and never throws.
    */
   beforeMailInject?: (environmentId: string) => Promise<unknown>;
+  /**
+   * The commits and paths between two commits of a project's checkout
+   * (`ProjectGitService.checkoutChanges`), for the checkout-update notice a
+   * coordinator conversation gets on its first turn after the checkout moved
+   * (`coordinator-checkout-update.ts`). Without it the notice names the
+   * commits only.
+   */
+  coordinatorCheckoutChanges?: (
+    projectId: string,
+    from: string,
+    to: string,
+  ) => Promise<CheckoutChanges | null>;
   /**
    * The user `!` commands this tab's agent has not been told about yet
    * (`user-commands.ts`): a block to start the next ordinary prompt with, and

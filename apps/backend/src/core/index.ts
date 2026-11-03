@@ -1137,6 +1137,8 @@ export class OrkestratorBackend {
           context.projectGit?.waitForMergeSync(projectId) ?? Promise.resolve(),
         beforeMailInject: (environmentId) =>
           fastForwardBeforeCoordinatorMail({ storage, git: context.projectGit }, environmentId),
+        coordinatorCheckoutChanges: async (projectId, from, to) =>
+          context.projectGit?.checkoutChanges(projectId, from, to) ?? null,
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");

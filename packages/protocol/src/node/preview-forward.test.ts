@@ -159,6 +159,58 @@ describe("preview header policy", () => {
     );
   });
 
+  test("maps a same-port redirect built from the forwarded scheme", () => {
+    // Next.js builds `request.url` from X-Forwarded-Proto and its listening port.
+    expect(mapLocation("https://localhost:3000/items/7?x=1", policy)).toBe(
+      "https://s-abc.preview.test/items/7?x=1",
+    );
+    expect(mapLocation("https://127.0.0.1:3000/a", policy)).toBe("https://s-abc.preview.test/a");
+    expect(mapLocation("https://localhost:3001/other", policy)).toBe(
+      "https://localhost:3001/other",
+    );
+    // The default HTTPS port is a different port from the app's 3000.
+    expect(mapLocation("https://localhost/other", policy)).toBe("https://localhost/other");
+    const plainPort80: PreviewHeaderPolicy = {
+      privateAuthority: "localhost:80",
+      privateOrigins: ["http://localhost:80"],
+      publicOrigin: "https://s-abc.preview.test",
+    };
+    expect(mapLocation("https://localhost:80/b", plainPort80)).toBe("https://s-abc.preview.test/b");
+    expect(mapLocation("https://localhost/b", plainPort80)).toBe("https://localhost/b");
+    // A local ingress serving plain HTTP maps an HTTPS app's http:// redirect.
+    const httpIngress: PreviewHeaderPolicy = {
+      privateAuthority: "localhost:8443",
+      privateOrigins: ["https://localhost:8443"],
+      publicOrigin: "http://127.0.0.1:41000",
+    };
+    expect(mapLocation("http://localhost:8443/c", httpIngress)).toBe("http://127.0.0.1:41000/c");
+  });
+
+  test("maps forwarded-scheme IPv6 redirects without widening host or port", () => {
+    for (const [privateOrigin, forwardedOrigin, otherPort] of [
+      ["http://[::1]:3000", "https://[::1]:3000", "https://[::1]:3001"],
+      ["http://[::1]:80", "https://[::1]:80", "https://[::1]"],
+      ["https://[::1]:443", "http://[::1]:443", "http://[::1]"],
+    ] as const) {
+      const ipv6: PreviewHeaderPolicy = {
+        privateAuthority: new URL(privateOrigin).host,
+        privateOrigins: [privateOrigin],
+        publicOrigin: privateOrigin.startsWith("https:")
+          ? "http://127.0.0.1:41000"
+          : "https://s-abc.preview.test",
+      };
+      expect(mapLocation(`${forwardedOrigin}/items/7?x=1#h`, ipv6)).toBe(
+        `${ipv6.publicOrigin}/items/7?x=1#h`,
+      );
+      expect(mapLocation(`${otherPort}/other`, ipv6)).toBe(`${otherPort}/other`);
+      expect(mapLocation("https://[::2]:3000/other", ipv6)).toBe("https://[::2]:3000/other");
+      expect(
+        downstreamResponseHeaders([["Location", `${forwardedOrigin}/items/7`]], ipv6).headers
+          .location,
+      ).toBe(`${ipv6.publicOrigin}/items/7`);
+    }
+  });
+
   test("apps on default ports: private origins compare and emit canonically", () => {
     for (const [scheme, port] of [
       ["http", 80],

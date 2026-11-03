@@ -502,8 +502,11 @@ ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
 
 # Real Chromium, Firefox and WebKit against private preview origins.
 # Install the engines once: mise exec -- bunx playwright install chromium firefox webkit
-# Add the Vite variable for HMR; --project=firefox or --grep can narrow the run.
+# Add the Vite variable for HMR and the Next.js one for the app-router fixture
+# (installed copies of test-fixtures/preview-vite and test-fixtures/preview-next);
+# --project=firefox or --grep can narrow the run.
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
+ORKESTRATOR_TEST_PREVIEW_NEXT_DIR=/tmp/preview-next \
   mise run test:logged -- --name preview-browser -- mise run test:preview:browser
 
 # Loopback route latency for the evidence log (prints one [preview-bench] line)

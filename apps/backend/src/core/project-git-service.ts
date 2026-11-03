@@ -121,6 +121,7 @@ import { resolveProjectGitRoot } from "./project-git-root.js";
 /** Serialized, checkout-root-bound Git operations for project coordinators. */
 export class ProjectGitService {
   private readonly operations = new Map<string, Promise<unknown>>();
+  private readonly mergeSyncs = new Map<string, Promise<ProjectGitStatus>>();
   private readonly activeMutations = new Set<string>();
   private readonly pendingTurns = new Map<string, number>();
   private readonly fetches = new Map<
@@ -866,7 +867,34 @@ export class ProjectGitService {
     }
   }
 
+  /** User operations wait for an unattended merge sync, then recheck admission. */
+  async waitForMergeSync(projectId: string): Promise<void> {
+    await this.mergeSyncs.get(projectId)?.catch(() => undefined);
+  }
+
+  async beginTurnAfterMergeSync(projectId: string): Promise<() => void> {
+    await this.waitForMergeSync(projectId);
+    return this.beginCoordinatorTurn(projectId);
+  }
+
+  syncAfterMerge(projectId: string): Promise<ProjectGitStatus> {
+    const existing = this.mergeSyncs.get(projectId);
+    if (existing) return existing;
+    const sync = this.syncOnce(projectId);
+    this.mergeSyncs.set(projectId, sync);
+    void sync.then(
+      () => this.mergeSyncs.delete(projectId),
+      () => this.mergeSyncs.delete(projectId),
+    );
+    return sync;
+  }
+
   async sync(projectId: string): Promise<ProjectGitStatus> {
+    await this.waitForMergeSync(projectId);
+    return this.syncOnce(projectId);
+  }
+
+  private async syncOnce(projectId: string): Promise<ProjectGitStatus> {
     return this.mutation(projectId, "syncing", async (root, status) => {
       if (!status.branch || !status.upstream || !status.remote) {
         throw new Error("A tracking branch is required before syncing");

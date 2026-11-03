@@ -11,11 +11,8 @@ import {
   type CoordinatorPaneLayoutSaveResult,
 } from "@orkestrator/protocol/coordinator-pane-layout";
 import {
-  parseCoordinatorUpstreamAutoMerge,
   parseCoordinatorUpstreamMergeCheck,
-  type CoordinatorUpstreamAutoMerge,
   type CoordinatorUpstreamMergeCheck,
-  type DeclinedUpstreamMerge,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
 import {
   parseNoticeDismissalSnapshot,
@@ -53,33 +50,6 @@ export const checkCoordinatorUpstreamMerge = async (
 ): Promise<CoordinatorUpstreamMergeCheck | null> =>
   parseCoordinatorUpstreamMergeCheck(
     await invoke("check_coordinator_upstream_merge", { projectId }),
-  );
-
-export const declineCoordinatorUpstreamMerge = (
-  projectId: string,
-  decline: DeclinedUpstreamMerge,
-  options: { onlyIfAbsent?: boolean } = {},
-): Promise<unknown> =>
-  invoke("decline_coordinator_upstream_merge", {
-    projectId,
-    upstream: decline.upstream,
-    upstreamCommit: decline.upstreamCommit,
-    ...(options.onlyIfAbsent ? { onlyIfAbsent: true } : {}),
-  });
-
-export const getCoordinatorUpstreamAutoMerge = async (
-  projectId: string,
-): Promise<CoordinatorUpstreamAutoMerge | null> =>
-  parseCoordinatorUpstreamAutoMerge(
-    await invoke("get_coordinator_upstream_auto_merge", { projectId }),
-  );
-
-export const setCoordinatorUpstreamAutoMerge = async (
-  projectId: string,
-  enabled: boolean,
-): Promise<CoordinatorUpstreamAutoMerge | null> =>
-  parseCoordinatorUpstreamAutoMerge(
-    await invoke("set_coordinator_upstream_auto_merge", { projectId, enabled }),
   );
 
 export const listNoticeDismissals = async (): Promise<NoticeDismissalSnapshot | null> =>

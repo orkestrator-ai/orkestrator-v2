@@ -3,13 +3,11 @@ import type { ClientStateCapabilities } from "@orkestrator/protocol/client-state
 import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import { readLegacyPersistedState, writeLegacyPersistedState } from "@/lib/legacy-local-state";
 import {
   checkUpstreamMergeOffer,
-  declineUpstreamMerge,
-  getUpstreamAutoMerge,
   LEGACY_UPSTREAM_DECLINE_KEY,
   resetUpstreamCheckForTests,
-  setUpstreamAutoMerge,
 } from "./coordinator-upstream-check";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
@@ -28,17 +26,10 @@ const behind = {
 const capabilities = (coordinatorUpstreamMerge: boolean): ClientStateCapabilities => ({
   coordinatorPaneLayouts: false,
   coordinatorUpstreamMerge,
-  coordinatorUpstreamAutoMerge: coordinatorUpstreamMerge,
+  coordinatorUpstreamAutoMerge: false,
   noticeDismissals: false,
   environmentAttention: false,
 });
-
-function seedBrowserCopy(declines: unknown) {
-  localStorage.setItem(
-    LEGACY_UPSTREAM_DECLINE_KEY,
-    JSON.stringify({ state: { declines }, version: 0 }),
-  );
-}
 
 function callsTo(command: string) {
   return invokeMock.mock.calls.filter((call) => call[0] === command);
@@ -46,12 +37,10 @@ function callsTo(command: string) {
 
 beforeEach(() => {
   invokeMock.mockReset();
-  localStorage.removeItem(LEGACY_UPSTREAM_DECLINE_KEY);
   resetUpstreamCheckForTests();
 });
 
 afterEach(() => {
-  localStorage.removeItem(LEGACY_UPSTREAM_DECLINE_KEY);
   resetClientStateCapabilitiesForTests();
   invokeMock.mockImplementation(() => Promise.resolve());
 });
@@ -73,103 +62,44 @@ describe("against a backend that decides", () => {
     expect(callsTo("fetch_project_git")).toHaveLength(0);
   });
 
-  test("records a decline on the backend, not in the browser", async () => {
-    invokeMock.mockImplementation(async () => undefined);
-    await declineUpstreamMerge("p", behind);
-    expect(callsTo("decline_coordinator_upstream_merge")[0]?.[1]).toEqual({
-      projectId: "p",
-      upstream: "origin/main",
-      upstreamCommit: tip,
-    });
-    expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
-  });
-
-  test("passes an automatic offer through and keeps the auto-merge setting on the backend", async () => {
-    invokeMock.mockImplementation(async (command: string, args: { enabled?: boolean }) => {
-      if (command === "check_coordinator_upstream_merge") {
-        return { offer: true, status: behind, automatic: true };
-      }
-      if (command === "set_coordinator_upstream_auto_merge") return { enabled: args.enabled };
-      return { enabled: true };
-    });
+  test("passes an automatic offer through", async () => {
+    invokeMock.mockImplementation(async () => ({ offer: true, status: behind, automatic: true }));
     expect(await checkUpstreamMergeOffer("p", { turnRunning: () => false })).toEqual({
       offer: true,
       status: behind,
       automatic: true,
     });
-    expect(await setUpstreamAutoMerge("p", true)).toBe(true);
-    expect(callsTo("set_coordinator_upstream_auto_merge")[0]?.[1]).toEqual({
-      projectId: "p",
-      enabled: true,
-    });
-    expect(await getUpstreamAutoMerge("p")).toBe(true);
-    expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
   });
 
-  test("imports the browser's declines once, without replacing newer answers", async () => {
-    seedBrowserCopy([
-      { projectId: "p", upstream: "origin/main", upstreamCommit: "old" },
-      { projectId: "removed", upstream: "origin/main", upstreamCommit: "old" },
-      { projectId: 4, upstream: "x", upstreamCommit: "y" },
-    ]);
-    invokeMock.mockImplementation(async (command: string, args: { projectId?: string }) => {
-      if (command === "check_coordinator_upstream_merge") {
-        return { offer: false, reason: "declined", status: behind };
-      }
-      if (args?.projectId === "removed") throw new Error("Project not found");
-      return undefined;
+  test("deletes the browser's copy of earlier declines without importing it", async () => {
+    writeLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY, {
+      declines: [{ projectId: "p", upstream: "origin/main", upstreamCommit: "old" }],
     });
+    invokeMock.mockImplementation(async () => ({ offer: true, status: behind, automatic: true }));
     await checkUpstreamMergeOffer("p", { turnRunning: () => false });
-    await checkUpstreamMergeOffer("p", { turnRunning: () => false });
-    const imports = callsTo("decline_coordinator_upstream_merge");
-    expect(imports.map((call) => call[1].projectId)).toEqual(["p", "removed"]);
-    expect(imports[0]?.[1].onlyIfAbsent).toBe(true);
-    expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
-  });
-
-  test("keeps the browser's declines for a later session when an import fails", async () => {
-    seedBrowserCopy([{ projectId: "p", upstream: "origin/main", upstreamCommit: "old" }]);
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === "check_coordinator_upstream_merge") {
-        return { offer: true, status: behind };
-      }
-      throw new Error("transport closed");
-    });
-    await checkUpstreamMergeOffer("p", { turnRunning: () => false });
-    expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).not.toBeNull();
+    expect(readLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
+    expect(callsTo("decline_coordinator_upstream_merge")).toHaveLength(0);
   });
 });
 
 describe("against an older backend", () => {
   beforeEach(() => resetClientStateCapabilitiesForTests(capabilities(false)));
 
-  test("applies the protocol rule here, honouring the browser's declines", async () => {
+  test("applies the protocol rule here: a mergeable checkout is always merged", async () => {
+    writeLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY, {
+      declines: [{ projectId: "p", upstream: "origin/main", upstreamCommit: tip }],
+    });
     invokeMock.mockImplementation(async () => behind);
-    expect(await checkUpstreamMergeOffer("p", { turnRunning: () => false })).toEqual({
-      offer: true,
-      status: behind,
-    });
-    expect(callsTo("fetch_project_git")).toHaveLength(1);
-    expect(callsTo("check_coordinator_upstream_merge")).toHaveLength(0);
-
-    await declineUpstreamMerge("p", behind);
-    expect(callsTo("decline_coordinator_upstream_merge")).toHaveLength(0);
-    expect(await checkUpstreamMergeOffer("p", { turnRunning: () => false })).toMatchObject({
-      offer: false,
-      reason: "declined",
-    });
+    const statuses: ProjectGitStatus[] = [];
     expect(
       await checkUpstreamMergeOffer("p", {
         turnRunning: () => false,
-        onStatus: () => undefined,
+        onStatus: (status) => statuses.push(status),
       }),
-    ).toMatchObject({ status: behind });
-  });
-
-  test("has no auto-merge setting to read or change", async () => {
-    expect(await getUpstreamAutoMerge("p")).toBeNull();
-    await expect(setUpstreamAutoMerge("p", true)).rejects.toThrow("cannot remember");
-    expect(callsTo("set_coordinator_upstream_auto_merge")).toHaveLength(0);
+    ).toEqual({ offer: true, status: behind, automatic: true });
+    expect(statuses).toEqual([behind]);
+    expect(callsTo("fetch_project_git")).toHaveLength(1);
+    expect(callsTo("check_coordinator_upstream_merge")).toHaveLength(0);
   });
 
   test("a running turn is not asked about and starts no fetch", async () => {
@@ -193,6 +123,7 @@ test("a backend that does not know the command gets the browser-local rule", asy
   expect(await checkUpstreamMergeOffer("p", { turnRunning: () => false })).toEqual({
     offer: true,
     status: behind,
+    automatic: true,
   });
   expect(callsTo("check_coordinator_upstream_merge")).toHaveLength(0);
 });

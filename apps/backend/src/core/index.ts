@@ -1116,10 +1116,12 @@ export class OrkestratorBackend {
           take: (environmentId, tabId) => this.userCommands.takeContext(environmentId, tabId),
           delivered: (ids, requestId) => this.userCommands.markDelivered(ids, requestId),
         },
+        waitForMergeSync: (projectId) =>
+          context.projectGit?.waitForMergeSync(projectId) ?? Promise.resolve(),
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");
-          return projectGit.beginCoordinatorTurn(projectId);
+          return projectGit.beginTurnAfterMergeSync(projectId);
         },
         resolveAgentToolConnection: (environmentId, projectId, tabId, target) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),

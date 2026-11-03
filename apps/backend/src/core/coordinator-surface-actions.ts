@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import type { CommandContext } from "./commands-context.js";
@@ -96,6 +96,30 @@ async function followPullRequest(
     ...(nodeId ? { nodeId } : {}),
   });
   context.coordinators?.statusWakes.notePullRequestFollowed(input.environmentId, nodeId);
+}
+
+/**
+ * Record that this coordinator waits on one planning exchange, so status wakes
+ * report its reply or its failure (`feature-plan` association; see
+ * `coordinator-feature-plan-status.ts`). Keyed by the request, so a retry
+ * finds the same record.
+ */
+async function followFeaturePlan(
+  context: CommandContext,
+  caller: CoordinatorCaller,
+  input: { featureId: string; operationId: string; requestId: string },
+): Promise<void> {
+  await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: randomUUID(),
+    projectId: caller.projectId,
+    coordinatorId: caller.coordinatorId,
+    conversationId: caller.conversationId,
+    kind: "feature-plan",
+    resourceId: input.featureId,
+    requestId: `feature-plan:${input.requestId}`,
+    featurePlan: { operationId: input.operationId },
+    createdAt: new Date().toISOString(),
+  });
 }
 
 /** The connected node `nodeId` names; none for this node, even by its own ID. */
@@ -380,6 +404,8 @@ export function registerCoordinatorSurfaceActions(
             )
           ).id;
         const operationId = `planning-coordinator-${key}`;
+        // Before planning starts: a full workflow store refuses here, not after the turn began.
+        await followFeaturePlan(context, caller, { featureId: id, operationId, requestId });
         const plan = await context.storage.kanban.getFeaturePlan(id);
         if (
           plan?.planning?.operationId === operationId ||

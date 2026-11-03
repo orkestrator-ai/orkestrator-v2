@@ -11,8 +11,13 @@
  * `graph-run-coordinator-status.ts`, one notice per wait), and a worker's
  * pull request the coordinator raised, resolved or got from its review's
  * auto-PR (a `pull-request` association; the reduction is in
- * `coordinator-pr-status.ts`), including its Resolve tab finishing. A worker
- * it owns being merged, closed or deleted is `coordinator-worker-outcomes.ts`.
+ * `coordinator-pr-status.ts`), including its Resolve tab finishing, and a
+ * feature plan's planning reply it asked for being ready or failing (a
+ * `feature-plan` association; the reduction is in
+ * `coordinator-feature-plan-status.ts`). A worker it owns being merged,
+ * closed or deleted is `coordinator-worker-outcomes.ts`. An association kind
+ * this backend does not know (one a newer backend on the same data directory
+ * wrote) is skipped, never observed as another kind.
  *
  * Ownership is the durable workflow association recorded when the coordinator
  * launched or prompted the resource, never anything the user started. Each
@@ -54,6 +59,7 @@ import {
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { StorageService } from "./storage.js";
+import { observeCoordinatorFeaturePlan } from "./coordinator-feature-plan-status.js";
 import {
   graphRunCoordinatorStatus,
   graphRunWaitNoticeIsNew,
@@ -664,7 +670,9 @@ export function renderCoordinatorStatusNotice(
             ? "Pull request"
             : resource.kind === "environment"
               ? "Environment"
-              : "Worker";
+              : resource.kind === "feature-plan"
+                ? "Feature plan"
+                : "Worker";
   const label = resource.label ? ` ${boundedLine(resource.label, MAX_LABEL_CHARS)}` : "";
   const subject = boundedLine(`${name}${label} ${status.headline}`, 160);
   const where =
@@ -956,6 +964,10 @@ export class CoordinatorStatusWakes {
       this.notePullRequestChange(change.id);
       return;
     }
+    if (change.resource === "feature-plan") {
+      this.noteFeaturePlanChange(change.id);
+      return;
+    }
     if (
       change.resource !== "multi-review" &&
       change.resource !== "build-pipeline" &&
@@ -975,6 +987,44 @@ export class CoordinatorStatusWakes {
         });
       }, RESOURCE_CHANGE_DEBOUNCE_MS),
     );
+  }
+
+  /**
+   * A project's feature plans were saved (the change's id is the project id):
+   * observe the planning exchanges its coordinators started there, debounced
+   * like a workflow save. Cheap when none is followed.
+   */
+  private noteFeaturePlanChange(projectId: string): void {
+    const key = `feature-plan\0${projectId}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observeFeaturePlans(projectId).catch((error: unknown) => {
+          log.warn("wake.observe-feature-plan-failed", { error: formatLogError(error) });
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
+  }
+
+  /** Observe the planning exchanges coordinators started in one project, now. */
+  observeFeaturePlans(projectId: string): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+      const owned = state.workflows.filter(
+        (association) =>
+          association.kind === "feature-plan" &&
+          association.projectId === projectId &&
+          !association.pending &&
+          !association.terminalNotifiedAt,
+      );
+      if (owned.length === 0) return;
+      const mode = await this.mode();
+      for (const association of owned) {
+        await this.observeFeaturePlan(state.workspaces, association, mode);
+      }
+    });
   }
 
   /** Resolves once every observation queued so far has finished. */
@@ -1049,7 +1099,8 @@ export class CoordinatorStatusWakes {
           (association.kind === "multi-review" ||
             association.kind === "build-pipeline" ||
             association.kind === "graph-run" ||
-            association.kind === "pull-request") &&
+            association.kind === "pull-request" ||
+            association.kind === "feature-plan") &&
           !association.pending &&
           !association.terminalNotifiedAt
         ) {
@@ -1117,7 +1168,13 @@ export class CoordinatorStatusWakes {
       await this.observePullRequest(workspaces, association, mode);
       return;
     }
-    const kind = association.kind === "build-pipeline" ? "build-pipeline" : "multi-review";
+    if (association.kind === "feature-plan") {
+      await this.observeFeaturePlan(workspaces, association, mode);
+      return;
+    }
+    // A kind a newer backend wrote is not a Multi Review: skip it.
+    if (association.kind !== "build-pipeline" && association.kind !== "multi-review") return;
+    const kind = association.kind;
     const remote = association.nodeId ? this.remote : null;
     if (association.nodeId && !remote) return;
     const read = remote
@@ -1622,6 +1679,26 @@ export class CoordinatorStatusWakes {
     await this.recordNotice(association.id, status.key);
     if (status.terminal)
       await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, run.revision);
+  }
+
+  /**
+   * A planning exchange the coordinator started (todo 0395 task 3): its reply
+   * is ready (once, terminal) or it failed (once per failure). Feature plans
+   * live on this node only; a cancelled exchange or a deleted plan ends the
+   * association without a wake.
+   */
+  private observeFeaturePlan(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    return observeCoordinatorFeaturePlan(association, {
+      storage: this.storage,
+      send: async (resource, status) =>
+        MODE_ORDER[mode] >= MODE_ORDER[status.mode] &&
+        (await this.deliver(workspaces, association, resource, status)),
+      recordNotice: (key) => this.recordNotice(association.id, key),
+    });
   }
 
   /**

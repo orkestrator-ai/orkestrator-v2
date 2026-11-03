@@ -1741,6 +1741,13 @@ export class StorageService {
     return this.repos.agentMail.withAgentMailWorkerAdmission(environmentId, operation);
   }
 
+  replayAgentMail(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<AgentMailMessage | null> {
+    return this.repos.agentMail.replayAgentMail(sender, input);
+  }
+
   sendAgentMail(
     sender: AgentMailSender,
     input: AgentMailSendInput,

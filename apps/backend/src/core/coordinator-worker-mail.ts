@@ -273,6 +273,20 @@ export function registerCoordinatorWorkerMailCommands(
   ): Promise<{ held: JsonRecord } | { sent: true }> => {
     const approvalRequestId = projectHomeApprovalRequestId(sender.coordinatorId, mail.requestId);
     const existing = await context.nodeCoordination?.actions.get(approvalRequestId);
+    // A direct send has no approval record. Replay it before consulting the clock;
+    // the mail store also refuses a changed payload under the same request id.
+    if (
+      !existing &&
+      (await context.storage.replayAgentMail(sender, {
+        requestId: mail.requestId,
+        toEnvironmentId: home.id,
+        toTabId: mail.toTabId,
+        body: mail.body,
+        ...(mail.subject !== undefined ? { subject: mail.subject } : {}),
+        ...(mail.replyToMessageId !== undefined ? { replyToMessageId: mail.replyToMessageId } : {}),
+      }))
+    )
+      return { sent: true };
     // Before the first request exists, a recent sent message lets this one through.
     if (!existing && (await projectHomeWindowOpen(context, sender.coordinatorId, home.id)))
       return { sent: true };
@@ -476,6 +490,10 @@ export function registerCoordinatorWorkerMailCommands(
         steer: held.deliverNow === true,
       },
     );
+    if (message.placement === "bounced" || message.placement === "undeliverable")
+      throw new Error(
+        `The project home message was not sent (${message.placement}: ${message.placementReason ?? "recipient unavailable"}).`,
+      );
     return {
       result: "sent",
       ...(typeof message.id === "string" ? { messageId: message.id } : {}),

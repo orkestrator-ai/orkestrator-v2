@@ -266,6 +266,140 @@ describe("coordinator messages to the project home", () => {
     }
   });
 
+  test("direct mail replays after expiry and conflicting content is refused", async () => {
+    const held = await send(homeMessage());
+    await resolveRequest(String(held.approvalRequestId), "approve");
+    const direct = homeMessage({ requestId: "direct" });
+    const sent = await send(direct);
+    const clock = spyOn(Date, "now").mockReturnValue(
+      Date.now() + COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS + 1000,
+    );
+    try {
+      expect(await send(direct)).toMatchObject({ id: sent.id });
+      await expect(send({ ...direct, body: "changed" })).rejects.toThrow("different content");
+      expect(await pendingRequests()).toEqual([]);
+      expect(await mailTo(homeId)).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("muted home approval fails without a sent notice or an open window", async () => {
+    await storage.updateAgentMailboxPolicy(homeId, "agent-1", { mutedInbound: true });
+    const mail = spyOn(storage, "sendAgentMail");
+    try {
+      const held = await send(homeMessage());
+      expect(await resolveRequest(String(held.approvalRequestId), "approve")).toMatchObject({
+        state: "failed",
+        result: { code: "failed" },
+      });
+      expect(await mailTo(homeId)).toEqual([]);
+      expect(await storage.latestCoordinatorMailTo(homeId, scope.coordinatorId)).toBeNull();
+      const notice = mail.mock.calls.find(
+        ([, input]) => input.requestId === `node-action:${held.approvalRequestId}:failed`,
+      );
+      expect(notice).toBeDefined();
+      expect(notice![1].body).not.toContain("For the next 3 hours");
+      expect(await send(homeMessage({ requestId: "next" }))).toMatchObject({
+        state: "pending",
+        sent: false,
+      });
+    } finally {
+      mail.mockRestore();
+    }
+  });
+
+  for (const scenario of ["closed", "removed", "paused"] as const) {
+    test(`approval after coordinator/home becomes ${scenario} sends no mail and reports the outcome`, async () => {
+      const held = await send(homeMessage());
+      if (scenario === "closed")
+        await context.coordinators!.closeConversation(scope.projectId, scope.conversationId);
+      if (scenario === "removed") await storage.removeEnvironment(homeId);
+      if (scenario === "paused") await context.coordinators!.setPaused(scope.projectId, true);
+      const mail = spyOn(storage, "sendAgentMail");
+      try {
+        const state = scenario === "paused" ? "failed" : "stale";
+        expect(await resolveRequest(String(held.approvalRequestId), "approve")).toMatchObject({
+          state,
+          result: { code: state },
+        });
+        expect(await mailTo(homeId)).toEqual([]);
+        const notice = mail.mock.calls.find(
+          ([, input]) => input.requestId === `node-action:${held.approvalRequestId}:${state}`,
+        );
+        expect(notice).toBeDefined();
+        expect(notice![1].body).not.toContain("For the next 3 hours");
+      } finally {
+        mail.mockRestore();
+      }
+    });
+  }
+
+  test("user home activity and undeliverable coordinator mail do not open the window", async () => {
+    await storage.sendAgentMail(
+      { kind: "user" },
+      {
+        requestId: "user-home",
+        toEnvironmentId: homeId,
+        toTabId: "agent-1",
+        body: "User activity",
+      },
+    );
+    expect(await storage.latestCoordinatorMailTo(homeId, scope.coordinatorId)).toBeNull();
+    const held = await send(homeMessage());
+    await resolveRequest(String(held.approvalRequestId), "approve");
+    await storage.removeEnvironment(homeId);
+    await storage.synchronizeAgentMailboxes();
+    expect(await storage.latestCoordinatorMailTo(homeId, scope.coordinatorId)).toBeNull();
+  });
+
+  test("approved and unknown outcomes replay existing mail without another approval", async () => {
+    const held = await send(homeMessage());
+    await resolveRequest(String(held.approvalRequestId), "approve");
+    const [message] = await mailTo(homeId);
+    const create = commands.get("create_node_action_request")!;
+    try {
+      for (const state of ["approved", "outcome-unknown"] as const) {
+        commands.set("create_node_action_request", async (args, ctx) => ({
+          ...((await create(args, ctx)) as Result),
+          state,
+        }));
+        expect(await send(homeMessage())).toMatchObject({ id: message!.id });
+        expect(await mailTo(homeId)).toHaveLength(1);
+      }
+    } finally {
+      commands.set("create_node_action_request", create);
+    }
+  });
+
+  test("approved deliverNow settles mail into the running turn and replay does not drain again", async () => {
+    let drains = 0;
+    context.drainAgentMail = async () => {
+      drains++;
+      const mailbox = await storage.getAgentMailMailbox(homeId, "agent-1");
+      const message = mailbox.messages.find((m) => m.requestId === "home-1")!;
+      await storage.beginAgentMailInject(
+        mailbox.descriptor.mailboxId,
+        message.id,
+        mailbox.descriptor.incarnationId,
+      );
+      await storage.finishAgentMailInject(mailbox.descriptor.mailboxId, message.id, {
+        outcome: "accepted",
+        via: "steer",
+      });
+    };
+    const held = await send(homeMessage({ deliverNow: true }));
+    expect(await resolveRequest(String(held.approvalRequestId), "approve")).toMatchObject({
+      state: "executed",
+    });
+    expect((await mailTo(homeId))[0]).toMatchObject({
+      placement: "injected",
+      injectedVia: "steer",
+    });
+    expect(await send(homeMessage({ deliverNow: true }))).toMatchObject({ deliverNow: "steered" });
+    expect(drains).toBe(1);
+  });
+
   test("declining sends nothing, tells the coordinator, and a retry reports the decline", async () => {
     const mail = spyOn(storage, "sendAgentMail");
     try {

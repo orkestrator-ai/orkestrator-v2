@@ -250,6 +250,20 @@ renewal (every 30 s) and an expired model-catalogue refresh announce a
 retained value that only went stale, and not for the runtime drift counter),
 since any such hint re-reads the view and restarts its backoff.
 
+Every session invalidation names why it was sent: `cause` on the activity
+announcement and on a `native-agent-session` resource change, one entry of
+`NATIVE_SESSION_INVALIDATION_CAUSES`
+(`packages/protocol/src/native-agent-observation.ts`): the code path, such as
+`discovery-renewal`, `content-revision`, `projection-read` or
+`record-dispatch`, never a value. The backend's announce APIs take that type,
+so a new announcement site cannot exist without a cause. Clients ignore it.
+The backend counts each emitted invalidation by cause and by the platform it
+named (`environment` when it named none) in
+`native-session-invalidation-metrics.ts`, reported as `sessionInvalidations`
+in `get_recurring_work_diagnostics` and the `recurringWork` block of the gateway's `/__orkestrator/metrics`. That is how an idle
+view's reads are attributed (todo 0049 task 4); the live idle-observation spec
+records the per-cause deltas over its idle window.
+
 Several mounted views of one session share one coordinated read
 (`native-session-shared-reads.ts`): one timer and dirty flag per session, and
 within each read identical requests are sent once. Each view still applies the

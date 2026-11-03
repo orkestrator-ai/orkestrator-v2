@@ -177,10 +177,14 @@ test("a stream that stops its keepalives, or an attempt nothing answers, is give
     eventReconnectDelayMs: 1,
   });
   const states: string[] = [];
+  // The limits are measured on this clock alone, so a late timer or a busy
+  // event loop can never make the stream look silent before the test says so.
+  let now = 0;
   client.listen(() => undefined, {
     onStreamState: (state) => states.push(state),
     streamSilenceLimitMs: 40,
     streamConnectTimeoutMs: 40,
+    streamNow: () => now,
   });
   const waitUntil = async (condition: () => boolean, message: string) => {
     const deadline = Date.now() + 5_000;
@@ -189,17 +193,26 @@ test("a stream that stops its keepalives, or an attempt nothing answers, is give
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
   };
+  // Lets the reader take what was pushed and the watchdog check the clock.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
   try {
     await waitUntil(() => states[0] === "open", "The stream never opened");
     // Keepalive comments carry it past the limit.
     for (let tick = 0; tick < 5; tick += 1) {
       attempts[0]!.push?.(": keepalive\n\n");
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await settle();
+      now += 20;
     }
+    await settle();
     expect(states).toEqual(["open"]);
 
+    now += 40;
     await waitUntil(() => states.includes("closed"), "The silent stream was never given up on");
     expect(attempts[0]!.aborted).toBe(true);
+    await waitUntil(() => attempts.length >= 2, "The stream was never retried");
+    await settle();
+    expect(attempts[1]!.aborted).toBe(false);
+    now += 40;
     await waitUntil(() => attempts.length >= 3, "The unanswered attempt was never retried");
     expect(attempts[1]!.aborted).toBe(true);
   } finally {

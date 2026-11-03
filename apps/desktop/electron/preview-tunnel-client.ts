@@ -53,12 +53,15 @@ const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
 export class PreviewTunnelStream extends Duplex {
   private closedByPeer = false;
   private readonly heartbeat: ReturnType<typeof setInterval>;
+  /** Milliseconds from starting the WebSocket connect to `OPEN_OK` (0 when built directly). */
+  readonly openMs: number;
 
   constructor(
     private readonly ws: PreviewWebSocket,
-    options: { pingIntervalMs?: number } = {},
+    options: { pingIntervalMs?: number; openMs?: number } = {},
   ) {
     super({ allowHalfOpen: true });
+    this.openMs = options.openMs ?? 0;
     this.heartbeat = setInterval(() => {
       if (this.ws.isOpen) this.ws.ping();
     }, options.pingIntervalMs ?? PREVIEW_TUNNEL_CLIENT_PING_MS);
@@ -134,6 +137,7 @@ export class PreviewTunnelStream extends Duplex {
 export async function openPreviewTunnel(
   options: PreviewTunnelOpenOptions,
 ): Promise<PreviewTunnelStream> {
+  const started = performance.now();
   let ws: PreviewWebSocket;
   try {
     ws = await connectPreviewWebSocket({
@@ -167,7 +171,10 @@ export async function openPreviewTunnel(
         reject(error);
         return;
       }
-      const stream = new PreviewTunnelStream(ws, { pingIntervalMs: options.pingIntervalMs });
+      const stream = new PreviewTunnelStream(ws, {
+        pingIntervalMs: options.pingIntervalMs,
+        openMs: performance.now() - started,
+      });
       resolve(stream);
     };
     const onMessage = (data: Buffer, binary: boolean) => {

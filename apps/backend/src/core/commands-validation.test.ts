@@ -3,6 +3,7 @@ import {
   MAX_EXECUTION_PROFILE_ID_LENGTH,
   asDispatchNativeAgentPromptInput,
   asNativeAgentControlUpdate,
+  asNativeAgentSessionAction,
 } from "./commands-validation.js";
 
 describe("asDispatchNativeAgentPromptInput", () => {
@@ -160,5 +161,24 @@ describe("asNativeAgentControlUpdate", () => {
     expect(() => asNativeAgentControlUpdate({})).toThrow(
       "Native agent control update must not be empty",
     );
+  });
+});
+
+describe("asNativeAgentSessionAction", () => {
+  test("carries trimmed compaction instructions and drops blank ones", () => {
+    expect(
+      asNativeAgentSessionAction({ kind: "compact", instructions: "  keep the plan " }),
+    ).toEqual({ kind: "compact", instructions: "keep the plan" });
+    expect(asNativeAgentSessionAction({ kind: "compact", instructions: "   " })).toEqual({
+      kind: "compact",
+    });
+    expect(asNativeAgentSessionAction({ kind: "compact" })).toEqual({ kind: "compact" });
+  });
+
+  test("refuses malformed or oversized compaction instructions", () => {
+    expect(() => asNativeAgentSessionAction({ kind: "compact", instructions: 7 })).toThrow();
+    expect(() =>
+      asNativeAgentSessionAction({ kind: "compact", instructions: "x".repeat(16_001) }),
+    ).toThrow("at most 16000 characters");
   });
 });

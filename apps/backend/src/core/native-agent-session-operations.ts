@@ -20,6 +20,7 @@ import type {
   StorageService,
 } from "./native-agent-service-shared.js";
 import {
+  compactInstructionsRefusal,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   NativeAgentProviderSessionMissingError,
   isFallbackExecutionProfileId,
@@ -483,6 +484,10 @@ export class NativeAgentSessionOperations {
     }
     if (!resolved.provider.performSessionAction) {
       throw new Error(`${input.agent} does not support ${input.action.kind}`);
+    }
+    if (input.action.kind === "compact") {
+      const refusal = compactInstructionsRefusal(input.agent, input.action.instructions);
+      if (refusal) throw new Error(refusal);
     }
     if (input.action.kind === "steer") {
       return this.host.performProjectionSteer(input, resolved, input.action);

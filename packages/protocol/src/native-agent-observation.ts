@@ -15,6 +15,11 @@
  * `previous_state`, and it says that an idle session's view changed anyway
  * (its provider's content revision moved). Clients treat it like any other
  * session-scoped invalidation; it shares the same stamp sequence.
+ *
+ * Every session invalidation also names why it was sent: `cause` on this
+ * announcement and on a `native-agent-session` resource change, one entry of
+ * {@link NATIVE_SESSION_INVALIDATION_CAUSES}. It is diagnostic only (todo 0049
+ * task 4): clients invalidate the same way whatever it says.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
 import { readViewRevisionStamp, type ViewRevisionStamp } from "./view-sync.js";
@@ -60,6 +65,90 @@ export const NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS: readonly AgentPlatform[] 
 export const NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS: readonly AgentPlatform[] =
   Object.freeze(["claude", "codex"]);
 
+/**
+ * Why the backend told native session views to read again. A fixed,
+ * content-free vocabulary: it names the code path that announced, never a
+ * value, identifier, prompt or transcript text, so it can be a metrics label.
+ * Adding an entry is how a new announcement site is allowed to exist; the
+ * backend's announce APIs take this type, not a string.
+ */
+export const NATIVE_SESSION_INVALIDATION_CAUSES = [
+  // `native-agent-session` resource changes from the projection layer.
+  /** A provider read produced a projection that differs from the cached one. */
+  "projection-read",
+  /** A provider read failed and the projection changed to its unreachable form. */
+  "projection-unreachable",
+  /** A title the backend chose was written into cached projections. */
+  "projection-title",
+  /** A runtime stop withdrew the environment's outstanding requests. */
+  "projection-withdrawn",
+  /** Progressive hydration recovered a cold transcript. */
+  "hydration",
+  /** A discovery section (models, commands, MCP, runtime) missed its 2 s deadline. */
+  "discovery-deadline",
+  /** A discovery section's read finished with a value a view would show differently. */
+  "discovery-renewal",
+  /** An expired environment model catalogue refreshed to a different catalogue. */
+  "model-catalog-refresh",
+  /** An environment's first model catalogue finished loading in the background. */
+  "model-catalog-load",
+  /** A session's slash-command catalogue changed. */
+  "command-catalog",
+  /** An Orkestrator permission rule answered one of the session's requests. */
+  "permission-rule",
+  /** A transcript-artifact publication changed the environment's projected transcripts. */
+  "transcript-artifact",
+  // `native-agent-session` resource changes from persisted session records.
+  "record-created",
+  "record-policy",
+  "record-goal",
+  "record-controls",
+  "record-title",
+  "record-notice",
+  "record-invalidated",
+  "record-removed",
+  "record-dispatch",
+  // `native-agent-session-activity` announcements from the activity observer.
+  /** The session's activity state changed. */
+  "transition",
+  /** An idle (or released) session's provider content revision moved. */
+  "content-revision",
+  /** The session's backend-owned view changed, such as its goal. */
+  "session-content",
+  /** A runtime stop settled a running session to idle. */
+  "runtime-stopped",
+] as const;
+export type NativeSessionInvalidationCause = (typeof NATIVE_SESSION_INVALIDATION_CAUSES)[number];
+
+const INVALIDATION_CAUSE_SET: ReadonlySet<string> = new Set(NATIVE_SESSION_INVALIDATION_CAUSES);
+
+export function isNativeSessionInvalidationCause(
+  value: unknown,
+): value is NativeSessionInvalidationCause {
+  return typeof value === "string" && INVALIDATION_CAUSE_SET.has(value);
+}
+
+/** Where a counted invalidation went: one platform's sessions, or a whole environment. */
+export type NativeSessionInvalidationScope = AgentPlatform | "environment";
+
+/**
+ * Content-free counts of the session invalidations one backend emitted since
+ * it started (or its counters were reset), by cause and by scope. Bounded by
+ * the vocabulary: at most seven scopes times the causes above.
+ */
+export interface NativeSessionInvalidationSnapshot {
+  enabled: boolean;
+  /** Milliseconds since the counter was created or last reset. */
+  windowMs: number;
+  total: number;
+  byCause: Partial<Record<NativeSessionInvalidationCause, number>>;
+  byScope: Partial<
+    Record<NativeSessionInvalidationScope, Partial<Record<NativeSessionInvalidationCause, number>>>
+  >;
+  /** Invalidations whose cause or agent was outside the vocabulary; counted, never kept. */
+  droppedLabels: number;
+}
+
 export interface NativeAgentActivityAnnouncement {
   environmentId: string;
   agent?: string;
@@ -68,6 +157,8 @@ export interface NativeAgentActivityAnnouncement {
   state: string;
   /** `content`: the view changed without a transition. Absent for a transition. */
   reason?: "content";
+  /** Why it was sent. Absent for an older backend or a cause this client does not know. */
+  cause?: NativeSessionInvalidationCause;
   /** Absent for an older backend. */
   stamp?: ViewRevisionStamp;
 }
@@ -92,6 +183,8 @@ export function parseNativeAgentActivityAnnouncement(
   if (record.previous_state !== undefined && !boundedString(record.previous_state)) return null;
   // An unknown reason is a newer backend's; the announcement still invalidates.
   if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  // Likewise an unknown cause: diagnostic only, so it never drops the announcement.
+  if (record.cause !== undefined && typeof record.cause !== "string") return null;
   const stamp = readViewRevisionStamp(record, "event");
   if (stamp === "invalid") return null;
   return {
@@ -105,6 +198,7 @@ export function parseNativeAgentActivityAnnouncement(
       ? { previousState: record.previous_state as string }
       : {}),
     ...(record.reason === "content" ? { reason: "content" as const } : {}),
+    ...(isNativeSessionInvalidationCause(record.cause) ? { cause: record.cause } : {}),
     ...(stamp ? { stamp } : {}),
   };
 }

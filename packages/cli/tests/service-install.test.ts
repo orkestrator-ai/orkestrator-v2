@@ -390,6 +390,7 @@ test("same-version old launcher failures during manager reload do not fail a cor
               appVersion: "9.9.9",
               publicApiSchemaVersion: 1,
             }),
+            { mode: 0o600 },
           );
         },
       }),

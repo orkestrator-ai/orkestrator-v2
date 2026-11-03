@@ -46,6 +46,7 @@ import { gitHubCli } from "./github-cli-binary.js";
 import { gitHubCliEnv, resolveGitHubToken } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import { writeConfinedFile } from "./path-safety.js";
+import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { BugReportRecord } from "./storage-bug-reports.js";
 
 export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
@@ -268,6 +269,23 @@ export async function saveBugReportScreenshot(
   await writeReportFile(record, relative, bytes);
   const file = path.join(record.scratchDir, relative);
   return { path: file, snapshot: await getBugReportSnapshot(context) };
+}
+
+/** Stage pasted images using the stored report root, never a client-supplied path. */
+export async function writeBugReportAttachment(
+  context: CommandContext,
+  reportId: string,
+  filename: string,
+  base64Data: string,
+): Promise<string> {
+  const record = await requireReport(context, reportId);
+  const [image] = assertValidPromptImages([{ filename, data: base64Data }]);
+  if (!image) throw new Error("Bug report attachment is invalid");
+  const mediaType = mimeTypeForImageData(image.filename, image.data);
+  const extension = mediaType === "image/jpeg" ? "jpg" : mediaType.slice("image/".length);
+  const relative = `${BUG_REPORT_SCREENSHOT_DIRECTORY}/paste-${randomUUID()}.${extension}`;
+  await writeReportFile(record, relative, Buffer.from(image.data, "base64"));
+  return path.join(record.scratchDir, relative);
 }
 
 async function writeReportFile(

@@ -12,8 +12,8 @@ What is still missing — mainly provider parity and live qualification — live
 [0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md);
 OpenCode and Grok steer in
 [0005-mid-turn-steer-and-interrupt.md](../todo/agent-engines/0005-mid-turn-steer-and-interrupt.md);
-worker-surface follow-ups (other nodes, status wakes for feature
-planning) in
+worker-surface follow-ups (root changes on other nodes, adopting feature
+plans) in
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md);
 live qualification of the gap tools (`resolve_conflicts`, PR wakes,
 `stop_worker_turn`, `get_worker_changes`, `fork_worker`, schedule edits,
@@ -53,8 +53,8 @@ separately so their lifetime is independent of an open chat tab.
 Every project shares one list of at most 2,000 workflow associations
 (`MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`,
 `apps/backend/src/core/coordinator-workflow-retention.ts`). Launches,
-delegations, review and pipeline runs, graph runs and pull-request follows each
-add one. When adding a record would go over the limit, the store first removes
+delegations, review and pipeline runs, graph runs, pull-request follows and
+feature-plan requests each add one. When adding a record would go over the limit, the store first removes
 a batch of up to 200 of the oldest finished records in the same locked write,
 so a store near the limit does not clean up again on every launch. Records are
 taken oldest `createdAt` first.
@@ -67,8 +67,10 @@ A record is never removed while something still reads it as live:
   `listOpenCoordinatorDelegations`, `listUnwokenCoordinatorDelegations` and the
   reconcile sweep read;
 - a review, pipeline or graph run whose persisted local state is active, even
-  if a previous attempt already set `terminalNotifiedAt`; unknown or remote
-  resource state is retained conservatively;
+  if a previous attempt already set `terminalNotifiedAt`, or a feature plan
+  whose planning exchange is still attached and has not failed; unknown or
+  remote resource state is retained conservatively, and so is a record of a
+  kind this backend does not know;
 - an unreported terminal local resource until 24 hours after its persisted
   `updatedAt`. A confirmed missing local resource can be reclaimed without a
   terminal notification. Missing/unreadable timestamps stay protected;
@@ -360,6 +362,26 @@ dropping closed conversations and placing new ones. Focusing a group selects its
 conversation (`selectCoordinatorConversation`), and a selection made elsewhere
 brings that conversation to the front of its group. Only each group's front
 conversation is mounted.
+
+## Activity indicator
+
+While a coordinator works, its icons carry the same spinner an environment
+row's marker draws: the **Coordinator** tab in the project navigation, and the
+leading icon of the project's sidebar heading (the coordinator's own icon when
+the project has none, shown only while it is active). A conversation waiting
+on the user pulses yellow instead; working outranks waiting across a project's
+open conversations, main and side agents alike.
+
+The state comes from the backend's activity observer, the same observation
+mail delivery and the environment markers read
+(`list_coordinator_activity`, `@orkestrator/protocol/coordinator-activity`).
+It reads retained observations only, so it never starts, attaches, hydrates
+or touches a session. The renderer projection
+(`apps/web/src/stores/coordinatorActivityStore.ts`) re-reads it on a
+coordinator session's activity transition, a coordinator session record
+change (a dispatch), a coordinator workspace change, and the transport's
+resync and safety checks, which also recover a missed hint. Other machines'
+coordinators are not shown yet.
 
 ## Project home
 
@@ -1418,7 +1440,8 @@ or prompted **settles**, so it can keep track and respond without polling
 durable record written at launch or prompt time with the coordinator and
 conversation ids (`launch_multi_review`, `start_multi_review`,
 `start_build_pipeline`, `launch_graph` (a `graph-run` association),
-`create_pr` and `resolve_conflicts` (a `pull-request` association), and the
+`create_pr` and `resolve_conflicts` (a `pull-request` association),
+`launch_feature_plan` (a `feature-plan` association per message), and the
 delegations `launch_environment`,
 `launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
 build the user started in the UI has no association and never wakes a
@@ -1446,6 +1469,8 @@ stable key; a key is sent once, recorded on the association
 | Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
 | Graph run | waiting for a person (`waiting`): an open human-node wait or an agent's `ask_human` question (`graphRunPendingInteractions`), keyed by the newest open wait, describing up to six waits by node and form, never the question's text | `settled` |
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
+| Feature plan | the planning reply to the coordinator's message is ready (`ready`; tone `attention` while the planner asks a question or for confirmation, `success` once it has stories), keyed `ready`, once | always |
+| Feature plan | planning `failed` (the failure's code and bounded message), keyed per failure, so a retry's own failure or reply is reported too | always |
 | Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Worker outcome | a worker the coordinator owns: its PR merged (`pr-merged`) or closed (`pr-closed`), naming the deletion when the environment is going too, or the environment deleted (`deleted`, resource `environment`) with its PR still open or without one; once per worker, unless a PR follow reports the merge or close | `settled` |
@@ -1462,6 +1487,36 @@ sends nothing again, and every new wait (a later node, a restarted one) sends
 one. Graph waits have no 20-second debounce: the 2-second save debounce is the
 only delay. `launch_graph` takes no `nodeId`, and the observer skips a
 `graph-run` association that has one.
+
+A feature plan is reduced by `featurePlanCoordinatorStatus`
+(`coordinator-feature-plan-status.ts`). A `feature-plan` association names
+one planning exchange (`featurePlan.operationId`); the plan takes many
+messages from the user and the coordinator. Launch reserves a pending follow
+before starting the planner, then activates it after startup succeeds or an
+existing operation is found. Reconciliation leaves a pending follow alone
+until its operation is attached; it can activate an attached exchange after a
+backend restart. A confirmed pre-start refusal releases the reservation, so a
+same-request retry can reserve it again. A successful exchange detaches
+its planning record, so the reply is found on the plan: an applied assistant
+message after the exchange's own user message (whose id is the operation id),
+before the next user message. Plan saves announce the project id, so a save
+observes that project's `feature-plan` associations after the usual 2-second
+debounce. A cancelled exchange, a deleted plan, or a reply whose state block
+never applied (its failure was already reported) ends the association without
+a wake. Details are content-free: the plan's title, status and story count and
+the failure message, never the reply or the user's message;
+`get_feature_plan` reads those. Feature plans are this node's only.
+
+**Kinds a reader does not know.** A data directory can be shared by backends
+of two versions, and the coordinator store reader keeps an association of any
+kind (it checks only `id`, `projectId` and `coordinatorId`). Every reader
+skips a kind it does not know rather than failing or treating it as another
+kind: status wakes do not observe it, `list_workflows` lists it with a null
+`resource`, and cleanup keeps it until its resource state can be read. So a
+backend older than `feature-plan` keeps and writes back those records, lists
+them without a resource, and never wakes anyone for them; the newer backend
+does. A new kind must not add a new receipt `action`: the receipt reader drops
+an unknown one (`isActionReceipt`), and the next save loses it.
 
 Individual reviewers finishing never wakes anyone: that is progress, and a
 seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
@@ -1931,7 +1986,7 @@ node and only the approved answer crosses the link
 | `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
 | `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus. One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
-| `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. No status wake. |
+| `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). | Replays the same approval request. | An approval dialog listing the checkout's changed files. |
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
 | `fork_worker` | The sidebar's **Fork** for a worker: a new worker on its own branch from the worker's last commit, with an optional prompt for its agent (below). Main coordinator only (`environments`). | Replays the receipt; the fork's record carries a control request ID derived from the request, so a retry after a crash finds the same fork, and its association and delegation are idempotent. | A new environment in the sidebar, started in the background. Deleting it is the user's. |
@@ -2298,7 +2353,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - status wakes (ownership, one wake per settled transition per resource kind,
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,
-  `coordinator-status-wakes-graph.test.ts`; pull requests (the reducer and
+  `coordinator-status-wakes-graph.test.ts`; feature plans and kinds a reader
+  does not know: `coordinator-status-wakes-feature-plan.test.ts`,
+  `control-mcp-feature-plan-workflows.test.ts`; pull requests (the reducer and
   environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
   tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
   worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)

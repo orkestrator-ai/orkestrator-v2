@@ -430,10 +430,10 @@ test("project grouping leads bound project headings with the machine home icon",
     "data-machine-color",
     "teal",
   );
-  await expect(heading.locator(":scope > :first-child")).toHaveAttribute(
-    "data-testid",
-    "machine-home-icon",
-  );
+  // The home leads the heading inside the coordinator's activity ring.
+  await expect(
+    heading.locator(':scope > :first-child [data-testid="machine-home-icon"]'),
+  ).toHaveCount(1);
 });
 
 test("a connected machine exposes catching-up status in its header", async ({ page }) => {

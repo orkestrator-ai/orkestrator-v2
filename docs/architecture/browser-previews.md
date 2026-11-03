@@ -593,8 +593,14 @@ downgrading that far.
 `get_preview_diagnostics` (trusted control API only) returns counts, bounded
 failure categories, gauges (tunnel sockets and queued bytes, publication
 sockets, relay processes and channels, active admissions), and
-p50/p95 connect times. It never contains URLs, paths, queries, headers,
-credentials, or page contents. Preview credentials cannot call it. A test
+p50/p95 connect times. Desktop windows add their own ingress series
+(`desktop.connect_ms`, `desktop.first_byte_ms`) and reconnect counts
+(`desktop.reconnect{category}`, `desktop.reconnect_failed{category}`), buffered
+in Electron and reported every 30 seconds through
+`record_preview_client_metrics`. That command accepts only those fixed names,
+safe failure categories and bounded numbers, and rejects the whole report
+otherwise (`@orkestrator/protocol/preview-client-metrics`). Diagnostics never
+contain URLs, paths, queries, headers, credentials, or page contents. Preview credentials cannot call it. A test
 ("logs, diagnostics, and events never carry credentials…") enforces this.
 
 Readiness in the picker and in environment settings distinguishes these cases:

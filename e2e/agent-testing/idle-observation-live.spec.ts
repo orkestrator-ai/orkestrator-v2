@@ -47,11 +47,13 @@ import {
   failedCases,
   freshToolResults,
   gapHistogram,
+  invalidationCauseDelta,
   readCadence,
   selectedCases,
   shellOutputContainsMarker,
   type CaseRecord,
   type IdleObservationCase,
+  type InvalidationCounts,
 } from "./idle-observation-live-support";
 import { sidebarActivity } from "./sidebar-activity";
 import { dismissSidebarTooltip } from "./sidebar-tooltip";
@@ -1394,6 +1396,11 @@ test.describe("live idle observation", () => {
            * hit, a group it reads as a miss. Profile-wide counters, so only an
            * otherwise idle profile isolates one provider.
            */
+          /*
+           * And what told the view to read (0049 task 4): every session
+           * invalidation the backend emits carries a content-free cause, and
+           * the diagnostics count them per platform.
+           */
           const sweepCounters = async () => {
             const diagnostics = (await client
               .invoke("get_recurring_work_diagnostics", {})
@@ -1401,9 +1408,14 @@ test.describe("live idle observation", () => {
               metrics?: {
                 kinds?: Record<string, { cacheHits?: number; cacheMisses?: number }>;
               };
+              sessionInvalidations?: { byScope?: InvalidationCounts };
             } | null;
             const sweep = diagnostics?.metrics?.kinds?.["native-activity-sweep"];
-            return { skipped: sweep?.cacheHits ?? 0, read: sweep?.cacheMisses ?? 0 };
+            return {
+              skipped: sweep?.cacheHits ?? 0,
+              read: sweep?.cacheMisses ?? 0,
+              invalidations: diagnostics?.sessionInvalidations?.byScope,
+            };
           };
           const sweepsBefore = await sweepCounters();
           const idleStart = Date.now();
@@ -1437,6 +1449,13 @@ test.describe("live idle observation", () => {
           const sweepsAfter = await sweepCounters();
           record.timings.backendGroupReads = sweepsAfter.read - sweepsBefore.read;
           record.timings.backendGroupSkips = sweepsAfter.skipped - sweepsBefore.skipped;
+          const invalidations = invalidationCauseDelta(
+            sweepsBefore.invalidations,
+            sweepsAfter.invalidations,
+            platform,
+          );
+          record.timings.idleInvalidations = invalidations.total ?? 0;
+          record.notes.push(`idle invalidations by cause: ${JSON.stringify(invalidations)}`);
           await expect
             .poll(runtimeState, { timeout: 40_000, intervals: [500] })
             .not.toBeUndefined();

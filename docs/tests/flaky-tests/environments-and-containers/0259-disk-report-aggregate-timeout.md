@@ -482,6 +482,29 @@ target branch or establish an environmental cause. The recorded aggregate
 failure remains unresolved; it is not excused as environmental. No unrelated
 implementation, timeout, assertion or skip changed.
 
+## Root cause and fix — 2026-11-03 (feature-plan wake fix round)
+
+- **Reproduction:** the complete unchanged owner failed alone on this host
+  (`bun test tests/unit/disk-report.test.ts`: 18 passed, one failed, one error
+  between tests; deadline at 5072.71 ms, `report.status` null at line 131).
+- **Root cause:** the test isolated `HOME` and the data directory but not the
+  temporary directory or Docker. The spawned `scripts/disk-report.ts --json`
+  therefore ran `du` over every `orkestrator-*` and Playwright directory in the
+  host's real temporary directory and asked the host's Docker daemon for
+  `docker system df`. Timed separately on the same host: `docker system df`
+  took 6.4 s and `du` over the 2,583 `orkestrator-*` leftovers took 5.2 s, so
+  either alone exceeded the five-second test deadline. Both scale with what
+  other test runs and builds leave on the host, which is why the failure
+  tracked host load and history rather than this repository's code.
+- **Fix:** the test gives the script its own `TMPDIR` under the test root and a
+  `DOCKER_HOST` socket nothing listens on (and drops an inherited
+  `DOCKER_CONTEXT`), and its temporary-directory assertions use that
+  directory. No timeout, assertion strength or script behaviour changed; the
+  macOS `/private/tmp` private-root branch is still exercised.
+- **Verification:** the complete owner passed alone (19 passed, 2.5 s); the
+  checkout test alone took 1.44 s, and six concurrent copies each passed in
+  1.7–2.1 s wall time.
+
 ## CLI descriptor review — 2026-11-03
 
 - **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
@@ -513,3 +536,73 @@ implementation, timeout, assertion or skip changed.
   passed with exit 0 in 13.5 s, on the same host where the unchanged owner had
   just failed alone.
 - **Status:** resolved.
+
+## Transcript follow review fixes — 2026-11-03
+
+- **Original command:** `mise run test` at `ca81bfd7fb1ba9a14c0e95b1c7104e51df522c82`;
+  root/support used one parallel worker alongside the other default groups.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5000 ms (5110.58 ms observed), with `report.status` null
+  instead of zero and an error between tests.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-be9d5c72-45fb-49aa-9d92-ed62c4c95458/validation-04.stdout.txt`,
+  lines 4099–4119. The original package and output remain unchanged.
+- **Suite counts:** root/support reported 3,480 passed, two failed and one
+  error across 3,482 tests in 173 files (316.49 s of test execution).
+- **Isolated rerun:** `mise run test:logged -- --name follow-review-disk-owner -- bun test tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed the complete unchanged owner (exit 0, 3.8 s). The logged runner
+  deleted passing output; per-test counts were not retained.
+- **Assessment:** confirmed recurrence, without a root-cause repair. The package
+  marks it `related` through an import of `packages/protocol/src/public-api.ts`;
+  that file's branch diff adds only an optional interface property. Neither the
+  owning test nor disk-report implementation changed. The import association
+  does not establish timeout causality, and the isolated pass does not excuse
+  the recorded failure as environmental. Leave it unresolved for verification;
+  no timeout, assertion, skip or implementation changed.
+
+## Resolution — 2026-11-03 (transcript follow, to-do 1202 task 16)
+
+- **Root cause:** the test ran `scripts/disk-report.ts` twice against the
+  real host tools. `collectReport` calls `docker system df` and lists probe
+  networks, runs `du` over every `orkestrator-*`, browser-profile and
+  `ork-test-tmp-*` directory in the host temporary directories, and runs
+  `ps -axww`. On mbp3 with five builds running, `docker system df` alone took
+  4.9 s; one report invocation took 7.6 s and 15.7 s with the real tools,
+  1.3–1.8 s with only Docker stubbed, and 0.4–0.9 s with Docker, `du` and
+  `ps` stubbed and its own `TMPDIR`. Two invocations plus `git init` could not
+  fit Bun's 5 s default under that load, and Bun killed the child at the
+  deadline, which is the null `report.status`. The cause is host Docker and
+  process load, not any product change, which is why the owner usually passed
+  alone and the failure followed busy aggregate runs.
+- **Fix:** the test now gives the script a `TMPDIR` inside its own temporary
+  root and puts stub `docker`, `du` and `ps` (each `exit 1`) first on `PATH`.
+  The report already treats each as unavailable, and none of the asserted rows
+  depends on them; the macOS private-root branch and the legacy-Turbo fix are
+  still exercised. The test's deadline is 30 s, because it spawns two Bun
+  processes and `git`. No assertion was loosened or skipped.
+- **Verification:** `mise run test:logged -- --name disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1`
+  passed (2.6 s); `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --rerun-each 5`
+  passed (8.1 s), on the same loaded host where one unstubbed invocation took
+  7.6–15.7 s.
+
+## Main merge reconciliation — 2026-11-03
+
+Both branches independently identified host Docker latency and stubbed Docker in
+the checkout fixture. The merged test retains that shared fix together with the
+transcript-follow branch’s isolated `TMPDIR`, `du` and `ps` stubs and 30 s
+subprocess-test deadline. The CLI descriptor and transcript-follow observations
+and their original verification results above are retained as separate history.
+
+## Combined main-merge resolution — 2026-11-03
+
+Both repairs are retained: the report gets a private `TMPDIR`, the failing
+`docker` stub on its child `PATH`, and an unanswered `DOCKER_HOST` with any
+inherited `DOCKER_CONTEXT` removed. This preserves temporary-directory isolation
+and prevents the Docker probe from reaching the shared host daemon. The
+assertions and deadline are unchanged.
+
+## Second main-merge reconciliation — 2026-11-03
+
+The final combined test retains the private `TMPDIR`, failing `docker`, `du` and
+`ps` stubs, removal of inherited `DOCKER_CONTEXT`, and unused `DOCKER_HOST` socket.
+It also retains the transcript-follow subprocess-test deadline of 30 s. All
+assertions and the separate repair histories above are preserved.

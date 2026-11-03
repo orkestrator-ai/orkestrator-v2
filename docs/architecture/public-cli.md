@@ -702,6 +702,18 @@ page holds; it stops at `--timeout` or Ctrl+C and never affects the session.
 Transcript reads are explicit content access; status reads and waits never
 read transcripts.
 
+A newest-page read may pass the `token` of the page it already holds as
+`knownToken`. Tokens are scoped to the session, effective `limit`, and live
+window revision. While the same newest page still has that token the action answers
+`{sessionId, status: "unchanged", token}` with no messages; otherwise it
+returns the page as usual, so a stale or unknown token costs nothing but the
+page. The window is still read fresh, and `knownToken` with `before` is
+`invalid-input` (older pages carry no token). A backend that accepts it
+advertises `features.transcriptKnownToken`; an older backend refuses unknown
+input, so `--follow` sends `knownToken` only when the answering backend (the
+`--node` leaf, when routed) advertises it, and otherwise skips a repeated page
+by comparing tokens itself.
+
 ### Changes
 
 `changes view ENV` reads the backend's change projection for the environment
@@ -962,9 +974,9 @@ Which test proves each scenario class is listed in
 ## Limitations and rollout
 
 - `capabilities.features` reports `projectCascadeRemove`, `localProjectInit`,
-  `promptAttachments`, `selectedSlashCommands` and `enqueue` as `true`; a
-  client must treat a missing or `false` entry (an older backend) as
-  unavailable. `transcriptFollow` stays `poll`.
+  `promptAttachments`, `selectedSlashCommands`, `enqueue`, `nodeRouting` and
+  `transcriptKnownToken` as `true`; a client must treat a missing or `false`
+  entry (an older backend) as unavailable. `transcriptFollow` stays `poll`.
 - Cascade removal is operator-only: a Control MCP credential, even one holding
   `projects`, is refused (`capability-unavailable`), because deleting
   environments is a separate destructive grant.

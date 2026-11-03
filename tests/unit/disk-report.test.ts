@@ -103,19 +103,29 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
-    // The host's Docker daemon is not under test: `docker system df` alone
-    // took over six seconds on a shared host, past this test's deadline. A
-    // stub that fails is "Docker cannot be asked", which drops the Docker rows.
-    const fakeBin = path.join(root, "bin");
-    await mkdir(fakeBin);
-    await writeFile(path.join(fakeBin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    // Keep the script off host-sized work (0259): `docker system df` alone
+    // takes about five seconds on a busy Docker host, and `du` and `ps` scale
+    // with every other live test. Its temporary directory is this test's own,
+    // and Docker, `du` and `ps` answer "unavailable", which the report already
+    // handles; the rows asserted below need none of them.
+    const tmpDir = path.join(root, "tmp");
+    await mkdir(tmpDir);
+    const stubs = path.join(root, "bin");
+    await mkdir(stubs);
+    for (const command of ["docker", "du", "ps"]) {
+      await writeFile(path.join(stubs, command), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    }
+    const hostEnv = { ...process.env };
+    delete hostEnv.DOCKER_CONTEXT;
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
-          ...process.env,
-          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+          ...hostEnv,
+          PATH: `${stubs}${path.delimiter}${process.env.PATH ?? ""}`,
+          TMPDIR: tmpDir,
+          DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,
           HOME: root,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
@@ -139,14 +149,14 @@ describe("disk report", () => {
     const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
     // Exercise collectReport's macOS root branch, including its prefix filter
     // and the same-root case: no private row is duplicated or mislabelled.
-    const privateRoot = privateTmpdirRoot(os.tmpdir());
+    const privateRoot = privateTmpdirRoot(tmpDir);
     expect(rows.filter((row) => row.location === `${privateRoot}/ork-test-tmp-*`)).toHaveLength(1);
-    if (privateRoot !== os.tmpdir()) {
+    if (privateRoot !== tmpDir) {
       expect(
         rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
       ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
       expect(
-        rows.some((row) => row.location === `${os.tmpdir()}/playwright_chromiumdev_profile-*`),
+        rows.some((row) => row.location === `${tmpDir}/playwright_chromiumdev_profile-*`),
       ).toBe(true);
     }
     expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(
@@ -165,7 +175,9 @@ describe("disk report", () => {
     expect(fixed.stdout).toContain("Removed 1 legacy Turbo artifacts");
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(active)).toBe(true);
-  });
+    // Two script processes plus a git init: Bun's 5 s default is too tight
+    // for that under the aggregate suite's load.
+  }, 30_000);
 
   test("reports cleanup the reconciler stopped retrying, never a live environment's", async () => {
     const dataDir = path.join(root, "data");

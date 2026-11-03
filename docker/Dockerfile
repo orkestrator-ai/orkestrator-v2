@@ -513,17 +513,18 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypo
   && command -v setpriv \
   && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
 
+# Nothing a root exec, root script or root shell resolves or sources may be
+# writable by node. Checked once every script and directory is in place; the
+# manifest layer below adds only a root-owned file.
+COPY docker/verify-root-boundary.sh /usr/local/share/verify-root-boundary.sh
+RUN chmod 755 /usr/local/share/verify-root-boundary.sh \
+  && /usr/local/share/verify-root-boundary.sh
+
 # Image manifest: identity, pinned versions and the container contracts this
 # image implements. Generated from the ARG pins above and verified against the
 # scripts installed in this layer; see docker/image-manifest.ts. The backend
 # reads it from a never-started container, so the entrypoint never runs to
 # answer "what is this image?".
-# Nothing a root exec, root script or root shell resolves or sources may be
-# writable by node. Checked last, once every file is in place.
-COPY docker/verify-root-boundary.sh /usr/local/share/verify-root-boundary.sh
-RUN chmod 755 /usr/local/share/verify-root-boundary.sh \
-  && /usr/local/share/verify-root-boundary.sh
-
 ARG ORKESTRATOR_SOURCE_REVISION=unknown
 ARG ORKESTRATOR_IMAGE_CAPABILITIES=unverified
 LABEL org.orkestrator.image.manifest-schema="1" \

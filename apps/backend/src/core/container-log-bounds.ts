@@ -1,4 +1,5 @@
 import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
+import { redactBridgeOutput } from "./bridge-output-redaction.js";
 
 /**
  * Bounds for diagnostic output read from containers.
@@ -18,23 +19,36 @@ export function boundedTailCommand(file: string): string {
 /**
  * Host-side second bound. Keeps the end of the text (the most recent output),
  * and says so when anything was dropped.
+ *
+ * Every container log tail the backend returns or puts in an error passes
+ * through here, so this is also where it is scrubbed with `redactBridgeOutput`,
+ * the same pass a local bridge's stdio gets. The text is cut to the byte cap
+ * before redaction, because the redaction rules are not linear on one long
+ * run of URL-scheme characters, and again after it, because a replacement can
+ * be longer than what it replaced. A token a cut has split has lost its
+ * prefix and is not caught.
  */
 export function boundDiagnosticTail(text: string): string {
-  let bounded = text;
-  let truncated = false;
-  if (Buffer.byteLength(bounded, "utf8") > DIAGNOSTIC_TAIL_MAX_BYTES) {
-    bounded = Buffer.from(bounded, "utf8")
-      .subarray(-DIAGNOSTIC_TAIL_MAX_BYTES)
-      .toString("utf8")
-      .replace(/^�+/, "");
-    truncated = true;
-  }
+  const source = keepLastBytes(text);
+  const redacted = keepLastBytes(redactBridgeOutput(source.text));
+  let bounded = redacted.text;
+  let truncated = source.cut || redacted.cut;
   const lines = bounded.split("\n");
   if (lines.length > DIAGNOSTIC_TAIL_MAX_LINES + 1) {
     bounded = lines.slice(-(DIAGNOSTIC_TAIL_MAX_LINES + 1)).join("\n");
     truncated = true;
   }
   return truncated ? `[earlier output truncated]\n${bounded}` : bounded;
+}
+
+/** The last `DIAGNOSTIC_TAIL_MAX_BYTES` of `text`, never starting mid-character. */
+function keepLastBytes(text: string): { text: string; cut: boolean } {
+  if (Buffer.byteLength(text, "utf8") <= DIAGNOSTIC_TAIL_MAX_BYTES) return { text, cut: false };
+  const kept = Buffer.from(text, "utf8")
+    .subarray(-DIAGNOSTIC_TAIL_MAX_BYTES)
+    .toString("utf8")
+    .replace(/^\uFFFD+/, "");
+  return { text: kept, cut: true };
 }
 
 /**

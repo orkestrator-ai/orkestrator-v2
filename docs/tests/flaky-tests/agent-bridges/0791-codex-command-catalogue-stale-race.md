@@ -511,3 +511,12 @@ host temporary directory. A separately installed detached `origin/main`
 at `eda57e938` passed ten complete-owner repeats (exit 0, 12.5 s).
 These focused runs do not establish target-branch reproduction of the failures.
 No bridge code, assertion, skip or timeout was changed.
+
+The subsequent detached-main full `mise run test` **did** reproduce the original
+line-273 failure (81.16 ms, expected stale, received ready). Codex reported
+2335 pass / 63 skip / 1 fail across 106 files, with the package configured for
+one parallel worker. Root and protocol groups passed; workspace and bridges
+failed. The full command exited 1 after 683.7 s including 332 s of host-resource
+queueing. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.p3moaJ/baseline-recorded-full-tests.log.gz`.
+This confirms the original failure exists on main without the coordinator change.

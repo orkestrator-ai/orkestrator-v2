@@ -22,6 +22,7 @@ describe("client state capabilities", () => {
     expect(parseClientStateCapabilities(undefined)).toEqual({
       coordinatorPaneLayouts: false,
       coordinatorUpstreamMerge: false,
+      coordinatorUpstreamAutoMerge: false,
       noticeDismissals: false,
       environmentAttention: false,
     });

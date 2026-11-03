@@ -870,6 +870,19 @@ the renderer applies the same protocol rule to its own fetch and browser copy of
 the declines; otherwise that copy is imported once (never replacing a newer
 answer) and deleted.
 
+The question also offers **Always merge**: it merges now and saves a
+per-project setting in this machine's backend
+(`set_coordinator_upstream_auto_merge`, store
+`coordinator-upstream-auto-merge`). While it is on, the check answers
+`{ offer: true, automatic: true }`, past any stored decline, and the panel
+fast-forwards before the message without showing the question. Every other
+condition still applies: nothing is merged under a running turn or into a
+blocked checkout, and a failed fast-forward keeps the draft. The fast-forward
+toggle in the toolbar (`get/set_coordinator_upstream_auto_merge`) shows the
+setting and turns it off or on. Both are shown only when the backend advertises
+`coordinatorUpstreamAutoMerge`; a client that predates `automatic` shows the
+question, the safe reading.
+
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
 from anything this page observed, so it is correct after a reload. A worker

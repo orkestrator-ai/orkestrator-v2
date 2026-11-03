@@ -8,6 +8,11 @@ import { fixPath } from "./core/fix-path.js";
 import { dropInheritedAgentToolConnection } from "./core/agent-tools.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
+import {
+  assertProxiedModeHost,
+  gatewayAllowsNonTailscaleBind,
+  gatewayBindAddress,
+} from "./gateway-bind-policy.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendExitHandler, createBackendShutdownHandler } from "./shutdown.js";
@@ -64,14 +69,7 @@ fixPath();
 // identity that lets the orphan watchdog recognize the transition.
 const initialParentPid = process.ppid;
 const options = parseOptions(process.argv.slice(2));
-if (
-  (options.tailscaleServe || options.desktopWebClient) &&
-  options.host &&
-  options.host !== "127.0.0.1"
-) {
-  const mode = options.desktopWebClient ? "--desktop-web-client" : "--tailscale-serve";
-  throw new Error(`${mode} requires --host 127.0.0.1`);
-}
+assertProxiedModeHost(options);
 await mkdir(options.dataDir, { recursive: true });
 loadAgentTestHostCursorApiKey({
   dataDir: options.dataDir,
@@ -143,10 +141,7 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
       dataDir: options.dataDir,
       rendererRoot: options.rendererRoot,
       rendererDevServerUrl: options.rendererDevServerUrl,
-      bindAddress:
-        options.tailscaleServe || options.desktopWebClient
-          ? (options.host ?? "127.0.0.1")
-          : options.host,
+      bindAddress: gatewayBindAddress(options),
       fallbackBindAddress: options.fallbackHost,
       port: options.port,
       controlBindAddress: options.controlHost,
@@ -155,8 +150,7 @@ const { gatewayInfo, info, tailscaleServe } = await startGatewayServices({
       backendHello: () => backend.backendHelloIdentity(),
       nodeHooks: backend.nodeGateway(),
       compression: options.compression,
-      allowNonTailscaleBind:
-        options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
+      allowNonTailscaleBind: gatewayAllowsNonTailscaleBind(options),
       allowedOrigins: options.allowedOrigins,
       strictPort: options.strictGatewayPort,
       agentTestMode: options.runtimeFlavor === "agent-test",

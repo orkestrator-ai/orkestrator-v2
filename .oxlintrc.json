@@ -275,6 +275,23 @@
                   "!**/scheduled-jobs/tools.js"
                 ],
                 "message": "Import the scheduled-jobs domain through scheduled-jobs/index.js."
+              },
+              {
+                "group": ["**/mcp-management/*", "!**/mcp-management/index.js"],
+                "message": "Import the mcp-management domain through mcp-management/index.js."
+              },
+              {
+                "group": [
+                  "**/public-api/*",
+                  "!**/public-api/index.js",
+                  "!**/public-api/attention-cursor.js",
+                  "!**/public-api/dispatch.js",
+                  "!**/public-api/errors.js",
+                  "!**/public-api/exec-control.js",
+                  "!**/public-api/operation-ledger.js",
+                  "!**/public-api/revisions.js"
+                ],
+                "message": "Import the public-api domain through public-api/index.js."
               }
             ]
           }
@@ -335,6 +352,20 @@
                   "!**/backend/src/core/scheduled-jobs/index.js"
                 ],
                 "message": "Import the scheduled-jobs domain through scheduled-jobs/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/mcp-management/*",
+                  "!**/backend/src/core/mcp-management/index.js"
+                ],
+                "message": "Import the mcp-management domain through mcp-management/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/public-api/*",
+                  "!**/backend/src/core/public-api/index.js"
+                ],
+                "message": "Import the public-api domain through public-api/index.js."
               }
             ]
           }

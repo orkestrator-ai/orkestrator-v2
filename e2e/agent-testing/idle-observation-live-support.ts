@@ -93,6 +93,43 @@ export function gapHistogram(
   return buckets;
 }
 
+/**
+ * The backend's session-invalidation counters as `get_recurring_work_diagnostics`
+ * reports them (`sessionInvalidations.byScope`): counts per content-free cause,
+ * per platform, plus `environment` for announcements that name no session.
+ */
+export type InvalidationCounts = Record<string, Record<string, number> | undefined>;
+
+/**
+ * What one provider's views were told to re-read during a window, by cause
+ * (todo 0049 task 4): the difference of two samples for `scope` and for the
+ * environment-wide announcements every view of the environment also honours.
+ * Causes that did not move are omitted; the sum is under `total`.
+ */
+export function invalidationCauseDelta(
+  before: InvalidationCounts | undefined,
+  after: InvalidationCounts | undefined,
+  scope: string,
+): Record<string, number> {
+  const delta: Record<string, number> = {};
+  let total = 0;
+  for (const [name, key] of [
+    [scope, scope],
+    ["environment", "environment:"],
+  ] as const) {
+    const end = after?.[name] ?? {};
+    const start = before?.[name] ?? {};
+    for (const [cause, count] of Object.entries(end)) {
+      const moved = count - (start[cause] ?? 0);
+      if (moved <= 0) continue;
+      const label = name === scope ? cause : `${key}${cause}`;
+      delta[label] = moved;
+      total += moved;
+    }
+  }
+  return { ...delta, total };
+}
+
 export type SidebarActivity = "working" | "waiting" | "idle" | "stopped" | "unknown";
 
 /**

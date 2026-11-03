@@ -5017,12 +5017,15 @@ describe("NativeAgentService shared observations", () => {
             revision: event.observation!.revision,
             state: event.state,
           }),
-        onObservationInvalidation: (event) =>
+        onObservationInvalidation: (event) => {
+          // Every content announcement names the observer path that sent it.
+          expect(event.cause).toBe("content-revision");
           announcements.push({
             kind: "content",
             revision: event.observation.revision,
             state: event.state,
-          }),
+          });
+        },
       },
       async ({ storage, service }) => {
         const key = await adopt(storage, "tab-1", "provider-1", "claude");
@@ -5109,6 +5112,7 @@ describe("NativeAgentService shared observations", () => {
           providerSessionId: "provider-1",
           state: "working",
           agent: "claude",
+          cause: "content-revision",
         });
 
         await service.reconcileAgentActivity();

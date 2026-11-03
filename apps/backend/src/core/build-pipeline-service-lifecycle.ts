@@ -768,7 +768,7 @@ export class BuildPipelineLifecycle {
     await this.ctx.refreshWorkflowRollout();
     const paused = (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
     if (paused.phase === "paused") await this.closeWorkflowResults(paused, "superseded");
-    const pipeline = await this.ctx.mutate(pipelineId, (candidate) => {
+    const pipeline = await this.ctx.mutate(pipelineId, async (candidate) => {
       if (candidate.phase !== "paused") return;
       const phase = candidate.pausedFromPhase ?? "building";
       candidate.phase = phase;
@@ -778,12 +778,26 @@ export class BuildPipelineLifecycle {
       // Multi-model review resumes by opening a fresh panel. There is no one
       // reviewer session a generic resume prompt could safely target.
       if (phase === "reviewing" && usesReviewFanout(candidate)) {
-        candidate.reviewRetryRequested = true;
         if (!candidate.reviewPackage) {
+          // Nothing to review against: the retry path rebuilds the package.
+          candidate.reviewRetryRequested = true;
           discardSessionReviewReports(candidate);
           delete candidate.structuredReview;
           delete candidate.structuredReviewRequestId;
+          return;
         }
+        // Not through `reviewRetryRequested`: an explicit retry now always
+        // re-runs package preparation, while a resume reuses the package the
+        // paused panel was reviewing. Pause already stopped the panel; abandon
+        // again so a reviewer whose abort failed then is retried, and leave no
+        // fan-out so the next pass verifies the package and opens a new one.
+        await this.agents.abandonReviewFanout(candidate, "idle");
+        discardSessionReviewReports(candidate);
+        delete candidate.reviewFanout;
+        delete candidate.structuredReview;
+        delete candidate.structuredReviewRequestId;
+        delete candidate.verificationResult;
+        delete candidate.verificationFeedback;
         return;
       }
       if (candidate.validationRun && !candidate.reviewPackage) return;

@@ -1092,7 +1092,10 @@ describe("project rows lead with their machine", () => {
     ).toEqual(["teal", "rose"]);
     for (const project of projects) {
       const name = within(project).getByText("app");
-      expect(name.previousElementSibling?.getAttribute("data-testid")).toBe("machine-home-icon");
+      // The home sits in the coordinator's activity ring, directly before the name.
+      const leading = name.previousElementSibling;
+      expect(leading?.getAttribute("data-testid")).toBe("coordinator-activity-icon");
+      expect(leading?.querySelector('[data-testid="machine-home-icon"]')).not.toBeNull();
     }
   });
 

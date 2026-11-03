@@ -132,6 +132,8 @@ describe("CI workflow contracts", () => {
       "claude-terminal-failed-turn-docker",
       "container-worktree-signal-docker",
       "tmux-hook-signal-docker",
+      // M8: the staged ~/.claude.json allowlist and a real Claude start on it.
+      "claude-config-filter-docker",
     ])
       expect(source).toContain(`./tests/${suite}.test.ts --parallel=1`);
     expect(source).toContain(

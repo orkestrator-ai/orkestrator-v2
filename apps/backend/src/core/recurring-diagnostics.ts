@@ -1,5 +1,10 @@
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
+import type { NativeSessionInvalidationSnapshot } from "@orkestrator/protocol/native-agent-observation";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  nativeSessionInvalidationMetrics,
+  type NativeSessionInvalidationMetrics,
+} from "./native-session-invalidation-metrics.js";
 import type { RecurringSchedulerStatus } from "./recurring-scheduler.js";
 import type { AdmissionPoolStatus } from "./work-admission.js";
 import type { ContainerGitFetchStatus } from "./container-git-fetch.js";
@@ -91,6 +96,12 @@ export interface RecurringWorkDiagnostics {
    * container stuck on the fast poll is visible without reading logs.
    */
   signals: { name: SignalSourceName; status: SignalHealthStatus }[];
+  /**
+   * Every native session invalidation the backend emitted, counted by its
+   * content-free cause and the platform it named (todo 0049 task 4): what
+   * keeps waking an idle view. Profile-wide, like `metrics`.
+   */
+  sessionInvalidations: NativeSessionInvalidationSnapshot;
   /** Registrations refused because the source table was full. */
   droppedSources: number;
   /** Sources whose `status()` threw; they are skipped, never propagated. */
@@ -171,7 +182,10 @@ export class RecurringDiagnosticsRegistry {
     }
   }
 
-  snapshot(metrics: RecurringWorkMetrics = recurringWorkMetrics): RecurringWorkDiagnostics {
+  snapshot(
+    metrics: RecurringWorkMetrics = recurringWorkMetrics,
+    invalidations: NativeSessionInvalidationMetrics = nativeSessionInvalidationMetrics,
+  ): RecurringWorkDiagnostics {
     let faultedSources = 0;
     const collect = <T>(sources: Set<StatusSource<T>>): T[] => {
       const result: T[] = [];
@@ -226,6 +240,7 @@ export class RecurringDiagnosticsRegistry {
       admission,
       fetchPolicies,
       signals,
+      sessionInvalidations: invalidations.snapshot(),
       droppedSources: this.droppedSources,
       faultedSources,
     };

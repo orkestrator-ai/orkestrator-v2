@@ -3,6 +3,7 @@ import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js"
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
 import {
   encodePreviewTunnelFrame,
   PREVIEW_TUNNEL_PATH,
@@ -24,6 +25,14 @@ import {
   requestUrl,
   startGateway,
 } from "./gateway-test-harness.js";
+
+/** Gateway credential plus the environment Electron main names on a legacy preview request. */
+function legacyHeaders(token: string, environmentId = "local") {
+  return {
+    authorization: `Bearer ${token}`,
+    [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId,
+  };
+}
 
 describe("gateway preview integration", () => {
   let harness: PreviewHarness;
@@ -195,15 +204,249 @@ describe("gateway preview integration", () => {
     });
     expect(control.status).toBe(401);
     expect(fixture.requests).toHaveLength(0);
-    // The legacy route still works with the gateway credential (old clients).
+    // The legacy route still works with the gateway credential.
     const allowed = await requestUrl(
       `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
-      { headers: { authorization: `Bearer ${info.token}` } },
+      { headers: legacyHeaders(info.token) },
     );
     expect(allowed.status).toBe(200);
     expect(compatibilityPathUsage.snapshot().paths["preview.legacy-loopback-route"]?.count).toBe(
       before + 1,
     );
+  });
+
+  test("legacy preview: only a verified service target is reachable (M2)", async () => {
+    const other = await startPreviewFixture({ marker: "unregistered" });
+    try {
+      await harness.runtime.registry.settle();
+      const { info } = await startGateway({ previews: harness.runtime });
+      const headers = legacyHeaders(info.token);
+
+      const known = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers },
+      );
+      expect(known.status).toBe(200);
+
+      // A listening port no environment registered as a service.
+      const unknown = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${other.port}/health`,
+        { headers },
+      );
+      expect(unknown.status).toBe(403);
+      expect(unknown.json()).toEqual({
+        error: `Port ${other.port} is not an available preview service of this environment. Add it as a service to preview it.`,
+      });
+      expect(other.requests).toHaveLength(0);
+
+      // A disabled service no longer opens its port.
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      const disabled = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers },
+      );
+      expect(disabled.status).toBe(403);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test("legacy preview: only the requesting environment's targets are reachable (M2)", async () => {
+    const other = await startPreviewFixture({ marker: "other-environment" });
+    try {
+      await harness.addLocalEnvironment("other");
+      const created = await harness.runtime.registry.register({
+        environmentId: "other",
+        label: "other app",
+        targetKind: "backend-host",
+        applicationPort: other.port,
+        addressFamily: "ipv4",
+      });
+      if (created.kind !== "definition") throw new Error("expected definition");
+      await harness.runtime.registry.settle();
+      const { info } = await startGateway({ previews: harness.runtime });
+      const url = (port: number) => `${info.url}__orkestrator/browser/loopback/${port}/health`;
+
+      // Each environment reaches its own service.
+      expect(
+        (await requestUrl(url(fixture.port), { headers: legacyHeaders(info.token) })).status,
+      ).toBe(200);
+      const own = await requestUrl(url(other.port), {
+        headers: legacyHeaders(info.token, "other"),
+      });
+      expect(own.status).toBe(200);
+      // The environment header is routing metadata; the application never sees it.
+      expect(own.body).toContain('"marker":"other-environment"');
+      expect(other.requests.at(-1)?.headerNames).not.toContain(BROWSER_PREVIEW_ENVIRONMENT_HEADER);
+
+      // A verified service of another environment is refused.
+      const requestsBefore = other.requests.length;
+      const cross = await requestUrl(url(other.port), { headers: legacyHeaders(info.token) });
+      expect(cross.status).toBe(403);
+      expect(cross.json()).toEqual({
+        error: `Port ${other.port} is not an available preview service of this environment. Add it as a service to preview it.`,
+      });
+      // So is an environment that does not exist.
+      expect(
+        (await requestUrl(url(other.port), { headers: legacyHeaders(info.token, "missing") }))
+          .status,
+      ).toBe(403);
+      // A request naming no environment, or a malformed one, opens nothing.
+      const unscoped = await requestUrl(url(other.port), {
+        headers: { authorization: `Bearer ${info.token}` },
+      });
+      expect(unscoped.status).toBe(403);
+      expect(unscoped.json()).toEqual({
+        error:
+          "This preview request names no environment. Update the Orkestrator desktop app to preview this address.",
+      });
+      expect(
+        (
+          await requestUrl(url(other.port), {
+            headers: legacyHeaders(info.token, "other, local"),
+          })
+        ).status,
+      ).toBe(403);
+      expect(other.requests.length).toBe(requestsBefore);
+    } finally {
+      await other.close();
+    }
+  });
+
+  test("legacy preview: verification errors return 503 without reaching upstream", async () => {
+    const { info } = await startGateway({
+      legacyPreviewPortAccess: async () => {
+        throw new Error("verification failed");
+      },
+    });
+    const response = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(response.status).toBe(503);
+    expect(response.json()).toEqual({ error: "Could not verify the browser preview port" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  test("legacy preview: an IPv6 binding cannot authorize an IPv4 listener", async () => {
+    const ipv6 = await startPreviewFixture({ host: "::1", port: fixture.port });
+    try {
+      await harness.addContainerEnvironment("ipv6", { entryPort: 3000 });
+      harness.docker.containers.set("container-ipv6", {
+        id: "ipv6-container",
+        environmentId: "ipv6",
+        owner: harness.owner,
+        ports: { "3000/tcp": [{ HostIp: "::1", HostPort: String(fixture.port) }] },
+      });
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      await harness.runtime.registry.settle();
+      const service = harness.runtime.registry.snapshot({ environmentId: "ipv6" }).services[0]!;
+      expect(service.endpoint.state).toBe("available");
+      expect(service.endpoint.addressFamily).toBe("ipv6");
+      const { info } = await startGateway({ previews: harness.runtime });
+      const response = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers: legacyHeaders(info.token, "ipv6") },
+      );
+      expect(response.status).toBe(403);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await ipv6.close();
+    }
+  });
+
+  test.each(["other-environment", "unattributed"] as const)(
+    "legacy preview: expired managed binding refuses a %s replacement without a lifecycle event",
+    async (replacement) => {
+      let now = 0;
+      let owner: "this-environment" | "other-environment" | "unattributed" = "this-environment";
+      const runtime = harness.newRuntime({
+        registry: { now: () => now },
+        listenerOwnership: {
+          attribute: async () =>
+            owner === "this-environment"
+              ? { attribution: owner, processKey: "original-listener" }
+              : { attribution: owner },
+          stats: () => ({ listenerChecks: 0, listenerUnchecked: 0 }),
+        },
+      });
+      await runtime.init();
+      const created = await runtime.registry.register({
+        environmentId: "local",
+        label: "managed",
+        targetKind: "worktree",
+        applicationPort: fixture.port,
+        addressFamily: "ipv4",
+      });
+      if (created.kind !== "definition") throw new Error("expected definition");
+      await runtime.registry.settle();
+      const { info } = await startGateway({ previews: runtime });
+      const url = `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`;
+      const headers = legacyHeaders(info.token);
+      expect((await requestUrl(url, { headers })).status).toBe(200);
+      await fixture.close();
+      const replacementListener = await startPreviewFixture({
+        port: fixture.port,
+        marker: "replacement",
+      });
+      try {
+        // Only the listener changes; there is no storage lifecycle event.
+        owner = replacement;
+        now = 5_001;
+        expect((await requestUrl(url, { headers })).status).toBe(403);
+        expect(replacementListener.connections()).toBe(0);
+        expect(replacementListener.requests).toHaveLength(0);
+      } finally {
+        await replacementListener.close();
+      }
+    },
+  );
+
+  test("legacy preview: reserved ports are refused even when a service is bound there (M2)", async () => {
+    await harness.runtime.registry.settle();
+    const { info } = await startGateway({ previews: harness.runtime });
+    const headers = legacyHeaders(info.token);
+    const requestsBefore = fixture.requests.length;
+
+    harness.runtime.reservePorts("m2-test", [fixture.port]);
+    const reserved = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers },
+    );
+    expect(reserved.status).toBe(403);
+    expect(reserved.json()).toEqual({
+      error: `Port ${fixture.port} belongs to Orkestrator or Docker and cannot be previewed.`,
+    });
+    expect(fixture.requests.length).toBe(requestsBefore);
+
+    // The Docker daemon ports are refused without any registry lookup.
+    const docker = await requestUrl(`${info.url}__orkestrator/browser/loopback/2375/`, {
+      headers,
+    });
+    expect(docker.status).toBe(403);
+
+    // The gateway's own port: nothing ever registers it as a service.
+    const self = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${new URL(info.url).port}/__orkestrator/status`,
+      { headers },
+    );
+    expect(self.status).toBe(403);
+  });
+
+  test("legacy preview: a gateway without a preview registry refuses every port (M2)", async () => {
+    const { info } = await startGateway({ legacyPreviewPortAccess: undefined });
+    const response = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(response.status).toBe(403);
+    expect(fixture.requests).toHaveLength(0);
   });
 
   test("rollback drill: stop issuance, revoke, preserve services, re-enable and reconnect", async () => {
@@ -240,7 +483,7 @@ describe("gateway preview integration", () => {
     expect(fixture.server.listening).toBe(true);
     const legacy = await requestUrl(
       `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
-      { headers: { authorization: `Bearer ${info.token}` } },
+      { headers: legacyHeaders(info.token) },
     );
     expect(legacy.status).toBe(200);
 

@@ -180,6 +180,7 @@ export class CoordinatorsRepository {
     association: CoordinatorWorkflowAssociation,
   ): "active" | "finished" | "missing" | "unknown" {
     if (association.nodeId) return "unknown";
+    if (association.kind === "feature-plan") return this.featurePlanResourceState(association);
     const file =
       association.kind === "multi-review"
         ? this.files.multiReviewsFile()
@@ -209,6 +210,32 @@ export class CoordinatorsRepository {
         return "unknown";
     }
     return "finished";
+  }
+
+  /**
+   * A planning exchange is active while its record is attached and has not
+   * failed. Detached or failed, it is finished once its notice was sent or a
+   * day has passed without a change to the plan.
+   */
+  private featurePlanResourceState(
+    association: CoordinatorWorkflowAssociation,
+  ): "active" | "finished" | "missing" | "unknown" {
+    const plan = this.context.loadStoreRow(
+      this.files.featurePlansFile(),
+      association.resourceId,
+    ) as { updatedAt?: unknown; planning?: { operationId?: unknown; phase?: unknown } } | null;
+    if (!plan) return "missing";
+    if (
+      plan.planning?.operationId === association.featurePlan?.operationId &&
+      plan.planning?.phase !== "failed"
+    )
+      return "active";
+    if (association.terminalNotifiedAt) return "finished";
+    const updatedAt = Date.parse(String(plan.updatedAt ?? ""));
+    return Number.isFinite(updatedAt) &&
+      Date.now() - updatedAt >= COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS
+      ? "finished"
+      : "unknown";
   }
 
   /**

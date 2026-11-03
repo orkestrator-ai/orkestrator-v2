@@ -6854,7 +6854,7 @@ describe("ActionBar successful cleanup and merge actions", () => {
           </>,
         );
         fireEvent.contextMenu(screen.getByText(target.name));
-        fireEvent.click(screen.getByRole("button", { name: "Merge PR", exact: true }));
+        fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
         expect(realStoresSnapshot.useUIStore.getState().selectedEnvironmentId).toBe(target.id);
         expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
           "Merge Pull Request",

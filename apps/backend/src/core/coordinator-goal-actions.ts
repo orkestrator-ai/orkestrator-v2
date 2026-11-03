@@ -21,7 +21,7 @@ import {
 import { requireCoordinatorWorker } from "./coordinator-surface-actions.js";
 import { goalIdForRequest } from "./native-agent-goal-service.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
-import { nativeTabsOfLayout } from "./public-api/summaries.js";
+import { nativeTabsOfLayout } from "./public-api/index.js";
 import { surfaceRecord as record } from "./worker-surface-runs.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

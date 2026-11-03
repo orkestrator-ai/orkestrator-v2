@@ -12,6 +12,7 @@ import { resetDockerTopologyCache } from "../src/core/docker-image";
 import { ContainerHostReachabilityService } from "../src/core/container-host-reachability";
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
+import { AUTH_SECRET_CANARIES } from "../../../tests/helpers/auth-secret-canaries.js";
 
 const { createCommandRegistry, __testing } = await import("../src/core/commands");
 
@@ -173,7 +174,7 @@ if [ "$1" = "exec" ]; then
     *opencode-github-env-plugin-fingerprint*) printf '%s' "\${FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT:-}" ;;
     *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
     *opencode-serve.log*) printf 'opencode log\n' ;;
-    *claude-bridge.log*) printf 'claude log\n' ;;
+    *claude-bridge.log*) printf 'claude log\nmcp auth failed: %s\n' '${AUTH_SECRET_CANARIES.anthropicApiKey}' ;;
     *codex-bridge.log*) printf 'codex log\n' ;;
   esac
   exit 0
@@ -815,8 +816,9 @@ describe("process and platform command behavior", () => {
     expect(await invoke("get_opencode_server_log", { containerId: "container-a" })).toBe(
       "opencode log\n",
     );
+    // The fake log carries a credential; the tail comes back scrubbed.
     expect(await invoke("get_claude_server_log", { containerId: "container-a" })).toBe(
-      "claude log\n",
+      "claude log\nmcp auth failed: [redacted]\n",
     );
     expect(await invoke("get_codex_server_log", { containerId: "container-a" })).toBe(
       "codex log\n",

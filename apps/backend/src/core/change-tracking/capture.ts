@@ -20,6 +20,7 @@
  */
 
 import { confinedRead, validCapturePath } from "./confined-read.js";
+import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import { objectId, type ObjectStore } from "./object-store.js";
 
@@ -199,14 +200,7 @@ export interface CaptureExecutor {
 }
 
 /** Git invocation hardened against repository-configured programs. */
-export const SAFE_GIT_CONFIG = [
-  "-c",
-  "core.fsmonitor=false",
-  "-c",
-  "core.untrackedCache=false",
-  "-c",
-  "core.hooksPath=/dev/null",
-];
+export const SAFE_GIT_CONFIG = [...HARDENED_GIT_CONFIG, "-c", "core.untrackedCache=false"];
 
 function splitNulBuffer(buffer: Buffer): Buffer[] {
   const parts: Buffer[] = [];

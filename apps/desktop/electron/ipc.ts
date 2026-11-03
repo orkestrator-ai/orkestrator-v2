@@ -23,6 +23,7 @@ import type {
   BrowserPreviewBounds,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
+import { browserPreviewEnvironmentId } from "@orkestrator/protocol/browser-preview";
 import { isOpaquePreviewId, normalizePreviewPath } from "@orkestrator/protocol/preview-services";
 import {
   isMacOsPrivacySettingsPane,
@@ -451,10 +452,8 @@ export function registerMainIpc({
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("Expected browser preview attachment details");
     }
-    const { tabId, url, service, navigationBasis, bounds, visible } = value as Record<
-      string,
-      unknown
-    >;
+    const { tabId, url, environmentId, service, navigationBasis, bounds, visible } =
+      value as Record<string, unknown>;
     if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
@@ -472,9 +471,13 @@ export function registerMainIpc({
         visible,
       });
     }
+    // A malformed environment is dropped; the gateway then refuses the
+    // view's requests rather than guessing an environment.
+    const environment = browserPreviewEnvironmentId(environmentId);
     return previews(event).attach({
       tabId: browserPreviewTabId(tabId),
       url: browserPreviewUrl(url),
+      ...(environment ? { environmentId: environment } : {}),
       ...basis,
       bounds: browserPreviewBounds(bounds),
       visible,

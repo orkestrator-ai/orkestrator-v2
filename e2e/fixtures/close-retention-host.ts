@@ -413,7 +413,7 @@ function readJsonLines(file: string): unknown[] {
 function vendorView() {
   const cursor = existsSync(files.cursorStore)
     ? (JSON.parse(readFileSync(files.cursorStore, "utf8")) as {
-        agents: Record<string, { turns: Array<{ prompt: string; status: string }> }>;
+        agents: Record<string, { turns: Array<{ prompt: string; sent: string; status: string }> }>;
       })
     : { agents: {} };
   const grokTurns = readJsonLines(files.grokStore) as Array<{
@@ -429,7 +429,10 @@ function vendorView() {
   return {
     cursor: Object.entries(cursor.agents).map(([id, agent]) => ({
       id,
+      // The user's text of each turn, without the bridge's system-instructions
+      // frame; `sent` is what the SDK was actually given, frame included.
       prompts: agent.turns.map((turn) => turn.prompt),
+      sent: agent.turns.map((turn) => turn.sent),
       statuses: agent.turns.map((turn) => turn.status),
     })),
     // `<event>:<agentId>` for every SDK call, in order.

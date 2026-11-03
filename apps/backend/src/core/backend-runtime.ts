@@ -23,7 +23,7 @@ import { FeatureBuildTasks } from "./feature-build-tasks.js";
 import { IntegrationLocks } from "./integration-locks.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./pr-monitor-runtime.js";
-import { PublicApiReconciliations } from "./public-api/reconciliations.js";
+import { PublicApiReconciliations } from "./public-api/index.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux-runtime.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";

@@ -237,3 +237,32 @@ The unchanged complete owner passed alone:
 (exit 0, 1.0 s; passing counts not retained). This repeats the open cold-restart
 projection race; no root cause is established. Original group evidence:
 `/tmp/orkestrator-test-run.svBnLQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## CLI descriptor review — 2026-11-03
+
+- **Test:** `Codex sub-agent cards through the bridge and backend projection > each child keeps one card, its transcript and status across a fresh backend and a cold restart`
+- **Original command:** `mise run test` at `2e81b373d006fa917fec5ed04a254e10c76a6703`.
+- **Worker configuration:** workspace reserved six slots, root one, bridges two; backend used four workers.
+- **Failure:** Cold restart reported recovering instead of idle at line 170 (1154.15 ms).
+- **Suite counts:** backend 13,567 pass, 100 skip, four fail across 916 files; root 3,480 pass, two fail, one error across 173 files.
+- **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-subagents -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures` → passed, exit 0, 2.8 s.
+- **Disposition:** The unchanged complete owner passed alone. This confirms intermittent behavior, not a root-cause fix. No assertion, timeout, skip or implementation in this area was changed.
+
+## `recovering` variant fixed — 2026-11-03 (CLI descriptor repair)
+
+- **Root cause of the `recovering` versus `idle` variant:** after `restart()`
+  the test read one projection straight away. A fresh codex-bridge reports
+  raw phase `starting` until its new app-server child is up, and
+  `HttpBridgeProvider` maps that to `recovering`
+  (`apps/backend/src/core/http-bridge-provider.ts`). Under load the first read
+  came before the child was up.
+- **Fix:** the cold-restart read now uses `stack.waitForProjection` until the
+  phase is no longer `recovering`, then asserts `idle` and the same cards and
+  rows as before. A turn that stays `recovering` still fails at the existing
+  30 s projection deadline. No implementation, assertion or skip changed.
+- **Verification:** `mise run test:logged -- --name l12-codex-cards -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --rerun-each=5 --only-failures`
+  passed with exit 0 in 5.5 s.
+- **Status:** still open. The original 31.8 s wait timeout and the
+  fallback-name, empty-action snapshot at line 140 are different variants, and
+  this change does not address them.

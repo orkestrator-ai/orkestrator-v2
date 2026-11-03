@@ -188,3 +188,40 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+## CI-failure branch main-merge validation — 2026-11-03
+
+- **Original command:** `mise run test:logged -- --name merge-default-suite -- mise run test`, merging `6ae99a3ed42ccc05ebd85d26289b5b4672712197` into `b949c7bd66b17bfc0914a8c87ebd799c02127284`.
+  Workspace/root/bridges/protocol reservations were 6/1/2/1; desktop used two
+  parallel workers. The run took 335.8 seconds, including about 127 seconds
+  waiting for shared-host capacity.
+- **Failure:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`
+  timed out after 15,003.77 ms (15,000 ms limit). Desktop reported 1,656 passed,
+  16 skipped and one failed across 113 files in 30.36 seconds. All other
+  aggregate groups passed; the workspace failed only its desktop task.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-desktop-rerun -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed (exit 0) in 0.9 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.EYlHGQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and enclosing `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.qT9K2W/merge-default-suite.log.gz`.
+- **Assessment:** another occurrence of the recorded aggregate-only timeout;
+  the cause remains unconfirmed. No owning implementation, assertion,
+  deadline or skip changed. The aggregate remains non-green despite the
+  passing isolated rerun.
+
+## tmux container polling main-merge validation — 2026-11-03
+
+- **Original command:** `mise run test:logged -- --name merge-default-suite -- mise run test`, merging `38ac308448d28ccc592b6add876be3996938a25b` into `b5f221e6305c98f1ccbf46346c6a3a1b251c2f82`.
+  Workspace/root/bridges/protocol reservations were 6/1/2/1; desktop used two
+  parallel workers. The aggregate took 692.7 seconds, including about 337 seconds
+  waiting for shared-host capacity.
+- **Failure:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`
+  timed out at 15,005.14 ms against its 15,000 ms limit. Desktop reported
+  1,664 passed, 14 skipped and one failed across 113 files (27.30 seconds).
+  All other aggregate groups passed; workspace failed only its desktop task.
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-bridge-builds-isolated -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed (exit 0) in 1.1 seconds. Passing raw output was removed by the logger.
+- **Evidence:** `/tmp/orkestrator-test-run.UCmFXn/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `/tmp/orkestrator-test-run.d1a2GX/merge-default-suite.log.gz`.
+- **Assessment:** recurrence of the recorded aggregate-only startup timeout;
+  the cause remains unconfirmed. No owning implementation, assertion, deadline
+  or skip changed. The aggregate remains non-green despite the isolated pass.

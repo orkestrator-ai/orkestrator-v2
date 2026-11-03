@@ -573,6 +573,7 @@ function ManualBrowserTab({
         void attachBrowserPreview({
           tabId,
           url: resolved.iframeUrl,
+          environmentId,
           ...(urlBasis === undefined ? {} : { navigationBasis: urlBasis }),
           bounds,
           visible: isActive && !hasBlockingOverlay && !annotations.previewHidden,
@@ -608,6 +609,7 @@ function ManualBrowserTab({
     annotations.previewHidden,
     applyNativeState,
     browserPreviewSupported,
+    environmentId,
     hasBlockingOverlay,
     isActive,
     nativeBrowserPreview,

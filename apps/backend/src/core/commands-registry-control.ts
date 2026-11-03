@@ -271,6 +271,11 @@ async function launchNativeAgentJobInternal(
     const jobId = jobIdFor(environmentId, requestId);
     if (tabReuse && completionAction) {
       const resent = await resendToOpenJobTab(context, {
+        authorized,
+        onDispatchStarted: () => {
+          dispatchStarted = true;
+        },
+        coalesce: !autoMergePrUrl,
         environmentId,
         requestId,
         completionAction,
@@ -287,7 +292,13 @@ async function launchNativeAgentJobInternal(
             : {}),
         },
       });
-      if (resent) return { jobId, environmentId, ...resent, ...completionActionResult };
+      if (resent) {
+        if (resent.status === "skipped") {
+          await rollBackCompletionAction();
+          return { status: "skipped" };
+        }
+        return { jobId, environmentId, ...resent, ...completionActionResult };
+      }
     }
     const tabId = `agent-job-${jobId}`;
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
@@ -341,6 +352,8 @@ async function launchNativeAgentJobInternal(
       });
     }
     if (!(await authorized())) {
+      if (tabReuse)
+        await context.storage.settleNativeAgentJobRequest(jobQueueKey, requestId, "rejected");
       await rollBackCompletionAction();
       return { status: "skipped" };
     }

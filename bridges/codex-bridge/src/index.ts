@@ -219,6 +219,10 @@ const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
 let bridgeAuthToken =
   process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
+// The token authenticates callers of this bridge; nothing this process spawns
+// needs it. Capture it once and remove it so the app-server child, and every
+// shell the agent runs through it, cannot inherit the credential (H4).
+delete process.env[BRIDGE_TOKEN_ENV];
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;

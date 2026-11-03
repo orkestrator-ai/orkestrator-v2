@@ -10,6 +10,8 @@ import type { ResourceChange } from "./storage.js";
 import { RESOURCE_MANIFEST_KINDS } from "./storage-shared.js";
 import { readStoredValue } from "./storage-test-support.js";
 
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
+
 const directories: string[] = [];
 const contexts: StorageContext[] = [];
 
@@ -55,6 +57,50 @@ describe("StorageContext", () => {
       ["kanban", "p1", 1],
     ]);
     expect(readStoredValue(dataDir, "project-notes.json")).toHaveLength(1);
+  });
+
+  test("retains native invalidation causes and counts only committed announcements once", async () => {
+    const { context } = await open();
+    const seen: ResourceChange[] = [];
+    context.changes.addResourceChangeListener((change) => seen.push(change));
+    const count = () => nativeSessionInvalidationMetrics.snapshot().byCause["record-title"] ?? 0;
+    const before = count();
+    await context.atomically(async () => {
+      context.changes.announce(
+        "native-agent-session",
+        "e1",
+        undefined,
+        { agent: "codex", logicalSessionKey: "env-e1:tab" },
+        false,
+        "record-title",
+      );
+      expect(seen).toEqual([]);
+      expect(count()).toBe(before);
+    });
+    expect(seen).toEqual([
+      expect.objectContaining({
+        resource: "native-agent-session",
+        cause: "record-title",
+        agent: "codex",
+        logicalSessionKey: "env-e1:tab",
+      }),
+    ]);
+    expect(count()).toBe(before + 1);
+    await expect(
+      context.atomically(async () => {
+        context.changes.announce(
+          "native-agent-session",
+          "e1",
+          undefined,
+          undefined,
+          false,
+          "record-title",
+        );
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(seen).toHaveLength(1);
+    expect(count()).toBe(before + 1);
   });
 
   test("uses the compact UTF-8 byte limit for direct and atomic sensitive saves", async () => {

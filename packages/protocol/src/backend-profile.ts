@@ -202,6 +202,13 @@ export const BACKEND_CAPABILITIES = {
    * as an environment and refuse, so the command node checks this first.
    */
   nodeCoordinatorMail: "node-coordinator-mail",
+  /**
+   * The leaf side of Kanban sync (`@orkestrator/protocol/ticket-sync`):
+   * `apply_ticket_sync`, `get_ticket_sync_cursor`, `collect_ticket_sync_outbox`
+   * and `ack_ticket_sync_outbox`. A command node syncs tickets only with a
+   * leaf that advertises it and tells the user to update any other.
+   */
+  ticketSync: "ticket-sync",
 } as const;
 
 const MAX_CAPABILITIES = 64;

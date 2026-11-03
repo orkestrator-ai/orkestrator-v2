@@ -3,8 +3,10 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import { databaseStoreForPath } from "./storage-stores.js";
 import { seedStore } from "./storage-test-support.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import {
   RESOURCE_MANIFEST_KINDS,
   type ResourceChange,
@@ -812,7 +814,7 @@ describe("StorageService resource change announcements", () => {
        * in-memory bound check rather than four thousand round trips to disk.
        */
       for (let index = 0; index < 4_200; index += 1) {
-        storage.announceNativeAgentSessionProjection("env-1", {
+        storage.announceNativeAgentSessionProjection("env-1", "projection-read", {
           agent: "codex",
           logicalSessionKey: `env-env-1:tab-${index}`,
         });
@@ -845,17 +847,101 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
+  test("a coordinator policy write announces record-policy", async () => {
+    await withStorage(async (storage, changes) => {
+      await storage.addEnvironment(environment("e1", "p1"));
+      const session = await storage.getOrCreateNativeAgentSession(
+        {
+          key: "codex env-e1:coordinator",
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:coordinator",
+          origin: "coordinator",
+        },
+        async () => "provider-coordinator",
+      );
+      changes.length = 0;
+      await storage.transitionCoordinatorResearchPolicy(
+        session,
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "restricted" },
+          "coordinator",
+          undefined,
+          "off",
+        ),
+        { kind: "coordinator", projectId: "p1", coordinatorId: "coordinator" },
+      );
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "native-agent-session",
+          cause: "record-policy",
+          agent: "codex",
+          logicalSessionKey: session.logicalSessionKey,
+        }),
+      ]);
+    });
+  });
+
+  test("persisted native-session write families announce their specific causes", async () => {
+    await withStorage(async (storage, changes) => {
+      await storage.addEnvironment(environment("e1", "p1"));
+      const input = {
+        key: "codex env-e1:tab",
+        environmentId: "e1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-e1:tab",
+      };
+      const expectCauses = (cause: string) => {
+        const native = changes.filter((change) => change.resource === "native-agent-session");
+        expect(native.length).toBeGreaterThan(0);
+        expect(native.every((change) => change.cause === cause)).toBe(true);
+        changes.length = 0;
+      };
+      changes.length = 0;
+      const session = await storage.getOrCreateNativeAgentSession(input, async () => "provider-1");
+      expectCauses("record-created");
+      await storage.updateNativeAgentSessionControls(session.key, session.providerSessionId, {
+        mode: "plan",
+      });
+      expectCauses("record-controls");
+      await storage.recordNativeAgentSessionBackendTitle(session.key, {
+        providerSessionId: session.providerSessionId,
+        title: "Title",
+        source: "generated",
+      });
+      expectCauses("record-title");
+      await storage.updateNativeAgentGoal(session.key, () => null);
+      expectCauses("record-goal");
+      await storage.setIncompleteTurnNotice(session.key, session.providerSessionId, {
+        assistantMessageId: "reply",
+        kind: "failed",
+        updatedAt: new Date(0).toISOString(),
+      });
+      expectCauses("record-notice");
+      await storage.dispatchNativeAgentPromptOnce(session.key, "request-1", async () => undefined);
+      expectCauses("record-dispatch");
+      await storage.invalidateNativeAgentSession(session.key, session.providerSessionId);
+      expectCauses("record-invalidated");
+      await storage.getOrCreateNativeAgentSession(input, async () => "provider-2");
+      expectCauses("record-created");
+      await storage.deleteNativeAgentSessionsByEnvironment("e1");
+      expectCauses("record-removed");
+    });
+  });
+
   test("scopes a native-agent announcement to its agent and logical session", async () => {
     await withStorage(async (storage, changes) => {
-      storage.announceNativeAgentSessionProjection("env-1", {
+      const counted = () => nativeSessionInvalidationMetrics.snapshot().byScope;
+      const before = counted();
+      storage.announceNativeAgentSessionProjection("env-1", "discovery-renewal", {
         agent: "codex",
         logicalSessionKey: "env-env-1:tab-a",
       });
-      storage.announceNativeAgentSessionProjection("env-1", {
+      storage.announceNativeAgentSessionProjection("env-1", "hydration", {
         agent: "claude",
         logicalSessionKey: "env-env-1:tab-b",
       });
-      storage.announceNativeAgentSessionProjection("env-1");
+      storage.announceNativeAgentSessionProjection("env-1", "model-catalog-refresh");
 
       expect(changes).toEqual([
         expect.objectContaining({
@@ -863,16 +949,32 @@ describe("StorageService resource change announcements", () => {
           id: "env-1",
           agent: "codex",
           logicalSessionKey: "env-env-1:tab-a",
+          cause: "discovery-renewal",
         }),
         expect.objectContaining({
           resource: "native-agent-session",
           id: "env-1",
           agent: "claude",
           logicalSessionKey: "env-env-1:tab-b",
+          cause: "hydration",
         }),
-        expect.objectContaining({ resource: "native-agent-session", id: "env-1" }),
+        expect.objectContaining({
+          resource: "native-agent-session",
+          id: "env-1",
+          cause: "model-catalog-refresh",
+        }),
       ]);
       expect(changes[2]).not.toHaveProperty("agent");
+      // Each emitted change is counted by its cause and the platform it named.
+      const after = counted();
+      expect(
+        (after.codex?.["discovery-renewal"] ?? 0) - (before.codex?.["discovery-renewal"] ?? 0),
+      ).toBe(1);
+      expect((after.claude?.hydration ?? 0) - (before.claude?.hydration ?? 0)).toBe(1);
+      expect(
+        (after.environment?.["model-catalog-refresh"] ?? 0) -
+          (before.environment?.["model-catalog-refresh"] ?? 0),
+      ).toBe(1);
     });
   });
 

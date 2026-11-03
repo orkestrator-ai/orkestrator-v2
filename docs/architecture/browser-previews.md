@@ -153,7 +153,14 @@ response:
   unauthenticated or embedded view.
 
 The legacy route (`/__orkestrator/browser/loopback/<port>/`) stays available
-for old clients and legacy URL tabs. A legacy URL tab whose loopback port
+for old clients and legacy URL tabs. It opens only a port that is the
+verified binding of an enabled service of the requesting environment, and
+never a reserved port (`PreviewRuntime.legacyLoopbackPortAccess`); any other
+port answers 403, so a backend-host port must be registered as a service of
+the tab's environment before a legacy tab can show it. The renderer passes the
+tab's environment with the attach call, and Electron main names it in the
+`x-orkestrator-preview-environment` header on the view's authenticated
+requests; a request without it (an older desktop app) is refused. A legacy URL tab whose loopback port
 belongs to exactly one enabled, available service of its own environment in
 the current backend epoch offers **Open as service**. The click re-reads the
 service list and converts the tab only if the same service still has the
@@ -593,8 +600,14 @@ downgrading that far.
 `get_preview_diagnostics` (trusted control API only) returns counts, bounded
 failure categories, gauges (tunnel sockets and queued bytes, publication
 sockets, relay processes and channels, active admissions), and
-p50/p95 connect times. It never contains URLs, paths, queries, headers,
-credentials, or page contents. Preview credentials cannot call it. A test
+p50/p95 connect times. Desktop windows add their own ingress series
+(`desktop.connect_ms`, `desktop.first_byte_ms`) and reconnect counts
+(`desktop.reconnect{category}`, `desktop.reconnect_failed{category}`), buffered
+in Electron and reported every 30 seconds through
+`record_preview_client_metrics`. That command accepts only those fixed names,
+safe failure categories and bounded numbers, and rejects the whole report
+otherwise (`@orkestrator/protocol/preview-client-metrics`). Diagnostics never
+contain URLs, paths, queries, headers, credentials, or page contents. Preview credentials cannot call it. A test
 ("logs, diagnostics, and events never carry credentials…") enforces this.
 
 Readiness in the picker and in environment settings distinguishes these cases:

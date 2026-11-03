@@ -12,6 +12,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 import { fixture, type StoredMail } from "./agent-mail-storage-test-support.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 describe("StorageService agent mail routes", () => {
   async function peerFixture() {
@@ -487,7 +488,12 @@ describe("StorageService agent mail routes", () => {
           ...config.global,
           agentMessaging: { ...config.global.agentMessaging!, autonomousWakeBudget: 4 },
         });
-        if (!side) await storage.coordinators.openCoordinatorDelegation("launch-e1", "agent");
+        if (!side)
+          await storage.coordinators.openCoordinatorDelegation(
+            new WorkerTabCloseAdmission(),
+            "launch-e1",
+            "agent",
+          );
         const main = coordinatorSender("conversation-1");
         const other = side ? coordinatorSender("conversation-2") : tab("e1");
         for (let index = 0; index < 6; index += 1) {

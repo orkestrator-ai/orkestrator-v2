@@ -116,7 +116,21 @@ export async function startPreviewHarnessClient(
     async close() {
       await browser.close();
       await proxy.close();
+      // Wait for the harness to stop its applications, so the next project's
+      // harness does not start a dev server over one that is still exiting.
+      const exited =
+        harness.exitCode !== null || harness.signalCode !== null
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => harness.once("exit", () => resolve()));
       harness.stdin.end();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        exited,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 30_000);
+        }),
+      ]);
+      clearTimeout(timer);
     },
   };
 }

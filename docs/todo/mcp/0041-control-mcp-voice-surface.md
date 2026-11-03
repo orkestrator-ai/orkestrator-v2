@@ -15,7 +15,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Live voice qualification (Remaining work 1(a))**: run the scripted voice session through a real realtime voice runtime and record latency, token counts, misresolved targets and session-handle copy errors. Status: blocked (no realtime voice runtime or credentials on the qualification machine; needs a person speaking).
 2. **`delegate` into a coordinator turn (D13)**: an action that starts a coordinator turn from outside. Status: deferred.
 3. **Stateful MCP session with `list_changed` and subscriptions (D14)**. Status: deferred.
-4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: open.
+4. **Over-limit Control MCP files**: `control-mcp-server.test.ts` (left over the limit by D17) and, newly, `control-mcp-tools.ts` exceed the 2,000-line rule. Status: test file done (split 2026-11-03, D23); `control-mcp-tools.ts` open (depends on #1664 merging, D24).
 5. **Stale statements in this file**: D11, the profile size table and the OpenCode conformance note no longer match `main`. Status: open (docs only).
 
 ### 1. Live voice qualification (Remaining work 1(a))
@@ -97,9 +97,11 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Investigation.** At HEAD `apps/backend/src/core/control-mcp-server.test.ts` is 3,078 lines and still growing. New since this file: `apps/backend/src/core/control-mcp-tools.ts` is 2,002 lines, just over the limit, after #1268 added the operator workflow tools (`control-mcp-operator-workflow-tools.ts`, `control-mcp-review-actions.ts`). `control-mcp-server.ts` itself is 650 lines.
 
+Rechecked 2026-11-03 against `main` at `b8862313`: the test file had reached 4,322 lines (62 tests, 565 assertions) and `control-mcp-tools.ts` 2,272. The test file is now split by the source module each block exercises (D23); the 62 tests keep their names and assertions. `control-mcp-tools.ts` is left alone because #1664 (cross-machine ticket coordination) edits it; it should be split once #1664 merges, along the boundaries in D24, so each tools module lines up with one test file.
+
 **Decisions.**
 
-- **Where should the split be tracked and done?**
+- **Where should the split be tracked and done?** Resolved 2026-11-03: in this file's task 4, by a ticket against it, rather than in a new todo file.
   - **Open a new todo file for splitting both, aligned with each other (tools module and its tests), as the README requires for new work (recommended).**
     - Pros: follows the "never add new todos to an existing file" rule; the split of the tools module and the test file can follow the same boundaries.
     - Cons: one more Low file.
@@ -760,6 +762,69 @@ the choice, why, and its pros and cons.
 - Pros: the run proves the answer took effect. Cons: the stop step usually
   meets an idle session in the approval script; a real mid-turn stop is
   covered by the runs without `--expect-approval` and by the earlier evidence.
+
+**D23. Task 4: how `control-mcp-server.test.ts` is split (2026-11-03).**
+- Options: (a) the five areas the ticket named (server, tools, voice,
+  operator workflow, review actions); (b) the source module each test block
+  actually exercises; (c) equal-sized chunks in file order.
+- Chosen: (b). The file had no voice, operator-workflow or review-action
+  tests of its own; those already live in `control-mcp-voice.test.ts`,
+  `control-mcp-operator-tools.test.ts` and `control-mcp-pr-tools.test.ts`.
+  Its 62 tests divide into:
+  - `control-mcp-server.test.ts`: credentials, the descriptor, transport,
+    transfers and the coordinator invoker guard (`control-mcp-server.ts`).
+  - `control-mcp-server-coordinator-workflows.test.ts`: worker, workflow,
+    review and schedule tools (`control-mcp-coordinator-tools.ts`,
+    `control-mcp-coordinator-worker-tools.ts`, `control-mcp-review-actions.ts`,
+    `control-mcp-account-tools.ts`).
+  - `control-mcp-server-reads.test.ts`: tool listing and instructions, and
+    the project, environment, tab, prompt, ticket and node tools.
+  - `control-mcp-server-launch.test.ts`: `get_launch_options`,
+    `launch_environment`, `launch_job` and the coordinator launch base.
+  - `control-mcp-server-messaging.test.ts`: the agent mail tools and the
+    delegation wake contract.
+  The scripted invoker, `rpc`, `rpcPayload`, `BASE` and
+  `coordinatorCredential` moved unchanged into
+  `control-mcp-server-test-support.ts` (`useControlMcpServerHarness`).
+  Test bodies moved byte for byte. Each file keeps the `describe` name, so
+  every test's full name is unchanged. The `for (const mode …)` loop stays
+  whole in the server file, although its third test (the workflow wake
+  promise) is a workflow test, because splitting a loop would change the
+  file's structure, not just move it.
+- Why: the test files then match how `control-mcp-tools.ts` will be split
+  (D24), which is what this task asked for.
+- Pros: each tools module will have one test file; every file is under
+  1,000 lines. Cons: the reads file spans several small tool groups, and the
+  credentials test ("binds coordinator credentials…", 505 lines) still calls
+  tools from most groups.
+- Evidence (rechecked 2026-11-03, from `apps/backend` with `NODE_ENV=test`
+  and `--reporter=junit`):
+  - Before: the parent commit's `control-mcp-server.test.ts`, run alone,
+    gave 62 pass, 0 fail, 565 `expect()` calls.
+  - After, all five files with `--parallel=5`: 62 pass, 0 fail, 565
+    `expect()` calls.
+  - After, each file alone: server 13 tests / 177 expects,
+    coordinator-workflows 10 / 125, reads 11 / 100, launch 16 / 82,
+    messaging 12 / 81 (62 tests, 565 expects in total), all passing.
+  - Names: the sorted `describe > test` list from each junit report has 62
+    entries. Two names appear twice because the `for (const mode …)` loop
+    runs them once per mode, both before and after. The list is identical
+    across all three runs (`diff` empty; SHA-256 `ebc3673f…89938` for
+    each).
+
+**D24. Task 4: when and how `control-mcp-tools.ts` is split.**
+- Options: (a) split it now, alongside the tests; (b) wait for #1664, which
+  edits it, then split along the D23 boundaries.
+- Chosen: (b). Status open, depends on #1664 merging.
+- Boundaries: keep `createControlMcp`'s composition, instructions, the
+  listing filter and the shared helpers in `control-mcp-tools.ts`; move the
+  launch tools and their launch-base helpers (tested by
+  `control-mcp-server-launch.test.ts`), the project, environment, tab, prompt
+  and ticket tools (`control-mcp-server-reads.test.ts`) and the mail tools
+  (`control-mcp-server-messaging.test.ts`) into one module each, registered
+  the way `registerCoordinatorWorkflowTools` already is.
+- Pros: no rebase conflict with #1664; one split per boundary. Cons: the
+  file stays at 2,272 lines until then.
 
 **Assumptions.**
 - `capabilities` stays without a CLI command of its own; `connection check`

@@ -67,6 +67,8 @@ import {
   OpenCodeIcon,
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
+import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
+import { CoordinatorActivityIcon } from "@/components/projects/CoordinatorActivityIcon";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -346,6 +348,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     targetBranch,
     sourceBranch,
   } = useActionBarController({ presentation });
+  const coordinatorActivity = useCoordinatorActivity(selectedProjectId);
   const autoMerge = useAutoMergeToggle(selectedEnvironment ?? null);
 
   // Configure dialogs open on the Settings action default, which is the same
@@ -582,7 +585,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             {
               value: "coordinator",
               label: "Coordinator",
-              icon: <MessagesSquare className="size-3.5" />,
+              icon: (
+                <CoordinatorActivityIcon state={coordinatorActivity}>
+                  <MessagesSquare className="size-3.5" />
+                </CoordinatorActivityIcon>
+              ),
               panelId: "project-panel-coordinator",
             },
             {

@@ -25,7 +25,7 @@ import {
   ScheduledJobExecutor,
   ScheduledJobService,
 } from "./scheduled-jobs/index.js";
-import { publicActionHandlers } from "./public-api/registry.js";
+import { publicActionHandlers } from "./public-api/index.js";
 import { createCodexLoginRefresher } from "./codex-host-login-refresh.js";
 import {
   bridgeRemoteCoordinatorEvents,
@@ -61,6 +61,7 @@ import {
   autoSwitchSettings,
   listAgentAccounts,
   readAgentAccountUsage,
+  renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import {
@@ -79,6 +80,7 @@ import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
   keyedSchedulingEnabled,
@@ -92,7 +94,8 @@ import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
-import { backendClaudeStateSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -122,7 +125,7 @@ import {
   mcpRolloutLoader,
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
-import { McpManagementService } from "./mcp-management/service.js";
+import { McpManagementService } from "./mcp-management/index.js";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
@@ -367,12 +370,15 @@ export class OrkestratorBackend {
         | "servicePort"
         | "issueStateSignal"
         | "issueWorktreeSignal"
+        | "issueTmuxHookSignal"
         | "callToolAs"
         | "listToolsAs"
         | "setScheduledJobs"
       >
     >;
   private readonly scheduledJobs: ScheduledJobService;
+  /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
+  private removeContainerLifecycleListener: (() => void) | null = null;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -428,6 +434,7 @@ export class OrkestratorBackend {
           | "servicePort"
           | "issueStateSignal"
           | "issueWorktreeSignal"
+          | "issueTmuxHookSignal"
           | "callToolAs"
           | "listToolsAs"
           | "setScheduledJobs"
@@ -597,6 +604,7 @@ export class OrkestratorBackend {
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
           claudeStatePolls: { signal: backendClaudeStateSignal() },
+          hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only
         // between init() and shutdown(); outside that nothing is asked.
@@ -874,6 +882,10 @@ export class OrkestratorBackend {
           reader: (readContext, readPlatform, readOptions) =>
             readContext.runtime.accounts.readPlanUsage(readContext, readPlatform, readOptions),
         }),
+      renewLogin: (platform, accountId) =>
+        renewAgentAccountLogin(context, platform, accountId, {
+          refresh: (account) => refreshHostClaudeLogin(context, account),
+        }),
       switchAccount: (platform, accountId, automatic) =>
         applyAutomaticAccountSwitch(context, platform, accountId, automatic),
       sessionAccount: (environmentId, platform) =>
@@ -919,11 +931,13 @@ export class OrkestratorBackend {
         // that view (or every view after a gap). Deliberately nothing else
         // hangs off it; it is not a turn edge.
         onObservationInvalidation: (event) => {
+          nativeSessionInvalidationMetrics.record(event.cause, event.agent);
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
             previous_state: event.state,
             state: event.state,
             reason: "content",
+            cause: event.cause,
             agent: event.agent,
             logical_session_key: event.logicalSessionKey,
             generation: event.observation.generation,
@@ -931,10 +945,12 @@ export class OrkestratorBackend {
           });
         },
         onActivityTransition: (event) => {
+          nativeSessionInvalidationMetrics.record("transition", event.agent);
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
             previous_state: event.previousState,
             state: event.state,
+            cause: "transition",
             // Additive (step 07): which session, and the observer's stamp so a
             // client can invalidate exactly that view and detect a missed
             // transition as a revision gap. Older clients ignore these.
@@ -1221,7 +1237,7 @@ export class OrkestratorBackend {
     // A publication changes its conversation's projected transcript (the
     // artifact part beside its call): views of that environment re-read.
     this.transcriptArtifacts.onLedgerChange((change) =>
-      storage.announceNativeAgentSessionProjection(change.environmentId),
+      storage.announceNativeAgentSessionProjection(change.environmentId, "transcript-artifact"),
     );
     this.projectGit = new ProjectGitService(storage, async (projectId) => {
       for (const home of await storage.getEnvironmentsByProject(projectId)) {
@@ -1889,6 +1905,13 @@ export class OrkestratorBackend {
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
     this.runtime.containerOom.start(dockerOwnerNamespace(this.context.storage.getDataDir()));
+    // The same follower's start and end events retire (or re-adopt) the loops
+    // that read each container, instead of leaving them to fail their execs.
+    const lifecycleReactor = new ContainerLifecycleReactor(() => this.context);
+    this.removeContainerLifecycleListener?.();
+    this.removeContainerLifecycleListener = this.runtime.onContainerLifecycle(
+      (containerId, action) => lifecycleReactor.handle(containerId, action),
+    );
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -2844,6 +2867,8 @@ export class OrkestratorBackend {
     this.codexLoginRefresher = null;
     // Observers; stopping them never touches containers. Only this backend's
     // followers stop: another backend in the process keeps its own.
+    this.removeContainerLifecycleListener?.();
+    this.removeContainerLifecycleListener = null;
     this.runtime.containerOom.stop();
     this.runtime.containerLogs.shutdown();
     if (this.nativeActivitySweep) {

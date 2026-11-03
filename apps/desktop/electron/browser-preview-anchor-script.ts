@@ -26,6 +26,9 @@ export function browserPreviewAnchorKit() {
   const ATTRIBUTE_VALUE_CHARS = 300;
   const MAX_EVIDENCE_ATTRIBUTES = 24;
   const MAX_SENSITIVE_RECTS = 32;
+  /** The sensitive-field scan reads every element once to find open shadow roots. */
+  const SENSITIVE_SCAN_VISITS = 100_000;
+  const SENSITIVE_SCAN_MS = 100;
   // `WEB_ANNOTATION_SOURCE_ATTRIBUTES` in the protocol (this kit cannot import).
   const SOURCE_ATTRIBUTE = "data-orkestrator-source";
   const SOURCE_COMPONENT_ATTRIBUTE = "data-orkestrator-component";
@@ -37,6 +40,8 @@ export function browserPreviewAnchorKit() {
   const MAX_SHADOW_DEPTH = 8;
   /** Shadow roots the resolver entered, so the pin layer can observe them. */
   const MAX_SEEN_SHADOW_ROOTS = 64;
+  /** Hosts the resolver found before their custom element was defined. */
+  const MAX_UNDEFINED_HOSTS = 50;
   const SKIP_TAGS = new Set([
     "SCRIPT",
     "STYLE",
@@ -1171,39 +1176,80 @@ export function browserPreviewAnchorKit() {
     };
   };
 
-  /** Viewport rectangles of detectable sensitive fields, for opaque masks. */
-  const sensitiveRects = (): Rect[] => {
+  /**
+   * Viewport rectangles of detectable sensitive fields, for opaque masks, in
+   * the document and every open shadow root down to `MAX_SHADOW_DEPTH`.
+   * `complete` is false when any field may have been missed: the budget ran
+   * out, roots nest deeper than the limit, a query failed, or more than
+   * `MAX_SENSITIVE_RECTS` fields are on screen. Main then drops the image
+   * rather than spool pixels it could not mask. Closed roots are invisible
+   * to page script and stay unmasked (a known limitation).
+   */
+  const sensitiveScan = (
+    budget: Budget = createBudget(SENSITIVE_SCAN_VISITS, SENSITIVE_SCAN_MS),
+  ): { rects: Rect[]; complete: boolean } => {
     const rects: Rect[] = [];
-    let candidates: NodeListOf<Element>;
-    try {
-      candidates = document.querySelectorAll(SENSITIVE_SELECTOR);
-    } catch {
-      return rects;
-    }
+    let complete = true;
     const width = window.innerWidth;
     const height = window.innerHeight;
-    for (let index = 0; index < Math.min(candidates.length, 128); index += 1) {
-      const element = candidates[index]!;
-      if (
-        isInspectorNode(element) ||
-        (element.tagName === "INPUT" && inputType(element) === "hidden")
-      ) {
-        continue;
+    const collect = (root: Root): boolean => {
+      let candidates: NodeListOf<Element>;
+      try {
+        candidates = root.querySelectorAll(SENSITIVE_SELECTOR);
+      } catch {
+        return false;
       }
-      const rect = rectOf(element);
-      if (rect.width <= 0 || rect.height <= 0) continue;
-      if (
-        rect.x + rect.width <= 0 ||
-        rect.y + rect.height <= 0 ||
-        rect.x >= width ||
-        rect.y >= height
-      ) {
-        continue;
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (!spend(budget)) return false;
+        const element = candidates[index]!;
+        if (
+          isInspectorNode(element) ||
+          (element.tagName === "INPUT" && inputType(element) === "hidden")
+        ) {
+          continue;
+        }
+        const rect = rectOf(element);
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (
+          rect.x + rect.width <= 0 ||
+          rect.y + rect.height <= 0 ||
+          rect.x >= width ||
+          rect.y >= height
+        ) {
+          continue;
+        }
+        if (rects.length >= MAX_SENSITIVE_RECTS) return false;
+        rects.push(rect);
       }
-      rects.push(rect);
-      if (rects.length >= MAX_SENSITIVE_RECTS) break;
+      return true;
+    };
+    /** Query `root`, then walk its elements in tree order and enter each open root. */
+    const scan = (root: Root, depth: number): boolean => {
+      if (!collect(root)) return false;
+      let element: Element | null = root.firstElementChild;
+      while (element) {
+        if (!spend(budget)) return false;
+        const shadow: ShadowRoot | null = element.hasAttribute(UI_ATTRIBUTE)
+          ? null
+          : element.shadowRoot;
+        if (shadow) {
+          if (depth >= MAX_SHADOW_DEPTH || !scan(shadow, depth + 1)) return false;
+        }
+        if (element.firstElementChild && !element.hasAttribute(UI_ATTRIBUTE)) {
+          element = element.firstElementChild;
+          continue;
+        }
+        while (element && !element.nextElementSibling) element = element.parentElement;
+        element = element ? element.nextElementSibling : null;
+      }
+      return true;
+    };
+    try {
+      complete = scan(document, 0);
+    } catch {
+      complete = false;
     }
-    return rects;
+    return { rects, complete };
   };
 
   // -------------------------------------------------------------------------
@@ -1308,6 +1354,25 @@ export function browserPreviewAnchorKit() {
       seenShadowRoots.push(root);
     }
   };
+  let undefinedHosts: Element[] = [];
+  /**
+   * A host without a shadow root that is not yet `:defined` will usually
+   * attach its root when its definition arrives, which no mutation reports.
+   * `:defined` is read from the element, so this also works in an isolated
+   * world, where `customElements` is null.
+   */
+  const noteUndefinedHost = (host: Element): void => {
+    if (undefinedHosts.length >= MAX_UNDEFINED_HOSTS || undefinedHosts.includes(host)) return;
+    // Built-in elements are always defined; only a custom element name can wait.
+    if (!host.localName.includes("-")) return;
+    let defined = false;
+    try {
+      defined = host.matches(":defined");
+    } catch {
+      // Without `:defined` support, assume the definition may still arrive.
+    }
+    if (!defined) undefinedHosts.push(host);
+  };
 
   /**
    * Rule 1, root path: each host must match exactly one element with its tag
@@ -1358,7 +1423,10 @@ export function browserPreviewAnchorKit() {
       }
       if (matches.length > 1) return { failed: result("ambiguous", "none", matches.length) };
       const shadow: ShadowRoot | null = matches[0]?.shadowRoot ?? null;
-      if (!shadow) return { failed: result("missing", "none", 0) };
+      if (!shadow) {
+        if (matches[0]) noteUndefinedHost(matches[0]);
+        return { failed: result("missing", "none", 0) };
+      }
       noteShadowRoot(shadow);
       root = shadow;
     }
@@ -1599,7 +1667,7 @@ export function browserPreviewAnchorKit() {
     labelFor,
     describeElement,
     describeRange,
-    sensitiveRects,
+    sensitiveScan,
     sanitizeUrl,
     sanitizedHtml,
     visibleText,
@@ -1607,9 +1675,12 @@ export function browserPreviewAnchorKit() {
     resetResolverCache: () => {
       cachedTextMap = undefined;
       seenShadowRoots = [];
+      undefinedHosts = [];
     },
     /** Open shadow roots entered since the last reset, at most 64. */
     shadowRootsSeen: (): ShadowRoot[] => seenShadowRoots.slice(),
+    /** Hosts found without a root before being defined since the last reset, at most 50. */
+    undefinedHostsSeen: (): Element[] => undefinedHosts.slice(),
   };
 }
 

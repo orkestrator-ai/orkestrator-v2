@@ -9,6 +9,7 @@ import {
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import {
   PROJECT_HOME_REASON_REQUIRED,
@@ -116,7 +117,11 @@ beforeEach(async () => {
   await storage.synchronizeAgentMailboxes();
   commands = createCommandRegistry();
   commands.set("get_node_status", (async () => ({ nodeId: "bk_self" })) as CommandHandler);
-  context = { storage, coordinators: coordinator } as unknown as CommandContext;
+  context = {
+    storage,
+    coordinators: coordinator,
+    runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
+  } as unknown as CommandContext;
   coordination = new NodeCoordination({
     storage,
     nodes: {

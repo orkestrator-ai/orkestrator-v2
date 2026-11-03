@@ -16,7 +16,7 @@ Analysed 2026-10-31 against `main` at `931e5541`; re-checked 2026-11-01 against
 2. **Move the per-backend rows**: move what task 1 marks per-backend, with a two-backend case for each; the three rows left are tasks 3 to 5. Status: done.
 3. **Move the managed GitHub CLI binary**: `github-cli-binary.ts` `managedGitHubCli`. Status: open.
 4. **Move the host model catalogue seed state**: `host-model-catalog-seed.ts` `failedAt`, `generations`, `flights`; waits for the account code another build is changing. Status: open.
-5. **Move the worker tab close admission**: `worker-tab-close-admission.ts` `closing`, `pending`. Status: open.
+5. **Move the worker tab close admission**: `worker-tab-close-admission.ts` `closing`, `pending`. Status: done.
 
 ### 1. Sort the remaining module state
 
@@ -127,7 +127,7 @@ Paths are under `apps/backend/src/core/`. Line numbers were at `931e5541`.
 | `bug-report-service.ts` | `filingFlights` (`:319`) | Stays: keyed by data directory and report. |
 | `agents-md-pr.ts` | `running` (`:254`) | Moved to `runtime.coordinatorRequests` (`joinAgentsMdPullRequest`). |
 | `coordinator-action-scope.ts` | `inFlightReceipts` (`:110`) | Moved to `runtime.coordinatorRequests` (`receiptAttempt`, `trackReceiptAttempt`). |
-| `worker-tab-close-admission.ts` | `closing`, `pending` (`:2-3`) | Per backend: keyed by storage ids. Not moved yet (task 5). |
+| `worker-tab-close-admission.ts` | `closing`, `pending` (`:2-3`) | Moved to `runtime.coordinatorRequests.workerTabs` (`WorkerTabCloseAdmission`, task 5). |
 | `opencode-coordinator-research.ts` | `researchToolIds` (`:22`), `registrations` (`:29`) | Moved to `runtime.localServers.openCodeAgentTools.research` (`OpenCodeCoordinatorResearch`). |
 | `graph-system-action.ts` | `effectLocks` (`:116`) | Moved to the system executor's `GraphSystemActionMemory`. |
 | `graph-system-checks.ts` | `readFailures` (`:118`) | Moved to the system executor's `GraphSystemActionMemory`. |
@@ -178,6 +178,10 @@ Test contexts that reach a coordinator receipt and were built without a runtime 
 ### Tasks 3 to 5: left for later
 
 Three per-backend rows were not moved, to keep this change reviewable and away from account code: the GitHub CLI binary has 16 call sites in 10 modules and six test files that set it, the catalogue seed reset is called from `agent-accounts.ts`, and the tab close admission is taken inside the coordinator store. Each is marked next to its declaration and listed in `backend-runtime.md`.
+
+### Task 5: the admission on `runtime.coordinatorRequests`
+
+Re-checked against `main` at `7b48c23f` (2026-11-03): `closing` and `pending` were still module state, with the callers the investigation lists. Followed the recommendation. `WorkerTabCloseAdmission` (`beginClose`, `beginDelegation`) replaces the two module functions, and `CoordinatorRequestFlights` holds one as `workerTabs`, so test contexts that already carry a partial runtime with `coordinatorRequests` needed no change. `openCoordinatorDelegation` takes it as its first argument, as `openAgentsMdPullRequest` takes the flights. Store tests that only open a delegation pass a fresh `WorkerTabCloseAdmission`; tests that race a close against a delegation pass the close's own (`context.runtime.coordinatorRequests.workerTabs`), and `MailWorld` holds one `CoordinatorRequestFlights` for its command node. Four test contexts built without a runtime (`commands-registry-coordinator-nodes.test.ts`, `coordinator-worker-mail.test.ts`, `control-mcp-node-auth.test.ts` and `MailWorld`'s send context) gained a partial one. The two-backend case is "worker tab close admission is per backend" in `backend-runtime-module-state.test.ts`.
 
 ## Related
 

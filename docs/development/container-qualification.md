@@ -44,6 +44,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Unit and integration | `mise run test` | Every scenario without a live suite below, against a fake `docker` |
 | Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
 | Live start recovery | same command, `./tests/container-start-docker.test.ts` | Fixed-port collision and two detached automatic-port failures, then network and HTTP publication recovery. Add `RUN_ROOTLESS_MOUNT_TESTS=1` on rootless to exercise read-only file mounts; use `TMPDIR` on `nosuid,nodev` for that topology. |
+| Claude config allowlist (M8) | same command, `./tests/claude-config-filter-docker.test.ts`; also run by `mise run test:agent:docker:isolated` | A fake host `~/.claude.json` staged from a throwaway HOME reaches `node` only as its allowlist, and interactive Claude starts in `/workspace` on it with no network and fake credentials |
 | All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
@@ -1161,8 +1162,17 @@ are skipped without one:
 ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
   bun test apps/backend/tests/claude-state-signal-docker.test.ts \
   apps/backend/tests/claude-terminal-failed-turn-docker.test.ts \
-  apps/backend/tests/container-worktree-signal-docker.test.ts
+  apps/backend/tests/container-worktree-signal-docker.test.ts \
+  apps/backend/tests/tmux-hook-signal-docker.test.ts
 ```
+
+`tmux-hook-signal-docker.test.ts` proves the claude-tmux hook doorbell
+(to-do 1202, task 8) with a fake doorbell on the container's loopback: the
+manifest declares `tmux-hook-signal=1`, the install's probe and the hook
+script's ring arrive with the right token, and a real tab loop against a real
+tmux session in the container, with its transcript bound, stays within four
+execs in 10 s idle and never searches for its transcript. Like the
+failed-turn test it needs no route from the container to the host.
 
 `claude-terminal-failed-turn-docker.test.ts` runs the image's own Claude CLI,
 with the hooks its entrypoint installs, against a fake API on the container's
@@ -1171,7 +1181,7 @@ normal turn must still ring `agent_waiting` (to-do 1200). It reads through
 `docker exec` only, so unlike the other two it also passes on a host whose
 containers cannot reach the backend.
 
-The Linux Engine workflow runs all three tests and the exec-cost script on every
+The Linux Engine workflow runs all four tests and the exec-cost script on every
 run (`exec-cost-<platform>.json` in the benchmark artifact). The worktree
 test's `change-to-scan` line is not a clean latency: it follows a writer
 whose close rang just before, so it likely waits out part of the 2 s hint

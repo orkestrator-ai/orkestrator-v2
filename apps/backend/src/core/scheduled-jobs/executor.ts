@@ -39,7 +39,7 @@ import { coordinatorRoleCapabilities } from "../control-mcp-tools.js";
 import type { InProcessToolInfo, InProcessToolResult } from "../mcp-in-process.js";
 import { withPublicAuthority } from "../public-api/dispatch.js";
 import { controlMcpAuthority, type PublicAuthority } from "../public-api/operation-ledger.js";
-import type { PublicActionHandler } from "../public-api/types.js";
+import type { PublicActionHandler } from "../public-api/index.js";
 import type { FireResult } from "./model.js";
 import { isReminderToSelf } from "./reminders.js";
 

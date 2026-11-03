@@ -35,6 +35,9 @@ export const TMUX_LOG_AREAS = defineLogAreas({
       "signal.arm-failed": "The Claude state signal could not be armed.",
       "signal.degraded":
         "The Claude state signal missed a change or rang too often, so polling stays at one second until it is re-armed.",
+      "hook-signal.arm-failed": "The tmux hook doorbell could not be armed.",
+      "hook-signal.degraded":
+        "The tmux hook doorbell missed a hook, so idle tabs poll every second until it is re-armed.",
       "pr-refresh.schedule-failed": "A pull request refresh after a turn could not be scheduled.",
       "pr-probe.failed": "Probing for a pull request an agent created failed.",
       "activity.persist-failed": "Tmux tab activity could not be saved.",

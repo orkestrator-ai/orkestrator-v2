@@ -14,6 +14,19 @@ export interface RuntimeParts {
   tokensPending: boolean;
   /** The clock is counting up from `now`, not from a recorded end. */
   live: boolean;
+  /**
+   * Epoch milliseconds a live clock counts from. A view under a
+   * `RuntimeClockContext` re-derives `elapsed` from it on each tick, so the
+   * owner that built these parts does not re-render every second.
+   */
+  liveStartedAt?: number;
+}
+
+/** `elapsed` as it reads at `now`, for a live part; any other part unchanged. */
+export function runtimePartsAt(parts: RuntimeParts, now: number): RuntimeParts {
+  if (!parts.live || parts.liveStartedAt === undefined) return parts;
+  const elapsed = formatElapsed(Math.max(0, Math.floor((now - parts.liveStartedAt) / 1_000)));
+  return elapsed === parts.elapsed ? parts : { ...parts, elapsed };
 }
 
 /**
@@ -37,7 +50,9 @@ export function runtimeParts(
   }
   const end = live ? now : completedAt;
   const elapsed = formatElapsed(Math.max(0, Math.floor((end - startedAt) / 1_000)));
-  return { elapsed, tokens, tokensPending: live && !tokens, live };
+  return live
+    ? { elapsed, tokens, tokensPending: !tokens, live, liveStartedAt: startedAt }
+    : { elapsed, tokens, tokensPending: false, live };
 }
 
 /** `{elapsed} · {tokens} tokens`, dropping whichever half is unknown. */

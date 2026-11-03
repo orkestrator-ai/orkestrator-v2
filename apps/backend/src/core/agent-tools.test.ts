@@ -26,6 +26,7 @@ import {
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 type RpcResponse = {
   result?: {
@@ -909,7 +910,11 @@ describe("agent Kanban tools", () => {
       requestId: "hint-delegate",
       createdAt: now,
     });
-    await storage.coordinators.openCoordinatorDelegation("hint-delegation", "agent-a");
+    await storage.coordinators.openCoordinatorDelegation(
+      new WorkerTabCloseAdmission(),
+      "hint-delegation",
+      "agent-a",
+    );
     await storage.synchronizeAgentMailboxes();
     const report = await call({
       ...args,

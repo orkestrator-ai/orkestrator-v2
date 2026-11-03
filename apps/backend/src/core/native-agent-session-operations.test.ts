@@ -364,6 +364,33 @@ describe("NativeAgentSessionOperations", () => {
       await operations.performProjectionAction({ ...identity, action: { kind: "compact" } });
       expect(events).toEqual(["steer", `invalidate:${sessionKey}`]);
     });
+
+    test("compaction instructions reach only platforms that honour them", async () => {
+      const actions: unknown[] = [];
+      const { operations } = harness({
+        provider: {
+          performSessionAction: async (_session: string, action: unknown) => {
+            actions.push(action);
+            return { outcome: "applied" };
+          },
+        },
+      });
+      // The identity is Codex, whose `thread/compact/start` takes no instructions.
+      await expect(
+        operations.performProjectionAction({
+          ...identity,
+          action: { kind: "compact", instructions: "keep the plan" },
+        }),
+      ).rejects.toThrow("Codex cannot take compaction instructions");
+      expect(actions).toEqual([]);
+
+      const pi = { ...identity, agent: "pi" as const };
+      await operations.performProjectionAction({
+        ...pi,
+        action: { kind: "compact", instructions: "keep the plan" },
+      });
+      expect(actions).toEqual([{ kind: "compact", instructions: "keep the plan" }]);
+    });
   });
 
   describe("sign-in", () => {

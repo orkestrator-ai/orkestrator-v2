@@ -603,7 +603,9 @@ agents, models, defaults and base branch tip), `list_environments`,
 the Multi Review tools (custom fix and reviewer tabs included) and the worker
 surfaces `launch_terminal`, `open_worker_browser`, `edit_worker_tab`,
 `create_pr`, `resolve_conflicts`, `get_worker_changes`, `fork_worker`,
-`stop_worker_turn`, `list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)). Without a `nodeId`, `list_environments` also lists
+`stop_worker_turn`, `list_worker_commands` and `run_worker_command` (see [coordinator.md](coordinator.md#worker-surfaces)), and the ticket tools
+(`create_ticket`, `update_ticket`, `get_ticket`, `list_tickets`,
+`add_ticket_comment`; see [Tickets across nodes](#tickets-across-nodes)). Without a `nodeId`, `list_environments` also lists
 the project's environments on the other nodes. The older `*_node_*` tools
 remain and use the same paths.
 
@@ -637,6 +639,39 @@ remain and use the same paths.
   included) make this prompt; the maintenance sweep covers
   missed events, and an unreachable node changes nothing
   (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
+
+## Tickets across nodes
+
+A project's Kanban board is shared with every leaf that has a copy of the
+same repository. The command node's board is authoritative and a leaf holds a
+copy of each ticket under the same id; the full model (cursors, the leaf's
+ticket outbox, conflicts, tombstones) is in
+[tickets.md](tickets.md#sync-across-machines).
+
+- **Direction.** The command node dials out here too: it sends the leaf the
+  board's changes after the leaf's cursor, and collects the changes the leaf
+  queued in its ticket outbox, exactly as it collects leaf mail. A leaf never
+  reaches the command node.
+- **When.** On every connect and stream resync, when the leaf announces queued
+  changes (`ticket-sync-outbox-ready`), a moment after any change to a shared
+  board here, and every 60 s.
+- **Commands.** `apply_ticket_sync`, `get_ticket_sync_cursor`,
+  `collect_ticket_sync_outbox` and `ack_ticket_sync_outbox` run only over the
+  link of an attached command node; like the mail outbox they are never
+  routable through `invoke_on_node`, a workspace grant or the relay.
+  `get_ticket_sync_status` feeds the board's sync line, and
+  `sync_node_tickets` syncs now.
+- **Disconnection.** Ticket changes wait durably on both sides (the board
+  itself, the leaf's outbox) and apply in order, once each, on reconnect.
+  Launches and other changes to a disconnected node are refused, not queued
+  (see [coordinator.md](coordinator.md#tickets-on-other-machines)).
+- **Compatibility.** Gated on the `ticket-sync` capability. An older leaf is
+  never sent tickets and the board says to update it; coordinator ticket
+  tools work on that leaf's own board as before
+  ([version-compatibility.md](version-compatibility.md)).
+- **Several command nodes.** Each syncs its own board with the leaf. A ticket
+  made on the leaf goes to the command node that synced that project last.
+  When a command node detaches, the leaf keeps its copies as its own tickets.
 
 ## Projects on leaf nodes
 

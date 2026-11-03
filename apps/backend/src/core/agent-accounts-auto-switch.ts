@@ -50,6 +50,14 @@ const CONFIRMATION_REUSE_MS = 2 * 60_000;
  */
 const RECENT_MOVE_MS = 5 * 60_000;
 const MAX_TRACKED_STOPS = 256;
+/**
+ * After asking for an account's sign-in to be renewed, wait this long before
+ * asking again; each failure in a row doubles it, up to the cap. One renewal
+ * yields a reset time that ranks the account until that reset, so a success
+ * is rarely needed twice in a week.
+ */
+export const LOGIN_RENEWAL_RETRY_MS = 30 * 60_000;
+export const LOGIN_RENEWAL_MAX_RETRY_MS = 6 * 60 * 60_000;
 
 export interface AutoSwitchNotice {
   platform: AgentAccountPlatform;
@@ -67,6 +75,12 @@ export interface AgentAccountAutoSwitcherDeps {
     accountId: string,
     options: { force: boolean },
   ): Promise<PlanUsageSnapshot>;
+  /**
+   * Have the provider's own CLI renew one account's lapsed sign-in, so its usage
+   * can be read. True when the account holds a live token afterwards. Without it
+   * an idle account keeps its last reading.
+   */
+  renewLogin?(platform: AgentAccountPlatform, accountId: string): Promise<boolean>;
   /** Gives way, answering false, when a manual switch got in first. */
   switchAccount(
     platform: AgentAccountPlatform,
@@ -122,6 +136,8 @@ export class AgentAccountAutoSwitcher {
     string,
     { since: number; checkedAt: number; bridgeSince?: number; confirmedUntil?: number }
   >();
+  /** When each account's sign-in may next be renewed, and the failures in a row. */
+  private readonly renewals = new Map<string, { next: number; failures: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
 
@@ -371,6 +387,29 @@ export class AgentAccountAutoSwitcher {
     return { snapshot, activeId: snapshot.active[platform] };
   }
 
+  /** Renew one account's sign-in, at most once per backoff window. */
+  private async renewLogin(platform: AgentAccountPlatform, accountId: string): Promise<boolean> {
+    const renew = this.deps.renewLogin;
+    if (!renew) return false;
+    const key = `${platform}:${accountId}`;
+    const previous = this.renewals.get(key);
+    if (previous && this.now() < previous.next) return false;
+    let renewed = false;
+    try {
+      renewed = await renew(platform, accountId);
+    } catch {
+      log.warn("login-renewal.failed", { platform });
+    }
+    const failures = renewed ? 0 : (previous?.failures ?? 0) + 1;
+    const wait = Math.min(
+      LOGIN_RENEWAL_RETRY_MS * 2 ** Math.max(0, failures - 1),
+      LOGIN_RENEWAL_MAX_RETRY_MS,
+    );
+    if (!this.renewals.has(key) && this.renewals.size >= MAX_TRACKED_STOPS) this.renewals.clear();
+    this.renewals.set(key, { next: this.now() + wait, failures });
+    return renewed;
+  }
+
   private async readings(
     platform: AgentAccountPlatform,
     state: NonNullable<Awaited<ReturnType<AgentAccountAutoSwitcher["automaticState"]>>>,
@@ -378,7 +417,11 @@ export class AgentAccountAutoSwitcher {
     force: boolean,
   ): Promise<AutoSwitchAccount[]> {
     const includedIds = state.snapshot.autoSwitch?.[platform]?.includedAccountIds ?? [];
-    const now = this.now();
+    const read = (accountId: string, forced: boolean): Promise<WeeklyLimitReading> =>
+      this.deps.readUsage(platform, accountId, { force: forced }).then(
+        (snapshot) => weeklyLimitReading(platform, snapshot, this.now()),
+        (): WeeklyLimitReading => ({ freshness: "none", wouldPay: false }),
+      );
     return Promise.all(
       state.snapshot.accounts
         .filter((account) => account.platform === platform)
@@ -388,10 +431,17 @@ export class AgentAccountAutoSwitcher {
           if (confirmedOut.has(account.id)) {
             reading = { freshness: "fresh", usedPercent: 100, wouldPay: false };
           } else if (account.signedIn && (included || account.id === state.activeId)) {
-            reading = await this.deps.readUsage(platform, account.id, { force }).then(
-              (snapshot) => weeklyLimitReading(platform, snapshot, now),
-              () => reading,
-            );
+            reading = await read(account.id, force);
+            // A reading with no reset to go on ranks after every account that has
+            // one, so without a fresh one this account would never be chosen and
+            // never be read again.
+            if (
+              reading.freshness !== "fresh" &&
+              reading.resetsAt === undefined &&
+              (await this.renewLogin(platform, account.id))
+            ) {
+              reading = await read(account.id, true);
+            }
           }
           return { account, included, reading };
         }),

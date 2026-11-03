@@ -523,7 +523,9 @@ the active account from the same shared reader, and reads any other account
 from its own directory, cached for two minutes (ten seconds after an error).
 Orkestrator never refreshes a token itself. Claude access tokens last hours,
 so an inactive Claude account reports "refreshed while it is in use" once its
-token lapses, until it is used again. Codex tokens last days.
+token lapses, until it is used again or automatic switching has Claude Code
+renew it ([Stale and unknown readings](#stale-and-unknown-readings)). Codex
+tokens last days.
 
 Each account's last successful reading is kept in
 `<agent-accounts>/last-usage.json` (`agent-accounts-last-usage.ts`). The active
@@ -559,9 +561,16 @@ provider the environment has revoked is never handed a login.
 - **Every start.** Before `docker start`, `refreshStagedAgentAccountLogins`
   rewrites the login files in the container's current staged revision, so the
   entrypoint imports the active account. The staged `.claude.json` is a
-  single-file bind mount and is rewritten in place to keep its inode. After
+  single-file bind mount and is rewritten in place to keep its inode, through
+  the same allowlist staging uses (`claudeContainerConfig`). After
   start, `syncContainerAgentAccountsOnStart` pipes Claude's credential in for
   the active account and writes the marker.
+- **Upgrading the Claude config filter (M8).** Containers already running
+  during the upgrade need an explicit stop and start through the environment
+  controls. Opening a running container or restarting the backend does not run
+  the staged-file migration. Stop/start sanitizes the staged file and rebuilds
+  both the relay and imported copies; until then the old raw content remains
+  readable. Images without staged inputs remain outside this fix (M9).
 - **Bridge start.** Each container records the login it holds in
   `/tmp/orkestrator-<platform>-account` as `<accountId>[:<loginGeneration>]`;
   a missing marker means the host login. When it differs from the active
@@ -773,6 +782,24 @@ until the reset. With no reset to go on it says too little to rule the account
 out, and it ranks last. A reset in the past is never a known reset: the window has
 started over (`stalePlanUsageSnapshot`, `weeklyLimitReading`), so it reads empty
 with its next reset unknown, and ranks last.
+
+Ranking last would starve such an account: a fresh account always has a known
+reset, so the unknown one is never chosen, never used, and so never read again.
+Its real reset may be the soonest. So when a check finds an included, signed-in
+account (the active one included) whose reading is not fresh and has no reset to
+go on, it has Claude Code renew that account's sign-in and reads it again, forced
+(`renewAgentAccountLogin`, wired into `AgentAccountAutoSwitcher` as
+`renewLogin`). The renewal is `refreshHostClaudeLogin` run in the account's own
+directory: a request for a model no catalogue knows, which Claude Code renews the
+login for under its own lock and then fails before any inference, so it spends no
+usage and Orkestrator never handles the refresh token. It runs only for a login
+that has lapsed but can be renewed, never for Codex (whose tokens last days),
+never in an agent-test profile, and never for the host login while
+`useHostClaudeCredentials` is off. Each account is asked at most once per 30
+minutes, doubling after each failure up to 6 hours. One fresh reading gives the
+account a reset that ranks it until that reset passes, so a success is needed
+about once a week. Removing an account refuses while its renewal runs, because
+the CLI would recreate a directory deleted under it.
 
 ### Paid overage
 

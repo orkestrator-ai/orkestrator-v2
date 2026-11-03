@@ -25,11 +25,11 @@ import {
   listPersistedSessionsForCwd,
   listPersistedSessionsWithTitlesForCwd,
   mergePersistedSessionMeta,
-  readTranscriptLines,
 } from "./rollout.js";
 import { persistSessionTitle } from "../session-title-index.js";
 import { recordCommandChanges } from "../sessions/command-changes.js";
 import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
+import { readSessionIndex } from "./session-index-cache.js";
 import capturedRevertMeta from "./fixtures/revert-session-meta.json";
 import type { StructuredOutputTurnRecord } from "@orkestrator/protocol/structured-output";
 
@@ -215,8 +215,8 @@ describe("findTranscriptPath path cache", () => {
     temporaryDirectories.push(root);
     // The session index is absent in a fresh Codex home; callers treat that as
     // "no persisted sessions", so it must not propagate as an error.
-    expect(await readTranscriptLines(join(root, "session_index.jsonl"))).toEqual([]);
-    expect(await readTranscriptLines(root)).toEqual([]);
+    expect((await readSessionIndex(join(root, "session_index.jsonl"))).entries()).toEqual([]);
+    expect((await readSessionIndex(root)).entries()).toEqual([]);
   });
 
   test("clearTranscriptPathCache forces the next lookup to walk", async () => {
@@ -254,7 +254,6 @@ describe("rollout public helpers (continued)", () => {
       },
     ]);
 
-    expect(await readTranscriptLines(path)).toHaveLength(2);
     expect(await getSessionMetaFromTranscriptPath(path)).toMatchObject({
       id: "thread-1",
       cwd: "/workspace",

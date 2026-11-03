@@ -1,4 +1,4 @@
-import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
+import type { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -661,8 +661,12 @@ export class CoordinatorsRepository {
     });
   }
 
-  /** Open one idempotent delegation without replacing another request. */
+  /**
+   * Open one idempotent delegation without replacing another request.
+   * `admission` is the backend's (`context.runtime.coordinatorRequests.workerTabs`).
+   */
   async openCoordinatorDelegation(
+    admission: WorkerTabCloseAdmission,
     associationId: string,
     workerTabId: string,
     at = new Date().toISOString(),
@@ -680,7 +684,7 @@ export class CoordinatorsRepository {
         // nor reopen one that already produced its wake.
         return association;
       }
-      const release = beginWorkerTabDelegation(
+      const release = admission.beginDelegation(
         association.resourceId,
         workerTabId,
         association.nodeId,

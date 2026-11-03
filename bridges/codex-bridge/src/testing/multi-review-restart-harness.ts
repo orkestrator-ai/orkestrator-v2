@@ -1,4 +1,6 @@
 /** Runs the real bridge routes over loopback, with an owned-child crash control. */
+// Must precede ../index.js, which removes the token from process.env.
+import { capturedCodexBridgeToken } from "./captured-bridge-token.js";
 import { app, __testing } from "../index.js";
 
 async function until(predicate: () => boolean): Promise<void> {
@@ -20,7 +22,7 @@ async function main(): Promise<void> {
       if (url.pathname !== "/__restart") return app.fetch(request);
       if (
         request.method !== "POST" ||
-        request.headers.get("Authorization") !== `Bearer ${process.env.CODEX_BRIDGE_TOKEN}`
+        request.headers.get("Authorization") !== `Bearer ${capturedCodexBridgeToken}`
       ) {
         return new Response(null, { status: 403 });
       }

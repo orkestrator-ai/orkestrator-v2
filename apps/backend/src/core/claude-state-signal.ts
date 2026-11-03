@@ -10,6 +10,7 @@ import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { readImageManifest } from "./docker-image.js";
 import { runCommand } from "./shell.js";
 import type { ClaudeStateSignalInstaller, ClaudeStateSignalSupport } from "./tmux-poll.js";
+import { TMUX_HOOK_SIGNAL_CONFIG_PATH, type TmuxHookSignalInstaller } from "./tmux-hook-signal.js";
 
 /**
  * Container side of the Claude terminal state signal (`claude-state-signal=2`,
@@ -30,12 +31,17 @@ export const CLAUDE_STATE_SIGNAL_INSTALL_TIMEOUT_MS = 10_000;
  * token, then rings once. That ring is how the backend learns the whole path
  * (host alias, firewall, credential, script) works before it relies on it.
  */
-const INSTALL_SCRIPT = `set -eu
+function installScript(configPath: string, ringArgument: string): string {
+  return `set -eu
 umask 077
-tmp="${CLAUDE_STATE_SIGNAL_CONFIG_PATH}.$$"
+tmp="${configPath}.$$"
 cat > "$tmp"
-mv -f "$tmp" "${CLAUDE_STATE_SIGNAL_CONFIG_PATH}"
-exec ${CLAUDE_STATE_SIGNAL_SCRIPT_PATH}`;
+mv -f "$tmp" "${configPath}"
+exec ${CLAUDE_STATE_SIGNAL_SCRIPT_PATH}${ringArgument ? ` ${ringArgument}` : ""}`;
+}
+const INSTALL_SCRIPT = installScript(CLAUDE_STATE_SIGNAL_CONFIG_PATH, "");
+/** The tmux hook doorbell's install: its own config, and a `hook` probe ring. */
+const TMUX_HOOK_INSTALL_SCRIPT = installScript(TMUX_HOOK_SIGNAL_CONFIG_PATH, "hook");
 
 /** The curl config `orkestrator-state-signal` reads. */
 export function claudeStateSignalConfig(
@@ -44,17 +50,35 @@ export function claudeStateSignalConfig(
   return `url = "${credential.url}"\nheader = "Authorization: Bearer ${credential.token}"\n`;
 }
 
-export function claudeStateSignalInstallCommand(
-  containerId: string,
-  credential: Pick<StateSignalCredential, "url" | "token">,
-): {
+type SignalInstallCommand = {
   command: string;
   args: string[];
   options: { stdin: string; timeoutMs: number; redactValues: string[] };
-} {
+};
+
+export function claudeStateSignalInstallCommand(
+  containerId: string,
+  credential: Pick<StateSignalCredential, "url" | "token">,
+): SignalInstallCommand {
+  return signalInstallCommand(containerId, credential, INSTALL_SCRIPT);
+}
+
+/** The same install for the claude-tmux hook doorbell (`tmux-hook-signal.ts`). */
+export function tmuxHookSignalInstallCommand(
+  containerId: string,
+  credential: Pick<StateSignalCredential, "url" | "token">,
+): SignalInstallCommand {
+  return signalInstallCommand(containerId, credential, TMUX_HOOK_INSTALL_SCRIPT);
+}
+
+function signalInstallCommand(
+  containerId: string,
+  credential: Pick<StateSignalCredential, "url" | "token">,
+  script: string,
+): SignalInstallCommand {
   return {
     command: "docker",
-    args: ["exec", "-i", containerId, "sh", "-c", INSTALL_SCRIPT],
+    args: ["exec", "-i", containerId, "sh", "-c", script],
     options: {
       stdin: claudeStateSignalConfig(credential),
       timeoutMs: CLAUDE_STATE_SIGNAL_INSTALL_TIMEOUT_MS,
@@ -106,19 +130,47 @@ export async function containerImageCapabilitySupport(
     : "unsupported";
 }
 
+/**
+ * The same host preparation a bridge start does: the host alias, and the
+ * backend's current service port in a restricted container's firewall.
+ */
+async function prepareSignalHost(
+  containerId: string,
+  context: Pick<CommandContext, "agentTools" | "containerHostReachability">,
+): Promise<void> {
+  await ensureContainerAgentToolsHost(
+    containerId,
+    undefined,
+    context.containerHostReachability?.containerHostAddress?.(),
+  );
+  await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
+}
+
 export const claudeStateSignalInstaller: ClaudeStateSignalInstaller = {
   support: claudeStateSignalSupport,
   async install(containerId, credential, context, isCurrent) {
-    // The same host preparation a bridge start does: the host alias, and the
-    // backend's current service port in a restricted container's firewall.
-    await ensureContainerAgentToolsHost(
-      containerId,
-      undefined,
-      context.containerHostReachability?.containerHostAddress?.(),
-    );
-    await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
+    await prepareSignalHost(containerId, context);
     if (!isCurrent()) return;
     const { command, args, options } = claudeStateSignalInstallCommand(containerId, credential);
+    await runCommand(command, args, options);
+  },
+};
+
+/** Whether the container's image rings the claude-tmux hook doorbell. */
+export function tmuxHookSignalSupport(
+  containerId: string,
+  context: Pick<CommandContext, "storage">,
+  readManifest = readImageManifest,
+): Promise<ClaudeStateSignalSupport> {
+  return containerImageCapabilitySupport(containerId, context, "tmux-hook-signal", 1, readManifest);
+}
+
+export const tmuxHookSignalInstaller: TmuxHookSignalInstaller = {
+  support: tmuxHookSignalSupport,
+  async install(containerId, credential, context, isCurrent) {
+    await prepareSignalHost(containerId, context);
+    if (!isCurrent()) return;
+    const { command, args, options } = tmuxHookSignalInstallCommand(containerId, credential);
     await runCommand(command, args, options);
   },
 };
@@ -130,4 +182,9 @@ export const claudeStateSignalInstaller: ClaudeStateSignalInstaller = {
  */
 export function backendClaudeStateSignal(): ClaudeStateSignalInstaller | undefined {
   return process.env.NODE_ENV === "test" ? undefined : claudeStateSignalInstaller;
+}
+
+/** The claude-tmux hook doorbell installer, on the same terms (`tmux.hookSignal`). */
+export function backendTmuxHookSignal(): TmuxHookSignalInstaller | undefined {
+  return process.env.NODE_ENV === "test" ? undefined : tmuxHookSignalInstaller;
 }

@@ -127,6 +127,34 @@ export class DiffStatsTracking {
   readonly sharedWatchers: SharedWatcherRegistry;
   readonly sharedScans: SharedScanQueue<DiffScanResult>;
   private readonly ownedWorktreePaths = new Set<string>();
+  private readonly endedContainers = new Map<string, string>();
+
+  /** An end event fences recurring work even if Docker inspect is unavailable. */
+  containerEnded(environmentId: string, containerId: string): void {
+    this.endedContainers.set(environmentId, containerId);
+    this.invalidatePendingSync();
+    this.service.pause(environmentId);
+  }
+
+  containerStarted(containerId: string): void {
+    for (const [id, ended] of Array.from(this.endedContainers)) {
+      if (ended.startsWith(containerId) || containerId.startsWith(ended)) {
+        this.endedContainers.delete(id);
+      }
+    }
+  }
+
+  private applyContainerEvents<
+    T extends { id: string; containerId?: string | null; status: string },
+  >(environments: T[]): T[] {
+    for (const id of Array.from(this.endedContainers.keys())) {
+      if (!environments.some((env) => env.id === id)) this.endedContainers.delete(id);
+    }
+    return environments.map((env) =>
+      this.endedContainers.get(env.id) === env.containerId ? { ...env, status: "stopped" } : env,
+    );
+  }
+
   private syncGeneration = 0;
   private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
@@ -308,7 +336,7 @@ export class DiffStatsTracking {
       .catch(() => undefined)
       .then(async () => {
         if (this.stopped || generation !== this.syncGeneration) return;
-        const [environments, config] = await Promise.all([
+        const [storedEnvironments, config] = await Promise.all([
           context.storage.loadEnvironments(),
           context.storage.loadConfig(),
         ]);
@@ -318,6 +346,7 @@ export class DiffStatsTracking {
         // removed.
         if (generation !== this.syncGeneration) return;
 
+        const environments = this.applyContainerEvents(storedEnvironments);
         this.baselineStorage = context;
         this.baselineCandidates.clear();
         this.ownedWorktreePaths.clear();

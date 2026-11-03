@@ -47,6 +47,28 @@ describe("parseLocalFileLinkTarget", () => {
     expect(parseLocalFileLinkTarget("#L10")).toBeNull();
   });
 
+  test.each([
+    ["java\tscript:alert(1)"],
+    ["java\nscript:alert(1)"],
+    ["\u0001javascript:alert(1)"],
+    ["vb\rscript:msgbox(1)"],
+    ["src/App.tsx\u007f:10"],
+    ["src/App.tsx\u0000"],
+  ])("refuses a destination containing a control character: %j", (destination) => {
+    expect(parseLocalFileLinkTarget(destination)).toBeNull();
+  });
+
+  test("still parses Windows drive paths with either separator", () => {
+    expect(parseLocalFileLinkTarget("C:\\workspace\\App.tsx:12:4")).toEqual({
+      filePath: "C:\\workspace\\App.tsx",
+      lineNumber: 12,
+      columnNumber: 4,
+    });
+    expect(parseLocalFileLinkTarget("D:/repo/README.md")).toEqual({
+      filePath: "D:/repo/README.md",
+    });
+  });
+
   test("does not accept zero or unsafe location suffixes", () => {
     expect(parseLocalFileLinkTarget("src/App.tsx:0")).toEqual({ filePath: "src/App.tsx:0" });
     expect(parseLocalFileLinkTarget("src/App.tsx:99999999999999999999")).toEqual({

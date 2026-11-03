@@ -87,10 +87,13 @@ import {
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/node/transcript-window";
 import {
+  COMPACT_INSTRUCTIONS_MAX_LENGTH,
   isNativeAgentExecutionPolicy,
+  parseCompactInstructionsBody,
   type NativeAgentReadiness,
 } from "@orkestrator/protocol/native-agent";
 import { claudeReadiness } from "../services/claude-sign-in.js";
+import { executionPolicyWidenings } from "../services/execution-policy-narrowing.js";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
@@ -132,6 +135,12 @@ const planApprovalBodyLimit = bodyLimit({
 const interactionBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
   onError: (c) => c.json({ error: "Interaction response is too large" }, 413),
+});
+// Instructions are bounded in characters; a character is at most four UTF-8
+// bytes, plus the JSON envelope and escapes.
+const compactBodyLimit = bodyLimit({
+  maxSize: COMPACT_INSTRUCTIONS_MAX_LENGTH * 6 + 1_024,
+  onError: (c) => c.json({ error: "Compact request is too large" }, 413),
 });
 const holdBodyLimit = bodyLimit({
   maxSize: 1_024,
@@ -483,6 +492,35 @@ session.post("/:id/config", async (c) => {
   if (Object.hasOwn(body, "policy") && !isNativeAgentExecutionPolicy(body.policy)) {
     return c.json({ error: "Invalid execution policy" }, 400);
   }
+  const nextPolicy = effectiveExecutionPolicy(
+    isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
+  );
+  // Narrow-only (H4). The agent this bridge runs can read the bridge token, so
+  // a token holder is not proof of the user's intent: a policy may only stay
+  // the same or get stricter here. Check before applying settings, and again
+  // after asynchronous SDK work before committing the policy.
+  const refusePolicyWidening = () => {
+    const widened = nextPolicy
+      ? executionPolicyWidenings(sessionData.executionPolicy, nextPolicy)
+      : [];
+    if (widened.length > 0) {
+      log.warn("session.policy-widening-refused", {
+        sessionId: sessionData.id,
+        widened: widened.join(","),
+      });
+      return c.json(
+        {
+          error:
+            "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
+          code: "policy-widening-refused",
+          widened,
+        },
+        403,
+      );
+    }
+  };
+  const refusal = refusePolicyWidening();
+  if (refusal) return refusal;
   const { effort, parameterValues } = resolveUltracodeEffort(
     typeof body.reasoningId === "string" ? body.reasoningId : undefined,
     body.parameterValues &&
@@ -515,9 +553,10 @@ session.post("/:id/config", async (c) => {
       sessionErrorStatus(error),
     );
   }
-  const nextPolicy = effectiveExecutionPolicy(
-    isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
-  );
+  // SDK control calls above yield. Another request may have narrowed the
+  // policy meanwhile; revalidate and commit together without another await.
+  const stalePolicyRefusal = refusePolicyWidening();
+  if (stalePolicyRefusal) return stalePolicyRefusal;
   if (nextPolicy) {
     sessionData.executionPolicy = structuredClone(nextPolicy);
   }
@@ -1177,8 +1216,26 @@ session.post("/:id/fork", async (c) => {
   }
 });
 
-session.post("/:id/compact", async (c) => {
+/**
+ * Compact through the CLI's own `/compact`, which takes optional instructions
+ * for the summary as its argument. `instructions: "applied"` in the answer is
+ * how the backend tells this bridge from one that predates the body and would
+ * have compacted without them.
+ */
+session.post("/:id/compact", compactBodyLimit, async (c) => {
   const id = c.req.param("id");
+  // Older backends send no body at all: that is a plain compaction.
+  const text = await c.req.text().catch(() => "");
+  let body: unknown;
+  if (text.trim()) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return c.json({ error: "Compact request body is not JSON" }, 400);
+    }
+  }
+  const parsed = parseCompactInstructionsBody(body);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const resolved = await resolveSession(id, "Failed to compact session");
   if (!resolved.ok) return c.json(resolved.body, resolved.status);
   const sessionData = resolved.session;
@@ -1189,10 +1246,14 @@ session.post("/:id/compact", async (c) => {
   if (sessionData.rewindInProgress === true) {
     return c.json({ error: "Session is restoring files from a checkpoint" }, 409);
   }
-  void sendPrompt(id, "/compact").catch((error) => {
+  const { instructions } = parsed;
+  void sendPrompt(id, instructions ? `/compact ${instructions}` : "/compact").catch((error) => {
     log.error("session.compact-failed", { error: formatLogError(error) });
   });
-  return c.json({ status: "processing" }, 202);
+  return c.json(
+    instructions ? { status: "processing", instructions: "applied" } : { status: "processing" },
+    202,
+  );
 });
 
 session.post("/:id/rewind", async (c) => {

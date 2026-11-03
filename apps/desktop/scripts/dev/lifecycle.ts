@@ -7,8 +7,10 @@ import { parseWorktreeLocationSettings } from "@orkestrator/protocol/disk-usage"
 
 import {
   defaultRuntimeProfileRoots,
+  HEADLESS_ELECTRON_SWITCHES,
   resolveRuntimeProfile,
   statusManifestPath,
+  withoutDisplay,
   type RuntimeProfile,
   type RuntimeProfileRoots,
   type RuntimeProcessName,
@@ -397,11 +399,10 @@ export async function seedAgentTestProfileState(
 const ELECTRON_READINESS_TIMEOUT_MS = 60_000;
 
 /**
- * Electron's leading switches and environment. `--headless-electron` (Linux
- * only) selects Chromium's headless Ozone platform and drops the display
- * variables, so the profile cannot open a window in the session that started
- * it. The switch has to be on the command line: appended from the main script
- * it is read too late.
+ * Electron's leading switches and environment. Headless selects Chromium's
+ * headless Ozone platform and drops the display variables, so the profile
+ * cannot open a window in the session that started it. Ozone exists only on
+ * Linux, so headless changes nothing on any other platform.
  */
 export function electronLaunch(
   headless: boolean,
@@ -410,12 +411,8 @@ export function electronLaunch(
 ): { switches: string[]; env: NodeJS.ProcessEnv } {
   const result = { ...env };
   delete result.ELECTRON_RUN_AS_NODE;
-  if (!headless) return { switches: [], env: result };
-  if (platform !== "linux") throw new Error("--headless-electron is only supported on Linux");
-  delete result.DISPLAY;
-  delete result.WAYLAND_DISPLAY;
-  delete result.ELECTRON_OZONE_PLATFORM_HINT;
-  return { switches: ["--ozone-platform=headless"], env: result };
+  if (!headless || platform !== "linux") return { switches: [], env: result };
+  return { switches: [...HEADLESS_ELECTRON_SWITCHES], env: withoutDisplay(result) };
 }
 
 /**
@@ -434,31 +431,53 @@ export function electronReadinessTimeoutMs(flavor: "development" | "agent-test")
   return flavor === "agent-test" ? ELECTRON_READINESS_TIMEOUT_MS : null;
 }
 
-/** Set to `1` to start an agent-test profile's Electron without any display (Linux only). */
+/** `1` starts an agent-test profile's Electron headless (Linux only), `0` keeps its window. */
+export const AGENT_TEST_HEADLESS_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS";
+/** The earlier opt-in; `1` still means headless, for scripts that set it. */
 export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON";
 
 /**
- * Chromium switches and display variables for the profile's Electron.
+ * Whether a person is at this launcher. Both streams have to be a terminal: an
+ * agent's shell often captures stdout while inheriting a terminal's stdin.
+ */
+function launcherIsInteractive(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+/**
+ * Whether the profile's Electron runs headless, and why.
  *
  * On a shared Linux host the inherited `DISPLAY` and `WAYLAND_DISPLAY` belong
- * to whoever is signed in, so an agent-test window would open on their
- * desktop. With the opt-in, Electron runs on Chromium's headless Ozone
- * platform with the GPU off and never sees those variables; the browser
- * suites drive the gateway, not this window. Other flavors and platforms are
- * unchanged, so a variable left in a shell cannot hide `mise run dev`.
+ * to whoever is signed in, so an agent-test window would open on their desktop,
+ * take focus and receive their keystrokes. The browser suites drive the
+ * gateway, not this window, so a run with nobody at its terminal goes headless
+ * unless told otherwise. An explicit flag wins over the variables, and they win
+ * over the terminal check. Other flavors and platforms are never headless, so a
+ * variable left in a shell cannot hide `mise run dev`.
  */
-export function electronLaunchForRuntime(
-  flavor: "development" | "agent-test",
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): { switches: string[]; env: NodeJS.ProcessEnv } {
-  const headless =
-    flavor === "agent-test" &&
-    platform === "linux" &&
-    env[AGENT_TEST_HEADLESS_ELECTRON_ENV] === "1";
-  const launch = electronLaunch(headless, platform, env);
-  if (headless) launch.switches.push("--disable-gpu");
-  return launch;
+export function resolveElectronHeadless(options: {
+  flavor: "development" | "agent-test";
+  platform: NodeJS.Platform;
+  requested?: boolean;
+  env: NodeJS.ProcessEnv;
+  interactive: boolean;
+}): { headless: boolean; reason: string } {
+  const { flavor, platform, requested, env, interactive } = options;
+  if (flavor !== "agent-test") return { headless: false, reason: `${flavor} profile` };
+  if (platform !== "linux") return { headless: false, reason: `not supported on ${platform}` };
+  if (requested !== undefined) {
+    return { headless: requested, reason: requested ? "--headless" : "--no-headless" };
+  }
+  const variable = env[AGENT_TEST_HEADLESS_ENV];
+  if (variable === "1" || variable === "0") {
+    return { headless: variable === "1", reason: `${AGENT_TEST_HEADLESS_ENV}=${variable}` };
+  }
+  if (env[AGENT_TEST_HEADLESS_ELECTRON_ENV] === "1") {
+    return { headless: true, reason: `${AGENT_TEST_HEADLESS_ELECTRON_ENV}=1` };
+  }
+  return interactive
+    ? { headless: false, reason: "interactive terminal" }
+    : { headless: true, reason: "no terminal" };
 }
 
 /**
@@ -567,6 +586,7 @@ export async function startDevelopment(
   flavor: "development" | "agent-test",
   dependencies: ElectronCompilationDependencies & {
     platform?: NodeJS.Platform;
+    interactive?: boolean;
     roots?: RuntimeProfileRoots;
     prune?: typeof pruneProfiles;
     turbo?: TurboRunner;
@@ -575,8 +595,6 @@ export async function startDevelopment(
     writeStatus?: typeof atomicWriteJson;
   } = {},
 ): Promise<void> {
-  // Refuse an unsupported platform before anything is built or started.
-  electronLaunch(args.headlessElectron === true, dependencies.platform ?? process.platform, {});
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
@@ -739,9 +757,19 @@ export async function startDevelopment(
     await (dependencies.waitForUrl ?? waitForUrl)(rendererUrl);
 
     const platform = dependencies.platform ?? process.platform;
-    const launch = args.headlessElectron
-      ? electronLaunch(true, platform, process.env)
-      : electronLaunchForRuntime(flavor, platform, process.env);
+    const { headless, reason } = resolveElectronHeadless({
+      flavor,
+      platform,
+      requested: args.headless,
+      env: process.env,
+      interactive: dependencies.interactive ?? launcherIsInteractive(),
+    });
+    if (headless) {
+      console.log(
+        `Electron is headless (${reason}); the app is at browserUrl and no window will open. Pass --no-headless for a real window.`,
+      );
+    }
+    const launch = electronLaunch(headless, platform, process.env);
     const electronEnv = launch.env;
     electron = (dependencies.spawn ?? spawn)(
       electronExecutable,

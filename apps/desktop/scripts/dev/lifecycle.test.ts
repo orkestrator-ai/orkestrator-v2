@@ -5,7 +5,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
+import {
+  HEADLESS_ELECTRON_SWITCHES,
+  resolveRuntimeProfile,
+  statusManifestPath,
+} from "../../electron/runtime-profile.js";
 import * as bridgeBuilds from "./bridge-builds.js";
 import * as profileIo from "./profile-io.js";
 import { atomicWriteJson, initializeProfile } from "./profile-io.js";
@@ -13,10 +17,10 @@ import { parseDevArguments } from "./arguments.js";
 import {
   assertElectronReadiness,
   compileElectronForDevelopment,
-  electronLaunchForRuntime,
   electronLaunch,
   electronReadinessTimeoutMs,
   outputTail,
+  resolveElectronHeadless,
   startDevelopment,
   withOutputTails,
   configuredDevWorktreeRoot,
@@ -100,40 +104,18 @@ describe("Electron readiness", () => {
     expect(electronReadinessTimeoutMs("agent-test")).toBe(60_000);
   });
 
-  test("hides the display only from an opted-in agent-test Electron on Linux", () => {
-    const env = {
-      DISPLAY: ":0",
-      WAYLAND_DISPLAY: "wayland-1",
-      ELECTRON_RUN_AS_NODE: "1",
-      ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1",
-    };
-    const headless = electronLaunchForRuntime("agent-test", "linux", env);
-    expect(headless.switches).toEqual(["--ozone-platform=headless", "--disable-gpu"]);
-    expect(headless.env.DISPLAY).toBeUndefined();
-    expect(headless.env.WAYLAND_DISPLAY).toBeUndefined();
-    expect(headless.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
-    expect(env.DISPLAY).toBe(":0");
-    for (const [flavor, platform] of [
-      ["development", "linux"],
-      ["agent-test", "darwin"],
-    ] as const) {
-      const shown = electronLaunchForRuntime(flavor, platform, env);
-      expect(shown.switches).toEqual([]);
-      expect(shown.env.DISPLAY).toBe(":0");
-      expect(shown.env.WAYLAND_DISPLAY).toBe("wayland-1");
-      expect(shown.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
-    }
-    const { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: _, ...notOptedIn } = env;
-    expect(electronLaunchForRuntime("agent-test", "linux", notOptedIn).switches).toEqual([]);
-  });
   test.each([
-    ["development", false],
-    ["agent-test", false],
-    ["development", true],
-    ["agent-test", true],
+    ["development", "linux", undefined, false, false],
+    ["development", "linux", undefined, true, false],
+    ["agent-test", "linux", undefined, false, true],
+    ["agent-test", "linux", undefined, true, false],
+    ["agent-test", "linux", true, true, true],
+    ["agent-test", "linux", false, false, false],
+    ["agent-test", "darwin", true, false, false],
+    ["agent-test", "win32", undefined, false, false],
   ] as const)(
-    "wires Electron spawn settings and keeps readiness during status persistence (%s, explicit=%s)",
-    async (flavor, explicitHeadless) => {
+    "wires Electron spawn settings and keeps readiness during status persistence (%s on %s, requested=%s, interactive=%s)",
+    async (flavor, platform, requested, interactive, headless) => {
       const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-ready-race-"));
       const roots = {
         developmentRoot: path.join(root, "dev"),
@@ -141,7 +123,7 @@ describe("Electron readiness", () => {
         homeDir: root,
       };
       const args = parseDevArguments(["--profile", "ready-race"]);
-      args.headlessElectron = explicitHeadless;
+      args.headless = requested;
       const profile = resolveRuntimeProfile({
         repositoryRoot: path.resolve(import.meta.dir, "../../../.."),
         requestedId: args.profile,
@@ -174,11 +156,18 @@ describe("Electron readiness", () => {
         DISPLAY: ":test-display",
         WAYLAND_DISPLAY: "test-wayland",
         ELECTRON_RUN_AS_NODE: "1",
-        ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1",
       };
+      const ambientHeadlessVariables = [
+        "ORKESTRATOR_AGENT_TEST_HEADLESS",
+        "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON",
+      ];
       const previousEnv = Object.fromEntries(
-        Object.keys(launchEnv).map((key) => [key, process.env[key]]),
+        [...Object.keys(launchEnv), ...ambientHeadlessVariables].map((key) => [
+          key,
+          process.env[key],
+        ]),
       );
+      for (const key of ambientHeadlessVariables) delete process.env[key];
       const cache = spyOn(profileIo, "seedInstalledModelCatalogCaches").mockResolvedValue([]);
       const toolchains = spyOn(profileIo, "seedInstalledAgentToolchains").mockResolvedValue({
         seeded: [],
@@ -200,7 +189,8 @@ describe("Electron readiness", () => {
       let electronOptions: SpawnOptions | undefined;
       try {
         await startDevelopment(args, flavor, {
-          platform: "linux",
+          platform,
+          interactive,
           roots,
           prune: async () => [],
           typecheck: () => ({ status: 0 }),
@@ -233,13 +223,8 @@ describe("Electron readiness", () => {
             if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
           },
         });
-        const headless = explicitHeadless || flavor === "agent-test";
         expect(electronArgs).toEqual([
-          ...(explicitHeadless
-            ? ["--ozone-platform=headless"]
-            : headless
-              ? ["--ozone-platform=headless", "--disable-gpu"]
-              : []),
+          ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",
         ]);
         expect(electronOptions?.env).not.toBe(process.env);
@@ -275,33 +260,78 @@ describe("Electron readiness", () => {
   );
 });
 
-describe("Electron launch", () => {
-  test("rejects unsupported headless startup before building or spawning", async () => {
-    for (const platform of ["darwin", "win32"] as const) {
-      let touched = false;
-      const args = parseDevArguments(["--profile", "unsupported"]);
-      args.headlessElectron = true;
-      await expect(
-        startDevelopment(args, "agent-test", {
-          platform,
-          typecheck: () => {
-            touched = true;
-            return { status: 0 };
-          },
-          spawn: (() => {
-            touched = true;
-            throw new Error("unexpected spawn");
-          }) as typeof import("node:child_process").spawn,
-          prune: async () => {
-            touched = true;
-            return [];
-          },
-        }),
-      ).rejects.toThrow("only supported on Linux");
-      expect(touched).toBe(false);
-    }
+describe("Electron headless mode", () => {
+  const decide = (
+    overrides: Partial<Parameters<typeof resolveElectronHeadless>[0]> = {},
+  ): ReturnType<typeof resolveElectronHeadless> =>
+    resolveElectronHeadless({
+      flavor: "agent-test",
+      platform: "linux",
+      env: {},
+      interactive: true,
+      ...overrides,
+    });
+
+  test("an interactive terminal keeps its window", () => {
+    expect(decide()).toEqual({ headless: false, reason: "interactive terminal" });
   });
 
+  test("a run with no terminal is headless", () => {
+    expect(decide({ interactive: false })).toEqual({ headless: true, reason: "no terminal" });
+  });
+
+  test("the variable turns it on from a terminal and off without one", () => {
+    expect(decide({ env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" } }).headless).toBe(true);
+    expect(
+      decide({ env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "0" }, interactive: false }).headless,
+    ).toBe(false);
+  });
+
+  test("a value other than 0 or 1 falls through to the terminal check", () => {
+    expect(decide({ env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "true" } }).headless).toBe(false);
+    expect(
+      decide({ env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "true" }, interactive: false }).headless,
+    ).toBe(true);
+  });
+
+  test("the earlier variable still opts in, but not past the new one", () => {
+    const earlier = { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" };
+    expect(decide({ env: earlier }).headless).toBe(true);
+    expect(decide({ env: { ...earlier, ORKESTRATOR_AGENT_TEST_HEADLESS: "0" } }).headless).toBe(
+      false,
+    );
+  });
+
+  test("an explicit flag wins over the variables and the terminal check", () => {
+    expect(
+      decide({ requested: true, env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "0" } }).headless,
+    ).toBe(true);
+    expect(
+      decide({
+        requested: false,
+        interactive: false,
+        env: {
+          ORKESTRATOR_AGENT_TEST_HEADLESS: "1",
+          ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1",
+        },
+      }).headless,
+    ).toBe(false);
+  });
+
+  test("never applies to mise run dev, or where Ozone does not exist", () => {
+    const pushed = {
+      requested: true,
+      interactive: false,
+      env: { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" },
+    };
+    expect(decide({ ...pushed, flavor: "development" }).headless).toBe(false);
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(decide({ ...pushed, platform }).headless).toBe(false);
+    }
+  });
+});
+
+describe("Electron launch", () => {
   const env = {
     DISPLAY: ":0",
     WAYLAND_DISPLAY: "wayland-1",
@@ -324,14 +354,20 @@ describe("Electron launch", () => {
 
   test("headless selects the headless Ozone platform with no display to open a window on", () => {
     const launch = electronLaunch(true, "linux", env);
-    expect(launch.switches).toEqual(["--ozone-platform=headless"]);
+    expect(launch.switches).toEqual([
+      "--ozone-platform=headless",
+      "--disable-gpu",
+      "--password-store=basic",
+    ]);
     expect(launch.env).toEqual({ PATH: "/usr/bin" });
+    expect(env.DISPLAY).toBe(":0");
   });
 
-  test("headless is refused where Ozone does not apply", () => {
-    expect(() => electronLaunch(true, "darwin", env)).toThrow("only supported on Linux");
-    expect(() => electronLaunch(true, "win32", env)).toThrow("only supported on Linux");
-    expect(electronLaunch(false, "darwin", env).switches).toEqual([]);
+  test("headless changes nothing where Ozone does not exist", () => {
+    for (const platform of ["darwin", "win32"] as const) {
+      expect(electronLaunch(true, platform, env)).toEqual(electronLaunch(false, platform, env));
+      expect(electronLaunch(true, platform, env).env.DISPLAY).toBe(":0");
+    }
   });
 });
 

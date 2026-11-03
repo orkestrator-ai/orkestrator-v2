@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   HEADLESS_ELECTRON_SWITCHES,
+  electronSpecDisplayProblem,
   headlessElectronRequested,
   withoutDisplay,
 } from "./electron-launch-switches";
@@ -88,8 +89,29 @@ describe("packaged Electron app launch", () => {
   });
 });
 
+describe("display the Electron specs need", () => {
+  test("Linux with no display says what to do", () => {
+    const problem = electronSpecDisplayProblem("linux", {});
+    expect(problem).toContain("neither DISPLAY nor WAYLAND_DISPLAY");
+    expect(problem).toContain("xvfb-run -a mise run test:agent:electron");
+    expect(electronSpecDisplayProblem("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" })).toBe(
+      problem,
+    );
+  });
+
+  test("any display is enough, as is the headless opt-in or another platform", () => {
+    expect(electronSpecDisplayProblem("linux", { DISPLAY: ":99" })).toBeNull();
+    expect(electronSpecDisplayProblem("linux", { WAYLAND_DISPLAY: "wayland-1" })).toBeNull();
+    expect(
+      electronSpecDisplayProblem("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" }),
+    ).toBeNull();
+    expect(electronSpecDisplayProblem("darwin", {})).toBeNull();
+    expect(electronSpecDisplayProblem("win32", {})).toBeNull();
+  });
+});
+
 describe("headless opt-in for the Vite-served Electron specs", () => {
-  test("applies only on Linux with the dev:test variable", () => {
+  test("applies only on Linux with its own variable", () => {
     const on = { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" };
     expect(headlessElectronRequested("linux", on)).toBe(true);
     expect(headlessElectronRequested("darwin", on)).toBe(false);
@@ -97,6 +119,12 @@ describe("headless opt-in for the Vite-served Electron specs", () => {
     expect(
       headlessElectronRequested("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "true" }),
     ).toBe(false);
+  });
+
+  test("dev:test's variable does not take a spec's window away", () => {
+    expect(headlessElectronRequested("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS: "1" })).toBe(
+      false,
+    );
   });
 
   test("drops only the display variables", () => {

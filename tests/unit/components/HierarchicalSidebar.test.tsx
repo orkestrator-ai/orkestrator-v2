@@ -247,7 +247,8 @@ describe("HierarchicalSidebar", () => {
       const boundHeading = within(list).getByRole("button", { name: /^Project One/i });
       const home = within(boundHeading).getByTestId("machine-home-icon");
       await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
-      expect(boundHeading.firstElementChild === home).toBe(true);
+      // It leads the heading inside the coordinator's activity ring.
+      expect(boundHeading.firstElementChild?.contains(home)).toBe(true);
       const boundId = "bk_self";
       // The project is rooted on its owner, but filed in a shared folder.
       await act(async () => {
@@ -269,7 +270,7 @@ describe("HierarchicalSidebar", () => {
       // By machine, this window's projects lead with its home too.
       const machineHome = within(machineHeading).getByTestId("machine-home-icon");
       expect(machineHome.getAttribute("data-machine-color")).toBe("violet");
-      expect(machineHeading.firstElementChild === machineHome).toBe(true);
+      expect(machineHeading.firstElementChild?.contains(machineHome)).toBe(true);
       fireEvent.contextMenu(machineHeading);
       expect(screen.getByText("Add to Folder")).toBeTruthy();
     } finally {

@@ -9,7 +9,7 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
 
 ### Tasks
 
-1. **Make the Home terminal check ignore terminal control sequences**: the spec compares raw terminal output to an exact line, which a host's shell can prefix with a control sequence. Status: open.
+1. **Make the Home terminal check ignore terminal control sequences**: the spec compares raw terminal output to an exact line, which a host's shell can prefix with a control sequence. Status: done (2026-11-03).
 
 ### 1. Make the Home terminal check ignore terminal control sequences
 
@@ -32,9 +32,19 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
     - Pros: one line.
     - Cons: the echoed command line contains the same text, so the check could pass before the command has finished.
 
+## Assumptions and decisions
+
+### Task 1: strip the sequences in the spec
+
+The recommended option. `browser-gateway.spec.ts` now compares lines of
+`visibleText(output)`, the same stripping `terminal-mobile-panes.spec.ts` and five
+other specs already use, so the check still needs the exact line and the echoed
+command cannot match it. The case passed in the isolated suite on beelink on
+2026-11-03 (about 10 s), on a `--headless` profile.
+
 ## Needs verification
 
-- After the fix, the spec passes alone on beelink and on a host without the systemd script.
+- On a host without the systemd script. Only beelink has run the fix.
 - Other specs that compare a whole line of `get_terminal_output_snapshot` output may share this failure. None were checked.
 
 ## Related

@@ -229,6 +229,9 @@ run = "bunx playwright install --no-remove --no-progress chromium"
 [tasks."test:browser"]
 description = "Run the component and public-site browser suites"
 depends = ["playwright:install"]
+# An inherited NODE_ENV=production (an agent session the packaged app started)
+# serves React's production build, which the fixtures' retry paths fail under.
+env = { NODE_ENV = false }
 run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]

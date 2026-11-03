@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -70,6 +71,8 @@ function commandOf(request: Request): { command?: string; args?: Record<string, 
     return {};
   }
 }
+
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 test("a shell in a hidden phone pane keeps working and its size while away, and shows the result on return", async ({
   page,

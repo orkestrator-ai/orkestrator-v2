@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -68,6 +69,8 @@ function commandOf(request: Request): { command?: string; args?: Record<string, 
     return {};
   }
 }
+
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 test("a lost terminal write stays fenced until the user resumes, and the shell survives", async ({
   page,

@@ -115,6 +115,15 @@ async function authenticatedInvoke(page: Page, status: Status) {
   };
 }
 
+/** Terminal output as text, without the escape sequences a shell interleaves (`PS0`, prompts). */
+const visibleText = (output: string): string =>
+  output
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+
 // This host-specific notice can arrive after login, on top of any surface.
 // Dismiss it through its public Close control so local-worktree flows run even
 // on machines whose firewall blocks Docker's host connection.
@@ -490,7 +499,9 @@ test("project Home retains background work and unread attention beneath the boar
         const snapshot = await invoke<{ output: string }>("get_terminal_output_snapshot", {
           sessionId: terminal.sessionId,
         });
-        return snapshot.output.split(/\r?\n/).some((line) => line === "home-background-finished");
+        return visibleText(snapshot.output)
+          .split("\n")
+          .some((line) => line === "home-background-finished");
       })
       .toBe(true);
     await invoke("set_environment_unread", { environmentId: home.id, unread: true });

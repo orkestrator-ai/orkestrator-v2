@@ -90,6 +90,31 @@ stops a Linux run with no display and says what to do, instead of letting each
 spec report a launch timeout. The design canvas spec's own opt-in still skips that
 check. CI's native-menu job already runs under `xvfb-run`, which sets `DISPLAY`.
 
+### Task 1: proving headless from the running processes
+
+`headless-profile.spec.ts` joins the browser config and runs only on Linux with
+`ORKESTRATOR_AGENT_TEST_HEADLESS=1`, which the isolated runners set. A launcher's
+arguments can claim anything; this reads `/proc` for the Electron tree the profile
+reports, compares variable names only, and then loads the app in a browser. Every
+isolated browser run therefore records the result in its own output, without a
+person reading `hyprctl`. It cannot see a window directly: it proves Electron has no
+display to open one on. `hyprctl clients` remains a manual, Hyprland-only check.
+
+### Task 1: making the isolated suite finish
+
+The review run's timeout came from the suite, not from headless mode: the Docker
+reachability modal blocked several specs, some spending their full 120 s, until the
+runner's 900 s budget ran out. Closing the modal in those specs (4221) fixes the cause, so the
+budget stays as it was.
+
+### Task 1: `NODE_ENV` in `test:browser`
+
+`env = { NODE_ENV = false }` on the mise task, not an edit to any spec.
+`scripts/test-all.ts` already removes the variable for the same reason, and CI does
+not set it. It goes beyond the ticket's wording; it is here because it was the
+demonstrated cause of two recorded validation failures on this branch, and the cost is
+one line.
+
 ### Task 1: the one-shot runners
 
 `isolatedProfileArguments` always adds `--headless`, and refuses `--no-headless`.
@@ -118,15 +143,41 @@ launcher that failed to clear them would crash rather than reach the real deskto
 | No TTY, `--no-headless` | Failed the same way | Unchanged | None |
 | `mise run test:agent:design:isolated` | Started with `--fixture --headless`; ready; stopped and reset | Headless | None |
 
-Browser spec against the `--headless` profile: `browser-gateway.spec.ts` with
-`--workers=1` gave 12 passed, 11 skipped (opt-in Docker and live cases) and 2 failed.
-Neither failure comes from this change:
+### Full isolated run, 2026-11-03
 
-- `capped file tree…` is open flake [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md). It passed one of one with only the Ozone switch and three of three with the full list.
-- `project Home retains…` also fails with only the Ozone switch; see [4220](4220-project-home-terminal-check-vs-shell-osc-context.md).
+`mise run test:agent:browser:isolated` on fake display values: started with
+`--fixture --headless --no-agent-credentials --agent-platforms codex`, reached ready,
+and stopped and reset its profile. The suite finished in 760 s, against a 900 s
+timeout at case 88 of 143 before the reachability handlers. Hyprland listed no
+window for the profile in any of 51 samples, taken every 15 s across the run.
 
-The one-shot design run's three specs failed, all with the Docker reachability modal
-over the page; see [4221](4221-design-canvas-spec-reachability-dialog.md).
+It gave 46 passed, 94 skipped (opt-in Docker and live cases) and 4 failed. The
+`/proc` half of `headless-profile.spec.ts` passed in that run, which reads the running
+Electron tree: no display variable in any process, and the headless switches on the
+launcher's child. The four failures:
+
+| Case | Cause | State |
+| --- | --- | --- |
+| `headless-profile.spec.ts` | Its last check did not find the `DEV ·` label with `getByText`; it now checks for the project in the sidebar. | Fixed; passed alone against a `--headless` profile |
+| `web-annotations-gateway.spec.ts`, `a desktop capture…` | The reachability modal, on a page the spec's own helper creates. | Fixed; passed alone against a `--headless` profile |
+| `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
+| `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Open; see [4222](4222-browser-failures-left-after-headless-qualification.md) |
+
+`project Home retains…` ([4220](4220-project-home-terminal-check-vs-shell-osc-context.md))
+and the design canvas cases ([4221](4221-design-canvas-spec-reachability-dialog.md))
+passed. So did `capped file tree…`, in 71 s; flake
+[2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)
+stays open, since one pass does not settle it. The suite was not rerun in full after
+the three fixes above.
+
+### `test:browser`
+
+The four files the review package classified as undetermined fail the same way
+alone, so they are not load flakes. `AgentsMdApproval.spec.ts` and
+`SettingsMachineRouting.spec.ts` fail only with the agent shell's inherited
+`NODE_ENV=production` and pass with it unset, which `mise run test:browser` now does.
+The two Multi Review layout assertions fail either way, with no change on this
+branch to anything they load; see [4222](4222-browser-failures-left-after-headless-qualification.md).
 
 ## Needs verification
 

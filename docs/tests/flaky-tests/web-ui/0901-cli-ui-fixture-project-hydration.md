@@ -1,7 +1,7 @@
 # CLI project cascade browser case misses the fixture project
 
 - **ID:** 0901
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-25
 - **File:** `e2e/agent-testing/cli-ui.spec.ts:268`
 - **Test:** `a CLI-initialized project and its cascade removal reach an open renderer`.
@@ -12,3 +12,5 @@
 - **Rerun fixture:** a fresh credential-free Codex profile with local and full-network container fixtures, rather than the original profile's local-only fixture. The cause is unknown; the richer fixture means this rerun does not establish that load caused the failure.
 - **Evidence:** original `output/agent-testing/qa-browser-a6c7ec9c-d18/browser/`; private log `orkestrator-test-run.BHICIj/browser-smoke.log.gz` in the host temporary directory. Both disposable profiles were stopped and reset after testing.
 - **Assessment:** intermittent fixture-project hydration in the broader run; no assertion, timeout or skip in the owning CLI browser file changed.
+- **Root cause, beelink (Linux), 2026-11-03,** on the branch for to-do [2181](../../../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md). `login()` returned at `domcontentloaded` and the case navigated again at once, while the login page's module graph was still loading. The gateway then answered the new document's `/@vite/client` and `/src/main.tsx` with 502, and the page stayed blank with no retry, so `Expand project origin` never appeared. Two traces show exactly those two 502s: this case in `mise run test:agent:browser:isolated`, and `CLI changes reach an open renderer and survive a reload` (the same `login()`) in one of three repeats alone.
+- **Fix and verification:** `login()` in `e2e/agent-testing/cli-ui.spec.ts` waits for `load`, which module scripts delay, and no assertion changed. With it, both cases passed five of five with `--repeat-each=5 --workers=1` (10 passed, 0 failed, about 39 s). Why the gateway answers 502 in that race was not investigated; a spec that navigates twice this way could still hit it.

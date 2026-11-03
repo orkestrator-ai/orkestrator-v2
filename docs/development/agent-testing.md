@@ -92,7 +92,9 @@ creates a profile.
 Every one-shot isolated runner starts its profile with `dev:test --headless`
 (see [Headless Electron](#headless-electron)), so a sub-agent's run cannot open
 a window on the host's desktop. They refuse `--no-headless`. The browser suites
-drive the gateway, not that window.
+drive the gateway, not that window. `headless-profile.spec.ts` checks this on each
+isolated browser run on Linux: it reads `/proc` for the profile's Electron tree (no
+display variables, the headless switches on the launcher's child) and loads the app.
 
 On Linux, Chromium aborts in-flight requests, including loopback ones, with
 `net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,

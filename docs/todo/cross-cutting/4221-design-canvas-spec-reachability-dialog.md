@@ -9,7 +9,7 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
 
 ### Tasks
 
-1. **Close the reachability dialog in the design canvas browser spec**: on a host whose firewall drops Docker's traffic to the host, the modal covers the page and every case in the spec fails. Status: open.
+1. **Close the reachability dialog in the design canvas browser spec**: on a host whose firewall drops Docker's traffic to the host, the modal covers the page and every case in the spec fails. Status: done (2026-11-03).
 
 ### 1. Close the reachability dialog in the design canvas browser spec
 
@@ -32,9 +32,22 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
     - Pros: no code; the modal's own instructions cover it.
     - Cons: changes a host setting to pass a test, and leaves the spec failing on the next such host.
 
-## Needs verification
+## Assumptions and decisions
 
-- With the handler, the spec passes on beelink. Check whether its cases need the page after the modal closes, since the spec is timing-sensitive on narrow layouts (flakes 0209 and 0632).
+### Task 1: the same gap in other specs
+
+The recommended per-spec handler, through the existing
+`e2e/docker-reachability-warning.ts`. The review run's page snapshots showed the
+same modal over `cli-ui.spec.ts` and `pull-request-pane.spec.ts`, and a later run
+over one case in `web-annotations-gateway.spec.ts`, so those got it too, along with
+`terminal-input-resume.spec.ts` and `terminal-mobile-panes.spec.ts`, which run
+ungated in the isolated suite. Blocked cases spent up to their full 120 s, and the
+suite passed the runner's 900 s budget at case 88 of 143. With the
+handlers the same suite finished in 760 s. Specs gated behind opt-in variables were
+left alone; they did not run.
+
+All three design canvas cases passed on beelink on 2026-11-03, on a `--headless`
+profile with one worker.
 
 ## Related
 

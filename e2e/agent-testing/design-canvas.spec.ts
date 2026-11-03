@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded } from "./sidebar-project";
 import { expect, test } from "@playwright/test";
 import { writeFile, rm } from "node:fs/promises";
@@ -6,6 +7,8 @@ import { spawnSync } from "node:child_process";
 import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-canvas";
 
 test.use({ actionTimeout: 15_000 });
+
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 /** The phone layout's tools trigger, found by CSS so an open modal does not hide it. */
 const MOBILE_TOOLS_TRIGGER = 'button[aria-label="Open tools"]';

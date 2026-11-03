@@ -45,3 +45,9 @@ Evidence:
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.rxxQDQ/r4-main-preview-owner.log.gz`.
 This establishes an existing target-branch failure independently of R4. It does
 not establish the cause; the earlier host-contention hypothesis is unconfirmed.
+
+The final aggregate repeated the same assertion after 689.70 ms. On fresh
+main at `62e99ff599cfcfa2bfdd23f907b8f05039925d63`, an explicit setup-node preload
+also reproduced it in all ten repetitions (60 passed, ten failed, 6.72 s):
+`mise run test:logged -- --name r4-main-preview-preloaded -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --parallel=1 --rerun-each=10 --only-failures`.
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.szuLqe/r4-main-preview-preloaded.log.gz`.

@@ -201,3 +201,9 @@ mise run test:logged -- --name r4-main-codex-runtime-owner -- bun test ./bridges
 This confirms intermittent behavior, not target-branch reproduction of the
 timeout or proof of an environmental cause. No implementation, assertion,
 timeout or skip changed.
+
+The final exact aggregate rerun after logger sink acknowledgement passed the
+entire bridges group (74.1 s), including this owner. Root and protocol groups
+also passed. Backend still had the independently reproduced preview failure
+and a Git fsmonitor timeout; no full-suite success is claimed. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.OdacnP/summary.json`.

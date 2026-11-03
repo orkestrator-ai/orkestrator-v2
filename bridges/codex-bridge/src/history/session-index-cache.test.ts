@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdtemp, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -157,15 +157,24 @@ describe("session index cache", () => {
   });
 
   test("a same-size rewrite is read again from scratch", async () => {
-    const path = await indexFile([{ id: "a", thread_name: "AAAA" }]);
-    await readSessionIndex(path);
+    const path = await indexFile();
+    const original = line("a", "AAAA");
+    const replacement = line("a", "BBBB");
+    expect(Buffer.byteLength(replacement)).toBe(Buffer.byteLength(original));
+    await writeFile(path, original, "utf8");
+    const before = await stat(path);
+    expect((await readSessionIndex(path)).last("a")?.threadName).toBe("AAAA");
 
-    await writeFile(path, line("a", "BBBB"), "utf8");
+    await writeFile(path, replacement, "utf8");
     // Force a distinct mtime even on a coarse-grained filesystem clock.
-    const later = new Date(Date.now() + 5_000);
+    const later = new Date(before.mtimeMs + 5_000);
     await utimes(path, later, later);
+    const after = await stat(path);
+    expect(after.size).toBe(before.size);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).not.toBe(before.mtimeMs);
     expect((await readSessionIndex(path)).last("a")?.threadName).toBe("BBBB");
-    expect(counts().fullReads).toBe(2);
+    expect(counts()).toEqual({ fullReads: 2, tailReads: 0, uncachedReads: 0 });
   });
 
   test("an unterminated last line is served, then committed once its newline lands", async () => {

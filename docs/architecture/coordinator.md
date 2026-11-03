@@ -137,6 +137,11 @@ works across the nodes that node controls:
   prompts and messages open delegations that wake this conversation once,
   and build pipelines and Multi Reviews there send status wakes. See
   [command-nodes.md](command-nodes.md#one-tool-family-every-node).
+- Tickets are shared: the project's board syncs to every node with a copy,
+  under the same ids. `create_ticket` (with or without `nodeId`) and then
+  `start_build_pipeline` with a `nodeId` builds a ticket on that node by its
+  id, with no relay through that node's coordinator. See
+  [Tickets on other machines](#tickets-on-other-machines).
 - A node without a copy needs one first: `request_project_on_node` asks the
   user, who settles the location and files in the copy dialog.
 - `request_environment_deletion` only asks: the user confirms in a dialog
@@ -285,6 +290,34 @@ coordinator directly when the sidebar is grouped by machine or project.
 Grouped by repository it leads to the command node's coordinator for that
 repository instead, when the command node has one
 ([command-nodes.md](command-nodes.md#leaf-mode)).
+
+### Tickets on other machines
+
+The project's Kanban board is the command node's, and every leaf with a copy
+of the repository holds a synced copy of it under the same ticket ids
+([tickets.md](tickets.md#sync-across-machines)). The ticket tools take an
+optional `nodeId` (`coordinator-node-tickets.ts`):
+
+| Tool with `nodeId` | Leaf that syncs tickets | Older leaf (no `ticket-sync`) |
+| --- | --- | --- |
+| `create_ticket` | Created on this board, then handed to the leaf now; while it is disconnected, `sync.state` is `offline` and it gets the ticket on reconnect. | Created on the leaf only; `sync.state` is `update-required`. |
+| `list_tickets`, `get_ticket` | The leaf's board: this board's copies (`syncedFromCommandNode`) and tickets made only there. Disconnected: this board, with a note. | The leaf's board. Disconnected: refused. |
+| `update_ticket`, `add_ticket_comment` | A ticket of this board is changed here and synced; a ticket made only on the leaf is changed there. | Changed on the leaf. Disconnected: refused. |
+
+`start_build_pipeline` with a `nodeId` and a ticket of this board syncs the
+leaf first (refusing if that does not finish) and starts the build there
+under the same id; the ticket then shows where its build runs (`runsOn` in
+ticket reads, a machine chip on the board). An older leaf cannot build a
+ticket of this board: the refusal says to update it or to create a ticket
+there. Ticket summaries carry `runsOn` for work on another machine.
+
+**Offline.** Ticket changes for a disconnected leaf wait on this board and
+reach it in order on reconnect. Launches, builds, Multi Reviews and the other
+environment and workflow tools on a disconnected node are refused with a
+message saying they are not queued: run hours later, a launch would start
+from a stale base commit, and an outcome lost to a disconnect could not be
+resolved without risking running it twice. Retry when the node reconnects
+(`list_nodes`), or use another machine.
 
 ## One main coordinator, and side agents
 

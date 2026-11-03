@@ -26,6 +26,7 @@ import {
   backgroundDelay,
   classifyPrDetectionFailure,
   detectionPriority,
+  rateLimitCooldown,
   resolvePrMonitorPolicy,
   type PrDetectionFailure,
   type PrMonitorPolicyConfig,
@@ -71,6 +72,15 @@ import {
  * same branch is still found. An explicit refresh, a new pending intent and an
  * agent-completion edge ({@link PrMonitorService.wakeForCompletion}) reset the
  * due time of any entry.
+ *
+ * ## Rate limits
+ *
+ * A rate-limited check cools its whole credential scope down (doubling per
+ * rate limit in a row). Background checks, including ones that were already
+ * queued for a slot, hold until it ends and resume with jitter. A refusal is
+ * not evidence the PR changed, so a reading GitHub answered within
+ * `rateLimitGraceMs` stays confirmed (`consecutiveErrors` unchanged) and the
+ * refusal is counted only once the grace runs out.
  *
  * ## Terminal obligations
  *
@@ -334,6 +344,15 @@ interface PrMonitorEntry {
   lastDetectionAt: number;
   /** Monotonic end of this entry's own rate-limit cooldown. */
   cooldownUntil: number;
+  /** Rate limits in a row for an entry with no shared cooldown scope. */
+  rateLimitStrikes: number;
+  /** Monotonic start of the check behind `lastSuccessfulCheckAt`; null when unconfirmed. */
+  lastAnsweredAt: number | null;
+  /**
+   * Rate-limited attempts not yet counted in `consecutiveErrors`, because
+   * the last reading was still inside the rate-limit grace.
+   */
+  deferredRateLimits: number;
   /** Restored by reconciliation: stagger the next background schedule. */
   restoreJitter: boolean;
   /** Restored by reconciliation: spread the first terminal discovery over a period. */
@@ -377,6 +396,7 @@ export class PrMonitorService {
   private readonly policy: PrMonitorPolicyConfig;
   private readonly cooldownScope: (target: PrMonitorTarget) => string | null;
   private readonly cooldowns: PrCooldownScopes;
+  private detectionSequence = 0;
 
   constructor(options: PrMonitorServiceOptions) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -613,6 +633,8 @@ export class PrMonitorService {
     // GitHub can change while polling is paused. Resume must earn a new
     // confirmation even when the persisted PR fields have not changed.
     entry.lastSuccessfulCheckAt = null;
+    entry.lastAnsweredAt = null;
+    entry.deferredRateLimits = 0;
     entry.recheckRequested = false;
     entry.wake = null;
     this.options.cancel(entry.timer);
@@ -733,6 +755,9 @@ export class PrMonitorService {
       forceDetection: false,
       lastDetectionAt: now,
       cooldownUntil: 0,
+      rateLimitStrikes: 0,
+      lastAnsweredAt: null,
+      deferredRateLimits: 0,
       restoreJitter: behaviour.restored === true,
       spreadFirstDiscovery: behaviour.restored === true,
       lastActivityAt: now,
@@ -776,6 +801,7 @@ export class PrMonitorService {
     // Someone is acting on this PR: it is not quiet, whatever GitHub says.
     entry.lastActivityAt = this.options.monotonicNow();
     if (entry.phase === "waiting") {
+      entry.wake = strongerWake(entry.wake, reason);
       this.raiseWaitingPriority(entry, reason);
       return;
     }
@@ -836,10 +862,51 @@ export class PrMonitorService {
       this.policy,
     );
     if (policy === "open" || policy === "provisional" || policy === "terminal-discovery") {
-      // A background detection never runs inside a rate-limit cooldown.
-      delay = Math.max(delay, this.cooldownRemaining(entry, this.options.monotonicNow()));
+      // A background detection never runs inside a rate-limit cooldown, and
+      // the entries one held do not all resume in the same instant.
+      const now = this.options.monotonicNow();
+      const remaining = this.cooldownRemaining(entry, now);
+      if (remaining > delay) {
+        delay = remaining + this.resumeJitter();
+        // Wake when a held reading's grace ends, even inside a long cooldown.
+        const grace = this.graceRemaining(entry, now);
+        if (grace !== null && grace < delay) delay = Math.max(grace, 1);
+      }
     }
     return delay;
+  }
+
+  private resumeJitter(): number {
+    return Math.floor(this.sample() * this.policy.rateLimitResumeJitterMs);
+  }
+
+  /**
+   * Waits out a rate-limit cooldown without asking GitHub. The last reading
+   * stays confirmed for the rate-limit grace; the entry wakes when the grace
+   * ends, so clients stop trusting a reading the monitor cannot refresh.
+   */
+  private holdThroughCooldown(entry: PrMonitorEntry, remaining: number): void {
+    const now = this.options.monotonicNow();
+    if (this.expireRateLimitGrace(entry, now)) this.emitState(entry);
+    let delay = remaining + this.resumeJitter();
+    const grace = this.graceRemaining(entry, now);
+    if (grace !== null) delay = Math.min(delay, Math.max(grace, 1));
+    this.scheduleNext(entry, delay);
+  }
+
+  /** Time left before a held reading stops counting as confirmed; null when none is held. */
+  private graceRemaining(entry: PrMonitorEntry, now: number): number | null {
+    if (entry.consecutiveErrors > 0 || entry.lastAnsweredAt === null) return null;
+    return entry.lastAnsweredAt + this.policy.rateLimitGraceMs - now;
+  }
+
+  /** Counts the held reading's rate limits as errors once its grace is over. */
+  private expireRateLimitGrace(entry: PrMonitorEntry, now: number): boolean {
+    const grace = this.graceRemaining(entry, now);
+    if (grace === null || grace > 0) return false;
+    entry.consecutiveErrors = Math.max(1, entry.deferredRateLimits);
+    entry.deferredRateLimits = 0;
+    return true;
   }
 
   /**
@@ -940,7 +1007,6 @@ export class PrMonitorService {
         this.metrics.requested("pr-detection");
         this.metrics.coalesced("pr-detection");
         const wake = entry.wake;
-        entry.wake = null;
         if (wake) this.raiseWaitingPriority(entry, wake);
       } else if (entry.phase === "detecting") {
         this.metrics.requested("pr-detection");
@@ -967,7 +1033,7 @@ export class PrMonitorService {
         // instead of spending another request that would be refused. A later
         // interactive wake still resets the due time.
         entry.wake = wake;
-        this.scheduleNext(entry, remaining);
+        this.holdThroughCooldown(entry, remaining);
         return;
       }
     }
@@ -1002,12 +1068,35 @@ export class PrMonitorService {
       return;
     }
 
+    // Wakes and pending intents received while queued are answered by this
+    // detection, including their cooldown exemption and fresh-read requirement.
+    wake = strongerWake(wake, entry.wake);
+    entry.wake = null;
+    policy = this.policyOf(entry);
+
+    if (wake !== "interactive" && policy !== "merge-pending" && policy !== "create-pending") {
+      const remaining = this.cooldownRemaining(entry, this.options.monotonicNow());
+      if (remaining > 0) {
+        // A rate limit began while this check waited for its slot (another
+        // entry in the scope hit it). Asking now would only be refused too,
+        // and a queue of such checks is what turned one refusal into a burst.
+        lease.release();
+        entry.checkInProgress = false;
+        entry.phase = "idle";
+        if (entry.lastEmitted?.checkInProgress) this.emitState(entry);
+        entry.wake = strongerWake(entry.wake, wake);
+        this.holdThroughCooldown(entry, remaining);
+        return;
+      }
+    }
+
     entry.phase = "detecting";
     // Captured after admission: a branch rename, target change or explicit
     // terminal reconciliation while queued is simply included in this check.
     const generation = entry.generation;
     const detectionTarget = entry.target;
     const checkStartedAt = this.options.now();
+    const detectionSequence = ++this.detectionSequence;
     let transition: PrMonitorTransition | undefined;
     try {
       let detection: PrDetection | null = null;
@@ -1042,10 +1131,23 @@ export class PrMonitorService {
       if (!this.isCurrent(entry, generation)) return;
 
       if (failure) {
-        entry.consecutiveErrors += 1;
-        if (failure.kind === "rate-limited") this.startCooldown(entry, detectionTarget, failure);
+        const grace = this.graceRemaining(entry, this.options.monotonicNow());
+        if (failure.kind === "rate-limited") {
+          this.startCooldown(entry, detectionTarget, failure, detectionSequence);
+        }
+        if (failure.kind === "rate-limited" && grace !== null && grace > 0) {
+          // GitHub refused to answer; it did not report a change. The last
+          // reading stays confirmed for the grace, counted if it runs out.
+          entry.deferredRateLimits += 1;
+        } else {
+          entry.consecutiveErrors += 1 + entry.deferredRateLimits;
+          entry.deferredRateLimits = 0;
+        }
       } else {
         entry.consecutiveErrors = 0;
+        entry.deferredRateLimits = 0;
+        entry.lastAnsweredAt = startedAt;
+        this.clearRateLimitStrikes(entry, detectionTarget);
         entry.lastSuccessfulCheckAt = this.options.now();
         entry.lastSuccessfulCheckStartedAt = checkStartedAt;
         if (detection) transition = await this.applyDetection(entry, detection, generation);
@@ -1140,15 +1242,24 @@ export class PrMonitorService {
     entry: PrMonitorEntry,
     target: PrMonitorTarget,
     failure: Extract<PrDetectionFailure, { kind: "rate-limited" }>,
+    detectionSequence: number,
   ): void {
     const now = this.options.monotonicNow();
-    const cooldown = Math.min(
-      failure.retryAfterMs ?? this.policy.rateLimitCooldownMs,
-      this.policy.maxRetryAfterMs,
-    );
-    entry.cooldownUntil = Math.max(entry.cooldownUntil, now + cooldown);
     const scope = this.cooldownScopeOf(target);
+    // Rate limits in a row lengthen the cooldown: a budget something else is
+    // still spending is rarely back two minutes later.
+    const strikes = scope
+      ? this.cooldowns.strike(scope, detectionSequence, this.detectionSequence)
+      : (entry.rateLimitStrikes += 1);
+    const cooldown = rateLimitCooldown(failure.retryAfterMs, strikes, this.policy);
+    entry.cooldownUntil = Math.max(entry.cooldownUntil, now + cooldown);
     if (scope) this.cooldowns.set(scope, now + cooldown, now);
+  }
+
+  private clearRateLimitStrikes(entry: PrMonitorEntry, target: PrMonitorTarget): void {
+    entry.rateLimitStrikes = 0;
+    const scope = this.cooldownScopeOf(target);
+    if (scope) this.cooldowns.clearStrikes(scope);
   }
 
   /**

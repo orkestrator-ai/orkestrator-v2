@@ -203,8 +203,9 @@ Ready means all of:
 - The reading is fresh. For this machine: the PR monitor mirror is `current`,
   the backend has answered a check for this exact PR since polling last started
   or resumed (the first answered check is announced once for this), the latest
-  check did not fail, both monitor and environment report no conflicts, and the
-  environment can be polled (local, or a running container). The monitor half
+  check did not fail (a rate-limited poll shortly after a confirmed reading
+  does not count as failing; see below), both monitor and environment report
+  no conflicts, and the environment can be polled (local, or a running container). The monitor half
   of that is `isPrReadingConfirmedByMonitor`. For another machine: the machine
   is connected, its summaries are `current`, and the summary carries
   `prMonitorConfirmed`, which the leaf computes with the same
@@ -218,6 +219,29 @@ lookup, so readiness costs no extra GitHub request. It persists the result as
 clears it whenever `prUrl` changes. Node summaries relay `prState`,
 `prHasMergeConflicts` and `prMergeability`, never the PR URL, so a command node
 can display a leaf's last persisted PR state.
+
+### When GitHub rate-limits the monitor
+
+Every `gh` call the monitor makes draws on the GitHub user's budget (5,000
+GraphQL points an hour, shared by every token, app, agent and machine signed
+in as that user), so a busy account can run it dry. The monitor batches open
+local PRs into one query per credential and polls quiet PRs every two minutes
+to spend less (`commands-pr-monitor-batch.ts`). When GitHub still refuses:
+
+- The refused scope (the host's local `gh` credential, or one container)
+  cools down. With no retry timing from `gh` the cooldown is two minutes,
+  doubling for each further rate limit in a row up to 30 minutes; a check that
+  GitHub answers resets it. User refreshes and pending intents still ask.
+- Checks already queued for a detection slot when the limit arrives wait out
+  the cooldown instead of asking, and the held checks resume spread over 30 s
+  rather than all at once, so one refusal does not become a burst.
+- A refused poll does not withdraw a reading GitHub confirmed in the last 15
+  minutes (`rateLimitGraceMs` in `pr-monitor-policy.ts`): a refusal is not
+  evidence that the PR changed, so the green and red names stay. Past the
+  grace, the deferred refusals count as failed checks and the reading is no
+  longer confirmed until GitHub answers again. Ordinary failures count at
+  once. Auto-merge is unaffected: it already requires a reading started in
+  the last 60 s.
 
 ### Merge permission
 

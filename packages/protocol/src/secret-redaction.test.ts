@@ -83,6 +83,28 @@ describe("redactSecrets", () => {
     expect(redactSecrets(message)).toBe(message);
   });
 
+  test.each(["x".repeat(65536), "a-".repeat(32768), "a.".repeat(32768)])(
+    "bounds redaction time for a long non-credential run %#",
+    (input) => {
+      const start = performance.now();
+      const result = redactSecrets(input);
+      const elapsed = performance.now() - start;
+      expect(result).toBe(input);
+      expect(elapsed).toBeLessThan(250);
+    },
+  );
+
+  test("still redacts prefixed assignments and custom URL schemes", () => {
+    for (const input of [
+      "MY-SERVICE-CLIENT_SECRET=assignmentCanary123",
+      "--password=assignmentCanary123",
+      "OPENAI_API_KEY=assignmentCanary123",
+      "custom+v1.2://user:assignmentCanary123@host/path",
+    ]) {
+      expect(redactSecrets(input)).not.toContain("assignmentCanary123");
+    }
+  });
+
   test("is stateless across calls despite the /g patterns", () => {
     // A shared /g RegExp carries lastIndex between calls, which would silently
     // skip a token on every other invocation.

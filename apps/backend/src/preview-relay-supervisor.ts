@@ -13,6 +13,23 @@ import {
 const HEADER = 9;
 const MAX_PAYLOAD = 32 * 1024;
 
+/**
+ * Inbound frames whose payload has one exact size. The relay script sends
+ * these and nothing else; any other length is a malformed frame.
+ */
+const FIXED_PAYLOAD_LENGTH: Partial<Record<number, number>> = {
+  [RELAY_FRAME.opened]: 0,
+  [RELAY_FRAME.eof]: 0,
+  [RELAY_FRAME.close]: 0,
+  [RELAY_FRAME.credit]: 4,
+};
+
+function malformedFrame(): Error {
+  return previewFailure("internal", {
+    message: "The container relay sent a malformed frame.",
+  });
+}
+
 export interface RelayProcess {
   stdin: NodeJS.WritableStream & { write(chunk: Buffer): boolean; end(): void };
   stdout: NodeJS.ReadableStream;
@@ -333,27 +350,39 @@ class EnvironmentRelay {
 
   private onData(chunk: Buffer): void {
     if (!this.alive) return;
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
-    while (this.buffer.length >= HEADER) {
-      const length = this.buffer.readUInt32BE(5);
-      if (length > MAX_PAYLOAD + 1024) {
-        this.shutdown(
-          previewFailure("internal", {
-            message: "The container relay sent a malformed frame.",
-          }),
-        );
-        return;
+    // This runs from the relay's stdout listener: a throw here would be
+    // uncaught and take the backend down, so any failure ends the relay.
+    try {
+      this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
+      while (this.alive && this.buffer.length >= HEADER) {
+        const length = this.buffer.readUInt32BE(5);
+        if (length > MAX_PAYLOAD + 1024) {
+          this.shutdown(malformedFrame());
+          return;
+        }
+        if (this.buffer.length < HEADER + length) return;
+        const type = this.buffer.readUInt8(0);
+        const id = this.buffer.readUInt32BE(1);
+        const payload = Buffer.from(this.buffer.subarray(HEADER, HEADER + length));
+        this.buffer = this.buffer.subarray(HEADER + length);
+        this.onFrame(type, id, payload);
       }
-      if (this.buffer.length < HEADER + length) return;
-      const type = this.buffer.readUInt8(0);
-      const id = this.buffer.readUInt32BE(1);
-      const payload = Buffer.from(this.buffer.subarray(HEADER, HEADER + length));
-      this.buffer = this.buffer.subarray(HEADER + length);
-      this.onFrame(type, id, payload);
+    } catch {
+      // Content-free: the error may carry frame bytes or consumer state.
+      this.shutdown(
+        previewFailure("internal", {
+          message: "The container relay sent a frame the backend could not handle.",
+        }),
+      );
     }
   }
 
   private onFrame(type: number, id: number, payload: Buffer): void {
+    const expected = FIXED_PAYLOAD_LENGTH[type];
+    if (expected !== undefined && payload.length !== expected) {
+      this.shutdown(malformedFrame());
+      return;
+    }
     const channel = this.channels.get(id);
     switch (type) {
       case RELAY_FRAME.ready:

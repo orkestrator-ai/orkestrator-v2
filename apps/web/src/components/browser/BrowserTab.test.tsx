@@ -2071,6 +2071,8 @@ describe("BrowserTab", () => {
       expect(native.browserPreview.attach).toHaveBeenCalledWith(
         expect.objectContaining({
           tabId: "browser-1",
+          // The view's gateway requests name the tab's environment (M2).
+          environmentId: "env-1",
           bounds: { x: 11, y: 22, width: 333, height: 244 },
           visible: true,
         }),

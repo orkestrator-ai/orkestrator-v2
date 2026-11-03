@@ -5,8 +5,11 @@ import type { CommandContext } from "./commands-context.js";
 import { nativeAgentJobReceiptIsActive, type NativeAgentJobCompletionAction } from "./models.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { createHash } from "node:crypto";
-import { nativePromptQueueKey } from "./public-api/prompt-delivery.js";
-import { nativeTabsOfLayout, type NativeTabInfo } from "./public-api/summaries.js";
+import {
+  nativePromptQueueKey,
+  nativeTabsOfLayout,
+  type NativeTabInfo,
+} from "./public-api/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

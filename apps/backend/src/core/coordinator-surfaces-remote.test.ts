@@ -303,7 +303,11 @@ test("tab edits on another node, refused while this node's coordinator waits on 
     requestId: "delegation:job",
     createdAt: new Date().toISOString(),
   });
-  await world.storage.coordinators.openCoordinatorDelegation(association.id, "agent");
+  await world.storage.coordinators.openCoordinatorDelegation(
+    rootContext.runtime.coordinatorRequests.workerTabs,
+    association.id,
+    "agent",
+  );
   const edits = routed.filter((command) => command === "edit_controller_worker_tab").length;
   const refused = await edit({ tabId: "agent", operation: "close" });
   expect(refused.text).toContain("waiting on this tab");
@@ -368,7 +372,11 @@ test("remote close holds delegation admission across its check and leaf RPC", as
   try {
     await entered.promise;
     await expect(
-      world.storage.coordinators.openCoordinatorDelegation(association.id, "idle"),
+      world.storage.coordinators.openCoordinatorDelegation(
+        rootContext.runtime.coordinatorRequests.workerTabs,
+        association.id,
+        "idle",
+      ),
     ).rejects.toThrow("being closed");
     for (const explicitTab of [true, false]) {
       await expect(
@@ -487,7 +495,11 @@ test("failed remote close releases admission for a later delegation", async () =
       .isError,
   ).toBe(true);
   expect(
-    await world.storage.coordinators.openCoordinatorDelegation(association.id, "idle"),
+    await world.storage.coordinators.openCoordinatorDelegation(
+      rootContext.runtime.coordinatorRequests.workerTabs,
+      association.id,
+      "idle",
+    ),
   ).toMatchObject({ delegation: { state: "running" } });
 });
 

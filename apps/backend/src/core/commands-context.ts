@@ -24,7 +24,7 @@ export type BackendEmit = (event: string, payload: unknown) => void;
 export type CommandContext = {
   design?: import("./design/index.js").DesignService;
   previews?: import("./preview-runtime.js").PreviewRuntime;
-  mcpManagement?: import("./mcp-management/service.js").McpManagementService;
+  mcpManagement?: import("./mcp-management/index.js").McpManagementService;
   webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
   /** Transcript artifacts: durable revisions, receipts and publications. */
   transcriptArtifacts?: import("./transcript-artifacts/index.js").TranscriptArtifactService;
@@ -66,6 +66,8 @@ export type CommandContext = {
     issueWorktreeSignal?(
       onSignal: (reason: WorktreeSignalReason) => void,
     ): StateSignalCredential | null;
+    /** Doorbell credential for a container's claude-tmux hook script (`tmux-hook-signal.ts`). */
+    issueTmuxHookSignal?(onSignal: () => void): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;

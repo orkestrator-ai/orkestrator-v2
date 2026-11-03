@@ -5,6 +5,7 @@ import {
   backgroundDelay,
   classifyPrDetectionFailure,
   detectionPriority,
+  rateLimitCooldown,
   resolvePrMonitorPolicy,
   type DelayInput,
 } from "./pr-monitor-policy.js";
@@ -123,6 +124,40 @@ describe("PR monitor policy", () => {
     expect(resolved.terminalDiscoveryJitterMs).toBe(policy.terminalDiscoveryJitterMs);
     expect(resolved.maxReconciliationKeys).toBe(policy.maxReconciliationKeys);
     expect(resolved.errorJitterRatio).toBe(1);
+  });
+
+  test("rate-limit cooldowns double per rate limit in a row, capped; boundary timing wins", () => {
+    expect([1, 2, 3, 4, 5, 6].map((strikes) => rateLimitCooldown(null, strikes, policy))).toEqual([
+      2 * 60_000,
+      4 * 60_000,
+      8 * 60_000,
+      16 * 60_000,
+      30 * 60_000,
+      30 * 60_000,
+    ]);
+    expect(rateLimitCooldown(null, 0, policy)).toBe(2 * 60_000);
+    expect(rateLimitCooldown(7 * 60_000, 5, policy)).toBe(7 * 60_000);
+    expect(rateLimitCooldown(3 * 60 * 60_000, 1, policy)).toBe(policy.maxRetryAfterMs);
+    // The cap never undercuts the base cooldown.
+    const longBase = resolvePrMonitorPolicy({
+      rateLimitCooldownMs: 40 * 60_000,
+      rateLimitCooldownMaxMs: 60_000,
+    });
+    expect(rateLimitCooldown(null, 3, longBase)).toBe(40 * 60_000);
+  });
+
+  test("cooldown scopes count rate limits in a row per scope, bounded", () => {
+    const scopes = new PrCooldownScopes(2);
+    expect(scopes.strike("a")).toBe(1);
+    expect(scopes.strike("a")).toBe(2);
+    expect(scopes.strike("b")).toBe(1);
+    scopes.clearStrikes("a");
+    expect(scopes.strike("a")).toBe(1);
+    // A third scope evicts the least recently struck one.
+    expect(scopes.strike("c")).toBe(1);
+    expect(scopes.strike("b")).toBe(1);
+    scopes.clear();
+    expect(scopes.strike("c")).toBe(1);
   });
 
   test("cooldown scopes are bounded, prune expired entries and never shorten a cooldown", () => {

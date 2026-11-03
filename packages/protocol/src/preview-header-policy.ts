@@ -219,6 +219,24 @@ export function rewriteSetCookie(value: string): string | null {
   return [first, ...attributes].join(";");
 }
 
+/**
+ * The private origins under the public transport's scheme, on the same port.
+ * Frameworks that build absolute URLs from `X-Forwarded-Proto` and their own
+ * listening port (a Next.js route handler's `request.url`) redirect a plain
+ * HTTP app to `https://localhost:<appPort>`. Only this application listens on
+ * that port, so the redirect is still same-service.
+ */
+function forwardedSchemeOrigins(policy: PreviewHeaderPolicy): string[] {
+  const scheme = new URL(policy.publicOrigin).protocol;
+  return privateOriginSet(policy).flatMap((origin) => {
+    const url = new URL(origin);
+    if (url.protocol === scheme) return [];
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    const mapped = canonicalOrigin(`${scheme}//${url.hostname}:${port}`);
+    return mapped ? [mapped] : [];
+  });
+}
+
 export function mapLocation(value: string, policy: PreviewHeaderPolicy): string {
   let target: URL;
   try {
@@ -226,7 +244,12 @@ export function mapLocation(value: string, policy: PreviewHeaderPolicy): string 
   } catch {
     return value; // relative: passes unchanged
   }
-  if (!privateOriginSet(policy).includes(target.origin)) return value;
+  if (
+    !privateOriginSet(policy).includes(target.origin) &&
+    !forwardedSchemeOrigins(policy).includes(target.origin)
+  ) {
+    return value;
+  }
   return `${policy.publicOrigin}${target.pathname}${target.search}${target.hash}`;
 }
 

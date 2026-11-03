@@ -15,7 +15,6 @@ import { asNonBlankString } from "./commands-helpers.js";
 import type { Environment, NativeAgentProvider } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
-import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 
 /**
  * The worker surfaces as they run on the node that owns the worker: a
@@ -241,7 +240,10 @@ export async function editWorkerTabWithTeardown(
       });
     }
   };
-  const release = operation === "close" ? beginWorkerTabClose(environmentId, tabId) : () => {};
+  const release =
+    operation === "close"
+      ? context.runtime.coordinatorRequests.workerTabs.beginClose(environmentId, tabId)
+      : () => {};
   let releaseAgentAdmission: (() => void) | undefined;
   try {
     if (operation === "close")

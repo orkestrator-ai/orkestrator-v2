@@ -90,7 +90,7 @@ The material risks are concentrated in four themes:
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
-| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
+| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
@@ -244,7 +244,20 @@ realpath confinement, instead of bind-mounting them.
 
 ### H4. An agent can read its own bridge-control token, then self-approve or widen its execution policy
 
-**Status:** Verified
+**Status:** Partly fixed (2026-11-03). Every bridge now deletes its token from
+`process.env` at startup, so nothing it spawns through `node:child_process` or
+an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Claude's
+`POST /session/:id/config` is narrow-only: a policy that is wider than the
+session's current one on any axis (approvals, sandbox, network, project
+resources, policy id, tool or capability grants and denials, MCP selection) is
+refused with 403 `policy-widening-refused` and nothing is applied
+(`bridges/claude-bridge/src/services/execution-policy-narrowing.ts`). Still
+open, in
+[todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md):
+the token file and `/proc/<bridge pid>/environ` are still readable by the
+agent's uid, so it can still answer its own approvals; the other bridges'
+create, resume and prompt routes still accept a wider policy; and a user's own
+widening reaches a live Claude session only after the bridge restarts.
 **Actor:** A1
 **Severity:** High only for hardened environments (see footnote in §2)
 
@@ -656,10 +669,10 @@ write and terminal calls when the policy denies them.
 | L8 | `read_local_file`/`write_local_file` accept any client-supplied root | `commands-registry-terminal.ts:896, 938-960` | Relative paths are confined, but the root is not tied to a registered environment. Resolve the root as `read_file_base64` does. | Fixed (2026-11-03): both commands accept only the worktree of a registered local environment (`requireRegisteredLocalRoot`) and do their I/O under that environment's stored root; any other directory is refused before reading or writing |
 | L9 | Host-side git scans of local worktrees inherit worktree config | `commands-files.ts:977`, `1268-1295` | Use the hardened `-c` set from `change-tracking/capture.ts`. | Fixed: diff-stats scans (`getLocalGitStatusDetailed`) pass `HARDENED_GIT_CONFIG` (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, in `git-fsmonitor.ts`), which capture's `SAFE_GIT_CONFIG` now extends; the `core.fsmonitor=true` write at `1268-1295` was already removed (`commands-files-local-scan.test.ts`) |
 | L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Reported |
-| L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Reported |
+| L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Fixed (2026-11-03): the two mode flags no longer turn the bind guard off. Without `--allow-non-tailscale-bind` they relax it for a loopback bind only (`gateway-bind-policy.ts`), so `--host 127.0.0.1` or `--host ::1` starts and `0.0.0.0` or a LAN address is refused at startup with `Refusing to bind gateway to non-Tailscale address`. Tailscale Serve now proxies to whichever loopback address the listener bound (`http://[::1]:<port>` for `::1`). A Tailscale or allowed LAN host is still refused, because Serve can only front loopback. `--allow-non-tailscale-bind` is unchanged, and the desktop, which passes it, is unaffected. |
 | L12 | CLI trusts the instance descriptor (owner/mode unchecked; `EPERM` counted as alive) | `packages/cli/src/client/targets.ts:120-184` | A local co-tenant on a stale port could receive the bearer token. | Partially fixed (2026-11-03): `readDescriptor` checks the opened file (`O_NOFOLLOW`) and refuses one owned by another user or with any group/other permission bits, naming the file and the reason; a refused profile descriptor no longer falls back to the manifest endpoint. `processIsAlive` no longer counts `EPERM` as alive. This closes the cross-user PID case; reuse by another process of the same user remains undetected because the descriptor is not bound to the original process start time or port listener. Tests: `packages/cli/tests/client-descriptor-trust.test.ts` |
-| L13 | A `javascript:` href hidden by a tab or control character passes the markdown URL transform | `apps/web/.../markdown-plugins.ts:112-117`, `file-url.ts:74, 83` | Not exploitable today, because `MarkdownLink` calls `preventDefault()`. Strip control characters, or check `new URL().protocol`. | Reported |
-| L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Reported |
+| L13 | A `javascript:` href hidden by a tab or control character passes the markdown URL transform | `apps/web/.../markdown-plugins.ts:112-117`, `file-url.ts:74, 83` | Not exploitable today, because `MarkdownLink` calls `preventDefault()`. Strip control characters, or check `new URL().protocol`. | Fixed (2026-11-03): `parseLocalFileLinkTarget` returns null for any destination containing a C0 control character (U+0000–U+001F) or DEL, so such an href is no longer treated as a local path and falls through to `defaultUrlTransform`, which blanks the unsafe scheme. Tests: `apps/web/src/lib/chat/file-url.test.ts`, `apps/web/src/lib/chat/rich-markdown/markdown-plugins.test.ts` |
+| L14 | Malformed relay credit frame can crash the backend | `preview-relay-supervisor.ts:389` | Relay is off by default. Validate frame lengths and catch errors in `onData`. | Fixed (2026-11-03): every fixed-size inbound frame must have its exact payload length (credit 4 bytes; opened, eof and close 0), and the `onData` frame loop is wrapped in try/catch; both paths shut the relay down with category `internal` instead of throwing out of the stdout listener. Tests: "a 0-byte / 2-byte / 5-byte credit frame shuts the relay down instead of throwing", "a 4-byte credit frame grants credit to its channel" and "an exception while handling a frame shuts the relay down, not the backend" in `apps/backend/src/preview-relay-supervisor.test.ts` |
 | L15 | Agent-tools MCP server binds `0.0.0.0` on the host | `apps/backend/src/core/agent-tools.ts:642` | Token-protected, but reachable from the LAN or tailnet. Bind to the Docker bridge or loopback addresses. | Verified |
 | L16 | Control MCP and scheduling soft spots | `control-mcp-confirm.ts`, `control-mcp-credentials.ts:330-345`, `scheduled-jobs/executor.ts:681-689`, `read-only-policy.ts:537` | **Confirmation:** the agent can complete it itself (HMAC-bound, but a speed bump, not human approval). **Operator token:** readable by the coordinator; add `denyRead` for the data directory. **Self-reminders:** presented as authenticated `system` notices. **Cursor/Pi:** accept some policy fields from the request body. | Reported |
 | L17 | Provider secrets stored in plaintext in SQLite (0600) | `storage-config.ts:786-824` | Consider `safeStorage`/libsecret. Remote-connection tokens already use `safeStorage`. | Reported |
@@ -692,6 +705,14 @@ write and terminal calls when the policy denies them.
   (`get_claude_server_log`, `commands-registry-servers.ts:296-300`) are
   returned without `redactBridgeOutput`. Give internal tokens a prefix
   (e.g. `okb_`) and redact those tails.
+  **Status:** Fixed in part (2026-11-03). Tail redaction is done:
+  `boundDiagnosticTail` (`apps/backend/src/core/container-log-bounds.ts`)
+  now runs `redactBridgeOutput`, so every container log tail is scrubbed. That
+  covers the five `get_*_server_log` commands and the bridge startup-failure
+  error in `commands-containers.ts`. The byte and line caps are unchanged. A
+  token that the source's `tail -c` cut through has lost its prefix and is not
+  caught. Still open: the `okb_` prefix for internal tokens. Without it,
+  redaction cannot recognise a bridge, gateway or MCP token by its shape.
 
 ## 7. Controls reviewed that look correct
 

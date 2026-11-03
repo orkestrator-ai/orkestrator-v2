@@ -6,12 +6,7 @@ import { quoteShell } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import type { Environment } from "./models.js";
 import type { GoalCheckRun } from "./native-agent-goal-service.js";
-import {
-  control,
-  execDirectory,
-  workspaceRoot,
-  type ExecState,
-} from "./public-api/exec-control.js";
+import { control, execDirectory, workspaceRoot, type ExecState } from "./public-api/index.js";
 import { runCommand } from "./shell.js";
 
 function errorMessage(error: unknown): string {

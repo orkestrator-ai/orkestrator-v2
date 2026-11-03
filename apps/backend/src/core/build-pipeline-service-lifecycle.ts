@@ -779,19 +779,18 @@ export class BuildPipelineLifecycle {
       // reviewer session a generic resume prompt could safely target.
       if (phase === "reviewing" && usesReviewFanout(candidate)) {
         if (!candidate.reviewPackage) {
-          // Nothing to review against: rebuild the package first.
+          // Nothing to review against: the retry path rebuilds the package.
           candidate.reviewRetryRequested = true;
           discardSessionReviewReports(candidate);
           delete candidate.structuredReview;
           delete candidate.structuredReviewRequestId;
           return;
         }
-        // The paused panel's package is still the one to review. Retire the
-        // panel here rather than through `reviewRetryRequested`, which an
-        // explicit retry uses to rebuild the package; with no fan-out the
-        // supervisor re-verifies the package and opens a fresh panel on it.
-        // Pause already stopped the reviewers; this repeats any abort that
-        // failed then, and the panel is replaced either way.
+        // Not through `reviewRetryRequested`: an explicit retry now always
+        // re-runs package preparation, while a resume reuses the package the
+        // paused panel was reviewing. Pause already stopped the panel; abandon
+        // again so a reviewer whose abort failed then is retried, and leave no
+        // fan-out so the next pass verifies the package and opens a new one.
         await this.agents.abandonReviewFanout(candidate, "idle");
         discardSessionReviewReports(candidate);
         delete candidate.reviewFanout;

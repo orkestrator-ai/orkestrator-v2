@@ -131,6 +131,7 @@ describe("CI workflow contracts", () => {
       "claude-state-signal-docker",
       "claude-terminal-failed-turn-docker",
       "container-worktree-signal-docker",
+      "tmux-hook-signal-docker",
       // M8: the staged ~/.claude.json allowlist and a real Claude start on it.
       "claude-config-filter-docker",
     ])

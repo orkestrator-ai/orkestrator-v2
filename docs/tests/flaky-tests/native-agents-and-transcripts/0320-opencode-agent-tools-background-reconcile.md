@@ -107,3 +107,9 @@ The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
 The unintended package-wide `mail-focused` invocation documented in case 2883 repeated the same count mismatch at 160.53 ms: expected 0, received 1 at commands-agent-tools.test.ts:195. That run used two workers and was stopped after 399.8 s, so it has no final suite counts. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.573vpq/mail-focused.log.gz`.
 
 The unchanged complete owner passed alone in 3.4 s with `mise run test:logged -- --name agent-tools-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. The implementation and fixed waits were unchanged. Status remains open.
+
+## CI repair on main — 2026-11-03
+
+`mise run test:logged -- --name full-suite-2 -- mise run test` on the CI-repair branch (rebased on `ee6208bad`, default worker grants) repeated the count mismatch at commands-agent-tools.test.ts:195 (expected 0, received 1; 220.21 ms). Backend 13,591 pass / 2 fail (the other is case 3101); web 11,517 pass / 0 fail; root, bridges and Codex protocol passed. The branch does not touch the owner or its implementation.
+
+The unchanged owner passed alone three times in a row (2.0 s each) with `mise run test:logged -- --name oc-N -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. Status remains open.

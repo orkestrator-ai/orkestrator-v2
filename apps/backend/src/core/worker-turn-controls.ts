@@ -3,13 +3,15 @@ import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resource
 import type { CommandContext } from "./commands-context.js";
 import {
   listSessionCommands,
+  PublicActionError,
+  resolveSession,
   resolveSessionCommand,
+  sessionActivity,
+  sessionPromptMode,
+  stopSessionTurn,
+  type ResolvedSession,
   type SessionCommandContext,
-} from "./public-api/actions-session-commands.js";
-import { sessionPromptMode } from "./public-api/actions-sessions.js";
-import { PublicActionError } from "./public-api/errors.js";
-import { stopSessionTurn } from "./public-api/session-turn-stop.js";
-import { resolveSession, sessionActivity, type ResolvedSession } from "./public-api/sessions.js";
+} from "./public-api/index.js";
 import type { SurfaceCommandRunner } from "./worker-surface-runs.js";
 
 /**

@@ -2400,7 +2400,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   coordinator, the operator profile or a public action
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
-- tool contract and poll guard: `control-mcp-server.test.ts`
+- tool contract and poll guard: `control-mcp-server-reads.test.ts` and
+  `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
   malformed answers never sent, end to end on this node
   (`worker-question-relay.test.ts`) and on a connected node
@@ -2410,7 +2411,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - project-home messages: a reason required, held outside the 3-hour window,
   approve, decline, replay, the window opened only by sent mail, and ordinary
   workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
-  shapes (`control-mcp-server.test.ts`); the dialog
+  shapes (`control-mcp-server-messaging.test.ts`); the dialog
   (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
@@ -2475,7 +2476,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `coordinator-surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
-  and side agents: `control-mcp-server.test.ts`
+  and side agents: `control-mcp-server-coordinator-workflows.test.ts`
 - `get_worker_changes` bounds, paging, path filters, uncommitted marks and
   diff rendering over fake `changes_*` answers:
   `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,

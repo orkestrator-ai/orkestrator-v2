@@ -1,7 +1,7 @@
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandContext } from "./commands.js";
@@ -63,6 +63,13 @@ export const TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS = 2;
  * searches on this backoff. Any hook activity searches again at once.
  */
 export const TMUX_DISCOVERY_MIN_INTERVAL_MS = 2_000;
+/**
+ * The safety read of an idle tab whose container's hook doorbell works
+ * (`tmux-hook-signal.ts`). Hooks are read when they ring; this read catches a
+ * lost ring and carries liveness and the pane, so it stays under the 3 s pane
+ * observation cadence and the 3 s liveness age mail presence accepts.
+ */
+export const TMUX_SIGNALLED_IDLE_INTERVAL_MS = 2_500;
 export const TMUX_DISCOVERY_MAX_INTERVAL_MS = 10_000;
 // The hook process owns the shared five-minute timeout. Renderers receive the
 // resulting absolute timestamps and only display them.
@@ -471,6 +478,28 @@ export type TmuxPollSnapshot = {
   timeouts: string[];
   /** Size of the transcript in bytes, or 0 when it has not been discovered yet. */
   transcriptSize: number;
+  /**
+   * Size of the transcript the session id names, for a tab not yet bound;
+   * null when that file does not exist. Absent when it was not asked for.
+   */
+  candidateSize?: number | null;
+  /** `tmux has-session`, when it was asked for. */
+  alive?: boolean;
+  /** `tmux capture-pane -p -J`, when asked for; null when the capture failed. */
+  pane?: string | null;
+};
+
+/** What a poll tick asks for beyond the hook directories and transcript size. */
+export type PollSnapshotExtras = {
+  /** The transcript an unbound tab expects (`<session id>.jsonl`). */
+  candidatePath?: string;
+  /** The tab's tmux session, for liveness and pane capture. */
+  tmux?: { command: string; session: string; liveness: boolean; pane: boolean };
+  /**
+   * Per-call secret framing the pane, which is the one section container
+   * output can fill with arbitrary text. Required with `tmux.pane`.
+   */
+  nonce?: string;
 };
 
 /**
@@ -480,42 +509,88 @@ export type TmuxPollSnapshot = {
 export const POLL_SNAPSHOT_PENDING_MARKER = "__ork_pending__";
 export const POLL_SNAPSHOT_TIMEOUT_MARKER = "__ork_timeout__";
 export const POLL_SNAPSHOT_SIZE_MARKER = "__ork_size__";
+export const POLL_SNAPSHOT_CANDIDATE_MARKER = "__ork_candidate__";
+export const POLL_SNAPSHOT_ALIVE_MARKER = "__ork_alive__";
+
+function paneMarkers(nonce: string): { start: string; end: string } {
+  if (!/^[A-Za-z0-9]{16,64}$/.test(nonce)) throw new Error("Invalid tmux poll snapshot nonce");
+  return { start: `__ork_pane_${nonce}__`, end: `__ork_pane_end_${nonce}__` };
+}
 
 /**
- * One shell script that answers a whole poll tick: both hook directories and
- * the transcript size.
+ * One shell script that answers a whole poll tick: both hook directories, the
+ * transcript size and, when asked, the expected transcript, tmux liveness and
+ * the pane.
  *
- * Container mode pays a `docker exec` per backend operation, so the three
- * separate calls this replaces cost three process spawns every 250ms per open
- * tab — even with Claude completely idle.
+ * Container mode pays a `docker exec` per backend operation, so the separate
+ * calls this replaces (listings, size, `has-session`, `capture-pane`) cost a
+ * process spawn each every 250ms per open tab, even with Claude idle.
  */
 export function pollSnapshotScript(
   pendingDir: string,
   timeoutDir: string,
   transcriptPath: string | undefined,
+  extras: PollSnapshotExtras = {},
 ): string {
   const size = transcriptPath
     ? `stat -c %s ${shellArg(transcriptPath)} 2>/dev/null || echo 0`
     : "echo 0";
-  return [
+  const parts = [
     `echo ${POLL_SNAPSHOT_PENDING_MARKER}`,
     `ls -1 ${shellArg(pendingDir)} 2>/dev/null || true`,
     `echo ${POLL_SNAPSHOT_TIMEOUT_MARKER}`,
     `ls -1 ${shellArg(timeoutDir)} 2>/dev/null || true`,
     `echo ${POLL_SNAPSHOT_SIZE_MARKER}`,
     size,
-  ].join("; ");
+  ];
+  if (extras.candidatePath) {
+    parts.push(
+      `echo ${POLL_SNAPSHOT_CANDIDATE_MARKER}`,
+      `stat -c %s ${shellArg(extras.candidatePath)} 2>/dev/null || echo missing`,
+    );
+  }
+  const tmux = extras.tmux;
+  if (tmux?.liveness) {
+    parts.push(
+      `echo ${POLL_SNAPSHOT_ALIVE_MARKER}`,
+      `if ${shellArg(tmux.command)} has-session -t ${shellArg(tmux.session)} >/dev/null 2>&1; then echo 1; else echo 0; fi`,
+    );
+  }
+  if (tmux?.pane) {
+    // Last, because its content is arbitrary: everything up to the final
+    // end marker is pane text, and only this call knows the nonce.
+    const markers = paneMarkers(extras.nonce ?? "");
+    parts.push(
+      `echo ${markers.start}`,
+      `${shellArg(tmux.command)} capture-pane -t ${shellArg(tmux.session)} -p -J 2>/dev/null`,
+      `printf '\\n%s %s\\n' ${markers.end} "$?"`,
+    );
+  }
+  return parts.join("; ");
 }
 
 /** Parses {@link pollSnapshotScript} output back into a snapshot. */
-export function parsePollSnapshotOutput(stdout: string): TmuxPollSnapshot {
+export function parsePollSnapshotOutput(stdout: string, nonce?: string): TmuxPollSnapshot {
+  let head = stdout;
+  let pane: string | null | undefined;
+  if (nonce !== undefined) {
+    const markers = paneMarkers(nonce);
+    const start = stdout.indexOf(`${markers.start}\n`);
+    const endMatch = new RegExp(`\\n${markers.end} (\\d+)\\n?$`).exec(stdout);
+    if (start < 0 || !endMatch || endMatch.index < start) {
+      throw new Error("Incomplete tmux poll snapshot pane");
+    }
+    head = stdout.slice(0, start);
+    pane =
+      endMatch[1] === "0" ? stdout.slice(start + markers.start.length + 1, endMatch.index) : null;
+  }
   const snapshot: TmuxPollSnapshot = { pending: [], timeouts: [], transcriptSize: 0 };
-  let section: "none" | "pending" | "timeouts" | "size" = "none";
+  let section: "none" | "pending" | "timeouts" | "size" | "candidate" | "alive" = "none";
   let sawPending = false;
   let sawTimeouts = false;
   let sawSize = false;
   let parsedSize = false;
-  for (const raw of stdout.split("\n")) {
+  for (const raw of head.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     if (line === POLL_SNAPSHOT_PENDING_MARKER) {
@@ -533,6 +608,14 @@ export function parsePollSnapshotOutput(stdout: string): TmuxPollSnapshot {
       section = "size";
       continue;
     }
+    if (line === POLL_SNAPSHOT_CANDIDATE_MARKER) {
+      section = "candidate";
+      continue;
+    }
+    if (line === POLL_SNAPSHOT_ALIVE_MARKER) {
+      section = "alive";
+      continue;
+    }
     if (section === "pending") snapshot.pending.push(line);
     else if (section === "timeouts") snapshot.timeouts.push(line);
     else if (section === "size") {
@@ -542,19 +625,34 @@ export function parsePollSnapshotOutput(stdout: string): TmuxPollSnapshot {
       }
       snapshot.transcriptSize = size;
       parsedSize = true;
+    } else if (section === "candidate") {
+      const size = line === "missing" ? null : Number(line);
+      if (
+        snapshot.candidateSize !== undefined ||
+        (size !== null && (!Number.isSafeInteger(size) || size < 0))
+      ) {
+        throw new Error("Malformed tmux poll snapshot transcript candidate");
+      }
+      snapshot.candidateSize = size;
+    } else if (section === "alive") {
+      if (snapshot.alive !== undefined || (line !== "0" && line !== "1")) {
+        throw new Error("Malformed tmux poll snapshot liveness");
+      }
+      snapshot.alive = line === "1";
     }
   }
   if (!sawPending || !sawTimeouts || !sawSize || !parsedSize) {
     throw new Error("Incomplete tmux poll snapshot");
   }
+  if (pane !== undefined) snapshot.pane = pane;
   return snapshot;
 }
 
-export function parsePollSnapshotExecOutput(output: ExecOutput): TmuxPollSnapshot {
+export function parsePollSnapshotExecOutput(output: ExecOutput, nonce?: string): TmuxPollSnapshot {
   if (output.status !== 0) {
     throw new Error(output.stderr || "tmux poll snapshot command failed");
   }
-  return parsePollSnapshotOutput(output.stdout);
+  return parsePollSnapshotOutput(output.stdout, nonce);
 }
 
 /**
@@ -767,6 +865,7 @@ export {
   path,
   os,
   createHash,
+  randomBytes,
   randomUUID,
   spawn,
   delay,

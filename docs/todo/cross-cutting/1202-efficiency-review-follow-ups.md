@@ -28,12 +28,12 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2 and BR-11 done 2026-11-03; BR-7 to BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
@@ -133,7 +133,7 @@ governs, marked "Decided".
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14 and WEB-16 to WEB-19. WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -161,6 +161,37 @@ governs, marked "Decided".
   - **Lengthen or remove them.**
     - Pros: fewer reads.
     - Cons: needs a gap signal for the portal stream and the ephemeral resource first.
+
+#### WEB-7 and WEB-17 (done 2026-11-03)
+
+Re-checked against `main` at `b8862313` first; both were still true, and `BuildChatTab` no longer has a timer, so it was left alone. Each change has a render-count test that fails on the previous code:
+
+- WEB-7, `AppShell`: it subscribed to the whole pane-layout `environments` Map and used only the selected environment's entry. It now selects that environment's active pane tab (`selectActivePaneTab`), which keeps its identity when another environment's layout changes. `AppShell.test.tsx` ("does not re-render for a pane-layout change in another environment"): two layout writes to another environment re-rendered the shell twice before, now not at all; the selected environment's own change still does.
+- WEB-7, `usePullRequest`: it called `useEnvironmentStore()` with no selector, so every store write re-rendered the action bar and the pipeline views using it. It now selects `prUrl`, `prState`, `hasMergeConflicts` and `setEnvironmentPR` one by one. `usePullRequest.render-count.test.tsx`: three writes to another environment in one batch (status, PR, deleting flag) re-rendered the consumer once before, now not at all; a change to its own PR fields still does.
+- WEB-17, `ClaudeTmuxChatTab`: the 1 s `elapsedSeconds` interval at the tab root is gone; the thinking indicator renders `LiveElapsed` from the same `busyStartedAt`, with the same text and class. `tests/unit/components/ClaudeTmuxChatTab.test.tsx` ("ticks the elapsed text without re-rendering the tab root while busy"): the tab root rendered twice in two real seconds before, now 0 times, while the text goes `1m 5s`, `1m 6s`, `1m 7s`.
+- WEB-17, `MultiReviewTab`: `reviewPanelNow` state is replaced by a per-tab `RuntimeClock` (`lib/review/runtime-clock.ts`) that the root starts and stops (active and something running, as before) but never subscribes to. It is shared through `RuntimeClockContext`; the five places that print a time subscribe: the header elapsed (`MultiReviewElapsed`), each flow-graph node's runtime and accessible name (`useLiveRuntimeParts` in `FlowGraph.tsx`), `StepFacts`, the reviewer's inspector line and `ReviewValidationStatus` (when no `now` prop is passed). Live `RuntimeParts` now carry `liveStartedAt`, from which a leaf re-derives `elapsed` (`runtimePartsAt`); settled parts never subscribe. The pipeline and graph-run views provide no clock, so their nodes behave as before. `MultiReviewTab.clock.test.tsx`: three ticks rendered the root three times before, now 0, while the header, node and inspector clocks advance each second and a settled step's runtime stays put. `runtime-clock.test.ts` covers the clock's start, stop and reference count.
+
+No React Profiler run was made; the numbers are render counts from tests.
+
+**Decisions.**
+
+- **How should the Multi Review clock reach its leaves (WEB-17)?**
+  - **A per-tab clock object in context, read with `useSyncExternalStore` by the components that print a time (recommended, done).**
+    - Pros: the root renders only on real changes; one tick still advances every clock on the tab together; the shared flow graph needs no new props, and views without a clock are unchanged.
+    - Cons: a new optional field (`liveStartedAt`) on the shared `RuntimeParts`; each live node re-renders itself once a second.
+  - **Pass `now` down as a prop to each leaf.**
+    - Pros: no context.
+    - Cons: the root would still have to re-render to pass a new `now`, which is the cost being removed.
+  - **One `LiveElapsed`-style timer per leaf.**
+    - Pros: simplest per leaf.
+    - Cons: the clocks on one tab tick apart, and the "freeze while inactive, read the time at once on return" rule would have to be repeated in every leaf.
+- **What should `AppShell` select (WEB-7)?**
+  - **The selected environment's active tab (recommended, done).**
+    - Pros: narrowest; a change to another pane in the same environment no longer re-renders the shell either.
+    - Cons: the pane walk runs in the selector on every pane-layout write (a few leaves, cheap).
+  - **The selected environment's entry.**
+    - Pros: what the report suggested; the selector is a single `get`.
+    - Cons: still re-renders on every change inside that environment.
 
 ### 4. Live agent view requests
 
@@ -212,7 +243,12 @@ Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the 
 - BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
 - Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-03 (against `main` at `b68b6e71`), Codex half: BR-2 and BR-11.
+
+- BR-2: `getConfig`'s `durable` check (`isSessionConfigPersisted` in `app-server-runtime-sessions.ts`) now calls `BridgeSessionStore.loadRecord(id)` (`sessions/persistence.ts`) instead of `load()`. It reads only `recordPath(id)`, with `load()`'s validation (`isPersistedBridgeSession`, cwd hash, retention cutoff, a tombstone is not persisted, and the record must name the session asked about). It does no legacy migration, login-record adoption, directory listing, chmod or sweep. Only when no record file exists does it look, read-only, where `load()` would first have published one: the former aggregate file, then the login's own records directory. Tests: `sessions/persistence-load-record.test.ts` (one `readFile` out of 50 records, no `readdir`/`chmod`/`mkdir`/write/`load()`; agreement with `load()` for valid, tombstoned, expired, wrong-cwd, invalid, corrupt, foreign-id, legacy-only and absent records; a login record found without being moved) and `app-server-runtime-config-durable.test.ts` (`getConfig` on one of 50 persisted sessions reads one record file and never calls `load()`, which fails on the old code; `durable` false for a changed config, a tombstone, a missing and an expired record).
+- BR-11: `history/session-index-cache.ts` keeps `session_index.jsonl` parsed per path, keyed by size, mtime, ctime and `dev:ino` from the descriptor's `fstat`, as `transcript-cache.ts` does. Unchanged means no read. Growth on the same inode whose 64 bytes before the old boundary are unchanged parses only the appended bytes. A shrink, a replacement, a same-size rewrite or a changed anchor re-reads from scratch. An unterminated last line is parsed on each read but never committed. Both `findSessionIndexEntry` (hydrate) and the cwd listing read through it; the listing still visits every line in file order, so its result is unchanged. Bounds (invariant 11): 50,000 entries, 16 MiB estimated and 4 paths across the cache, least recently used evicted first; an index too large on its own is parsed uncached on every read, as before. `readTranscriptLines` and `PersistedSessionIndexEntry`, used only for this, were removed. Tests: `history/session-index-cache.test.ts` (parsing parity, unchanged read once, append read as tail only, shorter rewrite, inode replacement, in-place rewrite with growth, same-size rewrite, pending tail, snapshot stability, concurrent readers, path/entry/byte bounds) and `history/rollout-session-index.test.ts` (two hydrates read the index once, an appended rename is found after one tail read, a shorter rewrite is fully re-read, the listing shares the cache).
+
+**Investigation.** Not re-checked since the report: BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
 
 What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
@@ -319,19 +355,52 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
 
 **Problem.** Each tmux tab still runs up to four separate execs per tick, and container lifecycle changes do not stop the loops that depend on them.
 
-**Context.** Decided 2026-11-01: do the structural container work now. Done that day: an unbound tab searches for its transcript at 2 s backing off to 10 s, and at once on any hook (BG-1); a quiet tab polls at 1 s after eight quiet ticks (BG-2, `TMUX_IDLE_*` in `tmux-shared.ts`); the `docker events` follower also reports `start`, `die`, `stop` and `destroy` and invalidates the shared `docker ps` snapshot (BG-8, `container-oom-events.ts`).
+**Context.** Decided 2026-11-01: do the structural container work now. Done that day: an unbound tab searches for its transcript at 2 s backing off to 10 s, and at once on any hook (BG-1); a quiet tab polls at 1 s after eight quiet ticks (BG-2, `TMUX_IDLE_*` in `tmux-shared.ts`); the `docker events` follower also reports `start`, `die`, `stop` and `destroy` and invalidates the shared `docker ps` snapshot (BG-8, `container-oom-events.ts`). Checked against `main` at `7b48c23f` on 2026-11-03: #1612 changed the Claude state signal to version 3 (`StopFailure`) and left the tmux loop as described.
 
-**Investigation.** Still to do: BG-1's bounded head ownership check and memo of rejected `(path, size)` pairs, and folding discovery into `pollSnapshotScript`; BG-2's `has-session` and `capture-pane` in the same snapshot exec, then one long-lived `docker exec -i` co-process per container or a hook-directory doorbell on the `claude-state-signal` pattern; BG-8's use of lifecycle events to retire the tmux, state, diff and PR loops; BG-7 (Claude state poll only with a Claude or tmux session); BG-14 (tail paging on reopen); BG-15. The discovery throttle has no direct test.
+Done 2026-11-03 (see [container-lifecycle.md](../../architecture/container-lifecycle.md), "claude-tmux hook doorbell" and "Container lifecycle events"):
+
+- BG-2: one `docker exec` per tick. `pollSnapshotScript` also carries `tmux has-session`, the pane (framed by a per-call nonce) and the expected transcript. The doorbell decided below: `orkestrator-state-signal hook` (`tmux-hook-signal=1`) rings `/tmux-hook-signal` after the container hook script writes a hook file; `TmuxHookSignalManager` (`tmux-hook-signal.ts`) arms it per container like the Claude state signal and wakes that container's tab loops. A confirmed idle tab sleeps until a ring or a 2.5 s safety read; a hook file no ring announced demotes it. Older images keep the per-tick poll.
+- BG-1: the snapshot binds `<session id>.jsonl` the moment it exists, so the fallback search runs only for a tab it cannot bind, after the tick's snapshot. That search reads a 64 KiB head per candidate (`transcriptHeadClaimsSession`) and remembers rejected candidates by mtime, or for good once the head is full (`TRANSCRIPT_REJECTED_MEMO_LIMIT`, 256).
+- BG-8: `ContainerLifecycleReactor` (`container-lifecycle-events.ts`). `die`, `stop` and `destroy` retire the container's Claude state poll, hook doorbell and tmux tabs at once. Unless a lifecycle operation owns the environment, the reactor then reconciles stored status with one inspect and re-syncs the diff, PR and state loops; a start outside the app re-adopts them.
+- BG-7: a Claude state poll keeps the 1 s cadence only while the container has a terminal shell or a claude-tmux tab (`terminalClaudeDemand`); otherwise one read on adoption, then the 30 s safety read.
+
+Exec counts per tab (`apps/backend/scripts/tmux-exec-count.ts`: the real loop against a fake container, 600 simulated seconds; before is `7b48c23f`):
+
+| Tab | Before | Older image | Doorbell |
+| --- | --- | --- | --- |
+| Idle, transcript bound | 1.85/s (snapshot 1.01, has-session 0.50, capture-pane 0.34) | 1.01/s | 0.42/s |
+| Idle, unbound | 2.57/s (discovery 0.72) | 1.12/s (discovery 0.11) | 0.52/s |
+| Busy | 6.50/s (capture-pane 2.00) | 4.00/s | 4.00/s |
+
+Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb95362a6` (`tmux-hook-signal-docker.test.ts`): a real idle tab on a real tmux session cost 4 execs in 10 s, and a rung hook was drained in under 2 s.
+
+Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from that commit as `orkestrator-v2:dev-f9ed233a0aa0` (`mise run docker:build:dev --profile task8r2-7d4bb95362a6`, exit 0); its manifest declares `tmux-hook-signal: 1` and `claude-state-signal: 3`. `tmux-hook-signal-docker.test.ts` against it: four runs at 4 execs in 10 s idle, plus one through `test:logged` (`task8-image-doorbell`), all passed. Its first run at that commit counted 7 and failed the old bound of 6, because the tab had no transcript and so also ran the fallback search, and pre-idle ticks could fall inside the window. The test now seeds the transcript, starts counting inside the idle wait, and asserts at most 4 execs and no search. Older image: `orkestrator-v2:latest`'s manifest has no `tmux-hook-signal` and its `orkestrator-state-signal hook` exits 0, so it stays on the one-exec poll. `tmux-exec-count.ts --seconds 600` reproduced the table above exactly, before and after.
+
+**Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
-- **Co-process or doorbell for BG-2?**
+- **Co-process or doorbell for BG-2?** Decided and done 2026-11-03: the doorbell.
   - **A doorbell on the hook directories, reusing `claude-state-signal` (recommended).**
     - Pros: a pattern already in the image; idle tabs cost nothing until a hook fires.
     - Cons: needs an image change, so older containers keep polling and need a fallback.
   - **One long-lived `docker exec -i` co-process per container.**
     - Pros: no image change.
     - Cons: a new long-lived process to supervise, bound and restart; its death must be detected.
+- **BG-14: how to stop a reopen replaying the whole transcript?**
+  - **Page from the tail, as native transcripts page their history (recommended).**
+    - Pros: one bounded read per reopen; the renderer already has a paged history view for native tabs.
+    - Cons: the tmux chat tab has to move onto paged history; renderer and backend change together.
+  - **Resume from the client's last byte offset.**
+    - Pros: small backend change.
+    - Cons: the offset is lost with the tab's state, and the task list must still be rebuilt from the start of the file.
+- **BG-15: pass the presence snapshot into the mail inject?**
+  - **Leave it (recommended).**
+    - Pros: the repeat is three keyed reads and one deliberate fresh `has-session` per delivered message, not per tick; the fresh probe is what keeps mail from reaching a dead session (task 10).
+    - Cons: a few reads per delivery remain.
+  - **Pass the presence answer through.**
+    - Pros: saves those reads.
+    - Cons: dispatch would act on an answer up to 3 s old, which task 10 ruled out.
 
 ### 9. PR monitor cost
 
@@ -836,11 +905,62 @@ the 2 s fallback are exported as `REBUILD_BACKSTOP_POLL_MS` and
 emitting an event or resync and verifies both newer progress and completion
 are installed from snapshot reads.
 
+### Task 3: test seams for the WEB-7 and WEB-17 render counts
+
+Made on 2026-11-03. The counts observe the root without mocking the module
+under test: `AppShell` and the tmux tab count renders of a direct child stub
+that has no subscriptions of its own (the existing `AgentInfoButton` and
+`react-virtuoso` stubs), and the Multi Review test counts reads of the
+`workflowId` getter on its tab data, which only the root's render reads. Each
+test also shows the counter moving when the root really renders. The tmux test
+uses two real one-second ticks over a controlled `Date.now`, because the tab
+mounts its interval before fake timers could be installed; it adds about two
+seconds to that file.
+
+### Task 3: `ClaudeTmuxChatTab.test.tsx` stays one file
+
+Made on 2026-11-03. The tmux render-count test went into the existing
+3,900-line file next to the elapsed-status test it extends, because it needs
+that file's whole mock setup. Splitting the file is separate work.
+
 ### Task 6: ACP persistence interval
 
 A fixed one-second timer that is not reset by later chunks, so it is also the
 maximum wait. Every other change still persists through `schedulePersist`, and
 any such write carries the output so far.
+
+### Task 6: Codex single-record config read and session-index cache (BR-2, BR-11)
+
+Made on 2026-11-03.
+
+- **Where `loadRecord` looks when the record file is missing.** Chose a
+  read-only look at the former aggregate file and then the login's own records
+  directory, because `load()` would have published either there before
+  listing, so `durable` stays exactly what it was. Returning false straight
+  away would be simpler, but a session that still has only a legacy or
+  unadopted copy would turn non-durable until the next `load()`. Calling
+  `load()` on a miss would also match, but would bring back the migration and
+  adoption writes on a path that should not write.
+- **No chmod on the single-record read.** `load()` tightens modes at startup
+  and every write sets them, so a read on the hot path has nothing to fix.
+  The one difference left: when `load()` cannot create or tighten the records
+  directory, it returns the legacy entries only, while `loadRecord` still
+  reads the record file. In that state the newer answer is the right one.
+- **Cache granularity for the session index.** Kept every parsed line in file
+  order plus a last-position-per-id map, rather than only the last entry per
+  id. The listing calls `getPersistedSessionMeta` once per line, and a later
+  line without `updated_at` for a thread with no rollout resolves to nothing
+  and keeps the earlier line's entry. Deduplicating would change that.
+- **What happens past the bounds.** Chose to parse an index that alone exceeds
+  the bounds uncached on every read, which is the old cost, rather than cache a
+  partial index. A partial index could answer "no entry" wrongly.
+- **Rewrite detection.** Added the 64-byte anchor check from
+  `transcript-cache.ts`, on top of the ticket's shrink-or-inode rule, so a
+  same-inode rewrite that grew is not taken as an append. A changed mtime or
+  ctime at the same size also re-reads.
+- **One behaviour change.** The old listing threw a `TypeError` on an index
+  line that parsed to `null` (`entry.id` of null); the cache skips that line,
+  as hydrate always did.
 
 ### Task 7: stat-stamp settle window
 
@@ -864,6 +984,59 @@ both blobs, so a different or pruned store still reports `body-unavailable`.
 Eight quiet ticks (2 s) before polling at 1 s; liveness every two idle ticks, so
 an ended session is still noticed in about 2 s. A hook can take one idle
 interval to be seen, within the 2 s approval budget.
+
+### Task 8: signalled idle safety read
+
+Made on 2026-11-03. A tab whose doorbell is confirmed reads every 2.5 s when no
+hook rings, and that read carries liveness and the pane. 2.5 s keeps the 3 s
+hidden-tab pane cadence and stays inside the 3 s liveness age mail presence
+accepts, so presence never probes on its own. A longer read (5 s) would halve
+the idle cost again but let presence spawn its own `has-session` and slow pane
+observation; it was not chosen.
+
+### Task 8: a ring wakes, never speeds up
+
+A ring only ends a wait early; the loop still keeps 250 ms after its previous
+read. A container can therefore never make the host read faster than the
+per-tick poll, so the doorbell needs no ring-rate limit of its own (the Claude
+state signal has one because each ring there is a read).
+
+### Task 8: missed-ring judgement a read later
+
+A safety read that finds an unannounced hook file demotes the doorbell only if
+no ring has arrived by the next read, about 250 ms later. The hook rings after
+writing, so a safety read can see the file just before its ring lands.
+
+### Task 8: discovery memo by mtime
+
+BG-1 asked for a memo of rejected `(path, size)` pairs. The `find` already
+returns mtimes, so the memo keys on mtime instead: a candidate is read again
+only if it changed while its head was short, and never once its head is full.
+
+### Task 8: one image script, one more capability
+
+The doorbell is a `hook` mode of `orkestrator-state-signal` with its own
+config file and credential route rather than a new script. An older image's
+script exits 0 on the unknown argument, so the new hook script is safe on it,
+and the separate credential keeps tmux hooks (several per turn) out of the
+Claude state signal's 30-a-minute flood limit.
+
+### Task 8: BG-7 keeps one adoption read
+
+A container with no terminal shell or tmux tab keeps its Claude state poll
+but at the 30 s safety read, after one read on adoption that can still correct
+a state stored before a restart. Dropping the poll entirely would lose that
+correction.
+
+### Task 8: the image check counts a bound idle tab
+
+Made on 2026-11-03. The image test's idle window first counted an unbound tab
+after a fixed 2.5 s settle, so its count (4 to 7) depended on where the
+fallback search's 2 s to 10 s backoff and the last pre-idle ticks fell. Raising
+the bound would have hidden that. The test now seeds the transcript and waits
+for 2 s with no exec in flight, which happens only inside the idle wait, so it
+measures the claim it makes: a bound idle tab reads once per 2.5 s. The
+unbound tab's search cost is measured by `tmux-exec-count.ts` instead.
 
 ### Task 9: batch freshness and quiet thresholds
 

@@ -15,6 +15,10 @@ export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.CURSOR_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+// The token authenticates callers of this bridge; nothing this process spawns
+// needs it. Captured once above and removed so the SDK's shells and MCP
+// servers cannot inherit the credential through process.env (H4).
+delete process.env.CURSOR_BRIDGE_TOKEN;
 
 /**
  * Pin `process.cwd()` to the workspace so Shell calls that omit

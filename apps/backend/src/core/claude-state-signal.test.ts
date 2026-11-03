@@ -9,7 +9,9 @@ import {
   CLAUDE_STATE_SIGNAL_SCRIPT_PATH,
   claudeStateSignalConfig,
   claudeStateSignalInstallCommand,
+  tmuxHookSignalInstallCommand,
 } from "./claude-state-signal.js";
+import { TMUX_HOOK_SIGNAL_CONFIG_PATH } from "./tmux-hook-signal.js";
 
 const SCRIPT = join(import.meta.dir, "../../../../docker/orkestrator-state-signal.sh");
 const credential = {
@@ -35,6 +37,18 @@ describe("Claude state signal install", () => {
     expect(claudeStateSignalConfig(credential)).toBe(
       `url = "${credential.url}"\nheader = "Authorization: Bearer ${credential.token}"\n`,
     );
+  });
+});
+
+describe("tmux hook signal install", () => {
+  test("writes its own config and probes with the hook ring", () => {
+    const { args, options } = tmuxHookSignalInstallCommand("container-1", credential);
+    expect(args.slice(0, 5)).toEqual(["exec", "-i", "container-1", "sh", "-c"]);
+    expect(args.join(" ")).not.toContain(credential.token);
+    expect(args[5]).toContain(`mv -f "$tmp" "${TMUX_HOOK_SIGNAL_CONFIG_PATH}"`);
+    expect(args[5]).not.toContain(CLAUDE_STATE_SIGNAL_CONFIG_PATH);
+    expect(args[5]?.trim().endsWith(`exec ${CLAUDE_STATE_SIGNAL_SCRIPT_PATH} hook`)).toBe(true);
+    expect(options.redactValues).toEqual([credential.token]);
   });
 });
 
@@ -93,7 +107,30 @@ describe("orkestrator-state-signal", () => {
     }
   });
 
-  test("declares the capability its contract names", () => {
-    expect(readFileSync(SCRIPT, "utf8")).toContain("ORKESTRATOR_CAPABILITY claude-state-signal=3");
+  test("the hook ring posts with the tmux hook config and writes no state", () => {
+    withFakeCurl(0, (dir, argsFile) => {
+      writeFileSync(join(dir, "hook-config"), claudeStateSignalConfig(credential));
+      writeFileSync(join(dir, "config"), claudeStateSignalConfig(credential));
+      const result = spawnSync("/bin/sh", ["-c", 'set -- hook; . "$0"; wait', SCRIPT], {
+        env: {
+          PATH: dir,
+          ORKESTRATOR_STATE_SIGNAL_CONFIG: join(dir, "config"),
+          ORKESTRATOR_TMUX_HOOK_SIGNAL_CONFIG: join(dir, "hook-config"),
+          ORKESTRATOR_STATE_FILE: join(dir, "state"),
+        },
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const args = readFileSync(argsFile, "utf8").trim().split("\n");
+      expect(args.slice(0, 2)).toEqual(["--config", join(dir, "hook-config")]);
+      expect(existsSync(join(dir, "state"))).toBe(false);
+      expect(existsSync(join(dir, "state-snapshot"))).toBe(false);
+    });
+  });
+
+  test("declares the capabilities its contract names", () => {
+    const text = readFileSync(SCRIPT, "utf8");
+    expect(text).toContain("ORKESTRATOR_CAPABILITY claude-state-signal=3");
+    expect(text).toContain("ORKESTRATOR_CAPABILITY tmux-hook-signal=1");
   });
 });

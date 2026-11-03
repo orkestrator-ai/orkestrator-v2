@@ -27,6 +27,7 @@ import type { ReviewValidationResult } from "@orkestrator/protocol/review-workfl
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRuntimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
+import { useLiveRuntimeParts } from "@/lib/review/runtime-clock";
 import { cn } from "@/lib/utils";
 import { reviewSeverityStyles } from "@/components/review/StructuredReviewReportView";
 import {
@@ -293,6 +294,8 @@ function FlowNode({
   const openHint = node.canOpen ? "Double-click or press Enter to open the session" : undefined;
   const muted = node.state === "not-started" || node.state === "cancelled";
   const runtimeRow = flowNodeHasRuntimeRow(node);
+  // Live under the owning view's clock: only this node re-renders on a tick.
+  const runtime = useLiveRuntimeParts(node.runtime);
   // A running node's state word sits with its clock, on the runtime row.
   const runningWord =
     node.state === "running" && !failure && !node.severity ? node.statusWord : undefined;
@@ -300,7 +303,7 @@ function FlowNode({
     node.title,
     node.statusLabel,
     // Usage not reported yet is left unsaid rather than announced as pending.
-    node.runtime ? formatRuntimeParts({ ...node.runtime, tokensPending: false }) : null,
+    runtime ? formatRuntimeParts({ ...runtime, tokensPending: false }) : null,
     node.startTime?.text,
     node.findingsLabel,
   ]
@@ -410,7 +413,7 @@ function FlowNode({
         {/* Row 3: the clock and usage, live while running and final after. */}
         {runtimeRow ? (
           <span data-flow-node-row="runtime" className="mt-0.5 flex min-w-0 items-center gap-2">
-            {node.runtime ? <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} /> : null}
+            {runtime ? <FlowRuntime runtime={runtime} label={node.runtimeLabel} /> : null}
             {runningWord ? (
               <span
                 className={cn(

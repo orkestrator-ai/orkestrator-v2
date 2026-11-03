@@ -1,7 +1,7 @@
 # Activity sweep batch tests see no bridge requests
 
 - **ID:** 0247
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Tests:** `activity sweep over the batch route > 100 sessions cost 2 request(s) and touch nothing`
   and `activity sweep over the batch route > a restarted bridge re-detects the batch route`
@@ -287,3 +287,58 @@ unconfirmed.
   establishes intermittency, not a root cause. The original aggregate remains
   failed. Triage marked it related through a shared protocol import; this
   observation does not override that verdict.
+
+## Root cause and fix — 2026-11-03
+
+- **Cause:** the fake bridge did not own the address the service dials. The
+  service connects to `http://127.0.0.1:<port>` (`peekLocalBridge` in
+  `native-agent-service.ts`), but `Bun.serve({ port: 0 })` listens on the
+  dual-stack `::` wildcard (`lsof` shows `TCP *:<port> (LISTEN)`). macOS lets
+  another process bind `127.0.0.1` on that same port, and the more specific
+  socket then receives every IPv4 connection. The sweep reached that server,
+  not the fake bridge, so the fake bridge recorded `[]`. Depending on the other
+  server, the answer was a non-JSON body (`SyntaxError`), a non-transient HTTP
+  status (the `assertOk` `Error` logged by the 2026-11-03 failure), a batch
+  answer without these ids (line 206) or no answer at all (the 5,000 ms
+  timeouts). Plenty of processes on this host bind `127.0.0.1` on an explicit
+  port: bridges started after `allocateLocalPort()` probes and releases a
+  port, and test harnesses that probe a free port first. TCP ports are handed
+  out sequentially across the whole host (`net.inet.tcp.randomize_ports: 0`;
+  IPv4 and IPv6 share one cursor), so the cursor wraps quickly under aggregate
+  load. That makes the failure aggregate-only and intermittent. Which process
+  held the port in each recorded failure was not captured.
+- **Not the cause:** the `ProviderUnavailableError` at
+  `native-agent-activity-reads.ts:206` and the `ProviderUnreachableError` also
+  appear in passing runs of the file. They come from the intentional
+  `unavailable` answer and from the stopped old bridge in the restarted-bridge
+  case. Kernel port-0 allocation never handed out a colliding port: 3,000
+  `127.0.0.1:0` listeners against 3,000 `[::]:0` listeners, both orders, gave
+  0 overlaps. An explicit-port bind is required.
+- **Evidence:**
+  - A probe process with `SO_REUSEADDR` bound `127.0.0.1:P` while a
+    `Bun.serve({ port: 0 })` held `[::]:P`, and `fetch("http://127.0.0.1:P")`
+    was answered by the probe. The same happened with the probe bound first.
+    Without `SO_REUSEADDR` the second bind failed (errno 48).
+  - A temporary copy of this test started such a squatter (a Python 404
+    server) on the fake bridge's port. All 7 cases failed with the aggregate
+    symptoms: empty request lists in tens of milliseconds, and for this case
+    `Expected ["POST", "GET", "GET"]` / `Received []` with the
+    `assertOk ... readProviderActivityObservation` log.
+- **Fix:** `fakeBridge` binds `hostname: "127.0.0.1"`, the address the service
+  dials, as `native-agent-unwatched-turn-end.test.ts` already does. A
+  `127.0.0.1` bind by another process now fails with `EADDRINUSE`. The same
+  squatter copy, with the fixed hostname and an assertion that the squatter's
+  bind failed with errno 48, passed 7 of 7. The temporary copy was deleted. No
+  assertion, timeout, retry or skip changed, and no product code changed.
+- **Verification:** `bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts`:
+  - 5 sequential runs: 7 pass each.
+  - 36 runs in rounds of 12 concurrent. During round 1, eight `yes > /dev/null`
+    processes were also running. All runs passed.
+  - 48 runs in 4 rounds of 12 concurrent, with eight `yes` processes held for
+    the whole run (1-minute load average about 76). All passed, 0 fail.
+- **Remaining exposure, not fixed here:**
+  - `native-agent-service-reconciliation.test.ts:4532` starts a fake bridge
+    with `Bun.serve({ port: 0 })` and no hostname.
+  - Production `allocateLocalPort()` probes a port, releases it, then lets the
+    child bind it. That leaves a gap in which another process can take the
+    port (compare case 0876).

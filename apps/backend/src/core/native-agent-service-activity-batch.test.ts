@@ -26,6 +26,12 @@ function fakeBridge(options: {
   const requests: Array<{ method: string; path: string; ids?: string[] }> = [];
   const streams: string[] = [];
   const server = Bun.serve({
+    // The service dials `http://127.0.0.1:<port>`. Bun's default listener is
+    // the dual-stack `::` wildcard, and on macOS another process may still bind
+    // `127.0.0.1` on that same port; its more specific socket then receives
+    // the sweep, so this bridge records nothing. Owning the exact address
+    // makes such a bind fail instead.
+    hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);

@@ -23,6 +23,7 @@ import {
   openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
   openCodeWorkflowResultTurnTools,
+  openCodeWorkerMailInstruction,
 } from "./opencode-provider-helpers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -175,6 +176,31 @@ describe("OpenCode provider dispatch", () => {
       // granted one adds the capability after them.
       expect(withGrant?.system).toStartWith(agentSystemInstructions());
       expect(plain?.system).toBe(agentSystemInstructions());
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("delivers a pipeline worker's mail capability only through the system field", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const workerMail = {
+      environmentId: "env-1",
+      tabId: "pipeline-worker:pipeline-1:build:0:build",
+      capability: "worker-mail-secret",
+    };
+    try {
+      await provider.send("owned-session", "Build it", {
+        requestId: "request-worker-mail",
+        workerMail,
+      });
+      const [call] = fake.promptCalls as Array<Record<string, unknown>>;
+      expect(call?.system).toBe(
+        `${agentSystemInstructions()}\n\n${openCodeWorkerMailInstruction(workerMail)}`,
+      );
+      expect(String(call?.system)).toContain('mailCapability set exactly to "worker-mail-secret"');
+      expect(String(call?.system)).toContain(`tab ${workerMail.tabId}`);
+      expect(JSON.stringify(call?.parts)).not.toContain("worker-mail-secret");
     } finally {
       await provider.dispose?.();
     }

@@ -37,6 +37,8 @@ import { WorkflowResultService } from "./workflow-result-service.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type { WorkspaceWriters } from "./workspace-writers.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { ProviderWorkerMail } from "./agent-provider-contract.js";
 import {
   TEST_FIX_RESULT,
   TEST_REVIEW_PREPARATION,
@@ -98,6 +100,8 @@ export class FakeProvider implements BuildPipelineProvider {
     prompt: string;
     schema?: JsonSchema;
     mode?: "plan" | "build";
+    agentMcp?: AgentToolConnection;
+    workerMail?: ProviderWorkerMail;
   }> = [];
   readonly created: Array<{
     phase: PipelineSessionPhase;
@@ -131,7 +135,13 @@ export class FakeProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: { requestId: string; schema?: JsonSchema; mode?: "plan" | "build" },
+    options: {
+      requestId: string;
+      schema?: JsonSchema;
+      mode?: "plan" | "build";
+      agentMcp?: AgentToolConnection;
+      workerMail?: ProviderWorkerMail;
+    },
   ): Promise<void> {
     this.sent.push({
       sessionId,
@@ -139,6 +149,8 @@ export class FakeProvider implements BuildPipelineProvider {
       prompt,
       schema: options.schema,
       mode: options.mode,
+      ...(options.agentMcp ? { agentMcp: options.agentMcp } : {}),
+      ...(options.workerMail ? { workerMail: options.workerMail } : {}),
     });
   }
 
@@ -226,6 +238,8 @@ export async function withService(
     assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
     /** D3 across engines: the shared workspace-holder projection. */
     workspaceWriters?: (storage: StorageService) => WorkspaceWriters;
+    /** Each worker's own mail identity on turns without a result tool. */
+    resolveWorkerToolConnection?: BuildPipelineServiceOptions["resolveWorkerToolConnection"];
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
@@ -413,6 +427,9 @@ export async function withService(
     environmentFence: options.environmentFence,
     assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,
     ...(options.workspaceWriters ? { workspaceWriters: options.workspaceWriters(storage) } : {}),
+    ...(options.resolveWorkerToolConnection
+      ? { resolveWorkerToolConnection: options.resolveWorkerToolConnection }
+      : {}),
   });
   try {
     await run(service, storage, provider, invocations, controls);

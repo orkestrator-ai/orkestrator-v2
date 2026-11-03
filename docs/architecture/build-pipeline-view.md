@@ -670,8 +670,15 @@ What the pipeline does for mail:
 - A coordinator's `deliverNow` is steered into the running turn under the
   pipeline lock, as the tab's own steer is; a steered build or fix drops its
   preparation result the same way.
-- A fan-out reviewer, and a build while validation runs against a fixed
-  snapshot, take no mail turn; their queued mail expires when they end.
+- A fan-out reviewer and the consolidation take their queued mail as a
+  follow-up turn before their result is accepted, with a fresh result key.
+  Mail during fixed-snapshot validation cancels and archives that validation
+  run before the writable mail turn; preparation and validation then certify
+  the new state.
+- Every turn carries its worker's own mail identity: the workflow-result
+  server on a tool-mode turn, otherwise a credential scoped to the worker's
+  mailbox, or on OpenCode a signed `mailCapability` in the turn's system
+  instruction (`BuildPipelineContext.workerMailTurn`).
 - A worker's own transcript is its session's committed transcript, which the
   coordinator reads with `get_tab_transcript` and the worker's address.
 

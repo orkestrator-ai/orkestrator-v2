@@ -442,6 +442,13 @@ export interface ProviderCreateSessionOptions {
   policy?: NativeAgentExecutionPolicy;
 }
 
+/** One pipeline worker's mailbox and the signed capability that acts as it. */
+export interface ProviderWorkerMail {
+  environmentId: string;
+  tabId: string;
+  capability: string;
+}
+
 export interface ProviderSendOptions {
   /** Per-turn mutation boundary; independent of plan/build response semantics. */
   readOnly?: boolean;
@@ -462,6 +469,13 @@ export interface ProviderSendOptions {
    * as trusted dispatch instructions; never logged or shown in transcripts.
    */
   artifactGrant?: string;
+  /**
+   * A build pipeline worker's own mail identity, for providers whose
+   * Orkestrator tool connection is environment-wide (OpenCode), on a turn
+   * with no workflow-result capability. Delivered to the agent as trusted
+   * dispatch instructions; never logged or shown in transcripts.
+   */
+  workerMail?: ProviderWorkerMail;
   /**
    * The result key of the attempt `workflowResultTool` belongs to. Bridges that
    * gate tools themselves (Claude, Cursor, Grok, Pi; Codex checks the tools are

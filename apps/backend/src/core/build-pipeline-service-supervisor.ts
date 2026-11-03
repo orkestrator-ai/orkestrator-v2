@@ -219,6 +219,8 @@ export class BuildPipelineSupervisor {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
         workerMailbox: () => this.ctx.workerMailbox,
+        workerMailTurn: (pipeline, sessionKey, agent) =>
+          this.ctx.workerMailTurn(pipeline, sessionKey, agent),
         provider: (pipeline, agent) => this.agents.provider(pipeline, agent),
         providerUnavailable: (pipeline, agent, provider) =>
           this.agents.evictUnreachableProvider(pipeline, agent, provider),
@@ -1806,8 +1808,8 @@ export class BuildPipelineSupervisor {
       agent,
       agentMcp,
     );
-    const turnAgentMcp =
-      artifactTurn?.agentMcp ?? agentMcp ?? this.ctx.workerAgentMcp(pipeline, sessionKey, agent);
+    const workerTurn = agentMcp ? undefined : this.ctx.workerMailTurn(pipeline, sessionKey, agent);
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
     await attachBeforeDispatch(
       provider,
       sessionId,
@@ -1843,6 +1845,7 @@ export class BuildPipelineSupervisor {
           ...(readOnlyReview ? readOnlyReviewSendOptions(agent, policy) : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+          ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),

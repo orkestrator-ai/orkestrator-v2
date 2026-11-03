@@ -1,5 +1,6 @@
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 /**
  * The build pipeline's multi-model review stage.
  *
@@ -153,6 +154,12 @@ const CONSOLIDATION_TURN = buildPipelineStageTurn(buildPipelineStage("consolidat
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
   workerMailbox?(): BuildPipelineContext["workerMailbox"];
+  /** A worker's own mail identity on a turn without a workflow-result capability. */
+  workerMailTurn?(
+    pipeline: BuildPipeline,
+    sessionKey: string,
+    agent: string | undefined,
+  ): PipelineWorkerMailTurn | undefined;
   provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
   providerUnavailable?(
     pipeline: BuildPipeline,
@@ -515,6 +522,12 @@ export class BuildPipelineReviewFanout {
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (selection, resultKey) =>
         this.deps.agentMcp?.(pipeline, resultKey, selection.agent, "build pipeline reviewer"),
+      workerMailTurn: (reviewer) =>
+        this.deps.workerMailTurn?.(
+          pipeline,
+          reviewerSessionKey(pipeline, reviewer),
+          reviewer.agent,
+        ),
       ...(this.deps.artifactDispatch
         ? {
             artifactTurns: {
@@ -1018,7 +1031,10 @@ export class BuildPipelineReviewFanout {
         agent: consolidation.agent,
         ...(agentMcp ? { agentMcp } : {}),
       });
-      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+      const workerTurn = agentMcp
+        ? undefined
+        : this.deps.workerMailTurn?.(pipeline, consolidation.sessionKey, consolidation.agent);
+      const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
       await attachAgentBeforeDispatch(
         provider,
         consolidation.providerSessionId,
@@ -1057,6 +1073,7 @@ export class BuildPipelineReviewFanout {
               : {}),
             ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
             ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+            ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
             ...(agentMcp
               ? {
                   workflowResultTool: workflowResultToolName(CONSOLIDATION_RESULT_KIND),

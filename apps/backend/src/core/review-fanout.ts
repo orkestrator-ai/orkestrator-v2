@@ -47,6 +47,7 @@ import {
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
+import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
 import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
@@ -409,6 +410,12 @@ export interface ReviewFanoutHost {
     selection: ReviewerModelSelection,
     resultKey: string,
   ): Promise<AgentToolConnection | undefined>;
+  /**
+   * The reviewer's own mail identity on a turn without a workflow-result
+   * connection (build pipeline workers). Absent: such turns keep the
+   * bridge's environment connection.
+   */
+  workerMailTurn?(reviewer: ReviewerRecord): PipelineWorkerMailTurn | undefined;
   prepareResult?(
     selection: ReviewerModelSelection,
     requestId: string,
@@ -739,6 +746,9 @@ function reviewBranchHost(host: ReviewFanoutHost): AgentBranchHost<ReviewerRecor
           agentMcp: (reviewer: ReviewerRecord, resultKey: string) =>
             host.agentMcp!(reviewer, resultKey),
         }
+      : {}),
+    ...(host.workerMailTurn
+      ? { workerMailTurn: (reviewer: ReviewerRecord) => host.workerMailTurn!(reviewer) }
       : {}),
     ...(host.prepareResult
       ? {

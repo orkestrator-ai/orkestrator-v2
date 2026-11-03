@@ -44,7 +44,10 @@ import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
 import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
-import { pipelineWorkerTabForResultKey } from "./pipeline-worker-identity.js";
+import {
+  authenticatePipelineWorkerMailCapability,
+  pipelineWorkerTabForResultKey,
+} from "./pipeline-worker-identity.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
 import {
   ARTIFACT_ONLY_SERVER_INSTRUCTIONS,
@@ -653,25 +656,28 @@ async function createAgentToolServer(
       { environmentId: scope.environmentId, projectId: scope.projectId },
       provisionalFindings,
     );
-    registerAgentMessagingTools(server, storage, pipelineScope, consumeRateLimit, async (input) => {
-      const grant =
-        typeof input.capability === "string"
-          ? await workflowResults.authenticateCapability(input.capability)
-          : null;
-      if (
-        !grant ||
-        grant.environmentId !== scope.environmentId ||
-        grant.projectId !== scope.projectId ||
-        grant.workflowResultKey !== input.resultKey
-      )
-        throw new Error("Worker mail capability denied");
-      const tabId = await pipelineWorkerTabForResultKey(
-        storage,
-        pipelineScope,
-        grant.workflowResultKey,
-      );
-      if (!tabId) throw new Error("Worker mail identity unavailable");
-      return { ...pipelineScope, tabId };
+    registerAgentMessagingTools(server, storage, pipelineScope, consumeRateLimit, {
+      kind: "broker",
+      resolve: async (input) => {
+        const grant =
+          typeof input.capability === "string"
+            ? await workflowResults.authenticateCapability(input.capability)
+            : null;
+        if (
+          !grant ||
+          grant.environmentId !== scope.environmentId ||
+          grant.projectId !== scope.projectId ||
+          grant.workflowResultKey !== input.resultKey
+        )
+          throw new Error("Worker mail capability denied");
+        const tabId = await pipelineWorkerTabForResultKey(
+          storage,
+          pipelineScope,
+          grant.workflowResultKey,
+        );
+        if (!tabId) throw new Error("Worker mail identity unavailable");
+        return { ...pipelineScope, tabId };
+      },
     });
     // Graph activations on OpenCode: the broker's tool list is fixed, so the
     // activation tools are always listed and authorized per call.
@@ -852,7 +858,33 @@ async function createAgentToolServer(
   );
 
   if (messagingScope)
-    registerAgentMessagingTools(server, storage, messagingScope, consumeRateLimit);
+    registerAgentMessagingTools(
+      server,
+      storage,
+      messagingScope,
+      consumeRateLimit,
+      // An environment-wide credential (OpenCode) acts as a build pipeline
+      // worker's mailbox only with the capability that worker's turn was
+      // given; a tab-scoped credential is already one mailbox.
+      !scope.tabId && workflowResults
+        ? {
+            kind: "worker-capability",
+            resolve: async (mailCapability) => {
+              const worker = authenticatePipelineWorkerMailCapability(
+                workflowResults,
+                mailCapability,
+              );
+              if (
+                !worker ||
+                worker.environmentId !== scope.environmentId ||
+                worker.projectId !== scope.projectId
+              )
+                throw new Error("Worker mail capability denied");
+              return { ...pipelineScope, tabId: worker.tabId };
+            },
+          }
+        : undefined,
+    );
   // Every action an agent can schedule is mail, so the schedule tools come
   // with messaging, and only while experimental scheduling is on. They act
   // as the caller's own mailbox tab.

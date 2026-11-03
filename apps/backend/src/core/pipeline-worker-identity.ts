@@ -8,9 +8,100 @@
  * backend's own record, never from anything the agent supplies, so one
  * worker's credential can never act as another worker's mailbox.
  */
+import { timingSafeEqual } from "node:crypto";
 import { isRecord } from "./storage-shared.js";
-import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
+import {
+  isPipelineWorkerTabId,
+  pipelineWorkerTabId,
+} from "@orkestrator/protocol/pipeline-worker-mail";
 import type { StorageService } from "./storage.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import type { AgentToolConnection } from "./agent-tools.js";
+import type { ProviderWorkerMail } from "./agent-provider-contract.js";
+
+/**
+ * How one stage turn without a workflow-result capability carries its
+ * worker's mail identity: a mailbox-scoped connection (bridge agents) or a
+ * signed capability for an environment-wide connection (OpenCode).
+ */
+export interface PipelineWorkerMailTurn {
+  agentMcp?: AgentToolConnection;
+  workerMail?: ProviderWorkerMail;
+}
+
+type WorkerMailSigner = Pick<WorkflowResultService, "signWorkerMailCapability">;
+type WorkerMailScope = { environmentId: string; projectId: string; tabId: string };
+
+const WORKER_MAIL_CAPABILITY_PREFIX = "wm";
+const MAX_WORKER_MAIL_CAPABILITY_BYTES = 2_048;
+
+function encodePart(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function decodePart(value: string): string | null {
+  if (!/^[A-Za-z0-9_-]{1,684}$/.test(value)) return null;
+  const decoded = Buffer.from(value, "base64url").toString("utf8");
+  return decoded && encodePart(decoded) === value ? decoded : null;
+}
+
+/**
+ * A worker's mail capability, for a turn whose Orkestrator connection is
+ * environment-wide and carries no workflow-result capability (OpenCode). It
+ * names exactly one pipeline worker mailbox and is signed by the backend's
+ * durable workflow-result identity, so it outlives a backend restart. It is
+ * never a bearer credential: it only selects which mailbox an
+ * already-authenticated environment connection's mail tools act as, and a
+ * worker that has ended no longer has a mailbox to act as.
+ */
+export function pipelineWorkerMailCapability(
+  signer: WorkerMailSigner,
+  scope: WorkerMailScope,
+): string {
+  if (!isPipelineWorkerTabId(scope.tabId)) throw new Error("Not a pipeline worker mailbox");
+  return [
+    WORKER_MAIL_CAPABILITY_PREFIX,
+    encodePart(scope.tabId),
+    encodePart(scope.environmentId),
+    encodePart(scope.projectId),
+    signer.signWorkerMailCapability(scope, scope.tabId),
+  ].join(".");
+}
+
+/** The worker mailbox a capability names, or null when it is not valid. */
+export function authenticatePipelineWorkerMailCapability(
+  signer: WorkerMailSigner,
+  token: string,
+): WorkerMailScope | null {
+  if (Buffer.byteLength(token, "utf8") > MAX_WORKER_MAIL_CAPABILITY_BYTES) return null;
+  const [prefix, tab, environment, project, signature, ...extra] = token.split(".");
+  if (
+    prefix !== WORKER_MAIL_CAPABILITY_PREFIX ||
+    extra.length > 0 ||
+    !tab ||
+    !environment ||
+    !project ||
+    !signature ||
+    !/^[A-Za-z0-9_-]{43}$/.test(signature)
+  )
+    return null;
+  const tabId = decodePart(tab);
+  const environmentId = decodePart(environment);
+  const projectId = decodePart(project);
+  if (!tabId || !environmentId || !projectId || !isPipelineWorkerTabId(tabId)) return null;
+  const scope = { environmentId, projectId, tabId };
+  let expected: string;
+  try {
+    expected = signer.signWorkerMailCapability(scope, tabId);
+  } catch {
+    return null;
+  }
+  const actualBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes))
+    return null;
+  return scope;
+}
 
 /** The worker mailbox tab id the attempt `resultKey` belongs to, or null. */
 export async function pipelineWorkerTabForResultKey(

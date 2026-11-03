@@ -586,6 +586,12 @@ delegation is `mcpClient && canInject`
 Unlocked native tabs (composer open, platform not chosen) are UI-only so a
 half-created tab cannot consume the environment credential.
 
+A build pipeline worker's mailbox answers only to its own turn's identity: a
+mailbox-scoped credential, its workflow-result capability, or (OpenCode, whose
+connection is environment-wide) the signed `mailCapability` argument its turn
+was given. The environment credential alone cannot claim it
+([coordinator.md](coordinator.md#pipeline-worker-mailboxes)).
+
 ## Provider notes
 
 **Claude native.** Reference implementation: per-turn MCP, idle inject via

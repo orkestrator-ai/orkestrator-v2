@@ -144,10 +144,11 @@ export class BuildPipelinePromptDispatch {
       step?.agent ?? (session ? sessionAgent(pipeline, session) : undefined),
       agentMcp,
     );
-    const turnAgentMcp =
-      artifactTurn?.agentMcp ??
-      agentMcp ??
-      (session ? this.ctx.workerAgentMcp(pipeline, session.sessionKey, step?.agent) : undefined);
+    const workerTurn =
+      agentMcp || !session
+        ? undefined
+        : this.ctx.workerMailTurn(pipeline, session.sessionKey, step?.agent);
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
     await attachBeforeDispatch(
       provider,
       attempt.sessionId,
@@ -183,6 +184,7 @@ export class BuildPipelinePromptDispatch {
           ...(typeof step?.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+          ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
           ...(agentMcp && resultKind
             ? { workflowResultTool: workflowResultToolName(resultKind) }
             : {}),

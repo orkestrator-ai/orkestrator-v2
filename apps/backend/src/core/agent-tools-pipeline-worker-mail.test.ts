@@ -1,7 +1,9 @@
 /**
  * A build pipeline worker's tool-mode turn connects with its workflow-result
  * capability alone; that server also carries the worker's own mail tools,
- * bound to the mailbox the backend's record says owns the attempt.
+ * bound to the mailbox the backend's record says owns the attempt. An
+ * OpenCode turn without one uses the environment-wide connection with the
+ * worker's signed mail capability.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
@@ -9,6 +11,10 @@ import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { BUILD_PIPELINE_VERSION } from "@orkestrator/protocol/build-pipeline";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import { AgentToolsServer } from "./agent-tools.js";
+import {
+  authenticatePipelineWorkerMailCapability,
+  pipelineWorkerMailCapability,
+} from "./pipeline-worker-identity.js";
 import { fixture } from "./agent-mail-storage-test-support.js";
 import {
   PIPELINE_ID,
@@ -195,5 +201,158 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
     );
     expect(names).toContain("submit_fix_result");
     expect(names).not.toContain("send_message");
+  });
+
+  describe("an OpenCode turn without a workflow-result capability", () => {
+    async function workerPipeline(addressStatus: "running" | "finished" = "running") {
+      const address = stageSession("address", { key: "address", label: "Address Session" });
+      const verify = stageSession("verify", { key: "verify", label: "Verify Session" });
+      await storage.saveBuildPipeline(
+        PIPELINE_ID,
+        "p1",
+        "e1",
+        BUILD_PIPELINE_VERSION,
+        addressStatus === "running"
+          ? pipelineSnapshot("e1", "p1", [address], { phase: "addressing" })
+          : pipelineSnapshot("e1", "p1", [{ ...address, status: "idle" }, verify], {
+              phase: "verifying",
+            }),
+      );
+      await storage.synchronizeAgentMailboxes();
+      const worker = pipelineWorkerTabId(address.sessionKey);
+      const connection = server.connection("e1", "p1", "host");
+      const capability = pipelineWorkerMailCapability(workflowResults, {
+        environmentId: "e1",
+        projectId: "p1",
+        tabId: worker,
+      });
+      const call = (name: string, args: Record<string, unknown>) =>
+        rpc(connection.url, connection.token, "tools/call", { name, arguments: args });
+      return { worker, connection, capability, call };
+    }
+
+    test("the environment connection acts as the worker with its mail capability", async () => {
+      const { worker, connection, capability, call } = await workerPipeline();
+      const tools = (await rpc(connection.url, connection.token, "tools/list")).result?.tools as
+        Array<{ name: string; inputSchema?: { properties?: Record<string, unknown> } }> | undefined;
+      for (const name of AGENT_MAIL_TOOL_NAMES) {
+        const tool = tools?.find((candidate) => candidate.name === name);
+        expect(tool?.inputSchema?.properties).toHaveProperty("mailCapability");
+      }
+
+      const listed = await call("list_mailboxes", { mailCapability: capability });
+      expect(listed.result?.structuredContent?.identity).toMatchObject({
+        environmentId: "e1",
+        tabId: worker,
+        resolved: "credential",
+      });
+      const sent = await call("send_message", {
+        mailCapability: capability,
+        requestId: "opencode-send",
+        toEnvironmentId: "e2",
+        toTabId: "agent",
+        body: "From the OpenCode Address worker.",
+      });
+      expect(sent.result?.isError).not.toBe(true);
+      const outbound = (await storage.getAgentMailMailbox("e2", "agent")).messages[0]!;
+      expect(outbound.from).toMatchObject({ kind: "tab", environmentId: "e1", tabId: worker });
+      expect(
+        (await call("get_message_status", { mailCapability: capability, messageId: outbound.id }))
+          .result?.isError,
+      ).not.toBe(true);
+
+      const inbound = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "e2", projectId: "p1", tabId: "agent" },
+        { requestId: "inbound", toEnvironmentId: "e1", toTabId: worker, body: "A question?" },
+      );
+      const inbox = await call("check_inbox", { mailCapability: capability });
+      const listedIds = (
+        (inbox.result?.structuredContent?.messages ?? []) as Array<{ id: string }>
+      ).map((message) => message.id);
+      expect(listedIds).toContain(inbound.id);
+      expect(
+        (await call("read_message", { mailCapability: capability, messageId: inbound.id })).result
+          ?.isError,
+      ).not.toBe(true);
+      const replied = await call("reply_message", {
+        mailCapability: capability,
+        messageId: inbound.id,
+        requestId: "opencode-reply",
+        body: "The answer.",
+      });
+      expect(replied.result?.isError).not.toBe(true);
+      const reply = (await storage.getAgentMailMailbox("e2", "agent")).messages.find(
+        (message) => message.replyToMessageId === inbound.id,
+      );
+      expect(reply?.from).toMatchObject({ kind: "tab", tabId: worker });
+      expect(
+        (await call("ack_message", { mailCapability: capability, messageId: inbound.id })).result
+          ?.isError,
+      ).not.toBe(true);
+    });
+
+    test("without, or with a forged or foreign capability, it cannot claim the worker", async () => {
+      const { worker, capability, call } = await workerPipeline();
+      const send = (args: Record<string, unknown>) =>
+        call("send_message", {
+          requestId: crypto.randomUUID(),
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "Not me.",
+          ...args,
+        });
+      // The environment credential alone never reaches a worker's mailbox.
+      expect((await send({ fromTabId: worker })).result?.isError).toBe(true);
+      const forged = `${capability.slice(0, -2)}${capability.endsWith("AA") ? "BB" : "AA"}`;
+      expect((await send({ mailCapability: forged })).result?.isError).toBe(true);
+      const foreign = pipelineWorkerMailCapability(workflowResults, {
+        environmentId: "e2",
+        projectId: "p1",
+        tabId: worker,
+      });
+      expect((await send({ mailCapability: foreign })).result?.isError).toBe(true);
+      // A capability names one mailbox; it cannot speak for another tab.
+      expect((await send({ mailCapability: capability, fromTabId: "agent" })).result?.isError).toBe(
+        true,
+      );
+      expect(() =>
+        pipelineWorkerMailCapability(workflowResults, {
+          environmentId: "e1",
+          projectId: "p1",
+          tabId: "agent",
+        }),
+      ).toThrow();
+      // It is not a bearer credential.
+      const bearer = await rpc(server.connection("e1", "p1", "host").url, capability, "tools/list");
+      expect(bearer.result?.tools).toBeUndefined();
+      expect((await storage.getAgentMailMailbox("e2", "agent")).messages).toHaveLength(0);
+    });
+
+    test("a finished worker's capability no longer acts as its mailbox", async () => {
+      const { capability, call } = await workerPipeline("finished");
+      const sent = await call("send_message", {
+        mailCapability: capability,
+        requestId: "late",
+        toEnvironmentId: "e2",
+        toTabId: "agent",
+        body: "After the end.",
+      });
+      expect(sent.result?.isError).toBe(true);
+    });
+
+    test("the capability is signed by the durable identity and survives a restart", async () => {
+      const { worker, capability } = await workerPipeline();
+      const restarted = new WorkflowResultService(dataDir);
+      try {
+        await restarted.initializeCapabilityIdentity();
+        expect(authenticatePipelineWorkerMailCapability(restarted, capability)).toEqual({
+          environmentId: "e1",
+          projectId: "p1",
+          tabId: worker,
+        });
+      } finally {
+        restarted.closeStorage();
+      }
+    });
   });
 });

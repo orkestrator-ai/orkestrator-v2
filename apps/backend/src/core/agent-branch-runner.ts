@@ -527,7 +527,8 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     }
     const resultTurn = host.resultTurn(branch, requestId);
     const artifactTurn = this.beginArtifactTurn(branch, index, agentMcp);
-    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+    const workerTurn = agentMcp ? undefined : host.workerMailTurn?.(branch);
+    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp ?? workerTurn?.agentMcp;
     try {
       // Attach after the connection is resolved so broker registration happens
       // outside the at-most-once window.
@@ -573,6 +574,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
           ...(typeof branch.fastMode === "boolean" ? { fastMode: branch.fastMode } : {}),
           ...(turnAgentMcp ? { agentMcp: turnAgentMcp } : {}),
           ...(artifactTurn?.artifactGrant ? { artifactGrant: artifactTurn.artifactGrant } : {}),
+          ...(workerTurn?.workerMail ? { workerMail: workerTurn.workerMail } : {}),
           ...(agentMcp ? resultTurn.send : {}),
         },
       );

@@ -1850,6 +1850,18 @@ export class WorkflowResultService {
       .digest("base64url");
   }
 
+  /**
+   * The signature of a build pipeline worker's mail capability
+   * (`pipeline-worker-identity.ts`). Domain-separated from every result
+   * capability, and keyed by the same durable identity, so it survives a
+   * backend restart and is never a bearer credential.
+   */
+  signWorkerMailCapability(scope: WorkflowResultCallerScope, tabId: string): string {
+    return createHmac("sha256", this.requireCapabilityIdentity().secret)
+      .update(`worker-mail\0${tabId}\0${scope.environmentId}\0${scope.projectId}`)
+      .digest("base64url");
+  }
+
   private signCapability(scope: WorkflowResultCallerScope, resultKey: string): string {
     return createHmac("sha256", this.requireCapabilityIdentity().secret)
       .update(`${resultKey}\0${scope.environmentId}\0${scope.projectId}`)

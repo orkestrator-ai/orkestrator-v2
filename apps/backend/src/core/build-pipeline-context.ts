@@ -42,6 +42,10 @@ import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import {
+  pipelineWorkerMailCapability,
+  type PipelineWorkerMailTurn,
+} from "./pipeline-worker-identity.js";
+import {
   buildPipelineSessionStage,
   buildPipelineStage,
   sessionPhaseForBuildPhase,
@@ -309,24 +313,46 @@ export class BuildPipelineContext {
 
   /**
    * The worker's own mail identity for a turn with no workflow-result
-   * connection: a credential scoped to its mailbox, so it sends, replies and
-   * acks as itself and no other worker can use that mailbox. OpenCode keeps
-   * one environment-wide registration and takes no per-turn connection.
+   * connection, so it sends, replies and acks as itself and no other worker
+   * can use that mailbox. A bridge agent gets a credential scoped to its
+   * mailbox. OpenCode keeps one environment-wide registration and takes no
+   * per-turn connection, so it gets a signed capability naming the mailbox,
+   * delivered as a trusted instruction (`pipeline-worker-identity.ts`).
    */
-  workerAgentMcp(
+  workerMailTurn(
     pipeline: BuildPipeline,
     sessionKey: string,
-    agent: BuildPipelineAgent | undefined,
-  ): AgentToolConnection | undefined {
-    if (!this.options.resolveWorkerToolConnection || !agent || agent === "opencode")
-      return undefined;
+    agent: string | undefined,
+  ): PipelineWorkerMailTurn | undefined {
+    if (!agent) return undefined;
+    const tabId = pipelineWorkerTabId(sessionKey);
     try {
-      return this.options.resolveWorkerToolConnection(
-        pipeline.environmentId,
-        pipeline.projectId,
-        pipeline.environmentType === "local" ? "host" : "container",
-        pipelineWorkerTabId(sessionKey),
-      );
+      if (agent === "opencode") {
+        // Worker identity is wired (`resolveWorkerToolConnection`) and the
+        // signing identity exists (`workflowResults`).
+        const workflowResults = this.options.workflowResults;
+        if (!workflowResults || !this.options.resolveWorkerToolConnection) return undefined;
+        return {
+          workerMail: {
+            environmentId: pipeline.environmentId,
+            tabId,
+            capability: pipelineWorkerMailCapability(workflowResults, {
+              environmentId: pipeline.environmentId,
+              projectId: pipeline.projectId,
+              tabId,
+            }),
+          },
+        };
+      }
+      if (!this.options.resolveWorkerToolConnection) return undefined;
+      return {
+        agentMcp: this.options.resolveWorkerToolConnection(
+          pipeline.environmentId,
+          pipeline.projectId,
+          pipeline.environmentType === "local" ? "host" : "container",
+          tabId,
+        ),
+      };
     } catch {
       // The agent tools server is down: the turn keeps the bridge's own.
       return undefined;

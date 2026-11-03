@@ -1376,15 +1376,28 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   and archives that validation run before writable work resumes; preparation
   and validation must then certify the new state.
 - **Identity.** A worker sends, replies, acks and checks its inbox as its own
-  mailbox. A tool-mode stage turn's workflow-result capability carries the
-  mail tools of the worker the backend's record says owns that attempt
-  (`pipeline-worker-identity.ts`); any other turn gets a credential scoped to
-  the worker's mailbox (`resolveWorkerToolConnection`). An environment-wide
-  credential cannot claim a worker's mailbox, and no worker can use
-  another's. OpenCode's persistent workflow-result broker authenticates each
-  mail call using the current resultKey and signed capability, then resolves
-  the worker from backend records. OpenCode turns without a workflow-result
-  capability still cannot act as their worker mailbox.
+  mailbox, on every agent and every turn (`pipeline-worker-identity.ts`):
+  - A tool-mode stage turn's workflow-result capability carries the mail
+    tools of the worker the backend's record says owns that attempt. On
+    OpenCode the persistent workflow-result broker authenticates each mail
+    call with the current resultKey and signed capability, then resolves the
+    worker the same way.
+  - A turn without one (build, address, fix, verify, PR, conflict resolution,
+    reviewers and consolidation alike) gets its worker's identity from
+    `BuildPipelineContext.workerMailTurn`. A bridge agent's turn connects
+    with a credential scoped to the worker's mailbox
+    (`resolveWorkerToolConnection`). OpenCode keeps its environment-wide
+    `orkestrator` connection, so the turn's trusted system instruction
+    carries the worker's mail capability (`workerMail`,
+    `openCodeWorkerMailInstruction`), and every mail tool on that connection
+    takes it as `mailCapability`. The capability names exactly one worker
+    mailbox and project, is signed by the workflow-result service's durable
+    identity (domain-separated, so it survives a restart), is never a bearer
+    credential, and stops working when its worker ends and loses its
+    mailbox.
+
+  An environment-wide credential without that capability cannot claim a
+  worker's mailbox, and no worker can use another's.
 - **Trust.** Unchanged: the same senders reach a worker as any other worker
   in the project, with the same routes, budgets and untrusted peer-mail
   framing. The carrier adds that the recipient is a build pipeline step: a
@@ -2539,7 +2552,13 @@ guarantee, not by one end-to-end scenario replayed per platform:
   delivery, transcripts, result-key identity, restart):
   `pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
   leaf: `control-mcp-pipeline-workers.test.ts`; worker derivation and carrier
-  framing: `packages/protocol/src/pipeline-worker-mail.test.ts`
+  framing: `packages/protocol/src/pipeline-worker-mail.test.ts`; each worker's
+  own mail identity (result server, OpenCode broker, and the environment-wide
+  connection with `mailCapability`: send, reply, ack, forged, foreign and
+  ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
+  stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
+  reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
+  and OpenCode's system field (`opencode-provider-dispatch.test.ts`)
 - tool contract and poll guard: `control-mcp-server-reads.test.ts` and
   `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and

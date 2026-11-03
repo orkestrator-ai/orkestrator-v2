@@ -5,7 +5,9 @@ import type { ProjectGitStatus } from "./coordinator.js";
  * main coordinator. The backend decides whether to ask
  * (`check_coordinator_upstream_merge`) and remembers declines per project
  * (`decline_coordinator_upstream_merge`), so every client asks the same
- * question once; clients only show it. Browser-safe.
+ * question once; clients only show it. A project can instead be set to merge
+ * every time without asking (`set_coordinator_upstream_auto_merge`), kept by
+ * the backend on this machine. Browser-safe.
  */
 
 /** Why a behind checkout cannot be fast-forwarded, or null when it can. */
@@ -71,17 +73,30 @@ export const COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS = [
 export type CoordinatorUpstreamMergeSkipReason =
   (typeof COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS)[number];
 
-/** The backend's answer to "ask before sending?". `status` is the refreshed checkout. */
+/**
+ * The backend's answer to "ask before sending?". `status` is the refreshed
+ * checkout. `automatic` means the project is set to always merge: the client
+ * fast-forwards without showing the question. A client that predates it shows
+ * the question, which is the safe reading.
+ */
 export type CoordinatorUpstreamMergeCheck =
-  | { offer: true; status: ProjectGitStatus }
+  | { offer: true; status: ProjectGitStatus; automatic?: true }
   | { offer: false; reason: CoordinatorUpstreamMergeSkipReason; status: ProjectGitStatus | null };
 
-/** The decision both the backend and an older-backend client apply. */
+/**
+ * The decision both the backend and an older-backend client apply. With
+ * `autoMerge` a mergeable checkout is merged without asking, whatever was
+ * declined before; a blocked one is still left alone.
+ */
 export function decideUpstreamMergeOffer(
   status: ProjectGitStatus | null | undefined,
   declined: DeclinedUpstreamMerge | null | undefined,
+  options: { autoMerge?: boolean } = {},
 ): CoordinatorUpstreamMergeCheck {
   if (!status) return { offer: false, reason: "no-status", status: null };
+  if (options.autoMerge && shouldOfferUpstreamMerge(status, null)) {
+    return { offer: true, status, automatic: true };
+  }
   if (shouldOfferUpstreamMerge(status, declined)) return { offer: true, status };
   if (!status.upstream || (status.behind ?? 0) <= 0) {
     return { offer: false, reason: "not-behind", status };
@@ -99,7 +114,12 @@ export function parseCoordinatorUpstreamMergeCheck(
     check.status && typeof check.status === "object" && !Array.isArray(check.status)
       ? (check.status as ProjectGitStatus)
       : null;
-  if (check.offer === true) return status ? { offer: true, status } : null;
+  if (check.offer === true) {
+    if (!status) return null;
+    return check.automatic === true
+      ? { offer: true, status, automatic: true }
+      : { offer: true, status };
+  }
   if (
     check.offer === false &&
     (COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS as readonly unknown[]).includes(check.reason)
@@ -130,4 +150,17 @@ export function isDeclinedUpstreamMerge(value: unknown): value is DeclinedUpstre
     record.upstreamCommit.length > 0 &&
     record.upstreamCommit.length <= UPSTREAM_DECLINE_LIMITS.commitChars
   );
+}
+
+/** Whether a project merges upstream commits without asking (`get/set_coordinator_upstream_auto_merge`). */
+export interface CoordinatorUpstreamAutoMerge {
+  enabled: boolean;
+}
+
+export function parseCoordinatorUpstreamAutoMerge(
+  value: unknown,
+): CoordinatorUpstreamAutoMerge | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const enabled = (value as Record<string, unknown>).enabled;
+  return typeof enabled === "boolean" ? { enabled } : null;
 }

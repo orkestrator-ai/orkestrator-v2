@@ -29,6 +29,7 @@ const single = () => reconcileCoordinatorLayout(null, ["main", "side-1", "side-2
 const capabilities = (coordinatorPaneLayouts: boolean): ClientStateCapabilities => ({
   coordinatorPaneLayouts,
   coordinatorUpstreamMerge: false,
+  coordinatorUpstreamAutoMerge: false,
   noticeDismissals: false,
   environmentAttention: false,
 });

@@ -31,7 +31,7 @@ governs, marked "Decided".
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2 and BR-11 done 2026-11-03; BR-7 to BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
@@ -243,7 +243,12 @@ Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the 
 - BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
 - Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-03 (against `main` at `b68b6e71`), Codex half: BR-2 and BR-11.
+
+- BR-2: `getConfig`'s `durable` check (`isSessionConfigPersisted` in `app-server-runtime-sessions.ts`) now calls `BridgeSessionStore.loadRecord(id)` (`sessions/persistence.ts`) instead of `load()`. It reads only `recordPath(id)`, with `load()`'s validation (`isPersistedBridgeSession`, cwd hash, retention cutoff, a tombstone is not persisted, and the record must name the session asked about). It does no legacy migration, login-record adoption, directory listing, chmod or sweep. Only when no record file exists does it look, read-only, where `load()` would first have published one: the former aggregate file, then the login's own records directory. Tests: `sessions/persistence-load-record.test.ts` (one `readFile` out of 50 records, no `readdir`/`chmod`/`mkdir`/write/`load()`; agreement with `load()` for valid, tombstoned, expired, wrong-cwd, invalid, corrupt, foreign-id, legacy-only and absent records; a login record found without being moved) and `app-server-runtime-config-durable.test.ts` (`getConfig` on one of 50 persisted sessions reads one record file and never calls `load()`, which fails on the old code; `durable` false for a changed config, a tombstone, a missing and an expired record).
+- BR-11: `history/session-index-cache.ts` keeps `session_index.jsonl` parsed per path, keyed by size, mtime, ctime and `dev:ino` from the descriptor's `fstat`, as `transcript-cache.ts` does. Unchanged means no read. Growth on the same inode whose 64 bytes before the old boundary are unchanged parses only the appended bytes. A shrink, a replacement, a same-size rewrite or a changed anchor re-reads from scratch. An unterminated last line is parsed on each read but never committed. Both `findSessionIndexEntry` (hydrate) and the cwd listing read through it; the listing still visits every line in file order, so its result is unchanged. Bounds (invariant 11): 50,000 entries, 16 MiB estimated and 4 paths across the cache, least recently used evicted first; an index too large on its own is parsed uncached on every read, as before. `readTranscriptLines` and `PersistedSessionIndexEntry`, used only for this, were removed. Tests: `history/session-index-cache.test.ts` (parsing parity, unchanged read once, append read as tail only, shorter rewrite, inode replacement, in-place rewrite with growth, same-size rewrite, pending tail, snapshot stability, concurrent readers, path/entry/byte bounds) and `history/rollout-session-index.test.ts` (two hydrates read the index once, an appended rename is found after one tail read, a shorter rewrite is fully re-read, the listing shares the cache).
+
+**Investigation.** Not re-checked since the report: BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
 
 What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
@@ -890,6 +895,39 @@ that file's whole mock setup. Splitting the file is separate work.
 A fixed one-second timer that is not reset by later chunks, so it is also the
 maximum wait. Every other change still persists through `schedulePersist`, and
 any such write carries the output so far.
+
+### Task 6: Codex single-record config read and session-index cache (BR-2, BR-11)
+
+Made on 2026-11-03.
+
+- **Where `loadRecord` looks when the record file is missing.** Chose a
+  read-only look at the former aggregate file and then the login's own records
+  directory, because `load()` would have published either there before
+  listing, so `durable` stays exactly what it was. Returning false straight
+  away would be simpler, but a session that still has only a legacy or
+  unadopted copy would turn non-durable until the next `load()`. Calling
+  `load()` on a miss would also match, but would bring back the migration and
+  adoption writes on a path that should not write.
+- **No chmod on the single-record read.** `load()` tightens modes at startup
+  and every write sets them, so a read on the hot path has nothing to fix.
+  The one difference left: when `load()` cannot create or tighten the records
+  directory, it returns the legacy entries only, while `loadRecord` still
+  reads the record file. In that state the newer answer is the right one.
+- **Cache granularity for the session index.** Kept every parsed line in file
+  order plus a last-position-per-id map, rather than only the last entry per
+  id. The listing calls `getPersistedSessionMeta` once per line, and a later
+  line without `updated_at` for a thread with no rollout resolves to nothing
+  and keeps the earlier line's entry. Deduplicating would change that.
+- **What happens past the bounds.** Chose to parse an index that alone exceeds
+  the bounds uncached on every read, which is the old cost, rather than cache a
+  partial index. A partial index could answer "no entry" wrongly.
+- **Rewrite detection.** Added the 64-byte anchor check from
+  `transcript-cache.ts`, on top of the ticket's shrink-or-inode rule, so a
+  same-inode rewrite that grew is not taken as an append. A changed mtime or
+  ctime at the same size also re-reads.
+- **One behaviour change.** The old listing threw a `TypeError` on an index
+  line that parsed to `null` (`entry.id` of null); the cache skips that line,
+  as hydrate always did.
 
 ### Task 7: stat-stamp settle window
 

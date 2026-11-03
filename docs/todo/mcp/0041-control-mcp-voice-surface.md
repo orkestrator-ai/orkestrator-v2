@@ -797,9 +797,20 @@ the choice, why, and its pros and cons.
   1,000 lines. Cons: the reads file spans several small tool groups, and the
   credentials test ("binds coordinator credentials…", 505 lines) still calls
   tools from most groups.
-- Evidence: before, 62 tests and 565 assertions; after, 62 tests (13 + 10 +
-  11 + 16 + 12) and 565 assertions, with identical test names, both per file
-  and with `--parallel=5`.
+- Evidence (rechecked 2026-11-03, from `apps/backend` with `NODE_ENV=test`
+  and `--reporter=junit`):
+  - Before: the parent commit's `control-mcp-server.test.ts`, run alone,
+    gave 62 pass, 0 fail, 565 `expect()` calls.
+  - After, all five files with `--parallel=5`: 62 pass, 0 fail, 565
+    `expect()` calls.
+  - After, each file alone: server 13 tests / 177 expects,
+    coordinator-workflows 10 / 125, reads 11 / 100, launch 16 / 82,
+    messaging 12 / 81 (62 tests, 565 expects in total), all passing.
+  - Names: the sorted `describe > test` list from each junit report has 62
+    entries. Two names appear twice because the `for (const mode …)` loop
+    runs them once per mode, both before and after. The list is identical
+    across all three runs (`diff` empty; SHA-256 `ebc3673f…89938` for
+    each).
 
 **D24. Task 4: when and how `control-mcp-tools.ts` is split.**
 - Options: (a) split it now, alongside the tests; (b) wait for #1664, which

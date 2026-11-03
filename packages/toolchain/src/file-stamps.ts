@@ -22,9 +22,9 @@
  *   last one, when the clock moved backwards past it, and on an explicit repair.
  *
  * The store is read and written only while the cache-wide install lock is held.
- * It keeps only stamps for files inspected in the current run that live in the
- * current artifact set's version directories, so it is bounded by the size of
- * one installation and never accumulates entries for removed versions.
+ * Subset checks retain metadata-matching stamps for omitted tools. Removed or
+ * changed files are pruned, and the entry limit bounds retained installation
+ * history. Full checks discard all old stamps, including omitted tools.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -292,7 +292,20 @@ export async function openFileStampStore(
         files[filePath] = stamp;
         count += 1;
       }
+      // Prioritise this run's verified set, then retain omitted tools only.
+      // Never resurrect an unchecked entry inside the set just verified.
+      for (const [filePath, stamp] of Object.entries(previousFiles)) {
+        if (count >= MAX_STAMP_ENTRIES) break;
+        if (isUnder(filePath, directories) || !isUnder(filePath, [rootDir])) continue;
+        const info = await lstatBig(filePath).catch(() => null);
+        if (!info || !metadataMatches(stamp, info)) continue;
+        files[filePath] = stamp;
+        count += 1;
+      }
       const derived: Record<string, string> = {};
+      for (const [filePath, source] of Object.entries(previousDerived)) {
+        if (files[filePath] && !isUnder(filePath, directories)) derived[filePath] = source;
+      }
       for (const [filePath, source] of runDerived) {
         if (files[filePath]) derived[filePath] = source;
       }

@@ -106,6 +106,84 @@ describe("verified stamps across launches", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  test("desktop subset then combined checks retain both tools across launches", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const support: ToolchainArtifact = {
+      ...artifact,
+      name: "gh",
+      executable: { ...artifact.executable, fileName: "gh" },
+    };
+    const desktopStartup = async () => {
+      await launch(dataDir, fetchImpl);
+      return launch(dataDir, fetchImpl, { artifacts: [artifact, support] });
+    };
+    const first = await desktopStartup();
+    const paths = await Promise.all(Object.values(first.executables).map((file) => readlink(file)));
+    const before = await stamps(dataDir);
+    // Make a re-hash observably different even on a fast filesystem.
+    for (const file of paths)
+      before.files[file]!.stampedAtNs = String(
+        BigInt(before.files[file]!.stampedAtNs) - 1_000_000n,
+      );
+    await writeFile(path.join(dataDir, "toolchains", STAMP_FILE), JSON.stringify(before));
+    for (let launchNumber = 0; launchNumber < 2; launchNumber += 1) {
+      await desktopStartup();
+    }
+    for (const file of paths)
+      expect((await stamps(dataDir)).files[file]).toEqual(before.files[file]!);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("companion failure retains the completed primary archive for the next attempt", async () => {
+    const dataDir = await createDataDir();
+    const companionBody = Buffer.from('#!/bin/sh\nprintf "tool 1.2.3\\n"\n');
+    const companionZip = Buffer.from(
+      "UEsDBAoAAAAAADMD8VyEaD1TIAAAACAAAAAEAAAAdG9vbCMhL2Jpbi9zaApwcmludGYgInRvb2wgMS4yLjNcbiIKUEsBAh4DCgAAAAAAMwPxXIRoPVMgAAAAIAAAAAQAAAAAAAAAAQABAECBAAAAAHRvb2xQSwUGAAAAAAEAAQAyAAAAQgAAAAAA",
+      "base64",
+    );
+    const companionArchive = {
+      ...artifact.archive,
+      url: "https://downloads.example.test/companion",
+      format: "zip" as const,
+      entryPath: "tool",
+      size: companionZip.length,
+      sha256: sha256(companionZip),
+    };
+    const withCompanion: ToolchainArtifact = {
+      ...artifact,
+      companions: [
+        {
+          fileName: "codex-helper",
+          archive: companionArchive,
+          executable: { size: companionBody.length, sha256: sha256(companionBody) },
+        },
+      ],
+    };
+    let failCompanion = true;
+    const requests: string[] = [];
+    const fetchImpl = mock(async (url: string) => {
+      requests.push(url);
+      if (url === companionArchive.url) {
+        if (failCompanion) return new Response(null, { status: 503 });
+        return new Response(companionZip);
+      }
+      return new Response(BODY);
+    });
+    await expect(launch(dataDir, fetchImpl, { artifacts: [withCompanion] })).rejects.toThrow(
+      "HTTP 503",
+    );
+    failCompanion = false;
+    const result = await launch(dataDir, fetchImpl, { artifacts: [withCompanion] });
+    expect(requests).toEqual([artifact.archive.url, companionArchive.url, companionArchive.url]);
+    const executablePath = await readlink(result.executables.codex);
+    expect(await readFile(executablePath)).toEqual(BODY);
+    expect(await readFile(path.join(path.dirname(executablePath), "codex-helper"))).toEqual(
+      companionBody,
+    );
+    expect(await readdir(path.join(dataDir, "toolchains", ".downloads"))).toEqual([]);
+  });
+
   test("any change to an installed file is hashed and repaired", async () => {
     const dataDir = await createDataDir();
     const fetchImpl = createFetch();

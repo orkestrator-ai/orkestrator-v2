@@ -25,7 +25,7 @@
  */
 import { createHash } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ToolchainArchive } from "./manifest.js";
 
@@ -53,7 +53,9 @@ export const DEFAULT_DOWNLOAD_TIMINGS: DownloadTimings = {
 export type DownloadArchiveOptions = {
   label: string;
   archive: ToolchainArchive;
-  /** Where the verified archive is moved once complete. */
+  /** Keep verified bytes available until the caller commits installation. */
+  retainComplete?: boolean;
+  /** Where the verified archive is staged once complete. */
   archivePath: string;
   /** The toolchain root; partials live in its `.downloads` directory. */
   rootDir: string;
@@ -278,7 +280,8 @@ export async function downloadArchive(options: DownloadArchiveOptions): Promise<
     const startSize = await existingPartialSize(partialPath, options.archive);
     try {
       await downloadAttempt(options, partialPath);
-      await rename(partialPath, options.archivePath);
+      if (options.retainComplete) await copyFile(partialPath, options.archivePath);
+      else await rename(partialPath, options.archivePath);
       return;
     } catch (error) {
       const attemptFailure = error as AttemptFailure;

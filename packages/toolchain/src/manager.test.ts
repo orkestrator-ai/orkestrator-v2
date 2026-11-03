@@ -2419,8 +2419,10 @@ describe("pinned desktop toolchain cache", () => {
       skipExecutableProbeForTests: true,
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(6);
-    expect(fetchImpl.mock.calls.map((call) => String(call[0]))[5]).toBe(secondUrl);
+    expect(await readdir(path.join(dataDir, "toolchains", ".downloads"))).toEqual([]);
+    // The completed archive from the interrupted repair is reused.
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))[4]).toBe(secondUrl);
     expect((await lstat(path.join(versionDir, "codex-host"))).mode & 0o777).toBe(0o500);
     expect((await lstat(path.join(versionDir, "second-host"))).isFile()).toBe(true);
     expect(await readFile(path.join(versionDir, "second-host"))).toEqual(secondBody);

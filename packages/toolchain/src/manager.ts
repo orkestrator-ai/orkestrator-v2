@@ -34,6 +34,7 @@ import { TOOLCHAIN_DIRECTORY, toolchainRootDir } from "./layout.js";
 import {
   DEFAULT_DOWNLOAD_TIMINGS,
   downloadArchive,
+  partialDownloadPath,
   prunePartialDownloads,
   type DownloadTimings,
   type FetchLike,
@@ -1076,6 +1077,7 @@ async function stageCompanions(
     const companionFilePath = path.join(stagingDirectory, companion.fileName);
     const precedingBytes = downloadedBytes;
     await downloadArchive({
+      retainComplete: true,
       label: companion.fileName,
       archive: companion.archive,
       archivePath: companionArchivePath,
@@ -1174,6 +1176,11 @@ async function repairArtifactCompanions(
         path.join(destinationDirectory, companion.fileName),
       );
     }
+    await Promise.all(
+      artifactCompanions(artifact).map((companion) =>
+        rm(partialDownloadPath(rootDir, companion.archive), { force: true }).catch(() => undefined),
+      ),
+    );
   } finally {
     await rm(stagingDirectory, { recursive: true, force: true });
   }
@@ -1198,6 +1205,7 @@ async function installArtifact(
     : executablePath;
   try {
     await downloadArchive({
+      retainComplete: artifactCompanions(artifact).length > 0,
       label: artifact.name,
       archive: artifact.archive,
       archivePath,
@@ -1325,6 +1333,12 @@ async function installArtifact(
     await rm(destinationDirectory, { recursive: true, force: true });
     await rename(stagingDirectory, destinationDirectory);
     await chmod(destinationDirectory, 0o700);
+    await Promise.all(
+      [artifact.archive, ...artifactCompanions(artifact).map((companion) => companion.archive)].map(
+        (archive) =>
+          rm(partialDownloadPath(rootDir, archive), { force: true }).catch(() => undefined),
+      ),
+    );
     return artifactExecutablePath(rootDir, artifact);
   } catch (error) {
     await rm(stagingDirectory, { recursive: true, force: true });

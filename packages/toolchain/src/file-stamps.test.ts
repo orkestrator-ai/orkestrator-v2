@@ -233,6 +233,35 @@ describe("verified file stamps", () => {
     expect(Object.keys((await readStampFile(rootDir)).files)).toEqual([kept]);
   });
 
+  test("subset saves retain omitted derived stamps but prune changed and removed files", async () => {
+    const { rootDir, versionDir } = await createRoot();
+    const omittedDir = path.join(rootDir, "gh", "1", "darwin-arm64");
+    await mkdir(omittedDir, { recursive: true });
+    const kept = path.join(omittedDir, "gh");
+    const changed = path.join(omittedDir, "changed");
+    const removed = path.join(omittedDir, "removed");
+    for (const file of [kept, changed, removed]) await writeFile(file, "bytes");
+    const first = await openCounted(rootDir);
+    await first.store.recordDerived(kept, sha256("source"));
+    await first.store.sha256(changed);
+    await first.store.sha256(removed);
+    await first.store.save([omittedDir]);
+    await writeFile(changed, "CHANGED");
+    await rm(removed);
+    const subset = await openCounted(rootDir);
+    await subset.store.save([versionDir]);
+    const saved = await readStampFile(rootDir);
+    expect(Object.keys(saved.files)).toEqual([kept]);
+    expect(saved.derived).toEqual({ [kept]: sha256("source") });
+    const combined = await openCounted(rootDir);
+    await combined.store.sha256(kept);
+    expect(combined.hashed).toEqual([]);
+    // A full check never extends omitted stamps' trust lifetime.
+    const full = await openCounted(rootDir, { forceFullCheck: true });
+    await full.store.save([versionDir]);
+    expect((await readStampFile(rootDir)).files).toEqual({});
+  });
+
   test("records which pinned source a locally produced file came from", async () => {
     const { rootDir, versionDir } = await createRoot();
     const produced = path.join(versionDir, "opencode");

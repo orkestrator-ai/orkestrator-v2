@@ -446,6 +446,36 @@ test.each([false, true])(
   },
 );
 
+test("standalone toolchain repair forces full verification through the installer", async () => {
+  const binDir = path.join(dataDir, "toolchains", "bin", "installed");
+  const install: typeof import("@orkestrator/toolchain/install").installPinnedToolchains = mock(
+    async (options) => {
+      expect(options.dataDir).toBe(dataDir);
+      expect(options.fullVerification).toBe(true);
+      expect(options.onProgress).toBeFunction();
+      return { binDir, versions: { codex: "1.2.3" } } as Awaited<ReturnType<typeof install>>;
+    },
+  );
+  const task = startToolchainRepair(
+    { ...context(), toolchainBinDir: binDir },
+    {
+      plan: async () => {
+        throw new Error("unexpected desktop branch");
+      },
+      ensure: async () => {
+        throw new Error("unexpected desktop branch");
+      },
+      install,
+    },
+  );
+  await until(() => service.task(task.id)?.state !== "running");
+  expect(install).toHaveBeenCalledTimes(1);
+  expect(service.task(task.id)).toMatchObject({
+    state: "succeeded",
+    result: { versions: { codex: "1.2.3" }, restartRequired: false },
+  });
+});
+
 test("a toolchain repair failure becomes a durable failed task", async () => {
   const task = startToolchainRepair(context(), {
     plan: async () => {

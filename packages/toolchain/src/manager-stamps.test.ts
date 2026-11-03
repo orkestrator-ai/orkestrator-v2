@@ -3,18 +3,21 @@ import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
   readlink,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { STAMP_FILE } from "./file-stamps.js";
 import { ensurePinnedToolchains, type EnsurePinnedToolchainsOptions } from "./manager.js";
-import type { ToolchainArtifact } from "./manifest.js";
+import { pinnedToolchainArtifacts, type ToolchainArtifact } from "./manifest.js";
+import { partialDownloadPath } from "./download.js";
 
 // Launch-level behaviour of verified stamps and resumable downloads. Hash and
 // download mechanics are covered in file-stamps.test.ts and download.test.ts.
@@ -133,6 +136,31 @@ describe("verified stamps across launches", () => {
     for (const file of paths)
       expect((await stamps(dataDir)).files[file]).toEqual(before.files[file]!);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("required-only ensure retains an aged pinned gh partial for the combined ensure", async () => {
+    const dataDir = await createDataDir();
+    const support = pinnedToolchainArtifacts().find((tool) => tool.name === "gh")!;
+    const partial = partialDownloadPath(path.join(dataDir, "toolchains"), support.archive);
+    await mkdir(path.dirname(partial), { recursive: true });
+    const prefix = Buffer.from("interrupted archive prefix");
+    await writeFile(partial, prefix);
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await utimes(partial, old, old);
+
+    await launch(dataDir, createFetch());
+    expect(await readFile(partial)).toEqual(prefix);
+    const ranges: Array<string | null> = [];
+    const fetchImpl: EnsurePinnedToolchainsOptions["fetchImpl"] = async (_input, init) => {
+      ranges.push(new Headers(init?.headers).get("range"));
+      // Stop at the request boundary: the real pinned gh archive is not a fixture.
+      return new Response(null, { status: 503 });
+    };
+    await expect(launch(dataDir, fetchImpl, { artifacts: [artifact, support] })).rejects.toThrow(
+      "HTTP 503",
+    );
+    expect(ranges).toEqual([`bytes=${prefix.length}-`]);
+    expect(await readFile(partial)).toEqual(prefix);
   });
 
   test("companion failure retains the completed primary archive for the next attempt", async () => {

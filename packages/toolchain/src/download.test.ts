@@ -182,6 +182,27 @@ describe("resumable toolchain downloads", () => {
     expect(await readFile(archivePath)).toEqual(BODY);
   });
 
+  test("discards a rejected range on HTTP 416 and retries from zero", async () => {
+    const { rootDir, archivePath } = await createRoot();
+    const partial = partialDownloadPath(rootDir, archive);
+    await mkdir(path.dirname(partial), { recursive: true });
+    await writeFile(partial, BODY.subarray(0, 700));
+    const ranges: Array<string | null> = [];
+    const server = rangeServer();
+    const fetchImpl: FetchLike = async (input, init) => {
+      ranges.push(new Headers(init?.headers).get("range"));
+      if (ranges.length === 1) return new Response(null, { status: 416 });
+      await expect(lstat(partial)).rejects.toThrow();
+      return server.fetchImpl(input, init);
+    };
+
+    await download(rootDir, archivePath, fetchImpl);
+
+    expect(ranges).toEqual(["bytes=700-", null]);
+    expect(await readFile(archivePath)).toEqual(BODY);
+    await expect(lstat(partial)).rejects.toThrow();
+  });
+
   test("re-hashes resumed bytes and starts again when they were damaged", async () => {
     const { rootDir, archivePath } = await createRoot();
     await mkdir(path.dirname(partialDownloadPath(rootDir, archive)), { recursive: true });

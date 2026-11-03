@@ -1691,10 +1691,15 @@ export async function ensurePinnedToolchains(
     await cleanStagingDirectories(rootDir);
     await prunePartialDownloads(
       rootDir,
-      artifacts.flatMap((artifact) => [
-        artifact.archive,
-        ...artifactCompanions(artifact).map((companion) => companion.archive),
-      ]),
+      // A subset check (desktop checks agents before support tools) must not
+      // discard downloads that the next check still needs. Custom artifacts
+      // are retained alongside the release's complete pinned manifest.
+      [...pinnedToolchainArtifacts(options.platform, options.architecture), ...artifacts].flatMap(
+        (artifact) => [
+          artifact.archive,
+          ...artifactCompanions(artifact).map((companion) => companion.archive),
+        ],
+      ),
     );
     // Files whose verified stamp still matches are not read again, here or in
     // the final verification below; see file-stamps.ts for what a stamp

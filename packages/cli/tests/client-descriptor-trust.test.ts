@@ -66,6 +66,29 @@ async function publishProfile(box: ClientSandbox, backend: FakeGateway, dataDir:
 const posix = process.platform !== "win32";
 const uid = process.getuid?.() ?? 0;
 
+describe("profile descriptor process identity", () => {
+  test("refuses a trusted descriptor whose pid differs from the manifest without sending requests", async () => {
+    const box = await sandbox();
+    const backend = await gateway();
+    const dataDir = await box.publishDescriptor(backend, { pid: process.pid + 1 });
+    await publishProfile(box, backend, dataDir);
+    // The descriptor passes file trust and parsing checks; only its process
+    // identity disagrees with the ready manifest's live backend.
+    expect((await readDescriptor(path.join(dataDir, "backend-instance.json"))).pid).toBe(
+      process.pid + 1,
+    );
+
+    const result = await box.run(["--json", "--profile", "qa", "project", "list"]);
+
+    expect(result.code).toBe(4);
+    expect(JSON.parse(result.out).error).toMatchObject({
+      code: "profile-unavailable",
+      message: "Profile 'qa' has a descriptor from a different backend process",
+    });
+    expect(backend.requests).toHaveLength(0);
+  });
+});
+
 describe("descriptorTrustRefusal", () => {
   test("accepts a descriptor the current user owns with mode 0600", () => {
     expect(descriptorTrustRefusal({ uid: 501, mode: 0o100600 }, 501)).toBeNull();

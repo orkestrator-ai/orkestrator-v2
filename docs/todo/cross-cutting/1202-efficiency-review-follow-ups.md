@@ -338,6 +338,8 @@ Exec counts per tab (`apps/backend/scripts/tmux-exec-count.ts`: the real loop ag
 
 Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb95362a6` (`tmux-hook-signal-docker.test.ts`): a real idle tab on a real tmux session cost 4 execs in 10 s, and a rung hook was drained in under 2 s.
 
+Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from that commit as `orkestrator-v2:dev-f9ed233a0aa0` (`mise run docker:build:dev --profile task8r2-7d4bb95362a6`, exit 0); its manifest declares `tmux-hook-signal: 1` and `claude-state-signal: 3`. `tmux-hook-signal-docker.test.ts` against it: four runs at 4 execs in 10 s idle, plus one through `test:logged` (`task8-image-doorbell`), all passed. Its first run at that commit counted 7 and failed the old bound of 6, because the tab had no transcript and so also ran the fallback search, and pre-idle ticks could fall inside the window. The test now seeds the transcript, starts counting inside the idle wait, and asserts at most 4 execs and no search. Older image: `orkestrator-v2:latest`'s manifest has no `tmux-hook-signal` and its `orkestrator-state-signal hook` exits 0, so it stays on the one-exec poll. `tmux-exec-count.ts --seconds 600` reproduced the table above exactly, before and after.
+
 **Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
@@ -900,6 +902,16 @@ A container with no terminal shell or tmux tab keeps its Claude state poll
 but at the 30 s safety read, after one read on adoption that can still correct
 a state stored before a restart. Dropping the poll entirely would lose that
 correction.
+
+### Task 8: the image check counts a bound idle tab
+
+Made on 2026-11-03. The image test's idle window first counted an unbound tab
+after a fixed 2.5 s settle, so its count (4 to 7) depended on where the
+fallback search's 2 s to 10 s backoff and the last pre-idle ticks fell. Raising
+the bound would have hidden that. The test now seeds the transcript and waits
+for 2 s with no exec in flight, which happens only inside the idle wait, so it
+measures the claim it makes: a bound idle tab reads once per 2.5 s. The
+unbound tab's search cost is measured by `tmux-exec-count.ts` instead.
 
 ### Task 10: paused messaging
 

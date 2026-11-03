@@ -1169,7 +1169,8 @@ ORKESTRATOR_TEST_STATE_SIGNAL_IMAGE=orkestrator-v2:dev-<hash> \
 (to-do 1202, task 8) with a fake doorbell on the container's loopback: the
 manifest declares `tmux-hook-signal=1`, the install's probe and the hook
 script's ring arrive with the right token, and a real tab loop against a real
-tmux session in the container stays within six execs in 10 s idle. Like the
+tmux session in the container, with its transcript bound, stays within four
+execs in 10 s idle and never searches for its transcript. Like the
 failed-turn test it needs no route from the container to the host.
 
 `claude-terminal-failed-turn-docker.test.ts` runs the image's own Claude CLI,

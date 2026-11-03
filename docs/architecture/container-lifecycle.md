@@ -1412,7 +1412,7 @@ a fake container, 600 simulated seconds per tab): idle 1.85 execs/s before,
 1.01/s on an older image and 0.42/s with the doorbell; unbound idle 2.57/s,
 1.12/s and 0.52/s; busy 6.50/s and 4.00/s.
 `apps/backend/tests/tmux-hook-signal-docker.test.ts` proves the image side and
-counts a real idle tab: 4 execs in 10 s.
+counts a real idle tab with its transcript bound: 4 execs in 10 s.
 
 ## Container lifecycle events
 

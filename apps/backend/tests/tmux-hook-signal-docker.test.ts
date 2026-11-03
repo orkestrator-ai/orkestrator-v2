@@ -165,15 +165,28 @@ dockerTest(
       expect(await rings()).toHaveLength(2);
 
       // A real tab loop on a real tmux session in this container, with the
-      // doorbell confirmed. Its execs are counted from the moment it is idle.
+      // doorbell confirmed and its transcript bound. Its execs are counted
+      // from the moment it is idle. The transcript is seeded so the window
+      // holds only safety reads: an unbound tab also runs the fallback search
+      // on its 2 s to 10 s backoff, which would make the count depend on
+      // where the window falls.
       const sessions = new TmuxSessionManager();
       sessions.insert(environment.id, "tab", session);
       await exec(`tmux new-session -d -s ${tmuxSessionName(environment.id, "tab")} sleep infinity`);
+      await write(session.expectedTranscriptPath(), '{"type":"summary","summary":"fixture"}\n');
       let execs = 0;
+      let searches = 0;
+      let inFlight = 0;
+      let lastSettledAt = Date.now();
       const realExec = backend.exec.bind(backend);
       backend.exec = (args, stdin, timeoutMs) => {
         execs += 1;
-        return realExec(args, stdin, timeoutMs);
+        if (args.some((arg) => arg.includes("find "))) searches += 1;
+        inFlight += 1;
+        return realExec(args, stdin, timeoutMs).finally(() => {
+          inFlight -= 1;
+          lastSettledAt = Date.now();
+        });
       };
       let ringCount = 0;
       let wake: (() => void) | undefined;
@@ -210,13 +223,19 @@ dockerTest(
       );
       // The two hooks above are drained on the first ticks.
       await waitFor(() => hooks.length === 2);
-      await Bun.sleep(2_500);
+      // Idle once eight quiet 250 ms ticks have passed; only the idle wait
+      // leaves 2 s with no exec in flight, so counting starts inside it.
+      await waitFor(() => inFlight === 0 && Date.now() - lastSettledAt >= 2_000);
       execs = 0;
+      searches = 0;
       await Bun.sleep(10_000);
       const idleExecs = execs;
       process.stderr.write(`tmux-hook-signal-docker: ${idleExecs} docker execs in 10 s idle\n`);
-      // One safety read every 2.5 s (four or five); the per-tick poll was 18.
-      expect(idleExecs).toBeLessThanOrEqual(6);
+      // One safety read per 2.5 s, the first within 0.5 s: at most four.
+      // The per-tick poll was 18. A bound tab never searches for its
+      // transcript.
+      expect(idleExecs).toBeLessThanOrEqual(4);
+      expect(searches).toBe(0);
       expect(session.recentLiveness(3_000)).toBe(true);
 
       // A hook the doorbell announces is read at once, not at the safety read.

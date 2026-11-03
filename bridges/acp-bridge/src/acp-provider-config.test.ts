@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BRIDGE_CONTROL_ENV_VARS,
   loadAcpProviderConfig,
   providerArgv,
   providerEnv,
@@ -132,6 +133,29 @@ describe("ACP provider configuration", () => {
     expect(withheld.HOME).toBe("/home/u");
     // Every other child keeps the bridge's environment.
     expect(providerEnv(config, { trustProject: false }, base).GH_TOKEN).toBe("gho_x");
+  });
+
+  // Security report M13: the agent and every command it runs used to inherit
+  // the bridge's HTTP token. The MCP connection reaches the agent in
+  // `session/new`, so it needs neither credential in its environment.
+  test("the agent is spawned without the bridge-control credentials", () => {
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+    const env = providerEnv(
+      config,
+      { trustProject: false },
+      {
+        HOME: "/home/u",
+        GH_TOKEN: "gho_x",
+        ACP_BRIDGE_TOKEN: "bridge",
+        CODEX_BRIDGE_TOKEN: "other-bridge",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "mcp",
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:1/mcp",
+      },
+    );
+    for (const name of BRIDGE_CONTROL_ENV_VARS) expect(env[name]).toBeUndefined();
+    expect(env.CODEX_BRIDGE_TOKEN).toBeUndefined();
+    expect(env.HOME).toBe("/home/u");
+    expect(env.GH_TOKEN).toBe("gho_x");
   });
 
   test("loads a generic ACP agent entirely from a config record", () => {

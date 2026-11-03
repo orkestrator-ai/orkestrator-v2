@@ -104,7 +104,7 @@ The material risks are concentrated in four themes:
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
 | M12 | Medium (design) | Firewall | IP-based allowlist (shared CDN fronts), allowed APIs accept attacker credentials, DNS tunnelling | Reported |
-| M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Potential |
+| M13 | Medium | Bridges | Codex worker shells inherit `*_TOKEN` env; ACP advertises write/terminal to read-only sessions | Fixed |
 | L1–L18 | Low | Various | See §5 | Mixed |
 | I1–I7 | Info | Various | See §6 | — |
 
@@ -548,7 +548,23 @@ exfiltration risk prominently.
 
 ### M13. Bridge policy gaps for non-coordinator sessions
 
-**Status:** Potential
+**Status:** Fixed (2026-11-03). Every Codex session's commands now exclude the
+bridge-control credentials (`CODEX_SESSION_SHELL_EXCLUDE` in `codex-config.ts`:
+`CODEX_BRIDGE_TOKEN`, `*_BRIDGE_TOKEN`, `ORKESTRATOR_AGENT_MCP_TOKEN`/`_URL`,
+`CODEX_API_KEY`); a thread that withholds GitHub repeats the list, and a
+coordinator keeps its wider `core` list. Ordinary sessions do not exclude the
+whole `*_TOKEN`/`*_KEY`/`*_SECRET` families, because their commands use the
+managed `GH_TOKEN` and the project's own variables. Proven against the pinned
+app-server without credits (`live-github-credential.test.ts`). The ACP bridge
+advertises `fs.writeTextFile` and `terminal` only when the child's policy
+permits them, and refuses `fs/write_text_file` and `terminal/*` with `-32601`
+otherwise (`acpClientMethodGrant` in `acp-policy.ts`): file denials withhold
+writes, `shell`/`shell.mutate` denials withhold terminals, `approvals: "deny"`
+(every read-only turn and coordinator) withholds both. The Grok child and its
+terminals are also spawned without the bridge token and agent MCP credential.
+The Codex app-server process itself still holds them, so a command that reads
+its parent's `/proc/<pid>/environ` finds them; moving them out of the agent's
+uid is H4.
 
 - **Codex.** The `shell_environment_policy` exclusions (including `*_TOKEN`) are only applied for coordinators (`bridges/codex-bridge/src/codex-config.ts:447, 570-582`). Worker shells may inherit secrets from the bridge environment, including the bridge token (H4).
 - **ACP (Grok).** Always advertises `writeTextFile` and `terminal` (`bridges/acp-bridge/src/acp-context.ts:1141`) and serves them without a policy check (`:1366`). Read-only depends on the provider's own tool profile.

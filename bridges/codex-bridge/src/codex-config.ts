@@ -20,6 +20,8 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 
+import { configuredShellExclusions } from "./shell-exclusions.js";
+
 import { ORKESTRATOR_MCP_STARTUP_TIMEOUT_SEC } from "./engine/mcp-tool-availability.js";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -500,9 +502,51 @@ export function resolveCodexMaxConcurrentThreads(value: string | undefined): num
     : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
 }
 
+/**
+ * Variables no model-created command may inherit, in any session (security
+ * report M13). They are Orkestrator's own control credentials: the bridge
+ * token that authorises this bridge's HTTP surface (`*_BRIDGE_TOKEN` covers
+ * every bridge's, should a launcher ever pass one on), the environment-wide
+ * agent MCP credential, and Codex's own API key. app-server keeps them in its
+ * own environment, which is where it reads `bearer_token_env_var` and its
+ * login from; only the commands it runs lose them.
+ *
+ * Deliberately not the broad `*_TOKEN`/`*_KEY`/`*_SECRET` families a
+ * coordinator excludes: an ordinary session's commands are expected to use the
+ * managed GitHub credential (`GH_TOKEN`, withheld per thread only where the
+ * policy denies `github.write`) and whatever the user's own project needs.
+ * Codex applies `exclude` after `inherit`, so this holds under both `all` and
+ * `core`.
+ */
+export const CODEX_SESSION_SHELL_EXCLUDE: readonly string[] = Object.freeze([
+  "CODEX_BRIDGE_TOKEN",
+  "*_BRIDGE_TOKEN",
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  "CODEX_API_KEY",
+]);
+
+/**
+ * A coordinator's exclusions: every session's, plus the broad secret families
+ * and the coordinator's runtime identities. The coordinator also inherits only
+ * Codex's `core` set, so these cover what that set could still carry.
+ */
+export const CODEX_COORDINATOR_SHELL_EXCLUDE: readonly string[] = Object.freeze([
+  ...new Set([
+    "*_KEY",
+    "*_SECRET",
+    "*_TOKEN",
+    "CODEX_HOME",
+    ...CODEX_SESSION_SHELL_EXCLUDE,
+    "CODEX_BRIDGE_PERMISSION_PROFILE",
+    "CODEX_BRIDGE_READABLE_RUNTIME_ROOT",
+  ]),
+]);
+
 export function codexAppServerConfigOverrides(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
+  const userExclusions = configuredShellExclusions(env);
   const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
   const overrides: Record<string, string> = {
     // Do not force `features.mcp_2026_07_28`. Codex CLI leaves that flag off
@@ -527,6 +571,14 @@ export function codexAppServerConfigOverrides(
     // D2) and ignores `thread/goal/*`: a goal Codex continued on its own would
     // run turns the bridge never dispatched (`live-network-lock.test.ts`).
     "features.goals": "false",
+    // Every session's commands lose the bridge-control credentials. A
+    // coordinator adds its wider list below; configured exclusions survive
+    // both. A thread that
+    // withholds the GitHub credential repeats it (`codexProcessShellExclude`),
+    // because a thread value replaces the process value.
+    "shell_environment_policy.exclude": JSON.stringify([
+      ...new Set([...userExclusions, ...CODEX_SESSION_SHELL_EXCLUDE]),
+    ]),
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
@@ -656,15 +708,7 @@ export function codexAppServerConfigOverrides(
     overrides["shell_environment_policy.inherit"] = JSON.stringify("core");
     overrides["shell_environment_policy.ignore_default_excludes"] = "false";
     overrides["shell_environment_policy.exclude"] = JSON.stringify([
-      "*_KEY",
-      "*_SECRET",
-      "*_TOKEN",
-      "CODEX_HOME",
-      "CODEX_BRIDGE_TOKEN",
-      "CODEX_BRIDGE_PERMISSION_PROFILE",
-      "CODEX_BRIDGE_READABLE_RUNTIME_ROOT",
-      ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
-      ORKESTRATOR_AGENT_MCP_URL_ENV,
+      ...new Set([...userExclusions, ...CODEX_COORDINATOR_SHELL_EXCLUDE]),
     ]);
   }
   if (rawUrl && token) {

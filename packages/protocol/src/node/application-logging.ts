@@ -324,7 +324,7 @@ async function fileSize(target: string): Promise<number | null> {
 
 /**
  * One JSON line for the file. A logger's record is already one; any other
- * console call (an unmigrated site, relayed process output) is wrapped without
+ * console call (a vendor's own printing, relayed process output) is wrapped without
  * an area or event, so every line of the file still parses.
  */
 function jsonEntry(

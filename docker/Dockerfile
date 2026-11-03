@@ -34,28 +34,37 @@ COPY bridges/pi-bridge/package.json bridges/pi-bridge/package.json
 COPY bridges/cursor-bridge/package.json bridges/cursor-bridge/package.json
 RUN bun install --frozen-lockfile --filter claude-bridge --filter codex-bridge \
       --filter acp-bridge --filter pi-bridge --filter cursor-bridge
+# Each bridge's sources arrive just before its own build, least-changed first,
+# so an edit to one bridge rebuilds only it and the bridges after it.
+#
+# The vendored SDKs (dist/node_modules) are moved to /opt/bridge-deps, so the
+# final stage can ship them in their own layers ahead of the bundles. They
+# change only when an SDK does; the bundles change nearly every release.
 COPY packages/protocol packages/protocol
-COPY bridges/claude-bridge bridges/claude-bridge
-COPY bridges/codex-bridge bridges/codex-bridge
-COPY bridges/acp-bridge bridges/acp-bridge
+# Pi: the SDK compiles extension TypeScript with jiti and reads themes and
+# templates from its package files, so `vendor` keeps it in dist/node_modules.
 COPY bridges/pi-bridge bridges/pi-bridge
+RUN cd bridges/pi-bridge && bun run build && rm -rf node_modules \
+ && mkdir -p /opt/bridge-deps && mv dist/node_modules /opt/bridge-deps/pi-bridge
+# Cursor: `vendor` stages the SDK's Linux platform package (ripgrep, the
+# sandbox helper, tree-sitter grammars) into dist/node_modules.
 COPY bridges/cursor-bridge bridges/cursor-bridge
+RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules \
+ && mkdir -p /opt/bridge-deps && mv dist/node_modules /opt/bridge-deps/cursor-bridge
+# ACP, like Codex below, bundles every dependency into dist/index.js.
+COPY bridges/acp-bridge bridges/acp-bridge
+RUN cd bridges/acp-bridge && bun run build && rm -rf node_modules
 # Claude: the SDK stays external and `vendor` copies it into dist/node_modules.
 # The SDK picks its native binary by libc; on this glibc base it resolves the
 # gnu variant, so the unused musl variant (~225 MB) is dropped. An Alpine/musl
 # base would invert this.
+COPY bridges/claude-bridge bridges/claude-bridge
 RUN cd bridges/claude-bridge && bun run build \
  && rm -rf node_modules \
- && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
-# Codex and the ACP bridge bundle every dependency into dist/index.js.
+ && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
+ && mkdir -p /opt/bridge-deps && mv dist/node_modules /opt/bridge-deps/claude-bridge
+COPY bridges/codex-bridge bridges/codex-bridge
 RUN cd bridges/codex-bridge && bun run build && rm -rf node_modules
-RUN cd bridges/acp-bridge && bun run build && rm -rf node_modules
-# Pi: the SDK compiles extension TypeScript with jiti and reads themes and
-# templates from its package files, so `vendor` keeps it in dist/node_modules.
-RUN cd bridges/pi-bridge && bun run build && rm -rf node_modules
-# Cursor: `vendor` stages the SDK's Linux platform package (ripgrep, the
-# sandbox helper, tree-sitter grammars) into dist/node_modules.
-RUN cd bridges/cursor-bridge && bun run build && rm -rf node_modules
 
 # ---------------------------------------------------------------------------
 # Development runtime image.
@@ -67,7 +76,9 @@ ENV TZ="$TZ"
 
 # Install basic development tools and iptables/ipset. curl/wget/xz-utils/
 # ca-certificates are not present in the bun base image (the node base bundled
-# them) and are needed by the tool installers below.
+# them) and are needed by the tool installers below. util-linux (setpriv) is
+# Essential in Debian and already present; it is named so the privilege drop's
+# dependency is explicit and stays in this one apt layer.
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
@@ -97,6 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   tmux \
   inotify-tools \
   locales \
+  util-linux \
   && apt-get clean && rm -rf /var/lib/apt/lists/* \
   && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 
@@ -111,7 +123,7 @@ RUN groupmod -n node bun \
 # terminals — need genuine Node (not bun's node shim). This also provides npm
 # for the global CLI installs below. /usr/local/bin precedes the bun-node
 # fallback on PATH, so this node takes precedence.
-ARG NODE_VERSION=24.21.0
+ARG NODE_VERSION=24.22.2
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
     amd64) NODE_ARCH=x64 ;; \
@@ -197,8 +209,11 @@ ARG GROK_BUILD_VERSION=1.0.70
 ARG PI_CLI_VERSION=1.4.0
 
 # Install Claude Code from the pinned npm package. The package pulls in the
-# platform-native binary via optional dependencies.
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
+# platform-native binary via optional dependencies. Every global npm install
+# clears npm's download cache in the same RUN: otherwise ~/.npm/_cacache keeps a
+# second copy of each package (356 MB across the three installs).
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
+ && npm cache clean --force
 ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude
 # Keep the pinned CLI on its pin, as CLAUDE_PINNED_RUNTIME_ENV does on the
 # host: otherwise terminal Claude updates the global install in place and the
@@ -226,7 +241,8 @@ ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
 # Install Codex CLI
-RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
+RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+ && npm cache clean --force
 ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex
 ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 
@@ -299,7 +315,8 @@ ARG PLAYWRIGHT_VERSION=1.64.0
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}"
+RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
+ && npm cache clean --force
 USER root
 RUN playwright install --with-deps chromium \
   && chown -R node:node /ms-playwright \
@@ -323,22 +340,12 @@ USER node
 RUN NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
     node /usr/local/share/verify-playwright.cjs
 
-# Bridge runtime output only (built in the bridge-build stage above), at the
-# paths the backend launches: /opt/<name>/dist/index.js.
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge
-COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge
+# Layer order from here on is by how often a layer changes, rarest first: a
+# changed layer re-pulls itself and every layer after it. Starship and mise
+# change a few times a year, the vendored bridge SDKs with each SDK bump, the
+# bridge bundles nearly every release, so the bundles come last of the large
+# layers and the small scripts after them.
 USER root
-# Every bridge entrypoint must exist in the final filesystem.
-RUN for bridge in claude codex acp pi cursor; do \
-      test -s "/opt/${bridge}-bridge/dist/index.js" || { echo "missing ${bridge} bridge" >&2; exit 1; }; \
-    done \
- && test -d /opt/claude-bridge/dist/node_modules/@anthropic-ai \
- && test -d /opt/pi-bridge/dist/node_modules \
- && test -d /opt/cursor-bridge/dist/node_modules \
- && ! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl 2>/dev/null
 
 # Starship owns the interactive Zsh prompt. Use the static musl artifacts on
 # both supported architectures so the prompt binary has no runtime libc
@@ -358,19 +365,17 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   rm -f "/tmp/${STARSHIP_TARBALL}" && \
   starship --version
 
-COPY docker/starship.toml /etc/starship.toml
-COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh
-COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc
-ENV STARSHIP_CONFIG=/etc/starship.toml
-RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
-  && STARSHIP_CONFIG=/etc/starship.toml starship prompt >/dev/null
-
-# Install mise after the expensive CLI, browser and bridge-build layers so a
-# mise-only version bump does not invalidate them. Host installations cannot be
-# reused here: their binaries target macOS and the container runs Linux. The
-# shared Bun install remains visible if a devcontainer mounts over the node
-# user's home. Keep both supported image architectures pinned to
-# config/mise-version.json.
+# Install mise after the expensive CLI and browser layers so a mise-only version
+# bump does not invalidate them, and before the bridges so a bridge release
+# does not re-pull it. Host installations cannot be reused here: their binaries
+# target macOS and the container runs Linux. Keep both supported image
+# architectures pinned to config/mise-version.json.
+#
+# Bun is the base image's own /usr/local/bin/bun, registered in mise's shared
+# system tool directory with `mise link` rather than downloaded a second time
+# (`mise install --system` would add another 107 MB binary and a 50 MB download
+# cache). A repository pinning the same Bun therefore needs no download, and the
+# install stays visible if a devcontainer mounts over the node user's home.
 ARG MISE_VERSION=2026.10.9
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
@@ -385,15 +390,19 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xzf "/tmp/${MISE_TARBALL}" -C /opt/mise --strip-components=1 --no-same-owner && \
   ln -s /opt/mise/bin/mise /usr/local/bin/mise && \
   chmod 755 /opt/mise/bin/mise && \
-  mise install --system bun@1.4.4 && \
+  test "$(/usr/local/bin/bun --version)" = "1.4.4" && \
+  mkdir -p /opt/bun/bin && \
+  ln -s /usr/local/bin/bun /opt/bun/bin/bun && \
+  ln -s bun /opt/bun/bin/bunx && \
+  MISE_DATA_DIR=/usr/local/share/mise mise link bun@1.4.4 /opt/bun && \
+  rm -rf /usr/local/share/mise/shims && \
   BUN_INSTALL_DIR="$(mise where bun@1.4.4)" && \
   test -x "$BUN_INSTALL_DIR/bin/bun" && \
-  ln -sf "$BUN_INSTALL_DIR/bin/bun" /usr/local/bin/bun && \
-  test "$(/usr/local/bin/bun --version)" = "1.4.4" && \
+  test "$(readlink -f "$BUN_INSTALL_DIR/bin/bun")" = /usr/local/bin/bun && \
   mise exec bun@1.4.4 -- bun --version && \
   printf '%s\n' 'eval "$(/usr/local/bin/mise activate zsh)"' >> /home/node/.zshrc && \
   chown node:node /home/node/.zshrc && \
-  rm -f "/tmp/${MISE_TARBALL}" && \
+  rm -rf "/tmp/${MISE_TARBALL}" /root/.cache/mise && \
   mise --version
 
 # Repository-controlled setup commands already execute inside this isolated
@@ -401,6 +410,38 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # self-update hints because the image pin, not mise, owns binary upgrades.
 ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_SELF_UPDATE_AVAILABLE=false
+
+# Bridge runtime output only (built in the bridge-build stage above), at the
+# paths the backend launches: /opt/<name>/dist/index.js. The vendored SDKs go
+# first, each in its own layer, so a release that changes only bridge code
+# re-pulls the small bundles and not the SDKs. Within each group the bridge
+# that changes least comes first.
+COPY --from=bridge-build --chown=node:node /opt/bridge-deps/pi-bridge /opt/pi-bridge/dist/node_modules
+COPY --from=bridge-build --chown=node:node /opt/bridge-deps/cursor-bridge /opt/cursor-bridge/dist/node_modules
+COPY --from=bridge-build --chown=node:node /opt/bridge-deps/claude-bridge /opt/claude-bridge/dist/node_modules
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge
+COPY --from=bridge-build --chown=node:node /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge
+# Every bridge entrypoint must exist in the final filesystem.
+RUN for bridge in claude codex acp pi cursor; do \
+      test -s "/opt/${bridge}-bridge/dist/index.js" || { echo "missing ${bridge} bridge" >&2; exit 1; }; \
+      test "$(stat -c %U "/opt/${bridge}-bridge" "/opt/${bridge}-bridge/dist" | sort -u)" = node \
+        || { echo "${bridge} bridge directories are not owned by node" >&2; exit 1; }; \
+    done \
+ && test -d /opt/claude-bridge/dist/node_modules/@anthropic-ai \
+ && test -d /opt/pi-bridge/dist/node_modules \
+ && test -d /opt/cursor-bridge/dist/node_modules \
+ && ! ls -d /opt/claude-bridge/dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl 2>/dev/null
+
+COPY docker/starship.toml /etc/starship.toml
+COPY docker/container-git-aliases.zsh /etc/orkestrator/git-aliases.zsh
+COPY docker/container-zshrc.zsh /etc/orkestrator/zshrc
+ENV STARSHIP_CONFIG=/etc/starship.toml
+RUN printf '%s\n' 'source /etc/orkestrator/zshrc' >> /etc/zsh/zshrc \
+  && STARSHIP_CONFIG=/etc/starship.toml starship prompt >/dev/null
+
 USER node
 WORKDIR /workspace
 RUN test "$(/usr/local/bin/bun --version)" = "1.4.4" \
@@ -466,9 +507,7 @@ RUN su node -s /bin/bash -c 'bash /tmp/orkestrator-log-writer-test.sh /usr/local
  && rm /tmp/orkestrator-log-writer-test.sh
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
-RUN apt-get update && apt-get install -y --no-install-recommends util-linux \
-  && apt-get clean && rm -rf /var/lib/apt/lists/* \
-  && chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh \
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh \
   && command -v setpriv \
   && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
 

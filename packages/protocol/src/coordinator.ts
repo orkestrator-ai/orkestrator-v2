@@ -150,6 +150,14 @@ export type CoordinatorTurnOrigin = "user" | "mail";
  */
 export const COORDINATOR_MAIL_ADDRESS = "coordinator";
 
+/**
+ * The address a coordinator on a node in leaf mode mails to reach the main
+ * coordinator for the same repository on the command node that controls it.
+ * Its mail waits in the leaf's outbox until that command node collects it.
+ * It is the one cross-node action a leaf-mode coordinator has.
+ */
+export const COMMAND_NODE_COORDINATOR_MAIL_ADDRESS = "command-node-coordinator";
+
 /** The project's open main coordinator conversation, if any. */
 export function coordinatorMainConversation(
   workspace: Pick<CoordinatorWorkspace, "conversations">,
@@ -301,8 +309,9 @@ export interface CoordinatorStatusNoticeRecord {
  *
  * Written when the coordinator raises the PR (`create_pr`), runs
  * `resolve_conflicts` on it, or when a review it launched reports the PR its
- * auto-PR opened. Status wakes report the PR's state changes from it; a PR the
- * user raised in the UI has no such record and wakes nobody.
+ * auto-PR opened. Status wakes report the PR's state changes from it. A PR the
+ * user raised in the UI has no such record; on a worker the coordinator owns,
+ * only its merge or close reaches it (`CoordinatorWorkerOutcome`).
  */
 export interface CoordinatorPullRequestFollow {
   source: "create-pr" | "resolve-conflicts" | "multi-review";
@@ -343,6 +352,34 @@ export interface CoordinatorPullRequestFollow {
   };
 }
 
+/**
+ * How a coordinator-owned worker ended up: its pull request merged or closed,
+ * or the environment deleted (`coordinator-worker-outcomes.ts`).
+ *
+ * Kept on one association per coordinator, worker and node: the earliest
+ * `environment` or `build-pipeline` association that names the worker. The
+ * coordinator hears one awareness notice when the watch ends on a merge, a
+ * close or a deletion; nothing it must act on.
+ */
+export interface CoordinatorWorkerOutcome {
+  /** `build-pipeline`: the pipeline's worker, read once from the pipeline. */
+  environmentId?: string;
+  /** First observation; an outcome already reached then is old news, recorded without a wake. */
+  observedAt?: string;
+  /** The worker's last seen pull request and name. */
+  prUrl?: string;
+  prState?: "open" | "closed" | "merged";
+  name?: string;
+  /** Captured just before the worker's record was deleted (`deleteEnvironment`). */
+  deletedAt?: string;
+  /**
+   * The watch is over. `key` names what ended it (`merged:<tag>`,
+   * `closed:<tag>`, `deleted`, `untracked`); `notified` says whether this
+   * watch woke the coordinator for it (a PR follow may have told it instead).
+   */
+  ended?: { key: string; at: string; notified: boolean };
+}
+
 export interface CoordinatorWorkflowAssociation {
   id: string;
   coordinatorId: string;
@@ -363,7 +400,7 @@ export interface CoordinatorWorkflowAssociation {
   requestId: string;
   payloadHash?: string;
   /** Additional idempotency keys that reattached to this same resource. */
-  requestAliases?: Array<{ requestId: string; payloadHash: string }>;
+  requestAliases?: Array<{ requestId: string; payloadHash: string; receivedAt?: string }>;
   /** A durable reservation written before a work-creating side effect. */
   pending?: boolean;
   /** Process currently materializing a reservation; never exposed as authority. */
@@ -381,6 +418,8 @@ export interface CoordinatorWorkflowAssociation {
   delegation?: CoordinatorDelegation;
   /** Present on `pull-request` associations. */
   pullRequest?: CoordinatorPullRequestFollow;
+  /** `environment` and `build-pipeline`: the worker's outcome watch (see `CoordinatorWorkerOutcome`). */
+  workerOutcome?: CoordinatorWorkerOutcome;
 }
 
 /**
@@ -513,7 +552,7 @@ export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
  * is the next step for a conflicting one.
  */
 export const COORDINATOR_PR_RULE =
-  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A build pipeline (start_build_pipeline, including feature builds) has its own PR step, so never raise one for it.";
+  "Pull requests: workers never raise them. When you launch a worker or send it a prompt, ask it to commit its work and report back, and tell it not to open a pull request. A prompt environment (a worker that just runs a prompt) runs build, then review or Multi Review, then fix, then PR, then resolve conflicts: a Multi Review with auto-fix and auto-PR raises the PR itself; otherwise raise it with create_pr, which opens the worker's PR tab, only after you are told the review and its fix have finished. You are woken when a pull request you raised opens, conflicts with its base branch, fails its checks, becomes ready to merge, or is merged or closed; when it conflicts, call resolve_conflicts, which opens the worker's Resolve tab and wakes you once it finishes. Never merge a pull request: the user does. A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step, so never raise one for it.";
 
 /**
  * Who runs full validation, told to every main coordinator verbatim.

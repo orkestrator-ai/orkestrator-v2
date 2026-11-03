@@ -17,7 +17,12 @@ import { schedulingEnabled } from "../commands-registry-scheduled-jobs.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import { claimDueFire, settleFire, type FireResult } from "./model.js";
-import { ScheduledJobService, SAFETY_TICK_MS, ScheduleNotFoundError } from "./service.js";
+import {
+  ScheduledJobService,
+  SAFETY_TICK_MS,
+  ScheduleNotFoundError,
+  type ScheduledJobWarning,
+} from "./service.js";
 
 /**
  * The scheduler over real storage with a recording executor: persistence
@@ -838,4 +843,79 @@ test("self-timer capacity is atomic across competing creates and all activation 
   expect(
     service.list(owner).filter((job) => job.state === "active" && job.id !== other.id),
   ).toHaveLength(20);
+});
+
+describe("structured service warnings", () => {
+  for (const step of ["tick", "claim", "heartbeat", "outcome"] as const) {
+    test(`${step} failure reports its static event, identifiers and original error`, async () => {
+      const clock = { now: T0 };
+      const { storage, executor } = await backend(await dataDir(), clock);
+      const store = storage.scheduledJobStore();
+      const warnings: Array<{ warning: ScheduledJobWarning; error: unknown }> = [];
+      const failure = Object.assign(new Error("storage unavailable"), { code: "EIO" });
+      const service = new ScheduledJobService({
+        store,
+        executor: executor as unknown as ScheduledJobExecutor,
+        now: () => clock.now,
+        enabled: () => {
+          if (step === "tick") throw failure;
+          return true;
+        },
+        log: (warning, error) => warnings.push({ warning, error }),
+      });
+      const { job } = await service.create(OPERATOR, { at: "+1m", action: MAIL });
+      clock.now += 60_000;
+      const fireId = `${job.id}@${clock.now}`;
+      let release: (() => void) | undefined;
+      const intervals = spyOn(globalThis, "setInterval");
+      let restoreMutation = () => {};
+      try {
+        if (step === "tick") {
+          service.start();
+          await service.idle();
+        } else if (step === "claim") {
+          const mutation = spyOn(store, "mutate").mockImplementationOnce(() => {
+            throw failure;
+          });
+          restoreMutation = () => mutation.mockRestore();
+          await service.tick();
+        } else {
+          executor.next = () =>
+            new Promise((resolve) => {
+              release = () => resolve({ ok: true, outcome: {} });
+            });
+          await service.tick();
+          const mutation = spyOn(store, "mutate").mockImplementationOnce(() => {
+            throw failure;
+          });
+          restoreMutation = () => mutation.mockRestore();
+          if (step === "heartbeat") {
+            const callback = intervals.mock.calls.find(
+              (call) => call[1] === SCHEDULED_JOB_LIMITS.fireHeartbeatMs,
+            )![0];
+            (callback as () => void)();
+          }
+          release!();
+          await service.idle();
+        }
+        const warning: ScheduledJobWarning =
+          step === "tick"
+            ? { event: "tick.failed" }
+            : step === "claim"
+              ? { event: "job.claim-failed", jobId: job.id }
+              : {
+                  event:
+                    step === "heartbeat" ? "fire.heartbeat-failed" : "fire.outcome-record-failed",
+                  fireId,
+                };
+        expect(warnings).toEqual([{ warning, error: failure }]);
+        expect(warnings[0]!.error).toBe(failure);
+      } finally {
+        restoreMutation();
+        release?.();
+        await service.stop();
+        intervals.mockRestore();
+      }
+    });
+  }
 });

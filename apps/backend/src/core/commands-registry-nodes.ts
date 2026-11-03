@@ -249,6 +249,9 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "subject",
         "body",
         "steer",
+        "nodeParent",
+        // The leaf's project, for mail to its coordinator ("coordinator").
+        "projectId",
       ],
       "arguments",
     );
@@ -277,6 +280,14 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       deliverNow: settled.deliverNow,
       deliverNowNote: settled.deliverNowNote,
     };
+  });
+
+  // Whether a project here has a coordinator a command node's coordinator can
+  // mail (`deliver_node_mail` to "coordinator").
+  register("get_node_project_coordinator", async (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    if (typeof args.projectId !== "string") throw new Error("Expected projectId.");
+    return coordination(context).projectCoordinator(args.projectId);
   });
 
   // Whether coordinator mail to a worker tab has reached a turn yet; a
@@ -310,15 +321,19 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("collect_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "after"], "arguments");
+    assertOnlyKeys(args, ["controllerId", "after", "coordinatorMail"], "arguments");
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     const after =
       typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
-    return coordination(context).leafMail.collect(args.controllerId, after);
+    return coordination(context).leafMail.collect(
+      args.controllerId,
+      after,
+      args.coordinatorMail === true,
+    );
   });
 
   register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "upTo", "sequences"], "arguments");
+    assertOnlyKeys(args, ["controllerId", "upTo", "sequences", "coordinatorMail"], "arguments");
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
@@ -335,6 +350,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.controllerId,
       args.upTo,
       sequences as number[] | undefined,
+      args.coordinatorMail === true,
     );
   });
 

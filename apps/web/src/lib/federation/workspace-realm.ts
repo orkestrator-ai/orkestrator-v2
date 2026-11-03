@@ -177,7 +177,12 @@ export type RealmToShellMessage =
   /** The realm listens for requests now; anything asked while it loaded is sent again. */
   | { type: "ready" }
   /** The realm's own selection changed (a new environment, a deleted one, a shortcut). */
-  | { type: "selection"; projectId: string | null; environmentId: string | null }
+  | {
+      type: "selection";
+      projectId: string | null;
+      environmentId: string | null;
+      projectHome?: boolean;
+    }
   /** Open a project or environment of any node, as the window's sidebar would. */
   | {
       type: "open";
@@ -410,7 +415,12 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
   if (message.type !== "selection") return null;
   const projectId = boundedId(message.projectId) ?? null;
   const environmentId = projectId ? (boundedId(message.environmentId) ?? null) : null;
-  return { type: "selection", projectId, environmentId };
+  return {
+    type: "selection",
+    projectId,
+    environmentId,
+    ...(environmentId && message.projectHome === true ? { projectHome: true } : {}),
+  };
 }
 
 /** Envelope of frame messages, so a page's other messages are never mistaken for ours. */

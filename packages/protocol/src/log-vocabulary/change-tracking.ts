@@ -20,8 +20,14 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
     description: "Environment diff stats and the worktree signals that drive them.",
     events: {
       "baseline.update-failed": "An environment's diff baseline could not be updated.",
-      "scan.warning":
-        "A diff scan step failed. `detail` is the service's own text with identifiers only.",
+      "scan.watcher-failed":
+        "An environment's diff watcher failed; its scans fall back to polling.",
+      "scan.failed":
+        "A diff scan failed; the last results stay, marked stale, and the scan is retried.",
+      "scan.freshness-read-failed": "Reading whether an environment's remote is fresh failed.",
+      "scan.listener-failed": "A change-tracking scan listener threw; the scan itself stands.",
+      "emit.diff-stats-failed": "A diff stats change could not be emitted to its sink.",
+      "emit.worktree-snapshot-failed": "A worktree snapshot could not be emitted to its sink.",
       "signal.demoted":
         "A worktree signal stopped being trusted, so scans fall back to timers until it is re-armed.",
     },

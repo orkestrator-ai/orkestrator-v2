@@ -8,7 +8,11 @@ import { MachineUpdatesDialog } from "@/components/settings/machines/MachineUpda
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { invoke } from "@/lib/native/backend";
 import { portalStore } from "@/lib/portal/portal-store";
-import { realmSearchParams, type RealmSelectRequest } from "@/lib/federation/workspace-realm";
+import {
+  parseRealmMessage,
+  realmSearchParams,
+  type RealmSelectRequest,
+} from "@/lib/federation/workspace-realm";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { useConfigStore } from "@/stores/configStore";
@@ -496,3 +500,47 @@ test("remote Updates Rebuild reaches the loaded realm's visible Container sectio
     ),
   );
 });
+
+for (const ensured of [false, true]) {
+  test(`Home activation reports its identity before summaries refresh (ensured: ${ensured})`, async () => {
+    const post = mock((_message: unknown) => {});
+    window.orkestrator = {
+      ...window.orkestrator,
+      workspaceRealm: {
+        post,
+        onMessage: () => () => {},
+      },
+    } as never;
+    let finish!: (value: Environment) => void;
+    const pending = new Promise<Environment>((resolve) => {
+      finish = resolve;
+    });
+    nativeInvoke.mockImplementation(async (command: string) => {
+      if (command === "get_projects") return [project];
+      if (command === "get_environments" || command === "get_environment_snapshots")
+        return ensured ? [] : [home];
+      if (command === "ensure_project_home_environment") return ensured ? pending : home;
+      return undefined;
+    });
+    openRealm({ projectId: project.id, boardTab: "coordinator" });
+    if (ensured) {
+      await waitFor(() =>
+        expect(
+          nativeInvoke.mock.calls.some(
+            ([command]) => command === "ensure_project_home_environment",
+          ),
+        ).toBe(true),
+      );
+      await act(async () => finish(home));
+    }
+    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+    const reports = post.mock.calls.map((args) => parseRealmMessage(args[0]));
+    expect(reports).toContainEqual({
+      type: "selection",
+      projectId: project.id,
+      environmentId: home.id,
+      projectHome: true,
+    });
+    expect(screen.getByLabelText("Visible workspace").textContent).toBe("coordinator");
+  });
+}

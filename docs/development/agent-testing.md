@@ -40,8 +40,30 @@ Test failures and cleanup failures return a nonzero exit status. Artifacts stay
 under `output/agent-testing/<unique-profile>/browser/`; profile state is removed.
 
 These tasks provision Codex without agent credentials and run ordinary local
-browser coverage. Live review and Docker tests remain opt-in and require the
-manual profile workflow below. Ambient live-review/Docker opt-ins are disabled
+browser coverage. Live review tests remain opt-in and require the manual profile workflow below.
+
+For image changes, review preparation must select this one-shot command instead
+of the already-running-profile command `mise run test:agent:docker`:
+
+```bash
+mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolated
+```
+
+It builds the worktree-specific development image, runs the final-image smoke,
+starts a credential-free local/container fixture with Codex, Grok and OpenCode,
+and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
+resets the profile afterwards. The worktree's shared development image is kept
+for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
+records that it covers `test:agent:docker`; do not schedule the latter separately
+without a running profile. No provider turns are enabled. Linux Electron runs
+headless. On Linux hosts with exhausted automatic Docker pools, its scoped Docker
+shim tries otherwise-unrouted /29 networks in 172.16.240.0/22 only for labelled
+fixture networks. Docker refuses overlaps atomically; other errors propagate.
+The Docker scheduler profile allows ten minutes between reporter lines because
+the annotation cleanup case intentionally waits for a 100-tick, three-second
+backend garbage-collection pass (its own test deadline is nine minutes).
+It changes no daemon settings and deletes no foreign resources. Without `ip`
+for the route check, automatic-pool exhaustion remains a hard failure. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
 
 Use separate disposable profiles for concurrent live browser suites. A profile

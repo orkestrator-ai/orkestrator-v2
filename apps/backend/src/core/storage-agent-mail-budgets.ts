@@ -188,7 +188,9 @@ export class AgentMailBudgets {
           subject: hourly ? "Worker mail held: hourly limit" : "Worker mail held: loop budget",
           body: hourly
             ? `Mail from worker ${worker} (environment ${from.environmentId}${onNode}) reached the hourly message limit for this conversation and is being held. It is delivered automatically as the hour passes. Read it now with read_messages if it cannot wait.`
-            : `Mail from worker ${worker} (environment ${from.environmentId}${onNode}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
+            : from.kind === "node" && from.environmentId.startsWith("coordinator:")
+              ? `Mail from coordinator ${worker}${onNode} used up its unattended message budget and is being held. Read it with read_messages. Ask the user to resume held delivery or prompt this conversation to reset the budget for future mail. Sending another request does not reset this budget.`
+              : `Mail from worker ${worker} (environment ${from.environmentId}${onNode}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
         },
         {
           notice: {

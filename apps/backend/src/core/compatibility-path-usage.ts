@@ -52,6 +52,11 @@ export const COMPATIBILITY_PATH_IDS = [
   "agent-handoff.renderer-saved",
   /** A prompt reached dispatch already holding its handoff: an older renderer prepended it. */
   "agent-handoff.renderer-carried",
+  /**
+   * A command node's coordinator asked to mail, or asked about, a leaf's
+   * coordinator and the leaf does not advertise `node-coordinator-mail`.
+   */
+  "node-coordinator-mail.older-node",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

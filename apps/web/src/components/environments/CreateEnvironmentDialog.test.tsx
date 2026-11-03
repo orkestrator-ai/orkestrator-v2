@@ -454,7 +454,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
 
     const customization = screen.getByRole("group", {
-      name: "Feature build model customization",
+      name: "Pipeline model customization",
     });
     // Match on the label rather than the combobox role: the picker only takes
     // that role when it is given an id, so a picker added without one would

@@ -239,6 +239,47 @@ describe("monorepo orchestration scripts", () => {
     expect(source.slice(runtime)).not.toContain("/opt/bridge-build/node_modules");
   });
 
+  test("Docker orders the runtime layers so a bridge release re-pulls only the bridges", () => {
+    const source = read("docker/Dockerfile");
+    const runtime = source.indexOf("\nFROM oven/bun:", source.search(/ AS bridge-build$/m));
+    // Each bridge's sources are copied just before its own build.
+    for (const bridge of ["pi", "cursor", "acp", "claude", "codex"]) {
+      const copy = source.indexOf(`COPY bridges/${bridge}-bridge bridges/${bridge}-bridge`);
+      const build = source.indexOf(`RUN cd bridges/${bridge}-bridge && bun run build`);
+      expect(build, bridge).toBeGreaterThan(copy);
+      expect(source.slice(copy, build), bridge).not.toContain("\nRUN ");
+    }
+    // The vendored SDKs ship in their own layers ahead of every bundle, and
+    // the rarely-changed tools (starship, mise) sit above both.
+    const firstBridge = source.indexOf("COPY --from=bridge-build", runtime);
+    const firstBundle = source.indexOf(
+      "COPY --from=bridge-build --chown=node:node /opt/bridge-build/",
+    );
+    for (const bridge of ["pi", "cursor", "claude"]) {
+      const deps = source.indexOf(
+        `COPY --from=bridge-build --chown=node:node /opt/bridge-deps/${bridge}-bridge /opt/${bridge}-bridge/dist/node_modules`,
+      );
+      expect(deps, bridge).toBeGreaterThan(-1);
+      expect(deps, bridge).toBeLessThan(firstBundle);
+    }
+    expect(source.indexOf("ARG STARSHIP_VERSION=")).toBeLessThan(firstBridge);
+    expect(source.indexOf("ARG MISE_VERSION=")).toBeLessThan(firstBridge);
+    expect(source.indexOf("COPY docker/", firstBridge)).toBeGreaterThan(
+      source.lastIndexOf("COPY --from=bridge-build"),
+    );
+  });
+
+  test("Docker clears npm's cache in every global install layer", () => {
+    const instructions = read("docker/Dockerfile")
+      .replace(/\\\n/g, " ")
+      .split("\n")
+      .filter((line) => line.includes("npm install -g"));
+    expect(instructions.length).toBeGreaterThanOrEqual(3);
+    for (const line of instructions) {
+      expect(line, line).toContain("&& npm cache clean --force");
+    }
+  });
+
   test("CLI build cache includes every source tree bundled from outside its workspace", () => {
     const turbo = JSON.parse(read("packages/cli/turbo.json")) as {
       tasks?: Record<string, { inputs?: string[] }>;

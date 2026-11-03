@@ -211,3 +211,10 @@ StreamingTranscript and VirtuosoFollow owners passed with one worker
 (`branch-scroll-owners`, 52.3 s). The failure is therefore present on
 `main` under parallel load and is not caused by that branch. No assertion,
 timeout, skip or implementation changed.
+
+### Environment terminology preparation (2026-11-02)
+
+- **Run:** `mise run test:browser` during preparation of `rename-environment-kinds-fbee095fc40a-r1` (wording-only branch; no transcript source or spec change). The aggregate reported 9 failed, 3 flaky and 1,147 passed in 11.1 min.
+- **Failure:** mobile `scrollbar departure after find stays put when streaming reapplies highlights` failed its first attempt (`toBe`) and passed on retry. It failed again on mobile in a five-owner subset run (GlobalSettings, MergedProjectList, CloseRetention, StreamingTranscript, ToolGroupFold) on the branch, and passed in the same subset on detached `origin/main` `fd679c0e2`.
+- **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s, as did three earlier runs of the same command.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z0tt7k/`. Cause remains unconfirmed.

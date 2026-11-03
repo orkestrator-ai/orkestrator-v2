@@ -48,6 +48,8 @@ interface SortableProjectFolderProps {
   subtitle?: string;
   /** Clicking the name opens this instead of toggling; the chevron still toggles. */
   onOpen?: () => void;
+  /** What `onOpen` opened is shown: highlighted like a selected project. */
+  selected?: boolean;
   /** Destination named by the repository navigation control. */
   openMachineName?: string;
   children: ReactNode;
@@ -75,6 +77,7 @@ export function SortableProjectFolder({
   icon,
   subtitle,
   onOpen,
+  selected = false,
   openMachineName,
   children,
 }: SortableProjectFolderProps) {
@@ -155,6 +158,7 @@ export function SortableProjectFolder({
       ref={setActivatorNodeRef}
       type="button"
       aria-expanded={onOpen ? undefined : !isCollapsed}
+      aria-current={selected ? "page" : undefined}
       aria-label={onOpen ? `Open ${label}${destination}` : undefined}
       title={
         onOpen
@@ -222,7 +226,9 @@ export function SortableProjectFolder({
           // header is highlighted rather than an insertion line being drawn.
           isOver && !isDragging && canHighlightDrop
             ? "border-primary/70 bg-primary/10"
-            : "border-transparent hover:bg-hover",
+            : selected
+              ? "border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
+              : "border-transparent hover:bg-hover",
         )}
       >
         {hasMenu ? (

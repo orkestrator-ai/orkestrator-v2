@@ -160,7 +160,8 @@ snapshot. A launch saves its choice to the ticket (`launch_build_pipeline`), and
 a choice equal to the ticket's own writes nothing. The delivery note is kept.
 The form's "A feature" option has the same control under Advanced and saves it
 on the ticket it creates. Other launchers have no control and use the ticket's
-policy: the coordinator's `start_build_pipeline` deliberately has no override,
+policy: the coordinator's `start_build_pipeline` deliberately has no override
+(and is linked to its ticket, so the too-late comment below reaches it too),
 and a Features view build creates a ticket with none, which can be set on its
 tile while it runs.
 

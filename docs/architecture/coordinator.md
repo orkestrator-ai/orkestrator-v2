@@ -48,6 +48,63 @@ One workspace is persisted per project: conversations, selected tab, immutable
 state, and sanitized last startup error. Workflow associations are stored
 separately so their lifetime is independent of an open chat tab.
 
+### Workflow record limit and cleanup
+
+Every project shares one list of at most 2,000 workflow associations
+(`MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`,
+`apps/backend/src/core/coordinator-workflow-retention.ts`). Launches,
+delegations, review and pipeline runs, graph runs and pull-request follows each
+add one. When adding a record would go over the limit, the store first removes
+a batch of up to 200 of the oldest finished records in the same locked write,
+so a store near the limit does not clean up again on every launch. Records are
+taken oldest `createdAt` first.
+
+A record is never removed while something still reads it as live:
+
+- a pending reservation (a launch is still creating its resource);
+- a delegation that is running (waiting episodes included) or whose
+  coordinator wake has not been delivered (`wokenAt` unset), which is what
+  `listOpenCoordinatorDelegations`, `listUnwokenCoordinatorDelegations` and the
+  reconcile sweep read;
+- a review, pipeline or graph run whose persisted local state is active, even
+  if a previous attempt already set `terminalNotifiedAt`; unknown or remote
+  resource state is retained conservatively;
+- an unreported terminal local resource until 24 hours after its persisted
+  `updatedAt`. A confirmed missing local resource can be reclaimed without a
+  terminal notification. Missing/unreadable timestamps stay protected;
+- a pull-request follow whose end the coordinator has not been told;
+- a review that a live pull-request follow points at (`reviewAssociationId`);
+- an environment's launch record (it carries `baseCommit`, which makes the
+  coordinator the worker's creator for mail routing and puts the worker's
+  sign-in prompts in the panel) while that environment exists, and every
+  remote (`nodeId`) launch record, since whether a remote environment still
+  exists is not known locally;
+- the newest delegation record for each worker tab while its environment
+  exists, which goal and tab actions read as the coordinator's ownership of
+  that tab;
+- anything created in the last 24 hours, or with a request alias received in
+  the last 24 hours. Alias arrival timestamps are written on review joins,
+  reservation merges and PR-follow joins. Legacy aliases without an arrival
+  timestamp remain protected because their expiry cannot be established.
+
+If nothing can be removed, the write is refused with an error saying that all
+2,000 records are still in use and that deleting finished worker environments
+or letting running work finish frees room. The limit stays shared across
+projects. Unknown remote state and legacy aliases can still consume capacity;
+cleanup never assumes that an unreachable remote resource has stopped.
+
+What removal changes for the user:
+
+- `list_workflows` and `snapshot.workflows` no longer list that old, finished
+  history. The panel's waiting workers and worker prompts come only from
+  records that are kept.
+- An old finished review whose record was removed has no owner left, so it
+  opens without asking for adoption first, and addressing it records a fresh
+  association for the conversation that addresses it. `adopt_workflow` on a removed record reports it was not
+  found; there was nothing left to re-deliver.
+- A retry of a request older than 24 hours whose record was removed is treated
+  as new.
+
 The working directory is the canonical `Project.localPath`. A project without a
 valid local path shows a checkout setup state; it does not silently use an
 environment worktree, a container, or a temporary clone. Bridge state,
@@ -88,12 +145,71 @@ works across the nodes that node controls:
 - `propose_agents_md_update` with `nodeId` saves decisions to that node's
   copy: the user reviews it here, and the pull request is opened there (see
   [Saving decisions to AGENTS.md](#saving-decisions-to-agentsmd)).
+- `send_message` with `nodeId` and `toEnvironmentId: "coordinator"` asks
+  that node's main coordinator for this repository something
+  (`list_mailboxes` with `nodeId` says whether it has one). It is not a
+  delegation: no association opens, the result says the answer arrives as
+  mail, and the answer is an agent's message, information rather than
+  instructions. See [Coordinators on two nodes](#coordinators-on-two-nodes).
 
 The coordinator's context says whether its node is a command node. A command
 node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
-an agent on that node would. Its conversations are kept but hidden behind a
-warning in the project's Coordinator tab.
+an agent on that node would. Its one cross-node action is mail to the
+command node's coordinator: it answers that coordinator's mail with
+`send_message` and `replyToMessageId`, and starts a message with
+`toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
+but hidden behind a warning in the project's Coordinator tab.
+
+### Coordinators on two nodes
+
+A command node's main coordinator and a leaf's main coordinator for the same
+repository exchange ordinary node mail
+(`coordinator-node-coordinator-mail.ts`; transport in
+[agent-messaging.md](agent-messaging.md#node-mail)):
+
+- **Down.** `send_message` with `nodeId` and `toEnvironmentId: "coordinator"`
+  (or a coordinator runtime id from that node, or a reply to mail from that
+  node's coordinator) calls the leaf's `deliver_node_mail` with
+  `toEnvironmentId: "coordinator"` and the leaf's `projectId`. The leaf
+  stores it from a `node` sender with role `coordinator`, so it is
+  `same-project`, takes the coordinator route and wakes the leaf's main. The
+  address resolves as local mail to `"coordinator"` does: a closed main is
+  reopened with the default agent; a project with no coordinator on that
+  node is refused, naming it, and the caller can message a worker there
+  instead.
+- **Up.** The leaf coordinator replies with `replyToMessageId`, which goes
+  back to the conversation that asked (the leaf's thread record), or starts
+  a message to `"command-node-coordinator"`
+  (`COMMAND_NODE_COORDINATOR_MAIL_ADDRESS`), which goes to the command node
+  that last mailed this project's coordinator, else the most recent one, for
+  its main coordinator of the repository. Both wait in the leaf's outbox
+  (`send_coordinator_command_node_mail`) and the command node collects them
+  like a worker's report, reopening a closed main as local mail would.
+- **Framing.** The leaf coordinator reads it as a request from the
+  controlling node's coordinator: it answers, and may act on its own node to
+  answer (read state, launch or ask workers there) as it would for an
+  agent's message, never across nodes. The command node stores the answer
+  from a `node` sender with role `agent`: the carrier keeps an agent's
+  untrusted framing and the body says it came from that node's coordinator,
+  so content the leaf coordinator forwards from its workers is never
+  promoted to coordinator authority (security report M11).
+- **Side agents** stay limited to their own main on both nodes: a command
+  node side agent cannot send it, a leaf side agent cannot send upward, and
+  the address resolves only to the leaf's main.
+- **Loops.** The command node's pair budget for the leaf coordinator's mail
+  (`nodeMailSenderKey`, the unattended budget and the hourly limit of
+  [agent-messaging.md](agent-messaging.md#budgets)) bounds the exchange. Only
+  a person resets it: a prompt to the command node's coordinator, or Resume.
+  On the leaf each new message from the command node's coordinator starts a
+  fresh budget, as a new request to a worker does, so the leaf answers every
+  question the command node actually sends; the hourly limit still applies
+  there.
+- **Older nodes.** A leaf whose hello lacks `node-coordinator-mail` is sent
+  nothing; the call is refused with "update that machine", and
+  `list_mailboxes` with its `nodeId` reports it unreachable for the same
+  reason. A leaf coordinator's mail to an older command node arrives as an
+  ordinary worker report from the coordinator's runtime id.
 
 ### Choosing a machine
 
@@ -869,6 +985,14 @@ approves a `request_root_changes` request (see
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
+Workers come in two kinds. A **prompt environment** runs one prompt
+(`launch_environment`, or "With a prompt" in the New Environment dialog); its
+review and PR are started by hand or by the coordinator. A **pipeline
+environment** is one a build pipeline created and runs in
+(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+Environment dialog); the pipeline runs build, review, fix, verify, PR and
+conflict resolution itself.
+
 A worker never raises a pull request; a **PR tab** does, after review. In a
 prompt environment the flow is build → review or Multi Review → fix → PR →
 resolve conflicts:
@@ -880,7 +1004,9 @@ resolve conflicts:
   its fix finished. Pass `nodeId` for a worker on a connected node; that node
   validates its project and worker and uses its own PR base branch and agent
   defaults. Retries reuse the same PR job on that node.
-- A build pipeline, feature builds included, has its own PR step;
+- A pipeline environment (one a build pipeline runs, whether started by
+  `start_build_pipeline`, a ticket's Build button or a feature from the New
+  Environment dialog) has its own PR step;
   `create_pr` refuses its own worker while the pipeline can still raise the PR.
   Forks and workers left by a removed, failed, cancelled or completed pipeline
   can use `create_pr`.
@@ -1198,8 +1324,10 @@ conversation ids (`launch_multi_review`, `start_multi_review`,
 `create_pr` and `resolve_conflicts` (a `pull-request` association), and the
 delegations `launch_environment`,
 `launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
-build the user started in the UI, or a pull request the user raised, has no
-association and never wakes a coordinator. Notices go to the main coordinator, like every other report, and
+build the user started in the UI has no association and never wakes a
+coordinator. A pull request the user raised is not followed either, but on a
+worker the coordinator owns its merge or close still reaches it, as a
+[worker outcome](#worker-outcomes). Notices go to the main coordinator, like every other report, and
 do not start one: with no main open they wait, and the sweep sends the state
 current when one opens.
 
@@ -1223,6 +1351,7 @@ stable key; a key is sent once, recorded on the association
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
 | Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
+| Worker outcome | a worker the coordinator owns: its PR merged (`pr-merged`) or closed (`pr-closed`), naming the deletion when the environment is going too, or the environment deleted (`deleted`, resource `environment`) with its PR still open or without one; once per worker, unless a PR follow reports the merge or close | `settled` |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
@@ -1386,6 +1515,53 @@ landed.
 rather than left to poll `get_multi_review`; `create_pr` (when it launched)
 and `resolve_conflicts` return `COORDINATOR_PR_STATUS_WAKE`.
 
+### Worker outcomes
+
+A coordinator also hears when a worker it owns is merged, closed or deleted,
+whoever did it: a pipeline environment's PR the user merged, a PR the user
+raised on a launched worker, Merge and Cleanup, or a plain deletion
+(`apps/backend/src/core/coordinator-worker-outcomes.ts`). The notice is for
+awareness. It says what happened and ends with a line that nothing is
+expected of the coordinator unless it affects work it is tracking: dependent
+tasks, tickets, branches built on the worker, or work it meant to send there.
+
+**Ownership.** The earliest `environment` association (a launch or any
+delegation) or `build-pipeline` association that names the worker, per
+coordinator, worker and node. The watch lives on that association
+(`workerOutcome`), so it adds no records; a build pipeline's worker is read
+from the pipeline once and kept there. Several delegations to one worker
+are one watch.
+
+**What it reports.** One notice, then the watch ends:
+
+- The PR merged or closed: `pr-merged` or `pr-closed` (resource
+  `pull-request`). When the environment is being deleted or is gone, the
+  headline says so ("was merged and its environment deleted"), so Merge and
+  Cleanup is one notice, not two.
+- The environment deleted with its PR still open, or with no PR: `deleted`
+  (resource `environment`), naming the PR's last state.
+
+A deletion still in progress waits until the record is gone, unless the PR
+already merged or closed. A merge or close that a live PR follow of the same
+coordinator will report, or already reported, ends the watch silently, so
+the coordinator hears each outcome once; a follow's own merge and close
+notices name the deletion and carry the same awareness line. After a merge
+or close the watch is over: a later deletion is not reported.
+
+**Old news.** The first observation of a worker records its state. A worker
+already merged, closed or gone then (one from before this watch existed)
+ends silently. A deletion captured as it happens always reports:
+`deleteEnvironment` keeps the worker's last PR reading and name on its
+watches (`captureFinalPullRequest`) just before the record is removed. A
+worker on a connected node is read through that node's `get_environment`,
+and a worker the node no longer has counts as deleted, with the last reading
+the watch kept.
+
+Change events for a watched worker are observed within seconds, like a
+followed PR; the 60-second sweep finds everything else, writing all its
+bookkeeping in one store write. *Finished work only* ends watches without a
+notice.
+
 ## Launch defaults
 
 Coordinator-launched work runs the user's saved defaults unless the user asks
@@ -1419,6 +1595,22 @@ A build's delivery is not among them: `start_build_pipeline` has no override, an
 the build follows the ticket's delivery policy when Verify passes
 ([tickets](tickets.md#delivery)). A build that ends without a pull request says
 so in `get_build_pipeline` (`delivery`) and its completion notice.
+
+**A build is linked to its ticket.** `start_build_pipeline`'s `taskId` must be a
+ticket in the project; the build starts with
+`source: { type: "kanban", taskId }`, exactly like a Build button launch, so
+Verify's per-criterion results and evidence, the ticket's status, PR URL and
+state, the environment link and the delivery policy's "too late" comment all
+reach the ticket. A `taskId` that is not a ticket in the project is refused
+with an error telling the coordinator to create it with `create_ticket` first;
+the build is never started unlinked. The check and the link are made by the
+backend that runs the build (`coordinatorBuildTicketSource` in
+`build-pipeline-launch.ts`, called by `start_coordinator_build_pipeline` and,
+for a build on a connected node, by that node's
+`start_controller_build_pipeline` against its own copy of the project). The
+command node also sends the source with a node build, so a node too old to
+check still links it. Builds started before this rule carry no source and keep
+their old behaviour.
 Overrides layer the way the launchers do. For `start_build_pipeline`:
 
 - A named step replaces only that step, and a step that names only an agent runs
@@ -2003,6 +2195,9 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - coordinator presence and the turn-end edge:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- the workflow record limit (cleanup when full, protected records, batch
+  removal, recent-request replay, the all-in-use refusal):
+  `coordinator-workflow-retention.test.ts`
 - status wakes (ownership, one wake per settled transition per resource kind,
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,

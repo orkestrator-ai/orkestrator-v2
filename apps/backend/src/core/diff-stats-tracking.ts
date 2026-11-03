@@ -229,8 +229,8 @@ export class DiffStatsTracking {
           ),
         );
       },
-      onWarning: (message, error) => {
-        log.warn("scan.warning", { detail: message, error: formatLogError(error) });
+      onWarning: ({ event, environmentId }, error) => {
+        log.warn(event, { environmentId, error: formatLogError(error) });
       },
     });
   }

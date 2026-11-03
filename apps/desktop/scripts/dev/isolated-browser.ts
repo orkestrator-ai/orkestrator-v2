@@ -124,6 +124,8 @@ export interface IsolatedSuite {
 
 export interface IsolatedBrowserOptions {
   design?: boolean;
+  /** Build, smoke and qualify the credential-free Docker fixture. */
+  docker?: boolean;
   /** Extra `dev:test` flags; see {@link isolatedProfileArguments}. */
   profileArgs?: readonly string[];
   /** Runs this suite instead of the browser agent suite. */
@@ -141,6 +143,7 @@ export interface IsolatedBrowserOptions {
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
 export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): Promise<number> {
   const profileArgs = isolatedProfileArguments(options.profileArgs);
+  if (options.docker) profileArgs.push("--fixture-environments", "local,container");
   const profile = options.profile ?? `qa-browser-${randomUUID().slice(0, 12)}`;
   const root = options.root ?? repositoryRoot;
   const runtimeProfile = resolveRuntimeProfile({
@@ -148,15 +151,18 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     requestedId: profile,
     flavor: "agent-test",
   });
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...(options.env ?? process.env),
     ORKESTRATOR_AGENT_TEST_PROFILE: profile,
     ORKESTRATOR_AGENT_TEST_RUN_ID: profile,
     // These are ordinary local smoke tasks. Live-provider and Docker coverage
     // remain separate opt-in tasks with their own fixture/credential setup.
     ORKESTRATOR_AGENT_TEST_REVIEW: "0",
-    ORKESTRATOR_AGENT_TEST_DOCKER: "0",
+    ORKESTRATOR_AGENT_TEST_DOCKER: options.docker ? "1" : "0",
     ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL: "0",
+    ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_DESIGN: "0",
     ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION: "0",
@@ -169,7 +175,15 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
     ...options.suite?.env,
   };
-  const startupTimeout = options.startupTimeoutMs ?? 120_000;
+  if (options.docker) {
+    const realDocker = Bun.which("docker", { PATH: env.PATH });
+    if (!realDocker) throw new Error("Docker qualification requires Docker");
+    Object.assign(env, {
+      ORKESTRATOR_QUALIFICATION_DOCKER: realDocker,
+      PATH: `${path.join(root, "apps/desktop/scripts/dev/docker-qualification-bin")}:${env.PATH}`,
+    });
+  }
+  const startupTimeout = options.startupTimeoutMs ?? (options.docker ? 300_000 : 120_000);
   const testTimeout = options.testTimeoutMs ?? 900_000;
   const cleanupTimeout = options.cleanupTimeoutMs ?? 45_000;
   const launchTask = (
@@ -193,6 +207,21 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
   let cleanupFailure: Error | undefined;
   options.signal?.throwIfAborted();
   try {
+    if (options.docker) {
+      const built = await launchTask("docker:build:dev", [], 1_800_000, false, options.signal).done;
+      if (built.code !== 0) throw new Error("Docker qualification image build failed");
+      const smoke = await launch(
+        "bash",
+        ["docker/tests/final-image-smoke.sh", runtimeProfile.dockerImage],
+        {
+          root,
+          env,
+          timeoutMs: 180_000,
+          signal: options.signal,
+        },
+      ).done;
+      if (smoke.code !== 0) throw new Error("Docker qualification image smoke failed");
+    }
     console.log(`Starting isolated browser profile ${profile}`);
     launcher = launchTask(
       "dev:test",
@@ -245,6 +274,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         "--config",
         options.suite?.config ?? "e2e/agent-testing/playwright.browser.config.ts",
         ...(options.design && !options.suite ? ["e2e/agent-testing/design-canvas.spec.ts"] : []),
+        ...(options.docker ? ["--grep", "Docker fixture"] : []),
         "--workers=1",
       ],
       { root, env, timeoutMs: testTimeout, signal: options.signal },
@@ -269,6 +299,8 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     console.log(`Cleaning isolated browser profile ${profile}`);
     const stopped = await launchTask("dev:stop", [], cleanupTimeout).done;
     const reset = await launchTask("dev:reset", [], cleanupTimeout).done;
+    // dockerImage belongs to the checkout, not this disposable profile.
+    // Leave it for the shared-image-aware profile prune workflow.
     if (stopped.code !== 0 || reset.code !== 0)
       cleanupFailure = new Error(
         `Isolated profile cleanup failed for ${profile}; inspect dev:status before retrying`,

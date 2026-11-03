@@ -50,7 +50,7 @@ describe("BuildPipelineService", () => {
       };
 
       await expect(internal.executionPolicy(started)).rejects.toThrow(
-        "Build environment no longer exists",
+        "Pipeline environment no longer exists",
       );
     });
   });

@@ -13,7 +13,7 @@ export async function readEnvironmentBranchPushState(
   environmentId: string,
 ): Promise<BranchPushState> {
   const environment = await storage.getEnvironment(environmentId);
-  if (!environment) throw new Error("Build environment no longer exists");
+  if (!environment) throw new Error("Pipeline environment no longer exists");
   const head = (await shell.git(environment, ["rev-parse", "HEAD"])).trim();
   const current = (await shell.git(environment, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
   // A detached HEAD names no branch; the environment still records its own.

@@ -16,6 +16,7 @@ import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { useConfigStore } from "@/stores/configStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { FederationProvider } from "@/components/federation/FederationProvider";
@@ -32,7 +33,11 @@ import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
 import { useUIStore as realUIStore } from "@/stores/uiStore";
 import type { TabInfo } from "@/types/paneLayout";
 
+import { invoke as nativeInvoke } from "@/lib/native/backend";
+
+let realInfo = false;
 const uiStore = realUIStore;
+const INITIAL_PROJECT_BOARD_TAB = uiStore.getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
 const realSystemUsageIndicatorSnapshot = { ...realSystemUsageIndicator };
 const realRealmTitleBarSnapshot = { ...realRealmTitleBar };
@@ -99,14 +104,17 @@ mock.module("./OpenFileDialog", () => ({ OpenFileDialog: () => null }));
 // Stubbed (with restore) so the tab AppShell derives is observable as a prop
 // rather than through the real popover's rendering.
 mock.module("./AgentInfoButton", () => ({
-  AgentInfoButton: ({ activeTab, mobile }: { activeTab: TabInfo | null; mobile?: boolean }) => (
-    <div
-      data-testid="agent-info-button"
-      data-active-tab-id={activeTab?.id ?? "none"}
-      data-active-tab-type={activeTab?.type ?? "none"}
-      data-mobile={String(mobile ?? false)}
-    />
-  ),
+  AgentInfoButton: ({ activeTab, mobile }: { activeTab: TabInfo | null; mobile?: boolean }) =>
+    realInfo ? (
+      <realAgentInfoButtonSnapshot.AgentInfoButton activeTab={activeTab} mobile={mobile} />
+    ) : (
+      <div
+        data-testid="agent-info-button"
+        data-active-tab-id={activeTab?.id ?? "none"}
+        data-active-tab-type={activeTab?.type ?? "none"}
+        data-mobile={String(mobile ?? false)}
+      />
+    ),
 }));
 
 // The real poll is exercised in its own suite; here it only needs to be
@@ -243,6 +251,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useActiveCoordinatorConversationStore.setState({ active: null });
+  uiStore.setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -657,6 +667,67 @@ describe("AppShell", () => {
     expect(slot.contains(screen.getByTestId("agent-info-button"))).toBe(true);
     expect(screen.getByTestId("agent-info-button").getAttribute("data-mobile")).toBe("true");
     expect(screen.queryByTestId("desktop-agent-info-slot") === null).toBe(true);
+  });
+
+  test("does not refresh open coordinator usage when unrelated pane state changes", async () => {
+    isMobile = false;
+    realInfo = true;
+    const invokeMock = nativeInvoke as ReturnType<typeof mock>;
+    invokeMock.mockImplementation(async () => null);
+    uiStore.setState({ projectBoardTab: "coordinator" });
+    useActiveCoordinatorConversationStore.getState().publish({
+      projectId: "project-1",
+      tabId: "coordinator-tab",
+      data: {
+        platform: "claude",
+        environmentId: "coordinator:workspace-1:conversation-1",
+        sessionId: "session-1",
+      },
+    });
+    try {
+      render(<AppShell>Workspace</AppShell>);
+      fireEvent.click(screen.getByRole("button", { name: "Open agent information" }));
+      const refreshes = () =>
+        invokeMock.mock.calls.filter(
+          ([command, args]) =>
+            command === "get_native_agent_projection" && args?.refreshUsage === true,
+        ).length;
+      await waitFor(() => expect(refreshes()).toBeGreaterThan(0));
+      const before = refreshes();
+      await act(async () => {
+        usePaneLayoutStore.setState((state) => ({ environments: new Map(state.environments) }));
+      });
+      expect(refreshes()).toBe(before);
+    } finally {
+      cleanup();
+      realInfo = false;
+    }
+  });
+
+  test("describes the shown coordinator conversation instead of the project home's tab", () => {
+    isMobile = false;
+    seedPaneLayout([CLAUDE_TAB], "claude-tab");
+    uiStore.setState({ projectBoardTab: "coordinator" });
+    useActiveCoordinatorConversationStore.getState().publish({
+      projectId: "project-1",
+      tabId: "coordinator-tab",
+      data: { platform: "claude", environmentId: "coordinator:workspace-1:conversation-1" },
+    });
+    render(<AppShell>Workspace</AppShell>);
+
+    const button = screen.getByTestId("agent-info-button");
+    expect(button.getAttribute("data-active-tab-id")).toBe("coordinator-tab");
+    expect(button.getAttribute("data-active-tab-type")).toBe("agent-native");
+
+    // Another board tab, or the page unmounting, returns to the environment's tab.
+    act(() => uiStore.setState({ projectBoardTab: "kanban" }));
+    expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
+    act(() => uiStore.setState({ projectBoardTab: "coordinator" }));
+    expect(button.getAttribute("data-active-tab-id")).toBe("coordinator-tab");
+    act(() =>
+      useActiveCoordinatorConversationStore.getState().clear("project-1", "coordinator-tab"),
+    );
+    expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
   });
 
   test("mounts the system usage meters in the desktop title bar but not in mobile", () => {

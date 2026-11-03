@@ -261,7 +261,7 @@ describe("BuildLaunchDialog", () => {
   test("asks for the environment once, outside the step configuration", () => {
     const { onConfirm } = renderDialog();
     const environment = screen.getByRole("radiogroup", {
-      name: "Build environment",
+      name: "Where it runs",
     });
 
     expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
@@ -875,7 +875,7 @@ describe("BuildLaunchDialog", () => {
     );
 
     const environment = screen.getByRole("radiogroup", {
-      name: "Build environment",
+      name: "Where it runs",
     });
     const container = within(environment).getByRole("radio", {
       name: /^Container/,
@@ -907,7 +907,7 @@ describe("BuildLaunchDialog", () => {
       <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
     );
     const environment = screen.getByRole("radiogroup", {
-      name: "Build environment",
+      name: "Where it runs",
     });
 
     view.rerender(
@@ -944,7 +944,7 @@ describe("BuildLaunchDialog", () => {
     );
 
     const environment = screen.getByRole("radiogroup", {
-      name: "Build environment",
+      name: "Where it runs",
     });
     expect(
       (
@@ -969,7 +969,7 @@ describe("BuildLaunchDialog", () => {
   test("opens on the local environment when it is the configured default", () => {
     const { onConfirm } = renderDialog({ defaultEnvironmentType: "local" });
     const environment = screen.getByRole("radiogroup", {
-      name: "Build environment",
+      name: "Where it runs",
     });
 
     expect(
@@ -1001,7 +1001,7 @@ describe("BuildLaunchDialog", () => {
     const view = render(dialog(true, false));
     await waitFor(() => {
       const environment = screen.getByRole("radiogroup", {
-        name: "Build environment",
+        name: "Where it runs",
       });
       expect(
         (
@@ -1017,7 +1017,7 @@ describe("BuildLaunchDialog", () => {
 
     await waitFor(() => {
       const environment = screen.getByRole("radiogroup", {
-        name: "Build environment",
+        name: "Where it runs",
       });
       expect(
         (

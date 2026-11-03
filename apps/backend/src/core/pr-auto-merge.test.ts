@@ -1,3 +1,5 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { CommandFailedError } from "./shell.js";
 import { describe, expect, test } from "bun:test";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import {
@@ -135,7 +137,7 @@ describe("decideAutoMerge", () => {
   });
 });
 
-function harness(initial: Environment) {
+function harness(initial: Environment, defaultLogging = false) {
   let stored = initial;
   let monitorState: PrMonitorEnvironmentState | null = monitor(initial);
   const listeners = new Set<(event: PrMonitorEvent) => void>();
@@ -191,7 +193,7 @@ function harness(initial: Environment) {
     cancel: (timer) => {
       (timer as { cancelled: boolean }).cancelled = true;
     },
-    onWarning: () => undefined,
+    ...(defaultLogging ? {} : { onWarning: () => undefined }),
   });
   return {
     controller,
@@ -497,3 +499,39 @@ for (const change of ["disable", "dispose", "intent", "head", "readiness", "poli
     expect(h.timers).toEqual([]);
   });
 }
+
+test.each(["merge", "resolve"] as const)(
+  "default %s failure logging classifies GitHub errors",
+  async (kind) => {
+    const h = harness(
+      environment(kind === "resolve" ? { hasMergeConflicts: true, prMergeability: "dirty" } : {}),
+      true,
+    );
+    const logs = captureLogs();
+    try {
+      h.failNextInvoke(
+        new CommandFailedError("gh auth login: private command output", { exitCode: 4 }),
+      );
+      await h.controller.evaluate("env-1");
+      expect(logs.records()).toMatchObject([
+        {
+          area: "pull-request",
+          level: "warn",
+          event: `auto-merge.${kind}-failed`,
+          fields: {
+            environmentId: "env-1",
+            reason: "auth-failed",
+            exitCode: 4,
+            signal: null,
+            error: { name: "CommandFailedError", outputOmitted: true, exitCode: 4 },
+          },
+        },
+      ]);
+      expect(logs.lines.join("\n")).not.toContain("private command output");
+      expect(logs.records()[0]?.fields).not.toHaveProperty("detail");
+    } finally {
+      h.controller.dispose();
+      logs.restore();
+    }
+  },
+);

@@ -334,7 +334,7 @@ export class BuildPipelineContext {
     origin: "build-pipeline" | "automated-review" = "build-pipeline",
   ): Promise<NativeAgentExecutionPolicy> {
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
+    if (!environment) throw new Error("Pipeline environment no longer exists");
     return resolveEnvironmentExecutionPolicy(environment, origin);
   }
 

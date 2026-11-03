@@ -12,6 +12,7 @@ import {
 } from "@orkestrator/protocol/federation";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import type { MachineView } from "@/lib/federation/aggregate";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useFederation } from "./FederationProvider";
@@ -45,7 +46,7 @@ function FederationEffectsActive() {
  * used, by node-qualified key, next to other machines' (recorded when they
  * are opened), so the project search ranks every machine's recents together.
  * A local selection also ends the search's highlight of another machine's
- * project.
+ * project, and a repository heading's highlight.
  */
 function useRecentSelections(backendId: BackendId | null) {
   useEffect(() => {
@@ -67,6 +68,21 @@ function useRecentSelections(backendId: BackendId | null) {
       const views = useMachineViewStore.getState();
       views.recordRecent(keys);
       if (keys.length > 0) views.revealProject(null);
+      const continuesHeading =
+        state.projectSelectionRevision === previous.projectSelectionRevision &&
+        views.openedRepository?.projectKey ===
+          (state.selectedProjectId
+            ? projectKey(projectRef(backendId, state.selectedProjectId))
+            : null) &&
+        useEnvironmentStore
+          .getState()
+          .environments.some(
+            (environment) =>
+              environment.id === state.selectedEnvironmentId &&
+              environment.projectId === state.selectedProjectId &&
+              environment.projectHome,
+          );
+      if (!continuesHeading) views.noteRepositoryOpened(null);
     });
   }, [backendId]);
 }

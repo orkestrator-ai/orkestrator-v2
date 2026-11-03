@@ -33,6 +33,8 @@ export interface RemoteWorkspaceSelection {
   nodeId: string;
   projectId: string | null;
   environmentId: string | null;
+  /** Reported by the owning realm, including Homes not yet in summaries. */
+  projectHome?: boolean;
 }
 
 export interface RealmRequest {
@@ -80,7 +82,7 @@ interface RemoteWorkspaceState {
   /** A realm reported its own selection. */
   noteRealmSelection: (
     nodeId: string,
-    selection: { projectId: string | null; environmentId: string | null },
+    selection: { projectId: string | null; environmentId: string | null; projectHome?: boolean },
   ) => void;
   /** A realm went away (failed, or its node was removed). */
   closeRealm: (nodeId: string) => void;
@@ -156,12 +158,18 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
     if (active?.nodeId !== nodeId) return;
     if (
       active.projectId === selection.projectId &&
-      active.environmentId === selection.environmentId
+      active.environmentId === selection.environmentId &&
+      Boolean(active.projectHome) === Boolean(selection.projectHome)
     ) {
       return;
     }
     set({ active: { nodeId, ...selection } });
-    noteRemoteSelection(nodeId, selection.projectId, selection.environmentId);
+    noteRemoteSelection(
+      nodeId,
+      selection.projectId,
+      selection.environmentId,
+      selection.projectHome,
+    );
   },
   closeRealm: (nodeId) => {
     const { active, realms, requests, titleBars, panelRequests } = get();
@@ -208,6 +216,7 @@ function noteRemoteSelection(
   nodeId: string,
   projectId: string | null,
   environmentId: string | null,
+  projectHome = false,
 ): void {
   const views = useMachineViewStore.getState();
   const backendId = nodeId as BackendId;
@@ -218,6 +227,10 @@ function noteRemoteSelection(
   ]);
   if (environmentId || views.revealedProject?.key !== selectedProjectKey) {
     views.revealProject(null);
+  }
+  // Explicit opens clear the heading; a realm targeting that project's Home continues it.
+  if (!projectHome || views.openedRepository?.projectKey !== selectedProjectKey) {
+    views.noteRepositoryOpened(null);
   }
 }
 
@@ -269,6 +282,8 @@ export function useRemoteProjectHomeShown(
     (state) =>
       state.active?.nodeId === nodeId &&
       state.active.projectId === projectId &&
-      (state.active.environmentId === null || state.active.environmentId === homeEnvironmentId),
+      (state.active.environmentId === null ||
+        state.active.projectHome === true ||
+        state.active.environmentId === homeEnvironmentId),
   );
 }

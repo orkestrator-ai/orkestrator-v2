@@ -2,8 +2,13 @@
 
 Status: Living. The shared logger, its vocabulary, how entries reach the log file,
 and the live settings that control them. Electron's main process, all five bridges,
-the renderer and the backend use it, apart from the exceptions
-[What is left in the backend](#what-is-left-in-the-backend) names.
+the renderer and the backend use it.
+
+**The migration is finished.** No application path writes to the raw `console`.
+The only sites left are the permanent exclusions [the lint rule](#the-lint-rule)
+names, whose console is their product or which wrap the console themselves.
+[What is left in the backend](#what-is-left-in-the-backend) lists the one open
+decision.
 
 ## Using it
 
@@ -373,9 +378,11 @@ command-failure site checks that `reason` comes from the classifier.
 The list and each sentence are in `log-vocabulary/command-failure-reasons.ts`, and
 the patterns are in `node/command-failure-reason.ts`. Text matching is case-insensitive.
 
-## Raw `console` until a site migrates
+## Backstops for raw `console`
 
-Two backstops apply before a site moves to the logger.
+Every application site is on the logger, but raw console output still exists: a
+script or fixture, a vendor library's own printing, and the files that wrap the
+console. Two backstops bound what such output can carry.
 
 **`CommandFailedError` prints safely.** Its `toJSON` and `util.inspect.custom` give
 the classified fields and bounded frames, so a raw `console.warn("...", error)` writes
@@ -390,7 +397,7 @@ backend's bounded console, a wrapper's `cause`. `GitRemoteTimeoutError` inherits
 
 It does not cover reading the text directly. `error.message`, `String(error)` and a
 template literal still give the output, because callers build user-facing text from
-them, so such a site stays unprotected until it migrates. Under Bun's own console, a
+them, so a log line must go through `formatLogError` instead. Under Bun's own console, a
 `CommandFailedError` held as a `cause` also prints in full. Bun's native error printer
 ignores `inspect.custom` there, and the backend avoids it by installing the bounded
 console first.
@@ -400,7 +407,7 @@ Other classes were checked. `SshTunnelError.detail` is one redacted line and
 bounded, and neither is child output, so neither has a backstop. A raw error from
 `promisify(execFile)` (`tailscale-serve.ts`, `ssh-agent-socket.ts`) and a plain
 `new Error(out.stderr)` (`tmux-*.ts`, `path-safety.ts`) have no class to add one to:
-migrating the site through `formatLogError` is what covers them.
+their log sites go through `formatLogError`, which is what covers them.
 
 **The fatal rejection guard is bounded.** `packages/protocol/src/fatal-rejections.ts`
 is serialized into workers, so it imports nothing and keeps its raw `console`. It
@@ -575,7 +582,7 @@ each one at the level it carries.**
 ```mermaid
 flowchart LR
   L[createLogger in backend] -->|JSON record| C[bounded console]
-  U[unmigrated console.*] -->|text| C
+  U[raw console.*: vendors, the fatal rejection guard] -->|text| C
   C -->|stdout / stderr| R{relay: starts with\norklog prefix and parses?}
   R -->|yes| E[emitLogRecord at its level]
   R -->|no| P["[Backend] line: stdout as LOG, stderr as ERROR"]
@@ -591,7 +598,7 @@ flowchart LR
   second grammar, and it is versioned by its `{"orklog":1,` prefix. Fields survive
   the crossing as well as the level, so the desktop renders them in its own format.
 - **Nothing is lost.** Anything that is not a valid record stays ordinary output:
-  an unmigrated `console.*`, a native crash, a runtime panic, or a record from
+  a raw `console.*` (a vendor's, or the fatal rejection guard's), a native crash, a runtime panic, or a record from
   another build naming an area or event this one does not list. A JSON object on
   stdout, which the relay used to drop silently, is now captured too.
 - **The cost is small.** The prefix check rejects a non-record without parsing.
@@ -750,10 +757,17 @@ lists every level this migration changed.
 
 ## The lint rule
 
-`no-restricted-globals` refuses `console`, used directly or passed as a value.
-[linting.md](../development/linting.md#raw-console) covers the exclusions and the
-ratchet. A bridge's `scripts/` and its `*.live-probe.ts` files keep the console, as
-their output is the point. Inside a migrated path, inject a logger or use a capture in tests:
+`no-restricted-globals` refuses `console`, used directly or passed as a value,
+everywhere except one permanent list of exclusions: tests, scripts, the CLI,
+`docker/`, a bridge's `scripts/` and `*.live-probe.ts` files, the logger, the
+application log writer, the fatal rejection guard, `bounded-console.ts`, the
+renderer's startup marker module and the bug-report error recorder.
+[linting.md](../development/linting.md#raw-console) says why each stays.
+`tests/unit/raw-console.test.ts` pins that list and the lint ignore patterns. It
+scans other sources for the six common console methods and rejects directives
+that disable `no-restricted-globals` (including blanket disables), so lint still
+checks other methods, optional or bracket access, and aliases. To log from a test
+or harness without the console, inject a logger or use a capture:
 
 ```ts
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -798,6 +812,10 @@ record what was observed at the time and are left as they are.
 | `[review-fanout]`, `[graph-agent]`, `[graph-describe]`, `[goal-verifier]` on an agent branch line | `[agent-branch] <event> owner=<name>` |
 | `[multi-review]` | `[review] <event>` |
 | `[pr]`, `[pr-monitor]`, `[pr-auto-merge]`, the `gh pr list` dump | `[pull-request] <event>`, `gh.pr-list-unparseable` with sizes only |
+| `[pull-request] monitor.warning detail=...`, `auto-merge.warning detail=...` | `[pull-request] monitor.<step>`, `auto-merge.<step>` with `environmentId` |
+| `[diff-stats] scan.warning detail=...` | `[diff-stats] scan.<step>`, `emit.<step>` with `environmentId` |
+| `[scheduled-jobs] <text>`, `[scheduler] service.warning detail=...` | `[scheduler] tick.failed`, `job.claim-failed jobId=<id>`, `fire.heartbeat-failed`, `fire.outcome-record-failed fireId=<id>` |
+| `[gateway] browser.unavailable detail=...`, `loopback.unavailable detail=...` | The same events with `error.*`; `browser.unavailable-degraded reason=no-tailscale-address` |
 | `[Storage]`, `[storage]` | `[storage] <event>` |
 | `[Tooling]`, `[Backend] Host executable discovery ready` | `[host] tool.available`, `tool.missing`, `path.discovered` |
 | `[Docker]`, `[container-start]`, `[container-lifecycle]`, `[claude-login-keeper]`, `[container-login-watcher]`, `[portable-inputs]`, `[github-ranges]` | `[docker] <event>` |
@@ -852,14 +870,25 @@ record what was observed at the time and are left as they are.
 - **An optional `logger`** remains on `core/transcript-artifacts/` (`runtime.ts`,
   `preview-runner.ts`, `content-server.ts`). Nothing in production passes one, so those
   warnings are silent today. Moving them onto the logger would add lines rather than move
-  them, which is a decision for the cleanup slice.
-- `apps/backend/**` is no longer excluded from the lint rule. `bounded-console.ts` and
+  them, and whether to is undecided, so they stay silent.
+- `apps/backend/**` is not excluded from the lint rule. `bounded-console.ts` and
   `scripts/` stay excluded for good, as their console is the product. Fixture processes
   write to `process.stdout` directly.
-- **`detail` fields:** the PR monitor, auto-merge and diff stats services report through
-  an `onWarning(message, error)` callback, so their lines carry the service's own text in
-  `detail`. It holds identifiers only. Static events there would mean changing those
-  services' tests, which can wait for the cleanup slice.
+- **Service warnings are static events.** The PR monitor, auto-merge, diff stats and
+  scheduled job services report a failed step through a callback that names the
+  step's event and its identifiers (`environmentId`, `jobId`, `fireId`, and a PR
+  `state`), never a message. The runtime logs that event as it stands, so each step is
+  listed in its area's vocabulary.
+- **Most remaining `detail` fields hold our own text.** `[docker.reachability]
+  firewall.detected` names the active host firewall, with ufw's default input policy
+  (one word from its config). In the Codex bridge, `app-server.protocol-violation` and
+  `app-server.invariant-violation` describe the rule broken. An unknown-response
+  protocol violation includes the peer-supplied response ID, which can be any
+  string; this detail is not guaranteed content-free. `app-server.stderr` carries a
+  summary of identifier-shaped tokens and a byte count, never the line. `recorder.notice` is dynamic and ours: it warns that notification recording is
+  on or refused, naming the directory the developer set in
+  `CODEX_BRIDGE_RECORD_NOTIFICATIONS`. It is loud on purpose, and a recording's content
+  never reaches it.
 
 ## Adding to later processes
 

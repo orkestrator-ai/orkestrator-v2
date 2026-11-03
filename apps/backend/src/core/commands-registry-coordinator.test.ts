@@ -463,7 +463,7 @@ describe("coordinator command registry", () => {
       conversationId: conversation.id,
     };
     const buildInput = {
-      taskId: "task-1",
+      taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
       projectId: project.id,
       taskTitle: "Task",
       taskSnapshot: {
@@ -519,7 +519,7 @@ describe("coordinator command registry", () => {
       conversationId: conversation.id,
     };
     const buildInput = {
-      taskId: "task-1",
+      taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
       projectId: project.id,
       taskTitle: "Task",
       taskSnapshot: {
@@ -559,6 +559,58 @@ describe("coordinator command registry", () => {
       await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
     ).toContainEqual(
       expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-1", pending: false }),
+    );
+  });
+
+  test("links a build to its ticket and refuses a taskId that is not a ticket here", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const other = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: snapshot.workspace.conversations[0]!.id,
+    };
+    const ticket = await storage.kanban.addKanbanTask(project.id, "Task", "");
+    const elsewhere = await storage.kanban.addKanbanTask(other.id, "Elsewhere", "");
+    const startBuild = mock(async () => ({ id: "pipeline-linked", projectId: project.id }));
+    context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
+    const input = (taskId: string) => ({
+      taskId,
+      projectId: project.id,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local",
+      agentType: "codex",
+      delegationBaseBranch: "main",
+      delegationBaseCommit: head,
+    });
+    const build = commands.get("start_coordinator_build_pipeline")!;
+
+    for (const [requestId, taskId] of [
+      ["build-missing", "no-such-ticket"],
+      ["build-elsewhere", elsewhere.id],
+    ]) {
+      await expect(build({ scope, requestId, input: input(taskId!) }, context)).rejects.toThrow(
+        "Create the ticket with create_ticket first",
+      );
+    }
+    expect(startBuild).not.toHaveBeenCalled();
+    expect(await storage.coordinators.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
+
+    await build({ scope, requestId: "build-linked", input: input(ticket.id) }, context);
+    expect(startBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: ticket.id,
+        source: { type: "kanban", taskId: ticket.id },
+      }),
     );
   });
 
@@ -659,7 +711,7 @@ describe("coordinator command registry", () => {
         scope,
         requestId: "build-defaults",
         input: {
-          taskId: "task-1",
+          taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
           projectId: project.id,
           taskTitle: "Task",
           taskSnapshot: {
@@ -694,7 +746,7 @@ describe("coordinator command registry", () => {
         scope,
         requestId: "build-overrides",
         input: {
-          taskId: "task-2",
+          taskId: (await storage.kanban.addKanbanTask(project.id, "Task 2", "")).id,
           projectId: project.id,
           taskTitle: "Task",
           taskSnapshot: {

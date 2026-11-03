@@ -18,10 +18,16 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "wake.waiting-check-failed": "A waiting worker could not be checked; the next pass retries.",
       "wake.resolve-report-failed": "A finished Resolve tab could not be reported.",
       "wake.waiting-report-failed": "A waiting worker could not be reported.",
+      "wake.worker-outcomes-failed":
+        "Coordinator-owned workers' merges and deletions could not be checked; the next sweep retries.",
       "store.malformed": "The coordinator store was malformed and is treated as empty.",
       "store.unsupported-version":
         "The coordinator store has an unsupported version and is treated as empty.",
       "store.invalid-workspace": "An invalid coordinator workspace record was ignored.",
+      "store.workflows-cleared":
+        "The workflow store was full, so a batch of its oldest finished records was removed.",
+      "store.workflows-in-use":
+        "The workflow store was full and every record was still in use, so new work was refused.",
       "remote-worker.settle-failed": "A remote worker could not be settled.",
     },
   },

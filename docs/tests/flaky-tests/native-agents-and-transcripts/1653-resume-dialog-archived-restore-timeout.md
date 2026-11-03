@@ -30,3 +30,26 @@
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-resume-dialog-rerun -- bun test --cwd apps/web ./src/components/chat/NativeResumeSessionDialog.test.tsx --parallel=1 --only-failures` passed in 4.0 s.
 - **Evidence:** `/tmp/orkestrator-test-run.YwLvvl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; aggregate wrapper evidence is under `/tmp/orkestrator-test-run.XCqUci/`.
 - **Assessment:** recurrence under aggregate load; the cause remains unconfirmed. No resume-dialog source, assertion, timeout or skip changed.
+
+
+### Coordinator retention fix validation, 2026-11-02
+
+`mise run test:logged -- --name repaired-validation-test -- mise run test`
+failed `NativeResumeSessionDialog > keeps archived history restorable after reopening with %s live rows` in `apps/web/src/components/chat/NativeResumeSessionDialog.test.tsx`: 5000 ms timeout after 5278.41 ms.
+Backend summary: 13349 pass, one fail, 13450 tests; web: 11406 pass,
+one fail, 11417 tests. The aggregate scheduled six workspace worker slots, one root worker, two
+bridge workers and one protocol-lockfile slot.
+Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`
+(and inner artifact directory `/tmp/orkestrator-test-run.OxYauT`).
+
+The unchanged complete owner passed alone via `mise run test:logged` with
+name `resume-owner`, explicit owner path and `--parallel=1 --only-failures`
+(3.2 s). The same owner passed in a separately installed detached
+`origin/main` worktree at `d7cdfaa8b` (main-resume-owner); the worktree was removed.
+No target-branch failure or environmental cause was reproduced, so this
+observation does not excuse the aggregate failure. The next exact aggregate
+rerun passed the workspace group (308.1 s), including this owner. It exposed
+three malformed flake-index rows introduced while recording these observations;
+the rows were repaired and the complete index owner passed alone. That rerun
+artifact is `/tmp/orkestrator-test-run.eKA8Rz/validation-test-final.log.gz`.
+A post-repair exact aggregate rerun is recorded separately.

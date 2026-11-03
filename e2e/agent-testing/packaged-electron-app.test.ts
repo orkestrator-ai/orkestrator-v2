@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
+import * as switches from "./electron-launch-switches";
+import displaySetup from "./electron-display-setup";
 
 import {
   HEADLESS_ELECTRON_SWITCHES,
@@ -137,4 +139,26 @@ describe("headless opt-in for the Vite-served Electron specs", () => {
       }),
     ).toEqual({ PATH: "/usr/bin" });
   });
+});
+
+test("display setup refuses startup with the actionable display problem", () => {
+  const problem = spyOn(switches, "electronSpecDisplayProblem").mockReturnValue(
+    "No disposable display",
+  );
+  try {
+    expect(() => displaySetup()).toThrow("No disposable display");
+    expect(problem).toHaveBeenCalledTimes(1);
+  } finally {
+    problem.mockRestore();
+  }
+});
+
+test("display setup permits startup when preflight succeeds", () => {
+  const problem = spyOn(switches, "electronSpecDisplayProblem").mockReturnValue(null);
+  try {
+    expect(() => displaySetup()).not.toThrow();
+    expect(problem).toHaveBeenCalledTimes(1);
+  } finally {
+    problem.mockRestore();
+  }
 });

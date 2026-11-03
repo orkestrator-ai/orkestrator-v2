@@ -18,6 +18,7 @@ import {
   assertElectronReadiness,
   compileElectronForDevelopment,
   electronLaunch,
+  launcherIsInteractive,
   electronReadinessTimeoutMs,
   outputTail,
   resolveElectronHeadless,
@@ -185,6 +186,7 @@ describe("Electron readiness", () => {
         bridges: {} as bridgeBuilds.BridgeBuildRecord["bridges"],
       });
       Object.assign(process.env, launchEnv);
+      const notice = spyOn(console, "log").mockImplementation(() => {});
       let electronArgs: readonly string[] | undefined;
       let electronOptions: SpawnOptions | undefined;
       try {
@@ -223,6 +225,12 @@ describe("Electron readiness", () => {
             if (status.status === "ready") setImmediate(() => electron.emit("exit", 0, null));
           },
         });
+        const headlessNotices = notice.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("Electron is headless"));
+        expect(headlessNotices.length).toBe(headless ? 1 : 0);
+        if (headless)
+          expect(headlessNotices[0]!.includes("Pass --no-headless")).toBe(requested !== true);
         expect(electronArgs).toEqual([
           ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
           "apps/desktop/dist/electron/main.js",
@@ -240,6 +248,7 @@ describe("Electron readiness", () => {
         expect(reachedReady).toBe(true);
         expect(await readFile(path.join(profile.logDir, "electron.log"), "utf8")).toContain(frame);
       } finally {
+        notice.mockRestore();
         cache.mockRestore();
         toolchains.mockRestore();
         credentials.mockRestore();
@@ -261,6 +270,15 @@ describe("Electron readiness", () => {
 });
 
 describe("Electron headless mode", () => {
+  test("interactive requires both stdin and stdout to be terminals", () => {
+    for (const stdin of [true, false, undefined]) {
+      for (const stdout of [true, false, undefined]) {
+        expect(launcherIsInteractive({ isTTY: stdin }, { isTTY: stdout })).toBe(
+          stdin === true && stdout === true,
+        );
+      }
+    }
+  });
   const decide = (
     overrides: Partial<Parameters<typeof resolveElectronHeadless>[0]> = {},
   ): ReturnType<typeof resolveElectronHeadless> =>

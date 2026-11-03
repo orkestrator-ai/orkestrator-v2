@@ -7,7 +7,7 @@ Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: done (2026-11-03).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open (implementation done 2026-11-03; real-display Electron and macOS/Windows qualification remain open).
 
 ### 1. A headless mode for agent-test Electron
 
@@ -28,6 +28,13 @@ Analysed 2026-11-01 against `main` at `93b99bfba`. Acted on 2026-11-03 against
     - Cons: every agent has to rediscover it, and a missed step opens the window anyway.
 
 ## Assumptions and decisions
+
+### Task 1: review repair and qualification status
+
+Keep the task and index unfinished while the real-display Electron and native-platform
+checks in Needs verification remain open. Unit coverage is useful but does not close
+those live checks. The isolated runner now forces the environment setting as well as
+the initial flag so spec-triggered restarts retain headless mode.
 
 ### Task 1: what counts as "no TTY"
 

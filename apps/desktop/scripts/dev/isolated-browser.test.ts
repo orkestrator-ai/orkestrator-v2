@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { resolveElectronHeadless } from "./lifecycle.js";
 import { parseAgentTestArguments } from "./arguments.js";
 import {
   IMAGE_QUALIFICATION_TESTS,
@@ -26,7 +27,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -72,6 +73,7 @@ if (task === "dev:test") {
             pid: number;
             scheduler: string;
             workers: string;
+            headless: string;
             containerApproval?: string;
             claudeTerminal?: string;
             grokLogin?: string;
@@ -202,6 +204,19 @@ test("a one-shot run cannot opt out of headless", async () => {
   ).toBe(0);
   const launcher = (await f.events()).find((event) => event.task === "dev:test")!;
   expect(launcher.args).toContain("--headless");
+  const events = await f.events();
+  expect(events.every((event) => event.headless === "1")).toBe(true);
+  const tests = events.find((event) => event.task === "playwright")!;
+  // A restarted launcher without flags resolves from the test process environment.
+  expect(
+    resolveElectronHeadless({
+      flavor: "agent-test",
+      platform: "linux",
+      interactive: true,
+      env: { ORKESTRATOR_AGENT_TEST_HEADLESS: tests.headless },
+    }).headless,
+  ).toBe(true);
+  expect(f.env.ORKESTRATOR_AGENT_TEST_HEADLESS).toBe("0");
 });
 
 test("another suite runs its own config and opt-in in a profile the caller names", async () => {

@@ -440,8 +440,11 @@ export const AGENT_TEST_HEADLESS_ELECTRON_ENV = "ORKESTRATOR_AGENT_TEST_HEADLESS
  * Whether a person is at this launcher. Both streams have to be a terminal: an
  * agent's shell often captures stdout while inheriting a terminal's stdin.
  */
-function launcherIsInteractive(): boolean {
-  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+export function launcherIsInteractive(
+  stdin: { isTTY?: boolean } = process.stdin,
+  stdout: { isTTY?: boolean } = process.stdout,
+): boolean {
+  return stdin.isTTY === true && stdout.isTTY === true;
 }
 
 /**
@@ -766,7 +769,7 @@ export async function startDevelopment(
     });
     if (headless) {
       console.log(
-        `Electron is headless (${reason}); the app is at browserUrl and no window will open. Pass --no-headless for a real window.`,
+        `Electron is headless (${reason}); the app is at browserUrl and no window will open.${args.headless === true ? "" : " Pass --no-headless for a real window."}`,
       );
     }
     const launch = electronLaunch(headless, platform, process.env);

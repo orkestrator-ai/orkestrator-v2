@@ -204,6 +204,8 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_TEST_HOST_WORKERS: "2",
     ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
     ...options.suite?.env,
+    // Specs may restart dev:test without the initial command-line flag.
+    ORKESTRATOR_AGENT_TEST_HEADLESS: "1",
   };
   if (options.docker) {
     const realDocker = Bun.which("docker", { PATH: env.PATH });

@@ -7,6 +7,7 @@ import {
   PREVIEW_SERVICES_CHANGED_EVENT,
   previewError,
   previewFailure,
+  PreviewServiceError,
   resolvePreviewEntryService,
   stablePreviewJson,
   validatePreviewServiceInput,
@@ -418,12 +419,35 @@ export class PreviewServiceRegistry {
    * counts (a published port of the environment's own container, or a
    * loopback listener it accepted); relay targets have no host port.
    */
-  hostLoopbackTargetOwner(port: number): string | null {
+  async hostLoopbackTargetOwner(port: number): Promise<string | null> {
+    const matches = (target: ResolvedPreviewTarget | null) =>
+      target !== null &&
+      target.transportKind !== "container-relay" &&
+      target.host === "127.0.0.1" &&
+      target.addressFamily === "ipv4" &&
+      target.port === port;
     for (const [serviceId, entry] of this.runtime) {
-      const target = entry.target;
-      if (!target || target.transportKind === "container-relay" || target.port !== port) continue;
+      if (!matches(entry.target) || !this.definitions.get(serviceId)?.enabled) continue;
+      const generation = entry.endpoint.endpointGeneration;
+      let target: ResolvedPreviewTarget;
+      try {
+        target = await this.acquireTarget(serviceId, generation);
+      } catch (error) {
+        if (error instanceof PreviewServiceError) continue;
+        throw error;
+      }
+      // Acquisition may yield to lifecycle changes. Never admit a replacement
+      // generation, disabled definition, or a target on a different address.
+      const current = this.runtime.get(serviceId);
       const definition = this.definitions.get(serviceId);
-      if (definition?.enabled) return definition.environmentId;
+      if (
+        definition?.enabled &&
+        current?.endpoint.endpointGeneration === generation &&
+        current.endpoint.state === "available" &&
+        current.target === target &&
+        matches(target)
+      )
+        return definition.environmentId;
     }
     return null;
   }

@@ -245,6 +245,98 @@ describe("gateway preview integration", () => {
     }
   });
 
+  test("legacy preview: verification errors return 503 without reaching upstream", async () => {
+    const { info } = await startGateway({
+      legacyPreviewPortAccess: async () => {
+        throw new Error("verification failed");
+      },
+    });
+    const response = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(response.status).toBe(503);
+    expect(response.json()).toEqual({ error: "Could not verify the browser preview port" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  test("legacy preview: an IPv6 binding cannot authorize an IPv4 listener", async () => {
+    const ipv6 = await startPreviewFixture({ host: "::1", port: fixture.port });
+    try {
+      await harness.addContainerEnvironment("ipv6", { entryPort: 3000 });
+      harness.docker.containers.set("container-ipv6", {
+        id: "ipv6-container",
+        environmentId: "ipv6",
+        owner: harness.owner,
+        ports: { "3000/tcp": [{ HostIp: "::1", HostPort: String(fixture.port) }] },
+      });
+      const definition = harness.runtime.registry.getDefinition(serviceId)!;
+      await harness.runtime.registry.update(serviceId, definition.definitionRevision, {
+        enabled: false,
+      });
+      await harness.runtime.registry.settle();
+      const service = harness.runtime.registry.snapshot({ environmentId: "ipv6" }).services[0]!;
+      expect(service.endpoint.state).toBe("available");
+      expect(service.endpoint.addressFamily).toBe("ipv6");
+      const { info } = await startGateway({ previews: harness.runtime });
+      const response = await requestUrl(
+        `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`,
+        { headers: { authorization: `Bearer ${info.token}` } },
+      );
+      expect(response.status).toBe(403);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await ipv6.close();
+    }
+  });
+
+  test.each(["other-environment", "unattributed"] as const)(
+    "legacy preview: expired managed binding refuses a %s replacement without a lifecycle event",
+    async (replacement) => {
+      let now = 0;
+      let owner: "this-environment" | "other-environment" | "unattributed" = "this-environment";
+      const runtime = harness.newRuntime({
+        registry: { now: () => now },
+        listenerOwnership: {
+          attribute: async () =>
+            owner === "this-environment"
+              ? { attribution: owner, processKey: "original-listener" }
+              : { attribution: owner },
+          stats: () => ({ listenerChecks: 0, listenerUnchecked: 0 }),
+        },
+      });
+      await runtime.init();
+      const created = await runtime.registry.register({
+        environmentId: "local",
+        label: "managed",
+        targetKind: "worktree",
+        applicationPort: fixture.port,
+        addressFamily: "ipv4",
+      });
+      if (created.kind !== "definition") throw new Error("expected definition");
+      await runtime.registry.settle();
+      const { info } = await startGateway({ previews: runtime });
+      const url = `${info.url}__orkestrator/browser/loopback/${fixture.port}/health`;
+      const headers = { authorization: `Bearer ${info.token}` };
+      expect((await requestUrl(url, { headers })).status).toBe(200);
+      await fixture.close();
+      const replacementListener = await startPreviewFixture({
+        port: fixture.port,
+        marker: "replacement",
+      });
+      try {
+        // Only the listener changes; there is no storage lifecycle event.
+        owner = replacement;
+        now = 5_001;
+        expect((await requestUrl(url, { headers })).status).toBe(403);
+        expect(replacementListener.connections()).toBe(0);
+        expect(replacementListener.requests).toHaveLength(0);
+      } finally {
+        await replacementListener.close();
+      }
+    },
+  );
+
   test("legacy preview: reserved ports are refused even when a service is bound there (M2)", async () => {
     await harness.runtime.registry.settle();
     const { info } = await startGateway({ previews: harness.runtime });

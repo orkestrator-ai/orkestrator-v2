@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
 
@@ -70,6 +70,60 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
     publish("a", "container-a", {});
     const runtime = await settled();
     expect(await runtime.legacyLoopbackPortAccess(3000)).toBe("unknown");
+  });
+
+  test("a healthy relay target never admits its container application port", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    publish("a", "container-a", {});
+    const healthy = spyOn(harness.runtime.relay, "healthy").mockReturnValue(true);
+    try {
+      await harness.runtime.updateSettings((current) => ({ ...current, relay: true }));
+      const runtime = await settled();
+      const service = runtime.registry.snapshot({ environmentId: "a" }).services[0]!;
+      expect(service.endpoint.state).toBe("available");
+      expect(service.endpoint.transportKind).toBe("container-relay");
+      expect(await runtime.legacyLoopbackPortAccess(3000)).toBe("unknown");
+    } finally {
+      healthy.mockRestore();
+    }
+  });
+
+  test("rechecks generation after asynchronous target acquisition", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    publish("a", "container-a", { 3000: 49152 });
+    const runtime = await settled();
+    const service = runtime.registry.snapshot({ environmentId: "a" }).services[0]!;
+    const target = await runtime.registry.acquireTarget(
+      service.definition.serviceId,
+      service.endpoint.endpointGeneration,
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const acquire = spyOn(runtime.registry, "acquireTarget").mockImplementation(async () => {
+      entered();
+      await gate;
+      return target;
+    });
+    try {
+      const access = runtime.legacyLoopbackPortAccess(49152);
+      await started;
+      await runtime.registry.update(
+        service.definition.serviceId,
+        service.definition.definitionRevision,
+        { enabled: false },
+      );
+      release();
+      expect(await access).toBe("unknown");
+    } finally {
+      release();
+      acquire.mockRestore();
+    }
   });
 
   test("reserved ports win over a verified binding", async () => {

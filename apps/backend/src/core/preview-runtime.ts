@@ -233,10 +233,10 @@ export class PreviewRuntime {
    */
   async legacyLoopbackPortAccess(port: number): Promise<LegacyLoopbackPortAccess> {
     if (isAlwaysReservedPort(port)) return "reserved";
-    if (this.registry.hostLoopbackTargetOwner(port) === null) return "unknown";
     // A stopped environment's agent ports stay reserved while free, so a
     // container could publish one; the reserved set wins over a binding.
-    return (await this.reservedPorts()).has(port) ? "reserved" : "allowed";
+    if ((await this.reservedPorts()).has(port)) return "reserved";
+    return (await this.registry.hostLoopbackTargetOwner(port)) === null ? "unknown" : "allowed";
   }
 
   private envFlag(name: string): boolean | undefined {

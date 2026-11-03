@@ -19,6 +19,10 @@
 #
 # Output (last line): ORKESTRATOR_STORAGE status=<code> [key=value…]
 set -euo pipefail
+# Root runs this, and the image PATH puts node-writable directories first.
+# Resolve every command from root-owned directories only (security H2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 FORMAT=1
 NODE_UID=1000

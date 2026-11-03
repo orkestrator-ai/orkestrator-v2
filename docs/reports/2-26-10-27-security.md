@@ -88,8 +88,8 @@ The material risks are concentrated in four themes:
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
-| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
-| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §4) |
+| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
+| H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
@@ -154,7 +154,25 @@ bearer token in `sessionStorage`.
 
 ### H2. The unprivileged `node` user can get code executed as root inside the container
 
-**Status:** Verified
+**Status:** Fixed (2026-11-03). Every root `docker exec`/`docker run`, and
+every root terminal, passes `PATH=/usr/sbin:/usr/bin:/sbin:/bin`
+(`CONTAINER_ROOT_USER_ARGS`). Each root script resets PATH itself. Root shells
+source neither `runtime-env.sh` nor `bash-env.sh` and take only root-owned
+PATH entries. `/usr/local/share` is root-owned, with `npm-global` its own
+`node`-owned directory, and root zsh runs `compinit -i`. The image build
+fails if `node` can write anything on a root path
+(`docker/verify-root-boundary.sh`). Checked on images built locally from
+before and after the fix: `docker/tests/root-boundary-smoke.sh` planted
+`awk`, `ps`, `iptables` and others, a v3 `runtime-env.sh`, `bash-env.sh`, a
+zsh `compinit` and a trusted `mise.toml` as `node`. On the old image root ran
+11 of them, through the stop drain, `update-firewall.sh` and a root terminal.
+On the new image it ran none, and npm globals still install and run for
+`node`. In-container firewall enforcement is not retired: images without the
+egress gateway, and policy 1 runtimes, still depend on it until they are
+rebuilt. Removing the `ORKESTRATOR_EGRESS=in-container` cap stays with
+[todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+See [`docker/AGENTS.md`](../../docker/AGENTS.md). The original finding
+follows.
 **Actor:** A1
 
 **Where**
@@ -661,13 +679,13 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- No dynamic testing was done. In particular, run H1/M1/M2 in Chromium and Safari, H3 against rootful and rootless Docker, and H2 against a built image.
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). Dynamic testing remains for H1/M1/M2 in Chromium and Safari and H3 against rootful and rootless Docker.
 
 ## 9. Recommended remediation order
 
 1. **H1 + M1.** Replace the token-valued cookie with an opaque session. Add a server-side `CSP: sandbox` on legacy previews and make the isolated transport the default. Together these close the cleanest container → host path.
 2. **H3.** `lstat` and realpath the `.env`/`opencode.json` sources and copy them instead of bind-mounting. This is a small change with large impact.
-3. **H2.** Fix the root PATH on root execs, stop root sourcing `node`-owned files, and make `/usr/local/share` root-owned.
+3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The remaining follow-up is retiring in-container firewall enforcement, tracked in todo 0018 task 4 after gateway qualification.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.

@@ -1,5 +1,9 @@
 #!/bin/bash
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+# Root runs this, and the image PATH puts node-writable directories first.
+# Resolve every command from root-owned directories only (security H2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 set -E            # Failures inside functions reach the fail-closed trap too
 IFS=$'\n\t'       # Stricter word splitting
 

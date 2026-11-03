@@ -26,6 +26,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { imageRelaysStagedInputs } from "@orkestrator/protocol/image-manifest";
 import { detectDockerTopology, imageCapabilities } from "./docker-image.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 /**
  * Which providers' portable inputs a new container receives: the enabled
@@ -311,8 +312,7 @@ export async function revokeProviderCredentials(
         "docker",
         [
           "exec",
-          "--user",
-          "root",
+          ...CONTAINER_ROOT_USER_ARGS,
           containerId,
           "sh",
           "-c",

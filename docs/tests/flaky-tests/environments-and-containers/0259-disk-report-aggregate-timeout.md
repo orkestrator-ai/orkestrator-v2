@@ -417,6 +417,28 @@ aggregate timeout. The exact aggregate rerun passed the root group (214.1 s),
 including disk-report, but failed two other workspace owners; see cases 1314
 and 1653. Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`.
 
+### H2 root-boundary review, 2026-11-03
+
+Preparation at `8a7364630` failed the isolated-checkout case after
+5020.08 ms in `mise run test`. After the ownership repair, the exact
+aggregate rerun (`mise run test:logged -- --name h2-full-rerun -- mise run test`)
+failed only this case (5044.63 ms); workspace, bridges and protocol passed.
+Root counts: 3469 pass, one skip, one fail, one between-test error.
+Evidence: `/tmp/orkestrator-test-run.H2tg5V/h2-full-rerun.log.gz` and
+`/tmp/orkestrator-test-run.jJbpwC/root-and-agent-support-tests.log.gz`.
+
+The complete unchanged owner also failed alone on the branch (5032.76 ms,
+18 pass, one fail, one error), with
+`mise run test:logged -- --name h2-disk-owner -- bun test tests/unit/disk-report.test.ts --parallel=1 --only-failures`.
+The same command with name `h2-main-disk` reproduced the deadline on
+detached `origin/main` at `6c7539617` (5043.60 ms, identical counts), after
+an independent frozen dependency install. Artifacts:
+`/tmp/orkestrator-test-run.YS5ewE/h2-disk-owner.log.gz` and
+`/tmp/orkestrator-test-run.QVu4iM/h2-main-disk.log.gz`. The temporary
+worktree was removed. No owning code, assertions, timeouts or skips changed.
+This observation establishes a target-branch failure, not a new isolated
+pass or a proven environmental cause; the case remains open.
+
 ## R4 diagnostics review recurrence — 2026-11-03
 
 Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`

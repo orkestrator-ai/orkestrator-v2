@@ -141,9 +141,11 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xJf "${NODE_TARBALL}" -C /usr/local --strip-components=1 --no-same-owner && \
   rm -f "${NODE_TARBALL}" SHASUMS256.txt
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
+# Global npm installs go to node's own npm-global directory. /usr/local/share
+# itself stays root-owned: root's zsh loads completion functions from
+# /usr/local/share/zsh/site-functions, so a node-writable parent would let node
+# plant code that every root terminal runs (verify-root-boundary.sh).
+RUN install -d -o node -g node -m 0755 /usr/local/share/npm-global
 
 ARG USERNAME=node
 
@@ -510,6 +512,13 @@ COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh \
   && command -v setpriv \
   && test "$(setpriv --reuid=node --regid=node --init-groups id -u)" = "$(id -u node)"
+
+# Nothing a root exec, root script or root shell resolves or sources may be
+# writable by node. Checked once every script and directory is in place; the
+# manifest layer below adds only a root-owned file.
+COPY docker/verify-root-boundary.sh /usr/local/share/verify-root-boundary.sh
+RUN chmod 755 /usr/local/share/verify-root-boundary.sh \
+  && /usr/local/share/verify-root-boundary.sh
 
 # Image manifest: identity, pinned versions and the container contracts this
 # image implements. Generated from the ARG pins above and verified against the

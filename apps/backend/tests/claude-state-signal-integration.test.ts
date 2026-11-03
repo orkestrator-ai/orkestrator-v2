@@ -191,8 +191,11 @@ case "$*" in
   *"inspect"*) printf '192.0.2.1\\n' ;;
   *"network-policy"*) printf '3\\n1234\\n' ;;
 esac
+# A root exec's fixed PATH is logged apart, so the positions below match.
+env=""
+if [ "$2" = "--env" ]; then env="[$3] "; first="$1"; shift 3; set -- "$first" "$@"; fi
 # Do not log stdin or the config script (credentials).
-printf '%s\\n' "$1 $2 $3 $4 $5" >> "$FAKE_DOCKER_LOG"
+printf '%s\\n' "$env$1 $2 $3 $4 $5" >> "$FAKE_DOCKER_LOG"
 `,
     async (log) => {
       await claudeStateSignalInstaller.install(
@@ -206,7 +209,9 @@ printf '%s\\n' "$1 $2 $3 $4 $5" >> "$FAKE_DOCKER_LOG"
       // gateway reads and changes the gateway's firewall), then cached.
       expect(calls).toHaveLength(7);
       expect(calls[2]).toContain("{{.HostConfig.NetworkMode}}");
-      expect(calls[5]).toContain("--user root container-1 /usr/local/bin/update-firewall.sh");
+      expect(calls[5]).toContain(
+        "[PATH=/usr/sbin:/usr/bin:/sbin:/bin] exec --user root container-1 /usr/local/bin/update-firewall.sh",
+      );
       expect(calls[6]).toBe("exec -i container-1 sh -c");
       await claudeStateSignalInstaller.install(
         "container-1",

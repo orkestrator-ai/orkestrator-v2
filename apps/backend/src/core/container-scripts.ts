@@ -5,6 +5,33 @@
  */
 
 /**
+ * PATH for every root process the backend starts in a container. The image
+ * PATH puts `node`-writable directories (npm globals, OpenCode) first and
+ * every `docker exec` inherits it, so a root exec without this would run any
+ * `awk` or `iptables` the agent planted there. Only root-owned directories.
+ */
+export const CONTAINER_ROOT_PATH = "/usr/sbin:/usr/bin:/sbin:/bin";
+/** `docker exec`/`docker run` options for a root process with the fixed PATH. */
+export const CONTAINER_ROOT_USER_ARGS: readonly string[] = [
+  "--env",
+  `PATH=${CONTAINER_ROOT_PATH}`,
+  "--user",
+  "root",
+];
+/** `--user` values that run as uid 0: `root`, `orkroot` (root terminals) or `0[:gid]`. */
+export function isContainerRootUser(user: string | undefined): boolean {
+  const name = user?.split(":")[0]?.trim();
+  return name === "root" || name === "orkroot" || name === "0";
+}
+/** `--user` (and, for uid 0, the fixed PATH) for a terminal `docker exec`. */
+export function containerTerminalUserArgs(user: string | undefined): string[] {
+  if (!user) return [];
+  return isContainerRootUser(user)
+    ? ["--env", `PATH=${CONTAINER_ROOT_PATH}`, "--user", user]
+    : ["--user", user];
+}
+
+/**
  * Message shown when another setup run still holds the setup lock: usually one
  * whose terminal's host process died. That run keeps going inside the
  * container, so a retry waits for it and never starts setup a second time

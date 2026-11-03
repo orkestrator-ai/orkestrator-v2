@@ -975,7 +975,9 @@ describe("process and platform command behavior", () => {
       expect(log).toContain(
         "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
       );
-      expect(log).toContain("docker exec --user root container-existing");
+      expect(log).toContain(
+        "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-existing",
+      );
       expect(log).not.toContain(connection.token);
     } finally {
       // Retire the memo so a later test against this container reconciles
@@ -991,7 +993,7 @@ describe("process and platform command behavior", () => {
     const log = await readCommandLog();
     expect(log).toContain("getent hosts host.docker.internal");
     expect(log).toContain("docker inspect --format");
-    expect(log).not.toContain("docker exec --user root");
+    expect(log).not.toContain("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root");
   });
 
   test("removes a Linux host-gateway override when Docker Desktop DNS is available", async () => {
@@ -1004,7 +1006,9 @@ describe("process and platform command behavior", () => {
     const log = await readCommandLog();
     expect(log).toContain("getent hosts gateway.docker.internal");
     expect(log).toContain("grep -E");
-    expect(log).toContain("docker exec --user root container-existing");
+    expect(log).toContain(
+      "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-existing",
+    );
     expect(log).not.toContain("docker inspect --format");
   });
 
@@ -1025,7 +1029,9 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
     );
-    expect(log).toContain("docker exec --user root container-existing");
+    expect(log).toContain(
+      "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-existing",
+    );
   });
 
   test("preserves the RootlessKit alias while the initial host probe is pending", async () => {
@@ -1055,7 +1061,9 @@ describe("process and platform command behavior", () => {
         undefined,
         service.containerHostAddress(),
       );
-      expect(await readCommandLog()).not.toContain("docker exec --user root");
+      expect(await readCommandLog()).not.toContain(
+        "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root",
+      );
       expect(service.containerHostAddress()).toBeNull();
     } finally {
       release();
@@ -1068,7 +1076,7 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_DOCKER_FAIL_INFO = "daemon temporarily unavailable";
     await __testing.ensureContainerAgentToolsHost("container-existing");
     const log = await readCommandLog();
-    expect(log).not.toContain("docker exec --user root");
+    expect(log).not.toContain("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root");
     expect(log).not.toContain("docker inspect --format");
   });
 
@@ -1078,7 +1086,9 @@ describe("process and platform command behavior", () => {
       process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
       await __testing.ensureContainerAgentToolsHost("container-existing", undefined, "10.0.2.2");
       const log = await readCommandLog();
-      expect(log.includes("docker exec --user root")).toBe(existing !== "10.0.2.2");
+      expect(log.includes("docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root")).toBe(
+        existing !== "10.0.2.2",
+      );
       // A selected address does not depend on Docker's namespace gateway.
       expect(log).not.toContain("docker inspect");
       if (existing !== "10.0.2.2") expect(log).toContain("orkestrator-host-repair 10.0.2.2");
@@ -1096,7 +1106,9 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
     );
-    expect(log).not.toContain("docker exec --user root container-existing");
+    expect(log).not.toContain(
+      "docker exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-existing",
+    );
   });
 
   test("status reuses Claude and Codex bridges with the current agent-tools fingerprint", async () => {

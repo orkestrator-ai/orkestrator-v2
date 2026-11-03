@@ -68,6 +68,7 @@ import {
 import {
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
+  containerTerminalUserArgs,
   asString,
   asRecord,
   assertOnlyKeys,
@@ -443,7 +444,7 @@ export function registerTerminalCommands(
       rows: config.rows,
     });
     const dockerArgs = ["exec", "-it"];
-    if (config.user) dockerArgs.push("--user", config.user);
+    dockerArgs.push(...containerTerminalUserArgs(config.user));
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
     spawnTerminalProcess(id, "docker", dockerArgs, config, context);
     return id;
@@ -483,7 +484,7 @@ export function registerTerminalCommands(
     }
     await runtime.terminals.history.resume(id);
     const dockerArgs = ["exec", "-it"];
-    if (config.user) dockerArgs.push("--user", config.user);
+    dockerArgs.push(...containerTerminalUserArgs(config.user));
     dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
     spawnTerminalProcess(
       id,

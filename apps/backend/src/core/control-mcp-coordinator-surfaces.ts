@@ -52,10 +52,10 @@ const WRITE = {
   openWorldHint: false,
 };
 
-/** Feature plans settle without waking the coordinator. */
-const NO_STATUS_WAKE = {
+/** A planning exchange wakes the coordinator when its reply is ready or it fails. */
+const FEATURE_PLAN_STATUS_WAKE = {
   delivery: "async",
-  wake: "This conversation is not woken when it settles. Finish your turn and tell the user it is running; if you need to act on the result, schedule a check with create_schedule rather than waiting.",
+  wake: "This conversation is woken once when the planning reply is ready, and when planning fails. Read the reply with get_feature_plan then. A cancelled request sends nothing.",
   nextStep: "Finish your turn now. Do not poll.",
 };
 
@@ -329,7 +329,7 @@ export function registerCoordinatorSurfaceTools(
     {
       title: "Plan a feature",
       description:
-        "Start feature planning, as New feature and Send on the Features board do: a planning agent in its own environment turns the message into a feature summary and stories. Omit featureId to start a new plan, or name one (from get_feature_plan) to send it another message. It never writes the project checkout. Building from a plan stays the user's Build button.",
+        "Start feature planning, as New feature and Send on the Features board do: a planning agent in its own environment turns the message into a feature summary and stories. Omit featureId to start a new plan, or name one (from get_feature_plan) to send it another message. This conversation is woken when the reply is ready or planning fails. It never writes the project checkout. Building from a plan stays the user's Build button.",
       inputSchema: z
         .object({
           requestId,
@@ -342,7 +342,7 @@ export function registerCoordinatorSurfaceTools(
     async (input) =>
       toolResult({
         ...(await call("launch_coordinator_feature_plan", { input })),
-        ...NO_STATUS_WAKE,
+        ...FEATURE_PLAN_STATUS_WAKE,
       }),
   );
 

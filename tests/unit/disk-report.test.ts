@@ -115,14 +115,17 @@ describe("disk report", () => {
     for (const command of ["docker", "du", "ps"]) {
       await writeFile(path.join(stubs, command), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     }
+    const hostEnv = { ...process.env };
+    delete hostEnv.DOCKER_CONTEXT;
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...hostEnv,
           PATH: `${stubs}${path.delimiter}${process.env.PATH ?? ""}`,
           TMPDIR: tmpDir,
+          DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,
           HOME: root,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),

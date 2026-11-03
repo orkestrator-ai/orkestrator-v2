@@ -414,3 +414,30 @@ mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-r
 
 This establishes intermittent behavior, not a root-cause fix. No assertion,
 timeout, skip, or unrelated implementation changed.
+
+## R4 round 3 review repair — 2026-11-03
+
+Preparation at `8d022cf9b` repeated the checkout timeout at 5079.13 ms
+(`mise run test`, one root worker), with process status null at line 131 and
+an error between tests. Original evidence:
+`.orkestrator/review-artifacts/review-validation-00bb3ca2-3d93-47b8-a736-2f3fd4bf7ab4/validation-04.stdout.txt`.
+The owning test and disk-report implementation have no diff in
+`origin/main...HEAD`.
+
+The complete unchanged owner passed on the branch (exit 0, 1.4 s):
+
+```sh
+mise run test:logged -- --name r4-disk-owner-round3 -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+A detached `origin/main` worktree at `5161688cf`, with its own independently
+installed frozen dependencies, passed ten repetitions (exit 0, 13.2 s):
+
+```sh
+mise run test:logged -- --name r4-main-disk-round3 -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --rerun-each=10 --only-failures
+```
+
+This confirms another isolated pass but does not reproduce the timeout on the
+target branch or establish an environmental cause. The recorded aggregate
+failure remains unresolved; it is not excused as environmental. No unrelated
+implementation, timeout, assertion or skip changed.

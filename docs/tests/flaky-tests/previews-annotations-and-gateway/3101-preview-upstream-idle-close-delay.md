@@ -71,3 +71,22 @@ mise run test:logged -- --name r4-main-preview-round2 -- bun test --cwd apps/bac
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.dr1x7z/r4-main-preview-round2.log.gz`.
 No unrelated code or test was changed; the temporary worktree was removed.
+
+## R4 round 3 review repair — 2026-11-03
+
+Preparation at `8d022cf9b` repeated the same assertion after 759.45 ms
+(`mise run test`, four backend workers). Original evidence:
+`.orkestrator/review-artifacts/review-validation-00bb3ca2-3d93-47b8-a736-2f3fd4bf7ab4/validation-04.stdout.txt`.
+The owning implementation and test have no diff in `origin/main...HEAD`.
+
+A detached `origin/main` worktree at `5161688cf`, with its own independently
+installed frozen dependencies, reproduced the assertion at lines 85/199:
+six passed, one failed, 730 ms total (673.57 ms in the failing case).
+
+```sh
+mise run test:logged -- --name r4-main-preview-round3 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.PyIOGK/r4-main-preview-round3.log.gz`.
+This confirms a target-branch failure, not a diagnostics regression. No
+unrelated implementation, timeout, assertion or skip changed.

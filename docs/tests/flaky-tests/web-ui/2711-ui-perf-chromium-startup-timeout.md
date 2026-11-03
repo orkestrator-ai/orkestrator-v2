@@ -92,3 +92,23 @@ Totals: 60 passed, nine failed, 69 tests, 86.69 s. Evidence:
 This independently establishes the target-branch recurrence; its cause remains
 unproven. No timeout, assertion, skip or unrelated code changed. The temporary
 worktree was removed.
+
+## R4 round 3 review repair — 2026-11-03
+
+Preparation at `8d022cf9b` repeated the unnamed 5000 ms hook timeout at
+5018.17 ms (`mise run test`, one root worker). Original evidence:
+`.orkestrator/review-artifacts/review-validation-00bb3ca2-3d93-47b8-a736-2f3fd4bf7ab4/validation-04.stdout.txt`.
+The owning test and imported performance probe have no diff in
+`origin/main...HEAD`.
+
+A detached `origin/main` worktree at `5161688cf`, with independently installed
+frozen dependencies, reproduced the same hook timeout at 5001.64 ms in the
+third repetition (18 passed, one failed, 23.28 s total).
+
+```sh
+mise run test:logged -- --name r4-main-ui-round3 -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=3 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.81RZZF/r4-main-ui-round3.log.gz`.
+This confirms the target-branch recurrence without establishing its cause.
+No unrelated implementation, timeout, assertion or skip changed.

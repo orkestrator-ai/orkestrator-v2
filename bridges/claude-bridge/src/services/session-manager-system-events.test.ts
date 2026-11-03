@@ -28,6 +28,7 @@ import {
   subagentInterruptedNoticeText,
 } from "./session-manager-messages.js";
 import { THINKING_TOKENS_EMIT_INTERVAL_MS, memoryRecallPart } from "./session-manager-prompt.js";
+import { readTranscriptVersion } from "./transcript-revision.js";
 
 // ---------------------------------------------------------------------------
 // SDK frames the bridge used to drop: system subtypes with no branch, synthetic
@@ -483,6 +484,63 @@ describe("informational, permission and memory frames", () => {
 });
 
 describe("task reports", () => {
+  test.each([false, true])(
+    "republishes a settled tool with a stable tracked timestamp (already stamped: %s)",
+    (alreadyStamped) => {
+      const session = createSession(`settled-row-timestamp-${alreadyStamped}`);
+      track(session.id);
+      const tracker = new ToolTracker();
+      const createdAt = "2026-08-17T10:00:00.000Z";
+      const firstStamp = "2026-08-17T09:59:00.000Z";
+      const part = {
+        type: "tool-invocation" as const,
+        content: "",
+        toolUseId: "agent-1",
+        toolState: "pending" as const,
+        createdAt,
+      };
+      // The row knows the launch time even if its tracker has never been stamped.
+      tracker.addTool("agent-1", {
+        ...part,
+        createdAt: alreadyStamped ? firstStamp : undefined,
+      });
+      tracker.updateToolResult("agent-1", { output: "Finished", state: "success" });
+      const beforeStamp = tracker.getTool("agent-1");
+      const message: NormalizedMessage = {
+        id: "settled-tool-row",
+        role: "assistant",
+        content: "",
+        parts: [part],
+        createdAt,
+      };
+      session.messages.push(message);
+      const beforeVersion = readTranscriptVersion(session);
+      const { events, stop } = captureEvents();
+      try {
+        refreshSettledToolRows(session, session.id, tracker, ["agent-1"], null);
+        const stamped = tracker.getTool("agent-1")!;
+        expect(stamped.createdAt).toBe(alreadyStamped ? firstStamp : createdAt);
+        if (alreadyStamped) expect(stamped).toBe(beforeStamp);
+        else expect(stamped).not.toBe(beforeStamp);
+        expect(message.parts[0]).toBe(stamped);
+        expect(message.parts[0]?.toolOutput).toBe("Finished");
+        expect(message.parts[0]?.toolState).toBe("success");
+        expect(readTranscriptVersion(session).revision).toBeGreaterThan(beforeVersion.revision);
+        const updates = events.filter((event) => event.type === "message.updated");
+        expect(updates).toHaveLength(1);
+        expect(updates[0]!.sessionId).toBe(session.id);
+        expect((updates[0]!.data as { message: NormalizedMessage }).message).toBe(message);
+
+        // A later fallback refresh must reuse the stamped tracker object too.
+        refreshSettledToolRows(session, session.id, tracker, ["agent-1"], null);
+        expect(message.parts[0]).toBe(stamped);
+        expect(tracker.getTool("agent-1")).toBe(stamped);
+      } finally {
+        stop();
+      }
+    },
+  );
+
   test("refreshes multiple settled rows across earlier messages", () => {
     const session = createSession("settled-rows-across-messages");
     track(session.id);

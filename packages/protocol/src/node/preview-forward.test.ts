@@ -186,6 +186,31 @@ describe("preview header policy", () => {
     expect(mapLocation("http://localhost:8443/c", httpIngress)).toBe("http://127.0.0.1:41000/c");
   });
 
+  test("maps forwarded-scheme IPv6 redirects without widening host or port", () => {
+    for (const [privateOrigin, forwardedOrigin, otherPort] of [
+      ["http://[::1]:3000", "https://[::1]:3000", "https://[::1]:3001"],
+      ["http://[::1]:80", "https://[::1]:80", "https://[::1]"],
+      ["https://[::1]:443", "http://[::1]:443", "http://[::1]"],
+    ] as const) {
+      const ipv6: PreviewHeaderPolicy = {
+        privateAuthority: new URL(privateOrigin).host,
+        privateOrigins: [privateOrigin],
+        publicOrigin: privateOrigin.startsWith("https:")
+          ? "http://127.0.0.1:41000"
+          : "https://s-abc.preview.test",
+      };
+      expect(mapLocation(`${forwardedOrigin}/items/7?x=1#h`, ipv6)).toBe(
+        `${ipv6.publicOrigin}/items/7?x=1#h`,
+      );
+      expect(mapLocation(`${otherPort}/other`, ipv6)).toBe(`${otherPort}/other`);
+      expect(mapLocation("https://[::2]:3000/other", ipv6)).toBe("https://[::2]:3000/other");
+      expect(
+        downstreamResponseHeaders([["Location", `${forwardedOrigin}/items/7`]], ipv6).headers
+          .location,
+      ).toBe(`${ipv6.publicOrigin}/items/7`);
+    }
+  });
+
   test("apps on default ports: private origins compare and emit canonically", () => {
     for (const [scheme, port] of [
       ["http", 80],

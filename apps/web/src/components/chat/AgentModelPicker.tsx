@@ -46,6 +46,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { Button } from "@/components/ui/button";
 
 interface AgentModelPickerProps {
   id?: string;
@@ -701,6 +702,7 @@ export function AgentModelPicker({
   title,
   onRefreshModels,
 }: AgentModelPickerProps) {
+  const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [catalogView, setCatalogView] = useState<AgentPlatform | "favorites">(() =>
     preferredCatalogView(favorites, selectedPlatform, models),
@@ -869,24 +871,23 @@ export function AgentModelPicker({
     }
   }, [isMobile, mobileSubmenu]);
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (nextOpen) {
+      // Hydrated favorites may arrive after the first render. Choose the
+      // current preferred view at the start of each interaction, while
+      // still leaving the rail free to browse during the open menu.
+      setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
+      return;
+    }
+    setSearch("");
+    setMobileSubmenu(null);
+    mobileReturnFocusRef.current = null;
+    setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
+  };
+
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open) {
-          // Hydrated favorites may arrive after the first render. Choose the
-          // current preferred view at the start of each interaction, while
-          // still leaving the rail free to browse during the open menu.
-          setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
-          return;
-        }
-        if (!open) {
-          setSearch("");
-          setMobileSubmenu(null);
-          mobileReturnFocusRef.current = null;
-          setCatalogView(preferredCatalogView(favorites, selectedPlatform, models));
-        }
-      }}
-    >
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
         <button
           id={id}
@@ -945,6 +946,27 @@ export function AgentModelPicker({
               }}
               className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
             />
+            {/* Choices apply as they are made, so Done only dismisses the menu.
+                Closing through the controlled state (not a synthetic Escape)
+                keeps the containing dialog open, and Radix still returns focus
+                to the trigger. */}
+            <Button
+              type="button"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleOpenChange(false);
+              }}
+              onKeyDown={(event) => {
+                // Keep Enter, Space and Tab away from the menu's typeahead and
+                // focus trap, as the search input does.
+                if (event.key !== "Escape") event.stopPropagation();
+              }}
+              className="h-8 shrink-0 px-3 text-xs"
+              data-native-model-picker-done
+            >
+              Done
+            </Button>
             {onRefreshModels ? (
               <button
                 type="button"

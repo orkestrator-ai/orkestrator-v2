@@ -38,7 +38,7 @@ governs, marked "Decided".
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
-13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
+13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
@@ -480,21 +480,42 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 
 ### 13. Toolchain startup and downloads
 
-**Problem.** Every desktop launch SHA-256s about 1.2 GB of binaries twice before the backend starts, and slow links can never finish a download.
+**Problem.** Every desktop launch SHA-256'd the whole installed toolchain (about 1.2 GB) twice per `ensurePinnedToolchains` call before the backend started, and slow links could never finish a download.
 
-**Context.** `packages/toolchain/src/manager.ts`; the final verification is unconditional (confirmed 2026-11-01). Startup is awaited in `apps/desktop/electron/main.ts`.
+**Context.** Done 2026-11-03 on branch `desktop-launch-hash-2ed459efe5f8-r1` (based on `main` at `7b48c23f`). Re-checked first: the final verification was still unconditional, and desktop startup (`apps/desktop/electron/toolchain-startup.ts`) calls the manager twice when a support tool such as `gh` is pinned (required agents, then the combined set), so a launch hashed every agent binary four times, not two. Downloads still had the five-minute total deadline and restarted from zero.
 
-**Investigation.** Not measured: launch-to-ready time with a warm and a cold page cache.
+- **DK-3 (done).** `packages/toolchain/src/file-stamps.ts` keeps `toolchains/.verified-stamps.json`: per file `dev, ino, size, mtimeNs, ctimeNs, digest` plus when the stamp was taken. A file whose metadata matches is not read; any mismatch re-hashes it. A stamp taken within 2 s of the file's own mtime or ctime is never trusted on metadata alone (git's racy-index rule). A full check ignores every persisted stamp once a week, when the stamp file is missing or unreadable, when the clock is behind the last check, and on the in-app toolchain repair (`fullVerification`). Stamps taken earlier in the same run are reused, so the final verification no longer re-reads untouched files. Re-signed macOS copies (OpenCode, Pi) are kept, without `codesign` or `--version`, while their stamp matches and they were made from the current pinned upstream.
+- **DK-4 (done).** `packages/toolchain/src/download.ts`: a 60 s idle timeout replaces the total deadline; bytes go to `toolchains/.downloads/<sha256>.partial`, which survives the staging directory; a retry or the next launch re-hashes the partial and asks for the rest with `Range:` (a `200` restarts, a wrong `Content-Range` or a damaged partial is discarded). Up to five attempts per call while each makes progress.
+- `apps/desktop/electron/main.ts` logs `toolchain` `prepare.ready` with `durationMs`, the toolchain's share of launch-to-ready.
+
+**Investigation.** Measured 2026-11-03 on arktech-mini (macOS, Apple silicon, about ten other builds running, warm page cache) with `output/efficiency/toolchain-13/bench.ts` (git-ignored): the two calls desktop startup makes, against an APFS clone of the installed toolchain in a throwaway data directory, with real `codesign` and `--version` probes and `HOME` pointed at a temporary directory. Times are for the whole toolchain step, which startup awaits before anything else.
+
+| Run | Before (`7b48c23f`) | After |
+| --- | --- | --- |
+| Unchanged toolchain, stamps current | 7.4 to 10.5 s (first window); 19.3 to 20.7 s (later, busier window) | 0.29 to 0.91 s (nine runs across both windows) |
+| First launch after a full check (re-signed copies' stamps still racy) | n/a | 1.0 to 1.5 s |
+| First launch after the old code re-created the re-signed copies (an upgrade) | n/a | 3.0 to 3.8 s |
+| Full check: first launch with no stamp file, weekly, or repair | as above | 7.7 s (first window); 9.6 to 10.2 s (busier window) |
+
+Whole Electron launch to ready, measured the same day on an isolated `dev:test` profile (`tc13-launch`, no fixture, the six seeded toolchains, 1.3 GB; load average 20 to 29) with `output/efficiency/toolchain-13/launch-runs.sh` (git-ignored). The time runs from the launcher's first status write naming an Electron PID to its `ready` write, which follows Electron's readiness line (window created, backend started); polled every 25 ms. "Before" is the same tree with `packages/toolchain/src` and `apps/desktop/electron/main.ts` checked out from `7b48c23f`; the Electron bundle is rebuilt from source on every start. The profile was reset afterwards.
+
+| Launch | Before (`7b48c23f`) | After | After: `prepare.ready` `durationMs` |
+| --- | --- | --- | --- |
+| Unchanged toolchain (repeat launches) | 10.2, 13.8, 12.6 s | 1.6, 1.9, 1.8, 1.7 s | 449, 390, 492, 214 ms |
+| First launch on the new code (no stamp file, so a full check) | n/a | 4.7 s | 3,339 ms |
+
+Not measured: a cold page cache (`purge` needs root).
 
 **Decisions.**
 
-- **What does a stamp hold?**
-  - **`dev, ino, size, mtimeNs, ctimeNs, digest` per file, re-hashing on any mismatch and on a periodic full check (recommended).**
+- **What does a stamp hold?** The ticket chose the recommended option; implemented as such.
+  - **`dev, ino, size, mtimeNs, ctimeNs, digest` per file, re-hashing on any mismatch and on a periodic full check (recommended, done).**
     - Pros: catches replacement and in-place edits; a periodic check covers a forged mtime.
     - Cons: a stamp file to keep consistent with the install.
   - **Skip only the final verification when nothing changed this run.**
     - Pros: smallest change; halves the cost.
     - Cons: still one full hash per launch.
+- **How often is the full check?** See "Task 13: full-check interval" below.
 
 ### 14. Docker image size
 
@@ -874,6 +895,44 @@ refresh-token digests (`hostMcpRefreshDigests`). It now does so before the
 marker check, for a container on another account too. The digests are the
 active account's and the call is idempotent for the same login, so a later
 handoff carries the same list it would have carried anyway.
+
+### Task 13: full-check interval
+
+Made on 2026-11-03. A full check runs once a week (`FULL_CHECK_INTERVAL_MS`),
+when the stamp file is missing or unreadable, when the clock is behind the
+last full check, and on the in-app toolchain repair. Daily would cost most
+users the old launch time every time they open the app; never would leave a
+forged stamp file trusted indefinitely. Anyone who can rewrite the stamp file
+can also rewrite the binaries and the app itself, so the check bounds how
+long a corrupted cache goes unnoticed rather than defending against that user.
+
+### Task 13: racy stamps
+
+Made on 2026-11-03. A stamp taken within 2 s of the file's own mtime or ctime
+is re-verified by hashing (the rule git uses for its index), so a file changed
+in the same timestamp tick as its stamp is never trusted on metadata alone. A
+freshly installed or re-signed file is therefore hashed once more on the next
+launch, and skipped from the one after.
+
+### Task 13: how launch-to-ready was measured
+
+Made on 2026-11-03. Launch-to-ready is timed on a disposable `dev:test`
+profile from Electron's spawn to the launcher's `ready` write, rather than
+from the launcher's own start, because the launcher's start also includes
+compiling the Electron bundle (16 s of the first run after the code change).
+The old code was measured by checking out only the two changed areas from
+`7b48c23f` into the worktree for those runs and restoring them afterwards, so
+the rest of startup was identical in both sets. The real installed toolchain
+was only copied (the profile's seeding), never verified or rewritten.
+
+### Task 13: download retries
+
+Made on 2026-11-03. Within one call an interrupted download retries, resuming,
+up to five attempts while each attempt adds bytes; an attempt that adds none
+fails at once, so a refused or offline host still reaches the existing retry
+dialog quickly. The partial stays for that retry and the next launch. Partials
+no pinned archive references are removed after a day unused, not at once,
+because another build sharing the cache may pin them.
 
 ### Task 16: when follow sends `knownToken` (DK-16)
 

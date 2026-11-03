@@ -1001,7 +1001,8 @@ export async function rewindSessionFiles(
  * at that index, and so can be left out of a patch frame.
  *
  * Tool parts are compared by identity, which is exact: `ToolTracker` hands out
- * the same object until a result arrives and replaces it. Text and thinking
+ * the same object until a result, denial or command change replaces it
+ * (`createdAt` is stamped onto the entry once, not spread per build). Text and thinking
  * parts are rebuilt from the accumulated deltas on every pass, so they never
  * match by identity and are compared on the one field they carry.
  */

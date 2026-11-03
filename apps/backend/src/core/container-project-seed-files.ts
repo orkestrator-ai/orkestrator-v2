@@ -151,7 +151,7 @@ export async function copyProjectSeedFilesIntoContainer(
   const archive = pack();
   const chunks: Buffer[] = [];
   const collected = (async () => {
-    for await (const chunk of archive) chunks.push(Buffer.from(chunk));
+    for await (const chunk of archive) chunks.push(Buffer.from(chunk as Uint8Array));
     return Buffer.concat(chunks);
   })();
   // At most three bounded file snapshots plus fixed tar headers enter memory.

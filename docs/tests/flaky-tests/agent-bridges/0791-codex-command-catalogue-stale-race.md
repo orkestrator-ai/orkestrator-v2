@@ -490,3 +490,17 @@ No catalogue code, assertion, timeout, or skip changed. The existing settling
 race remains a hypothesis.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/bridges.log.gz`.
+
+
+## Coordinator auto-merge review — 2026-11-03
+
+Preparation at `a77d8d849` ran `mise run test`: the two-pre-plugin-answer
+case expected `stale`, received `ready` at line 273 (65.17 ms). This branch
+changes no catalogue files. A detached `origin/main` worktree at `eda57e938`,
+with its own frozen dependency install, passed the complete owner once (1.4 s).
+`mise run test:logged -- --name baseline-catalogue-stress -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --rerun-each=40 --only-failures`
+then reproduced the exact mismatch, including run 1 (59.32 ms), with 1188 pass
+and 12 failures in 55.33 s; other settling cases also failed during repeats.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.N5MP6P/baseline-catalogue-stress.log.gz`.
+The real 20 ms settle timer remains a hypothesis; no catalogue assertion or
+implementation was changed.

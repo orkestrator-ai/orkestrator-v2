@@ -123,6 +123,19 @@ describe("client state storage", () => {
     });
   });
 
+  test("auto merge preferences survive reopening storage", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      storage.clientState.setCoordinatorUpstreamAutoMerge("enabled", true);
+      storage.clientState.setCoordinatorUpstreamAutoMerge("disabled", true);
+      storage.clientState.setCoordinatorUpstreamAutoMerge("disabled", false);
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("enabled")).toBe(true);
+      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("disabled")).toBe(false);
+      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("absent")).toBe(false);
+    });
+  });
+
   test("notice dismissals merge, reconcile, stay bounded and survive a reopen", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const state = storage.clientState;

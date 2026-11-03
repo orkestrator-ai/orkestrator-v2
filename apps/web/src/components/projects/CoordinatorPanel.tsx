@@ -128,22 +128,50 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   // null while unknown or when the backend cannot keep the setting.
   const [autoMerge, setAutoMerge] = useState<{ projectId: string; enabled: boolean } | null>(null);
   const autoMergeEnabled = autoMerge?.projectId === projectId ? autoMerge.enabled : null;
-  useEffect(() => {
-    let current = true;
-    void getUpstreamAutoMerge(projectId)
-      .then((enabled) => {
-        if (current && enabled !== null) setAutoMerge({ projectId, enabled });
-      })
-      .catch(() => undefined);
-    return () => {
-      current = false;
-    };
+  const [preferenceError, setPreferenceError] = useState<string | null>(null);
+  const preferenceRevision = useRef(0);
+  const invalidatePreferenceReads = useCallback(() => {
+    ++preferenceRevision.current;
+  }, []);
+  const refreshAutoMerge = useCallback(async () => {
+    const revision = ++preferenceRevision.current;
+    const enabled = await getUpstreamAutoMerge(projectId);
+    if (revision === preferenceRevision.current) {
+      setAutoMerge(enabled === null ? null : { projectId, enabled });
+    }
+    return enabled;
   }, [projectId]);
+  useEffect(() => {
+    const refresh = () => {
+      void refreshAutoMerge().catch(() => undefined);
+    };
+    refresh();
+    const timer = setInterval(refresh, 10_000);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      invalidatePreferenceReads();
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+    };
+  }, [refreshAutoMerge, invalidatePreferenceReads]);
   const changeAutoMerge = useCallback(
     async (enabled: boolean) => {
-      const saved = await setUpstreamAutoMerge(projectId, enabled);
-      setAutoMerge({ projectId, enabled: saved });
-      return saved;
+      ++preferenceRevision.current;
+      setPreferenceError(null);
+      try {
+        const saved = await setUpstreamAutoMerge(projectId, enabled);
+        ++preferenceRevision.current;
+        setAutoMerge({ projectId, enabled: saved });
+        return saved;
+      } catch (cause) {
+        setPreferenceError(
+          "Could not save the merge setting. " +
+            (cause instanceof Error ? cause.message : "Please try again."),
+        );
+        throw cause;
+      }
     },
     [projectId],
   );
@@ -480,6 +508,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         ]).finally(() => clearTimeout(timer));
         if (lifetime.signal.aborted || check === false) return false;
         if (!check?.offer) return;
+        void refreshAutoMerge().catch(() => undefined);
         const status = check.status;
         if (check.automatic) {
           setAutoMerge({ projectId, enabled: true });
@@ -496,8 +525,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             return;
           }
           if (choice === "always") {
-            // The merge goes ahead even if the setting cannot be saved; the
-            // question then simply comes back next time.
+            // Save errors remain visible while the current merge proceeds.
             void changeAutoMerge(true).catch(() => undefined);
           }
         }
@@ -527,7 +555,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         lifetime.signal.removeEventListener("abort", cancel);
       }
     },
-    [changeAutoMerge, projectId, refreshView, setGit],
+    [changeAutoMerge, projectId, refreshAutoMerge, refreshView, setGit],
   );
   const startConversation = useCallback(
     async (
@@ -1044,11 +1072,15 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               className={cn(autoMergeEnabled && "bg-emerald-500/15 text-emerald-300")}
               onClick={() => {
                 setError(null);
-                void changeAutoMerge(!autoMergeEnabled).catch((cause) =>
-                  setError(
-                    cause instanceof Error ? cause.message : "Could not save the merge setting",
-                  ),
-                );
+                void refreshAutoMerge()
+                  .then((enabled) => {
+                    if (enabled !== null) return changeAutoMerge(!enabled);
+                  })
+                  .catch((cause) =>
+                    setPreferenceError(
+                      cause instanceof Error ? cause.message : "Could not save the merge setting",
+                    ),
+                  );
               }}
             >
               <FastForward className="size-4" />
@@ -1110,6 +1142,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           </p>
         ) : null}
         {blocked && switchBlocked ? <p className="mt-1 text-xs text-amber-300">{blocked}</p> : null}
+        {preferenceError ? (
+          <p role="alert" className="mt-1 text-xs text-red-300">
+            {preferenceError}
+          </p>
+        ) : null}
         {git?.lastError || error ? (
           <details className="mt-1 text-xs text-red-300">
             <summary className="cursor-pointer">Repository or coordinator error</summary>

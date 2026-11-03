@@ -502,6 +502,9 @@ ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE=orkestrator-v2:latest \
 
 # Real Chromium, Firefox and WebKit against private preview origins.
 # Install the engines once: mise exec -- bunx playwright install chromium firefox webkit
+# On Linux that Playwright does not support (Arch), WebKit lacks ICU 74, libxml2 2.9
+# and flite: run mise run test:preview:webkit-libs, then prefix the command with the
+# PLAYWRIGHT_BROWSERS_PATH it prints (checksummed Ubuntu libraries, no system change).
 # Add the Vite variable for HMR; --project=firefox or --grep can narrow the run.
 ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
   mise run test:logged -- --name preview-browser -- mise run test:preview:browser

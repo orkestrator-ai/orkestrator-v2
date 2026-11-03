@@ -66,6 +66,8 @@ export type CommandContext = {
     issueWorktreeSignal?(
       onSignal: (reason: WorktreeSignalReason) => void,
     ): StateSignalCredential | null;
+    /** Doorbell credential for a container's claude-tmux hook script (`tmux-hook-signal.ts`). */
+    issueTmuxHookSignal?(onSignal: () => void): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;

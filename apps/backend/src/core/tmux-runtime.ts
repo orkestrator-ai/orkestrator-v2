@@ -6,6 +6,7 @@ import {
 } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, type ClaudeStatePollManagerOptions } from "./tmux-poll.js";
 import { TmuxSessionManager } from "./tmux-session-manager.js";
+import { TmuxHookSignalManager, type TmuxHookSignalInstaller } from "./tmux-hook-signal.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("tmux");
@@ -26,6 +27,11 @@ export type TmuxRuntimeOptions = {
    * (`signal`) outside tests; tests inject a reader and timers.
    */
   claudeStatePolls?: ClaudeStatePollManagerOptions;
+  /**
+   * The claude-tmux hook doorbell installer. The backend passes the
+   * Docker-backed one outside tests; without it every tab polls per tick.
+   */
+  hookSignal?: TmuxHookSignalInstaller | null;
   interactiveTerminals?: InteractiveTmuxTerminalManagerOptions;
 };
 
@@ -44,6 +50,8 @@ export class TmuxRuntime {
   readonly sessions = new TmuxSessionManager();
   readonly interactiveTerminals: InteractiveTmuxTerminalManager;
   readonly claudeStatePolls: ClaudeStatePollManager;
+  /** Per-container claude-tmux hook doorbells (`tmux-hook-signal.ts`). */
+  readonly hookSignals: TmuxHookSignalManager;
   private readonly activityWrites = new Map<string, Promise<void>>();
   /** Environments with a Stop hook whose activity write has not landed yet. */
   private readonly finishedTurns = new Set<string>();
@@ -59,10 +67,19 @@ export class TmuxRuntime {
     this.configDirectory = options.localClaudeConfigDirectory ?? (async () => undefined);
     this.interactiveTerminals = new InteractiveTmuxTerminalManager(options.interactiveTerminals);
     this.claudeStatePolls = new ClaudeStatePollManager(options.claudeStatePolls);
-    this.removeSignalDiagnostics = recurringDiagnosticsRegistry.addSignalSource(
+    this.hookSignals = new TmuxHookSignalManager({ installer: options.hookSignal });
+    const removeStateDiagnostics = recurringDiagnosticsRegistry.addSignalSource(
       "claude-state-signal",
       this.claudeStatePolls,
     );
+    const removeHookDiagnostics = recurringDiagnosticsRegistry.addSignalSource(
+      "tmux-hook-signal",
+      this.hookSignals,
+    );
+    this.removeSignalDiagnostics = () => {
+      removeStateDiagnostics();
+      removeHookDiagnostics();
+    };
   }
 
   localClaudeConfigDirectory(context: CommandContext): Promise<string | undefined> {
@@ -195,6 +212,7 @@ export class TmuxRuntime {
 
   shutdown(): void {
     this.claudeStatePolls.shutdownAll();
+    this.hookSignals.shutdownAll();
     this.interactiveTerminals.detachAll();
     this.removeSignalDiagnostics();
   }

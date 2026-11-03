@@ -256,7 +256,7 @@ export function useNativeCommandComposer({
     />
   ) : null;
 
-  const classify = useCallback(
+  const previewClassification = useCallback(
     (input: NativeCommandClassificationInput): NativeCommandSubmission => {
       const result = classifyNativeCommandSubmission({
         ...input,
@@ -266,10 +266,18 @@ export function useNativeCommandComposer({
         catalogue,
         selection,
       });
-      setLiteralOfferText(result.kind === "rejected" && result.literalEscape ? input.text : null);
       return result;
     },
     [agentLabel, catalogue, commands, platform, selection],
+  );
+
+  const classify = useCallback(
+    (input: NativeCommandClassificationInput) => {
+      const result = previewClassification(input);
+      setLiteralOfferText(result.kind === "rejected" && result.literalEscape ? input.text : null);
+      return result;
+    },
+    [previewClassification],
   );
 
   /** The command the draft would run as typed, for send-button hints. */
@@ -303,6 +311,7 @@ export function useNativeCommandComposer({
       activeDescendant: menu.activeOptionId,
     },
     classify,
+    previewClassification,
     draftCommand,
     clearSelection,
     /** Show "Send as text" beside a refusal only while the refused text is unchanged. */

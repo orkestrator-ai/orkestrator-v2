@@ -333,6 +333,7 @@ export function registerCoordinatorForkWorker(
           coordinatorDelegationOpened =
             (
               await context.storage.coordinators.openCoordinatorDelegation(
+                context.runtime.coordinatorRequests.workerTabs,
                 association.id,
                 STARTUP_AGENT_TAB_ID,
               )

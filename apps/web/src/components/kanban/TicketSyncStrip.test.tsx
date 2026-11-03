@@ -24,7 +24,7 @@ describe("TicketSyncStrip", () => {
     const { container } = render(<TicketSyncStrip status={null} />);
     expect(container.textContent).toBe("");
     render(<TicketSyncStrip status={status([])} />);
-    expect(screen.queryByTestId("ticket-sync-strip")).toBeNull();
+    expect(screen.queryByTestId("ticket-sync-strip") === null).toBe(true);
   });
 
   test("names each machine with its state, and counts conflicts", () => {
@@ -123,7 +123,7 @@ describe("KanbanCard on another machine", () => {
         <KanbanCard task={task} onClick={() => {}} />
       </DndContext>,
     );
-    expect(screen.queryByTestId("kanban-card-runs-on")).toBeNull();
+    expect(screen.queryByTestId("kanban-card-runs-on") === null).toBe(true);
   });
 });
 

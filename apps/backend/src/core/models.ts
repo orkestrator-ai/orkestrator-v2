@@ -1164,6 +1164,12 @@ export interface AppConfig {
      */
     autoMergeRequireChecks?: boolean;
     /**
+     * Native agent composer preference: true sends a message typed while a
+     * turn is running into that turn (steering) instead of adding it to the
+     * prompt queue. Absent or false queues. Read only by the renderer.
+     */
+    autoSteer?: boolean;
+    /**
      * Absolute directory new projects are cloned into on this machine, for
      * example when a project is copied here from another machine. Absent
      * means the most common parent of the existing projects, else `~/Projects`.

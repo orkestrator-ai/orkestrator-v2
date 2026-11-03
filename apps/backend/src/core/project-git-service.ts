@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  CoordinatorRepositoryContextSource,
   ProjectGitBranch,
   ProjectGitError,
   ProjectGitStatus,
@@ -15,6 +16,9 @@ import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-ho
 import type { StorageService } from "./storage.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
+const COMMIT_ID = /^[0-9a-f]{7,64}$/;
+const MAX_SUBJECT_CHARS = 200;
+const MAX_LISTED_RANGE_FILES = 2_000;
 const CONFIRMATION_TTL_MS = 120_000;
 const MAX_ERROR_CHARS = 4_000;
 const OPERATION_MARKERS = [
@@ -99,6 +103,14 @@ export type ProjectBaseBranchTip = {
   fetched: boolean;
   fetchError?: string;
   unavailableReason?: string;
+};
+
+/** Commits and paths between two checkout commits (`checkoutChanges`). */
+export type CheckoutChanges = {
+  totalCommits: number;
+  commits: { sha: string; subject: string }[];
+  totalFiles: number;
+  files: string[];
 };
 
 export type ProjectBaseContainment = { contained: true } | { contained: false; reason: string };
@@ -537,7 +549,11 @@ export class ProjectGitService {
     };
   }
 
-  private async persist(projectId: string, status: ProjectGitStatus): Promise<ProjectGitStatus> {
+  private async persist(
+    projectId: string,
+    status: ProjectGitStatus,
+    source: CoordinatorRepositoryContextSource = "external",
+  ): Promise<ProjectGitStatus> {
     for (const environment of await this.storage.getEnvironmentsByProject(projectId)) {
       if (!isProjectHomeEnvironment(environment)) continue;
       const updates = projectHomeBranchUpdates(environment, status.branch ?? "");
@@ -573,6 +589,9 @@ export class ProjectGitService {
                   branch: status.branch,
                   headCommit: status.headCommit,
                   occurredAt: new Date().toISOString(),
+                  previousBranch: previous.branch,
+                  previousHeadCommit: previous.headCommit,
+                  source,
                 },
               ].slice(-32),
             }
@@ -581,6 +600,83 @@ export class ProjectGitService {
       };
     });
     return persisted;
+  }
+
+  /**
+   * What lies between two commits of the checkout, for the coordinator's
+   * checkout-update notice: the newest `limits.commits` commits reachable
+   * from `to` but not `from`, and up to `limits.files` paths that differ.
+   * Read-only and deliberately not serialized behind a fetch, since a turn
+   * is waiting for it. Null when either commit cannot be read.
+   */
+  async checkoutChanges(
+    projectId: string,
+    from: string,
+    to: string,
+    limits: { commits: number; files: number } = { commits: 20, files: 40 },
+  ): Promise<CheckoutChanges | null> {
+    if (!COMMIT_ID.test(from) || !COMMIT_ID.test(to)) return null;
+    const root = await this.root(projectId);
+    try {
+      const [count, log, shortstat] = await Promise.all([
+        runCommand("git", ["rev-list", "--count", `${from}..${to}`, "--"], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }),
+        runCommand(
+          "git",
+          [
+            "log",
+            "--no-color",
+            "--format=%h%x09%s",
+            `--max-count=${limits.commits}`,
+            `${from}..${to}`,
+            "--",
+          ],
+          { cwd: root, timeoutMs: 10_000 },
+        ),
+        runCommand("git", ["diff", "--no-renames", "--shortstat", from, to, "--"], {
+          cwd: root,
+          timeoutMs: 10_000,
+        }),
+      ]);
+      const totalFiles = Number.parseInt(
+        /(\d+) files? changed/.exec(shortstat.stdout)?.[1] ?? "0",
+        10,
+      );
+      // Names are listed only for a range small enough to read whole; past
+      // that the notice gives the count alone.
+      const paths =
+        totalFiles > 0 && totalFiles <= MAX_LISTED_RANGE_FILES
+          ? (
+              await runCommand(
+                "git",
+                ["diff", "--no-color", "--no-renames", "--name-only", "-z", from, to, "--"],
+                { cwd: root, timeoutMs: 10_000 },
+              )
+            ).stdout
+              .split("\0")
+              .filter(Boolean)
+          : [];
+      const commits = log.stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const tab = line.indexOf("\t");
+          return {
+            sha: tab < 0 ? line : line.slice(0, tab),
+            subject: (tab < 0 ? "" : line.slice(tab + 1)).slice(0, MAX_SUBJECT_CHARS),
+          };
+        });
+      return {
+        totalCommits: Number.parseInt(count.stdout.trim(), 10) || commits.length,
+        commits,
+        totalFiles,
+        files: paths.slice(0, limits.files),
+      };
+    } catch {
+      return null;
+    }
   }
 
   async status(projectId: string): Promise<ProjectGitStatus> {
@@ -852,7 +948,7 @@ export class ProjectGitService {
           await action(root, before);
           const refreshed = await this.readStatus(projectId, root, before);
           refreshed.lastError = null;
-          return this.persist(projectId, refreshed);
+          return this.persist(projectId, refreshed, state === "syncing" ? "upstream" : "switch");
         } catch (error) {
           const refreshed = await this.readStatus(projectId, root, before).catch(() => before);
           const lastError = gitError(state === "syncing" ? "sync" : "switch", error);

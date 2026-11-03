@@ -30,6 +30,7 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 // This slow-tier file drives real repositories, submodules and remotes. Its
 // Git-heavy cases take about 2 s on an idle host and crossed Bun's 5 s default
@@ -1008,6 +1009,11 @@ describe("project coordinator", () => {
     const snapshot = await coordinator.get(project.id);
     expect(changed.branch).toBe("external");
     expect(snapshot!.workspace.repositoryContextRevision).toBeGreaterThan(0);
+    expect(snapshot!.workspace.repositoryContextEvents?.at(-1)).toMatchObject({
+      source: "external",
+      previousBranch: "occupied",
+      branch: "external",
+    });
   });
 
   test("operation markers in a newline-containing Git directory block linked-worktree switches", async () => {
@@ -1395,6 +1401,24 @@ describe("project coordinator", () => {
       upstreamCommit: publishedTip,
     });
     expect(await fs.readFile(path.join(checkout, "remote.txt"), "utf8")).toBe("remote\n");
+    // The fast-forward is recorded as coming from upstream, with where HEAD
+    // was, so the coordinator's next turn can be told what came in.
+    const synced = await storage.coordinators.getCoordinatorWorkspace(project.id);
+    expect(synced?.repositoryContextEvents?.at(-1)).toMatchObject({
+      revision: synced!.repositoryContextRevision,
+      source: "upstream",
+      previousBranch: "main",
+      previousHeadCommit: baseline.headCommit,
+      branch: "main",
+      headCommit: publishedTip,
+    });
+    expect(await git.checkoutChanges(project.id, baseline.headCommit!, publishedTip)).toEqual({
+      totalCommits: 1,
+      commits: [{ sha: expect.any(String), subject: "remote" }],
+      totalFiles: 1,
+      files: ["remote.txt"],
+    });
+    expect(await git.checkoutChanges(project.id, "--output=x", publishedTip)).toBeNull();
 
     await runCommand("git", ["switch", "-c", "feature"], { cwd: publisher });
     await fs.writeFile(path.join(publisher, "feature.txt"), "feature\n");
@@ -1413,6 +1437,11 @@ describe("project coordinator", () => {
     expect(await git.switchBranch(project.id, "refs/remotes/origin/feature")).toMatchObject({
       branch: "feature",
     });
+    expect(
+      (await storage.coordinators.getCoordinatorWorkspace(project.id))?.repositoryContextEvents?.at(
+        -1,
+      ),
+    ).toMatchObject({ source: "switch", previousBranch: "main", branch: "feature" });
 
     await runCommand("git", ["switch", "main"], { cwd: checkout });
     await fs.writeFile(path.join(checkout, "local.txt"), "local\n");
@@ -2178,6 +2207,7 @@ describe("project coordinator", () => {
         createdAt: new Date().toISOString(),
       });
       await storage.coordinators.openCoordinatorDelegation(
+        new WorkerTabCloseAdmission(),
         association.id,
         "startup-agent",
         options.requestedAt,
@@ -2208,7 +2238,11 @@ describe("project coordinator", () => {
         requestId,
         createdAt: new Date().toISOString(),
       });
-      await storage.coordinators.openCoordinatorDelegation(association.id, workerTabId);
+      await storage.coordinators.openCoordinatorDelegation(
+        new WorkerTabCloseAdmission(),
+        association.id,
+        workerTabId,
+      );
       return association.id;
     }
 
@@ -2720,7 +2754,11 @@ describe("project coordinator", () => {
         createdAt: new Date().toISOString(),
       });
       await expect(
-        storage.coordinators.openCoordinatorDelegation(conflicting.id, "startup-agent"),
+        storage.coordinators.openCoordinatorDelegation(
+          new WorkerTabCloseAdmission(),
+          conflicting.id,
+          "startup-agent",
+        ),
       ).rejects.toThrow("already has an outstanding");
       expect(
         (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),

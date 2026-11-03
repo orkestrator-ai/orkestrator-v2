@@ -78,6 +78,13 @@ export const IMAGE_CAPABILITIES = {
    * counts are served from the last scan with only a slow safety scan.
    */
   "container-worktree-signal": 1,
+  /**
+   * `orkestrator-state-signal hook`: the claude-tmux hook script rings the
+   * backend after writing a pending or timed-out hook file, so an idle tmux
+   * tab reads its hook directories when a hook fires and otherwise only on a
+   * slow safety read. Older images keep the per-tick poll.
+   */
+  "tmux-hook-signal": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

@@ -7,7 +7,7 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 ### Tasks
 
 1. **Preview upstream pool idle-expiry case fails deterministically**: `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`. Status: done (fixed under [2920](../previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)).
-2. **Log Detail settings case fails in both viewports**: `e2e/GlobalSettings.spec.ts:3` `Log Detail offers only areas controlled by live policy`. Status: open.
+2. **Log Detail settings case fails in both viewports**: `e2e/GlobalSettings.spec.ts:3` `Log Detail offers only areas controlled by live policy`. Status: done (2026-11-03): the spec was stale; `terminal` is a live-policy area. Fixed under [2921](2921-component-browser-failures-on-main.md) task 1.
 3. **Merged project list drag cases fail**: `e2e/MergedProjectList.spec.ts:168` `project/repository project and group drags ignore expanded environment rows`. Status: done (2026-11-03): the previous drag's card took the press during its drop animation (`0412ae2c4`); fixed under [2921](2921-component-browser-failures-on-main.md) task 2.
 4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: done (2026-11-03, through 2921 task 3).
 
@@ -54,6 +54,8 @@ peer; the poll budget was not widened.
     - Pros: unblocks validation.
     - Cons: hides a real regression; not allowed by the flaky-test rules.
 
+Resolved 2026-11-03 under [2921](2921-component-browser-failures-on-main.md) task 1. The page was right: the combobox found was `Log level for terminal`, and the bare `terminal` area is offered on purpose because its backend sites follow live policy. The spec now expects it and still excludes `web.*` and `terminal.*`. Not a flake: it failed every run.
+
 ### 3. Merged project list drag cases fail
 
 **Problem.** Both parameterised cases at `e2e/MergedProjectList.spec.ts:168` fail.
@@ -93,6 +95,7 @@ Resolved 2026-11-03 under [2921](2921-component-browser-failures-on-main.md) tas
     - Cons: would encode instructions text in user-visible transcript expectations, which may be the bug.
 
 **Outcome (2026-11-03).** Done in [2921](2921-component-browser-failures-on-main.md) task 3. The suffix belongs in the provider prompt: the bridge sends it to the SDK and strips it from the user's stored text, and the stored-text paths were not at fault. The fake Cursor engine recorded the framed prompt as the user's text; it now strips the frame and keeps the sent text separately, and one spec assertion checks the frame is still sent. `:693` had a second cause, unrelated to the suffix: the backend's 30 s runtime-health cache. Its deadline now covers that cache. See 2921's Assumptions and decisions.
+
 ## Assumptions and decisions
 
 ### Task 1: fixed through 2920
@@ -102,6 +105,10 @@ Closed by the test-only fix recorded in
 whose investigation found the cause this task left open. The idle timer did
 not need to change: expiry already destroys the socket, and the failing step
 was the "application closes" half of the case, not idle expiry.
+
+### Task 2: the spec was stale (2026-11-03)
+
+Took the recommended option and compared the spec with what `logDetailAreas()` offers. The settings page matches the live policy, so the spec changed, not the page; [2921](2921-component-browser-failures-on-main.md) task 1 has the options and the checks that the spec still fails when a `web.*` or `terminal.*` control appears. Skipping the case was rejected because the case was correct in intent and only its expectation was stale.
 
 ## Related
 

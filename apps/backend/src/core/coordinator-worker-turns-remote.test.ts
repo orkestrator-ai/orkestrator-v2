@@ -9,6 +9,7 @@ import { createCommandRegistry } from "./commands-registry.js";
 import { ControlMcpServer } from "./control-mcp-server.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 // A command node's coordinator stopping a turn and running a slash command in
 // a worker on a connected node: real MCP dispatch, scope checks, receipts,
@@ -190,7 +191,11 @@ async function remoteDelegation(requestId: string) {
     requestId: `delegation:${requestId}`,
     createdAt: new Date().toISOString(),
   });
-  await world.storage.coordinators.openCoordinatorDelegation(association.id, "agent");
+  await world.storage.coordinators.openCoordinatorDelegation(
+    new WorkerTabCloseAdmission(),
+    association.id,
+    "agent",
+  );
   return association.id;
 }
 

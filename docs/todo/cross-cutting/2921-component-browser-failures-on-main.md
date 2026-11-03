@@ -6,7 +6,7 @@ Analysed 2026-11-02 against main at `fd679c0e2`.
 
 ### Tasks
 
-1. **Log Detail shows a `terminal` area**: open.
+1. **Log Detail shows a `terminal` area**: done (2026-11-03): `terminal` is a deliberate live-policy area; the spec now expects it and still excludes `web.*` and `terminal.*`.
 2. **Merged project list group drags never start**: done (2026-11-03): the previous drag's card took the press; it no longer takes pointer input.
 3. **Cursor close-retention cases compare prompts without the appended system instructions**: done (2026-11-03; see Assumptions and decisions).
 
@@ -27,6 +27,8 @@ Analysed 2026-11-02 against main at `fd679c0e2`.
   - **Loosen the regex to drop `terminal`.**
     - Pros: one-line change.
     - Cons: may hide a real control that does nothing.
+
+**Outcome.** The spec was wrong. `logDetailAreas()` (`packages/protocol/src/log-policy.ts`) skips only `web.*` and `terminal.*` sub-areas, because their levels come from `orkestrator:debug` at renderer startup; the bare `terminal` area also has backend sites, which follow live policy. `log-policy.test.ts` already asserts that `terminal` is offered. The spec now lists `terminal` among the areas it expects and excludes `/^Log level for (web\.|terminal\.)/`. See Assumptions and decisions.
 
 ### 2. Merged project list group drags never start
 
@@ -71,6 +73,16 @@ The cause is `0412ae2c4` (#1603, Unify federated sidebar behavior). It added `Si
     - Cons: four call sites, and `includes` comparisons need rewriting.
 
 ## Assumptions and decisions
+
+### Task 1: fix the spec, not the settings list (2026-11-03)
+
+Checked against `main` at `b68b6e710`. The code side is deliberate: the comment in `logDetailAreas()` says the shared `terminal` area has backend sites that follow live policy, and `log-policy.test.ts` asserts `terminal` is offered while every `web.*` and `terminal.*` area is not. Options considered:
+
+- **Change the spec (chosen).** The exclusion regex becomes `/^Log level for (web\.|terminal\.)/` and `terminal` joins the expected-present list. The spec still pins the rule: with the `terminal.` skip removed from `logDetailAreas()` it fails (`terminal.setup` appears, count 1), and with the `web.` skip removed it fails (count 26). Both checks were run locally and not committed.
+- **Drop `terminal` from the Levels list.** This would remove a control that does change the backend's terminal logging, and contradict `log-policy.test.ts`.
+- **Only loosen the regex.** Passes, but no longer proves the `terminal` control is there.
+
+`gateway.terminal`, also in the failure's snapshot, is a backend area and is correctly offered; the regex never matched it.
 
 ### Task 2: fix the product, not the spec (2026-11-03)
 

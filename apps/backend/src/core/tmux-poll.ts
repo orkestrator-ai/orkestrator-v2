@@ -52,6 +52,7 @@ export type PollTmuxLayerTypes = [
 ];
 export type ClaudeStatePoll = {
   timer: unknown;
+  demandTimer?: unknown;
   intervalMs: number;
   lastState: string;
   lastRevision?: number;
@@ -63,6 +64,12 @@ export type ClaudeStatePoll = {
   pollRequested: boolean;
   inFlight?: Promise<void>;
   context: CommandContext;
+  /**
+   * Whether anything in the container can run terminal Claude: a terminal
+   * shell or a claude-tmux tab. Without one the hooks cannot write, so the
+   * poll keeps only the slow safety read (BG-7).
+   */
+  demand: boolean;
   /** When storage last confirmed the environment still owns a running container. */
   lastRetirementCheckAt?: number;
   /** This lineage's doorbell credential, while one is issued. */
@@ -213,6 +220,7 @@ export function parseClaudeStateSnapshot(value: string): {
 }
 
 export class ClaudeStatePollManager {
+  private readonly retired = new Set<string>();
   private readonly polls = new Map<string, ClaudeStatePoll>();
   /** Survives retirement until the old installer has stopped writing. */
   private readonly signalInstallations = new Map<string, Promise<void>>();
@@ -244,12 +252,24 @@ export class ClaudeStatePollManager {
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
-  start(containerId: string, context: CommandContext): void {
-    if (this.stopped) return;
+  start(containerId: string, context: CommandContext, demand = true): void {
+    if (this.stopped || this.isRetired(containerId)) return;
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
       existing.context = context;
+      const lost = !demand && existing.demand;
+      const gained = demand && !existing.demand;
+      existing.demand = demand;
+      if (lost) this.reschedule(containerId, existing, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      if (gained) {
+        // A terminal or tab just opened: back to the fast read until the next
+        // observation decides the cadence, and read now.
+        if (!existing.signalConfirmed) {
+          this.reschedule(containerId, existing, CLAUDE_STATE_POLL_INTERVAL_MS);
+        }
+        this.requestPoll(containerId, existing);
+      }
       this.armSignal(containerId, existing);
       return;
     }
@@ -263,6 +283,7 @@ export class ClaudeStatePollManager {
       active: true,
       pollRequested: false,
       context,
+      demand,
       signalConfirmed: false,
       signalUnsupported: false,
       signalDemoted: false,
@@ -429,7 +450,32 @@ export class ClaudeStatePollManager {
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
       running.add(environment.containerId);
-      this.start(environment.containerId, context);
+      if (context.runtime?.environments?.hasLifecycleWork(environment.id)) continue;
+      this.start(
+        environment.containerId,
+        context,
+        terminalClaudeDemand(context, environment.id, environment.containerId),
+      );
+      const poll = this.polls.get(environment.containerId);
+      if (poll && poll.demandTimer === undefined) {
+        // Re-evaluate backend-owned demand without an exec or storage read.
+        poll.demandTimer = this.schedule(() => {
+          this.start(
+            environment.containerId!,
+            poll.context,
+            terminalClaudeDemand(poll.context, environment.id, environment.containerId!),
+          );
+        }, CLAUDE_STATE_POLL_INTERVAL_MS);
+      }
+    }
+    for (const id of Array.from(this.retired)) {
+      if (
+        !environments.some(
+          (env) =>
+            env.containerId && (env.containerId.startsWith(id) || id.startsWith(env.containerId)),
+        )
+      )
+        this.retired.delete(id);
     }
     for (const containerId of this.polls.keys()) {
       if (!running.has(containerId)) this.shutdown(containerId);
@@ -446,6 +492,36 @@ export class ClaudeStatePollManager {
     if (poll) this.deactivate(containerId, poll);
   }
 
+  /**
+   * {@link shutdown} for every poll whose container id matches `containerId`
+   * as a full or short id, as a `docker events` id may differ in length.
+   */
+  shutdownMatching(containerId: string): void {
+    if (!containerId) return;
+    this.retired.add(containerId);
+    while (this.retired.size > 1024) {
+      const oldest = this.retired.values().next().value;
+      if (oldest === undefined) break;
+      this.retired.delete(oldest);
+    }
+    for (const id of Array.from(this.polls.keys())) {
+      if (id.startsWith(containerId) || containerId.startsWith(id)) this.shutdown(id);
+    }
+  }
+
+  private isRetired(containerId: string): boolean {
+    return Array.from(this.retired).some(
+      (id) => id.startsWith(containerId) || containerId.startsWith(id),
+    );
+  }
+
+  /** Only a positive start event reopens admission after container death. */
+  startedMatching(containerId: string): void {
+    for (const id of Array.from(this.retired)) {
+      if (id.startsWith(containerId) || containerId.startsWith(id)) this.retired.delete(id);
+    }
+  }
+
   /** Permanently close admission and retire every poll at backend shutdown. */
   shutdownAll(): void {
     this.stopped = true;
@@ -456,6 +532,7 @@ export class ClaudeStatePollManager {
     if (this.polls.get(containerId) !== poll) return;
     poll.active = false;
     this.cancel(poll.timer);
+    if (poll.demandTimer !== undefined) this.cancel(poll.demandTimer);
     this.revokeSignal(poll);
     this.polls.delete(containerId);
   }
@@ -498,8 +575,9 @@ export class ClaudeStatePollManager {
     poll.ringsAtPreviousRead = rings;
     poll.lastRevision = revision;
     poll.lastCompletions = completions;
-    // A legacy state has no way to expose a whole missed turn: keep fast polling.
-    const slow = poll.signalConfirmed && revision !== undefined;
+    // A legacy state has no way to expose a whole missed turn: keep fast polling,
+    // unless nothing in the container can run terminal Claude at all.
+    const slow = (poll.signalConfirmed && revision !== undefined) || !poll.demand;
     this.reschedule(
       containerId,
       poll,
@@ -714,6 +792,25 @@ export class ClaudeStatePollManager {
       warn(error);
     }
   }
+}
+
+/**
+ * Whether the container can be running terminal Claude: a terminal shell in
+ * it or a claude-tmux tab of its environment. A context without that runtime
+ * (lightweight fixtures) answers yes, the behaviour before the gate.
+ */
+export function terminalClaudeDemand(
+  context: CommandContext,
+  environmentId: string,
+  containerId: string,
+): boolean {
+  const runtime = context.runtime as Partial<CommandContext["runtime"]> | undefined;
+  const terminals = runtime?.terminals;
+  const sessions = runtime?.tmux?.sessions;
+  if (!terminals?.hasContainerTerminal || !sessions?.sessionsInEnvironment) return true;
+  return (
+    terminals.hasContainerTerminal(containerId) || sessions.sessionsInEnvironment(environmentId) > 0
+  );
 }
 
 /**

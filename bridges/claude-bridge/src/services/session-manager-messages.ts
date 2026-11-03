@@ -109,6 +109,22 @@ export class ToolTracker {
   getTool(toolUseId: string): NormalizedPart | undefined {
     return this.tools.get(toolUseId);
   }
+
+  /**
+   * The tool's part, with `createdAt` stamped onto the entry the first time
+   * one is known. Stored rather than spread per build, so every later build
+   * returns the same object and publishing can still diff tools by identity.
+   */
+  getToolWithCreatedAt(
+    toolUseId: string,
+    createdAt: string | undefined,
+  ): NormalizedPart | undefined {
+    const existing = this.tools.get(toolUseId);
+    if (!existing || !createdAt || existing.createdAt) return existing;
+    const stamped = { ...existing, createdAt };
+    this.tools.set(toolUseId, stamped);
+    return stamped;
+  }
 }
 
 /** Entry in the ordered parts sequence - a thinking block, tool reference, or text block */
@@ -539,12 +555,11 @@ export function refreshSettledToolRows(
         return part;
       }
       pending.delete(part.toolUseId);
-      const tracked = toolTracker.getTool(part.toolUseId);
-      if (!tracked || published?.has(message)) return part;
+      if (published?.has(message)) return part;
+      const tracked = toolTracker.getToolWithCreatedAt(part.toolUseId, part.createdAt);
+      if (!tracked || tracked === part) return part;
       changed = true;
-      return part.createdAt && !tracked.createdAt
-        ? { ...tracked, createdAt: part.createdAt }
-        : tracked;
+      return tracked;
     });
     if (changed) {
       message.parts = parts;
@@ -976,12 +991,8 @@ export function buildMessageParts(
         parentTaskUseId: entry.parentTaskUseId,
       });
     } else if (entry.type === "tool-ref") {
-      const tool = toolTracker.getTool(entry.value);
-      if (tool) {
-        result.push(
-          entry.timestamp && !tool.createdAt ? { ...tool, createdAt: entry.timestamp } : tool,
-        );
-      }
+      const tool = toolTracker.getToolWithCreatedAt(entry.value, entry.timestamp);
+      if (tool) result.push(tool);
     } else if (entry.type === "text") {
       result.push({
         type: "text",

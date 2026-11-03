@@ -170,6 +170,29 @@ describe("Claude state signal route", () => {
     expect(reasons).toHaveLength(5);
   });
 
+  test("hook credentials ring only their receiver and cannot open MCP or other doorbells", async () => {
+    const rings: string[] = [];
+    const hook = server.issueTmuxHookSignal(() => rings.push("hook"))!;
+    const second = server.issueTmuxHookSignal(() => rings.push("second"))!;
+    const state = server.issueStateSignal(() => rings.push("state"))!;
+    const worktree = server.issueWorktreeSignal(() => rings.push("worktree"))!;
+    const mcp = server.connection("env-1", "project-1", "container");
+    expect((await ring(hook.url, hook.token)).status).toBe(204);
+    expect(rings).toEqual(["hook"]);
+    expect((await ring(second.url, second.token)).status).toBe(204);
+    for (const other of [state, worktree]) {
+      expect((await ring(other.url, hook.token)).status).toBe(401);
+      expect((await ring(hook.url, other.token)).status).toBe(401);
+    }
+    expect((await ring(hook.url, mcp.token)).status).toBe(401);
+    const mcpUrl = new URL(hook.url);
+    mcpUrl.pathname = "/mcp";
+    expect((await ring(mcpUrl.toString(), hook.token)).status).toBe(401);
+    hook.revoke();
+    expect((await ring(hook.url, hook.token)).status).toBe(401);
+    expect(rings).toEqual(["hook", "second"]);
+  });
+
   test("stopping the server forgets every doorbell", async () => {
     const credential = server.issueStateSignal(() => undefined)!;
     await server.stop();

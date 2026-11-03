@@ -34,6 +34,7 @@ type BackendKind = shared.BackendKind;
 type RawExecOutput = shared.RawExecOutput;
 type TmuxPollSnapshot = shared.TmuxPollSnapshot;
 type SessionHookPaths = shared.SessionHookPaths;
+type PollSnapshotExtras = shared.PollSnapshotExtras;
 export type BackendTmuxLayerTypes = [
   CommandContext,
   AgentToolConnection,
@@ -155,6 +156,46 @@ export class TmuxBackend {
       content: buffer.subarray(0, maxBytes).toString("utf8"),
       truncated: buffer.byteLength > maxBytes,
     };
+  }
+
+  /**
+   * At most `maxBytes` from the start of `filePath` in one round trip, or
+   * undefined when it cannot be read. Discovery's ownership check needs only
+   * a transcript's opening records.
+   */
+  async readHead(filePath: string, maxBytes: number): Promise<string | undefined> {
+    if (this.kind === "local") {
+      return (await this.readBoundedFile(filePath, maxBytes))?.content;
+    }
+    const out = await this.exec(["head", "-c", String(maxBytes), filePath]);
+    return out.status === 0 ? out.stdout : undefined;
+  }
+
+  /** Bounded suffix for resumed/forked transcripts whose owner is beyond the head. */
+  async readTail(filePath: string, maxBytes: number): Promise<string | undefined> {
+    if (this.kind === "container") {
+      const out = await this.exec(["tail", "-c", String(maxBytes), filePath]);
+      return out.status === 0 ? out.stdout : undefined;
+    }
+    try {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const size = (await handle.stat()).size;
+        const buffer = Buffer.alloc(Math.min(size, maxBytes));
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          buffer.length,
+          Math.max(0, size - maxBytes),
+        );
+        return buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {
@@ -320,30 +361,61 @@ export class TmuxBackend {
   }
 
   /**
-   * Both hook directories and the transcript size for one poll tick.
+   * Both hook directories and the transcript size for one poll tick, plus
+   * whatever `extras` asks for (the expected transcript, liveness, the pane).
    *
-   * Local reads are three cheap syscalls issued together; container reads
-   * collapse into a single `docker exec`.
+   * Local reads are cheap syscalls issued together (tmux itself is still a
+   * spawn each); container reads collapse into a single `docker exec`.
    */
   async pollSnapshot(
     paths: SessionHookPaths,
     transcriptPath: string | undefined,
+    extras: PollSnapshotExtras = {},
   ): Promise<TmuxPollSnapshot> {
     if (this.kind === "local") {
-      const [pending, timeouts, transcriptSize] = await Promise.all([
+      const tmux = extras.tmux;
+      const [pending, timeouts, transcriptSize, candidateSize, alive, pane] = await Promise.all([
         this.listDir(paths.pendingDir),
         this.listDir(paths.timeoutDir),
         transcriptPath ? this.fileSize(transcriptPath) : Promise.resolve(0),
+        extras.candidatePath ? this.existingFileSize(extras.candidatePath) : undefined,
+        tmux?.liveness
+          ? this.exec([tmux.command, "has-session", "-t", tmux.session]).then(
+              (out) => out.status === 0,
+            )
+          : undefined,
+        tmux?.pane
+          ? this.exec([tmux.command, "capture-pane", "-t", tmux.session, "-p", "-J"]).then((out) =>
+              out.status === 0 ? out.stdout : null,
+            )
+          : undefined,
       ]);
-      return { pending, timeouts, transcriptSize };
+      return {
+        pending,
+        timeouts,
+        transcriptSize,
+        ...(candidateSize !== undefined ? { candidateSize } : {}),
+        ...(alive !== undefined ? { alive } : {}),
+        ...(pane !== undefined ? { pane } : {}),
+      };
     }
 
     const out = await this.exec([
       "sh",
       "-c",
-      pollSnapshotScript(paths.pendingDir, paths.timeoutDir, transcriptPath),
+      pollSnapshotScript(paths.pendingDir, paths.timeoutDir, transcriptPath, extras),
     ]);
-    return parsePollSnapshotExecOutput(out);
+    return parsePollSnapshotExecOutput(out, extras.tmux?.pane ? extras.nonce : undefined);
+  }
+
+  /** Size of a local file, or null when it does not exist. */
+  private async existingFileSize(filePath: string): Promise<number | null> {
+    try {
+      return (await fs.stat(filePath)).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
   }
 
   /** Every `.jsonl` in `dirPath` as `{ path, mtime }`, newest first. */

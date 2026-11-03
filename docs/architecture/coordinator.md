@@ -899,6 +899,24 @@ HEAD change, the repository-context revision increments and is supplied before
 the next turn so the agent does not assume its old analysis still describes the
 checkout.
 
+Each change is also recorded as a repository context event
+(`repositoryContextEvents`, the newest 32) with the branch and commit it moved
+from and its source: `upstream` for a fast-forward, `switch` for the branch
+picker, `external` for anything Orkestrator did not do itself. A conversation's
+first turn after the checkout moved gets a **checkout update** notice inside its
+context block (`coordinator-checkout-update.ts`), whatever started the turn (a
+typed message, mail, a timer): what moved it, the old and new commit, and up to
+20 new commits (subject lines) and 40 changed paths from
+`ProjectGitService.checkoutChanges`, with totals. It tells the coordinator its
+earlier reads may be stale and to check whether the changes bear on the
+request. "Since its previous turn" is the revision the conversation's newest
+dispatched turn carried (`repositoryContextRevisionAcknowledged`), so the
+notice is shown once, is repeated if that turn was refused, and is not shown on
+a conversation's first turn. When the starting commit is no longer known (the
+event was evicted, or written by an older release) the notice still says the
+checkout moved and where it is now. Commit subjects and paths are repository
+content, so each is kept to one line and cannot close the context block.
+
 ### Keeping the checkout on its upstream
 
 The coordinator reads the project's own checkout, so the backend keeps it on
@@ -908,7 +926,7 @@ rule lives in `@orkestrator/protocol/coordinator-upstream-merge`
 nothing blocks a fast-forward (no local commits, no uncommitted changes, no
 unfinished repository operation). Nothing is ever merged under a running
 coordinator or project-home turn, because the backend refuses to change the
-checkout then. It happens at two moments.
+checkout then. It happens at three moments.
 
 **Before each message to the main coordinator**, its first prompt included,
 the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
@@ -924,6 +942,25 @@ sync. Against a backend without the check, the renderer applies the same
 protocol rule to its own fetch. Any offer, including one without `automatic`
 from an older backend that would have asked, is merged.
 
+**Before agent mail wakes the main coordinator** (a worker's report, a side
+agent's question, a status notice), the backend does the same itself, since no
+client is involved (`coordinator-mail-upstream.ts`, the `beforeMailInject`
+hook of `NativeAgentService.dispatchMailInject`). It runs before the mail turn
+enters the session's dispatch fence, so the coordinator context block of that
+turn names the merged commit. Independent environments drain mail concurrently
+from a snapshot of at most 100 pending entries; each environment retains serial
+delivery and batching. A slow coordinator fetch therefore does not block worker
+mail in the same pass. Mail attempts have a 60-second per-project backoff,
+including failed and timed-out attempts, separate from the successful-fetch
+cooldown. The fetch is cooldown-bound and the wait for it
+is capped at five seconds: past that the mail is delivered without merging,
+and the late fetch does not start a fast-forward afterwards. A fast-forward
+that has begun is finished first, because the turn's admission
+(`beginTurnAfterMergeSync`) waits for it. A running turn, a blocked checkout,
+a side agent, a paused coordinator and a steered message (one taken into a
+running turn) are all left alone, and a failure is logged
+(`checkout.mail-follow`) and never holds the mail.
+
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout
 (`project-checkout-merge-follow.ts`, owned by the PR monitor runtime). Every
@@ -934,8 +971,8 @@ a merge made on GitHub that the PR monitor observes
 are touched, since nothing else reads that checkout, and the project home's
 own PR is not followed (its checkout is the PR's branch, not the base it
 merged into). A merge observed while a turn holds the checkout is retried
-every 30 seconds for up to 30 minutes; after that the next coordinator message
-merges it instead. Merges of one project coalesce, and each PR is followed
+every 30 seconds for up to 30 minutes; after that the next coordinator message,
+typed or mailed, merges it instead. Merges of one project coalesce, and each PR is followed
 once per backend process. The work belongs to the backend: no client has to
 be open.
 
@@ -2486,7 +2523,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
   coordinator, the operator profile or a public action
   (`graph-describe-coordinator.test.ts`)
 - single-turn mail batching: `agent-mail-service.test.ts`
-- tool contract and poll guard: `control-mcp-server.test.ts`
+- tool contract and poll guard: `control-mcp-server-reads.test.ts` and
+  `control-mcp-server-messaging.test.ts`
 - the answer relay: questions only, the proposal checked and stored, stale and
   malformed answers never sent, end to end on this node
   (`worker-question-relay.test.ts`) and on a connected node
@@ -2496,7 +2534,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - project-home messages: a reason required, held outside the 3-hour window,
   approve, decline, replay, the window opened only by sent mail, and ordinary
   workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
-  shapes (`control-mcp-server.test.ts`); the dialog
+  shapes (`control-mcp-server-messaging.test.ts`); the dialog
   (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
@@ -2561,7 +2599,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   `coordinator-surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
-  and side agents: `control-mcp-server.test.ts`
+  and side agents: `control-mcp-server-coordinator-workflows.test.ts`
 - `get_worker_changes` bounds, paging, path filters, uncommitted marks and
   diff rendering over fake `changes_*` answers:
   `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,

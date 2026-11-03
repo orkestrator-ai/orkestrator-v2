@@ -38,7 +38,7 @@ governs, marked "Decided".
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
-13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; a full Electron launch-to-ready run and a cold-cache run still need live evidence).
+13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
@@ -497,7 +497,14 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 | First launch after the old code re-created the re-signed copies (an upgrade) | n/a | 3.0 to 3.8 s |
 | Full check: first launch with no stamp file, weekly, or repair | as above | 7.7 s (first window); 9.6 to 10.2 s (busier window) |
 
-Not measured: a whole Electron launch to ready, and a cold page cache (`purge` needs root).
+Whole Electron launch to ready, measured the same day on an isolated `dev:test` profile (`tc13-launch`, no fixture, the six seeded toolchains, 1.3 GB; load average 20 to 29) with `output/efficiency/toolchain-13/launch-runs.sh` (git-ignored). The time runs from the launcher's first status write naming an Electron PID to its `ready` write, which follows Electron's readiness line (window created, backend started); polled every 25 ms. "Before" is the same tree with `packages/toolchain/src` and `apps/desktop/electron/main.ts` checked out from `7b48c23f`; the Electron bundle is rebuilt from source on every start. The profile was reset afterwards.
+
+| Launch | Before (`7b48c23f`) | After | After: `prepare.ready` `durationMs` |
+| --- | --- | --- | --- |
+| Unchanged toolchain (repeat launches) | 10.2, 13.8, 12.6 s | 1.6, 1.9, 1.8, 1.7 s | 449, 390, 492, 214 ms |
+| First launch on the new code (no stamp file, so a full check) | n/a | 4.7 s | 3,339 ms |
+
+Not measured: a cold page cache (`purge` needs root).
 
 **Decisions.**
 
@@ -895,6 +902,17 @@ is re-verified by hashing (the rule git uses for its index), so a file changed
 in the same timestamp tick as its stamp is never trusted on metadata alone. A
 freshly installed or re-signed file is therefore hashed once more on the next
 launch, and skipped from the one after.
+
+### Task 13: how launch-to-ready was measured
+
+Made on 2026-11-03. Launch-to-ready is timed on a disposable `dev:test`
+profile from Electron's spawn to the launcher's `ready` write, rather than
+from the launcher's own start, because the launcher's start also includes
+compiling the Electron bundle (16 s of the first run after the code change).
+The old code was measured by checking out only the two changed areas from
+`7b48c23f` into the worktree for those runs and restoring them afterwards, so
+the rest of startup was identical in both sets. The real installed toolchain
+was only copied (the profile's seeding), never verified or rewritten.
 
 ### Task 13: download retries
 

@@ -2740,6 +2740,8 @@ export class NativeAgentTranscriptProjection {
      * the provider's cursor decides whether it is needed at all.
      */
     const holdsPreview = (snapshot.omittedParts ?? 0) > 0;
+    const previewHeadId = (snapshot.messages[0] as { id?: unknown } | undefined)?.id;
+    const trimmedPreviewHeadId = typeof previewHeadId === "string" ? previewHeadId : undefined;
     if (holdsPreview) scheduleHydration(false);
     /*
      * A restarted Codex bridge knows the durable thread identity before it has
@@ -2777,6 +2779,8 @@ export class NativeAgentTranscriptProjection {
           projection.value.historyCursor === undefined
             ? projection.value.messageWindow
             : { truncated: true },
+          // The provider bound only ever trims the oldest row of its window.
+          holdsPreview ? trimmedPreviewHeadId : undefined,
         ),
         transient: resolved.transient,
         ...(resolved.provider.setSessionTitle

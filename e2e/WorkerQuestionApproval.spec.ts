@@ -175,15 +175,22 @@ test("a long question list scrolls while the heading and actions stay in view", 
   const decline = dialog.getByRole("button", { name: "Decline" });
 
   expect(await group.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+  const controls = [heading, approve, decline];
+  for (const control of controls) await expect(control).toBeInViewport({ ratio: 1 });
+  const before = await Promise.all(controls.map((control) => control.boundingBox()));
   await group.evaluate((element) => (element.scrollTop = element.scrollHeight));
   expect(await group.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  for (const [index, control] of controls.entries()) {
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const after = (await control.boundingBox())!;
+    expect(after.y).toBeCloseTo(before[index]!.y, 0);
+  }
   await page.screenshot({
     path: path.resolve(
       "output/visual-previews",
       `worker-question-approval-many-${testInfo.project.name}.png`,
     ),
   });
-  for (const control of [heading, approve, decline]) await expect(control).toBeInViewport();
 
   await decline.click();
   await expect

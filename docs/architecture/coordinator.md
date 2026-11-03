@@ -1314,8 +1314,10 @@ conversation ids (`launch_multi_review`, `start_multi_review`,
 `create_pr` and `resolve_conflicts` (a `pull-request` association), and the
 delegations `launch_environment`,
 `launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
-build the user started in the UI, or a pull request the user raised, has no
-association and never wakes a coordinator. Notices go to the main coordinator, like every other report, and
+build the user started in the UI has no association and never wakes a
+coordinator. A pull request the user raised is not followed either, but on a
+worker the coordinator owns its merge or close still reaches it, as a
+[worker outcome](#worker-outcomes). Notices go to the main coordinator, like every other report, and
 do not start one: with no main open they wait, and the sweep sends the state
 current when one opens.
 
@@ -1339,6 +1341,7 @@ stable key; a key is sent once, recorded on the association
 | Graph run | ended: `completed` (agent sessions and tokens), `failed` (the run's error), `cancelled`, keyed `complete`, `failed` or `cancelled` | always |
 | Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
+| Worker outcome | a worker the coordinator owns: its PR merged (`pr-merged`) or closed (`pr-closed`), naming the deletion when the environment is going too, or the environment deleted (`deleted`, resource `environment`) with its PR still open or without one; once per worker, unless a PR follow reports the merge or close | `settled` |
 | Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
@@ -1501,6 +1504,53 @@ landed.
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
 rather than left to poll `get_multi_review`; `create_pr` (when it launched)
 and `resolve_conflicts` return `COORDINATOR_PR_STATUS_WAKE`.
+
+### Worker outcomes
+
+A coordinator also hears when a worker it owns is merged, closed or deleted,
+whoever did it: a pipeline environment's PR the user merged, a PR the user
+raised on a launched worker, Merge and Cleanup, or a plain deletion
+(`apps/backend/src/core/coordinator-worker-outcomes.ts`). The notice is for
+awareness. It says what happened and ends with a line that nothing is
+expected of the coordinator unless it affects work it is tracking: dependent
+tasks, tickets, branches built on the worker, or work it meant to send there.
+
+**Ownership.** The earliest `environment` association (a launch or any
+delegation) or `build-pipeline` association that names the worker, per
+coordinator, worker and node. The watch lives on that association
+(`workerOutcome`), so it adds no records; a build pipeline's worker is read
+from the pipeline once and kept there. Several delegations to one worker
+are one watch.
+
+**What it reports.** One notice, then the watch ends:
+
+- The PR merged or closed: `pr-merged` or `pr-closed` (resource
+  `pull-request`). When the environment is being deleted or is gone, the
+  headline says so ("was merged and its environment deleted"), so Merge and
+  Cleanup is one notice, not two.
+- The environment deleted with its PR still open, or with no PR: `deleted`
+  (resource `environment`), naming the PR's last state.
+
+A deletion still in progress waits until the record is gone, unless the PR
+already merged or closed. A merge or close that a live PR follow of the same
+coordinator will report, or already reported, ends the watch silently, so
+the coordinator hears each outcome once; a follow's own merge and close
+notices name the deletion and carry the same awareness line. After a merge
+or close the watch is over: a later deletion is not reported.
+
+**Old news.** The first observation of a worker records its state. A worker
+already merged, closed or gone then (one from before this watch existed)
+ends silently. A deletion captured as it happens always reports:
+`deleteEnvironment` keeps the worker's last PR reading and name on its
+watches (`captureFinalPullRequest`) just before the record is removed. A
+worker on a connected node is read through that node's `get_environment`,
+and a worker the node no longer has counts as deleted, with the last reading
+the watch kept.
+
+Change events for a watched worker are observed within seconds, like a
+followed PR; the 60-second sweep finds everything else, writing all its
+bookkeeping in one store write. *Finished work only* ends watches without a
+notice.
 
 ## Launch defaults
 

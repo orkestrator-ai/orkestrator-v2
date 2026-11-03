@@ -309,8 +309,9 @@ export interface CoordinatorStatusNoticeRecord {
  *
  * Written when the coordinator raises the PR (`create_pr`), runs
  * `resolve_conflicts` on it, or when a review it launched reports the PR its
- * auto-PR opened. Status wakes report the PR's state changes from it; a PR the
- * user raised in the UI has no such record and wakes nobody.
+ * auto-PR opened. Status wakes report the PR's state changes from it. A PR the
+ * user raised in the UI has no such record; on a worker the coordinator owns,
+ * only its merge or close reaches it (`CoordinatorWorkerOutcome`).
  */
 export interface CoordinatorPullRequestFollow {
   source: "create-pr" | "resolve-conflicts" | "multi-review";
@@ -351,6 +352,34 @@ export interface CoordinatorPullRequestFollow {
   };
 }
 
+/**
+ * How a coordinator-owned worker ended up: its pull request merged or closed,
+ * or the environment deleted (`coordinator-worker-outcomes.ts`).
+ *
+ * Kept on one association per coordinator, worker and node: the earliest
+ * `environment` or `build-pipeline` association that names the worker. The
+ * coordinator hears one awareness notice when the watch ends on a merge, a
+ * close or a deletion; nothing it must act on.
+ */
+export interface CoordinatorWorkerOutcome {
+  /** `build-pipeline`: the pipeline's worker, read once from the pipeline. */
+  environmentId?: string;
+  /** First observation; an outcome already reached then is old news, recorded without a wake. */
+  observedAt?: string;
+  /** The worker's last seen pull request and name. */
+  prUrl?: string;
+  prState?: "open" | "closed" | "merged";
+  name?: string;
+  /** Captured just before the worker's record was deleted (`deleteEnvironment`). */
+  deletedAt?: string;
+  /**
+   * The watch is over. `key` names what ended it (`merged:<tag>`,
+   * `closed:<tag>`, `deleted`, `untracked`); `notified` says whether this
+   * watch woke the coordinator for it (a PR follow may have told it instead).
+   */
+  ended?: { key: string; at: string; notified: boolean };
+}
+
 export interface CoordinatorWorkflowAssociation {
   id: string;
   coordinatorId: string;
@@ -389,6 +418,8 @@ export interface CoordinatorWorkflowAssociation {
   delegation?: CoordinatorDelegation;
   /** Present on `pull-request` associations. */
   pullRequest?: CoordinatorPullRequestFollow;
+  /** `environment` and `build-pipeline`: the worker's outcome watch (see `CoordinatorWorkerOutcome`). */
+  workerOutcome?: CoordinatorWorkerOutcome;
 }
 
 /**

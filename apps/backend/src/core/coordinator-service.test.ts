@@ -2010,6 +2010,8 @@ describe("project coordinator", () => {
       createdAt: new Date().toISOString(),
       lastNotifiedRevision: 5,
       terminalNotifiedAt: new Date().toISOString(),
+      // Its worker's outcome watch already knows the worker.
+      workerOutcome: { environmentId: "env-1" },
     });
     const original = storage.getBuildPipeline.bind(storage);
     const read = mock(async () => {
@@ -2019,6 +2021,46 @@ describe("project coordinator", () => {
     try {
       await coordinator.reconcileWorkflowNotifications();
       expect(read).not.toHaveBeenCalled();
+    } finally {
+      storage.getBuildPipeline = original;
+    }
+  });
+
+  test("reads a settled pipeline once to learn the worker its outcome watch follows", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    await storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "settled-workflow",
+      coordinatorId: snapshot.workspace.id,
+      projectId: project.id,
+      conversationId: snapshot.workspace.conversations[0]!.id,
+      kind: "build-pipeline",
+      resourceId: "pipeline-1",
+      requestId: "request-1",
+      createdAt: new Date().toISOString(),
+      lastNotifiedRevision: 5,
+      terminalNotifiedAt: new Date().toISOString(),
+    });
+    const original = storage.getBuildPipeline.bind(storage);
+    const read = mock(async () => ({
+      snapshot: { environmentId: "env-1" },
+    })) as unknown as typeof storage.getBuildPipeline;
+    storage.getBuildPipeline = read;
+    try {
+      await coordinator.reconcileWorkflowNotifications();
+      await coordinator.reconcileWorkflowNotifications();
+      expect(read).toHaveBeenCalledTimes(1);
+      const [association] = await storage.coordinators.listCoordinatorWorkflowAssociations(
+        project.id,
+      );
+      expect(association?.workerOutcome?.environmentId).toBe("env-1");
     } finally {
       storage.getBuildPipeline = original;
     }

@@ -813,6 +813,32 @@ export class CoordinatorsRepository {
   }
 
   /**
+   * Several associations' bookkeeping in one write (a sweep's worker outcome
+   * watches). Each mutation returns whether it changed its association; the
+   * store is written once, and only when one did. Never for a delegation's
+   * waiting episode, which announces itself through the single-record update.
+   */
+  async updateCoordinatorWorkflowAssociations(
+    mutations: ReadonlyArray<{
+      associationId: string;
+      mutate: (association: CoordinatorWorkflowAssociation) => boolean;
+    }>,
+  ): Promise<void> {
+    if (mutations.length === 0) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const { associationId, mutate } of mutations) {
+        const association = store.workflows.find((item) => item.id === associationId);
+        if (association && mutate(association)) changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /**
    * Follow a worker's pull request for one coordinator (a `pull-request`
    * association), or update the live record that already does.
    *
@@ -1135,6 +1161,7 @@ export type CoordinatorsStorage = Pick<
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
   | "updateCoordinatorWorkflowAssociation"
+  | "updateCoordinatorWorkflowAssociations"
   | "followCoordinatorPullRequest"
   | "markCoordinatorWorkflowNotified"
   | "adoptCoordinatorWorkflowAssociation"

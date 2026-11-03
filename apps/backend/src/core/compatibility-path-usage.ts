@@ -57,6 +57,11 @@ export const COMPATIBILITY_PATH_IDS = [
    * coordinator and the leaf does not advertise `node-coordinator-mail`.
    */
   "node-coordinator-mail.older-node",
+  /**
+   * A command node's coordinator used ticket tools or a build with a `nodeId`
+   * on a leaf that does not advertise `ticket-sync`.
+   */
+  "ticket-sync.older-node",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

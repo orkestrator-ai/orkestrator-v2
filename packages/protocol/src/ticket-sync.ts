@@ -213,6 +213,28 @@ export interface TicketSyncStatusResult {
   conflicts: TicketSyncConflict[];
 }
 
+/** A leaf that does not advertise `ticket-sync` (version-compatibility.md, Register). */
+export function olderLeafTicketMessage(nodeName: string): string {
+  return `${nodeName} runs an older Orkestrator that cannot sync tickets. Update that machine to see this board's tickets there and build them by id.`;
+}
+
+/**
+ * A launch, build, review or other change for a machine that is not
+ * connected. These are refused rather than queued: run hours later, a launch
+ * would start from a stale base, and an ambiguous outcome could not be
+ * resolved without running it twice. Ticket changes do wait (see above).
+ */
+export function offlineLaunchMessage(nodeName: string): string {
+  return (
+    `${nodeName} is not connected; changes to it are disabled. Nothing was started there: launches, builds and reviews on another machine are not queued. ` +
+    `Retry when it reconnects (list_nodes), or run the work on another machine. Ticket tools still take its nodeId: their changes wait on this board until it reconnects.`
+  );
+}
+
+export function offlineTicketMessage(nodeName: string): string {
+  return `${nodeName} is not connected. Ticket changes wait here and reach it when it reconnects.`;
+}
+
 /*
  * Validation of what crosses the node link.
  */

@@ -57,6 +57,7 @@ import { registerControlCommands } from "./commands-registry-control.js";
 import { registerCoordinatorCommands } from "./commands-registry-coordinator.js";
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
+import { registerCoordinatorNodeTicketCommands } from "./coordinator-node-tickets.js";
 import { registerCoordinatorCommandNodeMail } from "./coordinator-node-coordinator-mail.js";
 import { registerCoordinatorForkWorker } from "./coordinator-fork-worker.js";
 import { registerCoordinatorWorkerChanges } from "./coordinator-worker-changes.js";
@@ -345,6 +346,7 @@ export function createCommandRegistry(
   registerCoordinatorCommands(register, dependencies);
   registerControllerWorkflowCommands(register, dependencies);
   registerCoordinatorNodeCommands(register);
+  registerCoordinatorNodeTicketCommands(register);
   registerCoordinatorCommandNodeMail(register);
   registerCoordinatorForkWorker(register, dependencies);
   registerCoordinatorWorkerChanges(register, dependencies);

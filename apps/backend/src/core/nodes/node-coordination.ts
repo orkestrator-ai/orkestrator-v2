@@ -269,11 +269,12 @@ export class NodeCoordination {
       this.ticketSync.handleNodeEvent(event, payload, nodeId);
     });
     // A board change here goes to the leaves with the project (command node);
-    // a change queued for a command node is announced to it (leaf).
-    this.unsubscribeKanban = storage.addResourceChangeListener((change) => {
+    // a change queued for a command node is announced to it (leaf). Test
+    // fixtures may hand in partial services, hence the optional calls.
+    this.unsubscribeKanban = storage.addResourceChangeListener?.((change) => {
       if (change.resource !== "kanban") return;
-      if (nodes.mode() === "command") this.ticketSync.noteLocalChange(change.id);
-      if (nodes.listControllers().length === 0) return;
+      if (nodes.mode?.() === "command") this.ticketSync.noteLocalChange(change.id);
+      if (!nodes.listControllers?.().length) return;
       void storage.kanban
         .ticketSyncOutboxControllers()
         .then((controllers) => {
@@ -283,7 +284,7 @@ export class NodeCoordination {
         })
         .catch(() => undefined);
     });
-    nodes.onControllerDetached((controllerId) => {
+    nodes.onControllerDetached?.((controllerId) => {
       void storage.kanban.forgetTicketSyncController(controllerId).catch(() => {
         log.warn("ticket-sync.forget-failed");
       });

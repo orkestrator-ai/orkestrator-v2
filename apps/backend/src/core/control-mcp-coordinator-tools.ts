@@ -300,7 +300,7 @@ export function registerCoordinatorWorkflowTools(
           .min(1)
           .max(200)
           .describe(
-            "The id of a ticket in this project (on nodeId's copy when nodeId is set). The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none.",
+            "The id of a ticket in this project. The build is linked to it and records its criteria results, status and pull request there. Create the ticket with create_ticket first if there is none. With nodeId, a ticket of this board is synced to that node first and built there under the same id (no relay through that node's coordinator); a ticket made only on that node works too.",
           ),
         environmentType: z.enum(["local", "containerized"]).default("local"),
         baseBranch: z.string().trim().min(1).max(500),

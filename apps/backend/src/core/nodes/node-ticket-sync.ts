@@ -1,6 +1,8 @@
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import {
+  offlineTicketMessage,
+  olderLeafTicketMessage,
   parseTicketSyncOutboxItem,
   TICKET_SYNC_OUTBOX_READY_EVENT,
   TICKET_SYNC_STATUS_EVENT,
@@ -77,15 +79,6 @@ export interface NodeTicketSyncResult {
 }
 
 const MAX_ROUNDS = 200;
-
-/** Counted against `version-compatibility.md`: a leaf too old to sync tickets. */
-export function olderLeafTicketMessage(nodeName: string): string {
-  return `${nodeName} runs an older Orkestrator that cannot sync tickets. Update that machine to see this board's tickets there and build them by id.`;
-}
-
-export function offlineTicketMessage(nodeName: string): string {
-  return `${nodeName} is not connected. Ticket changes wait here and reach it when it reconnects.`;
-}
 
 export class NodeTicketSync {
   private readonly running = new Map<string, Promise<NodeTicketSyncResult>>();

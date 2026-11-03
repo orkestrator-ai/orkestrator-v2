@@ -77,6 +77,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // A leaf coordinator's mail to its command node's coordinator is its own.
   "send_coordinator_command_node_mail",
   "start_coordinator_node_build_pipeline",
+  "coordinator_node_ticket",
   "launch_coordinator_node_multi_review",
   "coordinator_node_multi_review_surface",
   "start_coordinator_node_multi_review",

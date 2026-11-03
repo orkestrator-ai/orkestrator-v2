@@ -137,6 +137,30 @@ import {
 } from "./agent-accounts-active.js";
 import { applyActiveAgentAccountsForContainerTerminal } from "./agent-accounts-containers.js";
 
+/**
+ * The registered local environment whose worktree `worktreePath` names.
+ *
+ * `read_local_file` and `write_local_file` take a client-supplied root and
+ * confine the relative path beneath it. The root itself must therefore be one
+ * Orkestrator owns: a directory no environment is registered at is refused,
+ * so a client cannot turn either command on an arbitrary host directory.
+ */
+async function requireRegisteredLocalRoot(
+  context: CommandContext,
+  worktreePath: string,
+): Promise<{ environment: Environment & { worktreePath: string }; canonical: string }> {
+  const canonical = canonicalWorktreePath(worktreePath);
+  const environment = (await context.storage.loadEnvironments()).find(
+    (candidate) =>
+      candidate.environmentType === "local" &&
+      !!candidate.worktreePath &&
+      canonicalWorktreePath(candidate.worktreePath) === canonical,
+  );
+  if (!environment?.worktreePath)
+    throw new Error("The path is not the worktree of a registered local environment");
+  return { environment: environment as Environment & { worktreePath: string }, canonical };
+}
+
 /** Hold shared-checkout admission across a home file mutation. */
 async function withLocalFileMutation<T>(
   context: CommandContext,
@@ -897,9 +921,14 @@ export function registerTerminalCommands(
   register("get_local_file_subtree", ({ worktreePath, directory }) =>
     buildFileSubtree(asString(worktreePath, "worktreePath"), asString(directory, "directory")),
   );
-  register("read_local_file", ({ worktreePath, filePath }) =>
-    readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
-  );
+  register("read_local_file", async ({ worktreePath, filePath }, context) => {
+    const relativePath = asString(filePath, "filePath");
+    const { environment } = await requireRegisteredLocalRoot(
+      context,
+      asString(worktreePath, "worktreePath"),
+    );
+    return readTextFile(environment.worktreePath, relativePath);
+  });
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }, context) =>
     readLocalFileAtBranch(
       asString(worktreePath, "worktreePath"),
@@ -948,27 +977,21 @@ export function registerTerminalCommands(
       const precondition = parseFileWritePrecondition(expected);
       const release = context.runtime.environments.fence.beginWorktreeMutation(root);
       try {
-        const canonical = canonicalWorktreePath(root);
-        const environments = (await context.storage.loadEnvironments?.()) ?? [];
-        const environment = environments.find(
-          (candidate) =>
-            candidate.worktreePath && canonicalWorktreePath(candidate.worktreePath) === canonical,
-        );
         const relativePath = asString(filePath, "filePath");
         const data = asString(base64Data, "base64Data");
-        const write = () =>
-          precondition
-            ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
-                await assertLocalFileUnchanged(root, relativePath, precondition);
-                return writeFileBase64(root, relativePath, data);
-              })
-            : writeFileBase64(root, relativePath, data);
-        // Coordinator worktrees and compatibility callers use the raw-path API.
-        if (!environment) return await write();
+        // Coordinators stage pasted images through `write_coordinator_attachment`;
+        // nothing may write a directory that is not an environment's worktree.
+        const { environment, canonical } = await requireRegisteredLocalRoot(context, root);
         return await withLocalFileMutation(context, environment.id, async (current) => {
-          if (canonicalWorktreePath(current.worktreePath!) !== canonical)
+          const currentRoot = current.worktreePath!;
+          if (canonicalWorktreePath(currentRoot) !== canonical)
             throw new Error("The worktree moved; refresh before saving");
-          return write();
+          return precondition
+            ? serializeFileWrite(`local:${canonical}:${relativePath}`, async () => {
+                await assertLocalFileUnchanged(currentRoot, relativePath, precondition);
+                return writeFileBase64(currentRoot, relativePath, data);
+              })
+            : writeFileBase64(currentRoot, relativePath, data);
         });
       } finally {
         release();

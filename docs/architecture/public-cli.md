@@ -78,6 +78,22 @@ listener starts, stops or fails to bind. It is removed on graceful shutdown if
 it still describes that generation. A descriptor whose PID is gone is stale and
 is refused.
 
+The descriptor decides where the client sends the bearer token, so the client
+trusts only one its own user's backend could have written. On POSIX hosts it
+opens the file without following a symlink and refuses it (`connection-failed`,
+naming the file and the reason) when it is not a regular file, is owned by
+another user, or has any group or other permission bit set. A refused
+descriptor is never skipped: a profile falls back to the manifest's endpoint
+only when opening the descriptor returns `ENOENT`. Access-denied, other I/O
+errors and invalid contents are refusals. Service startup and generation reads
+also surface refusals immediately. A failed PID probe, including `EPERM`, counts
+as gone, closing the cross-user PID-reuse case. A successful probe establishes
+only that the current user can signal a process with that PID: reuse by another
+process of the same user is not detected. The descriptor is not bound to the
+original process start time or the port's listener, so same-user PID reuse can
+still cause the credential to be sent to a stale port before response identity
+validation. L12 is therefore only partially fixed.
+
 The installation ID is stable per data directory (a copied directory gets a
 new one). Every public response carries `backend.installationId`/`generation`;
 the client rejects an answer from a different installation than the one it

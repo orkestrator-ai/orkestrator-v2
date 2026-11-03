@@ -24,6 +24,7 @@ import {
   updateBugReportBridgeFromEnvironment,
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
+import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { localServerFields } from "./commands-local-server-lifecycle.js";
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
@@ -119,6 +120,64 @@ describe("bug report service", () => {
     const saved = await saveBugReportScreenshot(context, report!.id, PNG);
     expect(path.dirname(saved.path)).toBe(path.join(report!.scratchDir, "screenshots"));
     expect(saved.snapshot.report?.screenshots).toEqual([saved.path]);
+  });
+
+  test("stages pasted images by stored report ID without registering the scratch root", async () => {
+    const context = await createContext();
+    const { report } = await createBugReport(context, {});
+    scratchDirs.push(report!.scratchDir);
+    const write = createCommandRegistry().get("write_bug_report_attachment")!;
+    expect(await context.storage.loadEnvironments()).toEqual([]);
+    for (const filename of ["clipboard.png", "clipboard.jpg", "clipboard.webp"]) {
+      const file = (await write(
+        { reportId: report!.id, filename, base64Data: PNG },
+        context,
+      )) as string;
+      expect(path.dirname(file)).toBe(path.join(report!.scratchDir, "screenshots"));
+      expect(path.extname(file)).toBe(".png");
+      expect(await fs.readFile(file)).toEqual(Buffer.from(PNG, "base64"));
+      expect((await getBugReportSnapshot(context)).report?.screenshots).toContain(file);
+    }
+    await expect(
+      write({ reportId: "unknown", filename: "x.png", base64Data: PNG }, context),
+    ).rejects.toThrow("discarded");
+    await expect(
+      write(
+        { reportId: report!.id, filename: "x.png", base64Data: PNG, worktreePath: "/tmp" },
+        context,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      write({ reportId: report!.id, filename: "x.png", base64Data: "%%%" }, context),
+    ).rejects.toThrow();
+    await discardBugReport(context, report!.id);
+    await expect(
+      write({ reportId: report!.id, filename: "x.png", base64Data: PNG }, context),
+    ).rejects.toThrow("discarded");
+    expect(existsSync(report!.scratchDir)).toBe(false);
+  });
+
+  test("pasted images cannot escape through a filename or a symlinked screenshot directory", async () => {
+    const context = await createContext();
+    const { report } = await createBugReport(context, {});
+    scratchDirs.push(report!.scratchDir);
+    const outside = await fs.mkdtemp(path.join(tmpdir(), "ork-report-paste-sentinel-"));
+    scratchDirs.push(outside);
+    await fs.writeFile(path.join(outside, "sentinel"), "untouched");
+    const write = createCommandRegistry().get("write_bug_report_attachment")!;
+    const staged = (await write(
+      { reportId: report!.id, filename: "../escape.png", base64Data: PNG },
+      context,
+    )) as string;
+    expect(path.dirname(staged)).toBe(path.join(report!.scratchDir, "screenshots"));
+    expect(path.basename(staged)).toMatch(/^paste-[a-f0-9-]+\.png$/);
+    await fs.rm(path.join(report!.scratchDir, "screenshots"), { recursive: true });
+    await fs.symlink(outside, path.join(report!.scratchDir, "screenshots"));
+    await expect(
+      write({ reportId: report!.id, filename: "x.png", base64Data: PNG }, context),
+    ).rejects.toThrow();
+    expect(await fs.readdir(outside)).toEqual(["sentinel"]);
+    expect(await fs.readFile(path.join(outside, "sentinel"), "utf8")).toBe("untouched");
   });
 
   test("rejects symlinked screenshot ancestors, briefing files, and scratch roots", async () => {

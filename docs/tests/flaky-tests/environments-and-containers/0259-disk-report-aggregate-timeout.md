@@ -482,6 +482,38 @@ target branch or establish an environmental cause. The recorded aggregate
 failure remains unresolved; it is not excused as environmental. No unrelated
 implementation, timeout, assertion or skip changed.
 
+## CLI descriptor review — 2026-11-03
+
+- **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
+- **Original command:** `mise run test` at `2e81b373d006fa917fec5ed04a254e10c76a6703`.
+- **Worker configuration:** workspace reserved six slots, root one, bridges two; backend used four workers.
+- **Failure:** The report status was null instead of 0 at line 131; timeout at 5112.60 ms, with an error between tests.
+- **Suite counts:** backend 13,567 pass, 100 skip, four fail across 916 files; root 3,480 pass, two fail, one error across 173 files.
+- **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-disk -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` → failed, exit 1, 6.6 s; 18 pass, one fail, one error; timeout at 5092.70 ms.
+- **Disposition:** The unchanged owner also failed alone. This occurrence is unresolved and is not newly classified as flaky or environmental. Failure evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.hz0Qdn/descriptor-triage-disk.log.gz`. No assertion, timeout, skip or implementation in this area was changed.
+
+## Root cause and fix — 2026-11-03 (CLI descriptor repair)
+
+- **Root cause:** the test ran `scripts/disk-report.ts --json` against the
+  host's real Docker daemon. `collectReport` calls `docker system df`, which
+  computes image, volume and build-cache sizes; on this shared host, with five
+  builds running containers, `docker system df` alone took 6.3 s. That exceeds
+  the test's 5 s deadline, and when the deadline expires Bun kills the child, so
+  the status is null. The same script took 12.6 s run by hand, and 2.8 s with a
+  failing `docker` first on PATH (the scan of `/private/tmp` took 65 ms). This
+  explains why the test failed when the host was loaded, including in the
+  isolated owner, and passed when the daemon answered quickly. The test asserts
+  no Docker rows.
+- **Fix:** the test now puts a `docker` stub that exits 1 first on the child's
+  `PATH`. The script reads that as "Docker cannot be asked" and leaves out its
+  Docker rows, as it already does on a host without Docker. No assertion,
+  timeout or skip changed, and the script itself is unchanged.
+- **Verification:** `mise run test:logged -- --name l12-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --rerun-each=5 --only-failures`
+  passed with exit 0 in 13.5 s, on the same host where the unchanged owner had
+  just failed alone.
+- **Status:** resolved.
+
 ## Transcript follow review fixes — 2026-11-03
 
 - **Original command:** `mise run test` at `ca81bfd7fb1ba9a14c0e95b1c7104e51df522c82`;
@@ -528,3 +560,11 @@ implementation, timeout, assertion or skip changed.
   passed (2.6 s); `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --rerun-each 5`
   passed (8.1 s), on the same loaded host where one unstubbed invocation took
   7.6–15.7 s.
+
+## Main merge reconciliation — 2026-11-03
+
+Both branches independently identified host Docker latency and stubbed Docker in
+the checkout fixture. The merged test retains that shared fix together with the
+transcript-follow branch’s isolated `TMPDIR`, `du` and `ps` stubs and 30 s
+subprocess-test deadline. The CLI descriptor and transcript-follow observations
+and their original verification results above are retained as separate history.

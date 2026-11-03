@@ -10,6 +10,7 @@ import {
   type AgentMailMessageSummary,
   type AgentMessagingSettings,
   type MailboxKind,
+  type MailboxPipelineWorker,
   type NodeMailActor,
 } from "@orkestrator/protocol/agent-mail";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -54,6 +55,8 @@ export type PersistedMailbox = {
    */
   budgetResetSequence?: number;
   logicalSessionKey?: string;
+  /** A build pipeline worker's mailbox: which worker, and its last observed status. */
+  pipelineWorker?: MailboxPipelineWorker;
 };
 
 type IdempotencyRecord = {

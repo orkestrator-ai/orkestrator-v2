@@ -40,6 +40,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
+import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import {
   buildPipelineSessionStage,
   buildPipelineStage,
@@ -108,6 +109,18 @@ export type BuildPipelineServiceOptions = {
     resultKey: string,
     provider?: StructuredOutputProvider,
   ) => AgentToolConnection;
+  /**
+   * A tab-scoped Agent Tools connection for one pipeline worker's mailbox
+   * (`pipelineWorkerTabId`), for turns that carry no workflow-result
+   * capability: the worker's own mail identity. Absent: such turns keep the
+   * bridge's environment connection.
+   */
+  resolveWorkerToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    tabId: string,
+  ) => AgentToolConnection;
   /** Rejects when the environment's container cannot reach the agent tools server. */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
   /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
@@ -142,8 +155,30 @@ export type BuildPipelineServiceOptions = {
   workspaceWriters?: WorkspaceWriters;
 } & KeyedWorkflowServiceOptions;
 
+/**
+ * The agent mail side of a worker's turn boundary: claims the mail queued for
+ * one worker mailbox as a single carrier, and settles that claim once the
+ * pipeline has journaled it as the worker's next turn (`AgentMailService`).
+ */
+export interface PipelineWorkerMailbox {
+  claim(
+    environmentId: string,
+    tabId: string,
+    requestId: string,
+  ): Promise<{ text: string; messageIds: string[] } | null>;
+  settle(
+    environmentId: string,
+    tabId: string,
+    messageIds: readonly string[],
+    outcome: "accepted" | "returned",
+  ): Promise<void>;
+}
+
 export class BuildPipelineContext {
   timer: ReturnType<typeof setInterval> | null = null;
+
+  /** Bound by the backend once agent mail exists; null in narrow tests. */
+  workerMailbox: PipelineWorkerMailbox | null = null;
 
   /** The keyed driver (step 08); `null` on the rollback tick or before init. */
   supervisor: KeyedWorkflowSupervisor<BuildPipelineObligation> | null = null;
@@ -270,6 +305,32 @@ export class BuildPipelineContext {
       resultKey,
       provider,
     );
+  }
+
+  /**
+   * The worker's own mail identity for a turn with no workflow-result
+   * connection: a credential scoped to its mailbox, so it sends, replies and
+   * acks as itself and no other worker can use that mailbox. OpenCode keeps
+   * one environment-wide registration and takes no per-turn connection.
+   */
+  workerAgentMcp(
+    pipeline: BuildPipeline,
+    sessionKey: string,
+    agent: BuildPipelineAgent | undefined,
+  ): AgentToolConnection | undefined {
+    if (!this.options.resolveWorkerToolConnection || !agent || agent === "opencode")
+      return undefined;
+    try {
+      return this.options.resolveWorkerToolConnection(
+        pipeline.environmentId,
+        pipeline.projectId,
+        pipeline.environmentType === "local" ? "host" : "container",
+        pipelineWorkerTabId(sessionKey),
+      );
+    } catch {
+      // The agent tools server is down: the turn keeps the bridge's own.
+      return undefined;
+    }
   }
 
   /**

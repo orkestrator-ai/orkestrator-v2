@@ -5,6 +5,7 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
  * dispatch, review packages, validation and the multi-model review).
  */
 import { randomUUID } from "node:crypto";
+import { dispatchWorkerMailTurn } from "./build-pipeline-worker-mail.js";
 import {
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -924,6 +925,10 @@ export class BuildPipelineSupervisor {
       return;
     }
 
+    // Mail queued for this worker while its turn ran is its next turn, before
+    // the pipeline moves on and the worker ends.
+    if (await this.dispatchWorkerMail(pipeline, provider, session)) return;
+
     switch (pipeline.phase) {
       case "building":
       case "fixing":
@@ -1367,6 +1372,17 @@ export class BuildPipelineSupervisor {
     await this.dispatchPending(pipeline, provider);
   }
 
+  /** Queued mail for the current worker as its next turn (`build-pipeline-worker-mail.ts`). */
+  dispatchWorkerMail(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    return dispatchWorkerMailTurn(this.ctx, pipeline, session, () =>
+      this.dispatchPending(pipeline, provider),
+    );
+  }
+
   async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
     if (!pipeline.environmentId || pipeline.sourceLinkedAt) return;
     if (pipeline.source?.type === "kanban") {
@@ -1784,7 +1800,8 @@ export class BuildPipelineSupervisor {
       agent,
       agentMcp,
     );
-    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+    const turnAgentMcp =
+      artifactTurn?.agentMcp ?? agentMcp ?? this.ctx.workerAgentMcp(pipeline, sessionKey, agent);
     await attachBeforeDispatch(
       provider,
       sessionId,

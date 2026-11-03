@@ -34,6 +34,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import type { BuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import {
   BuildPipelineContext,
+  type PipelineWorkerMailbox,
   type BuildPipelineServiceOptions,
 } from "./build-pipeline-context.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
@@ -43,6 +44,7 @@ import { BuildPipelineInteractions } from "./build-pipeline-service-interactions
 import { BuildPipelineLifecycle } from "./build-pipeline-service-lifecycle.js";
 import { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+import { BuildPipelineWorkerMail } from "./build-pipeline-worker-mail.js";
 import {
   createBuildPipelineKeyInformationHost,
   type BuildPipelineKeyInformationHost,
@@ -66,6 +68,8 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   private readonly stageSupervisor: BuildPipelineSupervisor;
   private readonly lifecycle: BuildPipelineLifecycle;
   private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
+  /** Each worker's mail state, steer and restart reconciliation, for the mail drain. */
+  readonly workerMail: BuildPipelineWorkerMail;
 
   constructor(
     storage: StorageService,
@@ -103,6 +107,15 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     // within its own turn; the supervisor decides again when it consumes the
     // result (`build-pipeline-read-only-guard.ts`).
     if (options.workflowResults) this.stageSupervisor.readOnly.register(options.workflowResults);
+    this.workerMail = new BuildPipelineWorkerMail(this.context, this.agents);
+  }
+
+  /**
+   * Agent mail's side of a worker's turn boundary. Bound after construction
+   * because agent mail is built after the pipelines.
+   */
+  setWorkerMailbox(mailbox: PipelineWorkerMailbox | null): void {
+    this.context.workerMailbox = mailbox;
   }
 
   // -------------------------------------------------------------------------

@@ -144,7 +144,10 @@ export class BuildPipelinePromptDispatch {
       step?.agent ?? (session ? sessionAgent(pipeline, session) : undefined),
       agentMcp,
     );
-    const turnAgentMcp = artifactTurn?.agentMcp ?? agentMcp;
+    const turnAgentMcp =
+      artifactTurn?.agentMcp ??
+      agentMcp ??
+      (session ? this.ctx.workerAgentMcp(pipeline, session.sessionKey, step?.agent) : undefined);
     await attachBeforeDispatch(
       provider,
       attempt.sessionId,

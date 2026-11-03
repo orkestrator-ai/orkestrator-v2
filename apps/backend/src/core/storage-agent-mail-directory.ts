@@ -14,11 +14,19 @@ import {
   type AgentMailMailboxBatchSnapshot,
   type AgentMailInboxSnapshot,
   type AgentMailSendInput,
+  type AgentMailMessage,
   type AgentMailSummarySnapshot,
   type MailboxDescriptor,
   type MailboxKind,
+  type MailboxPipelineWorker,
 } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  PIPELINE_WORKER_TAB_TYPE,
+  describePipelineWorkers,
+  pipelineWorkerEnded,
+  type PipelineWorker,
+} from "@orkestrator/protocol/pipeline-worker-mail";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
   coordinatorMainConversation,
@@ -104,6 +112,86 @@ function tabAgent(tab: Record<string, unknown>): { agent: AgentPlatform | null; 
   return { agent: isAgentPlatform(platform) ? platform : null, locked: isAgentPlatform(platform) };
 }
 
+/** What a worker mailbox records about its worker. */
+function pipelineWorkerMetadata(worker: PipelineWorker): MailboxPipelineWorker {
+  return {
+    pipelineId: worker.pipelineId,
+    sessionKey: worker.sessionKey,
+    step: worker.step,
+    round: worker.round,
+    ...(worker.slot !== undefined ? { slot: worker.slot } : {}),
+    label: worker.label,
+    ...(worker.model ? { model: worker.model } : {}),
+    status: worker.status,
+  };
+}
+
+function pipelineWorkerDisplayName(worker: PipelineWorker): string {
+  return `${worker.label} · round ${worker.round}${
+    worker.step === "review" && worker.slot && !/\d/.test(worker.label)
+      ? ` · reviewer ${worker.slot}`
+      : ""
+  }`;
+}
+
+/** Equality for synced mailbox metadata; the worker record is the one object field. */
+function sameMetadataValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== "object" || typeof right !== "object" || !left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Mail for a worker that will never read it again: expire it, keep it readable. */
+export type ExpiredPipelineWorkerMail = {
+  mailbox: Pick<
+    PersistedMailbox,
+    "mailboxId" | "projectId" | "environmentId" | "tabId" | "displayName"
+  > & {
+    pipelineWorker: MailboxPipelineWorker;
+  };
+  message: AgentMailMessage;
+};
+
+function expirePipelineWorkerMail(
+  store: { pendingInject: Array<{ mailboxId: string; messageId: string }> },
+  mailbox: PersistedMailbox,
+  worker: MailboxPipelineWorker,
+  expired: ExpiredPipelineWorkerMail[],
+): boolean {
+  let changed = false;
+  const reason = `worker-${pipelineWorkerEnded(worker.status) ? worker.status : "ended"}`;
+  for (const message of mailbox.messages) {
+    if (message.toIncarnationId !== mailbox.incarnationId || message.ackedAt || message.discardedAt)
+      continue;
+    const queued =
+      message.placement === "pending-inject" ||
+      message.placement === "stored" ||
+      // A claim in flight settles through its own dispatch outcome.
+      (message.placement === "inject-held" && message.placementReason !== "submitting");
+    if (!queued) continue;
+    message.placement = "expired";
+    message.placementReason = reason;
+    message.revision += 1;
+    const index = store.pendingInject.findIndex(
+      (entry) => entry.mailboxId === mailbox.mailboxId && entry.messageId === message.id,
+    );
+    if (index >= 0) store.pendingInject.splice(index, 1);
+    expired.push({
+      mailbox: {
+        mailboxId: mailbox.mailboxId,
+        projectId: mailbox.projectId,
+        environmentId: mailbox.environmentId,
+        tabId: mailbox.tabId,
+        displayName: mailbox.displayName,
+        pipelineWorker: worker,
+      },
+      message: structuredClone(message),
+    });
+    changed = true;
+  }
+  return changed;
+}
+
 function isAddressableTab(tab: Record<string, unknown>): boolean {
   if (typeof tab.id !== "string" || typeof tab.type !== "string") return false;
   if (tab.isReviewTab === true || WORKFLOW_TYPES.has(tab.type)) return false;
@@ -123,6 +211,35 @@ export class AgentMailboxDirectory {
   ) {}
 
   private readonly agentMailLayoutRevisions = new Map<string, number>();
+
+  /** Per environment, the pipeline workers and statuses the last sync published. */
+  private pipelineWorkerFingerprints = new Map<string, string>();
+
+  private static workerFingerprint(workers: readonly PipelineWorker[]): string {
+    return workers.map((worker) => `${worker.address}=${worker.status}`).join(",");
+  }
+
+  private async pipelineWorkerFingerprintsByEnvironment(
+    environmentId?: string,
+  ): Promise<Map<string, string>> {
+    const fingerprints = new Map<string, string>();
+    for (const entry of await this.repos.buildPipelines.listBuildPipelineWorkers(environmentId)) {
+      const previous = fingerprints.get(entry.environmentId);
+      const next = `${entry.pipelineId}:${entry.terminal ? "ended" : "live"}:${AgentMailboxDirectory.workerFingerprint(entry.workers)}`;
+      fingerprints.set(entry.environmentId, previous ? `${previous};${next}` : next);
+    }
+    return fingerprints;
+  }
+
+  /** Whether a build pipeline's workers changed since the directory last published them. */
+  async pipelineWorkerMailboxesStale(): Promise<boolean> {
+    const current = await this.pipelineWorkerFingerprintsByEnvironment();
+    if (current.size !== this.pipelineWorkerFingerprints.size) return true;
+    for (const [environmentId, fingerprint] of current) {
+      if (this.pipelineWorkerFingerprints.get(environmentId) !== fingerprint) return true;
+    }
+    return false;
+  }
 
   private agentMailRuntimeProvider:
     | ((mailbox: {
@@ -168,6 +285,24 @@ export class AgentMailboxDirectory {
       );
       if (delegated) return delegated.delegation!.workerTabId;
     }
+    // A pipeline environment runs one worker per stage session, several at
+    // once during review. Which one is running changes under the sender, so
+    // nothing picks one for it: the sender names a worker.
+    const pipelines = (
+      await this.repos.buildPipelines.listBuildPipelineWorkers(input.toEnvironmentId)
+    ).filter((entry) => !entry.terminal);
+    if (pipelines.length > 0) {
+      const workers = pipelines.flatMap((entry) => entry.workers);
+      const others = await this.listAgentMailPullTabIds(input.toEnvironmentId);
+      throw new AgentMailError(
+        "recipient-not-found",
+        `That environment runs a build pipeline; nothing is routed to "whichever worker is running". Pass toTabId naming one worker${
+          workers.length > 0
+            ? `. Workers: ${describePipelineWorkers(workers)}`
+            : ", once one has started (none has yet)"
+        }${others.length > 0 ? `. Other agent tabs: ${others.join(", ")}` : ""}.`,
+      );
+    }
     const tabs = await this.listAgentMailPullTabIds(input.toEnvironmentId);
     if (tabs.length === 1) return tabs[0]!;
     if (tabs.includes(STARTUP_AGENT_TAB_ID)) return STARTUP_AGENT_TAB_ID;
@@ -196,6 +331,9 @@ export class AgentMailboxDirectory {
       if (
         mailbox.environmentId !== environmentId ||
         mailbox.tombstonedAt ||
+        // A pipeline worker is reached only through its own turn credential,
+        // never claimed by an environment-wide one.
+        mailbox.kind === "pipeline" ||
         !agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canPull
       ) {
         continue;
@@ -206,7 +344,15 @@ export class AgentMailboxDirectory {
     return tabId;
   }
 
-  async listAgentMailPullTabIds(environmentId: string): Promise<string[]> {
+  /**
+   * The environment's live pull-capable mailboxes. Pipeline workers are left
+   * out unless asked for: an environment-wide credential may not claim one,
+   * and a send naming only the environment never resolves to one.
+   */
+  async listAgentMailPullTabIds(
+    environmentId: string,
+    options: { includePipelineWorkers?: boolean } = {},
+  ): Promise<string[]> {
     if (!environmentId.trim()) return [];
     const store = await this.store.snapshot();
     return Object.values(store.mailboxes)
@@ -214,6 +360,8 @@ export class AgentMailboxDirectory {
         (mailbox) =>
           mailbox.environmentId === environmentId &&
           !mailbox.tombstonedAt &&
+          (options.includePipelineWorkers === true || mailbox.kind !== "pipeline") &&
+          !(mailbox.pipelineWorker && pipelineWorkerEnded(mailbox.pipelineWorker.status)) &&
           agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canPull,
       )
       .sort((a, b) => (a.tabOrdinal ?? 0) - (b.tabOrdinal ?? 0) || a.tabId.localeCompare(b.tabId))
@@ -221,15 +369,23 @@ export class AgentMailboxDirectory {
   }
 
   async synchronizeAgentMailboxes(): Promise<void> {
-    const [projects, environments, layoutsResult, coordinators, coordinatorWorkflows, config] =
-      await Promise.all([
-        this.repos.projects.loadProjects(),
-        this.repos.projects.loadEnvironments(),
-        this.repos.sessions.loadPaneLayoutsForReconciliation(),
-        this.repos.coordinators.listCoordinatorWorkspaces(),
-        this.repos.coordinators.listAllCoordinatorWorkflowAssociations(),
-        this.repos.config.loadConfig(),
-      ]);
+    const [
+      projects,
+      environments,
+      layoutsResult,
+      coordinators,
+      coordinatorWorkflows,
+      config,
+      pipelineWorkerSets,
+    ] = await Promise.all([
+      this.repos.projects.loadProjects(),
+      this.repos.projects.loadEnvironments(),
+      this.repos.sessions.loadPaneLayoutsForReconciliation(),
+      this.repos.coordinators.listCoordinatorWorkspaces(),
+      this.repos.coordinators.listAllCoordinatorWorkflowAssociations(),
+      this.repos.config.loadConfig(),
+      this.repos.buildPipelines.listBuildPipelineWorkers(),
+    ]);
     const coordinatorOrigins = coordinatorOriginsByEnvironment(coordinators, coordinatorWorkflows);
     if (!layoutsResult.available) return;
     const sessionsByEnvironment = new Map(
@@ -319,6 +475,50 @@ export class AgentMailboxDirectory {
         }
       }
     }
+    // One mailbox per build pipeline worker of a pipeline still running. A
+    // worker that has ended keeps its mailbox (with its final status) while
+    // its pipeline runs, so a send to it is refused by name; a finished or
+    // removed pipeline's workers are tombstoned below.
+    const endedWorkers = new Map<string, MailboxPipelineWorker>();
+    const pipelineWorkerFingerprints = new Map<string, string>();
+    for (const entry of pipelineWorkerSets) {
+      const previous = pipelineWorkerFingerprints.get(entry.environmentId);
+      const fingerprint = `${entry.pipelineId}:${entry.terminal ? "ended" : "live"}:${AgentMailboxDirectory.workerFingerprint(entry.workers)}`;
+      pipelineWorkerFingerprints.set(
+        entry.environmentId,
+        previous ? `${previous};${fingerprint}` : fingerprint,
+      );
+      const environment = environmentById.get(entry.environmentId);
+      const project = environment ? projectById.get(environment.projectId) : undefined;
+      for (const [index, worker] of entry.workers.entries()) {
+        const mailboxId = agentMailboxId(entry.environmentId, worker.address);
+        if (entry.terminal || !environment || environment.deletionRequestedAt || !project) {
+          endedWorkers.set(mailboxId, pipelineWorkerMetadata(worker));
+          continue;
+        }
+        const displayName = pipelineWorkerDisplayName(worker);
+        observed.set(mailboxId, {
+          mailboxId,
+          projectId: project.id,
+          projectName: project.name,
+          environmentId: entry.environmentId,
+          environmentName: environment.name,
+          environmentStatus: environment.status,
+          tabId: worker.address,
+          tabType: PIPELINE_WORKER_TAB_TYPE,
+          title: displayName,
+          displayName,
+          // After every pane tab, in the order the pipeline started them.
+          tabOrdinal: 1_000 + index,
+          agent: worker.agent,
+          kind: "pipeline",
+          locked: true,
+          coordinatorOrigin: coordinatorOrigins.get(entry.environmentId),
+          logicalSessionKey: worker.sessionKey,
+          pipelineWorker: pipelineWorkerMetadata(worker),
+        });
+      }
+    }
     for (const workspace of coordinators) {
       const project = projectById.get(workspace.projectId);
       if (!project) continue;
@@ -356,6 +556,7 @@ export class AgentMailboxDirectory {
       }
     }
 
+    const expired: ExpiredPipelineWorkerMail[] = [];
     await this.store.enqueue(async () => {
       const store = await this.store.load();
       const changedMailboxIds = new Set<string>();
@@ -377,7 +578,7 @@ export class AgentMailboxDirectory {
           continue;
         }
         const changed = Object.entries(metadata).some(
-          ([key, value]) => current[key as keyof PersistedMailbox] !== value,
+          ([key, value]) => !sameMetadataValue(current[key as keyof PersistedMailbox], value),
         );
         if (changed) {
           Object.assign(current, metadata);
@@ -398,8 +599,36 @@ export class AgentMailboxDirectory {
           }
         }
       }
+      // A worker that has ended never reads its queue: that mail expires and
+      // its sender is told, rather than waiting for a turn that will not come
+      // or going to some other worker.
+      for (const mailboxId of observed.keys()) {
+        const mailbox = store.mailboxes[mailboxId];
+        const worker = mailbox?.pipelineWorker;
+        if (
+          mailbox &&
+          worker &&
+          pipelineWorkerEnded(worker.status) &&
+          expirePipelineWorkerMail(store, mailbox, worker, expired)
+        ) {
+          mailbox.revision += 1;
+          changedMailboxIds.add(mailboxId);
+        }
+      }
       for (const [mailboxId, mailbox] of Object.entries(store.mailboxes)) {
         if (observed.has(mailboxId) || mailbox.tombstonedAt) continue;
+        if (mailbox.kind === "pipeline" && mailbox.pipelineWorker) {
+          // Its pipeline finished or was removed: keep the final status so a
+          // later send is refused with it, and expire what it never read.
+          const worker = endedWorkers.get(mailboxId) ?? {
+            ...mailbox.pipelineWorker,
+            status: pipelineWorkerEnded(mailbox.pipelineWorker.status)
+              ? mailbox.pipelineWorker.status
+              : ("cancelled" as const),
+          };
+          mailbox.pipelineWorker = worker;
+          expirePipelineWorkerMail(store, mailbox, worker, expired);
+        }
         mailbox.tombstonedAt = now;
         mailbox.injectOverride = "off";
         mailbox.revision += 1;
@@ -424,6 +653,11 @@ export class AgentMailboxDirectory {
         );
       }
     });
+    this.pipelineWorkerFingerprints = pipelineWorkerFingerprints;
+    if (expired.length > 0) {
+      // Each sender is told; a failed notice leaves the message expired.
+      await this.repos.agentMail.notifyExpiredPipelineWorkerMail(expired).catch(() => undefined);
+    }
     this.agentMailLayoutRevisions.clear();
     for (const [environmentId, layout] of Object.entries(layoutsResult.layouts)) {
       this.agentMailLayoutRevisions.set(environmentId, layout.revision);
@@ -444,7 +678,15 @@ export class AgentMailboxDirectory {
     for (const environmentId of new Set(environmentIds.filter(Boolean))) {
       const layout = await this.repos.sessions.getPaneLayout(environmentId);
       const revision = layout?.revision ?? -1;
-      if (this.agentMailLayoutRevisions.get(environmentId) !== revision) {
+      // A worker gets its mailbox the moment its session starts, and refuses
+      // mail the moment it ends: neither waits for a pane-layout change.
+      const workers =
+        (await this.pipelineWorkerFingerprintsByEnvironment(environmentId)).get(environmentId) ??
+        "";
+      if (
+        this.agentMailLayoutRevisions.get(environmentId) !== revision ||
+        (this.pipelineWorkerFingerprints.get(environmentId) ?? "") !== workers
+      ) {
         await this.synchronizeAgentMailboxes();
         return;
       }
@@ -465,11 +707,14 @@ export class AgentMailboxDirectory {
         !message.discardedAt,
     ).length;
     const runtime = this.agentMailRuntimeProvider?.(mailbox);
-    const presence = mailbox.tombstonedAt
-      ? "tab_closed"
-      : mailbox.environmentStatus !== "running"
-        ? "environment_stopped"
-        : (runtime?.presence ?? "unknown");
+    const worker = mailbox.pipelineWorker;
+    const presence =
+      mailbox.tombstonedAt || (worker && pipelineWorkerEnded(worker.status))
+        ? "tab_closed"
+        : mailbox.environmentStatus !== "running"
+          ? "environment_stopped"
+          : (runtime?.presence ??
+            (worker ? (worker.status === "running" ? "working" : "idle") : "unknown"));
     // Naming is synchronized on session-title resources. Do not recompute it
     // here from only the runtime title: that would incorrectly outrank a
     // persisted custom session name between observer passes.
@@ -518,6 +763,7 @@ export class AgentMailboxDirectory {
       ...(mailbox.coordinatorOrigin ? { coordinatorOrigin: mailbox.coordinatorOrigin } : {}),
       ...(mailbox.logicalSessionKey ? { logicalSessionKey: mailbox.logicalSessionKey } : {}),
       ...(mailbox.tombstonedAt ? { tombstonedAt: mailbox.tombstonedAt } : {}),
+      ...(worker ? { pipelineWorker: worker } : {}),
     };
   }
 

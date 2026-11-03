@@ -67,6 +67,7 @@
     "./environment-readiness": "./src/environment-readiness.ts",
     "./environment-activity-order": "./src/environment-activity-order.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
+    "./pipeline-worker-mail": "./src/pipeline-worker-mail.ts",
     "./build-pipeline-defaults": "./src/build-pipeline-defaults.ts",
     "./build-pipeline-restart-selection": "./src/build-pipeline-restart-selection.ts",
     "./build-pipeline-criteria": "./src/build-pipeline-criteria.ts",

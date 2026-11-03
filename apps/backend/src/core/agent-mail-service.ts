@@ -1,6 +1,7 @@
 import {
   AGENT_MAIL_MAX_LIST_LIMIT,
   AGENT_MAIL_MAX_PENDING_INJECTS,
+  agentMailboxId as agentMailboxIdOf,
   agentMailRouteWakes,
   normalizeAgentMessagingSettings,
   renderAgentMailCarrier,
@@ -25,6 +26,11 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail-injects.js";
+import type { PipelineWorkerMailPort } from "./build-pipeline-worker-mail.js";
+import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
+
+/** Why a pipeline worker's mail waits: the pipeline hands it over when the turn ends. */
+export const PIPELINE_WORKER_TURN_HOLD_REASON = "pipeline-worker-turn-end";
 
 const log = createLogger("agent-mail");
 
@@ -59,7 +65,7 @@ const MAX_MAIL_STEER_BATCH_BYTES = 60 * 1024;
 /** Presences that mean a turn may be running, so Deliver now tries steering into it. */
 const STEERABLE_PRESENCES: ReadonlySet<MailboxPresence> = new Set(["working", "waiting", "draft"]);
 
-function mayInjectMessage(
+export function mayInjectMessage(
   mailbox: MailboxDescriptor,
   message: AgentMailMessageSummary,
   settings: Pick<AgentMessagingSettings, "wakePeers">,
@@ -124,6 +130,8 @@ export class AgentMailService {
         environmentId: string,
         message: AgentMailMessageSummary,
       ) => Promise<void>;
+      /** Build pipeline workers: their state, steer and restart reconciliation. */
+      pipelineWorkers?: PipelineWorkerMailPort;
     } = {},
   ) {
     this.storage.setAgentMailRuntimeProvider((mailbox) => {
@@ -192,6 +200,27 @@ export class AgentMailService {
         }
         return;
       }
+      if (change.resource === "build-pipeline") {
+        // A pipeline saves often; only a change to its workers (one started,
+        // ended, or changed status) is a mailbox change.
+        if (this.syncTimers.has("build-pipelines")) return;
+        const timer = setTimeout(() => {
+          this.syncTimers.delete("build-pipelines");
+          void this.storage
+            .agentMailPipelineWorkersStale()
+            .then((stale) => {
+              if (!stale) return;
+              this.syncRevision += 1;
+              return this.synchronizeChangedMailboxes();
+            })
+            .catch((error) => {
+              log.warn("presence.sync-failed", { error: formatLogError(error) });
+            });
+        }, 250);
+        this.syncTimers.set("build-pipelines", timer);
+        timer.unref?.();
+        return;
+      }
       if (
         ![
           "pane-layout",
@@ -219,6 +248,32 @@ export class AgentMailService {
     });
     const interrupted = await this.storage.listInterruptedAgentMailInjects();
     for (const { mailbox, message, steerRequestId } of interrupted) {
+      if (mailbox.kind === "pipeline" && this.hooks.pipelineWorkers && message.injectRequestId) {
+        // A delivery the pipeline journaled before the restart is its own;
+        // one it never recorded goes back to the queue.
+        const port = this.hooks.pipelineWorkers;
+        const status = steerRequestId
+          ? await port
+              .reconcileSteer(mailbox.environmentId, mailbox.tabId, steerRequestId)
+              .catch(() => "unknown" as const)
+          : await port
+              .reconcileDelivery(mailbox.environmentId, mailbox.tabId, message.injectRequestId)
+              .catch(() => "unknown" as const);
+        await this.applyInjectorMutation(() =>
+          this.storage.finishAgentMailInject(
+            mailbox.mailboxId,
+            message.id,
+            status === "dispatched"
+              ? steerRequestId
+                ? { outcome: "accepted", via: "steer" }
+                : { outcome: "accepted" }
+              : status === "not-dispatched"
+                ? { outcome: "held", reason: PIPELINE_WORKER_TURN_HOLD_REASON }
+                : { outcome: "failed", reason: "ambiguous" },
+          ),
+        );
+        continue;
+      }
       if (mailbox.kind !== "native" || !mailbox.agent || !message.injectRequestId) continue;
       const logicalSessionKey =
         mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
@@ -487,6 +542,13 @@ export class AgentMailService {
     logicalSessionKey: string,
     requestId: string,
   ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
+    if (mailbox.kind === "pipeline") {
+      return (
+        (await this.hooks.pipelineWorkers
+          ?.reconcileSteer(mailbox.environmentId, mailbox.tabId, requestId)
+          .catch(() => "unknown" as const)) ?? "unknown"
+      );
+    }
     if (!this.nativeAgents.reconcileMailSteer) return "unknown";
     try {
       return await this.nativeAgents.reconcileMailSteer({
@@ -498,6 +560,115 @@ export class AgentMailService {
     } catch {
       return "unknown";
     }
+  }
+
+  /**
+   * Claim every message queued for one pipeline worker mailbox as a single
+   * carrier, for the pipeline to send as that worker's next turn (the same
+   * eligibility, order and bounds as the drain's batch). Null when nothing is
+   * deliverable. The claim is settled with {@link settlePipelineWorkerMail}.
+   */
+  async claimPipelineWorkerMail(
+    environmentId: string,
+    tabId: string,
+    requestId: string,
+  ): Promise<{ text: string; messageIds: string[] } | null> {
+    const config = await this.storage.loadConfig();
+    if (!config.global.agentMessaging?.enabled || config.global.agentMessaging.paused) return null;
+    const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
+    const mine = (
+      await this.storage.listPendingAgentMailInjects(AGENT_MAIL_MAX_PENDING_INJECTS, {
+        includeDeferred: true,
+        includeCoalescing: true,
+      })
+    )
+      .filter(
+        (entry) =>
+          entry.mailbox.kind === "pipeline" &&
+          entry.mailbox.environmentId === environmentId &&
+          entry.mailbox.tabId === tabId &&
+          !entry.verifyRequestId &&
+          mayInjectMessage(entry.mailbox, entry.message, settings),
+      )
+      .sort((a, b) => a.message.createdAt.localeCompare(b.message.createdAt));
+    if (mine.length === 0) return null;
+    const mailbox = mine[0]!.mailbox;
+    // The turn boundary is the moment this mail waited for: earlier backoff
+    // from the drain's busy holds no longer applies.
+    await this.applyInjectorMutation(() =>
+      this.storage.resetAgentMailInjectBackoff(mailbox.mailboxId),
+    );
+    const claimed: AgentMailMessageSummary[] = [];
+    const rendered: string[] = [];
+    let bytes = 0;
+    for (const entry of mine) {
+      if (claimed.length >= MAX_MAIL_INJECT_BATCH) break;
+      const message = await this.applyInjectorMutation(() =>
+        this.storage.beginAgentMailInject(
+          mailbox.mailboxId,
+          entry.message.id,
+          mailbox.incarnationId,
+          undefined,
+          { joinCoalescing: true },
+        ),
+      );
+      if (!message) continue;
+      const carrier = renderAgentMailCarrier(message);
+      const size = Buffer.byteLength(carrier, "utf8") + (rendered.length > 0 ? 2 : 0);
+      if (rendered.length > 0 && bytes + size > MAX_MAIL_INJECT_BATCH_BYTES) {
+        await this.applyInjectorMutation(() =>
+          this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
+            outcome: "held",
+            reason: "batch-full",
+          }),
+        );
+        break;
+      }
+      bytes += size;
+      claimed.push(message);
+      rendered.push(carrier);
+      this.skipReasons.delete(message.id);
+    }
+    if (claimed.length === 0) return null;
+    // The claim records which pipeline attempt carries it, for restart
+    // reconciliation against the session's journal.
+    await this.applyInjectorMutation(() =>
+      this.storage.recordAgentMailInjectRequest(
+        mailbox.mailboxId,
+        claimed.map((message) => message.id),
+        requestId,
+      ),
+    );
+    return { text: rendered.join("\n\n"), messageIds: claimed.map((message) => message.id) };
+  }
+
+  /** `accepted`: the pipeline journaled it as the worker's turn. `returned`: back to the queue. */
+  async settlePipelineWorkerMail(
+    environmentId: string,
+    tabId: string,
+    messageIds: readonly string[],
+    outcome: "accepted" | "returned",
+  ): Promise<void> {
+    const mailboxId = agentMailboxIdOf(environmentId, tabId);
+    for (const messageId of messageIds) {
+      await this.applyInjectorMutation(() =>
+        this.storage.finishAgentMailInject(
+          mailboxId,
+          messageId,
+          outcome === "accepted"
+            ? { outcome: "accepted" }
+            : { outcome: "held", reason: PIPELINE_WORKER_TURN_HOLD_REASON },
+        ),
+      );
+    }
+    log.info("inject.dispatched", () => ({
+      messageIds: messageIds.join(","),
+      toEnvironmentId: environmentId,
+      toTabId: tabId,
+      outcome: outcome === "accepted" ? "accepted" : "held",
+      reason: outcome === "accepted" ? null : PIPELINE_WORKER_TURN_HOLD_REASON,
+      via: "pipeline-turn",
+    }));
   }
 
   drainInjects(options?: { includeDeferred?: boolean }): Promise<void> {
@@ -621,7 +792,11 @@ export class AgentMailService {
       }
       const logicalSessionKey =
         mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
-      if (verifyRequestId && mailbox.kind === "native" && mailbox.agent) {
+      if (
+        verifyRequestId &&
+        ((mailbox.kind === "native" && mailbox.agent) ||
+          (mailbox.kind === "pipeline" && verifySteerRequestId === verifyRequestId))
+      ) {
         await this.verifyAmbiguousInject(
           mailbox,
           message,
@@ -665,6 +840,51 @@ export class AgentMailService {
         // tab; known queue, draft and live activity all stop before the claim.
         if (!steerRequestId && nativePresence !== "idle" && nativePresence !== "unknown") {
           this.noteSkip(message, mailbox, nativePresence);
+          continue;
+        }
+      } else if (mailbox.kind === "pipeline") {
+        const port = this.hooks.pipelineWorkers;
+        if (!port) continue;
+        const status = await port
+          .state(mailbox.environmentId, mailbox.tabId)
+          .catch(() => undefined);
+        if (status === undefined) continue;
+        if (status === null || pipelineWorkerEnded(status)) {
+          // Ended since the directory last looked: the sync expires what it
+          // never read and tells each sender.
+          this.syncRevision += 1;
+          void this.synchronizeChangedMailboxes();
+          this.noteSkip(message, mailbox, "pipeline-worker-ended");
+          continue;
+        }
+        await this.recordPresence(mailbox.mailboxId, status === "running" ? "working" : "idle");
+        if (steerRequested && status === "running") {
+          steerRequestId = randomUUID();
+        } else {
+          if (steerRequested) {
+            // Between turns: nothing to steer into. Say so on the message,
+            // which the pipeline delivers as the worker's next turn.
+            const claimed = await this.applyInjectorMutation(() =>
+              this.storage.beginAgentMailInject(
+                mailbox.mailboxId,
+                message.id,
+                mailbox.incarnationId,
+              ),
+            );
+            if (claimed) {
+              this.skipReasons.delete(message.id);
+              await this.applyInjectorMutation(() =>
+                this.storage.finishAgentMailInject(mailbox.mailboxId, message.id, {
+                  outcome: "held",
+                  reason: PIPELINE_WORKER_TURN_HOLD_REASON,
+                }),
+              );
+            }
+            continue;
+          }
+          // The pipeline hands queued mail to the worker when its turn ends
+          // (`BuildPipelineSupervisor.dispatchWorkerMail`).
+          this.noteSkip(message, mailbox, `pipeline-worker-${status}`);
           continue;
         }
       } else if (mailbox.kind === "tmux") {
@@ -825,15 +1045,23 @@ export class AgentMailService {
       if (steerRequestId) {
         let steered: MailSteerDispatchOutcome;
         try {
-          steered = this.nativeAgents.steerMailInject
-            ? await this.nativeAgents.steerMailInject({
-                environmentId: mailbox.environmentId,
-                agent: mailbox.agent!,
-                logicalSessionKey,
-                text: carrier,
-                requestId: steerRequestId,
-              })
-            : { outcome: "refused", reason: "steer-unsupported" };
+          steered =
+            mailbox.kind === "pipeline"
+              ? await this.hooks.pipelineWorkers!.steer({
+                  environmentId: mailbox.environmentId,
+                  tabId: mailbox.tabId,
+                  text: carrier,
+                  requestId: steerRequestId,
+                })
+              : this.nativeAgents.steerMailInject
+                ? await this.nativeAgents.steerMailInject({
+                    environmentId: mailbox.environmentId,
+                    agent: mailbox.agent!,
+                    logicalSessionKey,
+                    text: carrier,
+                    requestId: steerRequestId,
+                  })
+                : { outcome: "refused", reason: "steer-unsupported" };
         } catch {
           // Only the lookups before the steer throw; its dispatch reports
           // an unanswered hand-off as `unknown` instead.
@@ -852,7 +1080,16 @@ export class AgentMailService {
           await settle({ outcome: "held", reason: steered.reason }, "steer");
           continue;
         }
+        if (mailbox.kind === "pipeline") {
+          // The turn ended first: the pipeline delivers it as the next turn.
+          await settle({ outcome: "held", reason: PIPELINE_WORKER_TURN_HOLD_REASON }, "steer");
+          continue;
+        }
         // No turn is running after all: deliver it the ordinary way, now.
+      }
+      if (mailbox.kind === "pipeline") {
+        await settle({ outcome: "held", reason: PIPELINE_WORKER_TURN_HOLD_REASON });
+        continue;
       }
       let outcome:
         | Awaited<ReturnType<PromptQueueDrainer["dispatchMailInject"]>>

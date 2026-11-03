@@ -45,7 +45,11 @@ export type BuildPipelineProvider = Omit<AgentSessionProvider, "createSession"> 
   Partial<
     Pick<
       NativeAgentRuntimeProvider,
-      "activeSteerRun" | "steerSupported" | "performSessionAction" | "resolveDefaultModel"
+      | "activeSteerRun"
+      | "steerSupported"
+      | "steerStatus"
+      | "performSessionAction"
+      | "resolveDefaultModel"
     >
   > & {
     createSession(

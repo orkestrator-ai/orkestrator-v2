@@ -43,7 +43,11 @@ export async function assertCallerMailbox(
   if (scope.tabId && claimedTabId && claimedTabId !== scope.tabId) {
     throw new AgentMailError("capability-denied", "This credential belongs to another tab");
   }
-  const pullTabIds = await storage.listAgentMailPullTabIds(scope.environmentId);
+  // A build pipeline worker's mailbox answers only to the credential its own
+  // turn was given; an environment-wide credential cannot claim it.
+  const pullTabIds = await storage.listAgentMailPullTabIds(scope.environmentId, {
+    includePipelineWorkers: scope.tabId !== undefined,
+  });
   let tabId = scope.tabId;
   let resolved: AgentMailIdentity["resolved"] = "credential";
   if (!tabId) {

@@ -1427,6 +1427,13 @@ export class StorageService {
     return this.repos.buildPipelines.listAllBuildPipelines();
   }
 
+  /** Each pipeline's workers (`pipelineWorkers`), optionally one environment's. */
+  listBuildPipelineWorkers(
+    environmentId?: string,
+  ): ReturnType<StorageRepositories["buildPipelines"]["listBuildPipelineWorkers"]> {
+    return this.repos.buildPipelines.listBuildPipelineWorkers(environmentId);
+  }
+
   listBuildPipelinesForEnvironment(
     projectId: string,
     environmentId: string,
@@ -1684,12 +1691,25 @@ export class StorageService {
     return this.repos.agentMailboxes.resolveUniqueAgentMailPullTabId(environmentId);
   }
 
-  listAgentMailPullTabIds(environmentId: string): Promise<string[]> {
-    return this.repos.agentMailboxes.listAgentMailPullTabIds(environmentId);
+  listAgentMailPullTabIds(
+    environmentId: string,
+    options: { includePipelineWorkers?: boolean } = {},
+  ): Promise<string[]> {
+    return this.repos.agentMailboxes.listAgentMailPullTabIds(environmentId, options);
+  }
+
+  /** Whether a build pipeline's workers changed since the mailbox directory last synced. */
+  agentMailPipelineWorkersStale(): Promise<boolean> {
+    return this.repos.agentMailboxes.pipelineWorkerMailboxesStale();
   }
 
   synchronizeAgentMailboxes(): Promise<void> {
     return this.repos.agentMailboxes.synchronizeAgentMailboxes();
+  }
+
+  /** Resynchronizes when any of these environments' tabs or pipeline workers changed. */
+  ensureAgentMailDirectoryFresh(environmentIds: string[]): Promise<void> {
+    return this.repos.agentMailboxes.ensureAgentMailDirectoryFresh(environmentIds);
   }
 
   listAgentMailboxes(
@@ -1999,6 +2019,18 @@ export class StorageService {
       incarnationId,
       verificationRequestId,
       options,
+    );
+  }
+
+  recordAgentMailInjectRequest(
+    mailboxId: string,
+    messageIds: readonly string[],
+    requestId: string,
+  ): Promise<void> {
+    return this.repos.agentMailInjects.recordAgentMailInjectRequest(
+      mailboxId,
+      messageIds,
+      requestId,
     );
   }
 

@@ -42,6 +42,8 @@ import {
   type CoordinatorConversation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
+import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
+import type { ExpiredPipelineWorkerMail } from "./storage-agent-mail-directory.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";
@@ -507,6 +509,16 @@ export class AgentMailRepository {
 
       const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
       const recipient = store.mailboxes[destinationId];
+      // A pipeline worker that has ended is named, with how it ended; its
+      // mail is never passed on to whichever worker runs now.
+      const worker = recipient?.pipelineWorker;
+      if (worker && (recipient.tombstonedAt || pipelineWorkerEnded(worker.status)))
+        throw new AgentMailError(
+          "recipient-not-found",
+          `That build pipeline worker (${worker.label}, round ${worker.round}) has ${
+            pipelineWorkerEnded(worker.status) ? worker.status : "ended"
+          } and takes no more mail. Nothing is re-routed to another worker: pick a running one from list_mailboxes or get_build_pipeline.`,
+        );
       if (!recipient || recipient.tombstonedAt)
         throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
       // A mailbox is a tab, so a subagent or background task inside that tab
@@ -900,6 +912,75 @@ export class AgentMailRepository {
     });
     await this.repos.agentMailBudgets.noticeCoordinatorBudgetHold(placed);
     return placed;
+  }
+
+  /**
+   * Tell each sender that mail it sent to a build pipeline worker expired
+   * unread because the worker ended. A coordinator or agent tab here gets a
+   * workflow notice; a command node's coordinator gets a reply through the
+   * node outbox, from the worker's own address. A person sees the expired
+   * placement in the Messages panel. Each notice is idempotent per message.
+   */
+  async notifyExpiredPipelineWorkerMail(expired: ExpiredPipelineWorkerMail[]): Promise<void> {
+    for (const { mailbox, message } of expired) {
+      const worker = mailbox.pipelineWorker;
+      const subject = `Undelivered: ${message.subject ?? "your message"}`.slice(0, 200);
+      const body = `Your message ${message.id}${
+        message.subject ? ` ("${message.subject}")` : ""
+      } to build pipeline worker ${mailbox.tabId} (${worker.label}, round ${worker.round}) in environment ${mailbox.environmentId} expired unread: the worker ${worker.status === "running" || worker.status === "idle" ? "ended" : worker.status} before it could be delivered. It was not passed on to any other worker. Read get_build_pipeline for the pipeline's current workers and send to one of them if it still applies.`;
+      const requestId = `pipeline-worker-mail-expired:${message.id}`;
+      try {
+        if (message.from.kind === "coordinator" || message.from.kind === "tab") {
+          await this.sendAgentMail(
+            {
+              kind: "system",
+              projectId: mailbox.projectId,
+              source: "workflow",
+              resourceId: worker.pipelineId,
+            },
+            {
+              requestId,
+              toEnvironmentId: message.from.environmentId,
+              toTabId: message.from.tabId,
+              subject,
+              body,
+            },
+            {
+              notice: {
+                resource: {
+                  kind: "build-pipeline",
+                  id: worker.pipelineId,
+                  environmentId: mailbox.environmentId,
+                  tabId: mailbox.tabId,
+                  label: worker.label,
+                },
+                state: "mail-expired",
+                tone: "attention",
+              },
+            },
+          );
+        } else if (message.from.kind === "node" && this.repos.nodes.nodeMailRouter) {
+          const router = this.repos.nodes.nodeMailRouter;
+          const remote = await router.route({
+            fromEnvironmentId: mailbox.environmentId,
+            fromTabId: mailbox.tabId,
+            toEnvironmentId: "",
+            replyToMessageId: message.id,
+          });
+          if (remote) {
+            await router.enqueue(remote, {
+              requestId,
+              fromEnvironmentId: mailbox.environmentId,
+              fromTabId: mailbox.tabId,
+              subject,
+              body: `[Orkestrator notice, not written by the worker] ${body}`,
+            });
+          }
+        }
+      } catch {
+        // The message stays expired and readable; the notice is best effort.
+      }
+    }
   }
 
   async replyAgentMail(

@@ -22,6 +22,7 @@ import {
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { isPipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
@@ -1177,7 +1178,7 @@ export async function createControlMcp(
     {
       title: "Read a tab transcript",
       description:
-        "Read a bounded normalized transcript for a native tab, or a bounded terminal-output tail for a terminal tab.",
+        "Read a bounded normalized transcript for a native tab, a bounded terminal-output tail for a terminal tab, or a build pipeline worker's own transcript when tabId is a worker's mailbox address (pipeline-worker:…, from list_mailboxes or get_build_pipeline), running or finished.",
       inputSchema: z.object({
         environmentId: z.string().trim().min(1).max(200),
         tabId: z.string().trim().min(1).max(200),
@@ -1188,6 +1189,22 @@ export async function createControlMcp(
     },
     async ({ environmentId, tabId, limit, nodeId }) => {
       const { inv, where, layout: readLayout } = await environmentInvoker(nodeId, environmentId);
+      if (isPipelineWorkerTabId(tabId)) {
+        // A pipeline worker has no pane tab: its stage session's transcript.
+        const read = await inv<unknown>("get_build_pipeline_worker_transcript", {
+          environmentId,
+          tabId,
+          limit,
+        });
+        if (!isRecord(read)) throw new Error("The worker's transcript is unavailable");
+        const { messages, ...rest } = read;
+        return toolResult({
+          ...rest,
+          ...where,
+          kind: "pipeline-worker",
+          ...compactMessages(Array.isArray(messages) ? messages : []),
+        });
+      }
       const [layout, environment] = await Promise.all([
         readLayout(),
         inv<unknown>("get_environment", { environmentId }),
@@ -1953,19 +1970,51 @@ export async function createControlMcp(
       {
         title: "List agent mailboxes",
         description: coordinatorScope
-          ? 'List durable agent-message destinations without transcript or filesystem content. With nodeId, says whether that node\'s copy of this project has a coordinator you can reach with send_message, nodeId and toEnvironmentId "coordinator".'
+          ? "List durable agent-message destinations without transcript or filesystem content. With environmentId, lists that environment's mailboxes; for a pipeline environment that is one mailbox per build pipeline worker (build, each reviewer, preparation, consolidation, address, verify, fix, PR, conflict resolution, every round), each with its address (tabId), pipelineWorker step, round, slot, label, agent, model and status (running, idle, finished, failed, cancelled). With nodeId and environmentId, lists that node's environment the same way; with nodeId alone, says whether that node's copy of this project has a coordinator you can reach with send_message, nodeId and toEnvironmentId \"coordinator\"."
           : "List durable agent-message destinations without transcript or filesystem content.",
         inputSchema: z.object({
           q: z.string().trim().max(200).optional(),
+          ...(coordinatorScope
+            ? {
+                environmentId: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .max(200)
+                  .optional()
+                  .describe(
+                    "Only this environment's mailboxes, including its build pipeline workers.",
+                  ),
+              }
+            : {}),
           offset: z.number().int().min(0).default(0),
           limit: z.number().int().min(1).max(200).default(100),
           nodeId: nodeIdField,
         }),
         annotations: readAnnotations(),
       },
-      async ({ q, offset, limit, nodeId }) => {
+      async ({ q, offset, limit, nodeId, ...filters }) => {
         if (operator)
           return operatorListMailboxes(callerOnNode(operator, nodeId), { q, offset, limit });
+        const environmentId =
+          "environmentId" in filters && typeof filters.environmentId === "string"
+            ? filters.environmentId
+            : undefined;
+        if (coordinatorScope && environmentId) {
+          // One environment, on this node or a connected one: its tabs and
+          // its build pipeline workers.
+          const { inv, target, where } = await environmentInvoker(nodeId, environmentId);
+          const page = await inv<unknown>("list_agent_mailboxes", {
+            environmentId,
+            q,
+            offset,
+            limit,
+            projectId: target ? target.projectId : coordinatorScope.projectId,
+            strictProjectScope: true,
+          });
+          if (!isRecord(page)) throw new Error("Mailbox directory returned no result");
+          return toolResult({ ...page, ...where });
+        }
         if (coordinatorScope && nodeId) {
           // Another node's mailboxes are not listed; whether its coordinator
           // for this project can be reached is.
@@ -1995,7 +2044,7 @@ export async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours.'
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. A pipeline environment never resolves that way: name one build pipeline worker with toTabId set to its address from list_mailboxes (with environmentId) or get_build_pipeline. The message goes to that worker only and is never re-routed; a worker that has finished, failed or been cancelled refuses it, and mail still queued when its worker ends expires and you are told. Queued mail reaches the worker as its next turn when its current turn ends, before the pipeline moves on; deliverNow steers it into the running turn. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),

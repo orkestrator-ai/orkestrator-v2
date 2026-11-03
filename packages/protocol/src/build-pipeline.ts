@@ -864,6 +864,12 @@ export interface PipelineSession {
   reasoningEffort?: string;
   /** Fast/Normal choice retained for exact prompt recovery. */
   fastMode?: boolean;
+  /**
+   * Request ids of the recent agent-mail turns the pipeline gave this session
+   * (newest 20), recorded in the same save that journals each one, so a
+   * delivery claimed before a restart can be told apart from one never sent.
+   */
+  mailDeliveries?: string[];
   /** Persisted interaction authority for backend-owned workflow sessions. */
   origin?: import("./agent-interactions.js").AgentInteractionOrigin;
   interactionPolicy?: import("./agent-interactions.js").AgentInteractionPolicy;
@@ -1785,6 +1791,12 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
+    (value.mailDeliveries === undefined ||
+      (Array.isArray(value.mailDeliveries) &&
+        value.mailDeliveries.length <= 20 &&
+        value.mailDeliveries.every(
+          (entry: unknown) => isNonBlankString(entry) && entry.length <= 256,
+        ))) &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||
       (value.origin === "build-pipeline" &&
         isAgentInteractionPolicy(value.interactionPolicy) &&

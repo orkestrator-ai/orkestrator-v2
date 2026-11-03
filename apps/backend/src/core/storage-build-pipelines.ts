@@ -1,7 +1,9 @@
 import type {
+  BuildPipeline,
   PipelineSession,
   PipelineTranscriptReference,
 } from "@orkestrator/protocol/build-pipeline";
+import { pipelineWorkers, type PipelineWorker } from "@orkestrator/protocol/pipeline-worker-mail";
 import * as shared from "./storage-shared.js";
 import {
   activeBuildAdmissionKey,
@@ -480,6 +482,42 @@ export class BuildPipelinesRepository {
       .filter((pipeline) => pipeline.projectId === projectId)
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
       .map((record) => structuredClone(record));
+  }
+
+  /**
+   * Every pipeline's workers (`pipelineWorkers`), read in place without
+   * copying a record, for the agent mail directory. Optionally only one
+   * environment's.
+   */
+  async listBuildPipelineWorkers(environmentId?: string): Promise<
+    Array<{
+      pipelineId: string;
+      projectId: string;
+      environmentId: string;
+      terminal: boolean;
+      workers: PipelineWorker[];
+    }>
+  > {
+    const result = [];
+    for (const record of Object.values(await this.loadBuildPipelines())) {
+      if (environmentId !== undefined && record.environmentId !== environmentId) continue;
+      // A cheap shape check, not the full validator: this runs on every
+      // mailbox sync, and `pipelineWorkers` reads only a few fields.
+      if (!isRecord(record.snapshot) || !Array.isArray(record.snapshot.sessions)) continue;
+      const snapshot = record.snapshot as unknown as BuildPipeline;
+      result.push({
+        pipelineId: record.id,
+        projectId: record.projectId,
+        environmentId: record.environmentId,
+        terminal: snapshot.phase === "complete" || snapshot.phase === "failed",
+        workers: pipelineWorkers({
+          ...snapshot,
+          id: record.id,
+          environmentId: record.environmentId,
+        }),
+      });
+    }
+    return result;
   }
 
   /** Backend supervisors use this to re-arm every active pipeline on startup. */

@@ -17,6 +17,7 @@ import {
   conditionalBuildPipelineRead,
   withoutTranscriptBodies,
 } from "./build-pipeline-transcript-projection.js";
+import { readPipelineWorkerTranscript } from "./build-pipeline-worker-transcript.js";
 
 export function registerBuildPipelineCommands(
   register: CommandRegistrar,
@@ -223,6 +224,18 @@ export function registerBuildPipelineCommands(
         refreshUsage: shouldRefreshUsage,
       });
     },
+  );
+  /**
+   * One pipeline worker's own transcript, by its mailbox address: the newest
+   * `limit` messages of the stage session's committed transcript, which the
+   * pipeline checkpoints while the turn runs and keeps after it ends.
+   */
+  register("get_build_pipeline_worker_transcript", ({ environmentId, tabId, limit }, { storage }) =>
+    readPipelineWorkerTranscript(storage, {
+      environmentId: asNonBlankString(environmentId, "environmentId"),
+      tabId: asNonBlankString(tabId, "tabId"),
+      limit: typeof limit === "number" ? limit : undefined,
+    }),
   );
   register("list_build_pipelines", async (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "build-pipeline", async () => {

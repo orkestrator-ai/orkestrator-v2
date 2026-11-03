@@ -48,6 +48,7 @@ import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.
 import type { Environment } from "./models.js";
 import {
   defaultInputSourceRoots,
+  INPUT_LIMITS,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
   stagePortableInputs,
@@ -485,6 +486,143 @@ describe("refreshStagedAgentAccountLogins", () => {
     expect(
       await fs.readFile(staged(revision, "claude-config/.credentials.json"), "utf8"),
     ).toContain("claude-host");
+  });
+
+  test.each(["symlink", "large"])(
+    "preserves a staged %s Claude config through repeated start refreshes",
+    async (source) => {
+      const host = path.join(root, "host-home", ".claude.json");
+      const safe = {
+        oauthAccount: { emailAddress: "linked@example.com" },
+        hasCompletedOnboarding: true,
+        mcpServers: { docs: { type: "http", url: "https://docs.example.invalid/mcp" } },
+      };
+      const raw = JSON.stringify({
+        ...safe,
+        primaryApiKey: "SENTINEL",
+        projects: { secret: { metadata: "x".repeat(source === "large" ? 2 * 1024 * 1024 : 0) } },
+      });
+      await fs.unlink(host);
+      if (source === "symlink") {
+        await write(`${host}.target`, raw);
+        await fs.symlink(`${host}.target`, host);
+      } else {
+        await write(host, raw);
+      }
+      const revision = await stage();
+      const mount = staged(
+        revision,
+        `files/claude.json/${source === "symlink" ? ".claude.json.target" : ".claude.json"}`,
+      );
+      expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual(safe);
+      const inode = (await fs.stat(mount)).ino;
+      for (let start = 0; start < 2; start++) {
+        await refreshStagedAgentAccountLogins(
+          context,
+          environment,
+          "container-1",
+          fakeRunners(revision).runners,
+        );
+        expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual(safe);
+        expect((await fs.stat(mount)).ino).toBe(inode);
+      }
+    },
+  );
+
+  test.each(["missing", "broken-link", "oversized", "directory"])(
+    "clears a legacy raw mount in place with a %s host source, including switch-back",
+    async (source) => {
+      const revision = await stage();
+      const mount = staged(revision, "files/claude.json/.claude.json");
+      const raw = JSON.stringify({
+        primaryApiKey: "SENTINEL",
+        projects: { secret: {} },
+        mcpServers: {
+          orkestrator: {
+            type: "http",
+            url: "http://localhost/mcp",
+            headers: { Authorization: "SENTINEL" },
+          },
+        },
+      });
+      await write(mount, raw);
+      const inode = (await fs.stat(mount)).ino;
+      const host = path.join(root, "host-home", ".claude.json");
+      await fs.unlink(host);
+      if (source === "broken-link") {
+        await fs.symlink(`${host}.target`, host);
+      } else if (source === "oversized") {
+        await write(host, JSON.stringify({ padding: "x".repeat(INPUT_LIMITS.fileBytes) }));
+      } else if (source === "directory") {
+        await fs.mkdir(host);
+      }
+      const { runners } = fakeRunners(revision);
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toBe("{}");
+      expect((await fs.stat(mount)).ino).toBe(inode);
+      await addAccounts({ claude: CLAUDE_ID });
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toContain("second@example.com");
+      await addAccounts({});
+      await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+      expect(await fs.readFile(mount, "utf8")).toBe("{}");
+      expect((await fs.stat(mount)).ino).toBe(inode);
+    },
+  );
+
+  test("sanitizes legacy mounts even when provider credentials are not allowed", async () => {
+    const revision = await stage();
+    const mount = staged(revision, "files/claude.json/.claude.json");
+    await write(mount, '{"primaryApiKey":"SENTINEL","hasCompletedOnboarding":true}');
+    (context.credentialSources as Set<string>).delete("claude");
+    await refreshStagedAgentAccountLogins(
+      context,
+      environment,
+      "container-1",
+      fakeRunners(revision).runners,
+    );
+    expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual({ hasCompletedOnboarding: true });
+  });
+
+  test("a refreshed staged .claude.json carries only the container allowlist", async () => {
+    const revision = await stage();
+    const hostHome = path.join(root, "host-home");
+    await write(
+      path.join(hostHome, ".claude.json"),
+      JSON.stringify({
+        oauthAccount: { emailAddress: "host@example.com" },
+        hasCompletedOnboarding: true,
+        primaryApiKey: "SENTINEL-API-KEY",
+        projects: { [path.join(hostHome, "secret-project")]: { allowedTools: [] } },
+        mcpServers: {
+          remote: { type: "http", url: "https://mcp.example.com/mcp" },
+          orkestrator: {
+            type: "http",
+            url: "http://127.0.0.1:34122/mcp",
+            headers: { Authorization: "Bearer SENTINEL-OPERATOR" },
+          },
+          local: { command: path.join(hostHome, "bin", "server") },
+        },
+      }),
+    );
+    const { runners } = fakeRunners(revision);
+
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    const text = await fs.readFile(staged(revision, "files/claude.json/.claude.json"), "utf8");
+    expect(JSON.parse(text)).toEqual({
+      oauthAccount: { emailAddress: "host@example.com" },
+      hasCompletedOnboarding: true,
+      mcpServers: { remote: { type: "http", url: "https://mcp.example.com/mcp" } },
+    });
+    expect(text).not.toContain("SENTINEL");
+    expect(text).not.toContain(hostHome);
+
+    // An unparseable host file empties the mount rather than keeping the last copy.
+    await write(path.join(hostHome, ".claude.json"), "{not json");
+    await refreshStagedAgentAccountLogins(context, environment, "container-1", runners);
+    expect(await fs.readFile(staged(revision, "files/claude.json/.claude.json"), "utf8")).toBe(
+      "{}",
+    );
   });
 
   test("revokes a previously staged login when Claude container credentials are disabled", async () => {
@@ -1396,7 +1534,7 @@ if (command === "inspect") {
   if (failure === "ambiguous-start") process.exit(17);
 } else if (command === "exec") {
   if (readFileSync(running, "utf8") !== "true") process.exit(18);
-  if (args[0] === "--user") {
+  if (args.includes("--user")) {
     if (failure === "project-access") process.exit(19);
   } else {
     const text = args.at(-1);

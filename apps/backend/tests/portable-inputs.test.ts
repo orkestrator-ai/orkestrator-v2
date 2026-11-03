@@ -407,6 +407,59 @@ describe("portable input staging", () => {
     expect(oversized.providers[0]!.skipped["too-large"]).toBe(1);
   });
 
+  test("stages only the container allowlist of ~/.claude.json, never a raw copy", async () => {
+    const { dataDir, roots, home, root } = await fixtureHome();
+    // A dotfile manager's link is followed, and the target is filtered too.
+    const target = path.join(root, "dotfiles", "claude.json");
+    await write(
+      target,
+      JSON.stringify({
+        oauthAccount: { emailAddress: "fixture@example.invalid" },
+        hasCompletedOnboarding: true,
+        primaryApiKey: "SENTINEL-API-KEY",
+        projects: { [path.join(home, "code", "app")]: { allowedTools: ["Bash"] } },
+        githubRepoPaths: { "acme/app": [path.join(home, "code", "app")] },
+        mcpServers: {
+          docs: { type: "http", url: "https://docs.example.com/mcp" },
+          orkestrator: {
+            type: "http",
+            url: "http://127.0.0.1:34122/mcp",
+            headers: { Authorization: "Bearer SENTINEL-OPERATOR" },
+          },
+          local: { command: path.join(home, ".local", "bin", "mcp") },
+        },
+      }),
+    );
+    await fs.rm(path.join(home, ".claude.json"));
+    await fs.symlink(target, path.join(home, ".claude.json"));
+    const staged = await stagePortableInputs(dataDir, "claude-json", new Set(["claude"]), roots);
+    const mount = staged.mounts.find((entry) => entry.target === "/claude-config.json")!;
+    expect(mount.source).toBe(path.join(staged.directory, "files", "claude.json", "claude.json"));
+    const text = await fs.readFile(mount.source, "utf8");
+    expect(JSON.parse(text)).toEqual({
+      oauthAccount: { emailAddress: "fixture@example.invalid" },
+      hasCompletedOnboarding: true,
+      mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } },
+    });
+    expect(text).not.toContain("SENTINEL");
+    expect(text).not.toContain(home);
+    expect((await fs.stat(mount.source)).mode & 0o777).toBe(0o600);
+
+    // An unparseable file is withheld: no mount, so the entrypoint writes its minimal config.
+    await write(target, "{ SENTINEL-PARTIAL");
+    const broken = await stagePortableInputs(
+      dataDir,
+      "claude-json-bad",
+      new Set(["claude"]),
+      roots,
+    );
+    expect(broken.mounts.map((entry) => entry.target)).not.toContain("/claude-config.json");
+    for (const file of await listFiles(broken.directory))
+      expect(await fs.readFile(path.join(broken.directory, file), "utf8")).not.toContain(
+        "SENTINEL",
+      );
+  });
+
   test("a non-ENOENT settings read failure cannot publish raw settings", async () => {
     const { dataDir, roots, home } = await fixtureHome();
     const settings = path.join(home, ".claude", "settings.json");

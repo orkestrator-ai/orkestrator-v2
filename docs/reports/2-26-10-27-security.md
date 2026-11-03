@@ -99,7 +99,7 @@ The material risks are concentrated in four themes:
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
-| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Reported |
+| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
@@ -473,7 +473,39 @@ bootstrap windows only use `ipcRenderer.on`/`send` and can switch now.
 
 ### M8. Host `~/.claude.json` is staged unfiltered and stays readable in the container
 
-**Status:** Reported
+**Status:** Fixed (2026-11-03). Staging passes the file through an allowlist
+(`apps/backend/src/core/claude-container-config.ts`, `claudeContainerConfig`):
+only `oauthAccount`, the onboarding flags and container-safe user
+`mcpServers` are written to the staged copy, so the read-only
+`/claude-config.json` (and its relay copy) holds nothing else. A server is
+dropped when it is named `orkestrator` (the Control MCP setup's name), its URL
+is loopback, or any string in it names a path in the host home. The
+active-account refresh before every start rewrites the staged file through the
+same filter, the entrypoint keeps only the same top-level keys when it writes
+`~/.claude.json`, and MCP management's defaults preview, refresh and reset
+inherit only the same servers. Legacy images that bind the raw host file
+directly (`commands-containers.ts`, no staged inputs) are not covered; they
+belong to M9. Servers kept on purpose still carry the keys the user put in
+their headers or environment, because delivering them is the point.
+
+**Upgrade requirement:** Stop and start containers that were already running
+when this fix was installed, using Orkestrator's environment controls. Merely
+upgrading or restarting the backend, or opening an already-running container,
+does not sanitize it. The stopped-container start path filters the staged file
+in place and the entrypoint rebuilds the relay and imported copies. Until that
+stop/start, those running containers can still expose the old raw content.
+This does not revoke any secrets previously read; rotate exposed API keys or
+Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+
+Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
+run by `mise run test:agent:docker:isolated` against the image it builds, so
+review of any image change runs it, and in the container live qualification
+workflow) stages a fake host file
+from a throwaway HOME, boots the image with no network and fake credentials,
+and checks that no `node`-readable copy holds anything outside the allowlist
+and that interactive Claude starts in `/workspace` with no first-run, trust or
+auto-mode prompt. It passed on 2026-11-03 against an image built from this
+change.
 
 **Where:** `apps/backend/src/core/portable-inputs.ts:259-268` (no filter for the
 `claude.json` stage). `docker/entrypoint.sh:904-909` strips `projects` only from

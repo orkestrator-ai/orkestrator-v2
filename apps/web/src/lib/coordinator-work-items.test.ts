@@ -496,3 +496,84 @@ describe("pullRequestStage", () => {
     ).toBe("PR open · checks passed");
   });
 });
+
+describe("review fixes", () => {
+  test("review prompts update bucket, stage, ordering and counts", () => {
+    const items = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [
+          association({ kind: "multi-review", resourceId: "r" }),
+          delegated("busy", "running"),
+        ],
+        reviews: new Map([["r", review("r")]]),
+        environments: new Map([["busy", environment("busy")]]),
+        promptEnvironmentIds: new Set(["reviewed-env"]),
+      }),
+    );
+    expect(items[0]).toMatchObject({
+      kind: "review",
+      bucket: "needs-you",
+      stage: "Review · 3 reviewers · waiting for you",
+    });
+    expect(countCoordinatorWork(items)).toEqual({ needsYou: 1, running: 1, finished: 0 });
+  });
+  test("reviews and graphs retain open PRs from monitor or remote summaries", () => {
+    for (const remote of [false, true]) {
+      const workflows = [
+        association({
+          kind: "multi-review",
+          resourceId: "r",
+          ...(remote ? { nodeId: "node-b" } : {}),
+        }),
+        ...(!remote ? [association({ kind: "graph-run", resourceId: "g" })] : []),
+      ];
+      const r = review("r", { phase: "completed", updatedAt: at(-48 * HOUR) });
+      const run = (prState: "open" | "closed") =>
+        deriveCoordinatorWorkItems(
+          sources({
+            workflows,
+            reviews: new Map([["r", r]]),
+            remoteReviews: new Map([[remoteWorkKey("node-b", "r"), r]]),
+            graphRuns: new Map([
+              ["g", graphRun("g", { status: "complete", finishedAt: at(-48 * HOUR) })],
+            ]),
+            nodes: [node("node-b", "Studio", [{ environmentId: "reviewed-env", prState }])],
+            prReadings: new Map(
+              ["reviewed-env", "graph-env"].map((id) => [
+                id,
+                {
+                  prState,
+                  prUrl: "https://github.com/o/r/pull/1",
+                  hasMergeConflicts: false,
+                  checkSummary: null,
+                },
+              ]),
+            ),
+          }),
+        );
+      expect(run("open")).toHaveLength(remote ? 1 : 2);
+      expect(run("closed")).toEqual([]);
+    }
+  });
+  test.each(["build-pipeline", "multi-review", "graph-run"] as const)(
+    "confirmed missing %s expires; loading does not",
+    (kind) => {
+      const workflows = [association({ kind, resourceId: "gone", createdAt: at(-25 * HOUR) })];
+      expect(deriveCoordinatorWorkItems(sources({ workflows }))[0]?.bucket).toBe("running");
+      const missingResources = new Set([`${kind}:gone`]);
+      const recent = deriveCoordinatorWorkItems(
+        sources({ workflows, missingResources, now: NOW - 2 * HOUR }),
+      );
+      expect(recent[0]).toMatchObject({ bucket: "finished", target: null });
+      expect(deriveCoordinatorWorkItems(sources({ workflows, missingResources }))).toEqual([]);
+    },
+  );
+  test("unreadable remote graphs never inflate running counts and expire", () => {
+    const workflows = [
+      association({ kind: "graph-run", resourceId: "g", nodeId: "node-b", createdAt: at(-HOUR) }),
+    ];
+    const items = deriveCoordinatorWorkItems(sources({ workflows }));
+    expect(countCoordinatorWork(items).running).toBe(0);
+    expect(deriveCoordinatorWorkItems(sources({ workflows, now: NOW + 24 * HOUR }))).toEqual([]);
+  });
+});

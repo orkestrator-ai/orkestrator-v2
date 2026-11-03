@@ -117,6 +117,8 @@ export interface CoordinatorWorkSources {
   remoteReviews: ReadonlyMap<string, MultiReviewWorkflow>;
   /** Environments with a question, approval or input waiting on the user. */
   promptEnvironmentIds: ReadonlySet<string>;
+  /** Successful reads that confirmed a local resource no longer exists. */
+  missingResources?: ReadonlySet<string>;
   now: number;
 }
 
@@ -407,6 +409,33 @@ function workerItem(
   };
 }
 
+function missingItem(
+  base: Pick<CoordinatorWorkItem, "key" | "kind" | "name" | "openDelegations">,
+  createdAt: number,
+): CoordinatorWorkItem {
+  return {
+    ...base,
+    bucket: "finished",
+    stage: "Work no longer available",
+    target: null,
+    unavailableReason: "The underlying record no longer exists.",
+    finishedAt: createdAt,
+    sortAt: createdAt,
+    prOpen: false,
+  };
+}
+
+function environmentPrOpen(
+  sources: CoordinatorWorkSources,
+  association: CoordinatorWorkflowAssociation,
+  environmentId?: string,
+): boolean {
+  const prState = association.nodeId
+    ? nodeLookup(sources, association.nodeId, environmentId).environment?.prState
+    : prReadingFor(sources, environmentId)?.prState;
+  return prState === "open" || outcomePrOpen(association);
+}
+
 function buildItem(
   association: CoordinatorWorkflowAssociation,
   sources: CoordinatorWorkSources,
@@ -426,6 +455,8 @@ function buildItem(
     openDelegations: 0,
   };
   if (!pipeline) {
+    if (!nodeId && sources.missingResources?.has(`build-pipeline:${association.resourceId}`))
+      return missingItem(base, createdAt);
     const target: CoordinatorWorkTarget | null = nodeId
       ? null
       : { type: "build", projectId: association.projectId, pipelineId: association.resourceId };
@@ -536,6 +567,8 @@ function reviewItem(
     prOpen: false,
   };
   if (!workflow) {
+    if (!nodeId && sources.missingResources?.has(`multi-review:${association.resourceId}`))
+      return missingItem(base, createdAt);
     return {
       ...base,
       bucket: "running",
@@ -559,11 +592,13 @@ function reviewItem(
     bucket = "finished";
     stage = `Review ${REVIEW_PHASE_WORDS[workflow.phase]}`;
   } else {
-    bucket = "running";
+    const waiting = !nodeId && sources.promptEnvironmentIds.has(workflow.environmentId);
+    bucket = waiting ? "needs-you" : "running";
     stage =
       workflow.phase === "reviewing"
         ? `Review · ${plural(workflow.reviewers.length, "reviewer")}`
         : `Review · ${REVIEW_PHASE_WORDS[workflow.phase]}`;
+    if (waiting) stage += " · waiting for you";
   }
   const terminal = REVIEW_FINISHED.has(workflow.phase) || workflow.phase === "failed";
   const finishedAt = terminal ? (time(workflow.updatedAt) ?? createdAt) : undefined;
@@ -584,6 +619,7 @@ function reviewItem(
       };
   return {
     ...base,
+    prOpen: environmentPrOpen(sources, association, workflow.environmentId),
     bucket,
     stage,
     target,
@@ -611,7 +647,8 @@ function graphRunItem(
       ...base,
       name: "Graph run",
       machine: nodeLookup(sources, nodeId).machine,
-      bucket: "running",
+      bucket: "finished",
+      finishedAt: createdAt,
       stage: "Graph run · stage not readable from here",
       target: null,
       unavailableReason: "Open it on its own machine.",
@@ -620,6 +657,8 @@ function graphRunItem(
   }
   const run = sources.graphRuns.get(association.resourceId);
   if (!run) {
+    if (sources.missingResources?.has(`graph-run:${association.resourceId}`))
+      return missingItem({ ...base, name: "Graph run" }, createdAt);
     return {
       ...base,
       name: "Graph run",
@@ -682,6 +721,7 @@ function graphRunItem(
     : null;
   return {
     ...base,
+    prOpen: environmentPrOpen(sources, association, run.environmentId ?? undefined),
     name,
     bucket,
     stage,

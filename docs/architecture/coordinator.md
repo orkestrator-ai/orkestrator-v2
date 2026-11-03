@@ -980,7 +980,7 @@ yet opened) has a disabled button whose title says why.
 
 **Order.** Sections in this order, each headed in words so status never
 depends on colour: **Needs you** (a worker whose delegation has a waiting
-episode, a worker or build environment with a question, approval or input
+episode, a worker, build or review environment with a question, approval or input
 waiting in `HumanPromptBanner`'s data, a paused or failed build, a paused or
 failed review, a graph run waiting on a person, paused or failed), **Running**,
 then **Finished**; newest first within each.
@@ -998,16 +998,16 @@ conversation, so rows move while the coordinator is idle. The sources are the
 stores the app already keeps current from backend snapshots and resource
 events: the coordinator snapshot (whose delegation waiting episodes announce a
 `coordinator` change), environments, build pipelines and Multi Reviews
-(hydrated app-wide; one not yet held is read once), the PR monitor, the
+(hydrated app-wide; missing records are retried on resource changes, resync and safety checks), the PR monitor, the
 project's tickets, and the command node's summaries of other machines. Graph
 runs are read on demand (`graph_run_get`) when the panel mounts, when a
 `graph-run` change names one, and on resync and safety checks. A build or
 Multi Review on another node is read through that node's link with the reads
 the backend coordinator already uses (`get_build_pipeline`,
 `get_multi_review_workflow`), again whenever the node's summaries refresh and
-on safety checks, until it reaches a terminal state. A graph run on another
+on resync and safety checks, including after a failure that can be retried. A graph run on another
 node is named but not followed, since no routed read command serves it; its
-row says so and its Open button is disabled.
+row says so and its Open button is disabled. These unreadable graph rows do not count as running and expire 24 hours after association creation. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
 
 **Layout.** At 1280px and wider the panel is open by default beside the
 conversation. Narrower, it is a strip with the running and needs-you counts;

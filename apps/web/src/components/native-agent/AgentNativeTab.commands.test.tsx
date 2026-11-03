@@ -1,3 +1,5 @@
+import { createReadCoordinator, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { FakeClock } from "@/lib/testing/read-coordinator";
 /**
  * Composer command behaviour on the shared native tab.
  *
@@ -731,37 +733,48 @@ describe("AgentNativeTab commands", () => {
   });
 
   test("typing after the sigil filters a maximal list without fetching, refreshing or scanning", async () => {
-    // A wire-maximum inventory: the menu filters it in memory on every key.
-    const rows: NativeAgentSlashCommand[] = Array.from({ length: 512 }, (_, index) => ({
-      name: `/team-tools:review-pr-${index}`,
-      id: `codex:team-tools:review-pr-${index}`,
-      source: index % 2 ? "plugin" : "project",
-      description: `Review pull request batch ${index} against the project conventions.`,
-      argumentHint: "<path>",
-      executionKind: "provider-prompt",
-      bindingRevision: `rev-${index}`,
-    }));
-    projectionOptions = { commands: [...rows, COMPACT] };
-    const tabId = "tab-keystrokes";
-    const { input } = await renderTab(tabId);
-    await type(input, tabId, "/");
-    await screen.findByRole("listbox", { name: "Slash commands" });
-    const projectionReads = getNativeAgentProjectionMock.mock.calls.length;
-    const fileTreeReads =
-      getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length;
-
-    const typed = "team-tools:review-pr";
-    expect(typed).toHaveLength(20);
-    for (let length = 1; length <= typed.length; length += 1) {
-      await type(input, tabId, `/${typed.slice(0, length)}`);
-    }
-    // Still filtering the projection's rows: the search caps what it renders.
-    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
-    expect(getNativeAgentProjectionMock.mock.calls.length).toBe(projectionReads);
-    expect(refreshNativeAgentCommandsMock).not.toHaveBeenCalled();
-    expect(getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length).toBe(
-      fileTreeReads,
+    // This asserts reads caused by typing. Keep periodic background reads on
+    // a manual clock so a slow renderer cannot cross their wall-clock cadence.
+    const clock = new FakeClock();
+    resetReadCoordinatorForTests(() =>
+      createReadCoordinator({ clock, document: null, window: null }),
     );
+    try {
+      // A wire-maximum inventory: the menu filters it in memory on every key.
+      const rows: NativeAgentSlashCommand[] = Array.from({ length: 512 }, (_, index) => ({
+        name: `/team-tools:review-pr-${index}`,
+        id: `codex:team-tools:review-pr-${index}`,
+        source: index % 2 ? "plugin" : "project",
+        description: `Review pull request batch ${index} against the project conventions.`,
+        argumentHint: "<path>",
+        executionKind: "provider-prompt",
+        bindingRevision: `rev-${index}`,
+      }));
+      projectionOptions = { commands: [...rows, COMPACT] };
+      const tabId = "tab-keystrokes";
+      const { input } = await renderTab(tabId);
+      await type(input, tabId, "/");
+      await screen.findByRole("listbox", { name: "Slash commands" });
+      const projectionReads = getNativeAgentProjectionMock.mock.calls.length;
+      const fileTreeReads =
+        getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length;
+
+      const typed = "team-tools:review-pr";
+      expect(typed).toHaveLength(20);
+      for (let length = 1; length <= typed.length; length += 1) {
+        await type(input, tabId, `/${typed.slice(0, length)}`);
+      }
+      // Still filtering the projection's rows: the search caps what it renders.
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBe(projectionReads);
+      expect(refreshNativeAgentCommandsMock).not.toHaveBeenCalled();
+      expect(getFileTreeMock.mock.calls.length + getLocalFileTreeMock.mock.calls.length).toBe(
+        fileTreeReads,
+      );
+    } finally {
+      cleanup();
+      resetReadCoordinatorForTests();
+    }
   });
 
   test("loading and unsupported lists keep the menu open with an explanation", async () => {

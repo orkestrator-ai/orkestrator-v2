@@ -43,6 +43,45 @@ function focusTab(environmentId: string, tabId: string): void {
   if (!openConversationTab(environmentId, tabId)) requestPaneTabActivation(environmentId, tabId);
 }
 
+// The layout can still be hydrating when Open selects another environment.
+// Keep the intent outside React and let the normal layout persistence publish
+// a restored tab only after the authoritative snapshot has been installed.
+const pendingReviews = new Map<string, Extract<CoordinatorWorkTarget, { type: "review" }>>();
+let offReviews: (() => void) | undefined;
+function reconcileReviews(): void {
+  for (const [environmentId, target] of Array.from(pendingReviews)) {
+    const store = usePaneLayoutStore.getState();
+    if (store.hydration.get(environmentId) !== "done") continue;
+    const paneId = store.getActivePaneId(environmentId);
+    if (!paneId) continue;
+    pendingReviews.delete(environmentId);
+    const existing = store
+      .getAllTabs(environmentId)
+      .find(
+        (tab) =>
+          tab.type === "multi-review" &&
+          tab.multiReviewTabData?.workflowId === target.workflowId &&
+          !tab.multiReviewTabData.reviewerId,
+      );
+    const tabId = existing?.id ?? `multi-review:${target.workflowId}`;
+    if (!existing)
+      store.addTab(
+        paneId,
+        {
+          id: tabId,
+          type: "multi-review",
+          multiReviewTabData: { environmentId, workflowId: target.workflowId },
+        },
+        environmentId,
+      );
+    focusTab(environmentId, tabId);
+  }
+  if (!pendingReviews.size) {
+    offReviews?.();
+    offReviews = undefined;
+  }
+}
+
 export function openCoordinatorWorkTarget(
   target: CoordinatorWorkTarget,
   navigation: CoordinatorWorkNavigation = defaultNavigation,
@@ -67,6 +106,12 @@ export function openCoordinatorWorkTarget(
             !item.multiReviewTabData.reviewerId,
         );
       if (tab) focusTab(target.environmentId, tab.id);
+      else {
+        pendingReviews.set(target.environmentId, target);
+        while (pendingReviews.size > 64) pendingReviews.delete(pendingReviews.keys().next().value!);
+        offReviews ??= usePaneLayoutStore.subscribe(reconcileReviews);
+        reconcileReviews();
+      }
       return;
     }
     case "graph-run":

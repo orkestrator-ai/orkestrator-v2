@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
-import { isActiveBuildPhase, isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import {
-  isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -127,21 +126,61 @@ export function useCoordinatorWorkItems(
     };
   }, [localRunIds, loadRun]);
 
+  const [missingLocal, setMissingLocal] = useState<ReadonlySet<string>>(() => new Set());
+
   // Local builds and reviews are hydrated app-wide; one the stores do not
-  // hold yet (started a moment ago, or in a project not hydrated) is read once.
-  // Only a change of the coordinator's work asks again: a store update for an
-  // unrelated record must not repeat a read that came back empty.
+  // hold yet is read on mount and retried on reconciliation signals. A failed
+  // read stays loading; a successful empty read proves the record is missing.
   useEffect(() => {
-    const heldPipelines = useBuildPipelineStore.getState().pipelines;
-    const heldReviews = useMultiReviewStore.getState().workflows;
-    for (const association of associations) {
-      if (association.nodeId) continue;
-      if (association.kind === "build-pipeline" && !heldPipelines.has(association.resourceId)) {
-        void hydrateBuildPipeline(association.resourceId).catch(() => undefined);
-      } else if (association.kind === "multi-review" && !heldReviews.has(association.resourceId)) {
-        void hydrateMultiReviewWorkflow(association.resourceId).catch(() => undefined);
+    let disposed = false;
+    const inFlight = new Set<string>();
+    const refresh = () => {
+      for (const association of associations) {
+        if (association.nodeId) continue;
+        const kind = association.kind;
+        if (kind !== "build-pipeline" && kind !== "multi-review") continue;
+        const key = `${kind}:${association.resourceId}`;
+        const held =
+          kind === "build-pipeline"
+            ? useBuildPipelineStore.getState().pipelines.has(association.resourceId)
+            : useMultiReviewStore.getState().workflows.has(association.resourceId);
+        if (held || inFlight.has(key)) continue;
+        inFlight.add(key);
+        const load = kind === "build-pipeline" ? hydrateBuildPipeline : hydrateMultiReviewWorkflow;
+        void load(association.resourceId)
+          .then((record) => {
+            if (disposed) return;
+            setMissingLocal((current) => {
+              const next = new Set(current);
+              if (record) next.delete(key);
+              else next.add(key);
+              return next;
+            });
+          })
+          .catch(() => undefined)
+          .finally(() => inFlight.delete(key));
       }
-    }
+    };
+    refresh();
+    const offResync = onResourceResync(refresh);
+    const offSafety = onViewSafetyCheck(refresh);
+    const offChange = onResourceChanged("build-pipeline", refresh);
+    const offReview = onResourceChanged("multi-review", refresh);
+    const offPipelines = useBuildPipelineStore.subscribe((state, previous) => {
+      if (Array.from(previous.pipelines.keys()).some((id) => !state.pipelines.has(id))) refresh();
+    });
+    const offReviews = useMultiReviewStore.subscribe((state, previous) => {
+      if (Array.from(previous.workflows.keys()).some((id) => !state.workflows.has(id))) refresh();
+    });
+    return () => {
+      disposed = true;
+      offResync();
+      offSafety();
+      offChange();
+      offReview();
+      offPipelines();
+      offReviews();
+    };
   }, [associations]);
 
   // Builds name their ticket; the criteria count reads its checks. The store
@@ -175,11 +214,6 @@ export function useCoordinatorWorkItems(
       .join("|");
   }, [nodes, remoteRefs]);
   const [remoteTick, setRemoteTick] = useState(0);
-  // Read only to skip settled records, so holding them does not trigger reads.
-  const remoteRef = useRef(remote);
-  useEffect(() => {
-    remoteRef.current = remote;
-  }, [remote]);
   useEffect(() => {
     if (remoteRefs.length === 0) return;
     const bump = () => setRemoteTick((tick) => tick + 1);
@@ -193,20 +227,9 @@ export function useCoordinatorWorkItems(
   useEffect(() => {
     if (remoteRefs.length === 0) return;
     let disposed = false;
-    const settled = (key: string, kind: "build-pipeline" | "multi-review") => {
-      const remote = remoteRef.current;
-      if (kind === "build-pipeline") {
-        const held = remote.pipelines.get(key);
-        return held !== undefined && !isActiveBuildPhase(held.phase) && held.phase !== "paused";
-      }
-      const held = remote.reviews.get(key);
-      return held !== undefined && isMultiReviewTerminalPhase(held.phase);
-    };
     void Promise.all(
       remoteRefs.map(async (ref) => {
         const key = remoteWorkKey(ref.nodeId, ref.id);
-        // A finished record does not change again; its PR state comes from summaries.
-        if (settled(key, ref.kind)) return null;
         try {
           const value = await portalStore.invokeOnNode<unknown>(
             ref.nodeId as BackendId,
@@ -286,6 +309,12 @@ export function useCoordinatorWorkItems(
       remoteReviews: remote.reviews,
       promptEnvironmentIds,
       now,
+      missingResources: new Set([
+        ...missingLocal,
+        ...Array.from(runEntries)
+          .filter(([, entry]) => entry.status === "missing")
+          .map(([id]) => `graph-run:${id}`),
+      ]),
     });
     return {
       items,
@@ -309,5 +338,7 @@ export function useCoordinatorWorkItems(
     remote,
     promptEnvironmentIds,
     now,
+    missingLocal,
+    runEntries,
   ]);
 }

@@ -10,6 +10,7 @@ import {
 function seedLayout() {
   usePaneLayoutStore.setState({
     activeEnvironmentId: "env-1",
+    hydration: new Map([["env-1", "done"]]),
     environments: new Map([
       [
         "env-1",
@@ -110,6 +111,32 @@ describe("openCoordinatorWorkTarget", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
     expect(activeTab("pane-2")).toBe("review-main");
   });
+
+  test.each([false, true])(
+    "restores a closed review tab after hydration (delayed=%s)",
+    (delayed) => {
+      const store = usePaneLayoutStore.getState();
+      store.removeTab("pane-2", "review-main", "env-1");
+      if (delayed) usePaneLayoutStore.setState({ hydration: new Map([["env-1", "pending"]]) });
+      openCoordinatorWorkTarget(
+        { type: "review", projectId: "project-1", environmentId: "env-1", workflowId: "review-1" },
+        navigation(),
+      );
+      if (delayed) {
+        expect(store.getAllTabs("env-1").some((t) => t.id === "multi-review:review-1")).toBe(false);
+        usePaneLayoutStore.getState().finishHydration("env-1");
+      }
+      expect(activeTab("pane-1")).toBe("multi-review:review-1");
+      expect(
+        store
+          .getAllTabs("env-1")
+          .filter(
+            (t) =>
+              t.multiReviewTabData?.workflowId === "review-1" && !t.multiReviewTabData.reviewerId,
+          ),
+      ).toHaveLength(1);
+    },
+  );
 
   test("a build row activates the build tab through the pipeline activation path", () => {
     const nav = navigation();

@@ -434,6 +434,25 @@ export interface CoordinatorWorkflowAssociation {
   featurePlan?: { operationId: string };
   /** `environment` and `build-pipeline`: the worker's outcome watch (see `CoordinatorWorkerOutcome`). */
   workerOutcome?: CoordinatorWorkerOutcome;
+  /**
+   * The user cleared this record's finished row from the Work panel. Display
+   * only: retention, replay, mail routing and status wakes never read it, and
+   * a row that is no longer finished is listed again.
+   */
+  workHiddenAt?: string;
+}
+
+/**
+ * The end state a followed pull request's recorded notice names. Its key is
+ * `<condition>:<url hash>`, so a follow that reported its merge still says so
+ * after its environment, and every live reading of the PR, is gone.
+ */
+export function pullRequestStateFromNotice(
+  key: string | undefined,
+): "merged" | "closed" | undefined {
+  if (key?.startsWith("merged:")) return "merged";
+  if (key?.startsWith("closed:")) return "closed";
+  return undefined;
 }
 
 /**

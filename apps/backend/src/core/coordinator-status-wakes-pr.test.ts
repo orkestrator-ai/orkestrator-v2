@@ -369,6 +369,42 @@ describe("pull request status wakes", () => {
       expect((await followOf(current, actor))?.terminalNotifiedAt).toBeDefined();
   });
 
+  test("a follow that already ended still records the merge when its worker is deleted", async () => {
+    const current = await createWorld();
+    const coordinator = await current.main();
+    const worker = await current.addEnvironment("pr-env");
+    const replaced = await current.addEnvironment("replaced-env");
+    await follow(current, worker, "create-pr");
+    await follow(current, replaced, "create-pr", { prUrl: PR_URL }, "pr-follow:replaced");
+    await monitor(current, worker, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+    await monitor(current, replaced, { prUrl: PR_URL, prState: "open", hasMergeConflicts: null });
+    await settle(current);
+    await current.finishTurn(coordinator);
+    await monitor(current, worker, { prState: "merged" });
+    await monitor(current, replaced, { prState: "merged" });
+    await settle(current);
+    expect((await followOf(current, worker))?.terminalNotifiedAt).toBeDefined();
+    const wakes = current.wakes(coordinator);
+
+    await current.coordinator.statusWakes.captureFinalPullRequest(
+      (await current.storage.getEnvironment(worker.environmentId))!,
+    );
+    // The worker has moved on to another pull request: not the followed one's end.
+    await current.coordinator.statusWakes.captureFinalPullRequest({
+      ...(await current.storage.getEnvironment(replaced.environmentId))!,
+      prUrl: `${PR_URL}0`,
+    });
+    await settle(current);
+
+    expect((await followOf(current, worker))?.pullRequest?.final).toMatchObject({
+      prUrl: PR_URL,
+      prState: "merged",
+      name: "pr-env",
+    });
+    expect((await followOf(current, replaced))?.pullRequest?.final).toBeUndefined();
+    expect(current.wakes(coordinator)).toBe(wakes);
+  });
+
   test("a PR the user raised has no follow and wakes nobody", async () => {
     const current = await createWorld();
     const coordinator = await current.main();

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { pullRequestStateFromNotice } from "@orkestrator/protocol/coordinator";
 import {
   coordinatorPrFields,
   prKeyTag,
@@ -39,6 +40,17 @@ function run(readings: CoordinatorPrReading[]): string[] {
 }
 
 describe("pull request status", () => {
+  test("the Work panel reads a follow's end from the key of its recorded notice", () => {
+    const end = (change: Partial<CoordinatorPrReading>) =>
+      pullRequestStateFromNotice(
+        pullRequestStatus(reading(change), "env-1", undefined)!.status.key,
+      );
+    expect(end({ prState: "merged" })).toBe("merged");
+    expect(end({ prState: "closed" })).toBe("closed");
+    expect(end({})).toBeUndefined();
+    expect(pullRequestStateFromNotice(undefined)).toBeUndefined();
+  });
+
   test("wakes once per state change, never for an unknown reading in between", () => {
     const pending = reading({
       mergeability: "blocked",

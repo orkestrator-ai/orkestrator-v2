@@ -40,6 +40,7 @@ import {
   savedLaunchSettings,
 } from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import {
@@ -283,6 +284,22 @@ export function registerCoordinatorCommands(
     } finally {
       releaseOwner?.();
     }
+  });
+  // The Work panel's "Clear finished": hides rows, never removes the records.
+  register("hide_coordinator_work", async (args, context) => {
+    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
+    assertOnlyKeys(args, ["projectId", "associationIds"], "arguments");
+    const id = asNonBlankString(args.projectId, "projectId");
+    const ids = args.associationIds;
+    if (
+      !Array.isArray(ids) ||
+      ids.length > MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS ||
+      !ids.every((item) => typeof item === "string")
+    ) {
+      throw new Error("Expected associationIds to be a bounded list of record ids");
+    }
+    await context.storage.coordinators.hideCoordinatorWork(id, new Set<string>(ids));
+    return context.coordinators.get(id);
   });
   register("pause_project_coordinator", ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");

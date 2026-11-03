@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 import type { ActivitySortOrder } from "@orkestrator/protocol/environment-activity-order";
+import type { CoordinatorWorkBucket } from "@/lib/coordinator-work-items";
 import { windowStorageKey } from "@/lib/desktop-storage-key";
 import { workspaceTarget } from "@/lib/portal/portal-transport";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -54,6 +55,8 @@ interface UIState {
   selectedEnvironmentId: string | null;
   /** Whether the left projects/environments panel is visible. */
   sidebarOpen: boolean;
+  /** Coordinator Work panel sections folded shut, on this device, across projects. */
+  collapsedWorkBuckets: CoordinatorWorkBucket[];
   /** Most recently opened project IDs, newest first. */
   recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
@@ -99,6 +102,8 @@ interface UIState {
   setSidebarWidth: (width: number) => void;
   setMultiReviewGraphHeight: (height: number | null) => void;
   setPipelineGraphHeight: (height: number | null) => void;
+  /** Fold or unfold one section of the coordinator Work panel */
+  toggleWorkBucketCollapsed: (bucket: CoordinatorWorkBucket) => void;
   /** Toggle the collapsed state of a project */
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
@@ -141,6 +146,7 @@ export const createUIStore = () =>
         projectSelectionRevision: 0,
         selectedEnvironmentId: null,
         sidebarOpen: true,
+        collapsedWorkBuckets: [],
         recentProjectIds: [],
         projectBoardTab: initialProjectBoardTab(),
         sidebarWidth: 280,
@@ -157,6 +163,13 @@ export const createUIStore = () =>
         dataSaving: false,
 
         // Actions
+        toggleWorkBucketCollapsed: (bucket) =>
+          set((state) => ({
+            collapsedWorkBuckets: state.collapsedWorkBuckets.includes(bucket)
+              ? state.collapsedWorkBuckets.filter((item) => item !== bucket)
+              : [...state.collapsedWorkBuckets, bucket],
+          })),
+
         selectProject: (projectId) =>
           set((state) => ({
             selectedProjectId: projectId,
@@ -289,6 +302,7 @@ export const createUIStore = () =>
         partialize: (state) => ({
           sidebarWidth: state.sidebarWidth,
           sidebarOpen: state.sidebarOpen,
+          collapsedWorkBuckets: state.collapsedWorkBuckets,
           collapsedProjects: state.collapsedProjects,
           projectCollapseChoices: state.projectCollapseChoices,
           collapsedProjectFolders: state.collapsedProjectFolders,

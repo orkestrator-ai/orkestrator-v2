@@ -1225,4 +1225,47 @@ describe("coordinator command registry", () => {
     expect(stopCodex).not.toHaveBeenCalled();
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
   });
+
+  test("hide_coordinator_work marks this project's records only, and keeps them", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const other = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const elsewhere = await coordinator.ensure(other.id);
+    const follow = (projectId: string, coordinatorId: string, requestId: string) =>
+      storage.coordinators.followCoordinatorPullRequest({
+        projectId,
+        coordinatorId,
+        environmentId: "gone-env",
+        requestId,
+        source: "create-pr",
+        prUrl: "https://github.com/o/r/pull/1",
+      });
+    const mine = await follow(project.id, snapshot.workspace.id, "mine");
+    const theirs = await follow(other.id, elsewhere.workspace.id, "theirs");
+    const announced: string[] = [];
+    storage.addResourceChangeListener((change) => {
+      if (change.resource === "coordinator") announced.push(change.id);
+    });
+
+    const next = (await commands.get("hide_coordinator_work")!(
+      { projectId: project.id, associationIds: [mine.id, theirs.id] },
+      context,
+    )) as Awaited<ReturnType<CoordinatorService["get"]>>;
+
+    expect(next?.workflows.find((item) => item.id === mine.id)?.workHiddenAt).toEqual(
+      expect.any(String),
+    );
+    expect(announced).toContain(project.id);
+    expect(announced).not.toContain(other.id);
+    const [untouched] = await storage.coordinators.listCoordinatorWorkflowAssociations(other.id);
+    expect(untouched?.id).toBe(theirs.id);
+    expect(untouched?.workHiddenAt).toBeUndefined();
+
+    await expect(
+      commands.get("hide_coordinator_work")!(
+        { projectId: project.id, associationIds: "everything" },
+        context,
+      ),
+    ).rejects.toThrow("associationIds");
+  });
 });

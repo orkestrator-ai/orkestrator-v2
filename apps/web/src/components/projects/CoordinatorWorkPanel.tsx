@@ -3,6 +3,7 @@ import {
   AlertCircle,
   Bot,
   CheckCircle2,
+  ChevronRight,
   GitPullRequest,
   Hammer,
   Loader2,
@@ -10,11 +11,20 @@ import {
   PanelRightOpen,
   SearchCheck,
   Workflow,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   COORDINATOR_WORK_BUCKETS,
+  isClearableWorkItem,
   type CoordinatorWorkBucket,
   type CoordinatorWorkCounts,
   type CoordinatorWorkItem,
@@ -22,6 +32,7 @@ import {
   type CoordinatorWorkTarget,
 } from "@/lib/coordinator-work-items";
 import { cn } from "@/lib/utils";
+import { useUIStore } from "@/stores/uiStore";
 
 /** At or above this width the Work panel opens beside the conversation by default. */
 export const WORK_PANEL_WIDE_QUERY = "(min-width: 1280px)";
@@ -59,13 +70,16 @@ function BucketIcon({ bucket }: { bucket: CoordinatorWorkBucket }) {
 function WorkRow({
   item,
   onOpen,
+  onClear,
 }: {
   item: CoordinatorWorkItem;
   onOpen: (target: CoordinatorWorkTarget) => void;
+  /** Present on rows that can be cleared, which are the ones with a right-click menu. */
+  onClear?: () => void;
 }) {
   const KindIcon = KIND_ICONS[item.kind];
   const target = item.target;
-  return (
+  const row = (
     <li
       className="flex items-start gap-2 rounded px-2 py-1.5 hover:bg-elevated/60"
       data-work-kind={item.kind}
@@ -118,6 +132,92 @@ function WorkRow({
       </Button>
     </li>
   );
+  if (!onClear) return row;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={onClear}>
+          <X className="size-4" />
+          Clear
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function WorkSection({
+  bucket,
+  rows,
+  headingId,
+  onOpen,
+  onClearFinished,
+}: {
+  bucket: CoordinatorWorkBucket;
+  rows: CoordinatorWorkItem[];
+  headingId: string;
+  onOpen: (target: CoordinatorWorkTarget) => void;
+  onClearFinished: (associationIds: string[]) => Promise<void>;
+}) {
+  const collapsed = useUIStore((state) => state.collapsedWorkBuckets.includes(bucket));
+  const toggleCollapsed = useUIStore((state) => state.toggleWorkBucketCollapsed);
+  const [clearing, setClearing] = useState(false);
+  const clearable = bucket === "finished" ? rows.filter(isClearableWorkItem) : [];
+  const clear = () => {
+    setClearing(true);
+    void onClearFinished(clearable.flatMap((item) => item.associationIds)).finally(() =>
+      setClearing(false),
+    );
+  };
+  return (
+    <Collapsible open={!collapsed} onOpenChange={() => toggleCollapsed(bucket)} asChild>
+      <section aria-labelledby={headingId} className="mb-1">
+        <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5">
+          <h3 id={headingId} className="min-w-0 flex-1">
+            <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded text-left text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+              <ChevronRight
+                className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")}
+                aria-hidden="true"
+              />
+              <BucketIcon bucket={bucket} />
+              {BUCKET_TITLES[bucket]} ({rows.length})
+            </CollapsibleTrigger>
+          </h3>
+          {clearable.length > 0 ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-5 shrink-0 px-1.5 text-[11px] text-muted-foreground"
+              aria-label={`Clear ${clearable.length} finished ${clearable.length === 1 ? "item" : "items"}`}
+              title={
+                clearable.length < rows.length
+                  ? "Remove finished work from this list. Work whose pull request is still open stays."
+                  : "Remove finished work from this list"
+              }
+              disabled={clearing}
+              onClick={clear}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </div>
+        <CollapsibleContent>
+          <ul className="flex flex-col">
+            {rows.map((item) => (
+              <WorkRow
+                key={item.key}
+                item={item}
+                onOpen={onOpen}
+                {...(isClearableWorkItem(item)
+                  ? { onClear: () => void onClearFinished(item.associationIds) }
+                  : {})}
+              />
+            ))}
+          </ul>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
+  );
 }
 
 function countsText(counts: CoordinatorWorkCounts): string {
@@ -138,12 +238,15 @@ export function CoordinatorWorkPanel({
   counts,
   openDelegations,
   onOpen,
+  onClearFinished,
 }: {
   items: CoordinatorWorkItem[];
   counts: CoordinatorWorkCounts;
   /** Running delegations, exposed for end-to-end checks. */
   openDelegations: number;
   onOpen: (target: CoordinatorWorkTarget) => void;
+  /** Settles when the clear has finished; its failure is the caller's to show. */
+  onClearFinished: (associationIds: string[]) => Promise<void>;
 }) {
   const wide = useMediaQuery(WORK_PANEL_WIDE_QUERY);
   const [choice, setChoice] = useState<{ wide: boolean; open: boolean } | null>(null);
@@ -251,22 +354,15 @@ export function CoordinatorWorkPanel({
           COORDINATOR_WORK_BUCKETS.map((bucket) => {
             const rows = items.filter((item) => item.bucket === bucket);
             if (rows.length === 0) return null;
-            const sectionId = `${headingId}-${bucket}`;
             return (
-              <section key={bucket} aria-labelledby={sectionId} className="mb-1">
-                <h3
-                  id={sectionId}
-                  className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground"
-                >
-                  <BucketIcon bucket={bucket} />
-                  {BUCKET_TITLES[bucket]} ({rows.length})
-                </h3>
-                <ul className="flex flex-col">
-                  {rows.map((item) => (
-                    <WorkRow key={item.key} item={item} onOpen={onOpen} />
-                  ))}
-                </ul>
-              </section>
+              <WorkSection
+                key={bucket}
+                bucket={bucket}
+                rows={rows}
+                headingId={`${headingId}-${bucket}`}
+                onOpen={onOpen}
+                onClearFinished={onClearFinished}
+              />
             );
           })
         )}

@@ -203,6 +203,53 @@ describe("verified download", () => {
   const good = makeDeb([{ path: `${LIB}/libgood.so.1`, data: "good" }]);
   const pin = pinFor("libgood1", good);
 
+  test("rejects destination open errors instead of waiting for drain", async () => {
+    const directory = await tempDir();
+    let fetches = 0;
+    try {
+      // A large body reaches backpressure while the asynchronous open fails.
+      const body = new Uint8Array(128 * 1024);
+      await expect(
+        downloadVerifiedPackage(
+          { ...pin, size: body.length },
+          path.join(directory, "missing"),
+          async () => {
+            fetches++;
+            return new Response(body);
+          },
+        ),
+      ).rejects.toThrow(/ENOENT/);
+      expect(fetches).toBe(2);
+      expect(await readdir(directory)).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("removes partial downloads after response body errors and can retry", async () => {
+    const directory = await tempDir();
+    try {
+      await expect(
+        downloadVerifiedPackage(pin, directory, async () => {
+          let chunks = 0;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (chunks++ === 0) controller.enqueue(good.subarray(0, 8));
+                else controller.error(new Error("response interrupted"));
+              },
+            }),
+          );
+        }),
+      ).rejects.toThrow(/response interrupted/);
+      expect(await readdir(directory)).toEqual([]);
+      const bytes = await downloadVerifiedPackage(pin, directory, async () => new Response(good));
+      expect(Buffer.from(bytes).equals(Buffer.from(good))).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("falls back to the next mirror when one serves the wrong bytes", async () => {
     const directory = await tempDir();
     const requested: string[] = [];
@@ -421,6 +468,89 @@ describe("pins and command line", () => {
 });
 
 describe("review regressions", () => {
+  test("alternating revisions preserve each patched generation until explicit pruning", async () => {
+    const base = await tempDir();
+    try {
+      const shared = path.join(base, "shared");
+      const directory = path.join(base, "private");
+      for (const revision of ["1", "2"]) {
+        await mkdir(path.join(shared, `webkit-${revision}`, WEBKIT_LIBRARY_DIRECTORY), {
+          recursive: true,
+        });
+        await writeFile(path.join(shared, `webkit-${revision}`, "INSTALLATION_COMPLETE"), revision);
+      }
+      const deb = makeDeb([{ path: `${LIB}/libextra.so.1`, data: "patched" }]);
+      const options = {
+        shared,
+        directory,
+        packages: [pinFor("extra", deb)],
+        fetchImpl: async () => new Response(deb),
+        log: () => {},
+      };
+      const generations = new Map<string, string>();
+      for (const revision of ["1", "2", "1", "2"]) {
+        const browser = await preparePrivateBrowsers({ ...options, revision });
+        if (!generations.has(revision)) generations.set(revision, await readlink(browser));
+        for (const [prepared, generation] of generations) {
+          const entry = path.join(directory, `webkit-${prepared}`);
+          expect(await readlink(entry)).toBe(generation);
+          expect(
+            await readFile(path.join(entry, WEBKIT_LIBRARY_DIRECTORY, "libextra.so.1"), "utf8"),
+          ).toBe("patched");
+          expect(
+            await readdir(path.join(shared, `webkit-${prepared}`, WEBKIT_LIBRARY_DIRECTORY)),
+          ).toEqual([]);
+        }
+      }
+      await preparePrivateBrowsers({ ...options, revision: "2", prune: true });
+      expect(await readlink(path.join(directory, "webkit-1"))).toBe(path.join(shared, "webkit-1"));
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("failed download streams release the preparation lock and staging files before retry", async () => {
+    const base = await tempDir();
+    try {
+      const shared = path.join(base, "shared");
+      const directory = path.join(base, "private");
+      await mkdir(path.join(shared, "webkit-1", WEBKIT_LIBRARY_DIRECTORY), { recursive: true });
+      await writeFile(path.join(shared, "webkit-1", "INSTALLATION_COMPLETE"), "1");
+      const deb = makeDeb([{ path: `${LIB}/libextra.so.1`, data: "patched" }]);
+      const options = {
+        shared,
+        directory,
+        revision: "1",
+        packages: [pinFor("extra", deb)],
+        log: () => {},
+      };
+      await expect(
+        preparePrivateBrowsers({
+          ...options,
+          fetchImpl: async () =>
+            new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.error(new Error("download interrupted"));
+                },
+              }),
+            ),
+        }),
+      ).rejects.toThrow(/download interrupted/);
+      expect(await readdir(directory)).toEqual([]);
+      await preparePrivateBrowsers({ ...options, fetchImpl: async () => new Response(deb) });
+      expect((await readdir(directory)).includes(".prepare-lock")).toBe(false);
+      expect(
+        await readFile(
+          path.join(directory, "webkit-1", WEBKIT_LIBRARY_DIRECTORY, "libextra.so.1"),
+          "utf8",
+        ),
+      ).toBe("patched");
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   test("rejects cache and repository aliases before any preparation writes", async () => {
     const base = await tempDir();
     try {
@@ -629,14 +759,43 @@ describe("review regressions", () => {
         },
       };
       const argv = ["--dir", base, "--force", "--prune", "--print-path"];
-      await expect(main(argv, dependencies)).rejects.toThrow(/missing.so/);
+      const host = { platform: "linux", arch: "x64" };
+      await expect(main(argv, dependencies, host)).rejects.toThrow(/missing.so/);
       expect(launches).toBe(0);
-      await main([...argv, "--no-launch-check"], { ...dependencies, missing: async () => [] });
+      await main(
+        [...argv, "--no-launch-check"],
+        { ...dependencies, missing: async () => [] },
+        host,
+      );
       expect(launches).toBe(0);
-      await main(argv, { ...dependencies, missing: async () => [] });
+      await main(argv, { ...dependencies, missing: async () => [] }, host);
       expect(launches).toBe(1);
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  test.each([
+    { platform: "darwin", arch: "arm64" },
+    { platform: "darwin", arch: "x64" },
+    { platform: "linux", arch: "arm64" },
+    { platform: "win32", arch: "x64" },
+  ])("unsupported host %j is rejected before preparation", async (host) => {
+    let preparations = 0;
+    await expect(
+      main(
+        [],
+        {
+          prepare: async () => {
+            preparations++;
+            return "/unused";
+          },
+          missing: async () => [],
+          launch: async () => {},
+        },
+        host,
+      ),
+    ).rejects.toThrow(`this host is ${host.platform}-${host.arch}`);
+    expect(preparations).toBe(0);
   });
 });

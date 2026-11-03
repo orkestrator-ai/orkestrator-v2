@@ -45,6 +45,7 @@ import {
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -312,18 +313,19 @@ async function downloadTo(
   const hash = createHash("sha256");
   const out = createWriteStream(destination, { flags: "wx", mode: 0o600 });
   let size = 0;
-  try {
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      size += chunk.byteLength;
-      if (size > maxBytes) throw new Error(`more than the pinned ${maxBytes} bytes`);
-      hash.update(chunk);
-      if (!out.write(chunk)) await new Promise((resolve) => out.once("drain", resolve));
-    }
-  } finally {
-    await new Promise<void>((resolve, reject) =>
-      out.end((error?: Error | null) => (error ? reject(error) : resolve())),
-    );
-  }
+  // Pipeline owns backpressure and tears down both ends on read or write errors.
+  await pipeline(
+    response.body as unknown as AsyncIterable<Uint8Array>,
+    async function* (source: AsyncIterable<Uint8Array>) {
+      for await (const chunk of source) {
+        size += chunk.byteLength;
+        if (size > maxBytes) throw new Error(`more than the pinned ${maxBytes} bytes`);
+        hash.update(chunk);
+        yield chunk;
+      }
+    },
+    out,
+  );
   return { size, sha256: hash.digest("hex") };
 }
 
@@ -580,7 +582,12 @@ async function linkSharedBrowsers(
     const link = path.join(target, name);
     const existing = await lstat(link).catch(() => undefined);
     if (existing && !existing.isSymbolicLink()) continue;
-    if (existing && (await readlink(link)) === source) continue;
+    if (existing) {
+      if ((await readlink(link)) === source) continue;
+      // Another worktree may still use a prepared, older WebKit revision.
+      // Only the explicit idle-cache prune may retire that generation.
+      if (/^webkit-\d+$/.test(name) && (await readStamp(link)) !== undefined) continue;
+    }
     const temporary = `${link}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
     await symlink(source, temporary);
     await rename(temporary, link);
@@ -796,15 +803,16 @@ export async function main(
     missing: missingWebkitLibraries,
     launch: launchCheck,
   },
+  host: { platform: string; arch: string } = process,
 ): Promise<void> {
   const options = parseArgs(argv);
   if (options.help) {
     console.log(USAGE);
     return;
   }
-  if (process.platform !== "linux" || process.arch !== "x64") {
+  if (host.platform !== "linux" || host.arch !== "x64") {
     throw new Error(
-      `this script supplies Ubuntu 24.04 amd64 libraries and only applies to Linux x64 (this host is ${process.platform}-${process.arch})`,
+      `this script supplies Ubuntu 24.04 amd64 libraries and only applies to Linux x64 (this host is ${host.platform}-${host.arch})`,
     );
   }
   const log = (message: string) => console.error(`[webkit-host-libs] ${message}`);

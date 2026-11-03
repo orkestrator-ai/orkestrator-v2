@@ -9,7 +9,12 @@ import {
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import type {
+  GitHubPullRequestRef,
+  GitHubPullRequestViewTab,
+} from "@orkestrator/protocol/github-pull-requests";
 import * as backend from "@/lib/backend";
+import { openPullRequestInApp, PullRequestOpenerProvider } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -50,19 +55,29 @@ export function AgentMailPanel() {
       }}
     >
       <SheetContent data-testid="agent-mail-panel">
-        {conversation ? (
-          <AgentMailConversationView
-            key={`${conversation[0]}\n${conversation[1]}`}
-            a={conversation[0]}
-            b={conversation[1]}
-            onBack={() => openPanel(panel?.focus ? { focus: panel.focus } : {})}
-          />
-        ) : panel ? (
-          <AgentMailConversationList key={panel.focus ?? ""} focus={panel.focus} />
-        ) : null}
+        {/* This sheet covers the right-hand PR pane, so a pull request opened
+            there closes it; with nowhere to show it, the link opens GitHub. */}
+        <PullRequestOpenerProvider open={openPullRequestOverMail}>
+          {conversation ? (
+            <AgentMailConversationView
+              key={`${conversation[0]}\n${conversation[1]}`}
+              a={conversation[0]}
+              b={conversation[1]}
+              onBack={() => openPanel(panel?.focus ? { focus: panel.focus } : {})}
+            />
+          ) : panel ? (
+            <AgentMailConversationList key={panel.focus ?? ""} focus={panel.focus} />
+          ) : null}
+        </PullRequestOpenerProvider>
       </SheetContent>
     </Sheet>
   );
+}
+
+function openPullRequestOverMail(ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) {
+  if (!openPullRequestInApp(ref, view)) return false;
+  useAgentMailStore.getState().closePanel();
+  return true;
 }
 
 function AgentMailConversationList({ focus }: { focus?: string }) {

@@ -38,6 +38,7 @@ import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import { PipelineReviewTab } from "@/components/build-pipeline/PipelineReviewTab";
 import * as backend from "@/lib/backend";
+import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
@@ -901,14 +902,18 @@ function MultiReviewOverviewTab({
     layout.setActivePane(pane.id, data.environmentId);
     layout.setActiveTab(pane.id, prTabId, data.environmentId);
   }, [data.environmentId, prTabId]);
-  const viewPullRequest = useCallback(async () => {
-    if (!prUrl) return;
-    try {
-      await backend.openInBrowser(prUrl);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }, [prUrl]);
+  // In the right-hand PR pane, so the review stays in view; GitHub on request.
+  const viewPullRequest = useCallback(
+    async (options?: { external?: boolean }) => {
+      if (!prUrl) return;
+      try {
+        await openPullRequestUrl(prUrl, options);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    },
+    [prUrl],
+  );
 
   if (!workflow) {
     return (
@@ -1359,6 +1364,13 @@ function MultiReviewOverviewTab({
             <GitPullRequest />
             View pull request
           </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!prUrl}
+            onSelect={() => void viewPullRequest({ external: true })}
+          >
+            <ExternalLink />
+            Open on GitHub
+          </ContextMenuItem>
         </>
       ),
     },
@@ -1384,7 +1396,7 @@ function MultiReviewOverviewTab({
             size="sm"
             className={INSPECTOR_BUTTON_CLASS}
             title={prUrl}
-            onClick={() => void viewPullRequest()}
+            onClick={(event) => void viewPullRequest({ external: event.metaKey || event.ctrlKey })}
           >
             <GitPullRequest className="size-3.5" />
             View pull request

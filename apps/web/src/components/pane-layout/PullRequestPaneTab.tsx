@@ -1,14 +1,8 @@
 import { useCallback } from "react";
 import { PanelRight } from "lucide-react";
-import type {
-  GitHubPullRequestRef,
-  GitHubPullRequestViewTab,
-} from "@orkestrator/protocol/github-pull-requests";
 import { PullRequestView } from "@/components/pull-requests";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
-import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
 import { cn } from "@/lib/utils";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -28,8 +22,6 @@ export function PullRequestPaneTab({
   data,
   isActive,
 }: PullRequestPaneTabProps) {
-  const terminal = useOptionalTerminalContext();
-
   const closeTab = useCallback(() => {
     const layout = usePaneLayoutStore.getState();
     const owner = layout.findPaneWithTab(tabId, environmentId);
@@ -41,14 +33,6 @@ export function PullRequestPaneTab({
     closeTab();
   }, [closeTab, data.ref, data.view, environmentId]);
 
-  // Pull requests linked from this one open as further tabs beside it.
-  const open = useCallback(
-    (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => {
-      terminal?.createTab?.("pull-request", { pullRequest: { ref, view } });
-    },
-    [terminal],
-  );
-
   return (
     <div
       className={cn(
@@ -56,37 +40,37 @@ export function PullRequestPaneTab({
         !isActive && "hidden",
       )}
     >
-      <PullRequestOpenerProvider open={open}>
-        <PullRequestView
-          key={data.openRequest ?? 0}
-          className="min-h-0 flex-1"
-          pullRequest={data.ref}
-          initialView={data.view}
-          layout="page"
-          active={isActive}
-          onSummaryLoaded={(summary) =>
-            usePaneLayoutStore
-              .getState()
-              .updateTabPullRequest(tabId, { title: summary.title }, environmentId)
-          }
-          headerActions={
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  aria-label="Move to sidebar"
-                  onClick={moveToSidebar}
-                >
-                  <PanelRight className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Move to sidebar</TooltipContent>
-            </Tooltip>
-          }
-        />
-      </PullRequestOpenerProvider>
+      {/* Pull requests linked from this one open in the right-hand PR pane
+          (the default opener), so this tab stays the one in view. */}
+      <PullRequestView
+        key={data.openRequest ?? 0}
+        className="min-h-0 flex-1"
+        pullRequest={data.ref}
+        initialView={data.view}
+        layout="page"
+        active={isActive}
+        onSummaryLoaded={(summary) =>
+          usePaneLayoutStore
+            .getState()
+            .updateTabPullRequest(tabId, { title: summary.title }, environmentId)
+        }
+        headerActions={
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Move to sidebar"
+                onClick={moveToSidebar}
+              >
+                <PanelRight className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Move to sidebar</TooltipContent>
+          </Tooltip>
+        }
+      />
     </div>
   );
 }

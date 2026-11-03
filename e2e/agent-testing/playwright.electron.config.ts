@@ -25,6 +25,7 @@ export default defineConfig({
     "workspace-realm-electron.spec.ts",
     "connection-outage-electron.spec.ts",
     "renderer-log-boundary-electron.spec.ts",
+    "pull-request-pane-electron.spec.ts",
   ],
   workers: 1,
   timeout: 120_000,

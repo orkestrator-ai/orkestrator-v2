@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { errorText } from "@/components/settings/machines/machine-ui";
 import { useEnvironmentStore, useProjectStore, useUIStore } from "@/stores";
 import { ensureProjectHomeInStore, isProjectHomeDeletionInProgress } from "@/hooks/useFilesPanel";
+import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 
 const CLEANUP_IN_PROGRESS_MESSAGE =
@@ -89,6 +90,7 @@ export function useProjectHomeActivation() {
     );
     if (!selectedEnvironmentId && known) {
       reconciled.current = null;
+      useFilesPanelStore.getState().movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), known.id);
       useUIStore.getState().selectEnvironment(known.id);
       return;
     }
@@ -106,6 +108,9 @@ export function useProjectHomeActivation() {
         reconciled.current = key;
         setFailure(null);
         if (!ui.selectedEnvironmentId || ui.selectedEnvironmentId === selectedHomeId) {
+          if (!ui.selectedEnvironmentId) {
+            useFilesPanelStore.getState().movePullRequestTabs(projectRootFilesTargetId(selectedProjectId), home.id);
+          }
           ui.selectEnvironment(home.id);
         }
       })

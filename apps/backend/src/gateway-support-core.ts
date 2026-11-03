@@ -46,6 +46,7 @@ export type GatewayRouteKey =
   | "login"
   | "agent-test-bootstrap"
   | "agent-test-session"
+  | "session"
   | "logout"
   | "status"
   | "hello"
@@ -177,6 +178,9 @@ export interface OrkestratorGatewayOptions {
 }
 
 export const AUTH_COOKIE = "orkestrator_gateway_auth";
+/** The `__Host-` name, read and stripped everywhere; not issued yet (see `gateway-sessions.ts`). */
+export const SECURE_AUTH_COOKIE = "__Host-orkestrator_gateway_auth";
+export const GATEWAY_AUTH_COOKIE_NAMES: readonly string[] = [AUTH_COOKIE, SECURE_AUTH_COOKIE];
 export const API_PREFIX = "/__orkestrator";
 /**
  * Lifetime of a minted bootstrap code. It is generous enough that a slow agent
@@ -192,12 +196,27 @@ export const AGENT_TEST_BOOTSTRAP_TTL_MS = 120_000;
 export const AGENT_TEST_SESSION_IDLE_TTL_MS = 30 * 60_000;
 /** Hard ceiling on a session regardless of activity. */
 export const AGENT_TEST_SESSION_MAX_LIFETIME_MS = 12 * 60 * 60_000;
+/**
+ * Idle timeout for a browser signed in with the login form. Explicit keyboard
+ * or pointer activity renews it; background API polling does not.
+ */
+export const GATEWAY_SESSION_IDLE_TTL_MS = 12 * 60 * 60_000;
+/** Hard ceiling on a login-form session regardless of activity. */
+export const GATEWAY_SESSION_MAX_LIFETIME_MS = 7 * 24 * 60 * 60_000;
 export const MAX_AGENT_TEST_BOOTSTRAPS = 16;
-export const MAX_AGENT_TEST_SESSIONS = 32;
+/** Browser sessions held at once (every login and agent-test link mints one). */
+export const MAX_BROWSER_SESSIONS = 64;
 export { DEFAULT_GATEWAY_PORT } from "./fixed-ports.js";
 export const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 export const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * Sent on every legacy `browser/loopback` response. The same flags as the
+ * client's preview iframe, without `allow-same-origin`, so the preview stays an
+ * opaque origin even when it is opened top-level.
+ */
+export const BROWSER_PREVIEW_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-pointer-lock allow-presentation";
 /**
  * Command bodies carry durable snapshots — prompt queues, build pipelines and
  * agent handoffs — whose storage limit is 32 MB each. Every renderer command
@@ -799,6 +818,7 @@ export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   // Covers minting, the POST exchange, and the one-shot login link: all three
   // are the same bootstrap credential, and none may be served as static.
   if (pathname.startsWith(`${API_PREFIX}/agent-test/`)) return "agent-test-bootstrap";
+  if (pathname === `${API_PREFIX}/session`) return "session";
   if (pathname === `${API_PREFIX}/logout`) return "logout";
   if (pathname === `${API_PREFIX}/status`) return "status";
   if (pathname === `${API_PREFIX}/hello`) return "hello";

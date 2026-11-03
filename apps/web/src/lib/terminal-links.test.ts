@@ -147,6 +147,59 @@ describe("createTerminalLinkActivator", () => {
     },
   );
 
+  test.each(["external", "browser-tab"] as const)(
+    "opens a pull request link in the PR pane with the default gesture (default %s)",
+    (terminalLinkDefaultTarget) => {
+      const original = useConfigStore.getState().config;
+      useConfigStore.setState({
+        config: { ...original, global: { ...original.global, terminalLinkDefaultTarget } },
+      });
+      const openExternal = mock((_url: string) => Promise.resolve());
+      const openPullRequest = mock(() => true);
+      const activate = createTerminalLinkActivator({
+        environmentId: "environment-1",
+        sourceTabId: "terminal-1",
+        openExternal,
+        openPullRequest,
+      });
+      const url = "https://github.com/acme/repo/pull/12/files";
+      try {
+        activate(click({}), url);
+        expect(openPullRequest).not.toHaveBeenCalled();
+
+        activate(click({ metaKey: true }), url);
+        activate(click({ ctrlKey: true }), url);
+        expect(openPullRequest).toHaveBeenCalledTimes(2);
+        expect(openPullRequest).toHaveBeenCalledWith(
+          { owner: "acme", repo: "repo", number: 12, view: "code" },
+          "code",
+        );
+        expect(openExternal).not.toHaveBeenCalled();
+
+        // Shift asks for the other target, which for a pull request is GitHub.
+        activate(click({ metaKey: true, shiftKey: true }), url);
+        expect(openPullRequest).toHaveBeenCalledTimes(2);
+        expect(openExternal).toHaveBeenCalledWith(url);
+      } finally {
+        useConfigStore.setState({ config: original });
+      }
+    },
+  );
+
+  test("opens a pull request externally when the PR pane cannot host it", () => {
+    const openExternal = mock((_url: string) => Promise.resolve());
+    const openPullRequest = mock(() => false);
+    const activate = createTerminalLinkActivator({
+      environmentId: "environment-1",
+      sourceTabId: "terminal-1",
+      openExternal,
+      openPullRequest,
+    });
+    activate(click({ metaKey: true }), "https://github.com/acme/repo/pull/12");
+    expect(openPullRequest).toHaveBeenCalledTimes(1);
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/acme/repo/pull/12");
+  });
+
   test("opens modified clicks externally and ignores plain clicks", () => {
     const openExternal = mock((_url: string) => Promise.resolve());
     const activate = createTerminalLinkActivator({

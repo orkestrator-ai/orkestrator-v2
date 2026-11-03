@@ -437,7 +437,7 @@ export class BuildPipelineSupervisor {
     if (pipeline.phase === "starting-environment") {
       await this.recovery.configureEnvironment(pipeline);
       const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
-      if (!environment) throw new Error("Build environment no longer exists");
+      if (!environment) throw new Error("Pipeline environment no longer exists");
       if (environment.status !== "running") {
         await this.ctx.invoke("start_environment", {
           environmentId: pipeline.environmentId,
@@ -601,7 +601,7 @@ export class BuildPipelineSupervisor {
         delete pipeline.structuredReviewRequestId;
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
-        await this.startVerifiedReviewOrPrepare(pipeline);
+        await this.startReviewPackagePreparation(pipeline);
         return;
       }
       if (!pipeline.reviewFanout) {
@@ -915,7 +915,7 @@ export class BuildPipelineSupervisor {
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
       delete pipeline.delivery;
-      await this.startVerifiedReviewOrPrepare(pipeline);
+      await this.startReviewPackagePreparation(pipeline);
       return;
     }
 

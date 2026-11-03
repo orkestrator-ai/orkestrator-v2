@@ -583,7 +583,7 @@ export function recordedValidationSection(
     ? "If diagnostics are unavailable or insufficient, report that limitation in the rationale instead of rerunning the command."
     : "If diagnostics are unavailable or insufficient, report that limitation and run only the relevant failed or incomplete command when needed; do not rerun the broad validation plan.";
   if ("kind" in reviewPackage) {
-    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading} ${insufficient}`;
+    return `${header} Each command's status, exit code, limitations and output artifact paths are in the review package at \`${reviewPackage.filePath}\` in the environment workspace; read its \`validation\` entries. ${artifactReading} ${insufficient}\n\n${FAILURE_TRIAGE_GUIDE}`;
   }
   const results = reviewPackage.validation.map((result) => {
     const { command, status, exitCode, limitation } = result;
@@ -618,14 +618,26 @@ ${promptCarrierJson({ results, limitations: reviewPackage.limitations })}
 </recorded-validation-json>`;
 }
 
+/**
+ * How to read the package's `failureTriage` (`validation-failure-triage.ts`):
+ * the backend's per-test classification, made from existing evidence only.
+ */
+export const FAILURE_TRIAGE_GUIDE =
+  "**Failure triage**: the package's `failureTriage` lists each failing test the failed commands' output names, with a `verdict` the backend derived from evidence that already existed, without running anything. `related`: the branch changed the test, code it imports, or a path it reads. `unrelated`: the test passed when the runner retried it, is open in the repository's flake registry, failed on the target branch's CI at the merge-base, failed in another pipeline on the same merge-base, or its complete import graph reaches no changed file; `reasons` says which. `undetermined`: the evidence cannot decide, typically an end-to-end spec that drives the whole application or an incomplete import graph. A command with `unattributed: true` failed in a way its listed tests do not explain (a type, lint or build error, a crash, a timeout, or a runner count its listed tests do not match): judge that command from its diagnostics, as you would a failed command the triage does not list, or any failure when the package has no `failureTriage`.";
+
 /** Shared rule: an excuse for a failure needs evidence, and ticket repairs are never excusable. */
 function excusedFailureRule(targetBranch: string): string {
-  return `Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental, and only with evidence: the same failure reproduced on origin/${targetBranch}, or a demonstrated cause such as a missing tool or an operating-system path difference rather than the code. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause.`;
+  return `Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental, and only with evidence: a failure triage verdict of \`unrelated\` and its reasons, or a demonstrated cause such as a missing tool or an operating-system path difference rather than the code. A timeout or a check that produced no output may be excused only when the triage classifies it \`unrelated\` or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause.`;
 }
 
-/** How to reproduce one check on the target branch without touching this checkout. */
-function targetReproductionSteps(targetBranch: string): string {
-  return `Check whether the failure involves code this branch changes (git diff origin/${targetBranch}...HEAD); if it does, it is not unrelated. Otherwise rerun only that one check against origin/${targetBranch} in a temporary detached worktree outside this checkout (git worktree add --detach). Install its dependencies in that worktree rather than linking this checkout's. Remove the worktree before finishing.`;
+/**
+ * How to treat a failure believed unrelated. Validation never runs extra
+ * tests: the triage already carries every piece of target-branch evidence
+ * that exists, so reproducing a failure on the target branch here would only
+ * add the wait it was built to avoid.
+ */
+function unrelatedFailureSteps(targetBranch: string): string {
+  return `Check whether the failure involves code this branch changes (git diff origin/${targetBranch}...HEAD); if it does, it is not unrelated. Do not run any check against origin/${targetBranch}, check it out, or create another worktree to reproduce a failure there: the failure triage already records the evidence that exists (the target branch's CI result, the repository's flake registry, other pipelines on the same merge-base, the test's imports), so cite it. Leave an \`undetermined\` failure you cannot tie to this branch's diff for the verifier, and say why in \`limitations\`.`;
 }
 
 /**
@@ -651,7 +663,7 @@ export function addressValidationGuidance(
 ): string {
   return [
     recordedValidationSection(reviewPackage),
-    `Fix every recorded failure that relates to the ticket or this branch's changes, then rerun only that check. ${excusedFailureRule(targetBranch)} For a failure you believe is unrelated: ${targetReproductionSteps(targetBranch)} Do not change unrelated code or tests to hide a failure.`,
+    `Fix every recorded failure that relates to the ticket or this branch's changes, then rerun only that check. ${excusedFailureRule(targetBranch)} For a failure you believe is unrelated: ${unrelatedFailureSteps(targetBranch)} Do not change unrelated code or tests to hide a failure.`,
     reviewPackage ? validationHistoryRule(reviewPackage.headRef, targetBranch) : "",
     ADDRESS_FIX_RESULT_REPORTING,
   ]
@@ -678,7 +690,7 @@ function validationHistoryRule(headRef: string, targetBranch: string): string {
  * limitation remains.
  */
 export const ADDRESS_FIX_RESULT_REPORTING =
-  "Report your work in the fix result you submit, which is the verifier's record of this stage. `summary` says what you changed and why; `filesChanged` lists the files you edited; `commandsRun` lists each check you ran with its result; `notes` names each recorded failure you fixed and the commit that fixed it; `limitations` names each finding you could not address and each failure you left as pre-existing or environmental, with its target-branch reproduction or demonstrated environmental-cause evidence. Set `complete` to true only when no check you ran still fails and `limitations` is empty. The verifier does not rerun checks: it judges recorded-failure repairs and excuses from the diff and this result, so name the evidence for each.";
+  "Report your work in the fix result you submit, which is the verifier's record of this stage. `summary` says what you changed and why; `filesChanged` lists the files you edited; `commandsRun` lists each check you ran with its result; `notes` names each recorded failure you fixed and the commit that fixed it; `limitations` names each finding you could not address and each failure you left as pre-existing or environmental, with its failure triage evidence or demonstrated environmental cause. Set `complete` to true only when no check you ran still fails and `limitations` is empty. The verifier does not rerun checks: it judges recorded-failure repairs and excuses from the diff and this result, so name the evidence for each.";
 
 /** How a schema-constrained Address turn uses its two channels, as Verify's does. */
 export const ADDRESS_OUTPUT_CONTRACT =
@@ -690,7 +702,7 @@ export const ADDRESS_OUTPUT_CONTRACT =
  * target branch turns a minutes-long review into a second validation pass.
  */
 export function verificationFailureInstruction(targetBranch: string): string {
-  return `**Recorded failures**: judge them from the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failed or incomplete recorded check blocks completion when it exercises code this branch changes or an acceptance criterion depends on it, unless a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD. To establish a later repair, use the recorded validation headRef as <headRef>: confirm it is an ancestor of HEAD with git merge-base --is-ancestor <headRef> HEAD, inspect git log --oneline <headRef>..HEAD and the relevant commit diffs, and check git diff <headRef>..HEAD to confirm the repair addresses the recorded failure and remains in the final code. The cumulative target-to-HEAD diff alone does not establish that a repair followed validation. If headRef is missing, unavailable or not an ancestor of HEAD, or no repair can be established in that range, report the limitation and keep the relevant failed or incomplete check blocking completion. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. A failure confined to code this branch does not touch is not a reason to fail; mention it in the rationale. The address report is another agent's claim: accept a claimed repair only when the diff shows it in that post-validation range, and do not repeat its target-branch reproductions. If any ticket-required repair remains unmet on this branch, report complete: false.`;
+  return `**Recorded failures**: judge each failing test, not each command. An aggregate command such as a full test suite fails when any one of its tests fails, and that alone says nothing about this branch. Judge them from the failure triage, the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failure the triage classifies \`unrelated\` never blocks completion, unless an acceptance criterion names that test or the repair of that failure. A \`related\` failure blocks completion unless a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD. An \`undetermined\` failure, a failure the triage does not list and an \`unattributed\` command block completion only when their diagnostics show they exercise code this branch changes or an acceptance criterion depends on that specific behavior, with the same exception for a later repair; a general criterion such as "tests are updated" does not make every suite failure block. To establish a later repair, use the recorded validation headRef as <headRef>: confirm it is an ancestor of HEAD with git merge-base --is-ancestor <headRef> HEAD, inspect git log --oneline <headRef>..HEAD and the relevant commit diffs, and check git diff <headRef>..HEAD to confirm the repair addresses the recorded failure and remains in the final code. The cumulative target-to-HEAD diff alone does not establish that a repair followed validation. If headRef is missing, unavailable or not an ancestor of HEAD, or no repair can be established in that range, report the limitation and keep the relevant failed or incomplete check blocking completion. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. Name each failure you did not count as blocking in the rationale, with its verdict. The address report is another agent's claim: accept a claimed repair only when the diff shows it in that post-validation range, and do not repeat its checks. If any ticket-required repair remains unmet on this branch, report complete: false.`;
 }
 
 /**
@@ -873,7 +885,7 @@ export function fixTaskPrompt(
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",
-    `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. For those unrelated failures, establish target-branch reproduction or a demonstrated environmental cause before treating them as pre-existing or environmental; do not change unrelated code or tests to hide them. A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/${targetBranch} or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with the target-branch reproduction or demonstrated environmental-cause evidence.`,
+    `Fix every unmet ticket acceptance criterion, including requested repairs that also fail on origin/${targetBranch}. Only failures unrelated to the ticket acceptance criteria may be left alone. Treat a failure as pre-existing or environmental only on evidence the verification feedback or the last review package's failure triage records (a verdict of \`unrelated\` and its reasons) or a demonstrated environmental cause; do not change unrelated code or tests to hide them. Do not run checks against origin/${targetBranch}, check it out, or create another worktree to reproduce a failure there: that evidence is already recorded, and gathering more only slows the pipeline. A timeout or a check that produced no output may be excused only when the triage classifies it \`unrelated\` or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. Name any excused unrelated failure in your final message with its triage evidence or demonstrated environmental cause.`,
     validation,
   ]
     .filter(Boolean)

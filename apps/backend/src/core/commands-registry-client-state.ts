@@ -4,6 +4,7 @@ import {
 } from "@orkestrator/protocol/client-state";
 import {
   decideUpstreamMergeOffer,
+  type CoordinatorUpstreamAutoMerge,
   type CoordinatorUpstreamMergeCheck,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
 import {
@@ -30,6 +31,10 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  *   checkout status (subject to the fetch cooldown) unless a turn is running.
  * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
  *   onlyIfAbsent?}` → the decline now in force.
+ * - `get_coordinator_upstream_auto_merge {projectId}`,
+ *   `set_coordinator_upstream_auto_merge {projectId, enabled}` → `{enabled}`:
+ *   whether this machine merges the project's upstream commits before a
+ *   coordinator message without asking. The check then answers `automatic`.
  * - `list_notice_dismissals`, `dismiss_notices {sessions}`,
  *   `reconcile_notice_dismissals {sessionIdentity, activeOccurrenceIds}` →
  *   the dismissal snapshot.
@@ -38,6 +43,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 const CAPABILITIES: ClientStateCapabilities = {
   coordinatorPaneLayouts: true,
   coordinatorUpstreamMerge: true,
+  coordinatorUpstreamAutoMerge: true,
   noticeDismissals: true,
   environmentAttention: true,
 };
@@ -90,6 +96,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
       return decideUpstreamMergeOffer(
         status,
         context.storage.clientState.getCoordinatorUpstreamDecline(id),
+        { autoMerge: context.storage.clientState.getCoordinatorUpstreamAutoMerge(id) },
       );
     },
   );
@@ -104,6 +111,27 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
         },
         { onlyIfAbsent: onlyIfAbsent === true },
       ),
+  );
+
+  register(
+    "get_coordinator_upstream_auto_merge",
+    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => ({
+      enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
+        await existingProjectId(projectId, context),
+      ),
+    }),
+  );
+  register(
+    "set_coordinator_upstream_auto_merge",
+    async ({ projectId, enabled }, context): Promise<CoordinatorUpstreamAutoMerge> => {
+      if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
+      return {
+        enabled: context.storage.clientState.setCoordinatorUpstreamAutoMerge(
+          await existingProjectId(projectId, context),
+          enabled,
+        ),
+      };
+    },
   );
 
   register("list_notice_dismissals", (_args, context) =>

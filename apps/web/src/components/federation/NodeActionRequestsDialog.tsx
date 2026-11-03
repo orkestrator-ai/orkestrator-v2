@@ -21,6 +21,7 @@ import { useFederation } from "./FederationProvider";
 import { RootChangesApprovalDialog } from "./RootChangesApprovalDialog";
 import { AgentsMdApprovalDialog } from "./AgentsMdApprovalDialog";
 import { WorkerQuestionApprovalDialog } from "./WorkerQuestionApprovalDialog";
+import { ProjectHomeMessageApprovalDialog } from "./ProjectHomeMessageApprovalDialog";
 
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
 
@@ -39,7 +40,9 @@ function targetLabel(request: NodeActionRequestView): string {
                 ? `the active ${target.platform === "codex" ? "Codex" : "Claude"} account on ${target.nodeName} to “${target.accountLabel ?? target.accountId}”`
                 : request.kind === "answer-worker-question"
                   ? `the question “${target.environmentName ?? target.environmentId}” is waiting on`
-                  : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
+                  : request.kind === "message-project-home"
+                    ? `a message to the project home “${target.environmentName ?? target.environmentId}”`
+                    : `${(target.files ?? []).join(", ")}${target.keys?.length ? ` (${target.keys.join(", ")})` : ""} on ${target.nodeName}`,
     )
     .join(", ");
 }
@@ -53,6 +56,7 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
   "update-agents-md": "Update",
   "switch-agent-account": "Switch",
   "answer-worker-question": "Answer",
+  "message-project-home": "Send",
 };
 
 /**
@@ -60,7 +64,8 @@ const TITLES: Record<NodeActionRequestView["kind"], string> = {
  * environment, create a project on a node, push project files, show a
  * secret value, copy the checkout's uncommitted changes into a worker, save
  * decisions to the project's AGENTS.md through a pull request, switch the
- * active provider account on a machine, answer a question a worker waits on).
+ * active provider account on a machine, answer a question a worker waits on,
+ * message the project home).
  * Nothing happens until the user approves here; the dialog names every node
  * and environment involved.
  */
@@ -115,6 +120,15 @@ export function NodeActionRequestsDialog() {
   if (request.kind === "answer-worker-question")
     return (
       <WorkerQuestionApprovalDialog key={request.requestId} request={request} onSettled={refresh} />
+    );
+  // The user reads the message and the coordinator's reason before sending it.
+  if (request.kind === "message-project-home")
+    return (
+      <ProjectHomeMessageApprovalDialog
+        key={request.requestId}
+        request={request}
+        onSettled={refresh}
+      />
     );
   const label = targetLabel(request);
   const reviewCopy =

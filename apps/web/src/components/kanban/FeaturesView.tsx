@@ -581,7 +581,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (message === FEATURE_BUILD_ALREADY_ACTIVE) {
           toast.error(FEATURE_BUILD_ALREADY_ACTIVE);
         } else {
-          toast.error("Failed to start feature build", { description: message });
+          toast.error("Failed to start the build pipeline", { description: message });
         }
       } finally {
         setBuildingFeatureId(null);

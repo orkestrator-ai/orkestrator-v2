@@ -109,7 +109,8 @@ export function PipelinePullRequestView({
           className="min-w-0 truncate text-primary underline-offset-2 hover:underline"
           onClick={(event) => {
             event.preventDefault();
-            void viewPR();
+            // The right-hand PR pane; Cmd/Ctrl-click opens GitHub, as in transcripts.
+            void viewPR({ external: event.metaKey || event.ctrlKey });
           }}
         >
           {pullRequest.url}

@@ -21,8 +21,10 @@ import {
   usePullRequestTimeline,
   useStablePullRequestRef,
 } from "@/hooks/usePullRequestData";
+import { settlePullRequestFallback } from "@/lib/pull-request-load-fallback";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { usePullRequestsStore } from "@/stores/pullRequestsStore";
+import { resourceKey, usePullRequestsStore } from "@/stores/pullRequestsStore";
 import { PullRequestCodeTab } from "./PullRequestCodeTab";
 import { PullRequestHeader } from "./PullRequestHeader";
 import { PullRequestSummaryTab, type SortOrder } from "./PullRequestSummaryTab";
@@ -105,6 +107,21 @@ export function PullRequestView({
   const [visited, setVisited] = useState(() => new Set<GitHubPullRequestViewTab>([initialView]));
   const [timelineOrder, setTimelineOrder] = useState<SortOrder>("newest");
   const { detail, loading, error, reload } = usePullRequestDetail(ref, active);
+  useEffect(() => {
+    // Activation starts its load in the hook's earlier effect. Read the
+    // authoritative snapshot, not this render's possibly cached failure.
+    const state = usePullRequestsStore.getState();
+    if (
+      !active ||
+      state.loading.has(resourceKey("detail", gitHubPullRequestKey(ref))) ||
+      loading ||
+      (!detail && !error)
+    )
+      return;
+    void settlePullRequestFallback(ref, !detail && Boolean(error)).catch(() =>
+      toast.error("Could not open the link"),
+    );
+  }, [ref, detail, error, loading, active]);
   const timeline = usePullRequestTimeline(ref, visited.has("timeline"));
   const files = usePullRequestFiles(ref, visited.has("code"));
   const refreshAll = usePullRequestsStore((state) => state.refreshAll);

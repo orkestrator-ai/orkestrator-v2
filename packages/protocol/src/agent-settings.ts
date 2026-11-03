@@ -64,7 +64,7 @@ export interface MultiReviewAgentSettings {
   autoFix?: boolean;
   /** Automatically launch the PR tab after a Multi Review Fix turn completes, or after a clean report. */
   autoPr?: boolean;
-  /** Number of reviewer sessions Multi Review, feature builds, and ticket builds start. */
+  /** Number of reviewer sessions Multi Review and build pipelines start. */
   reviewerCount?: number;
   /** Reviewer 3 onward. Null means use the first reviewer's resolved default. */
   additionalReviewers?: Array<AgentActionDefault | null>;

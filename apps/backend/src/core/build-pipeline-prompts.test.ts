@@ -663,7 +663,7 @@ describe("build pipeline prompts", () => {
     const prompt = verificationPrompt(pipeline(), "", "release/2026.07-hotfix");
 
     expect(prompt).toContain("do not rerun or reproduce them");
-    expect(prompt).toContain("exercises code this branch changes");
+    expect(prompt).toContain("show they exercise code this branch changes");
     expect(prompt).toContain(
       "unless a commit after the recorded validation headRef plausibly repairs it",
     );
@@ -680,7 +680,15 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("keep the relevant failed or incomplete check blocking completion");
     expect(prompt).toContain("accept a claimed repair only when the diff shows it");
     expect(prompt).toContain("in that post-validation range");
-    expect(prompt).toContain("do not repeat its target-branch reproductions");
+    expect(prompt).toContain("do not repeat its checks");
+    // A red aggregate command is judged by its tests, not as one failure.
+    expect(prompt).toContain("judge each failing test, not each command");
+    expect(prompt).toContain(
+      "A failure the triage classifies `unrelated` never blocks completion, unless an acceptance criterion names that test",
+    );
+    expect(prompt).toContain(
+      'a general criterion such as "tests are updated" does not make every suite failure block',
+    );
     expect(prompt).not.toContain("git worktree add");
     expect(prompt).not.toContain("temporary detached worktree");
     expect(prompt).not.toContain("permitted even when that command is the full test suite");
@@ -1061,8 +1069,14 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("`.orkestrator/review/package-1.json`");
     expect(prompt).toContain("Fix every recorded failure that relates to the ticket");
     expect(prompt).toContain("a requested repair remains mandatory");
-    expect(prompt).toContain("git worktree add --detach");
-    expect(prompt).toContain("rather than linking this checkout's");
+    // Validation runs no extra tests: the triage carries the target-branch
+    // evidence, so Address cites it instead of reproducing anything.
+    expect(prompt).not.toContain("git worktree add");
+    expect(prompt).toContain("Do not run any check against origin/release");
+    expect(prompt).toContain("the failure triage already records the evidence that exists");
+    expect(prompt).toContain(
+      "**Failure triage**: the package's `failureTriage` lists each failing test",
+    );
     expect(prompt).toContain("Report your work in the fix result you submit");
     expect(prompt).toContain("Set `complete` to true only when no check you ran still fails");
     expect(prompt).toContain("The verifier does not rerun checks");
@@ -1108,18 +1122,24 @@ describe("build pipeline prompts", () => {
     expect(fix).toContain("including requested repairs that also fail on origin/main");
   });
 
-  test("fix excuses timeouts and silent checks only with target reproduction or a missing tool", () => {
+  test("fix excuses timeouts and silent checks only on triage evidence or a missing tool", () => {
     for (const prompt of [fixPrompt(pipeline(), "", "", "release")]) {
       expect(prompt).toContain(
-        "A timeout or a check that produced no output may be excused only when the same behavior is reproduced on origin/release or the cause is demonstrably a missing tool",
+        "A timeout or a check that produced no output may be excused only when the triage classifies it `unrelated` or the cause is demonstrably a missing tool",
       );
       expect(prompt).toContain(
         "A timeout or silence alone is not evidence of an environmental cause",
       );
-      expect(prompt).toContain(
-        "with the target-branch reproduction or demonstrated environmental-cause evidence",
-      );
+      expect(prompt).toContain("with its triage evidence or demonstrated environmental cause");
     }
+  });
+
+  test("fix never reproduces a failure on the target branch", () => {
+    const prompt = fixPrompt(pipeline(), "", "", "release");
+    expect(prompt).toContain(
+      "Do not run checks against origin/release, check it out, or create another worktree to reproduce a failure there",
+    );
+    expect(prompt).not.toContain("git worktree add");
   });
 
   test("fixPrompt carries verification feedback into a committed fix request", () => {

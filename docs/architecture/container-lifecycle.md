@@ -711,7 +711,8 @@ container's `node` (UID 1000), but under rootless Docker it is container root
 and `node` is a subordinate UID that cannot open the mounts. Before dropping
 privileges, the root entrypoint (`relay_staged_inputs` in
 `network-policy-entrypoint.sh`) checks each staged mount, and the project seed
-binds `/project-env` and `/opencode-project-json`, as `node`. One `node`
+paths `/project-env` and `/opencode-project-json` (bind mounts before H3,
+copied in since; see [Project seed files](#project-seed-files)), as `node`. One `node`
 cannot read in full is streamed with `tar`, root reading and `node` writing,
 into `node`'s own `/run/orkestrator-inputs/<mount>` (`0700`/`0600`, links kept
 as links, within the revision bounds). `entrypoint.sh` and
@@ -843,6 +844,43 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   credentials or revokes an account-wide key.
 - Unreferenced input revisions are pruned only after 30 minutes, so a staging
   or container creation still in progress keeps its revision.
+
+### Project seed files
+
+The project folder's own `.env`, `.env.local` and `opencode.json` are copied
+into every new container (`container-project-seed-files.ts`), where
+`workspace-setup.sh` moves them into `/workspace`. They are repository
+content, so a branch can commit any of them as a link to a host path, and
+Docker resolves a bind source on the host (as root on a rootful daemon). They
+are therefore never bind-mounted (security report H3):
+
+- Before `docker create` the backend `lstat`s each one and reads it only when
+  it is a regular file, not a link (even one to a file inside the project),
+  whose `realpath` stays inside the project folder and which is at most 1 MiB.
+  It is opened `O_NOFOLLOW | O_NONBLOCK` and must be the inode it listed.
+- The bytes it read are what `docker cp` writes into the created, stopped
+  container at `/project-env/<name>` and `/opencode-project-json`, owned by
+  `node` (uid/gid 1000), `0600`, with a `0700` parent directory. An archive
+  with explicit ownership is sent through `docker cp -a`, so delivery works
+  even on images without the staged-input relay. Nothing re-reads the checkout.
+- A refused file is skipped, never a failed environment. The refusal
+  (`symlink`, `not-a-file`, `outside-project`, `too-large`,
+  `changed-while-reading` or `unreadable`) is logged as
+  `docker project-seed.refused`, recorded on the container as the
+  `orkestrator-project-seed-refused` label (`name=reason` pairs), and printed
+  as one `[orkestrator] Skipped …` line per file at the top of the setup
+  terminal, before the setup's own "Setting up environment files" step. A
+  rebuild re-reads and re-checks the files; a container that predates the
+  label shows nothing.
+- These three seed names are excluded from generic configured-file staging.
+  A command-node fallback for a configured seed is read with the same rules,
+  only when the project file is absent; a refusal never permits fallback.
+  Other configured files still use `stageConfiguredProjectFilesForContainer`
+  (realpath-confined, `docker cp` into `/project-files`).
+- The other `bindIfExists` callers mount host agent homes and `~/.gitconfig`
+  for images without staged inputs. Those paths are the user's own host
+  configuration, not repository content, and a dotfiles manager may link
+  them, so they still follow links.
 
 ## Environment networks (`network-policy=2`)
 

@@ -339,7 +339,14 @@ export const runValidationAndSealAction: GraphSystemActionHandler = {
         };
       },
     );
-    const { diffCharacters: _legacy, ...descriptor } = reference.reference;
+    // The graph artifact is the closed review-package@2 descriptor. The failure
+    // summary is the pipeline engine's record; graph nodes read the triage
+    // from the package file itself.
+    const {
+      diffCharacters: _legacy,
+      failureSummary: _summary,
+      ...descriptor
+    } = reference.reference;
     if (!ctx.produces("review-package@2")) return;
     const contents = await ctx.deps.shell.readFile(inputs.environment, descriptor.filePath);
     await ctx.outputFile("review-package@2", contents, descriptor, {

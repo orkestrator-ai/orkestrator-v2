@@ -46,3 +46,18 @@ Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrato
 
 The completed aggregate root group reported 3,441 pass and 5 fail; the full
 aggregate exited 1 after 294.0 seconds.
+
+## CI recurrence and fix applied, 2026-11-03
+
+GitHub Actions CI ("Unit and integration tests", `ubuntu-latest`, 4 cores) hit
+this in four of six runs checked between `d6040915c` and `b0dcf1660` (for
+example run 41549578197). There the first case's `browser.newPage()` ran past
+Bun's 5 s test timeout (5000.39 ms), and the next two cases then failed at once
+with "Target page, context or browser has been closed".
+
+Branch `debug-ci-failures-a629816c8619-r1` gives the
+`beforeAll` hook a 60 s budget and opens and closes a warm-up page inside it,
+so Chromium's start-up cost is paid there, and gives each case a 30 s budget.
+No assertion was changed. The timeout could not be reproduced locally: with
+32 busy-loop processes on a 16-core host, both the old and new file passed
+3 of 3 runs. Mark this resolved once CI on that change shows the file green.

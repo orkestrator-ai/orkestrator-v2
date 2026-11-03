@@ -9,8 +9,8 @@ import {
   GATEWAY_KEEPALIVE_EVENT,
   GATEWAY_KEEPALIVE_EVENTS_PARAM,
 } from "@orkestrator/protocol/gateway-event-stream";
+import { gatewayRequestCredential } from "./gateway-sessions.js";
 import {
-  AUTH_COOKIE,
   API_PREFIX,
   MAX_INVOKE_BODY_BYTES,
   INVOKE_COMMAND_BODY_LIMITS,
@@ -31,8 +31,6 @@ import {
   IdentityEventClientWriter,
   GzipEventClientWriter,
   parseEventSubscriptionFilter,
-  getBearerToken,
-  getCookie,
 } from "./gateway-internals.js";
 import type {
   GatewayRequestMetrics,
@@ -300,8 +298,10 @@ export class GatewayHandlers {
 
     let closed = false;
     let credentialExpiryTimer: ReturnType<typeof setTimeout> | null = null;
-    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    const credential = gatewayRequestCredential(request.headers);
+    let unsubscribeRevocation = () => {};
     const close = () => {
+      unsubscribeRevocation();
       if (closed) return;
       closed = true;
       if (credentialExpiryTimer) clearTimeout(credentialExpiryTimer);
@@ -323,6 +323,7 @@ export class GatewayHandlers {
       );
       credentialExpiryTimer.unref?.();
     };
+    if (credential) unsubscribeRevocation = this.ctx.browserSessions.onRevoke(credential, close);
     request.once("close", close);
     response.once("close", close);
     scheduleCredentialExpiry();

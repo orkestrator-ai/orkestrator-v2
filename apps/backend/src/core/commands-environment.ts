@@ -70,6 +70,10 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
+import {
+  formatProjectSeedRefusals,
+  readProjectSeedRefusals,
+} from "./container-project-seed-files.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { pathExists, runCommand } from "./shell.js";
@@ -496,7 +500,11 @@ export function buildSetupTerminalCommand(commands: string[], finalShellCommand:
   return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}; exec ${finalShellCommand}`;
 }
 
-export function formatSetupTerminalIntro(environment: Environment, commands: string[]): string {
+export function formatSetupTerminalIntro(
+  environment: Environment,
+  commands: string[],
+  notices: readonly string[] = [],
+): string {
   const target =
     environment.environmentType === "local"
       ? (environment.worktreePath ?? environment.id)
@@ -508,6 +516,7 @@ export function formatSetupTerminalIntro(environment: Environment, commands: str
     `[orkestrator] Target: ${target}`,
     "[orkestrator] Command:",
     ...commands.map((command) => `  ${command}`),
+    ...notices,
     "",
   ];
   return lines.join("\r\n");
@@ -665,6 +674,7 @@ export async function spawnSetupTerminal(
     generation: terminals.outputGeneration(sessionId) ?? 1,
   });
 
+  const introNotices: string[] = [];
   if (environment.environmentType === "local") {
     if (!environment.worktreePath)
       throw new Error(`Local environment worktree is not available: ${environment.id}`);
@@ -704,6 +714,11 @@ export async function spawnSetupTerminal(
     if (!(await isContainerRunning(environment.containerId))) {
       throw new Error(`Container is not running: ${environment.containerId}`);
     }
+    // Shown before the setup's own "Setting up environment files" step, which
+    // would otherwise just not mention a file the backend refused to copy.
+    introNotices.push(
+      ...formatProjectSeedRefusals(await readProjectSeedRefusals(environment.containerId)),
+    );
     const setupCommand = buildSetupTerminalCommand(commands, "zsh -l");
     spawnTerminalProcess(
       sessionId,
@@ -715,7 +730,11 @@ export async function spawnSetupTerminal(
     );
   }
 
-  terminals.emitOutput(sessionId, formatSetupTerminalIntro(environment, commands), context.emit);
+  terminals.emitOutput(
+    sessionId,
+    formatSetupTerminalIntro(environment, commands, introNotices),
+    context.emit,
+  );
   logSetupTerminal("setup.intro-emitted", {
     environmentId: environment.id,
     sessionId,

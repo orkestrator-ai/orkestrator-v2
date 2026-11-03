@@ -16,6 +16,7 @@ const key = LEGACY_NOTICE_DISMISSAL_KEY;
 const capabilities = (noticeDismissals: boolean): ClientStateCapabilities => ({
   coordinatorPaneLayouts: false,
   coordinatorUpstreamMerge: false,
+  coordinatorUpstreamAutoMerge: false,
   noticeDismissals,
   environmentAttention: false,
 });

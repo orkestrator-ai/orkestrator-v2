@@ -10,6 +10,8 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useUIStore } from "@/stores/uiStore";
 import {
   mockToastError as toastError,
   mockToastInfo as toastInfo,
@@ -634,6 +636,46 @@ describe("AgentMailPanel", () => {
   });
 });
 
+describe("pull request links in mail", () => {
+  const body = "Opened [the PR](https://github.com/acme/widget/pull/42) for review.";
+  async function openMailWithPullRequestLink() {
+    getAgentMailConversation.mockImplementation(async () =>
+      conversation([agent1, user], [mail("stored", { userSeenAt: "seen", body })]),
+    );
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    return screen.findByRole("link", { name: "the PR" });
+  }
+
+  test("open in the right-hand PR pane and close the mail sheet that covers it", async () => {
+    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    try {
+      fireEvent.click(await openMailWithPullRequestLink());
+      expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+        owner: "acme",
+        repo: "widget",
+        number: 42,
+      });
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useAgentMailStore.getState().panel).toBeNull();
+      expect(openInBrowser).not.toHaveBeenCalled();
+    } finally {
+      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    }
+  });
+
+  test("fall back to GitHub and keep the sheet open when nothing can host the pane", async () => {
+    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    fireEvent.click(await openMailWithPullRequestLink());
+    await waitFor(() =>
+      expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/widget/pull/42"),
+    );
+    expect(useAgentMailStore.getState().panel).not.toBeNull();
+  });
+});
+
 describe("conversation Deliver now actions", () => {
   async function openWaitingConversation() {
     getAgentMailConversation.mockImplementation(async () =>
@@ -773,6 +815,35 @@ describe("AgentMailBanner actions", () => {
     expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
     // Delivered: the banner goes away on refresh, with nothing more to say.
     expect(toastInfo).not.toHaveBeenCalled();
+  });
+
+  test("Deliver now releases every deliverable inbox message, and skips untrusted mail", async () => {
+    installBanner("stored");
+    const mailbox = useAgentMailStore.getState().mailboxes.get(AGENT_1)!;
+    const { body: _body, ...summary } = mail("stored");
+    mailbox.messages.push(
+      { ...summary, id: "message-2" },
+      { ...summary, id: "external", trust: "external" },
+    );
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() => expect(deliverAgentMailNow).toHaveBeenCalledTimes(2));
+    expect(deliverAgentMailNow.mock.calls.map((call) => call[2])).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+  });
+
+  test("Deliver now shows the backend's refusal instead of doing nothing", async () => {
+    installBanner("stored");
+    deliverAgentMailNow.mockImplementationOnce(async () => {
+      throw new Error("This thread has reached its reply limit.");
+    });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("reply limit");
+    expect(toastError).toHaveBeenCalled();
   });
 
   test("Deliver now asks a busy recipient to take the message mid-turn", async () => {

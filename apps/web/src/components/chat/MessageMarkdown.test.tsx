@@ -6,8 +6,9 @@ import type { PluggableList } from "unified";
 import { TerminalProvider, useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { invoke } from "@/lib/native/backend";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
-import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
-import type { Environment } from "@/types";
+import { useEnvironmentStore, useFilesPanelStore, useProjectStore, useUIStore } from "@/stores";
+import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
+import type { Environment, Project } from "@/types";
 import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
 import {
@@ -442,6 +443,37 @@ describe("MessageMarkdown pull request links", () => {
     ]);
     expect(invokeMock).not.toHaveBeenCalled();
   });
+
+  test.each(["coordinator", "linear", "kanban"] as const)(
+    "a link on the project's %s page opens in the PR pane without leaving the page",
+    (projectBoardTab) => {
+      invokeMock.mockClear();
+      useProjectStore.setState({
+        projects: [{ id: "project-1", name: "Project", localPath: "/repo" } as Project],
+      });
+      useUIStore.setState({
+        selectedEnvironmentId: null,
+        selectedProjectId: "project-1",
+        projectBoardTab,
+      });
+      useProjectPullRequestsStore.setState({ projects: {} });
+      render(<MessageMarkdown content="[PR](https://github.com/acme/widgets/pull/42)" />);
+
+      fireEvent.click(screen.getByRole("link", { name: "PR" }));
+
+      const panel = useFilesPanelStore.getState();
+      expect(panel.isOpen).toBe(true);
+      expect(panel.activeTab).toBe("pull-request:acme/widgets#42");
+      expect(panel.pullRequestTabs["project-root:project-1"]?.map((tab) => tab.ref)).toEqual([
+        { owner: "acme", repo: "widgets", number: 42 },
+      ]);
+      // The main view stays on the same page: no board switch, no project PR tab.
+      expect(useUIStore.getState().projectBoardTab).toBe(projectBoardTab);
+      expect(useProjectPullRequestsStore.getState().projects).toEqual({});
+      expect(invokeMock).not.toHaveBeenCalled();
+      useProjectStore.setState({ projects: [] });
+    },
+  );
 
   test("falls back to the browser when nothing is selected to show the pull request", () => {
     invokeMock.mockClear();

@@ -54,6 +54,7 @@ export class OrkestratorGateway {
     this.context = new GatewayContext(options, {
       gatewayCredentialMatches: (candidate) => this.auth.gatewayCredentialMatches(candidate),
       gatewayCredentialExpiresAt: (candidate) => this.auth.gatewayCredentialExpiresAt(candidate),
+      requestCredentialMatches: (request) => this.auth.requestCredentialMatches(request),
       isOriginAllowed: (request, originValue) => this.auth.isOriginAllowed(request, originValue),
     });
     this.lifecycle = new GatewayLifecycle(this.context, {
@@ -120,8 +121,8 @@ export class OrkestratorGateway {
     return this.context.agentTestBootstraps;
   }
 
-  protected get agentTestSessions(): GatewayContext["agentTestSessions"] {
-    return this.context.agentTestSessions;
+  protected get browserSessions(): GatewayContext["browserSessions"]["records"] {
+    return this.context.browserSessions.records;
   }
 
   protected get replayHandshakeFrameCapacity(): number {
@@ -167,15 +168,11 @@ export class OrkestratorGateway {
     return this.auth.gatewayCredentialMatches(...args);
   }
 
-  protected issueAgentTestSession(
-    ...args: Parameters<GatewayAuth["issueAgentTestSession"]>
-  ): ReturnType<GatewayAuth["issueAgentTestSession"]> {
-    return this.auth.issueAgentTestSession(...args);
+  protected issueBrowserSession(now?: number): string {
+    return this.context.browserSessions.issue(now);
   }
 
-  protected refreshAgentTestSession(
-    ...args: Parameters<GatewayAuth["refreshAgentTestSession"]>
-  ): ReturnType<GatewayAuth["refreshAgentTestSession"]> {
-    return this.auth.refreshAgentTestSession(...args);
+  protected refreshBrowserSession(session: string, now?: number): boolean {
+    return this.context.browserSessions.refresh(session, now);
   }
 }

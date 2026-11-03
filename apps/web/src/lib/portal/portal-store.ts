@@ -15,6 +15,7 @@ import type { AgentsMdChange, AgentsMdSection } from "@orkestrator/protocol/agen
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
 import type { AgentInteractionQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
 import type { WorkerQuestionRelay } from "@orkestrator/protocol/worker-question-relay";
+import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   isNodeReadCommand,
@@ -247,7 +248,8 @@ export interface NodeActionRequestView {
     | "apply-root-changes"
     | "update-agents-md"
     | "switch-agent-account"
-    | "answer-worker-question";
+    | "answer-worker-question"
+    | "message-project-home";
   targets: Array<{
     nodeId: string;
     nodeName: string;
@@ -271,6 +273,8 @@ export interface NodeActionRequestView {
   agentsMd?: { changes: AgentsMdChange[] };
   /** `answer-worker-question`: the worker's question and the coordinator's proposed answer. */
   workerQuestion?: WorkerQuestionRelay;
+  /** `message-project-home`: the coordinator's message, held for approval. */
+  projectHomeMessage?: ProjectHomeMessage;
   state: string;
   /** `url`: the pull request an `update-agents-md` approval opened. */
   result?: { code: string; message: string; url?: string };

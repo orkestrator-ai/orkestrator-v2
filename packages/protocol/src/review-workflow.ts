@@ -12,6 +12,12 @@ import { isReviewValidationPlan, type ReviewValidationPlan } from "./review-vali
 import { getReviewInstructionValidationError } from "./review-prompt.js";
 import { reviewPackageArtifactPath } from "./review-artifacts.js";
 import {
+  isValidationFailureSummary,
+  isValidationFailureTriage,
+  type ValidationFailureSummary,
+  type ValidationFailureTriage,
+} from "./validation-failure-triage.js";
+import {
   REVIEW_CHANGE_TYPES,
   REVIEW_ISSUE_CATEGORIES,
   REVIEW_OVERALL_RISKS,
@@ -113,6 +119,12 @@ export interface ReviewPackage {
   changedFiles: ReviewPackageFile[];
   validation: ReviewPackageCommandResult[];
   validationPlan?: ReviewValidationPlan;
+  /**
+   * Each failing test the failed commands' output names, classified as caused
+   * by this branch or not. Absent when no command failed, or when triage could
+   * not run (a limitation then says so).
+   */
+  failureTriage?: ValidationFailureTriage;
   uncommittedFiles: Array<{ path: string; reason: string }>;
   limitations: string[];
   context?: ReviewPackageContext;
@@ -159,6 +171,8 @@ export interface ReviewPackageReference {
   /** Only present on references generated before the package stopped carrying the diff. */
   diffCharacters?: number;
   limitations: string[];
+  /** The compact form of the package's {@link ReviewPackage.failureTriage}. */
+  failureSummary?: ValidationFailureSummary;
 }
 
 /** Legacy snapshots may still contain the inline package written before file-backed packages. */
@@ -331,7 +345,8 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
     !Array.isArray(value.validation) ||
     (value.validationPlan !== undefined &&
       (!isReviewValidationPlan(value.validationPlan) ||
-        value.validationPlan.headRef !== value.headRef))
+        value.validationPlan.headRef !== value.headRef)) ||
+    (value.failureTriage !== undefined && !isValidationFailureTriage(value.failureTriage))
   )
     return false;
   if (
@@ -454,7 +469,9 @@ export function isReviewPackageReference(
       "changedFileCount",
       "diffCharacters",
       "limitations",
+      "failureSummary",
     ]) &&
+    (value.failureSummary === undefined || isValidationFailureSummary(value.failureSummary)) &&
     // Absent on every reference generated since the package stopped carrying
     // the diff; still validated when an older snapshot supplies it.
     (value.diffCharacters === undefined || isNonNegativeInteger(value.diffCharacters)) &&

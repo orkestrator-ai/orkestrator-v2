@@ -81,6 +81,51 @@ URL, so the raw token is never stored. File pages and GraphQL requests are not
 cached. `resetGitHubPullRequestCache()` clears it, and every function accepts
 `{ fetchImpl, cache }` so tests inject their own.
 
+## Where an in-app pull request link opens
+
+Every in-app pull request link goes through `apps/web/src/lib/pull-request-opener.tsx`.
+Without a surrounding `PullRequestOpenerProvider`, `openPullRequestInApp` opens
+the pull request as a tab of the right-hand files panel (the PR pane) for
+whatever the main view shows now: the selected environment, or the selected
+project's root checkout (`project-root:<id>`). It never changes the selected
+project or environment, the project board tab, or a pane tab, so closing the
+panel leaves the user where they were. `openPullRequestUrl` wraps it for URL
+call sites.
+
+- **Surfaces.** Transcript, mail, Linear, GitHub issue and coordinator
+  Markdown (`MarkdownLink`), Kanban comment links, terminal links (the
+  default modifier click; adding Shift opens GitHub), the action bar's View
+  PR, the pipeline's Pull request step, Multi Review's PR node, and links
+  inside a pull request opened in the main area.
+- **Modal hosts.** The agent mail sheet and the Kanban ticket dialog cover
+  the PR pane, so a pull request that opens in the pane closes them (the
+  ticket dialog only when it is not being edited). Ticket-section Markdown
+  and comments share that policy. While editing, PR links open in the external
+  browser so unsaved changes remain available in the dialog.
+- **Hosts with their own tabs.** Inside the files panel a linked pull request
+  opens as another panel tab. The project's Pull requests page also routes list rows and nested links to
+  the right-hand pane, preserving its selected main-area tab.
+- **Another project.** The PR pane shows any GitHub pull request by
+  owner/repo/number, so a pull request from another project opens in the
+  current view's pane; the selection does not follow it.
+- **Another machine.** Under another node's workspace this window's selection
+  is cleared and the workspace has its own panel, so links inside it open in
+  that workspace's pane, and the window's own links fall back to the browser.
+- **Fallback.** A URL that is not a `github.com` pull request, or a view with
+  nothing selected to host the pane, opens in the browser as before. An initial
+  detail-load failure also opens the original link externally once; subsequent
+  retries and polling failures do not repeatedly open the browser.
+  Cmd/Ctrl-click and every "Open on GitHub" action always open the browser.
+- **Native window.** Opening and closing the pane is renderer state only: the
+  desktop main process sees no window focus or blur, no focus, show or raise
+  call, no new window or view and no `shell.openExternal`.
+  `e2e/agent-testing/pull-request-pane-electron.spec.ts` (in
+  `mise run test:agent:electron`) checks that against the real app, and also
+  that the main view and the view Chromium focuses are unchanged. It checks
+  OS key-window focus only where the desktop session lets Electron become key;
+  a locked macOS console never does (todo 1170) and the spec then records a
+  `native-focus` annotation.
+
 ## Environments
 
 After a merge, close or reopen from the viewer, the backend asks the PR
@@ -283,3 +328,14 @@ A failed merge or launch is retried after 60 s, doubling up to 15 minutes. A
 successful attempt also holds the same PR for 60 s, because a merge GitHub has
 accepted but not completed still reads as open and clean. Coordinators cannot
 call `set_environment_auto_merge`, as they cannot call `merge_environment_pr`.
+
+After an initial detail-load failure, the fallback also shows an **Open on
+GitHub** notification action. This remains clickable when a web browser blocks
+an automatic popup after user activation expires. Terminal fallbacks retain the
+complete clicked URL, including its path, query and fragment. Reopening a failed
+PR waits for the new activation load before deciding whether to fall back.
+
+The project Pull requests page retains its saved main-area tabs. To create one
+explicitly, select a PR in the right pane and use **Open pane PR in main area**
+in the project's PR tab bar. Ordinary list and transcript links continue to open
+the right pane.

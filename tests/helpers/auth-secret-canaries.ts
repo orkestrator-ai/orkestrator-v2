@@ -30,6 +30,8 @@ export const AUTH_SECRET_CANARIES = {
   oauthCode: `${MARK}-oauth-authorization-code`,
   cursorApiKey: `key_${MARK}_cursor_api_key_000000000000000000`,
   xaiApiKey: `xai-${MARK}-grok-api-key-00000000000000000000`,
+  githubToken: `ghp_${MARK}_github_token_0000000000000000000`,
+  openCodeZenApiKey: `sk-${MARK}-opencode-zen-api-key-0000000000000`,
 } as const;
 
 export type AuthSecretCanary = keyof typeof AUTH_SECRET_CANARIES;

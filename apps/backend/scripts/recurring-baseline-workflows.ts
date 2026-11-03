@@ -146,6 +146,8 @@ class BusyProvider {
 }
 
 const reviewInvoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+  // Start reads the ticket's delivery policy; the synthetic tasks have none.
+  if (command === "get_kanban_tasks") return [] as T;
   if (command === "generate_review_package") {
     const id = String(args.packageId);
     const sha256 = "a".repeat(64);

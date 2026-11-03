@@ -42,22 +42,27 @@ test("a cancelled ACP process stays idle and detects a later pending request sta
       await update;
       child.notify("session/cancel", { sessionId });
       expect(await prompt).toMatchObject({ stopReason: "cancelled" });
+      // The first look records what changed since attaching; an idle process is no stall.
+      heartbeat();
+      const settled = heartbeats().length;
+      expect(settled).toBeLessThanOrEqual(1);
       for (let i = 0; i < 3; i++) heartbeat();
-      expect(heartbeats()).toHaveLength(0);
+      expect(heartbeats()).toHaveLength(settled);
       update = new Promise(resolve => { updated = resolve; });
       const later = child.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "HOLD" }] });
       await update;
+      heartbeat(); // the request appearing is a change
+      expect(heartbeats()).toHaveLength(settled + 1);
+      expect(heartbeats().at(-1)).toMatchObject({ pendingToolCount: 1, lastDeltaAgoMs: 60000 });
       heartbeat();
-      expect(heartbeats()).toHaveLength(0);
-      heartbeat();
-      expect(heartbeats()).toHaveLength(1);
-      expect(heartbeats()[0]).toMatchObject({ phase: "cancelling", pendingToolCount: 1, lastDeltaAgoMs: 120000 });
+      expect(heartbeats()).toHaveLength(settled + 2);
+      expect(heartbeats().at(-1)).toMatchObject({ phase: "cancelling", pendingToolCount: 1, lastDeltaAgoMs: 120000 });
       child.notify("session/cancel", { sessionId });
       await later;
       heartbeat(); // clearing the genuine stall is recorded
-      expect(heartbeats()).toHaveLength(2);
+      expect(heartbeats()).toHaveLength(settled + 3);
       for (let i = 0; i < 3; i++) heartbeat();
-      expect(heartbeats()).toHaveLength(2);
+      expect(heartbeats()).toHaveLength(settled + 3);
     } finally {
       await child.close();
     }

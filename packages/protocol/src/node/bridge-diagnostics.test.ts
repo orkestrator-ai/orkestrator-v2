@@ -280,10 +280,9 @@ describe("diagnostics that follow a live setting", () => {
 
   const parsed = () => bridgeDiagnosticPayloads(lines);
 
-  test("a scope opened with the stream off writes its lifecycle only, and counts anyway", () => {
+  test("a scope opened with the stream off writes an unchanged look's lifecycle only, and counts anyway", () => {
     const scope = createBridgeDiagnostics("pi", state);
     scope.activity("message_update");
-    scope.tool("call-1", "shell", "started");
     scope.report("heartbeat");
     expect(parsed().map((entry) => entry.event)).toEqual(["send-started"]);
     scope.close();

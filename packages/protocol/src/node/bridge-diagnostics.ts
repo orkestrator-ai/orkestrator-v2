@@ -122,14 +122,17 @@ type Baseline = {
 /**
  * A counter that moved this much since the last snapshot is a change. Errors and
  * requests count once each; stderr counts in pages, so a trickle accumulates
- * rather than writing every minute.
+ * rather than writing every minute. Notifications are the delta stream itself
+ * (every ACP `session/update`), so they never count as a change: a streaming
+ * turn would otherwise write every minute, and their silence is what the
+ * no-delta stall signal already watches.
  */
 export const COUNTER_CHANGE_THRESHOLDS: Readonly<Record<Counter, number>> = {
   stderrBytes: 4096,
   requestsSent: 1,
   responsesReceived: 1,
   timeouts: 1,
-  notificationsReceived: 1,
+  notificationsReceived: Number.POSITIVE_INFINITY,
   protocolErrors: 1,
 };
 /** Phases in which a turn scope is waiting on its provider. */
@@ -305,7 +308,7 @@ function writeDiagnostic(
  * Lifecycle events are written whenever `bridge.diagnostics` allows `info`. A
  * look is written every minute while `active()` says the per-minute stream is
  * on (`bridge.diagnostics` at debug); otherwise only when a stall signal starts
- * or clears, when something changes during a stall, or as a keepalive.
+ * or clears, when the phase, pending tools or a counter changes, or as a keepalive.
  * docs/architecture/bridge-diagnostics.md, "When a snapshot is written".
  *
  * A scope counts whether or not it is writing. Turning detail on mid-turn is how
@@ -532,9 +535,9 @@ export class BridgeRunDiagnostics {
   /**
    * Off the per-minute stream, a look is written only when it says something the
    * last snapshot did not: a stall signal started or cleared (or another tool
-   * crossed the pending threshold); the turn changed while it was silent or its
-   * timer was late; or the keepalive is due. A pending tool alone does not make
-   * changes worth writing: deltas are still arriving, so the turn is moving.
+   * crossed the pending threshold); the phase, the set of pending tools or a
+   * counter past its threshold changed; or the keepalive is due. Ages growing and
+   * deltas arriving are not changes: they are what a healthy turn does.
    */
   private periodicDue(now: number, stall: StallState): boolean {
     // Each late firing is a separate observation, not an age of a persistent stall.
@@ -543,8 +546,7 @@ export class BridgeRunDiagnostics {
     if (!last) return true;
     if (!sameSet(stall.signals, last.stall.signals) || !sameSet(stall.tools, last.stall.tools))
       return true;
-    const silent = stall.signals.has("no-delta") || stall.signals.has("tick-delay");
-    if (silent && this.changedSince(last)) return true;
+    if (this.changedSince(last)) return true;
     return now - last.at >= BRIDGE_DIAGNOSTICS_KEEPALIVE_MS;
   }
 

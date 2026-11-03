@@ -474,7 +474,8 @@ covers `desktop.dialog`. The default is `info`. Bridge snapshots
 ([bridge-diagnostics.md](bridge-diagnostics.md#when-a-snapshot-is-written)) are
 change-driven at `info`: each scope's lifecycle, a snapshot when a turn stalls (no
 delta for 2 minutes, a tool pending for 10, or a diagnostic timer 10 seconds late),
-changes during a silent stall, and a keepalive every 10 minutes. When the level in
+a snapshot when the phase, the set of pending tools or a counter past its threshold
+changes, and a keepalive every 10 minutes. When the level in
 force for `bridge.diagnostics` is `debug` or `trace` (`bridge=debug` or a global
 `debug` also does it) they add the per-minute stream: one snapshot every minute,
 changed or not. `bridge.diagnostics=warn` silences them all.

@@ -154,15 +154,22 @@ describe("change-driven snapshots at info", () => {
     const h = harness();
     try {
       h.scope.checkpoint("attached");
+      // Attaching is a phase change, written once; idling after it is not a stall.
       for (let minute = 0; minute < 5; minute++) h.tick();
-      expect(h.events()).toEqual(["send-started"]);
+      expect(h.events()).toEqual(["send-started", "heartbeat"]);
+      expect(h.written.at(-1)).toMatchObject({ phase: "attached", pendingToolCount: 0 });
       // A request sent after a long idle spell waits from when it was sent.
       h.scope.tool("request-1", "session/prompt", "started");
       h.tick();
-      expect(h.events()).toHaveLength(1);
+      expect(h.events()).toHaveLength(3);
+      expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1, lastDeltaAgoMs: null });
       h.tick();
-      expect(h.events()).toHaveLength(2);
-      expect(h.written.at(-1)).toMatchObject({ phase: "attached", pendingToolCount: 1 });
+      expect(h.events()).toHaveLength(4);
+      expect(h.written.at(-1)).toMatchObject({
+        phase: "attached",
+        pendingToolCount: 1,
+        pendingTools: [{ ageMs: STALL_NO_DELTA_MS }],
+      });
     } finally {
       h.scope.close();
     }
@@ -175,19 +182,20 @@ describe("change-driven snapshots at info", () => {
       h.run(TICK);
       h.scope.tool("long-build", "shell", "started");
       h.run(9 * TICK);
-      // Only the keepalive so far.
+      // Only the tool appearing so far: it is a change, not yet a stall.
       expect(h.events()).toEqual(["send-started", "send-resolved", "heartbeat"]);
+      expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(TICK);
       h.run(TICK);
       expect(h.events()).toHaveLength(4);
       expect(h.written.at(-1)!.pendingTools[0].ageMs).toBe(STALL_TOOL_PENDING_MS);
-      // Other tools coming and going is a turn that is moving, not more of the stall.
+      // Tools that start and finish between two looks leave the pending set unchanged.
       for (let minute = 0; minute < 3; minute++) {
         h.scope.tool(`short-${minute}`, "read", "started");
-        h.run(TICK);
         h.scope.tool(`short-${minute}`, "read", "completed");
+        h.run(TICK);
       }
       expect(h.events()).toHaveLength(4);
-      // A second tool crossing the threshold is a new stall signal (after one keepalive).
+      // A second tool is written when it appears and again when it crosses the threshold.
       h.scope.tool("second", "shell", "started");
       h.run(STALL_TOOL_PENDING_MS);
       expect(h.events()).toHaveLength(6);
@@ -349,78 +357,134 @@ describe("change-driven snapshots at info", () => {
   });
 
   describe("a change", () => {
-    function stalled() {
+    /** A turn that keeps streaming, so no stall signal is involved. */
+    function moving() {
       const h = harness();
       h.scope.sent("run-1");
-      h.scope.tool("call-1", "shell", "started");
-      h.tick();
-      h.tick();
-      h.tick();
-      expect(h.events()).toEqual(["send-started", "send-resolved", "heartbeat"]);
+      h.run(TICK);
+      expect(h.events()).toEqual(["send-started", "send-resolved"]);
       return h;
     }
 
-    test("of phase during a stall is written; an unchanged stall is not", () => {
-      const h = stalled();
+    test("of phase is written once; the unchanged phase is not written again", () => {
+      const h = moving();
       try {
-        h.tick();
-        expect(h.events()).toHaveLength(3);
         h.scope.terminalSettled("resolved");
-        h.tick();
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3);
+        expect(h.written.at(-1)).toMatchObject({
+          event: "heartbeat",
+          phase: "draining",
+          terminal: "resolved",
+        });
+        h.run(3 * TICK);
+        expect(h.events()).toHaveLength(3);
+        h.scope.checkpoint("cancelling");
+        h.run(TICK);
         expect(h.events()).toHaveLength(4);
-        expect(h.written.at(-1)).toMatchObject({ phase: "draining", terminal: "resolved" });
-        h.tick();
-        expect(h.events()).toHaveLength(4);
+        expect(h.written.at(-1)!.phase).toBe("cancelling");
       } finally {
         h.scope.close();
       }
     });
 
-    test("of the pending tools during a stall is written", () => {
-      const h = stalled();
+    test("of the pending tools is written: a tool appearing, being replaced or finishing", () => {
+      const h = moving();
       try {
+        h.scope.tool("call-1", "shell", "started");
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3);
+        expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1 });
+        // Still pending and under its threshold: nothing new to say.
+        h.run(3 * TICK);
+        expect(h.events()).toHaveLength(3);
+        // Same count, different tool: the set changed.
         h.scope.tool("call-1", "shell", "completed");
-        h.tick();
+        h.scope.tool("call-2", "read", "started");
+        h.run(TICK);
         expect(h.events()).toHaveLength(4);
-        expect(h.written.at(-1)!.pendingToolCount).toBe(0);
-        h.scope.tool("call-2", "shell", "started");
-        h.tick();
+        expect(h.written.at(-1)!.pendingTools).toMatchObject([{ kind: "read" }]);
+        h.scope.tool("call-2", "read", "completed");
+        h.run(TICK);
         expect(h.events()).toHaveLength(5);
-        h.tick();
+        expect(h.written.at(-1)!.pendingToolCount).toBe(0);
+        h.run(TICK);
         expect(h.events()).toHaveLength(5);
       } finally {
         h.scope.close();
       }
     });
 
-    test("of a counter over its threshold during a stall is written; under it is not", () => {
-      const h = stalled();
+    test("of a counter over its threshold is written; under it is not", () => {
+      const h = moving();
       try {
         h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
-        h.tick();
-        expect(h.events()).toHaveLength(3);
+        h.run(TICK);
+        expect(h.events()).toHaveLength(2);
         h.scope.count("stderrBytes", 1);
-        h.tick();
-        expect(h.events()).toHaveLength(4);
-        h.scope.count("timeouts");
-        h.tick();
-        expect(h.events()).toHaveLength(5);
-        expect(h.written.at(-1)!.counters).toMatchObject({ timeouts: 1 });
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3);
+        // The delta is measured from the last snapshot, not from the scope's start.
+        h.scope.count("stderrBytes", COUNTER_CHANGE_THRESHOLDS.stderrBytes - 1);
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3);
+        for (const counter of [
+          "timeouts",
+          "protocolErrors",
+          "requestsSent",
+          "responsesReceived",
+        ] as const) {
+          h.scope.count(counter);
+          h.run(TICK);
+          expect(h.written.at(-1)!.counters[counter]).toBe(1);
+        }
+        expect(h.events()).toHaveLength(7);
       } finally {
         h.scope.close();
       }
     });
 
-    test("outside a stall is not written: a moving turn is not noise worth keeping", () => {
+    test("notifications are the delta stream, not a change", () => {
+      const h = moving();
+      try {
+        h.scope.count("notificationsReceived", 10_000);
+        h.run(TICK);
+        expect(h.events()).toHaveLength(2);
+      } finally {
+        h.scope.close();
+      }
+    });
+
+    test("is written during a stall too, and an unchanged stall is not", () => {
       const h = harness();
       try {
         h.scope.sent("run-1");
-        h.scope.activity("message_update");
-        h.scope.terminalSettled("resolved");
-        h.scope.tool("call-1", "shell", "started");
-        h.scope.count("timeouts");
         h.tick();
-        expect(h.events()).toEqual(["send-started", "send-resolved"]);
+        h.tick();
+        expect(h.events()).toEqual(["send-started", "send-resolved", "heartbeat"]);
+        h.tick();
+        expect(h.events()).toHaveLength(3);
+        h.scope.tool("call-1", "shell", "started");
+        h.tick();
+        expect(h.events()).toHaveLength(4);
+        expect(h.written.at(-1)).toMatchObject({ pendingToolCount: 1 });
+        h.tick();
+        expect(h.events()).toHaveLength(4);
+      } finally {
+        h.scope.close();
+      }
+    });
+
+    test("an unchanged, moving turn writes nothing between keepalives", () => {
+      const h = moving();
+      try {
+        h.scope.tool("long-call", "task", "started");
+        h.run(TICK);
+        expect(h.events()).toHaveLength(3);
+        h.scope.count("stderrBytes", 100);
+        // Short of the keepalive and of the tool's pending threshold.
+        h.run(BRIDGE_DIAGNOSTICS_KEEPALIVE_MS - 2 * TICK);
+        expect(h.events()).toHaveLength(3);
       } finally {
         h.scope.close();
       }

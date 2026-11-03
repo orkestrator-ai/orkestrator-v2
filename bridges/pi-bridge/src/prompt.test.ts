@@ -158,13 +158,13 @@ describe("dispatchPrompt", () => {
           toolName: "bash",
           args: { command: "PRIVATE COMMAND" },
         });
+        // A tool appearing or finishing changes the pending set, so these looks are
+        // written either way.
         state.diagnostics?.report("heartbeat");
-        if (enabled) {
-          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
-            '"pendingToolCount":1',
-          );
-          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain('"kind":"bash"');
-        }
+        expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+          '"pendingToolCount":1',
+        );
+        expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain('"kind":"bash"');
         applySessionEvent(state, {
           type: "tool_execution_end",
           toolCallId: "PRIVATE ID",
@@ -172,21 +172,21 @@ describe("dispatchPrompt", () => {
           result: { content: [] },
         });
         state.diagnostics?.report("heartbeat");
-        if (enabled)
-          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
-            '"pendingToolCount":0',
-          );
+        expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+          '"pendingToolCount":0',
+        );
+        // Nothing changed since: only the per-minute stream writes this look.
+        state.diagnostics?.report("heartbeat");
         stub.finish();
         await completion;
         expect(state.diagnostics).toBeUndefined();
-        // Lifecycle is written either way; the looks only on the per-minute stream.
+        // Lifecycle is written either way; the unchanged look only on the per-minute stream.
         expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
           '"event":"closed"',
         );
-        if (!enabled)
-          expect(
-            bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat"),
-          ).toEqual([]);
+        expect(
+          bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat"),
+        ).toHaveLength(enabled ? 3 : 2);
         expect(lines.join("\n")).not.toContain("PRIVATE");
       } finally {
         stub.finish();

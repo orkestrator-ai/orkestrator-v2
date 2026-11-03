@@ -13,7 +13,7 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
     maxStringChars: MAX_BRIDGE_DIAGNOSTIC_BYTES,
     events: {
       heartbeat:
-        "A periodic snapshot of an open turn or process: every minute at debug; at info on a stall, a change during one, or the keepalive.",
+        "A periodic snapshot of an open turn or process: every minute at debug; at info on a stall, a change of phase, pending tools or a counter, or the keepalive.",
       "send-started": "A turn or process diagnostic scope began.",
       "send-resolved": "The provider accepted a dispatch.",
       "cancel-requested": "Cancellation of a turn was requested.",

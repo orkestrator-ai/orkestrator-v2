@@ -240,11 +240,10 @@ test("a stale cached fetch retries and recovers without another merge", async ()
 
 test("an expired fetch failure permits a later observation of the same PR", async () => {
   const timers = manualTimers();
-  const git = fakeGit({
-    fetch: mock(async () => {
-      throw new Error("offline");
-    }),
+  const fetch = mock(async (_projectId: string, _force?: boolean): Promise<ProjectGitStatus> => {
+    throw new Error("offline");
   });
+  const git = fakeGit({ fetch });
   const follower = new ProjectCheckoutMergeFollower({
     ...timers,
     retryIntervalMs: 1000,
@@ -254,7 +253,7 @@ test("an expired fetch failure permits a later observation of the same PR", asyn
   await follower.idle();
   timers.advance(1000);
   await follower.idle();
-  git.fetch.mockImplementation(async () => behind);
+  fetch.mockImplementation(async () => behind);
   follower.follow("project-1", git, "pr-retry");
   await follower.idle();
   expect(git.sync).toHaveBeenCalledTimes(1);

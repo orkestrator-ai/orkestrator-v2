@@ -84,6 +84,7 @@ import { registerPromptCommands } from "./commands-registry-prompts.js";
 import { registerReviewWorkflowCommands } from "./commands-registry-reviews.js";
 import { registerServerCommands } from "./commands-registry-servers.js";
 import { registerSessionCommands } from "./commands-registry-sessions.js";
+import { registerRequestCaptureCommands } from "./commands-request-capture.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerHostFileCommands } from "./commands-host-files.js";
 import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
@@ -355,6 +356,7 @@ export function createCommandRegistry(
   registerGitHubPullRequestCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
+  registerRequestCaptureCommands(register);
   registerBackendProfileCommands(register);
   registerPermissionRuleCommands(register);
   registerNodeCommands(register);

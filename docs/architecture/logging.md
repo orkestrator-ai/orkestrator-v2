@@ -919,3 +919,39 @@ Backend jobs, annotation reconciliation and certificate refresh scopes include a
 content-free owner UUID so separate backend instances cannot clear each other.
 Kept-branch notices use a bounded per-storage deduplication set and plain info
 logging; they consume no shared fault keys.
+
+## Opt-in Claude API body inspector
+
+Claude tabs have an **API request inspector**. This is separate from log detail
+and disk logging: it intentionally stores content, only after an explicit opt-in.
+Enable capture, then restart the environment to start new Claude processes with
+capture enabled. Disabling also requires restarting the environment to stop an
+already-running process from capturing. The setting survives bridge restarts.
+
+The bridge uses Claude Code's native `OTEL_LOG_RAW_API_BODIES=file:<dir>` facility,
+not a reconstruction from SDK frames. Its request JSON includes the assembled
+system prompt, messages, reminders and tools. Native response JSON and the native
+correlation index link successful responses to their exact requests; the inspector
+can search request, message and session IDs. Unanswered requests remain visible
+by timestamp and file ID, but native correlation is emitted only for successful
+responses: a rejected API attempt may not be searchable by its provider request ID.
+Claude redacts extended thinking and can withhold protected content; the inspector
+preserves those markers. This cannot expose Anthropic's internal classifier inputs
+or explain a refusal by itself, and cannot reconstruct uncaptured past requests.
+
+Files live under `$CLAUDE_CONFIG_DIR/orkestrator-request-captures/<workspace-hash>`
+(or `~/.claude/orkestrator-request-captures/<workspace-hash>`). The directory is
+owner-only. Capture disables telemetry exporters for that Claude process so raw
+content does not flow to an inherited collector. Authentication headers are not
+captured. Prompts, source, attachments and tool results inside bodies are sensitive;
+they are never routed into application logs. The authenticated backend forwards
+on-demand reads only to the selected environment's existing bridge.
+
+A backend-independent bridge timer sweeps every five seconds, retaining at most
+200 files and 128 MiB and removing individual files over 16 MiB. These are
+post-write retention limits, not a disk quota. The inspector reads at most 16 MiB
+per file and rejects symlinks; expired pairs may be unavailable. Captures survive
+tab closure and are read again on reopen/reload, with no renderer-owned capture
+state. Restarting an environment does not delete its history.
+
+Native format reference: [Claude Code API body events](https://code.claude.com/docs/en/monitoring-usage#api-request-body-event).

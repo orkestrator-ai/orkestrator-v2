@@ -31,6 +31,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
+import { RequestCaptureInspector } from "./RequestCaptureInspector";
 import { PreviewLinkSourceContext } from "@/components/chat/link-source-context";
 
 const log = createLogger("web.native-agent");
@@ -485,7 +486,17 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
     return controller;
   return (
     <PreviewLinkSourceContext.Provider value={linkSource}>
-      {controller}
+      <div className="flex h-full min-h-0 flex-col">
+        {props.data.platform === "claude" && (
+          <div className="shrink-0 border-b px-2">
+            <RequestCaptureInspector
+              key={props.data.environmentId}
+              environmentId={props.data.environmentId}
+            />
+          </div>
+        )}
+        <div className="min-h-0 flex-1">{controller}</div>
+      </div>
     </PreviewLinkSourceContext.Provider>
   );
 });

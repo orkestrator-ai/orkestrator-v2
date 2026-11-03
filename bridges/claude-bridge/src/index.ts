@@ -9,6 +9,7 @@ import {
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import requestCaptureRoutes from "./routes/request-capture.js";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
@@ -184,6 +185,7 @@ compressTranscriptReads(app);
  * rotation. This bridge has no engine-health dimension the way codex-bridge
  * does, so an authenticated 200 mirrors `/global/health`'s unconditional "ok".
  */
+app.route("/debug/request-capture", requestCaptureRoutes);
 app.get("/global/auth-check", (c) => c.json({ status: "ok" }));
 app.get("/global/auth", async (c) => c.json(await readClaudeAuthStatus()));
 /** Plan-allocation windows for the global settings pane; no session required. */

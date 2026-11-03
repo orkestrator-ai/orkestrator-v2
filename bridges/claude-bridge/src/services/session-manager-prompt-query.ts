@@ -76,6 +76,7 @@ import {
   claudeTurnSettingSources,
   effectiveClaudeContext1m,
 } from "./session-manager-runtime.js";
+import { requestCapture } from "./request-capture.js";
 import { requestsUltracode } from "./ultracode.js";
 
 // The query a turn runs: its policy, MCP servers, plugins, tools and
@@ -298,7 +299,7 @@ export async function resolveQueryPlan(
     policy,
     withUnattendedOverloadRetry(
       session.executionPolicy,
-      await runtimeEnvironmentForSessionQuery(policy),
+      await requestCapture.environment(await runtimeEnvironmentForSessionQuery(policy)),
     ),
   );
   const liveSettings = claudeLiveSettings({

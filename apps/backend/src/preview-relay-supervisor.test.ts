@@ -429,6 +429,8 @@ describe("PreviewRelaySupervisor (scripted relay process)", () => {
     ["a 2-byte credit", RELAY_FRAME.credit, 2],
     ["a 5-byte credit", RELAY_FRAME.credit, 5],
     ["an eof with a payload", RELAY_FRAME.eof, 1],
+    ["an opened with a payload", RELAY_FRAME.opened, 1],
+    ["a close with a payload", RELAY_FRAME.close, 1],
   ] as const) {
     test(`${label} frame shuts the relay down instead of throwing`, async () => {
       const channel = await supervisor.connect(target, signal);

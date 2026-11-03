@@ -314,18 +314,26 @@ async function downloadTo(
   const out = createWriteStream(destination, { flags: "wx", mode: 0o600 });
   let size = 0;
   // Pipeline owns backpressure and tears down both ends on read or write errors.
-  await pipeline(
-    response.body as unknown as AsyncIterable<Uint8Array>,
-    async function* (source: AsyncIterable<Uint8Array>) {
-      for await (const chunk of source) {
-        size += chunk.byteLength;
-        if (size > maxBytes) throw new Error(`more than the pinned ${maxBytes} bytes`);
-        hash.update(chunk);
-        yield chunk;
-      }
-    },
-    out,
-  );
+  try {
+    await pipeline(
+      response.body as unknown as AsyncIterable<Uint8Array>,
+      async function* (source: AsyncIterable<Uint8Array>) {
+        for await (const chunk of source) {
+          size += chunk.byteLength;
+          if (size > maxBytes) throw new Error(`more than the pinned ${maxBytes} bytes`);
+          hash.update(chunk);
+          yield chunk;
+        }
+      },
+      out,
+    );
+  } catch (error) {
+    // A read error can reject the pipeline while the destination's open is
+    // still pending; that open would create the file after the caller's
+    // cleanup removed it. Wait for the stream to finish closing first.
+    if (!out.closed) await new Promise<void>((resolve) => out.once("close", () => resolve()));
+    throw error;
+  }
   return { size, sha256: hash.digest("hex") };
 }
 

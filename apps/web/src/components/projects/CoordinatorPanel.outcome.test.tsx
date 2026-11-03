@@ -326,7 +326,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
       expect(input.textContent).toBe("Review this branch and tell me what needs attention"),
     );
     // A filled box hides them, so another click cannot replace the edit.
-    expect(screen.queryByRole("group", { name: "Starter prompts" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Starter prompts" }) === null).toBe(true);
 
     // Still editable, and nothing was sent.
     fireEvent.input(input, { target: { textContent: "Review this branch for security issues" } });
@@ -359,9 +359,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
         useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
       ).toBe(1),
     );
-    expect(screen.queryByRole("group", { name: "Starter prompts" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Starter prompts" }) === null).toBe(true);
     for (const starter of COORDINATOR_STARTER_PROMPTS) {
-      expect(screen.queryByRole("button", { name: starter })).toBeNull();
+      expect(screen.queryByRole("button", { name: starter }) === null).toBe(true);
     }
   });
 
@@ -373,10 +373,10 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(badge.getAttribute("data-coordinator-isolation-badge")).toBe("enforced");
     expect(badge.className).toContain("emerald");
     expect(badge.textContent).not.toContain("advisory");
-    expect(screen.queryByText("Read-only coordinator")).toBeNull();
+    expect(screen.queryByText("Read-only coordinator") === null).toBe(true);
     // Neither the path nor the revision is header text any more.
-    expect(screen.queryByText("/checkout")).toBeNull();
-    expect(screen.queryByText(/Context r7/)).toBeNull();
+    expect(screen.queryByText("/checkout") === null).toBe(true);
+    expect(screen.queryByText(/Context r7/) === null).toBe(true);
 
     act(() => badge.focus());
     const tooltip = await screen.findByRole("tooltip");
@@ -410,7 +410,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     );
     expect(badge.textContent).toContain("Read-only protection is advisory");
     expect(badge.className).toContain("amber");
-    expect(screen.queryByText(/never changes it/)).toBeNull();
+    expect(screen.queryByText(/never changes it/) === null).toBe(true);
 
     act(() => badge.focus());
     const tooltip = await screen.findByRole("tooltip");
@@ -426,11 +426,11 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     const banner = await screen.findByText(/Coordination is paused/);
     expect(banner.textContent).toContain("Messages will wait");
     expect(screen.getByTestId("native-agent")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause" }) === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
     await waitFor(() => expect(resume).toHaveBeenCalledWith("project-1"));
-    await waitFor(() => expect(screen.queryByText(/Coordination is paused/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Coordination is paused/) === null).toBe(true));
     expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
     expect(screen.getByTestId("native-agent")).toBeTruthy();
   });
@@ -453,7 +453,9 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     ensuredSnapshot = withWorkspace({ lifecycleState: "ready" });
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(ensure.mock.calls.length).toBeGreaterThan(calls));
-    await waitFor(() => expect(screen.queryByText(/Coordinator startup failed/)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/Coordinator startup failed/) === null).toBe(true),
+    );
     expect(screen.getByTestId("native-agent")).toBeTruthy();
   });
 
@@ -520,7 +522,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     await waitFor(() => expect(pause).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.getAllByText("pause failed")).toHaveLength(1);
-    expect(screen.queryByText("Coordinator error")).toBeNull();
+    expect(screen.queryByText("Coordinator error") === null).toBe(true);
   });
 
   test("an unavailable provider keeps the transcript under a banner", async () => {
@@ -574,7 +576,7 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
     expect(closeConversation).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep open" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(closeConversation).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Coordinator, Codex" })).toBeTruthy();
 
@@ -596,6 +598,6 @@ describe("CoordinatorPanel outcome-first wording and banners", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
     await waitFor(() => expect(closeConversation).toHaveBeenCalledWith("project-1", "side-1"));
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
   });
 });

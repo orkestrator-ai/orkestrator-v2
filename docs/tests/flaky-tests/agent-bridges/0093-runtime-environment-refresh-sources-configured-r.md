@@ -207,3 +207,19 @@ entire bridges group (74.1 s), including this owner. Root and protocol groups
 also passed. Backend still had the independently reproduced preview failure
 and a Git fsmonitor timeout; no full-suite success is claimed. Evidence:
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.OdacnP/summary.json`.
+
+## Recurrence 2026-11-03
+
+On branch `fix-ci-failures-c4a3c6a8620e-r1` (base `051261eee`), the aggregate
+`mise run test:logged -- --name full-suite -- mise run test` failed this exact
+case after 15,014.45 ms with one Codex file worker (`1x PARALLEL`). The other
+bridge suites passed. The branch changes no bridge code. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2la6fW/bridges.log.gz`.
+
+The owner passed alone twice (exit 0, 0.1 s each):
+
+```sh
+mise run test:logged -- --name codex-runtime-env -- mise exec -- bun --cwd=bridges/codex-bridge test --preload ../../tests/setup-node.ts src/runtime-env.test.ts
+```
+
+Still intermittent, only under aggregate load; no new cause identified.

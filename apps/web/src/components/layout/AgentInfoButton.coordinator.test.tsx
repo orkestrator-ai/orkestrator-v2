@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -196,6 +196,43 @@ describe("AgentInfoButton coordinator conversations", () => {
       platform: "claude",
       accountId: "work",
     });
+  });
+
+  test("daily buckets allow the fallback and projection turn/generation changes refresh it", async () => {
+    const projection = coordinatorProjection();
+    projection.contextUsage!.account = [
+      { window: "daily:2026-11-02", label: "2026-11-02", tokens: 60_000_000 },
+    ];
+    projection.turn = { phase: "running" };
+    useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, projection);
+    render(<AgentInfoButton activeTab={coordinatorTab()} />);
+    open();
+    expect(await screen.findByText("Weekly limit")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Daily tokens" })).toBeTruthy();
+    const reads = () =>
+      nativeInvokeMock.mock.calls.filter(([command]) => command === "get_agent_account_usage")
+        .length;
+    const before = reads();
+    await act(async () => {
+      useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
+        ...projection,
+        revision: 2,
+        turn: { phase: "idle" },
+      });
+    });
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    const afterTurn = reads();
+    await act(async () => {
+      useNativeAgentProjectionStore.getState().setProjection(SESSION_KEY, {
+        ...projection,
+        revision: 3,
+        generation: "next-generation",
+        turn: { phase: "idle" },
+      });
+    });
+    await waitFor(() => expect(reads()).toBeGreaterThan(afterTurn));
+    expect(screen.getByText("Weekly limit")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Daily tokens" })).toBeTruthy();
   });
 
   test("keeps the session's own plan limits when the coordinator reports them", async () => {

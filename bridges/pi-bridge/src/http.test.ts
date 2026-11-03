@@ -1,5 +1,6 @@
 import { publicInteractionKinds } from "./public.js";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -2536,10 +2537,16 @@ describe("steering", () => {
     expect(await steer.json()).toEqual({ outcome: "idle" });
     expect(steerCalls).toBe(0);
 
+    const logs = captureLogs();
     rejectFirstRun(new Error("preflight rejected"));
     const refused = await firstPrompt;
+    logs.restore();
     expect(refused.status).toBe(422);
     expect(await refused.json()).toEqual({ error: "preflight rejected", kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toMatchObject([
+      { level: "warn", area: "bridge.pi", fields: { sessionId: state.id } },
+    ]);
+    expect(JSON.stringify(logs.records())).not.toContain("preflight rejected");
     expect(state.pendingSteerDeliveries).toEqual([]);
     expect(state.steerJournal.size).toBe(0);
 

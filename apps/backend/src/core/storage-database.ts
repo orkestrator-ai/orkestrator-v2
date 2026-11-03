@@ -6,9 +6,12 @@ import {
   type StoredLayoutKind,
   type StoredRow,
 } from "@orkestrator/protocol/node/storage-database";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+const log = createLogger("storage");
 
 /**
  * The backend's single SQLite database.
@@ -917,16 +920,24 @@ export class StorageDatabase {
    * Makes deleted content unrecoverable from the WAL. `secure_delete` zeroes
    * freed pages in the main file; a truncating checkpoint moves the deleting
    * transaction there and discards the old frames. Busy readers can defer
-   * truncation, so this is best effort and never throws.
+   * truncation, so this is best effort and never throws. SQLite reports that
+   * deferral in the checkpoint's result row rather than as an error.
    */
   scrubDeletedContent(): void {
     try {
       // Return a bounded number of freed pages to the filesystem first, so a
       // large delete shrinks the file without one long blocking vacuum.
       this.db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
-      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
+      const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number };
+      if (busy === 0) log.recovered("scrub.checkpoint-failed", "scrub");
+      else log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+    } catch (error) {
       // A concurrent reader keeps the WAL alive; the next checkpoint scrubs it.
+      log.throttled("warn", "scrub.checkpoint-failed", {
+        scope: "scrub",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
     }
   }
 
@@ -1314,8 +1325,14 @@ export class StorageDatabase {
         this.db
           .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
           .run(Date.now(), name, owner);
-      } catch {
+        log.recovered("lease.heartbeat-failed", name);
+      } catch (error) {
         // A missed heartbeat only shortens the lease; the next one retries.
+        log.throttled("warn", "lease.heartbeat-failed", {
+          scope: name,
+          error,
+          fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+        });
       }
     }, heartbeatMs);
     heartbeat.unref?.();

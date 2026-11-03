@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { realpath, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
@@ -99,6 +100,8 @@ import {
   type BridgeMessagePart,
   type SessionState,
 } from "./state.js";
+
+const log = createLogger("bridge.pi");
 
 /** Bridge sessions that have been permanently closed by their owner. */
 const closingSessions = new WeakSet<SessionState>();
@@ -1083,7 +1086,11 @@ export function sessionManagerFor(state: SessionState): SessionManager {
   if (state.sessionFile) {
     try {
       return SessionManager.open(state.sessionFile, directory, workingDirectory);
-    } catch {
+    } catch (error) {
+      log.warn("session.resume-fell-back", {
+        sessionId: state.id,
+        error: formatLogError(error, { message: false }),
+      });
       state.sessionFile = undefined;
     }
   }

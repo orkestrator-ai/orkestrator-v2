@@ -2,6 +2,7 @@ import {
   boundedBackgroundLaunch,
   boundedTailCommand,
   boundDiagnosticTail,
+  keepPreviousLogCommand,
   bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
@@ -847,7 +848,7 @@ export async function startContainerOpenCodeServer(
     `
     set -e
     cd /workspace
-    rm -f /tmp/opencode-serve.log
+    ${keepPreviousLogCommand("/tmp/opencode-serve.log")}
     umask 077
     mkdir -p /home/node/.config/opencode/plugins /tmp/orkestrator-ai
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)} > ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
@@ -945,7 +946,7 @@ export async function startContainerClaudeServer(
       "claude",
       `
       cd /workspace
-      rm -f /tmp/claude-bridge.log
+      ${keepPreviousLogCommand("/tmp/claude-bridge.log")}
       umask 077
       mkdir -p /tmp/orkestrator-ai
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token

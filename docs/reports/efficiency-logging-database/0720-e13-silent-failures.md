@@ -19,11 +19,11 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Writer lease loss**: log it and tell the user schedules have paused. Status: open.
-2. **Local bridge exit**: log code and signal. Status: open.
-3. **Pi and Cursor resume fallback**: log it and surface it. Status: open.
-4. **ACP exits and 500s, Cursor and Pi turn failures**: log them at `warn` with bounded fields. Status: open.
-5. **Storage swallows**: SQLite lease heartbeat and WAL scrub failures. Status: open.
+1. **Writer lease loss**: log it and tell the user schedules have paused. Status: logging done; the notice is open.
+2. **Local bridge exit**: log code and signal. Status: done.
+3. **Pi and Cursor resume fallback**: log it and surface it. Status: logging done; the notice is open.
+4. **ACP exits and 500s, Cursor and Pi turn failures**: log them at `warn` with bounded fields. Status: done.
+5. **Storage swallows**: SQLite lease heartbeat and WAL scrub failures. Status: done.
 
 #### 1. Writer lease loss
 
@@ -116,6 +116,9 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
+Tasks 1 to 5's logging is in, with the events listed in
+[Application logging](../../architecture/logging.md#failures-that-would-otherwise-leave-no-trace).
+
 Already done from report L4's table, so not tasks here:
 
 - Environment deletion side steps log `delete.step-failed` (`commands-servers.ts:1611`, `:1696-1778`).
@@ -171,6 +174,39 @@ Nothing has landed. Split from [0850](0740-e14-docker-logs.md#0850-bound-docker-
 
 - Whether any supported provider needs one of these set in normal use. None was found, but vendor CLIs were not run.
 - Whether an existing settings field already passes user-set variables to local bridges was not traced.
+
+## Outstanding work
+
+The user chose to do the logging first, so neither notice exists. What each needs:
+
+- **Lost writer lease in Settings, Schedules.** An additive status field on the scheduled jobs answer, read from `registryWriterLease.isHeld()` (it reads as false for a lost lease and for a backend that never had it, so the field must tell those apart to word the notice; `RegistryWriterLease` would have to expose the state it now logs). A notice in the Schedules settings, shown only to someone with schedules, and a rehydrating read: a backend event alone would be missed by an unmounted screen. Older clients ignore the field and stay silent.
+- **A transcript note that a resume fell back.** A status transcript item both bridges can emit, written where `session.resume-fell-back` is logged, and renderer support if the existing status row does not fit. Pi's `sessionManagerFor` and Cursor's `attach` run before a turn, so the item has to land in the transcript in step with its revision and survive a reload, in `normalize`-style replay as well as live. Fixed text only, never the provider's message.
+
+## Assumptions and decisions
+
+### Task 1: the lease module logs under `docker`
+
+The lease guards container mutation and already formats its refusal as a container lifecycle error, so `writer-lease.*` joined that area rather than a new one. A new area would cost two lines and tell a reader nothing more.
+
+### Task 1: there is no regained event
+
+`lost` is sticky, the heartbeat stops, and nothing reacquires: a lost lease lasts until the process restarts. A test pins this. A refresh racing `release` finds its own removal, so the transition ignores a released lease rather than warn at every shutdown.
+
+### Task 2: stop intent is held per child, in `LocalServerRuntime.terminate`
+
+`terminate` is the one path every requested stop takes, including replacement and shutdown, so it records the child in a `WeakSet`. Reporting does not depend on key ownership, because a replaced child no longer owns its key and its exit still explains what happened. A bridge that crashes in the moment before a stop is requested reads as requested. A bridge that exits before it is healthy also logs, beside the startup error that already reported it.
+
+### Task 4: a normal ACP close is `debug`, not `warn`
+
+The bridge closes agent processes on every session close, replacement and shutdown (`#terminationOutcome === "resolved"`). A `warn` on each would make the line useless, so only an exit nothing asked for, or a fault-driven termination, warns. Client hang-ups are left out of `http.route-failed` too, because the aborted route rejects with no one waiting.
+
+### Task 4: turn failure sites beyond the analysis
+
+Re-checking found three more failures that set state only: Pi's refusal before a run (`http.ts`, `turn.refused`), Cursor's rejected `send` (`http.ts`, `turn.send-failed`), and a Cursor run recovered after a restart (`agent-session.ts`, `turn.recovery-failed`). Each got its own event. `turn.failed` skips a turn the user or Pi cancelled, which needs one new unpersisted field on each bridge's state (`turnCancelRequested`), because a cancel can also make the run reject.
+
+### Task 5: a blocked scrub counts as a failure
+
+`PRAGMA wal_checkpoint(TRUNCATE)` reports a reader blocking it as `busy=1` in its result row and does not throw, so logging only the existing `catch` would have missed the common case. The scrub now reads that row and logs `kind=busy`. Nothing else about the scrub changed, including the time it can wait on a reader, which is [0800](0800-r18-scrub-checkpoint-stall.md).
 
 ## Related
 

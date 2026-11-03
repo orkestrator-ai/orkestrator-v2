@@ -148,7 +148,7 @@ import {
   assertExecutionPolicyNotWidened,
   PolicyWideningRefusedError,
 } from "@orkestrator/protocol/execution-policy-narrowing";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.cursor");
 
@@ -1318,6 +1318,10 @@ async function dispatchClaimedPrompt(
     // The SDK agent has to go too: a failed send can leave that object unable
     // to start another run, and `ensureAgent` would otherwise hand the same
     // instance back on retry.
+    log.warn("turn.send-failed", {
+      sessionId: state.id,
+      error: formatLogError(error, { message: false }),
+    });
     state.status = "error";
     state.error = errorText(error);
     state.dispatching = false;

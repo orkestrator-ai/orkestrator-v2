@@ -9,7 +9,8 @@ import { setLiveBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diag
  * model to answer.
  */
 import { bridgeDiagnosticPayloads } from "@orkestrator/protocol/testing/bridge-diagnostic-lines";
-import { describe, expect, jest, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from "./prompt.js";
@@ -370,6 +371,130 @@ describe("dispatchPrompt", () => {
       if (previousFlag === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
       else process.env.ORKESTRATOR_BRIDGE_DEBUG = previousFlag;
     }
+  });
+
+  describe("failure logging", () => {
+    const SENTINEL = "SENTINEL-PROVIDER-TEXT";
+    let logs: LogCapture;
+    const turnLines = () =>
+      logs.records().filter((record) => record.event?.startsWith("turn.") === true);
+
+    beforeEach(() => {
+      logs = captureLogs();
+    });
+
+    afterEach(() => {
+      logs.restore();
+    });
+
+    test("a turn the provider failed warns without its message", async () => {
+      const state = runningState();
+      const stub = stubSession();
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-1" }));
+      stub.fail(Object.assign(new Error(`quota for ${SENTINEL}`), { code: "E_QUOTA" }));
+      await handle.completion;
+
+      expect(state.status).toBe("error");
+      expect(state.error).toBe(`quota for ${SENTINEL}`);
+      expect(turnLines()).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.pi",
+          event: "turn.failed",
+          fields: { sessionId: state.id, error: { name: "Error", code: "E_QUOTA" } },
+        },
+      ]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+    });
+
+    test("a run that resolved on a failed response warns too", async () => {
+      const state = runningState();
+      const stub = stubSession();
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-2" }));
+      state.turnError = `refused ${SENTINEL}`;
+      stub.finish();
+      await handle.completion;
+
+      expect(state.status).toBe("error");
+      expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+    });
+
+    test("a turn the user cancelled logs nothing", async () => {
+      const state = runningState();
+      const stub = stubSession();
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-3" }));
+      await state.cancelTurn?.();
+      await handle.completion;
+
+      expect(state.status).toBe("idle");
+      expect(turnLines()).toEqual([]);
+    });
+
+    test("a cancel that makes the run reject is still not a failure", async () => {
+      const state = runningState();
+      let reject: (error: unknown) => void = () => undefined;
+      const stub = stubSession({ onAbort: () => reject(new Error(`aborted ${SENTINEL}`)) });
+      reject = stub.fail;
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-4" }));
+      await state.cancelTurn?.();
+      await handle.completion;
+
+      expect(turnLines()).toEqual([]);
+    });
+
+    test("a turn Pi itself aborted logs nothing", async () => {
+      const state = runningState();
+      const stub = stubSession();
+      const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-5" }));
+      state.turnAborted = true;
+      stub.fail(new Error(`aborted ${SENTINEL}`));
+      await handle.completion;
+
+      expect(turnLines()).toEqual([]);
+    });
+
+    test("a cancel on one turn does not silence the next turn's failure", async () => {
+      const state = runningState();
+      const first = stubSession();
+      const firstHandle = await dispatchPrompt(state, first.session, input({ requestId: "a" }));
+      await state.cancelTurn?.();
+      await firstHandle.completion;
+
+      state.status = "running";
+      state.promptSequence += 1;
+      const second = stubSession();
+      const secondHandle = await dispatchPrompt(state, second.session, input({ requestId: "b" }));
+      second.fail(new Error("provider failed"));
+      await secondHandle.completion;
+
+      expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
+    });
+
+    test("a turn past its time budget warns", async () => {
+      jest.useFakeTimers();
+      const state = runningState();
+      const stub = stubSession();
+      let completion: Promise<void> | undefined;
+      try {
+        const handle = await dispatchPrompt(
+          state,
+          stub.session,
+          input({ requestId: "timeout" }),
+          60_000,
+        );
+        completion = handle.completion;
+        jest.advanceTimersByTime(60_001);
+        await completion;
+        expect(turnLines()).toMatchObject([
+          { level: "warn", event: "turn.failed", fields: { error: { name: "TimeoutError" } } },
+        ]);
+      } finally {
+        stub.finish();
+        await completion;
+        jest.useRealTimers();
+      }
+    });
   });
 
   test("records a timed-out turn with rejected outcomes and timeout cancellation", async () => {

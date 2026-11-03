@@ -10,6 +10,7 @@ import {
  * journal of every request id it has taken and refuses to reuse one whose
  * outcome a previous bridge process could not record.
  */
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import type { AgentSession, ContextUsage, SessionStats } from "@earendil-works/pi-coding-agent";
 import {
@@ -44,6 +45,8 @@ import {
   type PromptJournalEntry,
   type SessionState,
 } from "./state.js";
+
+const log = createLogger("bridge.pi");
 
 export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";
 
@@ -226,6 +229,7 @@ export async function dispatchPrompt(
     : undefined;
   // Pi's verdict and provider time belong to this turn's run alone.
   state.turnAborted = undefined;
+  state.turnCancelRequested = undefined;
   state.turnError = undefined;
   state.currentTurnApiDurationMs = undefined;
   let run: Promise<void>;
@@ -335,6 +339,7 @@ export async function dispatchPrompt(
   let cancelling: Promise<void> | undefined;
   const cancelTurn = (reason: CancellationReason = "user"): Promise<void> => {
     if (cancelling) return cancelling;
+    if (reason === "user") state.turnCancelRequested = true;
     const operation = (async () => {
       if (commandRun) {
         commandRun.cancelled = true;
@@ -443,6 +448,7 @@ function abandonStartup(
   error: PromptStartupTimeoutError,
   evidenceTurnId: string,
 ): void {
+  log.warn("turn.startup-timed-out", { sessionId: state.id });
   state.status = "error";
   state.error = error.message;
   // `dispatching` stays set until Pi settles the prompt: it is exactly "a turn
@@ -662,6 +668,13 @@ function failTurn(
   error: unknown,
   input: DispatchInput,
 ): void {
+  // Aborting can reject the run; a turn someone stopped has not failed.
+  if (state.turnAborted !== true && state.turnCancelRequested !== true) {
+    log.warn("turn.failed", {
+      sessionId: state.id,
+      error: formatLogError(error, { message: false }),
+    });
+  }
   settleTurn(state, session);
   recordTurnEnded(state, piRunId(state), "failed");
   state.status = "error";

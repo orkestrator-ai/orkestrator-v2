@@ -8,6 +8,7 @@
  * untestable at any sane wall-clock cost.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { resetPlanAccountWindowsForTests } from "./plan-usage.js";
 import type { SDKAgent } from "@cursor/sdk";
 import {
@@ -102,23 +103,31 @@ describe("a turn that outlives its budget", () => {
   test("cancels the run it is about to abandon", async () => {
     const state = runningSession();
     const run = controlledRun();
+    const logs = captureLogs();
 
-    const completion = followRun(
-      state,
-      run,
-      state.promptSequence,
-      { prompt: "forever", images: [] },
-      5,
-    );
-    await waitFor(() => run.cancels() === 1);
+    try {
+      const completion = followRun(
+        state,
+        run,
+        state.promptSequence,
+        { prompt: "forever", images: [] },
+        5,
+      );
+      await waitFor(() => run.cancels() === 1);
 
-    expect(run.cancels()).toBe(1);
-    expect(state.status).toBe("running");
-    expect(state.error).toContain("time budget");
+      expect(run.cancels()).toBe(1);
+      expect(state.status).toBe("running");
+      expect(state.error).toContain("time budget");
+      expect(logs.records()).toMatchObject([
+        { level: "warn", event: "turn.timed-out", fields: { sessionId: state.id } },
+      ]);
 
-    run.finish();
-    await completion;
-    expect(state.status).toBe("idle");
+      run.finish();
+      await completion;
+      expect(state.status).toBe("idle");
+    } finally {
+      logs.restore();
+    }
   });
 
   test("reports the session as working until cancellation is acknowledged", async () => {
@@ -980,6 +989,89 @@ describe("terminal run usage", () => {
     expect(state.currentRunUsageUpdatedAt).toBeUndefined();
     expect(state.currentRunModelId).toBeUndefined();
     expect(publicContextUsage(state)).not.toHaveProperty("estimated");
+  });
+
+  describe("failure logging", () => {
+    const SENTINEL = "SENTINEL-PROVIDER-TEXT";
+    let logs: LogCapture;
+    const turnLines = () =>
+      logs.records().filter((record) => record.event?.startsWith("turn.") === true);
+
+    beforeEach(() => {
+      logs = captureLogs();
+    });
+
+    afterEach(() => {
+      logs.restore();
+    });
+
+    const runWith = (wait: () => Promise<{ status: string; error?: { message: string } }>) =>
+      ({ async *stream() {}, cancel: async () => undefined, wait }) as unknown as FollowableRun;
+
+    test("a run that ends in error warns without its message", async () => {
+      const state = runningSession();
+      await followRun(
+        state,
+        runWith(async () => ({ status: "error", error: { message: `failed ${SENTINEL}` } })),
+        state.promptSequence,
+        { prompt: "x", images: [] },
+      );
+
+      expect(state.error).toBe(`failed ${SENTINEL}`);
+      expect(turnLines()).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.cursor",
+          event: "turn.failed",
+          fields: { sessionId: state.id, error: { name: "Error" } },
+        },
+      ]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+    });
+
+    test("a run whose wait rejects warns without its message", async () => {
+      const state = runningSession();
+      await followRun(
+        state,
+        runWith(async () => {
+          throw new Error(`lost ${SENTINEL}`);
+        }),
+        state.promptSequence,
+        { prompt: "x", images: [] },
+      );
+
+      expect(state.status).toBe("error");
+      expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+    });
+
+    test("a cancelled run logs nothing", async () => {
+      const state = runningSession();
+      await followRun(
+        state,
+        runWith(async () => ({ status: "cancelled" })),
+        state.promptSequence,
+        { prompt: "x", images: [] },
+      );
+
+      expect(state.status).toBe("idle");
+      expect(turnLines()).toEqual([]);
+    });
+
+    test("a cancel that makes the run reject is still not a failure", async () => {
+      const state = runningSession();
+      state.turnCancelRequested = true;
+      await followRun(
+        state,
+        runWith(async () => {
+          throw new Error("the run was aborted");
+        }),
+        state.promptSequence,
+        { prompt: "x", images: [] },
+      );
+
+      expect(turnLines()).toEqual([]);
+    });
   });
 
   test("records terminal usage when a run is cancelled", async () => {

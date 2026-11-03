@@ -1258,7 +1258,8 @@ not keep answering for a container that just ended. A memory update below curren
 | --- | --- | --- |
 | Container stdout/stderr | `local` driver, 10 MiB × 3 (new runtimes, when the daemon offers `local`) | `logDriverArguments` |
 | Bridge/server output | 5 MiB × 3 per file, lines cut at the file size | `orkestrator-log-writer` |
-| Startup failure tail | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
+| Previous run's bridge/server log | One file, up to 5 MiB, the active file at the last relaunch | `keepPreviousLogCommand` |
+| Startup failure tail, `get_*_server_log` | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
 | `get_container_logs` | ≤ 2,000 lines and 512 KiB | registry |
 | Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
@@ -1281,6 +1282,39 @@ output whatever `stdbuf` asks, and mawk exited when the file could not be
 opened. Only a line still waiting for its newline is held, and at most 64 KiB
 of it before it is split, so output without newlines stays bounded. An image
 built before the rewrite keeps the old behaviour until it is rebuilt.
+
+### The previous run
+
+A relaunch used to delete the bridge log, so the log that explained a crash went
+exactly when it was needed. Every launch script now runs `keepPreviousLogCommand`
+first, which moves the log to its `.prev.log` name:
+
+| Server | Active log | Previous run |
+| --- | --- | --- |
+| OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
+| Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
+| Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
+| Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
+| Grok | `/tmp/grok-acp-bridge.log` | `/tmp/grok-acp-bridge.prev.log` |
+| Pi | `/tmp/pi-bridge.log` | `/tmp/pi-bridge.prev.log` |
+
+- **It works on every image.** The move is launch-script shell, not image content,
+  so it applies at the next bridge start whichever image the container runs, with
+  or without the rotating writer.
+- **The new run's log starts clean,** so a startup failure's attached tail reads
+  only that attempt. A rename keeps the file's 0600 mode.
+- **Keeping output never stops a start.** The OpenCode script runs under `set -e`,
+  so a first start with no log and a move that fails must both leave status 0. A
+  failed move removes the log, as the relaunch always did.
+- **An empty log moves nothing,** so a run that wrote nothing cannot displace the
+  log of the crash before it. Otherwise only the last relaunch is kept: a run of
+  relaunches leaves one previous log, and rotated `.1` and `.2` files are not moved.
+
+`get_*_server_log` takes an optional `previous: true` to read that file, under the
+same 64 KiB and 200 line bounds and the same redaction. Only an explicit `true`
+selects it, a call without it reads the active log as before, and no previous log
+reads as empty. The web client's getters do not pass it, and it has none for Cursor,
+Grok or Pi; a diagnostics export is the likely first consumer.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,

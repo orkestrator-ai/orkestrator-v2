@@ -32,6 +32,12 @@ import type { CommandContext } from "./command-fixtures";
 
 type ServerStart = { hostPort: number; wasRunning: boolean; authToken: string };
 
+/** The relaunch moves the log that may explain a crash; it never deletes a good one. */
+function expectKeepsPreviousLog(execLog: string, logFile: string, previousFile: string): void {
+  expect(execLog).toContain(`mv -f ${logFile} ${previousFile}`);
+  expect(execLog).not.toMatch(new RegExp(`^\\s*rm -f ${logFile}$`, "m"));
+}
+
 describe("Electron backend command registry", () => {
   let previousLogLevel: string | undefined;
   beforeEach(() => {
@@ -272,6 +278,7 @@ exit 0
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
+        expectKeepsPreviousLog(execLog, "/tmp/codex-bridge.log", "/tmp/codex-bridge.prev.log");
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
@@ -424,6 +431,7 @@ exit 0
         expect(execLog).not.toContain("export ACP_PROVIDER=");
         expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CURSOR_BRIDGE_TOKEN=");
+        expectKeepsPreviousLog(execLog, "/tmp/cursor-bridge.log", "/tmp/cursor-bridge.prev.log");
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=1");
@@ -695,6 +703,11 @@ exit 0
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain(`export ACP_PROVIDER=${provider}`);
         expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
+        expectKeepsPreviousLog(
+          execLog,
+          `/tmp/${provider}-acp-bridge.log`,
+          `/tmp/${provider}-acp-bridge.prev.log`,
+        );
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
@@ -865,6 +878,7 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        expectKeepsPreviousLog(execLog, "/tmp/pi-bridge.log", "/tmp/pi-bridge.prev.log");
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
         // Templates, skills and extensions resolve in the container's workspace.
@@ -1467,6 +1481,7 @@ exit 0
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
           expect(execLog).not.toContain("setsid node");
+          expectKeepsPreviousLog(execLog, "/tmp/claude-bridge.log", "/tmp/claude-bridge.prev.log");
           // No CWD: discovery uses the process's own working directory, the
           // container's workspace (claudeWorkspaceCwd).
           expect(execLog).toContain("cd /workspace");
@@ -1660,6 +1675,7 @@ exit 0
         // A container connection names no directory, so the server's own cwd,
         // the container's workspace, scopes `command.list`.
         expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
+        expectKeepsPreviousLog(execLog, "/tmp/opencode-serve.log", "/tmp/opencode-serve.prev.log");
         expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");

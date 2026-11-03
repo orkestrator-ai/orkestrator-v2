@@ -39,6 +39,38 @@ test("leaf-bound Settings preserves ownership across selection, save and reload"
   expect(errors).toEqual([]);
 });
 
+test("Auto-steer is saved on the command node whichever machine is selected", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const stored = (owner: string) =>
+    page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) ?? "{}").global?.autoSteer,
+      `settings-machine:${owner}`,
+    );
+  await page.goto("/settings-machines");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Default projects folder", exact: true }),
+  ).toHaveValue("/other/projects");
+  await expect(page.getByTestId("settings-scope")).toContainText("Preferences come from");
+
+  const autoSteer = page.getByRole("switch", { name: "Auto-steer" });
+  await autoSteer.click();
+  await expect.poll(() => stored("command")).toBe(true);
+  expect(await stored("other")).toBeUndefined();
+  expect(await stored("leaf")).toBeUndefined();
+
+  // The command node's value is what every selected machine now shows.
+  await page.reload();
+  await expect(autoSteer).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Default projects folder", exact: true }),
+  ).toHaveValue("/other/projects");
+  await expect(autoSteer).toHaveAttribute("aria-checked", "true");
+  expect(errors).toEqual([]);
+});
+
 test("failed machine config has an accessible retry without switching away", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));

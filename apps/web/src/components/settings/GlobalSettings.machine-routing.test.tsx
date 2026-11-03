@@ -141,9 +141,14 @@ test("a different selected backend never changes this window's web server", asyn
 });
 
 for (const machine of ["leaf", "other", null]) {
-  test(`Auto-steer visibility for ${machine ?? "command node"}`, async () => {
+  test(`Auto-steer can be changed with ${machine ?? "command node"} selected`, async () => {
+    const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
+      async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
+    );
     mount("general", machine);
-    await screen.findByLabelText("Default projects folder");
-    expect(Boolean(screen.queryByRole("switch", { name: "Auto-steer" }))).toBe(machine === "leaf");
+    fireEvent.click(await screen.findByRole("switch", { name: "Auto-steer" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({ autoSteer: true }, { unset: [], machine }),
+    );
   });
 }

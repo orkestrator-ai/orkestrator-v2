@@ -156,8 +156,8 @@ to everything it runs, on every machine it controls.
   excluded from `invoke_on_node`) — keep the command node chosen.
 - **Handed down to leaves.** The command node sends the inherited subset
   of its settings (`@orkestrator/protocol/controller-settings`: agent
-  defaults and models, review instruction, terminal, messaging and similar
-  preferences) to each leaf when the link connects and whenever its config
+  defaults and models, review instruction, terminal, messaging, Auto-steer and
+  similar preferences) to each leaf when the link connects and whenever its config
   changes (`sync_controller_settings`, never routable through a workspace
   grant or `invoke_on_node`). The leaf lays them over its own config
   (`ConfigRepository.loadConfig`), so a launch on the leaf that falls back to

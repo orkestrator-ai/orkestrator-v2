@@ -279,6 +279,33 @@ describe("patching global settings", () => {
     });
   });
 
+  test("a leaf window reads Auto-steer from the command node and saves it there", async () => {
+    const portal = installLeafWindow();
+    const withAutoSteer = (owner: string, autoSteer?: boolean): AppConfig => ({
+      ...config(owner),
+      global: { ...config(owner).global, ...(autoSteer === undefined ? {} : { autoSteer }) },
+    });
+    portal.invoke.mockImplementation(async () => withAutoSteer("command", true));
+    invokeMock.mockImplementation(async () => withAutoSteer("leaf"));
+    expect((await getConfig()).global.autoSteer).toBe(true);
+
+    // Off is stored as absent, and the leaf's own value must not show through.
+    portal.invoke.mockImplementation(async () => withAutoSteer("command"));
+    invokeMock.mockImplementation(async () => withAutoSteer("leaf", true));
+    expect((await getConfig()).global.autoSteer).toBeUndefined();
+
+    await patchGlobalConfig({ autoSteer: true });
+    expect(portal.invoke).toHaveBeenCalledWith("patch_global_config", {
+      patch: { autoSteer: true },
+    });
+    await patchGlobalConfig({}, { unset: ["autoSteer"] });
+    expect(portal.invoke).toHaveBeenCalledWith("patch_global_config", {
+      patch: {},
+      unset: ["autoSteer"],
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("patch_global_config", expect.anything());
+  });
+
   test.each(["leaf-window", "selected-machine"] as const)(
     "%s saves terminal link preferences on the command node and returns effective config",
     async (context) => {

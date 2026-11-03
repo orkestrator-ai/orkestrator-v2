@@ -19,6 +19,11 @@ describe("controller settings snapshots", () => {
     });
   });
 
+  test("hands Auto-steer down, including an explicit off", () => {
+    expect(parseInheritedGlobalSettings({ autoSteer: true })).toEqual({ autoSteer: true });
+    expect(parseInheritedGlobalSettings({ autoSteer: false })).toEqual({ autoSteer: false });
+  });
+
   test("bounds serialized UTF-8 bytes, including the JSON envelope", () => {
     const overhead = new TextEncoder().encode(JSON.stringify({ reviewInstruction: "" })).length;
     const instruction = "é".repeat(Math.floor((MAX_INHERITED_SETTINGS_BYTES - overhead) / 2));

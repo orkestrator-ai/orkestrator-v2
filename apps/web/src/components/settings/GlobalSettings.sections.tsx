@@ -884,10 +884,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderGeneral = () => (
     <SettingsPageLayout title="General">
       <DataSavingSetting />
-      {/* The composer reads this window's own config, not another machine's. */}
-      {isWindowMachine(machine) && (
-        <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
-      )}
+      <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
 
       {/* Preferred Editor */}
       <div className="space-y-3">

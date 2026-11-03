@@ -152,6 +152,7 @@ export function SettingsScopeBanner({
     shownMachine?.name ?? (commandNode.workspaceHere ? commandNode.name : "this machine");
   const inherited = section === "review" || section === "messaging";
   const mixed = [
+    "general",
     "defaults",
     "terminal",
     "previews",

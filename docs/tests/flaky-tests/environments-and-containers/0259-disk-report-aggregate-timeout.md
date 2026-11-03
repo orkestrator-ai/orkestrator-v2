@@ -1,7 +1,7 @@
 # Disk report checkout fixture times out in the aggregate
 
 - **ID:** 0259
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
 - **Owning file:** `tests/unit/disk-report.test.ts`
@@ -503,3 +503,28 @@ implementation, timeout, assertion or skip changed.
   does not establish timeout causality, and the isolated pass does not excuse
   the recorded failure as environmental. Leave it unresolved for verification;
   no timeout, assertion, skip or implementation changed.
+
+## Resolution — 2026-11-03 (transcript follow, to-do 1202 task 16)
+
+- **Root cause:** the test ran `scripts/disk-report.ts` twice against the
+  real host tools. `collectReport` calls `docker system df` and lists probe
+  networks, runs `du` over every `orkestrator-*`, browser-profile and
+  `ork-test-tmp-*` directory in the host temporary directories, and runs
+  `ps -axww`. On mbp3 with five builds running, `docker system df` alone took
+  4.9 s; one report invocation took 7.6 s and 15.7 s with the real tools,
+  1.3–1.8 s with only Docker stubbed, and 0.4–0.9 s with Docker, `du` and
+  `ps` stubbed and its own `TMPDIR`. Two invocations plus `git init` could not
+  fit Bun's 5 s default under that load, and Bun killed the child at the
+  deadline, which is the null `report.status`. The cause is host Docker and
+  process load, not any product change, which is why the owner usually passed
+  alone and the failure followed busy aggregate runs.
+- **Fix:** the test now gives the script a `TMPDIR` inside its own temporary
+  root and puts stub `docker`, `du` and `ps` (each `exit 1`) first on `PATH`.
+  The report already treats each as unavailable, and none of the asserted rows
+  depends on them; the macOS private-root branch and the legacy-Turbo fix are
+  still exercised. The test's deadline is 30 s, because it spawns two Bun
+  processes and `git`. No assertion was loosened or skipped.
+- **Verification:** `mise run test:logged -- --name disk-report-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1`
+  passed (2.6 s); `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --rerun-each 5`
+  passed (8.1 s), on the same loaded host where one unstubbed invocation took
+  7.6–15.7 s.

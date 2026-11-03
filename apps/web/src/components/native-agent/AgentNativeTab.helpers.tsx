@@ -1144,7 +1144,7 @@ export function UnassignedNativeAgentComposer({
           sendTitle="Start agent"
           onSend={send}
         />
-        {starterPrompts && starterPrompts.length > 0 && !draft.text ? (
+        {starterPrompts && starterPrompts.length > 0 && !draft.text.trim() ? (
           <div
             role="group"
             aria-label="Starter prompts"

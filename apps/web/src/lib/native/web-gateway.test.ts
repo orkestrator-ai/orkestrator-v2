@@ -215,9 +215,10 @@ function subscribeTerminalSocket(
 async function waitForCondition(
   condition: () => boolean,
   message = "Condition was not met",
+  timeoutMs = 500,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const deadline = Date.now() + 500;
+    const deadline = Date.now() + timeoutMs;
     const poll = () => {
       if (condition()) return resolve();
       if (Date.now() > deadline) return reject(new Error(message));
@@ -268,6 +269,51 @@ afterEach(() => {
 });
 
 describe("web gateway browser API", () => {
+  for (const failure of ["network", "server"] as const) {
+    test(`retries a ${failure} startup probe after connectivity returns`, async () => {
+      const methods: string[] = [];
+      globalThis.fetch = mock(async (_input, init) => {
+        methods.push(init?.method ?? "GET");
+        if (methods.length === 1) {
+          if (failure === "network") throw new TypeError("offline");
+          return new Response(null, { status: 503 });
+        }
+        return new Response(null, { status: 200 });
+      }) as unknown as typeof fetch;
+      createBrowserGatewayApi({ browserSessionActivity: true });
+      await Promise.resolve();
+      await Promise.resolve();
+      window.dispatchEvent(new Event("online"));
+      await waitForCondition(() => methods.length === 2, "Probe did not retry");
+      await Promise.resolve();
+      window.dispatchEvent(new Event("pointerdown"));
+      await waitForCondition(() => methods.includes("POST"), "Renewal did not resume");
+    });
+  }
+
+  test("retries a failed startup probe without an online event", async () => {
+    let probes = 0;
+    globalThis.fetch = mock(async () => {
+      probes++;
+      return new Response(null, { status: probes === 1 ? 503 : 200 });
+    }) as unknown as typeof fetch;
+    createBrowserGatewayApi({ browserSessionActivity: true });
+    await waitForCondition(() => probes === 2, "Backoff did not retry", 3000);
+  });
+
+  test("an initial session 401 starts login recovery once", async () => {
+    const lapsed = mock(() => undefined);
+    globalThis.fetch = mock(
+      async () => new Response(null, { status: 401 }),
+    ) as unknown as typeof fetch;
+    createBrowserGatewayApi({ browserSessionActivity: true, onCredentialLapsed: lapsed });
+    await waitForCondition(() => lapsed.mock.calls.length === 1, "Initial rejection was ignored");
+    window.dispatchEvent(new Event("online"));
+    window.dispatchEvent(new Event("pointerdown"));
+    await Promise.resolve();
+    expect(lapsed).toHaveBeenCalledTimes(1);
+  });
+
   test("renews cookie sessions only after explicit browser activity", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     const lapsed = mock(() => undefined);

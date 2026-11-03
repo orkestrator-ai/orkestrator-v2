@@ -91,6 +91,18 @@ export function clearedGatewayCookies(secure: boolean): string[] {
  */
 export class BrowserSessionStore {
   readonly records = new Map<string, BrowserSessionRecord>();
+  private readonly revocationListeners = new Map<string, Set<() => void>>();
+
+  onRevoke(session: string, listener: () => void): () => void {
+    let listeners = this.revocationListeners.get(session);
+    if (!listeners) this.revocationListeners.set(session, (listeners = new Set()));
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) this.revocationListeners.delete(session);
+    };
+  }
+
   private readonly idleTtlMs: number;
   private readonly maxLifetimeMs: number;
 
@@ -110,7 +122,7 @@ export class BrowserSessionStore {
     const record = this.records.get(session);
     if (record === undefined) return false;
     if (record.expiresAt <= now || record.absoluteExpiresAt <= now) {
-      this.records.delete(session);
+      this.revoke(session);
       return false;
     }
     return true;
@@ -127,7 +139,7 @@ export class BrowserSessionStore {
     while (this.records.size >= MAX_BROWSER_SESSIONS) {
       const evicted = this.nearest();
       if (!evicted) break;
-      this.records.delete(evicted);
+      this.revoke(evicted);
     }
     const session = randomBytes(32).toString("base64url");
     this.records.set(session, {
@@ -140,7 +152,7 @@ export class BrowserSessionStore {
   refresh(session: string, now = Date.now()): boolean {
     const record = this.records.get(session);
     if (!record || record.expiresAt <= now || record.absoluteExpiresAt <= now) {
-      this.records.delete(session);
+      this.revoke(session);
       return false;
     }
     record.expiresAt = Math.min(now + this.idleTtlMs, record.absoluteExpiresAt);
@@ -149,17 +161,20 @@ export class BrowserSessionStore {
 
   revoke(session: string): void {
     this.records.delete(session);
+    const listeners = this.revocationListeners.get(session);
+    this.revocationListeners.delete(session);
+    if (listeners) for (const listener of Array.from(listeners)) listener();
   }
 
   /** Token rotation and shutdown: every browser signs in again. */
   revokeAll(): void {
-    this.records.clear();
+    for (const session of Array.from(this.records.keys())) this.revoke(session);
   }
 
   prune(now = Date.now()): void {
-    for (const [session, record] of this.records) {
+    for (const [session, record] of Array.from(this.records)) {
       if (record.expiresAt <= now || record.absoluteExpiresAt <= now) {
-        this.records.delete(session);
+        this.revoke(session);
       }
     }
   }

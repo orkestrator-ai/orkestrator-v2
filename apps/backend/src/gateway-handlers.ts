@@ -299,7 +299,9 @@ export class GatewayHandlers {
     let closed = false;
     let credentialExpiryTimer: ReturnType<typeof setTimeout> | null = null;
     const credential = gatewayRequestCredential(request.headers);
+    let unsubscribeRevocation = () => {};
     const close = () => {
+      unsubscribeRevocation();
       if (closed) return;
       closed = true;
       if (credentialExpiryTimer) clearTimeout(credentialExpiryTimer);
@@ -321,6 +323,7 @@ export class GatewayHandlers {
       );
       credentialExpiryTimer.unref?.();
     };
+    if (credential) unsubscribeRevocation = this.ctx.browserSessions.onRevoke(credential, close);
     request.once("close", close);
     response.once("close", close);
     scheduleCredentialExpiry();

@@ -209,3 +209,15 @@ existing timing cases is claimed. Final status evidence is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kkqsTX/summary.json`;
 compressed group logs are in that same directory. The enclosing log is
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.TLjndR/r5-round2-default-suite.log.gz`.
+
+## Opaque session review — 2026-11-03
+
+Recorded `mise run test:all` at 27f6d5eba reported `recovering` instead of
+`idle` at apps/backend/tests/codex-subagent-cards.test.ts:170 after cold restart
+(1017 ms). The unchanged owner passed alone on the repair branch in 0.9 s:
+
+`mise run test:logged -- --name codex-subagent-isolated -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+
+It also passed in a four-owner focused baseline run on origin/main 63e202c27
+(248 pass, three unrelated failures). No assertion or timing changed.
+Original evidence: `.orkestrator/review-artifacts/review-validation-2c183b1f-33d1-45e1-b1fe-0f5647dd9025/validation-01.stdout.txt`.

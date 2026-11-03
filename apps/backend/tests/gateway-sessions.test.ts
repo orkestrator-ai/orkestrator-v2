@@ -12,7 +12,15 @@ import {
   getGatewayAuthCookie,
   requestIsHttps,
 } from "../src/gateway-sessions";
-import { requestUrl, startGateway } from "./gateway-test-harness.js";
+import { WebSocket } from "ws";
+import {
+  nextTerminalControl,
+  openTerminalSocket,
+  openEventStream,
+  waitUntil,
+  requestUrl,
+  startGateway,
+} from "./gateway-test-harness.js";
 
 type SessionInternals = {
   browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
@@ -40,6 +48,66 @@ function fakeRequest(
 }
 
 describe("gateway browser sessions", () => {
+  for (const removal of ["logout", "eviction"] as const) {
+    test(`${removal} closes only the removed session's live channels`, async () => {
+      const { gateway, info } = await startGateway();
+      const { cookie } = await signIn(info);
+      const other = await signIn(info);
+      const stream = await openEventStream(gateway, info, "", { authorization: "", cookie });
+      const otherStream = await openEventStream(gateway, info, "", {
+        authorization: "",
+        cookie: other.cookie,
+      });
+      const bearerStream = await openEventStream(gateway, info);
+      const terminal = await openTerminalSocket(info, {
+        authenticate: false,
+        headers: { cookie, origin: new URL(info.url).origin },
+      });
+      await nextTerminalControl(terminal.inbox, "ready");
+      const bearer = await openTerminalSocket(info);
+      try {
+        if (removal === "logout") {
+          await requestUrl(`${info.url}__orkestrator/logout`, { headers: { cookie } });
+        } else {
+          for (let i = 0; i < MAX_BROWSER_SESSIONS - 1; i++) await signIn(info);
+        }
+        await waitUntil(
+          () => stream.aborted() && terminal.socket.readyState === WebSocket.CLOSED,
+          "Revoked channels stayed open",
+        );
+        expect(otherStream.aborted()).toBe(false);
+        expect(bearerStream.aborted()).toBe(false);
+        expect(bearer.socket.readyState).toBe(WebSocket.OPEN);
+        expect(
+          (await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } })).status,
+        ).toBe(401);
+      } finally {
+        stream.close();
+        otherStream.close();
+        bearerStream.close();
+        terminal.socket.terminate();
+        bearer.socket.terminate();
+      }
+    });
+  }
+
+  test("opaque-origin requests cannot invoke commands even with valid credentials", async () => {
+    const { info } = await startGateway();
+    const { cookie } = await signIn(info);
+    for (const headers of [{ cookie }, { authorization: `Bearer ${info.token}` }] as Record<
+      string,
+      string
+    >[]) {
+      const response = await requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: { ...headers, origin: "null", "content-type": "application/json" },
+        body: JSON.stringify({ command: "list_projects", args: {} }),
+      });
+      expect(response.status).toBe(403);
+      expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+    }
+  });
+
   test("a login cookie holds an opaque session, never the durable token", async () => {
     const { gateway, info } = await startGateway();
     const { cookie, setCookie } = await signIn(info);

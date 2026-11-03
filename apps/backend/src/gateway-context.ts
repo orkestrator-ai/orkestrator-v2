@@ -186,6 +186,10 @@ export class GatewayContext {
         this.credentials.gatewayCredentialExpiresAt(
           suppliedToken ?? gatewayRequestCredential(request.headers),
         ),
+      onCredentialRevoked: (request, suppliedToken, close) => {
+        const credential = suppliedToken ?? gatewayRequestCredential(request.headers);
+        return credential ? this.browserSessions.onRevoke(credential, close) : () => {};
+      },
       originAllowed: (request) =>
         Boolean(
           request.headers.origin &&

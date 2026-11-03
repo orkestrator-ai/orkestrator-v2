@@ -417,11 +417,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     const controller = new AbortController();
     let disposed = false;
     let lastRefreshAt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryDelay = 1000;
+    let probing = false;
     const removeListeners = () => {
       if (disposed) return;
       disposed = true;
       browserSessionActive = false;
       controller.abort();
+      clearTimeout(retryTimer);
+      window.removeEventListener("online", probe);
       window.removeEventListener("keydown", refreshAfterActivity);
       window.removeEventListener("pointerdown", refreshAfterActivity);
     };
@@ -444,21 +449,43 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         .catch(() => undefined);
     };
     disposeBrowserSessionActivity = removeListeners;
-    try {
-      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/session`), {
-        credentials,
-        signal: controller.signal,
-      });
-      if (!response.ok || disposed) {
-        removeListeners();
-        return;
+    const scheduleRetry = () => {
+      if (disposed) return;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(probe, retryDelay);
+      retryDelay = Math.min(30_000, retryDelay * 2);
+    };
+    const probe = async () => {
+      if (disposed || probing) return;
+      probing = true;
+      clearTimeout(retryTimer);
+      try {
+        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/session`), {
+          credentials,
+          signal: controller.signal,
+        });
+        if (disposed) return;
+        if (response.status === 401) {
+          browserSessionActive = true;
+          handleCredentialLapse();
+        } else if (response.status === 404) {
+          removeListeners();
+        } else if (!response.ok) {
+          scheduleRetry();
+        } else {
+          browserSessionActive = true;
+          window.removeEventListener("online", probe);
+          window.addEventListener("keydown", refreshAfterActivity);
+          window.addEventListener("pointerdown", refreshAfterActivity);
+        }
+      } catch {
+        scheduleRetry();
+      } finally {
+        probing = false;
       }
-      browserSessionActive = true;
-      window.addEventListener("keydown", refreshAfterActivity);
-      window.addEventListener("pointerdown", refreshAfterActivity);
-    } catch {
-      removeListeners();
-    }
+    };
+    window.addEventListener("online", probe);
+    await probe();
   };
   void detectBrowserSession();
 

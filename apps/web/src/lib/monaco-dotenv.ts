@@ -35,28 +35,57 @@ export const dotenvMonarchLanguage: languages.IMonarchLanguage = {
       ],
     ],
     value: [
-      [/"/, { token: "string.quote", switchTo: "@doubleQuoted" }],
-      [/'/, { token: "string.quote", switchTo: "@singleQuoted" }],
-      [/`/, { token: "string.quote", switchTo: "@backQuoted" }],
-      // Dotenv loaders treat `#` as a comment only after whitespace, so
-      // `PASSWORD=abc#123` keeps the whole value.
-      [/\s+#.*$/, { token: "comment", next: "@pop" }],
+      [
+        /"/,
+        {
+          cases: {
+            "@eos": { token: "string.quote", next: "@pop" },
+            "@default": { token: "string.quote", switchTo: "@doubleQuoted" },
+          },
+        },
+      ],
+      [
+        /'/,
+        {
+          cases: {
+            "@eos": { token: "string.quote", next: "@pop" },
+            "@default": { token: "string.quote", switchTo: "@singleQuoted" },
+          },
+        },
+      ],
+      [
+        /`/,
+        {
+          cases: {
+            "@eos": { token: "string.quote", next: "@pop" },
+            "@default": { token: "string.quote", switchTo: "@backQuoted" },
+          },
+        },
+      ],
+      // Unquoted hashes start comments, even without preceding whitespace.
+      [/#.*$/, { token: "comment", next: "@pop" }],
       [INTERPOLATION, endOfLine("variable")],
-      [/[^\s$]+|\s+|\$/, endOfLine("string")],
+      [/[^\s$#"'`]+|\s+|\$/, endOfLine("string")],
     ],
+    // Recover at each line boundary so unfinished quotes cannot swallow later keys.
     doubleQuoted: [
-      [/[^\\"$]+/, "string"],
-      [/\\./, "string.escape"],
-      [INTERPOLATION, "variable"],
-      [/\$/, "string"],
+      [/[^\\"$]+/, endOfLine("string")],
+      [/\\./, endOfLine("string.escape")],
+      [INTERPOLATION, endOfLine("variable")],
+      [/\$/, endOfLine("string")],
+      [/\\$/, endOfLine("string")],
       [/"/, { token: "string.quote", next: "@pop" }],
     ],
     singleQuoted: [
-      [/[^']+/, "string"],
+      [/[^\\']+/, endOfLine("string")],
+      [/\\./, endOfLine("string.escape")],
+      [/\\$/, endOfLine("string")],
       [/'/, { token: "string.quote", next: "@pop" }],
     ],
     backQuoted: [
-      [/[^`]+/, "string"],
+      [/[^\\`]+/, endOfLine("string")],
+      [/\\./, endOfLine("string.escape")],
+      [/\\$/, endOfLine("string")],
       [/`/, { token: "string.quote", next: "@pop" }],
     ],
   },

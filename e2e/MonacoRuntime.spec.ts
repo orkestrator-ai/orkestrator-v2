@@ -65,3 +65,47 @@ test("real Monaco defaults and every Vite worker route initialize in Chromium", 
   expect(byLabel.javascript).toBe(byLabel.typescript);
   expect(new Set(routes.urls).size).toBe(5);
 });
+
+test("dotenv highlights comments and recovers unfinished quotes in real Monaco", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "tokenization is viewport independent");
+  const monacoResponse = page.waitForResponse((response) =>
+    /\/deps\/monaco-editor\.js\?/.test(response.url()),
+  );
+  await page.goto("/monaco-runtime");
+  await expect(page.getByTestId("monaco-runtime-editor").locator(".monaco-editor")).toBeVisible();
+  const source = [
+    "INLINE=bar#comment",
+    "EMPTY=#comment",
+    String.raw`SINGLE='a\'#inside' #outside`,
+    'BROKEN="unfinished',
+    "NEXT=value",
+    "EMPTY_VALUE=",
+    "LAST=$HOME/${USER}",
+  ].join("\n");
+  const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+  const tokens = await page.evaluate(
+    async ({ root, source, monacoUrl }) => {
+      const monaco = await import(/* @vite-ignore */ monacoUrl);
+      const { registerDotenvLanguage } = await import(
+        /* @vite-ignore */ `${root}/apps/web/src/lib/monaco-dotenv.ts`
+      );
+      registerDotenvLanguage(monaco);
+      const model = monaco.editor.getModels()[0];
+      monaco.editor.setModelLanguage(model, "dotenv");
+      model.setValue(source);
+      return monaco.editor
+        .tokenize(source, "dotenv")
+        .map((line: { offset: number; type: string }[]) =>
+          line.map((token) => ({ offset: token.offset, type: token.type })),
+        );
+    },
+    { root: `/@fs${root}`, source, monacoUrl: (await monacoResponse).url() },
+  );
+  expect(tokens[0]).toContainEqual({ offset: 10, type: "comment.dotenv" });
+  expect(tokens[1]).toContainEqual({ offset: 6, type: "comment.dotenv" });
+  expect(tokens[2]).toContainEqual({ offset: 9, type: "string.escape.dotenv" });
+  expect(tokens[4]?.[0]).toEqual({ offset: 0, type: "key.dotenv" });
+  await page.screenshot({ path: "output/visual-previews/dotenv-after-desktop.png" });
+});

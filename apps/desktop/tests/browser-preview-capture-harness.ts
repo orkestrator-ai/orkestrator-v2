@@ -81,6 +81,7 @@ export class CaptureContents extends EventEmitter {
     scroll: { x: 0, y: 120 },
     devicePixelRatio: 2,
     sensitive: [{ x: 10, y: 10, width: 100, height: 20 }],
+    sensitiveComplete: true,
   };
   image = { width: 1_600, height: 1_000 };
   /** Simulate a native image whose pixels cannot be read back for masking. */
@@ -99,6 +100,7 @@ export class CaptureContents extends EventEmitter {
     scroll: { x: 0, y: 0 },
     devicePixelRatio: 2,
     sensitive: [],
+    sensitiveComplete: true,
     rect: null,
     state: "none",
     stable: true,

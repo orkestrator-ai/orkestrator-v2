@@ -261,6 +261,12 @@ export interface SkillInventoryDeps {
   refreshDebounceMs?: number;
   /** 0 trusts a child's first answer (tests that do not model plugin loading). */
   coldSettleMs?: number;
+  /**
+   * Arms one cold-settle delay and returns its cancel. Defaults to an unref'd
+   * `setTimeout`; tests inject their own so they decide when each settling
+   * re-read is sent instead of racing a real timer.
+   */
+  setSettleTimer?: (fire: () => void, delayMs: number) => () => void;
   /** Called after every re-read, successful or not, including coalesced ones. */
   onRefreshed?: (read: SkillInventoryRead) => void;
 }
@@ -277,6 +283,12 @@ export interface SkillInventoryRead {
   settled: boolean;
   /** Bounded, content-free reason the inventory could not be refreshed. */
   error?: string;
+}
+
+function realSettleTimer(fire: () => void, delayMs: number): () => void {
+  const timer = setTimeout(fire, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
 }
 
 export class SkillInventory {
@@ -301,7 +313,7 @@ export class SkillInventory {
   } | null = null;
   /** The generation that has answered at least once. */
   private answeredGeneration: EngineGeneration | null = null;
-  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private cancelSettle: (() => void) | null = null;
   private disposed = false;
   /** Counters for tests and diagnostics; never names or paths. */
   readonly stats = { invalidations: 0, reads: 0, scheduledRefreshes: 0, settlingReads: 0 };
@@ -452,9 +464,10 @@ export class SkillInventory {
     // Keep the answer that starts this delay: a refresh just before timer fire
     // must not replace the baseline and shorten the observation interval.
     const baseline = snapshotSignature(snapshot);
-    if (this.settleTimer) clearTimeout(this.settleTimer);
-    this.settleTimer = setTimeout(() => {
-      this.settleTimer = null;
+    this.cancelSettle?.();
+    const setSettleTimer = this.deps.setSettleTimer ?? realSettleTimer;
+    this.cancelSettle = setSettleTimer(() => {
+      this.cancelSettle = null;
       if (this.disposed || this.deps.generation() !== generation) return;
       // Like an invalidation: a read already in flight stays dirty, so the
       // settling answer always comes from a request sent after this point.
@@ -477,15 +490,14 @@ export class SkillInventory {
       };
       void (pending ? pending.then(read) : read())?.catch(() => undefined);
     }, this.coldSettleMs());
-    this.settleTimer.unref?.();
   }
 
   dispose(): void {
     this.disposed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
-    if (this.settleTimer) clearTimeout(this.settleTimer);
-    this.settleTimer = null;
+    this.cancelSettle?.();
+    this.cancelSettle = null;
     this.settling = null;
   }
 }

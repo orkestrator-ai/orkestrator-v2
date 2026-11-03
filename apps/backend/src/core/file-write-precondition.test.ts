@@ -27,9 +27,22 @@ async function worktree(): Promise<string> {
   return root;
 }
 
+// `write_local_file` writes only a registered environment's worktree, so every
+// temporary root is registered as a local environment.
+const environmentFor = (id: string) => {
+  const index = Number(id.slice("env-".length));
+  return { id, environmentType: "local", worktreePath: roots[index] };
+};
 const context = {
-  storage: { loadEnvironments: async () => [] },
-  runtime: { environments: { fence: { beginWorktreeMutation: () => () => undefined } } },
+  storage: {
+    loadEnvironments: async () => roots.map((_, index) => environmentFor(`env-${index}`)),
+    getEnvironment: async (id: string) => environmentFor(id),
+  },
+  runtime: {
+    environments: {
+      fence: { beginWorktreeMutation: () => () => undefined, beginMutation: () => () => undefined },
+    },
+  },
 } as unknown as CommandContext;
 
 const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
@@ -112,6 +125,105 @@ describe("write_local_file with a precondition", () => {
       ),
     ).rejects.toThrow("sha256");
     await expect(fs.access(path.join(root, "a.txt"))).rejects.toThrow();
+  });
+
+  test("a directory no environment is registered at is refused", async () => {
+    const unregistered = await fs.mkdtemp(path.join(tmpdir(), "ork-file-precondition-other-"));
+    try {
+      await expect(
+        write({ worktreePath: unregistered, filePath: "a.txt", base64Data: b64("x") }, context),
+      ).rejects.toThrow("not the worktree of a registered local environment");
+      await expect(fs.access(path.join(unregistered, "a.txt"))).rejects.toThrow();
+    } finally {
+      await fs.rm(unregistered, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("registered local file roots", () => {
+  const registry = createCommandRegistry();
+
+  for (const environmentType of ["container", undefined]) {
+    test(`refuses reads and writes for a matching ${environmentType ?? "legacy non-local"} root`, async () => {
+      const root = await worktree();
+      await fs.writeFile(path.join(root, "a.txt"), "unchanged");
+      const nonLocalContext = {
+        ...context,
+        storage: {
+          loadEnvironments: async () => [{ id: "non-local", environmentType, worktreePath: root }],
+        },
+      } as unknown as CommandContext;
+      const args = { worktreePath: root, filePath: "a.txt", base64Data: b64("changed") };
+      for (const command of ["read_local_file", "write_local_file"]) {
+        await expect(registry.get(command)!(args, nonLocalContext)).rejects.toThrow(
+          "not the worktree of a registered local environment",
+        );
+      }
+      expect(await fs.readFile(path.join(root, "a.txt"), "utf8")).toBe("unchanged");
+    });
+  }
+
+  test("refuses a write when the stored root moves during mutation admission and releases both fences", async () => {
+    const previousRoot = await worktree();
+    const movedRoot = await worktree();
+    for (const root of [previousRoot, movedRoot]) {
+      await fs.writeFile(path.join(root, "a.txt"), "unchanged");
+    }
+    let currentRoot = previousRoot;
+    let admitted!: () => void;
+    const admission = new Promise<void>((resolve) => (admitted = resolve));
+    let resume!: () => void;
+    const gate = new Promise<void>((resolve) => (resume = resolve));
+    let worktreeReleased = false;
+    let environmentReleased = false;
+    const movingContext = {
+      storage: {
+        loadEnvironments: async () => [
+          { id: "moving", environmentType: "local", worktreePath: previousRoot },
+        ],
+        getEnvironment: async () => {
+          await gate;
+          return { id: "moving", environmentType: "local", worktreePath: currentRoot };
+        },
+      },
+      runtime: {
+        environments: {
+          fence: {
+            beginWorktreeMutation: () => () => {
+              worktreeReleased = true;
+            },
+            beginMutation: () => {
+              admitted();
+              return () => {
+                environmentReleased = true;
+              };
+            },
+          },
+        },
+      },
+    } as unknown as CommandContext;
+    const pending = rejection(() =>
+      registry.get("write_local_file")!(
+        {
+          worktreePath: previousRoot,
+          filePath: "a.txt",
+          base64Data: b64("changed"),
+        },
+        movingContext,
+      ),
+    );
+    try {
+      await admission;
+      currentRoot = movedRoot;
+    } finally {
+      resume();
+    }
+    expect(await pending).toMatchObject({ message: "The worktree moved; refresh before saving" });
+    expect(worktreeReleased).toBe(true);
+    expect(environmentReleased).toBe(true);
+    for (const root of [previousRoot, movedRoot]) {
+      expect(await fs.readFile(path.join(root, "a.txt"), "utf8")).toBe("unchanged");
+    }
   });
 });
 

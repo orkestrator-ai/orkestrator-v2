@@ -240,7 +240,7 @@ test("a stale cached fetch retries and recovers without another merge", async ()
 
 test("an expired fetch failure permits a later observation of the same PR", async () => {
   const timers = manualTimers();
-  const fetch = mock(async (_projectId: string, _force?: boolean): Promise<ProjectGitStatus> => {
+  const fetch = mock(async (): Promise<ProjectGitStatus> => {
     throw new Error("offline");
   });
   const git = fakeGit({ fetch });

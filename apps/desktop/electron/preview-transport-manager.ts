@@ -752,7 +752,7 @@ export class PreviewTransportManager {
       applicationPort: () => group.attachment?.applicationPort ?? 0,
       available: () => !group.disposed && group.attachment !== null,
       forwardRequest: async (request, response, publicOrigin) => {
-        const result = await forwardPreviewRequest(
+        await forwardPreviewRequest(
           request,
           response,
           this.policy(group, publicOrigin),
@@ -760,9 +760,9 @@ export class PreviewTransportManager {
           {
             connect: (signal) => this.connect(group, signal),
             reuse: (socket) => this.pool(group, socket),
+            onFirstByte: (ms) => this.observe("desktop.first_byte_ms", ms),
           },
         );
-        this.observe("desktop.first_byte_ms", result.firstByteMs);
       },
       forwardUpgrade: async (request, socket, head, publicOrigin) => {
         await forwardPreviewUpgrade(
@@ -819,7 +819,7 @@ export class PreviewTransportManager {
       writePreviewError(response, denied);
       return;
     }
-    const result = await forwardPreviewRequest(
+    await forwardPreviewRequest(
       request,
       response,
       this.policy(group),
@@ -827,12 +827,12 @@ export class PreviewTransportManager {
       {
         connect: (signal) => this.connect(group, signal),
         reuse: (socket) => this.pool(group, socket),
+        onFirstByte: (ms) => this.observe("desktop.first_byte_ms", ms),
       },
     ).catch(() => {
       writePreviewError(response, "internal");
       return null;
     });
-    this.observe("desktop.first_byte_ms", result?.firstByteMs);
   }
 
   private async handleUpgrade(

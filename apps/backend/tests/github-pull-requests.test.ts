@@ -668,7 +668,6 @@ describe("pull request deletion probe", () => {
 
   test.each([
     ["410 Gone", () => json({ message: "This issue was deleted" }, { status: 410 })],
-    ["404 Not Found", notFound],
     ["an issue that is not a pull request", () => json({ number: 7, title: "An issue" })],
   ] as const)(
     "counts a readable repository whose number answers %s as deleted",
@@ -680,6 +679,14 @@ describe("pull request deletion probe", () => {
       expect(fake.unexpected).toEqual([]);
     },
   );
+
+  test("readable repository metadata with permission-hidden issue access remains ambiguous", async () => {
+    const fake = createFakeGitHub();
+    fake.on("GET", "/repos/acme/repo", { id: 1, has_issues: true });
+    fake.on("GET", "/repos/acme/repo/issues/7", notFound);
+    expect(await confirmGitHubPullRequestDeleted(TOKEN, REF, fake.options)).toBe(false);
+    expect(fake.unexpected).toEqual([]);
+  });
 
   test("a pull request the issue endpoint still lists is not deleted", async () => {
     const fake = createFakeGitHub();

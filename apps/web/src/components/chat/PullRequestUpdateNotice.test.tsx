@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import {
+  CoordinatorPullRequestWatchProvider,
+  resetCoordinatorPullRequestWatchReports,
+} from "@/lib/coordinator-pull-request-watch";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
 import {
@@ -31,7 +36,10 @@ function mail(overrides: Partial<PeerMailPresentation> = {}): PeerMailPresentati
 }
 
 describe("PullRequestUpdateNotice", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    resetCoordinatorPullRequestWatchReports();
+  });
 
   test("is one quiet line with the number, title and what changed", () => {
     const { container } = render(<PullRequestUpdateNotice mail={mail()} timestampLabel="10:04" />);
@@ -53,6 +61,37 @@ describe("PullRequestUpdateNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "PR #12" }));
     expect(open).toHaveBeenCalledWith({ owner: "acme", repo: "app", number: 12 }, undefined);
   });
+
+  test.each([{}, { metaKey: true }, { ctrlKey: true }])(
+    "notice opens register a watch, including modifiers %j",
+    (modifiers) => {
+      const nativeInvoke = invoke as ReturnType<typeof mock>;
+      nativeInvoke.mockClear();
+      const open = mock(() => true);
+      render(
+        <CoordinatorPullRequestWatchProvider projectId="project-a">
+          <PullRequestOpenerProvider open={open}>
+            <PullRequestUpdateNotice
+              mail={mail({ notice: { ...mail().notice!, state: "pr-closed" } })}
+            />
+          </PullRequestOpenerProvider>
+        </CoordinatorPullRequestWatchProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "PR #12" }), modifiers);
+      expect(
+        nativeInvoke.mock.calls
+          .filter((call) => call[0] === "watch_coordinator_pull_request")
+          .map((call) => call[1]),
+      ).toContainEqual({
+        projectId: "project-a",
+        owner: "acme",
+        repo: "app",
+        number: 12,
+        source: "opened",
+      });
+      expect(open).toHaveBeenCalledTimes("metaKey" in modifiers || "ctrlKey" in modifiers ? 0 : 1);
+    },
+  );
 
   test("a deleted pull request reads as one quiet line too", () => {
     const deleted = mail({

@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { openPullRequestUrl, usePullRequestOpener } from "@/lib/pull-request-opener";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
+import { useCoordinatorPullRequestLink } from "@/lib/coordinator-pull-request-watch";
 import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<AgentMailNoticeTone, string> = {
@@ -62,6 +63,7 @@ export const PullRequestUpdateNotice = memo(function PullRequestUpdateNotice({
   const openPullRequest = usePullRequestOpener();
   const notice = mail.notice;
   const ref = notice ? watchedPullRequestRef(notice.resource.id) : null;
+  const reportOpened = useCoordinatorPullRequestLink(ref ? gitHubPullRequestUrl(ref) : undefined);
   const title = notice?.resource.label;
   const summary = watchedPullRequestSummary(mail);
   const tone = notice?.tone ?? "info";
@@ -83,6 +85,7 @@ export const PullRequestUpdateNotice = memo(function PullRequestUpdateNotice({
             <button
               type="button"
               onClick={(event) => {
+                reportOpened();
                 if (!(event.metaKey || event.ctrlKey) && openPullRequest(ref)) return;
                 void openPullRequestUrl(gitHubPullRequestUrl(ref), { external: true });
               }}

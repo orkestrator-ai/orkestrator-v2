@@ -933,7 +933,7 @@ export async function getGitHubPullRequestStatus(
  * after its own read answered 404 or 410. A 404 alone cannot tell a deleted
  * pull request from a token that lost access, so this reads the repository
  * first: only when the repository is readable with the same credential and
- * the number answers 410 (deleted), 404 (no longer there) or an issue that is
+ * the number answers 410 (deleted) or an issue that is
  * not a pull request does it count as gone. Any other answer, including an
  * unreadable repository or one with issues turned off, is ambiguous and
  * returns false.
@@ -960,7 +960,9 @@ export async function confirmGitHubPullRequestDeleted(
       isRecord(data) && numberValue(data.number) === ref.number && !isRecord(data.pull_request)
     );
   } catch (error) {
-    return error instanceof GitHubApiError && (error.status === 404 || error.status === 410);
+    // Metadata access does not establish issue access: scoped tokens can hide
+    // existing issues with 404. Only an explicit Gone response proves deletion.
+    return error instanceof GitHubApiError && error.status === 410;
   }
 }
 

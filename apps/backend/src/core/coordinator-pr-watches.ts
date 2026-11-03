@@ -511,7 +511,8 @@ export class CoordinatorPullRequestWatches {
    * Put one notice in the main coordinator's inbox. Like other status
    * notices it does not start a coordinator: with no main conversation open
    * the change is recorded without a notice. The request id is fixed by the
-   * pull request, notice count and reading, so a retry after a crash replays.
+   * pull request lifecycle, notice count and reading, so a retry after a crash replays.
+   * Legacy watches retain their original request namespace until they settle.
    */
   private async deliver(
     projectId: string,
@@ -534,7 +535,7 @@ export class CoordinatorPullRequestWatches {
       await this.storage.sendAgentMail(
         { kind: "system", projectId, source: "workflow", resourceId: entry.key },
         {
-          requestId: `pr-watch:${main.id}:${entry.key}:${entry.notices + 1}:${signature}`,
+          requestId: `pr-watch:${main.id}:${entry.key}:${entry.incarnationId ? `${entry.incarnationId}:` : ""}${entry.notices + 1}:${signature}`,
           toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
           toTabId: main.tabId,
           subject,

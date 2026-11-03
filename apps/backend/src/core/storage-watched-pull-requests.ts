@@ -42,6 +42,8 @@ export interface WatchedPullRequest {
   title?: string;
   /** What put it here first: a link rendered in, or opened from, the coordinator. */
   source: (typeof WATCHED_PULL_REQUEST_SOURCES)[number];
+  /** Durable identity for new lifecycles; absent on legacy watches. */
+  incarnationId?: string;
   addedAt: string;
   /** Last time the coordinator rendered or opened it. */
   lastSeenAt: string;
@@ -104,6 +106,7 @@ function storedEntry(value: unknown): WatchedPullRequest | null {
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     source,
     addedAt,
+    ...(typeof value.incarnationId === "string" ? { incarnationId: value.incarnationId } : {}),
     lastSeenAt,
     ...(typeof value.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}),
     ...(typeof value.missingSince === "string" ? { missingSince: value.missingSince } : {}),
@@ -194,7 +197,10 @@ export class WatchedPullRequestsRepository {
           return { result: { watched: false, reason: "settled" } };
         }
         value.settled = value.settled.filter((item) => item.key !== input.key);
-        const entries = [...value.entries, { ...input, addedAt: at, lastSeenAt: at, notices: 0 }]
+        const entries = [
+          ...value.entries,
+          { ...input, incarnationId: crypto.randomUUID(), addedAt: at, lastSeenAt: at, notices: 0 },
+        ]
           .sort((a, b) => Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt))
           .slice(0, MAX_WATCHED_PULL_REQUESTS_PER_PROJECT);
         return { result: { watched: true, added: true }, value: { ...value, entries } };

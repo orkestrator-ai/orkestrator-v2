@@ -1824,8 +1824,10 @@ is recorded without a notice, as for other status notices. Disabled messaging al
 from a credential that lost access, so a 404 or 410 from the status read is
 confirmed (`confirmGitHubPullRequestDeleted`): with the same credential the
 repository must be readable (and have issues turned on, since otherwise the
-issue endpoint answers 410 for every number) and the number must answer 410,
-404 or an issue that is not a pull request. A confirmed deletion sends one
+issue endpoint answers 410 for every number) and the number must answer 410 or
+an issue that is not a pull request. An issue-endpoint 404 stays ambiguous even
+when repository metadata is readable, because scoped credentials can hide issues.
+A confirmed deletion sends one
 `pr-gone` notice ("deleted from GitHub") when a baseline exists, then ends the
 watch like a merge or close. An unconfirmed 404 keeps the watch and its
 baseline and records `missingSince`; a successful reading clears it, and after

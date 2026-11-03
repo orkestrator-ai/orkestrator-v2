@@ -33,6 +33,8 @@ test("watches are per project, bounded, settle, and go with the project", async 
       added: true,
     });
     expect(watched.listWatchedPullRequests("project-b")).toEqual([]);
+    const incarnation = watched.listWatchedPullRequests(project.id)[0]!.incarnationId;
+    expect(incarnation).toBeString();
 
     // Seen again inside the touch window: no write; after it, lastSeenAt moves.
     now += 1_000;
@@ -45,6 +47,8 @@ test("watches are per project, bounded, settle, and go with the project", async 
     expect(watched.listWatchedPullRequests(project.id)[0]?.lastSeenAt).toBe(
       new Date(now).toISOString(),
     );
+
+    expect(watched.listWatchedPullRequests(project.id)[0]!.incarnationId).toBe(incarnation);
 
     // The least recently seen goes once the bound is reached.
     for (let number = 2; number <= MAX_WATCHED_PULL_REQUESTS_PER_PROJECT + 1; number += 1) {
@@ -71,6 +75,12 @@ test("watches are per project, bounded, settle, and go with the project", async 
       watched: true,
       added: true,
     });
+
+    watched.watchPullRequest(project.id, entry(1), at(), 60_000);
+    expect(
+      watched.listWatchedPullRequests(project.id).find((item) => item.key === "acme/app#1")!
+        .incarnationId,
+    ).not.toBe(incarnation);
 
     await storage.removeProject(project.id);
     expect(watched.listWatchedPullRequests(project.id)).toEqual([]);

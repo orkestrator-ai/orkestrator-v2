@@ -1,3 +1,7 @@
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+} from "@orkestrator/protocol/coordinator";
 import { describe, expect, test } from "bun:test";
 import { AgentMailError, type AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { GitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
@@ -10,7 +14,10 @@ import {
   watchedPullRequestReading,
 } from "./coordinator-pr-watches.js";
 import { GitHubApiError } from "./github.js";
-import type { GitHubPullRequestStatus } from "./github-pull-requests.js";
+import {
+  confirmGitHubPullRequestDeleted,
+  type GitHubPullRequestStatus,
+} from "./github-pull-requests.js";
 import type { StorageService } from "./storage.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 
@@ -56,7 +63,11 @@ interface Harness {
   deletionProbes: GitHubPullRequestRef[];
 }
 
-async function withHarness(run: (harness: Harness) => Promise<void>): Promise<void> {
+async function withHarness(
+  run: (harness: Harness) => Promise<void>,
+  realMail = false,
+  hiddenIssueAccess = false,
+): Promise<void> {
   await withTemporaryStorage(async (storage) => {
     await storage.addProject({
       id: PROJECT_ID,
@@ -82,7 +93,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
         {
           id: "conv-main",
           tabId: "tab-main",
-          role: "main",
+          role: "main" as const,
           logicalSessionKey: "k",
           title: "Coordinator",
           createdAt: new Date(0).toISOString(),
@@ -90,6 +101,25 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
         },
       ],
     };
+    if (realMail) {
+      await storage.coordinators.mutateCoordinatorWorkspace(PROJECT_ID, () => ({
+        ...workspace,
+        version: COORDINATOR_WORKSPACE_VERSION,
+        projectId: PROJECT_ID,
+        executionPolicy: COORDINATOR_EXECUTION_POLICY,
+        lifecycleState: "ready",
+        conversations: workspace.conversations.map((conversation) => ({
+          ...conversation,
+          agent: "codex" as const,
+        })),
+        selectedConversationId: "conv-main",
+        repositoryContextRevision: 0,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }));
+      await storage.synchronizeAgentMailboxes();
+    }
+    const deliveredIds = new Set<string>();
     const facade = {
       watchedPullRequests: storage.watchedPullRequests,
       getProject: (id: string) => storage.getProject(id),
@@ -101,6 +131,15 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
         options: { notice?: AgentMailNotice; statusBudgetKey?: string },
       ) => {
         if (deliveryError) throw deliveryError;
+        if (realMail) {
+          const message = await storage.sendAgentMail(
+            { kind: "system", projectId: PROJECT_ID, source: "workflow", resourceId: "acme/app#7" },
+            input,
+            options,
+          );
+          if (deliveredIds.has(message.id)) return message as never;
+          deliveredIds.add(message.id);
+        }
         sent.push({ ...input, notice: options.notice, statusBudgetKey: options.statusBudgetKey });
         return {} as never;
       },
@@ -129,6 +168,20 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
       },
       confirmDeleted: async (_token, ref) => {
         deletionProbes.push(ref);
+        if (hiddenIssueAccess) {
+          return confirmGitHubPullRequestDeleted(_token, ref, {
+            fetchImpl: Object.assign(
+              async (input: RequestInfo | URL) => {
+                const pathname = new URL(String(input)).pathname.toLowerCase();
+                if (pathname === "/repos/acme/app")
+                  return Response.json({ id: 1, has_issues: true });
+                expect(pathname).toBe(`/repos/acme/app/issues/${ref.number}`);
+                return Response.json({ message: "Not Found" }, { status: 404 });
+              },
+              { preconnect: fetch.preconnect },
+            ),
+          });
+        }
         return deleted;
       },
     });
@@ -308,6 +361,28 @@ describe("watching a pull request", () => {
     });
   });
 
+  test("permission-hidden issue access preserves the watch and baseline without deletion mail", async () => {
+    await withHarness(
+      async ({ watches, setStatus, advance, storage, sent, deletionProbes }) => {
+        await watches.watch(PROJECT_ID, ref(7), "opened");
+        await watches.sweep();
+        const baseline =
+          storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]!.reading;
+        setStatus(7, new GitHubApiError("not found", { code: "not-found", status: 404 }));
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        await watches.sweep();
+        expect(deletionProbes).toEqual([{ owner: "Acme", repo: "App", number: 7 }]);
+        expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(1);
+        expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]!.reading).toEqual(
+          baseline,
+        );
+        expect(sent).toEqual([]);
+      },
+      false,
+      true,
+    );
+  });
+
   test("a deletion GitHub confirms is reported once, then the pull request is no longer watched", async () => {
     await withHarness(async ({ watches, sent, setStatus, setDeleted, advance, storage, reads }) => {
       await watches.watch(PROJECT_ID, ref(9), "rendered");
@@ -436,6 +511,33 @@ describe("watching a pull request", () => {
       await watches.sweep();
       expect(sent).toHaveLength(2);
     });
+  });
+
+  test("rewatched lifecycles deliver repeated changes through real mail idempotency", async () => {
+    await withHarness(async ({ watches, setStatus, advance, sent, storage }) => {
+      await watches.watch(PROJECT_ID, ref(7), "opened");
+      const firstId =
+        storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]!.incarnationId;
+      await watches.sweep();
+      setStatus(7, status({ checksState: "failure" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      setStatus(7, status({ state: "closed" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      setStatus(7, status());
+      await watches.watch(PROJECT_ID, ref(7), "opened");
+      expect(
+        storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]!.incarnationId,
+      ).not.toBe(firstId);
+      await watches.sweep();
+      setStatus(7, status({ checksState: "failure" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      const failures = sent.filter((mail) => mail.notice?.state === "pr-checks-failed");
+      expect(failures).toHaveLength(2);
+      expect(failures[0]!.requestId).not.toBe(failures[1]!.requestId);
+    }, true);
   });
 
   test("delivery failure advances due order and retries without losing the change", async () => {

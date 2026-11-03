@@ -1,17 +1,15 @@
 import type { MiddlewareHandler } from "hono";
 import {
-  bridgeDebugEnabled,
-  liveBridgeDiagnostics,
+  bridgeDiagnosticsStreamEnabled,
   readBridgeDebugFlag,
   createBufferedDebugLogger,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 
 /** Kept for standalone legacy configurations; the shared app flag takes precedence. */
 export const readDebugFlag = readBridgeDebugFlag;
-const startupDebugLogging = bridgeDebugEnabled("claude");
 /** A live setting: called per streamed token, so it must stay this cheap. */
 export function isDebugLoggingEnabled(): boolean {
-  return liveBridgeDiagnostics() ?? startupDebugLogging;
+  return bridgeDiagnosticsStreamEnabled("claude");
 }
 
 // Only source-defined labels can reach the log. All positional strings, raw

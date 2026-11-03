@@ -351,7 +351,6 @@ Evidence: `/tmp/orkestrator-test-run.6dslpJ/baseline-profiles-repeat.log.gz` (19
 This confirms the existing cleanup race independently of the packaged-app changes;
 no assertion, skip or production cleanup behavior was changed.
 
-
 ### Coordinator retention fix validation, 2026-11-02
 
 `mise run test:logged -- --name repaired-validation-test -- mise run test`
@@ -373,3 +372,19 @@ three malformed flake-index rows introduced while recording these observations;
 the rows were repaired and the complete index owner passed alone. That rerun
 artifact is `/tmp/orkestrator-test-run.eKA8Rz/validation-test-final.log.gz`.
 A post-repair exact aggregate rerun is recorded separately.
+
+## R4 diagnostics review recurrence — 2026-11-03
+
+Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`
+with four backend workers and one root worker. Expected an empty ledger; one JSON entry remained at line 505 after 142.79 ms.
+Backend totals: 13,378 passed, 99 skipped, two failed. Root totals: 3,451 passed,
+two failed, one error. Evidence: `.orkestrator/review-artifacts/review-validation-305987e4-d185-4d3f-bd05-a72e0c7df530/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone (exit 0, 0.7 s):
+
+```sh
+mise run test:logged -- --name browser-profiles-rerun -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures
+```
+
+This establishes intermittent behavior, not a root-cause fix. No assertion,
+timeout, skip, or unrelated implementation changed.

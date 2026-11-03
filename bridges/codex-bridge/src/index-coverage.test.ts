@@ -503,8 +503,15 @@ describe("codex bridge private boundary coverage", () => {
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
       const quiet = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);
       quiet?.report("heartbeat");
+      quiet?.report("heartbeat");
       quiet?.close();
-      expect(lines).toEqual([]);
+      // Off, the process scope writes its lifecycle and no look: attaching is
+      // not stall evidence, and an idle process is not stalled.
+      expect(bridgeDiagnosticPayloads(lines).map((entry) => entry.event)).toEqual([
+        "send-started",
+        "closed",
+      ]);
+      lines.length = 0;
 
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "1";
       diagnostics = __testing.createCodexProcessDiagnosticsForTesting(runtime as never);

@@ -34,3 +34,10 @@ the exact line-284 assertion:
 `.orkestrator/review-artifacts/h3-fix-evidence/h3-base-ttl-boundary.log.gz`). Dependencies
 were installed independently with `mise exec -- bun install --frozen-lockfile`.
 No catalogue implementation or assertion was changed by H3.
+## Recurrence, 2026-11-03
+
+`mise run test:logged -- --name full-default-2 -- mise run test` on branch
+`debug-ci-failures-a629816c8619-r1` (16-core Linux host, queued behind another
+worktree's aggregate run, so the workspace group took 1,019 s against about
+245 s for the previous run that day) repeated this failure (6.27 ms). The unchanged
+owner then passed alone: `bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`.

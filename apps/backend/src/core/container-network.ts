@@ -16,6 +16,7 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import { imageCapabilities } from "./docker-image.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import type { AppConfig, Environment } from "./models.js";
 
 /**
@@ -492,8 +493,7 @@ async function applyAllowedDomainsNow(
       "docker",
       [
         "exec",
-        "--user",
-        "root",
+        ...CONTAINER_ROOT_USER_ARGS,
         await networkOwnerContainer(environment.containerId),
         "/usr/local/bin/update-firewall.sh",
         "--set-domains",

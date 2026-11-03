@@ -182,3 +182,17 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## H2 root-boundary review — 2026-11-03
+
+Preparation at `8a7364630` ran `mise run test`; the sigil-filter case
+expected one projection read and received two (1789.15 ms). Original evidence:
+`.orkestrator/review-artifacts/review-validation-b57739ba-a6d4-4e8a-92e2-bf155945270f/validation-04.stdout.txt`, lines 3684–3694.
+
+The unchanged complete owner passed alone with
+`NODE_ENV=test mise run test:logged -- --name h2-command-correct-env -- bun test --cwd apps/web ./src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures`
+(7.2 s). The same command with log name `h2-main-command-correct-env`
+passed in 7.8 s on detached `origin/main` at `6c7539617`, with independently
+installed dependencies. Earlier attempts without `NODE_ENV=test` loaded
+production React (`React.act` unavailable) on both branches; those attempts
+do not test the projection-read assertion. No owning source or test changed.

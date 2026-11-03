@@ -73,6 +73,7 @@ import { stopEnvironmentReviewValidation } from "./review-validation-service.js"
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");
@@ -236,8 +237,7 @@ function helperArguments(
     ...(interactive ? ["-i"] : []),
     "--network",
     "none",
-    "--user",
-    "root",
+    ...CONTAINER_ROOT_USER_ARGS,
     "--label",
     `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
     "--label",

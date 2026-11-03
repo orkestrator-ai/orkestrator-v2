@@ -8,6 +8,14 @@
 ORKESTRATOR_RUNTIME_ENV_FILE="${ORKESTRATOR_RUNTIME_ENV_FILE:-/tmp/orkestrator-ai/runtime-env.sh}"
 ORKESTRATOR_BASH_ENV_FILE="${ORKESTRATOR_BASH_ENV_FILE:-/tmp/orkestrator-ai/bash-env.sh}"
 ORKESTRATOR_GITHUB_CREDENTIAL_FILE="${ORKESTRATOR_GITHUB_CREDENTIAL_FILE:-/tmp/orkestrator-ai/github-token}"
+# A root shell (the uid-0 `orkroot` terminal) gets only root-owned directories.
+# The image build checks that each one, and everything in it, is root-owned.
+ORKESTRATOR_ROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# True for uid 0. `id` by absolute path: this runs before PATH is trusted.
+orkestrator_is_root() {
+    [ "$(/usr/bin/id -u 2>/dev/null)" = 0 ]
+}
 
 orkestrator_prepend_path() {
     if [ -z "${1:-}" ] || [ ! -d "$1" ]; then
@@ -150,6 +158,12 @@ orkestrator_add_common_runtime_paths_floor() {
 }
 
 orkestrator_ensure_bash_env() {
+    # bash-env.sh lives in node's /tmp/orkestrator-ai; root never sources it
+    # and never writes there (node could have planted a symlink).
+    if orkestrator_is_root; then
+        unset BASH_ENV
+        return 0
+    fi
     mkdir -p "$(dirname "$ORKESTRATOR_BASH_ENV_FILE")"
 
     if [ ! -f "$ORKESTRATOR_BASH_ENV_FILE" ]; then
@@ -248,6 +262,11 @@ orkestrator_get_runtime_var() {
 }
 
 orkestrator_capture_runtime_env() {
+    # The snapshot is node's; a root capture would hand node-writable paths
+    # to the next node process and write into node's directory.
+    if orkestrator_is_root; then
+        return 0
+    fi
     mkdir -p "$(dirname "$ORKESTRATOR_RUNTIME_ENV_FILE")"
     orkestrator_add_common_runtime_paths
     orkestrator_ensure_bash_env
@@ -292,20 +311,7 @@ orkestrator_migrate_runtime_env() {
     )
 }
 
-orkestrator_source_runtime_env() {
-    orkestrator_add_common_runtime_paths_floor
-
-    if [ -f "$ORKESTRATOR_RUNTIME_ENV_FILE" ]; then
-        if ! orkestrator_runtime_env_is_current; then
-            orkestrator_migrate_runtime_env 2>/dev/null || true
-        fi
-
-        if orkestrator_runtime_env_is_current; then
-            # shellcheck source=/dev/null
-            . "$ORKESTRATOR_RUNTIME_ENV_FILE"
-        fi
-    fi
-
+orkestrator_load_runtime_credentials() {
     # The backend refreshes this owner-only file whenever a container starts.
     # Its presence is authoritative even when empty, so switching credential
     # modes can override immutable environment variables from container creation.
@@ -336,6 +342,40 @@ orkestrator_source_runtime_env() {
         fi
     done
     unset key_file
+}
+
+# Root shells read only root-owned code. The runtime snapshot, bash-env.sh and
+# the tool directories it lists are all node-writable, and so is any
+# configuration that npm or mise would load from the paths the image ENV names
+# (npm's global npmrc under its prefix, mise.toml under the trusted /workspace).
+# Credential files are read as data, never sourced.
+orkestrator_source_root_env() {
+    PATH="$ORKESTRATOR_ROOT_PATH"
+    export PATH
+    unset BASH_ENV ENV NPM_CONFIG_PREFIX MISE_TRUSTED_CONFIG_PATHS
+    orkestrator_load_runtime_credentials
+}
+
+orkestrator_source_runtime_env() {
+    if orkestrator_is_root; then
+        orkestrator_source_root_env
+        return 0
+    fi
+
+    orkestrator_add_common_runtime_paths_floor
+
+    if [ -f "$ORKESTRATOR_RUNTIME_ENV_FILE" ]; then
+        if ! orkestrator_runtime_env_is_current; then
+            orkestrator_migrate_runtime_env 2>/dev/null || true
+        fi
+
+        if orkestrator_runtime_env_is_current; then
+            # shellcheck source=/dev/null
+            . "$ORKESTRATOR_RUNTIME_ENV_FILE"
+        fi
+    fi
+
+    orkestrator_load_runtime_credentials
 
     orkestrator_add_common_runtime_paths_floor
     orkestrator_promote_mise_shims

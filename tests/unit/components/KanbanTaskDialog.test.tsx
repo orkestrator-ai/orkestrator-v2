@@ -429,7 +429,7 @@ describe("KanbanTaskDialog", () => {
     try {
       render(<Ticket />);
       fireEvent.click(screen.getByRole("link", { name: "Review PR" }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       expect(useFilesPanelStore.getState().isOpen).toBe(true);
       expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
@@ -466,7 +466,7 @@ describe("KanbanTaskDialog", () => {
     try {
       render(<Ticket />);
       fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
       expect(useFilesPanelStore.getState().isOpen).toBe(true);
       expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
       expect(openInBrowserMock).not.toHaveBeenCalled();
@@ -1052,7 +1052,7 @@ describe("KanbanTaskDialog", () => {
           onOpenChange={() => {}}
         />,
       );
-      expect(screen.queryByTestId("ticket-delivery-too-late")).toBeNull();
+      expect(screen.queryByTestId("ticket-delivery-too-late") === null).toBe(true);
     });
   });
 

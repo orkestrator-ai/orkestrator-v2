@@ -16,6 +16,7 @@ import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { PROVIDER_STATE_LAYOUT } from "./container-state-layout.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 /**
  * Persistent environment storage (format `volume-v1`).
@@ -275,8 +276,7 @@ async function runStorageHelper(
           "--rm",
           "--network",
           "none",
-          "--user",
-          "root",
+          ...CONTAINER_ROOT_USER_ARGS,
           "--label",
           `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
           "--label",

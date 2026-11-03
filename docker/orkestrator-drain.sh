@@ -23,6 +23,10 @@
 #
 # Output (one line): ORKESTRATOR_DRAIN signalled=<n> remaining=<n> hungup=<n>
 set -u
+# Root runs this, and the image PATH puts node-writable directories first.
+# Resolve every command from root-owned directories only (security H2).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 GRACE_SECONDS="${1:-10}"
 case "$GRACE_SECONDS" in

@@ -873,7 +873,9 @@ describe("CoordinatorPanel", () => {
       ).toBe("false");
       fireEvent.click(screen.getByRole("button", { name: "Always merge upstream commits" }));
       await waitFor(() => expect(storedAutoMerge).toBe(true));
-      expect(screen.queryByText("Could not save the merge setting. disk unavailable")).toBeNull();
+      expect(
+        screen.queryByText("Could not save the merge setting. disk unavailable") === null,
+      ).toBe(true);
     });
 
     test("focus and reconnect reconcile external changes and retry a failed initial read", async () => {

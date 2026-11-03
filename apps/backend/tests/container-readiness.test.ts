@@ -476,7 +476,7 @@ printf 'ORKESTRATOR_DRAIN signalled=4 remaining=1\\n'
           remaining: 1,
         });
         expect(await log.read()).toContain(
-          "exec --user root container-1 /usr/local/bin/orkestrator-drain.sh 5",
+          "exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-1 /usr/local/bin/orkestrator-drain.sh 5",
         );
       },
     );

@@ -108,6 +108,7 @@ import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyProcess } from "./pty.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
+  CONTAINER_ROOT_USER_ARGS,
   CONTAINER_WORKSPACE_SETUP_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
   SETUP_FAILED_OSC_SEQUENCE,
@@ -2440,7 +2441,7 @@ export async function ensureContainerAgentToolsHost(
       `;
       await runCommand(
         "docker",
-        ["exec", "--user", "root", containerId, "bash", "-lc", repairHosts],
+        ["exec", ...CONTAINER_ROOT_USER_ARGS, containerId, "bash", "-lc", repairHosts],
         { timeoutMs: 10_000, signal },
       );
       existing = await dockerExec(
@@ -2501,8 +2502,7 @@ export async function ensureContainerAgentToolsHost(
     "docker",
     [
       "exec",
-      "--user",
-      "root",
+      ...CONTAINER_ROOT_USER_ARGS,
       containerId,
       "bash",
       "-lc",
@@ -2577,8 +2577,7 @@ export async function ensureContainerHostServicePorts(
     "docker",
     [
       "exec",
-      "--user",
-      "root",
+      ...CONTAINER_ROOT_USER_ARGS,
       firewallContainer,
       "/usr/local/bin/update-firewall.sh",
       "--host-ports",

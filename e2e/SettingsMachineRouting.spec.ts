@@ -39,6 +39,38 @@ test("leaf-bound Settings preserves ownership across selection, save and reload"
   expect(errors).toEqual([]);
 });
 
+test("Auto-steer is saved on the command node whichever machine is selected", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const stored = (owner: string) =>
+    page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) ?? "{}").global?.autoSteer,
+      `settings-machine:${owner}`,
+    );
+  await page.goto("/settings-machines");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Default projects folder", exact: true }),
+  ).toHaveValue("/other/projects");
+  await expect(page.getByTestId("settings-scope")).toContainText("Preferences come from");
+
+  const autoSteer = page.getByRole("switch", { name: "Auto-steer" });
+  await autoSteer.click();
+  await expect.poll(() => stored("command")).toBe(true);
+  expect(await stored("other")).toBeUndefined();
+  expect(await stored("leaf")).toBeUndefined();
+
+  // The command node's value is what every selected machine now shows.
+  await page.reload();
+  await expect(autoSteer).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Other", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Default projects folder", exact: true }),
+  ).toHaveValue("/other/projects");
+  await expect(autoSteer).toHaveAttribute("aria-checked", "true");
+  expect(errors).toEqual([]);
+});
+
 test("failed machine config has an accessible retry without switching away", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -102,4 +134,28 @@ test("container budgets survive Settings section changes on the selected machine
       await expect(page.getByRole("spinbutton", { name: "Memory (GB)" })).toHaveValue("4");
   }
   expect(await page.evaluate(() => localStorage.getItem("settings-machine:leaf"))).toBeNull();
+});
+
+test("a directly opened leaf reconciles masked Auto-steer without repeated saves", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/settings-machines?direct-leaf");
+  const toggle = page.getByRole("switch", { name: "Auto-steer" });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `output/visual-previews/auto-steer-direct-leaf-before-${testInfo.project.name}.png`,
+  });
+  await toggle.click();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("settings-machine:patch-count")))
+    .toBe("1");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => localStorage.getItem("settings-machine:patch-count"))).toBe("1");
+  await page.screenshot({
+    path: `output/visual-previews/auto-steer-direct-leaf-after-${testInfo.project.name}.png`,
+  });
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
 });

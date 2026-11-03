@@ -1,16 +1,5 @@
-import { appendFileSync, existsSync } from "node:fs";
-import {
-  grokConfig,
-  holdTurnFile,
-  isObject,
-  provider,
-  state,
-  whenFileExists,
-  whenReleased,
-  write,
-  writeIgnoredCursorTaskMarker,
-  type JsonObject,
-} from "./fake-agent-context.js";
+import { appendFileSync } from "node:fs";
+import { provider, state, whenReleased, write, type JsonObject } from "./fake-agent-context.js";
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../structured-prompt-marker.js";
 import { beginClientMethodExercise } from "./fake-agent-final.js";

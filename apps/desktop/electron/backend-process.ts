@@ -286,6 +286,9 @@ export function createBackendProcessEnvironment(
     // whatever the shell had set.
     delete env.ORKESTRATOR_VERSION;
   }
+  // The desktop supplies an approved dev URL explicitly on the command line.
+  // Never let the backend fallback select a renderer from the launching shell.
+  delete env.ORKESTRATOR_RENDERER_DEV_SERVER_URL;
   delete env.ORKESTRATOR_GATEWAY_HOST;
   delete env.ORKESTRATOR_GATEWAY_PORT;
   delete env.ORKESTRATOR_GATEWAY_TOKEN;

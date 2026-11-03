@@ -824,6 +824,16 @@ mise run test:logged -- --name packaged-security -- bunx playwright test \
   --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts
 ```
 
+The hostile environment also sets `ORKESTRATOR_RENDERER_DEV_SERVER_URL`.
+The check authenticates an HTTP request to the disposable backend gateway and
+requires that the hostile server receives no requests. Separate cases copy the
+shipping package into private temporary storage and verify that a changed asar
+header aborts with an integrity error (macOS only) and that replacing
+`app.asar` with an executable `resources/app` directory never runs its marker
+(macOS/Linux). The source package is never modified; copied packages and their
+profiles are removed after their owned process groups stop. Linux skips header
+tampering because Electron does not enforce asar integrity there.
+
 This does not inspect the Node main process and therefore cannot use the
 inspect-enabled package as evidence of shipping security. Each run owns and
 stops its detached process group and removes its disposable profile.

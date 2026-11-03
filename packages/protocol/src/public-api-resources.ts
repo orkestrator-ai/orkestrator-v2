@@ -407,6 +407,22 @@ export interface PublicTranscriptPage {
   freshness: "current" | "cached" | "empty";
 }
 
+/**
+ * `session.transcript` with a `knownToken` that is still current: the caller
+ * keeps the page it holds. Only a request that sent `knownToken` gets this.
+ */
+export interface PublicTranscriptUnchanged {
+  sessionId: string;
+  status: "unchanged";
+  token: string;
+}
+
+export function isPublicTranscriptUnchanged(
+  value: PublicTranscriptPage | PublicTranscriptUnchanged,
+): value is PublicTranscriptUnchanged {
+  return (value as { status?: unknown }).status === "unchanged";
+}
+
 // ---------------------------------------------------------------------------
 // Change tracking
 

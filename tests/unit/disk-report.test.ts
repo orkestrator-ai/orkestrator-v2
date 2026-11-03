@@ -103,14 +103,18 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
-    // The report scans its temporary directory and asks Docker for disk use.
-    // Isolate both from the shared host: use a private TMPDIR and a Docker
-    // stub that fails so the report omits Docker rows, which are not under test.
+    // Keep the script off host-sized work (0259): `docker system df` alone
+    // takes about five seconds on a busy Docker host, and `du` and `ps` scale
+    // with every other live test. Its temporary directory is this test's own,
+    // and Docker, `du` and `ps` answer "unavailable", which the report already
+    // handles; the rows asserted below need none of them.
     const tmpDir = path.join(root, "tmp");
     await mkdir(tmpDir);
-    const fakeBin = path.join(root, "bin");
-    await mkdir(fakeBin);
-    await writeFile(path.join(fakeBin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const stubs = path.join(root, "bin");
+    await mkdir(stubs);
+    for (const command of ["docker", "du", "ps"]) {
+      await writeFile(path.join(stubs, command), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    }
     const hostEnv = { ...process.env };
     delete hostEnv.DOCKER_CONTEXT;
     const invoke = (...args: string[]) =>
@@ -119,10 +123,10 @@ describe("disk report", () => {
         encoding: "utf8",
         env: {
           ...hostEnv,
-          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
-          HOME: root,
+          PATH: `${stubs}${path.delimiter}${process.env.PATH ?? ""}`,
           TMPDIR: tmpDir,
           DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,
+          HOME: root,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
         },
@@ -171,7 +175,9 @@ describe("disk report", () => {
     expect(fixed.stdout).toContain("Removed 1 legacy Turbo artifacts");
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(active)).toBe(true);
-  });
+    // Two script processes plus a git init: Bun's 5 s default is too tight
+    // for that under the aggregate suite's load.
+  }, 30_000);
 
   test("reports cleanup the reconciler stopped retrying, never a live environment's", async () => {
     const dataDir = path.join(root, "data");

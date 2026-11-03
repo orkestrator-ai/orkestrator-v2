@@ -41,7 +41,7 @@ governs, marked "Decided".
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: open.
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
-16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open.
+16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
 
 ### 1. Baseline and before-and-after numbers
 
@@ -693,7 +693,9 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 **Context.** `packages/cli/src/client/commands/session.ts`, `packages/cli/src/client/transport.ts`, `packages/protocol/src/node/application-logging.ts`. A `knownToken` on the public API is a contract change (`docs/architecture/public-cli.md`).
 
-**Investigation.** Not re-checked since the report. `attention --follow` probably has the same pattern; not checked.
+DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of this change's scope and is still open.
+
+**Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here.
 
 **Decisions.**
 
@@ -704,6 +706,15 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
   - **Back off the follow interval when pages repeat.**
     - Pros: CLI-only.
     - Cons: still downloads every page; slower to show new output.
+  - Done with the recommended option.
+- **DK-17: how does the transport stop buffering three times?**
+  - **Return the bounded bytes from the send step and decode them directly (recommended).**
+    - Pros: one bounded read inside the deadline, no second `Response`; the error mapping stays in one place.
+    - Cons: a small internal response type instead of `Response`.
+  - **Stream-parse the JSON as it arrives.**
+    - Pros: no whole-body buffer at all.
+    - Cons: needs a streaming parser; responses are at most 8 MiB, so the saving is small.
+  - Done with the recommended option.
 
 ## Assumptions and decisions
 
@@ -863,6 +874,22 @@ refresh-token digests (`hostMcpRefreshDigests`). It now does so before the
 marker check, for a container on another account too. The digests are the
 active account's and the call is idempotent for the same login, so a later
 handoff carries the same list it would have carried anyway.
+
+### Task 16: when follow sends `knownToken` (DK-16)
+
+Made on 2026-11-03. An older backend refuses an unknown input field with
+`invalid-input`. So `--follow` checks `features.transcriptKnownToken` once
+rather than sending the token and retrying without it on refusal. The check
+reads capabilities once per follow, through the same routing as the read,
+and never depends on matching the server's error prose.
+
+### Task 16: unchanged still reads the window fresh (DK-16)
+
+Made on 2026-11-03. The action keeps `forceSnapshot: true` and compares the
+token afterwards. Dropping the forced read would let the backend answer from
+its cache or with a delta the public page cannot express. It would also make
+`unchanged` depend on cache state rather than on the transcript. The provider
+read on each poll stays, and reducing it belongs with task 4.
 
 ## Current state
 

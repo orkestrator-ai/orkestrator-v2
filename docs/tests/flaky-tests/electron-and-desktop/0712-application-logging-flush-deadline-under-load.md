@@ -10,6 +10,30 @@
 - **Isolated rerun:** `bun test ./electron/application-logging.test.ts` from `apps/desktop`: 25 pass, 0 fail.
 - **Assessment:** a deadline-based test sensitive to scheduler delay; unconfirmed.
 
+## Preview pool review repair — 2026-11-03
+
+At `1012906d3`, `mise run test:logged -- --name r1-status-full-suite -- mise run test`
+failed the sibling `application logging shutdown > closes the log only after pending output settles`
+at `apps/desktop/electron/application-logging.test.ts:760` after 23.49 ms:
+`quitCount` was zero instead of one after the five-millisecond sleep.
+Desktop used two workers; workspace/root/bridges/protocol reservations were
+6/1/2/1. Desktop reported 1,622 passes, 16 skips and one failure. Root reported 3,481 passes and one unrelated failure; web reported
+11,513 passes, ten skips and no failures. The aggregate exited 1 in 836.1 s,
+including a 269 s resource wait. Its other failures were the existing case
+3008 metadata, review fan-out assertion and ActionBar test type error.
+
+The complete unchanged owner passed alone (exit 0, 0.3 s):
+
+```sh
+mise run test:logged -- --name r1-logging-owner -- bun test --cwd apps/desktop ./electron/application-logging.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2G7kmZ/r1-status-full-suite.log.gz`;
+the inner workspace log is under `orkestrator-test-run.FCChXD` in the same
+temporary parent. Neither logging code nor its tests changed on this branch.
+This confirms intermittence in another shutdown sibling; scheduler delay
+between closing the log and the deferred quit remains a hypothesis.
+
 ## Design-agent links refresh through d6ed0717d — 2026-10-24
 
 The combined merge repeated a failure in this owner during `mise run test:logged -- --name merge-tests -- mise run test` (workspace/root/bridge/protocol reservations 4/1/2/1, other worktrees active). The complete unchanged owner passed with one worker in 1.4 s: `mise run test:logged -- --name design-links-owner-desktop-logging -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./electron/application-logging.test.ts --parallel=1 --only-failures`. See [0772](../aggregate-validation-runs/0772-design-agent-links-main-refresh-validation.md) for the exact failing cases, durations, counts, parents and artifacts. No assertion, deadline or skip changed; shared-host contention remains a hypothesis.

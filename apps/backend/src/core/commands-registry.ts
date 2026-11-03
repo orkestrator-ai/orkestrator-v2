@@ -86,7 +86,7 @@ import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerHostFileCommands } from "./commands-host-files.js";
 import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
-import { registerPublicApiCommands } from "./public-api/registry.js";
+import { registerPublicApiCommands } from "./public-api/index.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerUserCommandCommands } from "./commands-registry-user-commands.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";

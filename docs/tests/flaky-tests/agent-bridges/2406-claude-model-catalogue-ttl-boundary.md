@@ -19,3 +19,18 @@ passed all four groups (exit 0, 741.9 seconds including a 540.5-second capacity
 wait) at code commit `1144ea780`. The logging shutdown clock fix is in that
 commit; the other owners listed here were unchanged. This green aggregate
 does not establish a root cause for the still-open intermittent cases.
+
+### H3 review validation — 2026-11-03
+
+Preparation at `28a19d5db` repeated expected one probe / received two at line
+284 (1.75 ms) in `mise run test`; the original artifacts remain under
+`.orkestrator/review-artifacts/review-validation-f687c5af-e160-44ca-a69e-8b4c9e450ba7/validation-04.stdout.txt`.
+The unrelated owner passed alone on detached `origin/main` `b58d401e1`:
+`mise run test:logged -- --name h3-base-catalog -- bun test bridges/claude-bridge/src/services/claude-model-catalog.test.ts --parallel=1 --only-failures`
+(exit 0, 1.3 s). A targeted repetition on that same detached checkout reproduced
+the exact line-284 assertion:
+`mise run test:logged -- --name h3-base-ttl-boundary -- bun test bridges/claude-bridge/src/services/claude-model-catalog.test.ts --parallel=1 --rerun-each=500 --test-name-pattern 'the answer expires' --only-failures`
+(2 pass, 498 fail, 11,000 filtered; 2.9 s; artifact
+`.orkestrator/review-artifacts/h3-fix-evidence/h3-base-ttl-boundary.log.gz`). Dependencies
+were installed independently with `mise exec -- bun install --frozen-lockfile`.
+No catalogue implementation or assertion was changed by H3.

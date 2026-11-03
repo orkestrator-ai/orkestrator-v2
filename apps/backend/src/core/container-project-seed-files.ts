@@ -1,5 +1,5 @@
 import { constants as fsConstants, promises as fs } from "node:fs";
-import os from "node:os";
+import { pack } from "tar-stream";
 import path from "node:path";
 import { isPathInsideRoot } from "./commands-project-files.js";
 import { DOCKER_LABEL_PROJECT_SEED_REFUSED } from "./constants.js";
@@ -108,14 +108,24 @@ async function readSeedFile(projectRoot: string, name: string): Promise<Buffer |
 }
 
 /** Reads and checks the project's seed files. Never throws for a refused file. */
-export async function readProjectSeedFiles(projectPath: string): Promise<ReadProjectSeedFiles> {
+export async function readProjectSeedFiles(
+  projectPath: string,
+  fallbackPath?: string,
+  fallbackNames: readonly string[] = [],
+): Promise<ReadProjectSeedFiles> {
   const result: ReadProjectSeedFiles = { accepted: [], refused: [] };
   const projectRoot = await fs.realpath(projectPath).catch(() => null);
   // A missing project folder has no seed files, as before.
   if (!projectRoot) return result;
+  const fallbackRoot = fallbackPath ? await fs.realpath(fallbackPath).catch(() => null) : null;
   for (const { name, target } of PROJECT_SEED_FILES) {
     try {
-      const contents = await readSeedFile(projectRoot, name);
+      // Only absence permits fallback. A refusal must never be replaced by a
+      // second source, even when the command-node manifest lists this name.
+      let contents = await readSeedFile(projectRoot, name);
+      if (contents === null && fallbackRoot && fallbackNames.includes(name)) {
+        contents = await readSeedFile(fallbackRoot, name);
+      }
       if (contents) result.accepted.push({ name, target, contents });
     } catch (error) {
       result.refused.push({
@@ -130,33 +140,33 @@ export async function readProjectSeedFiles(projectPath: string): Promise<ReadPro
 /**
  * Copies accepted seed files into a created, not yet started container, at
  * the paths the image's setup reads (`/project-env/<name>`,
- * `/opencode-project-json`). `docker cp` gives them the image user (`node`).
+ * `/opencode-project-json`). Archive ownership is explicit: docker cp's
+ * default root ownership would make 0700/0600 inputs unreadable on old images.
  */
 export async function copyProjectSeedFilesIntoContainer(
   containerId: string,
   files: ReadProjectSeedFiles["accepted"],
 ): Promise<void> {
   if (files.length === 0) return;
-  const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-project-seed-"));
-  try {
-    for (const file of files) {
-      const destination = path.join(stagingDir, file.target);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      await fs.writeFile(destination, file.contents, { mode: 0o600, flag: "wx" });
-    }
-    // One copy per top-level path: `/project-env` (a directory) and
-    // `/opencode-project-json` (a file). Neither exists in the image.
-    const roots = Array.from(
-      new Set(files.map((file) => file.target.split("/", 1)[0] ?? file.target)),
-    );
-    for (const root of roots) {
-      await runCommand("docker", ["cp", path.join(stagingDir, root), `${containerId}:/${root}`], {
-        timeoutMs: 120_000,
-      });
-    }
-  } finally {
-    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+  const archive = pack();
+  const chunks: Buffer[] = [];
+  const collected = (async () => {
+    for await (const chunk of archive) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  })();
+  // At most three bounded file snapshots plus fixed tar headers enter memory.
+  const owner = { uid: 1000, gid: 1000, uname: "node", gname: "node" };
+  if (files.some((file) => file.target.startsWith("project-env/"))) {
+    archive.entry({ name: "project-env", type: "directory", mode: 0o700, ...owner });
   }
+  for (const file of files) {
+    archive.entry({ name: file.target, mode: 0o600, ...owner }, file.contents);
+  }
+  archive.finalize();
+  await runCommand("docker", ["cp", "-a", "-", `${containerId}:/`], {
+    stdin: await collected,
+    timeoutMs: 120_000,
+  });
 }
 
 /** Container label value: `.env=symlink,opencode.json=outside-project`. */

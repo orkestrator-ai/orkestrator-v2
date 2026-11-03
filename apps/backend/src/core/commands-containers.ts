@@ -35,6 +35,7 @@ import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "
 import { pathExists, runCommand } from "./shell.js";
 import {
   copyProjectSeedFilesIntoContainer,
+  PROJECT_SEED_FILES,
   projectSeedRefusalLabel,
   readProjectSeedFiles,
 } from "./container-project-seed-files.js";
@@ -210,11 +211,13 @@ export async function createDockerContainer(
   const repoConfig = config.repositories[project.id] ?? defaultRepositoryConfig();
   const seedRoot = seedFilesDir(context.storage.getDataDir(), environment.id);
   const seededFiles = await readSeedManifest(seedRoot);
-  const configuredFilesToCopy = normalizeConfiguredProjectFiles([
+  const allFilesToCopy = normalizeConfiguredProjectFiles([
     ...(repoConfig.filesToCopy ?? []),
     ...seededFiles,
   ]);
-  if (configuredFilesToCopy.length > 0 && !project.localPath) {
+  const seedNames = new Set<string>(PROJECT_SEED_FILES.map((file) => file.name));
+  const configuredFilesToCopy = allFilesToCopy.filter((name) => !seedNames.has(name));
+  if (allFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
   // Agent-test fixtures use a deterministic bare repository on the host. A host
@@ -561,10 +564,10 @@ export async function createDockerContainer(
   // checked now and copied into the stopped container below, never bound: a
   // bind source is resolved by the daemon on the host, so a committed link
   // could mount any host path. A refused file is skipped and recorded on the
-  // container for the setup terminal. Seed files a command node staged are
-  // copied with the configured files, so no host secret mount survives setup.
+  // container for the setup terminal. Command-node fallback seeds go through
+  // the same reader; generic configured-file staging cannot reread these names.
   const projectSeedFiles = project.localPath
-    ? await readProjectSeedFiles(project.localPath)
+    ? await readProjectSeedFiles(project.localPath, seedRoot, allFilesToCopy)
     : { accepted: [], refused: [] };
   for (const { name, reason } of projectSeedFiles.refused) {
     dockerLog.warn("project-seed.refused", { environmentId: environment.id, file: name, reason });

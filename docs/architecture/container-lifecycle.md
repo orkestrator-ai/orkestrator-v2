@@ -860,8 +860,9 @@ are therefore never bind-mounted (security report H3):
   It is opened `O_NOFOLLOW | O_NONBLOCK` and must be the inode it listed.
 - The bytes it read are what `docker cp` writes into the created, stopped
   container at `/project-env/<name>` and `/opencode-project-json`, owned by
-  the image user (`node`), `0600`. Nothing re-reads the checkout after the
-  check.
+  `node` (uid/gid 1000), `0600`, with a `0700` parent directory. An archive
+  with explicit ownership is sent through `docker cp -a`, so delivery works
+  even on images without the staged-input relay. Nothing re-reads the checkout.
 - A refused file is skipped, never a failed environment. The refusal
   (`symlink`, `not-a-file`, `outside-project`, `too-large`,
   `changed-while-reading` or `unreadable`) is logged as
@@ -871,9 +872,11 @@ are therefore never bind-mounted (security report H3):
   terminal, before the setup's own "Setting up environment files" step. A
   rebuild re-reads and re-checks the files; a container that predates the
   label shows nothing.
-- Configured files to copy and command-node seed files go through
-  `stageConfiguredProjectFilesForContainer` (realpath-confined, `docker cp`
-  into `/project-files`), unchanged.
+- These three seed names are excluded from generic configured-file staging.
+  A command-node fallback for a configured seed is read with the same rules,
+  only when the project file is absent; a refusal never permits fallback.
+  Other configured files still use `stageConfiguredProjectFilesForContainer`
+  (realpath-confined, `docker cp` into `/project-files`).
 - The other `bindIfExists` callers mount host agent homes and `~/.gitconfig`
   for images without staged inputs. Those paths are the user's own host
   configuration, not repository content, and a dotfiles manager may link

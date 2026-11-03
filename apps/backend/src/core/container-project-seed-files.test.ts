@@ -173,3 +173,17 @@ test("each refusal is explained in one setup terminal line", () => {
     "[orkestrator] Skipped opencode.json from the project folder: it is not a regular file. Only a regular file inside the project is copied into the container.",
   ]);
 });
+
+test("fallback seed links and directories are refused by the same reader", async () => {
+  const project = await tempDir();
+  const fallback = await tempDir();
+  await writeFile(path.join(fallback, "shared.env"), "FALLBACK=1");
+  await symlink("shared.env", path.join(fallback, ".env"));
+  await mkdir(path.join(fallback, "opencode.json"));
+  const result = await readProjectSeedFiles(project, fallback, [".env", "opencode.json"]);
+  expect(result.accepted).toEqual([]);
+  expect(result.refused).toEqual([
+    { name: ".env", reason: "symlink" },
+    { name: "opencode.json", reason: "not-a-file" },
+  ]);
+});

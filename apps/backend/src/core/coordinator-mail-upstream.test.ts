@@ -1,0 +1,150 @@
+import { describe, expect, mock, test } from "bun:test";
+import {
+  coordinatorRuntimeId,
+  type CoordinatorConversation,
+  type CoordinatorWorkspace,
+  type ProjectGitStatus,
+} from "@orkestrator/protocol/coordinator";
+import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
+import type { ProjectCheckoutGit } from "./project-checkout-merge-follow.js";
+
+const behind = {
+  projectId: "project-1",
+  upstream: "origin/main",
+  upstreamCommit: "b".repeat(40),
+  ahead: 0,
+  behind: 2,
+  trackedChanges: 0,
+  untrackedChanges: 0,
+  repositoryOperationBlockedReason: null,
+} as unknown as ProjectGitStatus;
+
+function fakeGit(overrides: Partial<ProjectCheckoutGit> = {}) {
+  return {
+    isCheckoutBusy: mock(async (_projectId: string) => false),
+    fetch: mock(async (_projectId: string, _force?: boolean) => behind),
+    sync: mock(async (_projectId: string) => ({ ...behind, behind: 0 })),
+    syncAfterMerge: mock(async (_projectId: string) => ({ ...behind, behind: 0 })),
+    ...overrides,
+  };
+}
+
+function storageWith(
+  conversation: Partial<CoordinatorConversation> = {},
+  workspace: Partial<CoordinatorWorkspace> = {},
+) {
+  const record = {
+    id: "coord-1",
+    projectId: "project-1",
+    lifecycleState: "ready",
+    conversations: [
+      { id: "conv-1", tabId: "tab-1", agent: "claude", role: "main", ...conversation },
+    ],
+    ...workspace,
+  } as unknown as CoordinatorWorkspace;
+  return {
+    coordinators: {
+      getCoordinatorWorkspaceById: async (id: string) => (id === record.id ? record : null),
+    },
+  } as never;
+}
+
+const runtimeId = coordinatorRuntimeId("coord-1", "conv-1");
+
+describe("fastForwardBeforeCoordinatorMail", () => {
+  test("fast-forwards the main coordinator's checkout with a cooldown-bound fetch", async () => {
+    const git = fakeGit();
+    expect(await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git }, runtimeId)).toBe(
+      "fast-forwarded",
+    );
+    expect(git.fetch).toHaveBeenCalledWith("project-1", false);
+    // The merge-sync path, so the mail turn's admission waits for it.
+    expect(git.syncAfterMerge).toHaveBeenCalledWith("project-1");
+    expect(git.sync).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["an ordinary environment", "env-1", storageWith()],
+    ["a side agent", runtimeId, storageWith({ role: "side", sideOrdinal: 1 })],
+    ["a conversation with no agent yet", runtimeId, storageWith({ agent: undefined })],
+    ["a paused coordinator", runtimeId, storageWith({}, { lifecycleState: "paused" } as never)],
+    ["a closed conversation", runtimeId, storageWith({ closedAt: "2026-01-01T00:00:00Z" })],
+    ["a missing coordinator", coordinatorRuntimeId("other", "conv-1"), storageWith()],
+  ])("skips %s", async (_label, id, storage) => {
+    const git = fakeGit();
+    expect(await fastForwardBeforeCoordinatorMail({ storage, git }, id)).toBe("skipped");
+    expect(git.isCheckoutBusy).not.toHaveBeenCalled();
+    expect(git.fetch).not.toHaveBeenCalled();
+  });
+
+  test("skips when there is no project Git service", async () => {
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: undefined }, runtimeId),
+    ).toBe("skipped");
+  });
+
+  test("leaves a checkout under a running turn, or one Git cannot fast-forward, alone", async () => {
+    const busy = fakeGit({ isCheckoutBusy: mock(async () => true) });
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: busy }, runtimeId),
+    ).toBe("busy");
+    expect(busy.fetch).not.toHaveBeenCalled();
+
+    const diverged = fakeGit({ fetch: mock(async () => ({ ...behind, ahead: 1 })) });
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: diverged }, runtimeId),
+    ).toBe("blocked");
+    expect(diverged.syncAfterMerge).not.toHaveBeenCalled();
+  });
+
+  test("a slow fetch delays the mail only to the bound, and never merges late", async () => {
+    let finishFetch!: (status: ProjectGitStatus) => void;
+    const git = fakeGit({
+      fetch: mock(
+        () =>
+          new Promise<ProjectGitStatus>((resolve) => {
+            finishFetch = resolve;
+          }),
+      ),
+    });
+    expect(
+      await fastForwardBeforeCoordinatorMail(
+        { storage: storageWith(), git, timeoutMs: 5 },
+        runtimeId,
+      ),
+    ).toBe("timed-out");
+    finishFetch(behind);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(git.syncAfterMerge).not.toHaveBeenCalled();
+    expect(git.sync).not.toHaveBeenCalled();
+  });
+
+  test("never throws: a failing lookup or Git service reads as failed", async () => {
+    const storage = {
+      coordinators: {
+        getCoordinatorWorkspaceById: async () => {
+          throw new Error("store unavailable");
+        },
+      },
+    } as never;
+    expect(await fastForwardBeforeCoordinatorMail({ storage, git: fakeGit() }, runtimeId)).toBe(
+      "failed",
+    );
+    const git = fakeGit({
+      isCheckoutBusy: mock(async () => {
+        throw new Error("boom");
+      }),
+    });
+    expect(await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git }, runtimeId)).toBe(
+      "failed",
+    );
+    const refused = fakeGit({
+      syncAfterMerge: mock(async () => {
+        throw new Error("Not possible to fast-forward");
+      }),
+    });
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: refused }, runtimeId),
+    ).toBe("failed");
+  });
+});

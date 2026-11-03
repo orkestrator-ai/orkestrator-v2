@@ -511,6 +511,13 @@ export interface NativeAgentServiceOptions {
   beginCoordinatorTurn?: (projectId: string) => (() => void) | Promise<() => void>;
   waitForMergeSync?: (projectId: string) => Promise<void>;
   /**
+   * Runs before agent mail is injected as a new turn
+   * (`coordinator-mail-upstream.ts`): fast-forwards the main coordinator's
+   * checkout to its upstream when Git can do it cleanly, so the mail is
+   * answered from current code. Bounded, and never throws.
+   */
+  beforeMailInject?: (environmentId: string) => Promise<unknown>;
+  /**
    * The user `!` commands this tab's agent has not been told about yet
    * (`user-commands.ts`): a block to start the next ordinary prompt with, and
    * a commit once that prompt was dispatched.

@@ -3061,6 +3061,8 @@ export class NativeAgentService {
     input: DispatchNativeAgentPromptInput,
   ): Promise<MailInjectDispatchOutcome> {
     let heldReason: "parked" | "queue" | "draft" | "busy" | undefined;
+    // Outside the session fence: a slow fetch must not hold a typed prompt.
+    await this.options.beforeMailInject?.(input.environmentId).catch(() => undefined);
     try {
       const result = await this.dispatchPromptInternal(
         { ...input, allowProviderCommands: false },

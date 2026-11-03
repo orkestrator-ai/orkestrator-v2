@@ -908,7 +908,7 @@ rule lives in `@orkestrator/protocol/coordinator-upstream-merge`
 nothing blocks a fast-forward (no local commits, no uncommitted changes, no
 unfinished repository operation). Nothing is ever merged under a running
 coordinator or project-home turn, because the backend refuses to change the
-checkout then. It happens at two moments.
+checkout then. It happens at three moments.
 
 **Before each message to the main coordinator**, its first prompt included,
 the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
@@ -924,6 +924,20 @@ sync. Against a backend without the check, the renderer applies the same
 protocol rule to its own fetch. Any offer, including one without `automatic`
 from an older backend that would have asked, is merged.
 
+**Before agent mail wakes the main coordinator** (a worker's report, a side
+agent's question, a status notice), the backend does the same itself, since no
+client is involved (`coordinator-mail-upstream.ts`, the `beforeMailInject`
+hook of `NativeAgentService.dispatchMailInject`). It runs before the mail turn
+enters the session's dispatch fence, so the coordinator context block of that
+turn names the merged commit. The fetch is cooldown-bound and the wait for it
+is capped at five seconds: past that the mail is delivered without merging,
+and the late fetch does not start a fast-forward afterwards. A fast-forward
+that has begun is finished first, because the turn's admission
+(`beginTurnAfterMergeSync`) waits for it. A running turn, a blocked checkout,
+a side agent, a paused coordinator and a steered message (one taken into a
+running turn) are all left alone, and a failure is logged
+(`checkout.mail-follow`) and never holds the mail.
+
 **When an environment's pull request merges**, the backend fetches (past the
 cooldown) and fast-forwards the project's checkout
 (`project-checkout-merge-follow.ts`, owned by the PR monitor runtime). Every
@@ -934,8 +948,8 @@ a merge made on GitHub that the PR monitor observes
 are touched, since nothing else reads that checkout, and the project home's
 own PR is not followed (its checkout is the PR's branch, not the base it
 merged into). A merge observed while a turn holds the checkout is retried
-every 30 seconds for up to 30 minutes; after that the next coordinator message
-merges it instead. Merges of one project coalesce, and each PR is followed
+every 30 seconds for up to 30 minutes; after that the next coordinator message,
+typed or mailed, merges it instead. Merges of one project coalesce, and each PR is followed
 once per backend process. The work belongs to the backend: no client has to
 be open.
 

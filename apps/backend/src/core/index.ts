@@ -195,6 +195,7 @@ import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
 import {
   lastAssistantText,
   waitingBlocker,
@@ -1134,6 +1135,8 @@ export class OrkestratorBackend {
         },
         waitForMergeSync: (projectId) =>
           context.projectGit?.waitForMergeSync(projectId) ?? Promise.resolve(),
+        beforeMailInject: (environmentId) =>
+          fastForwardBeforeCoordinatorMail({ storage, git: context.projectGit }, environmentId),
         beginCoordinatorTurn: (projectId) => {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");

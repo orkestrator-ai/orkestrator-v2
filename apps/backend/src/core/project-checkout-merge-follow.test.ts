@@ -110,6 +110,30 @@ describe("fastForwardProjectCheckout", () => {
       ),
     ).toBe("failed");
   });
+
+  test("forceFetch false keeps the fetch cooldown", async () => {
+    const git = fakeGit();
+    expect(await fastForwardProjectCheckout(git, "project-1", { forceFetch: false })).toBe(
+      "fast-forwarded",
+    );
+    expect(git.fetch).toHaveBeenCalledWith("project-1", false);
+  });
+
+  test("a caller that stopped waiting is not fast-forwarded behind its back", async () => {
+    const git = fakeGit();
+    expect(await fastForwardProjectCheckout(git, "project-1", { proceed: () => false })).toBe(
+      "abandoned",
+    );
+    expect(git.fetch).toHaveBeenCalledTimes(1);
+    expect(git.sync).not.toHaveBeenCalled();
+  });
+
+  test("prefers the merge-sync path a turn's admission waits for", async () => {
+    const git = fakeGit({ syncAfterMerge: mock(async () => ({ ...behind, behind: 0 })) });
+    expect(await fastForwardProjectCheckout(git, "project-1")).toBe("fast-forwarded");
+    expect(git.syncAfterMerge).toHaveBeenCalledWith("project-1");
+    expect(git.sync).not.toHaveBeenCalled();
+  });
 });
 
 describe("ProjectCheckoutMergeFollower", () => {

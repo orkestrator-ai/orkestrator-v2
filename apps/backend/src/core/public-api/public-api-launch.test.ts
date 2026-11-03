@@ -173,6 +173,68 @@ describe("session.transcript", () => {
     });
     expect(!invalid.ok && invalid.error.code).toBe("invalid-input");
   });
+
+  test("a still-current knownToken answers unchanged without the messages", async () => {
+    const { harness, stub } = await setup();
+    const capabilities = await harness.call<{ features: { transcriptKnownToken?: boolean } }>(
+      "capabilities",
+      {},
+    );
+    expect(capabilities.ok && capabilities.result.features.transcriptKnownToken).toBe(true);
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-known" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    stub.messages.push({
+      id: "m-0",
+      role: "user",
+      content: "secret words",
+      createdAt: new Date(0).toISOString(),
+      parts: [],
+    });
+    const first = await harness.call<PublicTranscriptPage>("session.transcript", { sessionId });
+    if (!first.ok) throw new Error(`${first.error.code}: ${first.error.message}`);
+    expect(first.result.messages.map((message) => message.id)).toEqual(["m-0"]);
+    const token = first.result.token;
+    expect(token).toEqual(expect.any(String));
+
+    const same = await harness.call("session.transcript", { sessionId, knownToken: token });
+    if (!same.ok) throw new Error(`${same.error.code}: ${same.error.message}`);
+    expect(same.result).toEqual({ sessionId, status: "unchanged", token });
+    expect(JSON.stringify(same)).not.toContain("secret words");
+
+    // A token that is not current, and a moved transcript, both get the page.
+    const stale = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      knownToken: "not-the-token",
+    });
+    expect(stale.ok && stale.result.messages.map((message) => message.id)).toEqual(["m-0"]);
+    stub.messages.push({
+      id: "m-1",
+      role: "assistant",
+      content: "reply",
+      createdAt: new Date(1_000).toISOString(),
+      parts: [],
+    });
+    const moved = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      knownToken: token,
+    });
+    if (!moved.ok) throw new Error(`${moved.error.code}: ${moved.error.message}`);
+    expect(moved.result.messages.map((message) => message.id)).toEqual(["m-0", "m-1"]);
+    expect(moved.result.token).not.toBe(token);
+
+    // Older pages have no token to compare.
+    const paged = await harness.call("session.transcript", {
+      sessionId,
+      knownToken: token,
+      before: "anything",
+    });
+    expect(!paged.ok && paged.error.code).toBe("invalid-input");
+  });
 });
 
 describe("unqualified providers", () => {

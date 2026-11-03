@@ -3,6 +3,7 @@ import type {
   PublicTranscriptMessage,
   PublicTranscriptPage,
   PublicTranscriptPart,
+  PublicTranscriptUnchanged,
 } from "@orkestrator/protocol/public-api-resources";
 import { PublicActionError } from "./errors.js";
 import {
@@ -25,6 +26,12 @@ import type { PublicActionHandler, ReadActionHandler } from "./types.js";
  * longer lines up with the transcript is `cursor-expired`, never silently
  * re-anchored. Transcript reads are explicit content access: they are never
  * made by status polling or `run wait`.
+ *
+ * A newest-page read may carry the `token` of the page the caller already
+ * holds (`knownToken`). When the live window still has that token the answer
+ * is `unchanged` with no messages, so a follower polling every two seconds
+ * downloads a page only when something moved. The window is still read fresh
+ * (`forceSnapshot`): the token is only compared, never trusted as a cache key.
  */
 
 const LIVE_WINDOW = { messages: 100, targetBytes: 512 * 1024 };
@@ -132,6 +139,7 @@ const sessionTranscript: ReadActionHandler<{
   tabId: string;
   limit: number;
   before?: string;
+  knownToken?: string;
 }> = {
   kind: "read",
   action: "session.transcript",
@@ -142,7 +150,15 @@ const sessionTranscript: ReadActionHandler<{
       optionalInteger(input, "limit", 1, PUBLIC_API_LIMITS.transcriptMaxMessages) ??
       PUBLIC_API_LIMITS.transcriptDefaultMessages;
     const before = optionalString(input, "before", 2048);
-    return { ...target, limit, ...(before ? { before } : {}) };
+    const knownToken = optionalString(input, "knownToken", 256);
+    // An older page has no token to compare; only the newest page changes.
+    if (before && knownToken) throw invalid("knownToken reads the newest page; drop before");
+    return {
+      ...target,
+      limit,
+      ...(before ? { before } : {}),
+      ...(knownToken ? { knownToken } : {}),
+    };
   },
   async run(input, context) {
     // Validate the cursor before any expensive read.
@@ -249,6 +265,14 @@ const sessionTranscript: ReadActionHandler<{
       throw new PublicActionError("connection-failed", "The transcript is unavailable right now", {
         retryable: update.retryable !== false,
       });
+    }
+    if (input.knownToken !== undefined && update.token === input.knownToken) {
+      const unchanged: PublicTranscriptUnchanged = {
+        sessionId: session.sessionId,
+        status: "unchanged",
+        token: update.token,
+      };
+      return { result: unchanged };
     }
     const view = update.value;
     let messages = view.messages

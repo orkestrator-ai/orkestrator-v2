@@ -8,6 +8,7 @@ import {
 import type { PublicEnvironmentSummary } from "@orkestrator/protocol/public-api-resources";
 import { PUBLIC_API_FIXTURES } from "@orkestrator/protocol/testing/public-api-fixtures";
 import {
+  capabilities,
   captureIo,
   createSandbox,
   defaultResponder,
@@ -772,31 +773,44 @@ describe("environment --wait through a lost submission response", () => {
 });
 
 describe("transcript following", () => {
+  const page = (ids: string[], token: string) => ({
+    sessionId: "ses_eA",
+    order: "oldest-first",
+    messages: ids.map((id) => ({
+      id,
+      role: "assistant",
+      createdAt: null,
+      text: `text ${id}`,
+      textTruncated: false,
+      parts: [],
+    })),
+    complete: true,
+    truncated: false,
+    token,
+    historyEpoch: "e",
+    freshness: "current",
+  });
+  const FOLLOW = ["--jsonl", "session", "transcript", "ses_eA", "--follow", "--timeout"];
+  const sentTokens = (gateway: FakeGateway) =>
+    gateway.requests
+      .filter((request) => request.body.args.action === "session.transcript")
+      .map((request) => (request.body.args.input as { knownToken?: string }).knownToken);
+  const followed = (out: string) =>
+    out
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type?: string; message?: { id: string } })
+      .filter((record) => record.type === "message")
+      .map((record) => record.message!.id);
+
   test("streams each new message once as JSONL and flags gaps", async () => {
-    const page = (ids: string[], token: string) => ({
-      sessionId: "ses_eA",
-      order: "oldest-first",
-      messages: ids.map((id) => ({
-        id,
-        role: "assistant",
-        createdAt: null,
-        text: `text ${id}`,
-        textTruncated: false,
-        parts: [],
-      })),
-      complete: true,
-      truncated: false,
-      token,
-      historyEpoch: "e",
-      freshness: "current",
-    });
     const pages = [
       page(["a", "b"], "t1"),
       page(["a", "b"], "t1"),
       page(["a", "b", "c"], "t2"),
       page(["x", "y"], "t3"),
     ];
-    const { box } = await fixture([], {
+    const { box, gateway } = await fixture([], {
       "session.transcript": (call) => pages[Math.min(call - 1, pages.length - 1)],
     });
     const result = await box.run([
@@ -819,5 +833,32 @@ describe("transcript following", () => {
     expect(messages).toEqual(["a", "b", "c", "x", "y"]);
     expect(records.some((record) => record.type === "gap")).toBe(true);
     expect(records.at(-1)).toMatchObject({ ok: true, action: "session.transcript" });
+    // This backend does not advertise knownToken: it would refuse the input.
+    expect(sentTokens(gateway).every((token) => token === undefined)).toBe(true);
+  });
+
+  test("sends the held token where advertised and keeps the page on unchanged", async () => {
+    const answers = [
+      page(["a", "b"], "t1"),
+      { sessionId: "ses_eA", status: "unchanged", token: "t1" },
+      page(["a", "b", "c"], "t2"),
+      { sessionId: "ses_eA", status: "unchanged", token: "t2" },
+    ];
+    const { box, gateway } = await fixture([], {
+      capabilities: () =>
+        capabilities({ features: { ...capabilities().features, transcriptKnownToken: true } }),
+      "session.transcript": (call) => answers[Math.min(call - 1, answers.length - 1)],
+    });
+    const result = await box.run([...FOLLOW, "2s"]);
+    expect(result.code).toBe(0);
+    expect(followed(result.out)).toEqual(["a", "b", "c"]);
+    const tokens = sentTokens(gateway);
+    expect(tokens.length).toBeGreaterThanOrEqual(4);
+    expect(tokens.slice(0, 4)).toEqual([undefined, "t1", "t1", "t2"]);
+    expect(tokens.slice(4).every((token) => token === "t2")).toBe(true);
+    // Capabilities are read once for the whole follow, not per poll.
+    expect(
+      gateway.requests.filter((request) => request.body.args.action === "capabilities"),
+    ).toHaveLength(1);
   });
 });

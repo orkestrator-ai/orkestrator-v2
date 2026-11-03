@@ -616,7 +616,9 @@ export class NativeAgentService {
       invoke,
       now: () => this.now(),
       announce: (environmentId) => {
-        if (!this.stopped) this.storage.announceNativeAgentSessionProjection(environmentId);
+        if (!this.stopped) {
+          this.storage.announceNativeAgentSessionProjection(environmentId, "command-catalog");
+        }
       },
     });
     this.observations = new NativeAgentObservationBroker(() => this.now());
@@ -672,10 +674,14 @@ export class NativeAgentService {
             now: () => this.now(),
             onApplied: (application) => {
               if (this.stopped) return;
-              this.storage.announceNativeAgentSessionProjection(application.environmentId, {
-                agent: application.agent,
-                logicalSessionKey: application.logicalSessionKey,
-              });
+              this.storage.announceNativeAgentSessionProjection(
+                application.environmentId,
+                "permission-rule",
+                {
+                  agent: application.agent,
+                  logicalSessionKey: application.logicalSessionKey,
+                },
+              );
             },
           })
         : undefined;

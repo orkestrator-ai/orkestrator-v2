@@ -396,6 +396,26 @@ conversation (`selectCoordinatorConversation`), and a selection made elsewhere
 brings that conversation to the front of its group. Only each group's front
 conversation is mounted.
 
+## Activity indicator
+
+While a coordinator works, its icons carry the same spinner an environment
+row's marker draws: the **Coordinator** tab in the project navigation, and the
+leading icon of the project's sidebar heading (the coordinator's own icon when
+the project has none, shown only while it is active). A conversation waiting
+on the user pulses yellow instead; working outranks waiting across a project's
+open conversations, main and side agents alike.
+
+The state comes from the backend's activity observer, the same observation
+mail delivery and the environment markers read
+(`list_coordinator_activity`, `@orkestrator/protocol/coordinator-activity`).
+It reads retained observations only, so it never starts, attaches, hydrates
+or touches a session. The renderer projection
+(`apps/web/src/stores/coordinatorActivityStore.ts`) re-reads it on a
+coordinator session's activity transition, a coordinator session record
+change (a dispatch), a coordinator workspace change, and the transport's
+resync and safety checks, which also recover a missed hint. Other machines'
+coordinators are not shown yet.
+
 ## Project home
 
 The files pane works on the project board too. With a project selected and no

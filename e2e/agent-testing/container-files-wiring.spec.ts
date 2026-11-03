@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Request } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,9 +21,13 @@ import {
  * profile started with `--fixture-environments local,container`. No provider
  * turns: every change is written straight into the container or worktree.
  *
- * - The Files panel on a container follows changes through its 5 s poll (a
- *   container is an unwatched target), across an inactive-environment switch,
- *   a hidden document, a reload and a second window.
+ * - The Files panel on a container follows changes across an
+ *   inactive-environment switch, a hidden document, a reload and a second
+ *   window. Its Changes tab is the backend's change projection: the backend
+ *   scans the container on its own clock (every 15 s, or on a worktree-signal
+ *   ring) and pushes each revision, which the page applies even while hidden.
+ *   Only the All files tab polls the container from the page (every 5 s), and
+ *   that poll pauses while the document is hidden (todo 2922, task 5).
  * - A revert from the Files panel restores the file without a fetch: the
  *   comparison base of a new container is its creation commit.
  * - On a watched local worktree, a tree revision announced while the document
@@ -56,6 +60,35 @@ async function openFilesPanel(page: Page) {
   await page.getByRole("tab", { name: /^Changes/ }).click();
 }
 
+/**
+ * The commands the Files panel's 5 s poll sends. Only this page's requests are
+ * recorded, so another client of the profile (the headless Electron window)
+ * cannot make or hide a poll.
+ */
+const FILES_PANEL_POLL_COMMANDS = new Set([
+  "get_git_status",
+  "get_file_tree",
+  "get_file_subtree",
+  "get_local_git_status",
+  "get_local_file_tree",
+  "get_local_file_subtree",
+]);
+
+function recordFilesPanelPolls(page: Page) {
+  const polls: string[] = [];
+  page.on("request", (request: Request) => {
+    if (!request.url().endsWith("/__orkestrator/invoke")) return;
+    let command: unknown;
+    try {
+      command = (request.postDataJSON() as { command?: unknown } | null)?.command;
+    } catch {
+      return;
+    }
+    if (typeof command === "string" && FILES_PANEL_POLL_COMMANDS.has(command)) polls.push(command);
+  });
+  return polls;
+}
+
 /** A changed-file row; both the projection and the legacy list title it by path. */
 function changeRow(page: Page, file: string) {
   return page.getByTitle(file, { exact: false }).first();
@@ -70,10 +103,11 @@ test("Docker fixture container Files panel follows changes across switch, hidden
   const containerId = container.containerId;
   if (!containerId) throw new Error(`${containerName} has no container`);
   const run = randomUUID().slice(0, 8);
-  const files = ["visible", "inactive", "hidden", "second-window"].map(
+  const files = ["visible", "inactive", "hidden", "hidden-tree", "second-window"].map(
     (label) => `qa-wiring-${label}-${run}.txt`,
   );
-  const [visibleFile, inactiveFile, hiddenFile, secondWindowFile] = files as [
+  const [visibleFile, inactiveFile, hiddenFile, hiddenTreeFile, secondWindowFile] = files as [
+    string,
     string,
     string,
     string,
@@ -87,6 +121,7 @@ test("Docker fixture container Files panel follows changes across switch, hidden
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
+  const polls = recordFilesPanelPolls(page);
   try {
     await test.step("the Files panel on a container shows a change made in it", async () => {
       await selectEnvironment(page, containerName);
@@ -106,26 +141,61 @@ test("Docker fixture container Files panel follows changes across switch, hidden
       await expect(changeRow(page, visibleFile)).toBeVisible();
     });
 
-    await test.step("a hidden document pauses the poll and catches up on return", async () => {
+    await test.step("a hidden document still applies the backend's change projection", async () => {
+      // The Changes tab has no page poll: the backend scans the container on
+      // its own clock and pushes the revision, so the row arrives while hidden.
+      // Budget: one 15 s scan interval, a tick skipped after a recent scan
+      // (half an interval) and the scan itself.
       await setDocumentHidden(page, true);
+      const pollsBefore = polls.length;
+      const written = Date.now();
       inContainer(containerId, `echo hidden > ${hiddenFile}`);
-      // Two poll intervals: a visible panel would have shown it by now.
-      await page.waitForTimeout(12_000);
-      await expect(changeRow(page, hiddenFile)).toHaveCount(0);
+      await expect(changeRow(page, hiddenFile)).toBeVisible({ timeout: 2 * POLL_BUDGET_MS });
+      testInfo.annotations.push({
+        type: "hidden-projection",
+        description: `change shown ${Date.now() - written} ms after it was written, while hidden`,
+      });
+      expect(polls.slice(pollsBefore)).toEqual([]);
+      await setDocumentHidden(page, false);
+    });
+
+    await test.step("a hidden document pauses the All files poll and catches up on return", async () => {
+      const treeEntry = () => page.getByText(hiddenTreeFile, { exact: true });
+      await page.getByRole("tab", { name: "All files", exact: true }).click();
+      await expect(page.getByText("README.md", { exact: true }).first()).toBeVisible({
+        timeout: 30_000,
+      });
+      // The visible tab polls the container from the page.
+      const visiblePolls = polls.length;
+      await expect
+        .poll(() => polls.length, { timeout: POLL_BUDGET_MS })
+        .toBeGreaterThan(visiblePolls);
+      await setDocumentHidden(page, true);
+      // A read already in flight when the document hid may still be sent.
+      await page.waitForTimeout(1_000);
+      const hiddenPolls = polls.length;
+      inContainer(containerId, `echo hidden > ${hiddenTreeFile}`);
+      // Three poll intervals, past the container tree's 10 s cache: a page
+      // that kept polling would have read the new tree by now.
+      await page.waitForTimeout(18_000);
+      expect(polls.slice(hiddenPolls)).toEqual([]);
+      await expect(treeEntry()).toHaveCount(0);
       const returned = Date.now();
       await setDocumentHidden(page, false);
-      await expect(changeRow(page, hiddenFile)).toBeVisible({ timeout: POLL_BUDGET_MS });
+      await expect(treeEntry()).toBeVisible({ timeout: POLL_BUDGET_MS });
       testInfo.annotations.push({
         type: "hidden-return",
-        description: `change shown ${Date.now() - returned} ms after the document became visible`,
+        description: `tree entry shown ${Date.now() - returned} ms after the document became visible`,
       });
+      await page.getByRole("tab", { name: /^Changes/ }).click();
+      await expect(changeRow(page, hiddenTreeFile)).toBeVisible({ timeout: POLL_BUDGET_MS });
     });
 
     await test.step("a reload shows the same changes", async () => {
       await reloadApp(page, testInfo);
       await selectEnvironment(page, containerName);
       await openFilesPanel(page);
-      for (const file of [visibleFile, inactiveFile, hiddenFile]) {
+      for (const file of [visibleFile, inactiveFile, hiddenFile, hiddenTreeFile]) {
         await expect(changeRow(page, file)).toBeVisible({ timeout: POLL_BUDGET_MS });
       }
     });

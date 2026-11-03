@@ -9,8 +9,8 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
 1. **The DOM-assertion scanner finds six offending test files**: open.
 2. **`build pipeline commands` expects `restartStep` without its selection argument**: open.
 3. **The workflow baseline cannot capture a ticket delivery policy**: open.
-4. **Two graph journeys cannot find their environment in the sidebar**: open.
-5. **The container Files panel shows a change while the document is hidden**: open.
+4. **Two graph journeys cannot find their environment in the sidebar**: done (spec drift, not a regression).
+5. **The container Files panel shows a change while the document is hidden**: done (2026-11-03: the backend's change projection delivers it; the spec was wrong and now checks the page poll on the All files tab).
 
 ### 1. The DOM-assertion scanner finds six offending test files
 
@@ -74,10 +74,16 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
 
 **Investigation.** Started a disposable `dev:test --fixture --no-agent-credentials --agent-platforms codex` profile on a detached `origin/main` at `b0dcf1660` and ran `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts` on `graph-designer.spec.ts`, `graph-run-view.spec.ts` and `graph-designer-editing.spec.ts` with `--workers=1 --retries=0`: the same two cases failed with the same errors (2 failed, 4 passed, 1 skipped). The third failure in the branch's run, `graph-designer-editing.spec.ts` (edge count 2, expected 1), passed on `main` and is open flake [1311](../../tests/flaky-tests/web-ui/1311-graph-designer-keyboard-undo-edge.md).
 
+On 2026-11-03, against `main` at `7b48c23fb` on a disposable codex profile (`dev:test --fixture --no-agent-credentials --agent-platforms codex --headless-electron`), a probe created a stopped local environment after the page had loaded: the sidebar listed it live, with the accessible name `probe-stopped-2922, on beelink, Idle`. Since `980719e6c` (#1553) a client that can show several machines labels every row of its own machine `<name>, on <machine>, <activity>` (`environment-row-model.ts`), so the exact name `graphs-designer-other` and the pattern `/^graph-human-run(\s|$)/` no longer match. The product did not regress; the specs drifted. With the row matcher fixed, the human-approval case then failed on its unread bell: the run reached its first human wait before the switch away had landed (wait opened 26.16 s, switch started 27.46 s), so the renderer cleared the unread badge of the environment still on screen (`useUnreadEnvironmentSync`), and `get_environment` reported `hasUnreadWork: false` with the wait's attention key recorded. On this host both specs also met the modal "Docker containers can't reach Orkestrator" dialog, which hides the whole page from Playwright until closed.
+
+With the fix at `04a57aefa`, on a fresh disposable codex profile (`dev:test --fixture --no-agent-credentials --agent-platforms codex --headless-electron`, load average ~47 on 16 cores), `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/graph-designer.spec.ts e2e/agent-testing/graph-run-view.spec.ts --workers=1 --retries=0` through `test:logged` passed twice in a row: 5 passed, 1 skipped (the opt-in profile-restart case at `graph-run-view.spec.ts:659`), 0 failed, including `graph-designer.spec.ts:33` and `graph-run-view.spec.ts:433`.
+
+Re-run on the branch head `7d99f7acc` (the last code change, which only adds the Docker dialog handler to `graph-designer-mock.spec.ts`) on 2026-11-03, on a fresh disposable codex profile started the same way (load average ~4.5): the same command passed twice in a row (49–51 s each, `test:logged` exit 0). The JSON reporter recorded 5 expected, 1 skipped, 0 unexpected, 0 flaky: `graph-designer.spec.ts:33` and `:239`, `graph-run-view.spec.ts:48`, `:188` and `:433` passed; `graph-run-view.spec.ts:659` (opt-in profile restart) skipped. `graph-designer-mock.spec.ts` passed on the same profile (1 passed). The profile was stopped and reset afterwards.
+
 **Decisions.**
 
 - **Where to start?**
-  - **Check whether the sidebar still lists a stopped local environment created after the page loaded, and what its accessible name is now (recommended).**
+  - **Check whether the sidebar still lists a stopped local environment created after the page loaded, and what its accessible name is now (recommended; taken, see Assumptions and decisions).**
     - Pros: one question covers both cases.
     - Cons: needs a live profile.
   - **Reload the page after `create_environment` in both specs.**
@@ -92,6 +98,22 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
 
 **Investigation.** `mise run test:agent:docker:isolated` on a detached `origin/main` at `b0dcf1660` failed the same case at the same line (`toHaveCount(0)` received 1, 14 resolutions) with the same counts as the branch's preparation run: 1 failed, 19 passed, 4 skipped. The companion case `local Files panel shows a file whose announcement arrived while hidden` passed on both.
 
+Delivery path (2026-11-03, main at `7b48c23fb`, beelink, disposable `dev:test` profile with `--fixture-environments local,container --fixture-network full`, headless Chromium). The change reaches the Changes tab through the backend's change projection, not through any page poll:
+
+- Since `d9bc8b840` (agent change tracking, 2026-10-20) the Changes tab is `ChangesView` over `useEnvironmentChangeRows`. `useFilesPanel.ts` turns the 5 s coordinated poll off while the projection owns that tab (`projectionOwnsChanges`), so the "paused poll" the spec waited out does not run on the Changes tab at all, visible or hidden.
+- The backend scans every running container on its own clock (`diff-stats-service.ts`: every 15 s when the container's worktree signal is not armed, within about 2 s of a signal ring when it is), and `environment-projector.ts` publishes `CHANGE_PROJECTION_CHANGED_EVENT`. `lib/changes/subscriptions.ts` applies it and `useEnvironmentChangeRows` reads the first page (`changes_get_view`) with no visibility check.
+- A diagnostic spec sampled once a second while hidden. On the Changes tab: the backend `diff-scan` count advanced on its 15 s clock, the renderer's projection revision went up, the row appeared 4 s and, in a second run, about 13 s after the write, and the only command the page sent was `changes_get_view`. On the All files tab: visible, the page sent `get_file_tree` + `get_git_status` every 5 s; hidden for 32 s, it sent neither and the new tree entry did not appear; it appeared 0.3 to 1.3 s after return.
+- Why the result varied: on this host the container's worktree signal fails to arm (`[diff-stats] signal.demoted demotion=arm-failed`, the host's ufw blocks container-to-host), so delivery waits for the 15 s tick, which lands inside the spec's 12 s hidden window about four times in five; an unmodified rerun here passed. Where the signal arms, delivery takes about 2 s and the old assertion fails every time. The 2026-11-01 pass recorded in 0048 is the 15 s case landing late.
+
+So the product is right: a backend-owned projection keeps a hidden page current from pushed events and a backend cache read, which is what the background-work invariants ask for, and the container is not polled from the page while hidden. The spec assumed the Changes tab was still polled.
+
+**Fix.** `e2e/agent-testing/container-files-wiring.spec.ts` now records this page's own Files panel read commands (`get_git_status`, `get_file_tree`, `get_file_subtree` and their local forms) from its `/__orkestrator/invoke` requests, so another client of the profile cannot add or hide one, and splits the hidden step in two:
+
+- **Changes tab:** with the document hidden, a file written in the container shows while still hidden, within 40 s (one 15 s backend interval, a tick skipped after a recent scan, and the scan), and the page sends no Files panel read meanwhile.
+- **All files tab:** the visible tab is seen polling; once hidden, the page sends no Files panel read for 18 s (three poll intervals, past the container tree's 10 s cache) and a file written then is absent from the tree; it shows after return, and then on the Changes tab and after the reload.
+
+A run with the document left visible fails the new no-read assertion (10 reads recorded), so the check still catches a page that keeps polling a container while hidden. `docs/development/agent-testing.md` describes the split.
+
 **Decisions.**
 
 - **How to proceed?**
@@ -101,6 +123,36 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
   - **Drop the hidden-document step.**
     - Pros: quick.
     - Cons: loses the only check that hidden windows stop polling containers.
+
+## Assumptions and decisions
+
+### Task 4: fix the specs, not the sidebar
+
+The live check showed the row is listed and only its accessible name changed, so the product stays as it is. `sidebarEnvironmentRow` in `e2e/agent-testing/sidebar-project.ts` matches a row button whose name starts with the environment name followed by a comma, whitespace or nothing, which covers the machine-aware label and the content-derived name of a single-machine client without matching a longer name. Both graph specs use it; `graph-run-view.spec.ts` drops its local `sidebarRow`. Matching the full label (`, on beelink, Idle`) was rejected because the machine name and activity text vary by host and state.
+
+### Task 4: assert the unread bell on the wait that opens while away
+
+The first human wait opens before the test can switch away, so its badge is cleared as seen; that is the intended behaviour of `useUnreadEnvironmentSync`, not a bug. The case still checks the `waiting` marker after the first wait, and now checks the bell after answering it, when the second wait opens with the environment genuinely away. Slowing the template with an extra node or launching through the command path instead of the Run graph dialog were rejected: the first changes what the journey qualifies, the second skips the dialog the case covers.
+
+### Task 4: close the host Docker reachability dialog
+
+`graph-designer.spec.ts`, `graph-run-view.spec.ts` and `graph-designer-editing.spec.ts` install the existing `acknowledgeDockerReachabilityWarning` helper from `e2e/docker-reachability-warning.ts` in `beforeEach`. The initial implementation overlooked that shared helper and added a duplicate; review caught this and the duplicate was removed. The shared helper now accepts an optional `TestInfo`: overlay callers retain their annotations, while local graph journeys dismiss the notice without an inaccurate docker-exec annotation. Reusing the helper avoids selector drift; retaining a separate copy would isolate callers but duplicate maintenance (reuse is recommended). Existing inline copies elsewhere were left alone to keep the change scoped.
+
+### Task 4: a blank page after reload under load is recorded, not fixed
+
+One run failed `graph-run-view.spec.ts:48` with a blank page after `page.reload()` at load average ~56; it passed in the run before and alone afterwards. Recorded as flake [3610](../../tests/flaky-tests/web-ui/3610-graph-run-view-blank-page-after-reload.md).
+
+### Task 5: fix the spec, not the product
+
+The ticket asked to fix whichever of product or spec was wrong. Options: pause the change projection while the document is hidden (keeps the old spec, but drops pushed state the backend already computed, needs a catch-up read on return, and saves only a backend cache read per revision, since the container scan runs whatever the page does); or make the spec check what the hidden pause covers (recommended). I took the second: the hidden pause exists to stop the page polling containers, and the projection's live-while-hidden behaviour is already relied on by the local case in the same spec.
+
+### Task 5: assert on this page's requests rather than the backend's counters
+
+`get_recurring_work_diagnostics` counts reads from every client of the profile, and its `file-tree-read` count also rises on backend-side re-walks; one rose while the page was hidden. Recording the page's own `/__orkestrator/invoke` commands is exact for the page under test. The tree-entry absence check is kept as the user-visible half.
+
+### Task 5: run with a full-network fixture container
+
+On beelink, 29 leaked `reach-probe-net` networks from other owners fill Docker's default address pools (follow-up [3320](../containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)), so the fixture could not create its environment network. For the live runs a PATH shim outside the repository gave this profile's networks explicit `10.229.x.0/24` subnets. With that subnet the restricted container's egress gateway failed to apply its policy, so the fixture used `--fixture-network full`. The Files panel path does not depend on the network policy. Not run: the restricted-mode fixture and `mise run test:agent:docker:isolated` end to end.
 
 ## Related
 

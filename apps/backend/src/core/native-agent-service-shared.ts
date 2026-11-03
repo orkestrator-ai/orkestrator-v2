@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
@@ -402,6 +403,11 @@ export interface NativeAgentObservationInvalidation {
   logicalSessionKey: string;
   owner: "environment" | "coordinator";
   observation: ViewRevisionStamp;
+  /** Which observer path announced it; content-free (todo 0049 task 4). */
+  cause: Extract<
+    NativeSessionInvalidationCause,
+    "content-revision" | "session-content" | "runtime-stopped"
+  >;
 }
 
 /**

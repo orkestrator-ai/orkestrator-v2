@@ -71,10 +71,15 @@ export interface TranscriptArtifactCapabilities {
 
 /** State of the on-demand container preview worker preparation. */
 export interface ArtifactWorkerPreparationStatus {
-  /** A Docker CLI and a shipped worker build context (or published image pin) exist. */
+  /** A Docker CLI and a shipped (or stageable) worker build context exist. */
   available: boolean;
   state: "idle" | "preparing" | "ready" | "failed";
-  /** `build`: from the shipped build context; `pull`: the published, digest-pinned image. */
+  /**
+   * `build`: from the shipped build context, the only route current backends
+   * take. `pull` (a published, digest-pinned image) is never sent by current
+   * backends; it stays so a renderer can still read an older backend's status
+   * within the support window.
+   */
   method: "build" | "pull" | null;
   /** Why preparation is unavailable or failed. Content-free. */
   reason?: string;

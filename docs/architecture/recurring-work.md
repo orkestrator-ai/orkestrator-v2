@@ -57,7 +57,9 @@ turns it off. A few backend kinds are catalogued but not yet recorded
 read-only surface: recorder snapshot, every live scheduler, admission pool,
 fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
-cadence, and demotions by reason), all aggregate and content-free. It is served by the
+cadence, and demotions by reason) and native session invalidations
+(`sessionInvalidations`: counts by content-free cause and by platform, from
+`native-session-invalidation-metrics.ts`), all aggregate and content-free. It is served by the
 `get_recurring_work_diagnostics` command and the `recurringWork` block of the
 gateway's `/__orkestrator/metrics`.
 

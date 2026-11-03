@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixtureScript, policyPath, read, statusFile, writeStub } from "./firewall-test-support";
+import {
+  fixtureScript,
+  policyPath,
+  read,
+  statusFile,
+  withCallerPath,
+  writeStub,
+} from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 // Expiry stamps go through GNU `date -d`.
@@ -130,7 +137,7 @@ describe("container firewall policy", () => {
       const script = join(dir, "network-policy-entrypoint.sh");
       writeFileSync(
         script,
-        read("docker/network-policy-entrypoint.sh")
+        withCallerPath(read("docker/network-policy-entrypoint.sh"))
           .replaceAll(policyPath, join(dir, "policy"))
           .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
           .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
@@ -682,7 +689,7 @@ esac`,
       const script = join(dir, "network-policy-entrypoint.sh");
       writeFileSync(
         script,
-        read("docker/network-policy-entrypoint.sh")
+        withCallerPath(read("docker/network-policy-entrypoint.sh"))
           .replaceAll(policyPath, join(dir, "policy"))
           .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
           .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
@@ -724,7 +731,7 @@ esac`,
     const script = join(dir, "network-policy-entrypoint.sh");
     writeFileSync(
       script,
-      read("docker/network-policy-entrypoint.sh")
+      withCallerPath(read("docker/network-policy-entrypoint.sh"))
         .replaceAll(policyPath, join(dir, "policy"))
         .replaceAll("/run/orkestrator-network", join(dir, "run-network"))
         .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))
@@ -933,7 +940,7 @@ esac`,
       mkdirSync(join(dir, "policy"));
       writeFileSync(
         script,
-        read("docker/orkestrator-egress-gateway.sh")
+        withCallerPath(read("docker/orkestrator-egress-gateway.sh"))
           .replaceAll("/etc/orkestrator", join(dir, "policy"))
           .replaceAll("/usr/local/bin/network-policy-entrypoint.sh", join(dir, "record.sh"))
           .replaceAll("/usr/local/bin/init-firewall.sh", join(dir, "init-firewall.sh"))

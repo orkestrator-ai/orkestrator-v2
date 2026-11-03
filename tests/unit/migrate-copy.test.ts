@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -11,8 +11,9 @@ import {
   linkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { parseCopyOutput } from "../../apps/backend/src/core/container-replacement";
+import { read, withCallerPath } from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 /**
@@ -21,7 +22,11 @@ import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
  * extracts, so what is checked here is that the manifest compares it, not
  * that root restores it.
  */
-const SCRIPT = resolve(import.meta.dir, "../../docker/orkestrator-migrate.sh");
+// The image runs it with a root-only PATH; this copy keeps gnuToolPath's tools.
+const SCRIPT_DIR = mkdtempSync(join(tmpdir(), "ork-migrate-script-"));
+const SCRIPT = join(SCRIPT_DIR, "orkestrator-migrate.sh");
+writeFileSync(SCRIPT, withCallerPath(read("docker/orkestrator-migrate.sh")));
+afterAll(() => rmSync(SCRIPT_DIR, { recursive: true, force: true }));
 const SHELL_ENV = { ...process.env, PATH: gnuToolPath };
 const NO_GNU_TAR = missingGnuTools("tar");
 const dirs: string[] = [];

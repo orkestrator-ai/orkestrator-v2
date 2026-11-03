@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+# sudo's secure_path, stated here so the gateway's `docker run --user root`
+# (image PATH, node-writable directories first) resolves the same way. It is
+# also the PATH entrypoint.sh starts with once privileges drop (security H2).
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 # Docker launches this sudo command as its entrypoint before any node code
 # runs. The sudo permission remains available after startup, so a later call

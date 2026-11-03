@@ -3617,6 +3617,46 @@ printf '["exists","missing"]'
     });
   });
 
+  test("starts root container terminals with the fixed root PATH", async () => {
+    const environment = createEnvironment({
+      id: "env-container-root-terminal",
+      environmentType: "containerized",
+      containerId: "container-1",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const { sessionId } = terminalSessionResult(
+      await commands.get("create_terminal_session")?.(
+        {
+          containerId: "container-1",
+          environmentId: environment.id,
+          terminalKey: "orkroot-tab",
+          cols: 80,
+          rows: 24,
+          user: "orkroot",
+        },
+        context,
+      ),
+    );
+    await commands.get("start_terminal_session")?.({ sessionId }, context);
+
+    // The image PATH starts with node-writable directories; a root shell must
+    // not inherit it (security H2).
+    expect(ptySpawn.mock.calls.at(-1)?.[1]).toEqual([
+      "exec",
+      "-it",
+      "--env",
+      "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+      "--user",
+      "orkroot",
+      "container-1",
+      "bash",
+      "-lc",
+      expect.stringContaining("orkestrator_source_runtime_env"),
+    ]);
+  });
+
   test("supersedes a stable container terminal when its target or activity context changes", async () => {
     const environment = createEnvironment({
       id: "env-container-terminal-replaced",

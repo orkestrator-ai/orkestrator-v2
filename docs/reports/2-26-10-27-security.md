@@ -88,7 +88,7 @@ The material risks are concentrated in four themes:
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Verified (browser behaviour: standard) |
-| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
+| H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Verified code / Potential runtime |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
@@ -146,7 +146,25 @@ bearer token in `sessionStorage`.
 
 ### H2. The unprivileged `node` user can get code executed as root inside the container
 
-**Status:** Verified
+**Status:** Fixed (2026-11-03). Every root `docker exec`/`docker run`, and
+every root terminal, passes `PATH=/usr/sbin:/usr/bin:/sbin:/bin`
+(`CONTAINER_ROOT_USER_ARGS`). Each root script resets PATH itself. Root shells
+source neither `runtime-env.sh` nor `bash-env.sh` and take only root-owned
+PATH entries. `/usr/local/share` is root-owned, with `npm-global` its own
+`node`-owned directory, and root zsh runs `compinit -i`. The image build
+fails if `node` can write anything on a root path
+(`docker/verify-root-boundary.sh`). Checked on images built locally from
+before and after the fix: `docker/tests/root-boundary-smoke.sh` planted
+`awk`, `ps`, `iptables` and others, a v3 `runtime-env.sh`, `bash-env.sh`, a
+zsh `compinit` and a trusted `mise.toml` as `node`. On the old image root ran
+11 of them, through the stop drain, `update-firewall.sh` and a root terminal.
+On the new image it ran none, and npm globals still install and run for
+`node`. In-container firewall enforcement is not retired: images without the
+egress gateway, and policy 1 runtimes, still depend on it until they are
+rebuilt. Removing the `ORKESTRATOR_EGRESS=in-container` cap stays with
+[todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+See [`docker/AGENTS.md`](../../docker/AGENTS.md). The original finding
+follows.
 **Actor:** A1
 
 **Where**

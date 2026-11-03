@@ -141,9 +141,11 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   tar -xJf "${NODE_TARBALL}" -C /usr/local --strip-components=1 --no-same-owner && \
   rm -f "${NODE_TARBALL}" SHASUMS256.txt
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
-  chown -R node:node /usr/local/share
+# Global npm installs go to node's own npm-global directory. /usr/local/share
+# itself stays root-owned: root's zsh loads completion functions from
+# /usr/local/share/zsh/site-functions, so a node-writable parent would let node
+# plant code that every root terminal runs (verify-root-boundary.sh).
+RUN install -d -o node -g node -m 0755 /usr/local/share/npm-global
 
 ARG USERNAME=node
 
@@ -516,6 +518,12 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/network-policy-entrypo
 # scripts installed in this layer; see docker/image-manifest.ts. The backend
 # reads it from a never-started container, so the entrypoint never runs to
 # answer "what is this image?".
+# Nothing a root exec, root script or root shell resolves or sources may be
+# writable by node. Checked last, once every file is in place.
+COPY docker/verify-root-boundary.sh /usr/local/share/verify-root-boundary.sh
+RUN chmod 755 /usr/local/share/verify-root-boundary.sh \
+  && /usr/local/share/verify-root-boundary.sh
+
 ARG ORKESTRATOR_SOURCE_REVISION=unknown
 ARG ORKESTRATOR_IMAGE_CAPABILITIES=unverified
 LABEL org.orkestrator.image.manifest-schema="1" \

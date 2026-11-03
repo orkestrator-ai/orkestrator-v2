@@ -373,7 +373,7 @@ describe("allowlist edits in place", () => {
           gateway: "172.30.0.1",
         });
         expect(await log.read()).toContain(
-          "exec --user root container-1 /usr/local/bin/update-firewall.sh --set-domains one.example,two.example",
+          "exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-1 /usr/local/bin/update-firewall.sh --set-domains one.example,two.example",
         );
       },
     );
@@ -523,7 +523,7 @@ case "$*" in *'cat /etc/orkestrator/network-policy'*) printf '%s' '${record}' ;;
         const calls = await log.read();
         expect(
           calls.includes(
-            "exec --user root container-1 /usr/local/bin/update-firewall.sh --host-ports 42345",
+            "exec --env PATH=/usr/sbin:/usr/bin:/sbin:/bin --user root container-1 /usr/local/bin/update-firewall.sh --host-ports 42345",
           ),
         ).toBe(updates);
         if (port === null) expect(calls).toBe("");

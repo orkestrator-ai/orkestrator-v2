@@ -1138,7 +1138,9 @@ exit 0
               expect(environment.containerId).toBe("container-created");
 
               const execCalls = await fs.readFile(logs.exec, "utf8");
-              expect(execCalls).toMatch(/exec --user root container-created sh -c/);
+              expect(execCalls).toMatch(
+                /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-created sh -c/,
+              );
               expect(execCalls).toContain(
                 "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
               );
@@ -2628,7 +2630,9 @@ exit 0
           expect(environment.containerId).toBe("container-copy-created");
 
           const execCalls = await fs.readFile(logs.exec, "utf8");
-          expect(execCalls).toMatch(/exec --user root container-copy-created sh -c/);
+          expect(execCalls).toMatch(
+            /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-copy-created sh -c/,
+          );
           expect(execCalls).toContain(
             "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
           );

@@ -1139,7 +1139,11 @@ Users and isolation:
   Git aliases plus native Zsh completion without Oh My Zsh.
 - `orkroot`, a uid-0 user for root terminal sessions. The backend opens those
   terminals with `docker exec --user orkroot`; `node` has no sudoers path to
-  become `orkroot`.
+  become `orkroot`. Nor can `node` get code run as root through the files
+  root uses: root execs and terminals get a fixed root PATH, root scripts
+  reset PATH, root shells source no `node`-writable file, and the image build
+  (`docker/verify-root-boundary.sh`) fails when `node` can write anything on
+  those paths. The rules are in [`docker/AGENTS.md`](docker/AGENTS.md).
 - Network firewall (iptables/ipset) for security isolation. `node` has
   passwordless sudo for exactly two things: the image entrypoint
   (`/usr/local/bin/network-policy-entrypoint.sh`, which records the network

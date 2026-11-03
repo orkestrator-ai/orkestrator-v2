@@ -2,6 +2,7 @@ import { formatContainerLifecycleError } from "@orkestrator/protocol/container-l
 import { copyOutBounded, extractSingleTarFile } from "./docker-copy-out.js";
 import type { EnvironmentOperations } from "./environment-operations.js";
 import { runCommand } from "./shell.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
 /**
  * Generation-bound container readiness and graceful drain.
@@ -381,8 +382,7 @@ export async function drainContainerProcesses(
       "docker",
       [
         "exec",
-        "--user",
-        "root",
+        ...CONTAINER_ROOT_USER_ARGS,
         containerId,
         "/usr/local/bin/orkestrator-drain.sh",
         String(Math.max(0, Math.min(60, Math.floor(graceSeconds)))),

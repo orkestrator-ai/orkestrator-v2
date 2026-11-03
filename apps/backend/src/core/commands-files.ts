@@ -37,7 +37,10 @@ import {
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
 } from "./agent-credential-files.js";
-import { CONTAINER_UNTRACKED_STATS_SCANNER } from "./container-scripts.js";
+import {
+  CONTAINER_ROOT_USER_ARGS,
+  CONTAINER_UNTRACKED_STATS_SCANNER,
+} from "./container-scripts.js";
 import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
@@ -2533,8 +2536,7 @@ export async function ensureContainerProjectFilesAccess(containerId: string): Pr
     "docker",
     [
       "exec",
-      "--user",
-      "root",
+      ...CONTAINER_ROOT_USER_ARGS,
       containerId,
       "sh",
       "-c",

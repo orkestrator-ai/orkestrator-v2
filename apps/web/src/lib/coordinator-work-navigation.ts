@@ -28,6 +28,7 @@ const defaultNavigation: CoordinatorWorkNavigation = {
       projectId: target.projectId,
       environmentId: target.environmentId,
       title: target.title,
+      workTarget: target.workTarget,
     }),
   openBuild: scheduleBuildPipelineTabActivation,
 };
@@ -41,6 +42,25 @@ function selectEnvironment(projectId: string, environmentId: string): void {
 /** Focuses a tab that is in the environment's layout, or asks for it once it arrives. */
 function focusTab(environmentId: string, tabId: string): void {
   if (!openConversationTab(environmentId, tabId)) requestPaneTabActivation(environmentId, tabId);
+}
+
+const pendingWorkers = new Map<string, string>();
+let offWorkers: (() => void) | undefined;
+function reconcileWorkers(): void {
+  for (const [environmentId, tabId] of Array.from(pendingWorkers)) {
+    const store = usePaneLayoutStore.getState();
+    if (
+      store.hydration.get(environmentId) !== "done" ||
+      !store.findPaneWithTab(tabId, environmentId)
+    )
+      continue;
+    pendingWorkers.delete(environmentId);
+    focusTab(environmentId, tabId);
+  }
+  if (!pendingWorkers.size) {
+    offWorkers?.();
+    offWorkers = undefined;
+  }
 }
 
 // The layout can still be hydrating when Open selects another environment.
@@ -89,7 +109,12 @@ export function openCoordinatorWorkTarget(
   switch (target.type) {
     case "worker-tab":
       selectEnvironment(target.projectId, target.environmentId);
-      if (target.tabId) focusTab(target.environmentId, target.tabId);
+      if (target.tabId) {
+        pendingWorkers.set(target.environmentId, target.tabId);
+        while (pendingWorkers.size > 64) pendingWorkers.delete(pendingWorkers.keys().next().value!);
+        offWorkers ??= usePaneLayoutStore.subscribe(reconcileWorkers);
+        reconcileWorkers();
+      }
       return;
     case "build":
       navigation.openBuild(target.projectId, target.pipelineId, target.environmentId);

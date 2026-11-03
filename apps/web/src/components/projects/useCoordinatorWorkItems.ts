@@ -273,7 +273,7 @@ export function useCoordinatorWorkItems(
           return {
             key,
             kind: ref.kind,
-            missing: false,
+            missing: ref.kind !== "graph-run" && value === null,
             snapshot:
               ref.kind === "graph-run" ? remoteGraphRun(value, ref.id) : remoteSnapshot(value),
           };
@@ -294,6 +294,22 @@ export function useCoordinatorWorkItems(
         let missingNext: Set<string> | null = null;
         for (const result of results) {
           if (!result) continue;
+          const missingKey = `${result.kind}:${result.key}`;
+          if (result.missing) {
+            missingNext ??= new Set(current.missing);
+            missingNext.add(missingKey);
+            if (result.kind === "build-pipeline") {
+              pipelinesNext ??= new Map(current.pipelines);
+              pipelinesNext.delete(result.key);
+            }
+            if (result.kind === "multi-review") {
+              reviewsNext ??= new Map(current.reviews);
+              reviewsNext.delete(result.key);
+            }
+          } else if (isBuildPipeline(result.snapshot) || isMultiReviewWorkflow(result.snapshot)) {
+            missingNext ??= new Set(current.missing);
+            missingNext.delete(missingKey);
+          }
           if (result.kind === "build-pipeline" && isBuildPipeline(result.snapshot)) {
             pipelinesNext ??= new Map(current.pipelines);
             pipelinesNext.set(result.key, result.snapshot);

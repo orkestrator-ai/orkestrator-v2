@@ -260,3 +260,57 @@ test("a held review removed from its store is confirmed missing and recovers on 
     load.mockRestore();
   }
 });
+
+test.each(["build-pipeline", "multi-review"])(
+  "remote %s clears deleted records, remounts missing and retries errors",
+  async (kind) => {
+    const reviewRecord = {
+      version: 1,
+      controller: "backend",
+      id: "r",
+      projectId: "p",
+      environmentId: "e",
+      targetBranch: "main",
+      phase: "reviewing",
+      reviewers: [
+        { id: "one", agent: "codex", model: "gpt", status: "running" },
+        { id: "two", agent: "codex", model: "gpt", status: "running" },
+      ],
+      fixModel: { agent: "codex", model: "gpt" },
+      backendRevision: 1,
+      createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString(),
+    };
+    let missing = false;
+    let offline = false;
+    const read = spyOn(portalStore, "invokeOnNode").mockImplementation(async () => {
+      if (offline) throw new Error("offline");
+      return (
+        missing
+          ? null
+          : { snapshot: kind === "build-pipeline" ? pipeline("building") : reviewRecord }
+      ) as never;
+    });
+    try {
+      const snap = snapshot(kind, "remote");
+      const hook = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      await waitFor(() => expect(hook.result.current.items[0]?.target).not.toBeNull());
+      offline = true;
+      await act(async () => requestViewSafetyChecks("interval"));
+      expect(hook.result.current.counts.running).toBe(1);
+      offline = false;
+      missing = true;
+      await act(async () => requestResourceResync());
+      await waitFor(() => expect(hook.result.current.counts.finished).toBe(1));
+      expect(hook.result.current.items[0]?.target).toBeNull();
+      hook.unmount();
+      const fresh = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      await waitFor(() => expect(fresh.result.current.counts.finished).toBe(1));
+      missing = false;
+      await act(async () => requestResourceResync());
+      await waitFor(() => expect(fresh.result.current.counts.running).toBe(1));
+    } finally {
+      read.mockRestore();
+    }
+  },
+);

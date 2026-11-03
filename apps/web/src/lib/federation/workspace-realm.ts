@@ -15,6 +15,8 @@
 
 import { isAppShortcutId, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 
+import type { LocalWorkTarget } from "@/lib/coordinator-work-items";
+
 const REALM_PARAM = "realm";
 const REALM_VALUE = "workspace";
 const MAX_ID_LENGTH = 256;
@@ -136,12 +138,33 @@ export function isEnvironmentDialog(dialog: RealmDialog): boolean {
   return dialog === "environment-settings" || dialog === "environment-rebuild";
 }
 
+function workTarget(
+  value: unknown,
+  projectId?: string,
+  environmentId?: string,
+): LocalWorkTarget | undefined {
+  if (!value || typeof value !== "object" || !projectId || !environmentId) return undefined;
+  const v = value as Record<string, unknown>;
+  if (v.projectId !== projectId || v.environmentId !== environmentId) return undefined;
+  const base = { projectId, environmentId };
+  if (v.type === "worker-tab")
+    return { ...base, type: v.type, ...(boundedId(v.tabId) ? { tabId: boundedId(v.tabId) } : {}) };
+  if (v.type === "build" && boundedId(v.pipelineId))
+    return { ...base, type: v.type, pipelineId: boundedId(v.pipelineId)! };
+  if (v.type === "review" && boundedId(v.workflowId))
+    return { ...base, type: v.type, workflowId: boundedId(v.workflowId)! };
+  if (v.type === "graph-run" && boundedId(v.runId))
+    return { ...base, type: v.type, runId: boundedId(v.runId)! };
+  return undefined;
+}
+
 /** What the window asks its realm to show. */
 export interface RealmSelectRequest {
   type: "select";
   projectId?: string;
   environmentId?: string;
   boardTab?: RealmBoardTab;
+  workTarget?: LocalWorkTarget;
   /** Open the node's Add Project dialog. */
   addProject?: true;
   /** Open the node's New Environment dialog for this project. */
@@ -190,6 +213,7 @@ export type RealmToShellMessage =
       projectId: string;
       environmentId?: string;
       boardTab?: RealmBoardTab;
+      workTarget?: LocalWorkTarget;
       title: string;
     }
   /** Show or hide the window's sidebar. */
@@ -280,6 +304,19 @@ export function realmSearchParams(request: Omit<RealmSelectRequest, "type">): UR
   if (request.projectId) search.set("project", request.projectId);
   if (request.environmentId) search.set("environment", request.environmentId);
   if (request.boardTab) search.set("boardTab", request.boardTab);
+  if (request.workTarget) {
+    search.set("workType", request.workTarget.type);
+    const target = request.workTarget;
+    const id =
+      target.type === "worker-tab"
+        ? target.tabId
+        : target.type === "build"
+          ? target.pipelineId
+          : target.type === "review"
+            ? target.workflowId
+            : target.runId;
+    if (id) search.set("workId", id);
+  }
   if (request.addProject) search.set("addProject", "1");
   if (request.createEnvironmentProjectId)
     search.set("createEnvironment", request.createEnvironmentProjectId);
@@ -297,6 +334,15 @@ export function realmInitialRequest(): RealmSelectRequest | null {
     projectId: search.get("project") ?? undefined,
     environmentId: search.get("environment") ?? undefined,
     boardTab: search.get("boardTab") ?? undefined,
+    workTarget: {
+      type: search.get("workType"),
+      projectId: search.get("project"),
+      environmentId: search.get("environment"),
+      tabId: search.get("workId"),
+      pipelineId: search.get("workId"),
+      workflowId: search.get("workId"),
+      runId: search.get("workId"),
+    },
     addProject: search.get("addProject") === "1" ? true : undefined,
     createEnvironmentProjectId: search.get("createEnvironment") ?? undefined,
     dialog: search.get("dialog") ?? undefined,
@@ -347,6 +393,9 @@ export function parseShellMessage(value: unknown): ShellToRealmMessage | null {
     ...(projectId ? { projectId } : {}),
     ...(projectId && environmentId ? { environmentId } : {}),
     ...(projectId && tab ? { boardTab: tab } : {}),
+    ...(workTarget(message.workTarget, projectId, environmentId)
+      ? { workTarget: workTarget(message.workTarget, projectId, environmentId) }
+      : {}),
     ...(message.addProject === true ? { addProject: true as const } : {}),
     ...(createEnvironmentProjectId ? { createEnvironmentProjectId } : {}),
     ...(dialog && dialogTarget ? { dialog } : {}),
@@ -370,6 +419,9 @@ export function parseRealmMessage(value: unknown): RealmToShellMessage | null {
       projectId,
       ...(environmentId ? { environmentId } : {}),
       ...(tab ? { boardTab: tab } : {}),
+      ...(workTarget(message.workTarget, projectId, environmentId)
+        ? { workTarget: workTarget(message.workTarget, projectId, environmentId) }
+        : {}),
       title,
     };
   }

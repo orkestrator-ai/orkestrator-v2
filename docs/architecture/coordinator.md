@@ -974,20 +974,26 @@ pipeline's own newest Verify results (`pipelineCriteriaView`) give the same
 count. Open goes to the worker's delegated tab, the build tab
 (`scheduleBuildPipelineTabActivation`), the review's own Multi Review tab, the
 graph run (`requestGraphRunView`) or the pull request (`openPullRequestUrl`);
-work on another node opens that node's environment through
-`openMachineWorkspace`. A row with nothing to open (a deleted worker, a PR not
-yet opened) has a disabled button whose title says why.
+work on another node carries the delegated tab, pipeline, review or run identity
+through `openMachineWorkspace` and the validated realm selection message. The
+node activates that surface after its layout hydrates. A row with nothing to
+open (a deleted worker, a PR not yet opened) has a disabled button whose title
+and accessible name say why.
 
 **Order.** Sections in this order, each headed in words so status never
 depends on colour: **Needs you** (a worker whose delegation has a waiting
 episode, a worker, build or review environment with a question, approval or input
 waiting in `HumanPromptBanner`'s data, a paused or failed build, a paused or
 failed review, a graph run waiting on a person, paused or failed), **Running**,
-then **Finished**; newest first within each.
+then **Finished**; newest first within each. Remote build and review waiting
+summaries count as Needs you without consulting local environment IDs. A ready
+review with findings needs a decision; a clean report is finished, unless its
+automatic PR launch is pending (Running) or failed (Needs you).
 
 **Finished work** stays listed for 24 hours after it finishes, or while its
 pull request is open, whichever is later; then it drops off. A build's finish
-time is its last session's completion (or the delivery decision), a review's
+time is its last session's completion (or the delivery decision or authoritative
+`cancelledAt` transition), a review's
 its last update, a graph run's `finishedAt`, a worker's last delegation
 completion or outcome, a PR's merge or close as last recorded. A failed build,
 review or run is listed under Needs you but expires by the same rule. The panel
@@ -1006,7 +1012,12 @@ Multi Review or graph run on another node is read through that node's link
 (`invokeOnNode`) with the same reads its own views use (`get_build_pipeline`,
 `get_multi_review_workflow`, `graph_run_get`), again whenever the node's
 summaries refresh and on resync and safety checks, including after a failure
-that can be retried. A failed read keeps the last reading. `graph_run_get` is
+that can be retried. A failed read keeps the last reading. A successful null build or review read
+clears the cached snapshot and marks it unavailable under Finished, with bounded
+retention even after a remount. Followed PR rows are keyed by their URL once
+known; live status and checks are used only when the reading names that URL.
+Remote summaries omit PR URLs, so historical follows use their own final record
+rather than an unverified environment reading. `graph_run_get` is
 listed by name in `isNodeReadCommand` (`packages/protocol/src/command-nodes.ts`)
 because its verb comes last: a routed read is never recorded as an
 outcome-unknown write and does not refresh the node's summaries. A remote graph

@@ -102,7 +102,9 @@ describe("CoordinatorWorkPanel", () => {
     expect(onOpen).toHaveBeenCalledWith(items[0]!.target);
     fireEvent.click(screen.getByRole("button", { name: "Open Work panel" }));
     expect(onOpen).toHaveBeenLastCalledWith(items[1]!.target);
-    const unavailable = screen.getByRole("button", { name: "Open PR #42" }) as HTMLButtonElement;
+    const unavailable = screen.getByRole("button", {
+      name: "Open PR #42: The pull request has not been opened yet.",
+    }) as HTMLButtonElement;
     expect(unavailable.disabled).toBe(true);
     expect(unavailable.getAttribute("title")).toBe("The pull request has not been opened yet.");
     expect(onOpen).toHaveBeenCalledTimes(2);

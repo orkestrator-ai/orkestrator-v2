@@ -313,6 +313,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
           ...(message.environmentId ? { environmentId: message.environmentId } : {}),
           ...(message.boardTab ? { boardTab: message.boardTab } : {}),
           title: message.title,
+          workTarget: message.workTarget,
         });
       }
     },

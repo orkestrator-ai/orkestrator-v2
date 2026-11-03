@@ -200,3 +200,44 @@ describe("openCoordinatorWorkTarget", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
   });
 });
+
+test.each(["worker-tab", "build", "review", "graph-run"] as const)(
+  "remote %s retains its surface across workspace transport and reload",
+  async (type) => {
+    const { portalStore } = await import("@/lib/portal/portal-store");
+    const { useRemoteWorkspaceStore } = await import("@/stores/remoteWorkspaceStore");
+    const { parseShellMessage, realmSearchParams, realmInitialRequest } =
+      await import("@/lib/federation/workspace-realm");
+    const originalPortal = portalStore.getState();
+    const originalRemote = useRemoteWorkspaceStore.getState();
+    const happyDOM = (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM;
+    const originalHref = window.location.href;
+    const base = { projectId: "p", environmentId: "e" };
+    const workTarget =
+      type === "worker-tab"
+        ? { ...base, type, tabId: "tab" }
+        : type === "build"
+          ? { ...base, type, pipelineId: "pipe" }
+          : type === "review"
+            ? { ...base, type, workflowId: "review" }
+            : { ...base, type, runId: "run" };
+    try {
+      portalStore.store.setState({ selfId: "local" as never });
+      openCoordinatorWorkTarget({
+        type: "remote",
+        nodeId: "remote",
+        ...base,
+        title: "Work",
+        workTarget,
+      });
+      const request = useRemoteWorkspaceStore.getState().requests.remote!.request;
+      expect(parseShellMessage(request)).toHaveProperty("workTarget", workTarget);
+      happyDOM.setURL(`http://localhost/?${realmSearchParams(request)}`);
+      expect(realmInitialRequest()).toHaveProperty("workTarget", workTarget);
+    } finally {
+      happyDOM.setURL(originalHref);
+      portalStore.store.setState(originalPortal, true);
+      useRemoteWorkspaceStore.setState(originalRemote, true);
+    }
+  },
+);

@@ -2623,3 +2623,9 @@ test("legacy delivery warnings cover active Ship but exclude finished and pre-Ve
     ),
   ).toBeUndefined();
 });
+
+test("cancellation timestamp is optional for old snapshots and must be an ISO date", () => {
+  expect(isBuildPipeline(snapshot())).toBe(true);
+  expect(isBuildPipeline({ ...snapshot(), cancelledAt: "2026-11-03T15:00:00.000Z" })).toBe(true);
+  expect(isBuildPipeline({ ...snapshot(), cancelledAt: "yesterday" })).toBe(false);
+});

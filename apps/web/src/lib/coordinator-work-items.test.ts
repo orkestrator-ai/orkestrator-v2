@@ -650,3 +650,175 @@ describe("review fixes", () => {
     ).toEqual([]);
   });
 });
+
+test("remote builds and reviews follow waiting summaries without local ID collisions", () => {
+  const base = sources({
+    workflows: [
+      association({ kind: "build-pipeline", resourceId: "b", nodeId: "n" }),
+      association({ kind: "multi-review", resourceId: "r", nodeId: "n" }),
+    ],
+    remotePipelines: new Map([[remoteWorkKey("n", "b"), pipeline("b", { environmentId: "e" })]]),
+    remoteReviews: new Map([[remoteWorkKey("n", "r"), review("r", { environmentId: "e" })]]),
+    nodes: [node("n", "Remote", [{ environmentId: "e", activity: "waiting" }])],
+  });
+  expect(countCoordinatorWork(deriveCoordinatorWorkItems(base)).needsYou).toBe(2);
+  expect(
+    countCoordinatorWork(
+      deriveCoordinatorWorkItems({
+        ...base,
+        nodes: [node("n", "Remote", [{ environmentId: "e", activity: "working" }])],
+        promptEnvironmentIds: new Set(["e"]),
+      }),
+    ).running,
+  ).toBe(2);
+  for (const item of deriveCoordinatorWorkItems(base))
+    expect(item.target).toHaveProperty("workTarget");
+});
+
+test("ready reviews surface findings and finish clean reports with bounded retention", () => {
+  const base = sources({ workflows: [association({ kind: "multi-review", resourceId: "r" })] });
+  const run = (issues: unknown[], updatedAt = at(-HOUR)) =>
+    deriveCoordinatorWorkItems({
+      ...base,
+      reviews: new Map([
+        [
+          "r",
+          review("r", {
+            phase: "ready",
+            updatedAt,
+            consolidatedReport: { issues } as MultiReviewWorkflow["consolidatedReport"],
+          }),
+        ],
+      ]),
+    });
+  expect(run([{}])[0]?.bucket).toBe("needs-you");
+  expect(run([])[0]?.bucket).toBe("finished");
+  expect(run([], at(-25 * HOUR))).toEqual([]);
+});
+
+test.each([true, false])(
+  "cancellation retains a long-paused or setup build (%s) from its transition",
+  (paused) => {
+    const base = sources({
+      workflows: [
+        association({ kind: "build-pipeline", resourceId: "b", createdAt: at(-50 * HOUR) }),
+      ],
+      pipelines: new Map([
+        [
+          "b",
+          pipeline("b", {
+            phase: "failed",
+            error: "Build cancelled",
+            cancelledAt: at(0),
+            sessions: paused
+              ? [{ completedAt: at(-48 * HOUR) } as BuildPipeline["sessions"][number]]
+              : [],
+          }),
+        ],
+      ]),
+    });
+    expect(deriveCoordinatorWorkItems(base)[0]?.finishedAt).toBe(NOW);
+    expect(deriveCoordinatorWorkItems({ ...base, now: NOW + 23 * HOUR })).toHaveLength(1);
+    expect(deriveCoordinatorWorkItems({ ...base, now: NOW + 24 * HOUR })).toHaveLength(0);
+  },
+);
+
+test("PR follows keep independent URLs, final states and expiry when an environment is reused", () => {
+  const a = "https://github.com/o/r/pull/1",
+    b = "https://github.com/o/r/pull/2";
+  const old = association({
+    kind: "pull-request",
+    resourceId: "e",
+    pullRequest: {
+      source: "create-pr",
+      prUrl: a,
+      final: { prUrl: a, prState: "merged", at: at(-HOUR) } as NonNullable<
+        CoordinatorWorkflowAssociation["pullRequest"]
+      >["final"],
+    },
+  });
+  const current = association({
+    kind: "pull-request",
+    resourceId: "e",
+    pullRequest: { source: "create-pr", prUrl: b },
+  });
+  const base = sources({
+    workflows: [old, current],
+    prReadings: new Map([
+      ["e", { prUrl: b, prState: "open", hasMergeConflicts: true, checkSummary: null }],
+    ]),
+  });
+  const items = deriveCoordinatorWorkItems(base);
+  expect(items).toHaveLength(2);
+  expect(items.find((x) => x.target?.type === "pull-request" && x.target.url === a)?.stage).toBe(
+    "PR merged",
+  );
+  expect(
+    items.find((x) => x.target?.type === "pull-request" && x.target.url === b)?.stage,
+  ).toContain("merge conflicts");
+  expect(deriveCoordinatorWorkItems({ ...base, now: NOW + 24 * HOUR })).toHaveLength(1);
+});
+
+test.each(["pending", "launched", "failed"] as const)(
+  "clean ready review follows automatic PR delivery %s",
+  (state) => {
+    const items = deriveCoordinatorWorkItems(
+      sources({
+        workflows: [association({ kind: "multi-review", resourceId: "r" })],
+        reviews: new Map([
+          [
+            "r",
+            review("r", {
+              phase: "ready",
+              consolidatedReport: {
+                issues: [],
+              } as unknown as MultiReviewWorkflow["consolidatedReport"],
+              autoPrLaunch: { state, fixIdentity: "f", requestId: "r", basis: "clean-review" },
+            }),
+          ],
+        ]),
+      }),
+    );
+    expect(items[0]?.bucket).toBe(
+      state === "pending" ? "running" : state === "failed" ? "needs-you" : "finished",
+    );
+  },
+);
+
+test.each(["build-pipeline", "multi-review"] as const)(
+  "confirmed missing remote %s has no target and expires",
+  (kind) => {
+    const base = sources({
+      workflows: [
+        association({ kind, resourceId: "gone", nodeId: "n", createdAt: at(-23 * HOUR) }),
+      ],
+      missingResources: new Set([`${kind}:${remoteWorkKey("n", "gone")}`]),
+    });
+    const item = deriveCoordinatorWorkItems(base)[0]!;
+    expect(item.bucket).toBe("finished");
+    expect(item.target).toBeNull();
+    expect(countCoordinatorWork([item]).running).toBe(0);
+    expect(deriveCoordinatorWorkItems({ ...base, now: NOW + HOUR })).toEqual([]);
+  },
+);
+
+test("ready coverage gaps also need a decision", () => {
+  const items = deriveCoordinatorWorkItems(
+    sources({
+      workflows: [association({ kind: "multi-review", resourceId: "r" })],
+      reviews: new Map([
+        [
+          "r",
+          review("r", {
+            phase: "ready",
+            consolidatedReport: {
+              issues: [],
+              testCoverageGaps: [{}],
+            } as unknown as MultiReviewWorkflow["consolidatedReport"],
+          }),
+        ],
+      ]),
+    }),
+  );
+  expect(items[0]?.bucket).toBe("needs-you");
+});

@@ -107,7 +107,7 @@ function WorkRow({
         size="sm"
         variant="outline"
         className="h-6 shrink-0 px-2 text-[11px]"
-        aria-label={`Open ${item.name}`}
+        aria-label={`Open ${item.name}${!target && item.unavailableReason ? `: ${item.unavailableReason}` : ""}`}
         title={target ? `Open ${item.name}` : item.unavailableReason}
         disabled={!target}
         onClick={() => {

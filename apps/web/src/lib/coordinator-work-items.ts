@@ -39,6 +39,11 @@ export const COORDINATOR_WORK_BUCKETS: readonly CoordinatorWorkBucket[] = [
   "finished",
 ];
 
+export type LocalWorkTarget = Exclude<
+  CoordinatorWorkTarget,
+  { type: "remote" } | { type: "pull-request" }
+>;
+
 /** Where a row's Open button goes. */
 export type CoordinatorWorkTarget =
   /** A worker environment on this machine, at the delegated tab when known. */
@@ -49,7 +54,14 @@ export type CoordinatorWorkTarget =
   | { type: "graph-run"; projectId: string; environmentId: string; runId: string; title?: string }
   | { type: "pull-request"; url: string }
   /** Work on another node: its environment, through that node's workspace. */
-  | { type: "remote"; nodeId: string; projectId: string; environmentId: string; title: string };
+  | {
+      type: "remote";
+      nodeId: string;
+      projectId: string;
+      environmentId: string;
+      title: string;
+      workTarget?: LocalWorkTarget;
+    };
 
 export interface CoordinatorWorkItem {
   /** Stable row key. */
@@ -229,6 +241,7 @@ function remoteTarget(
   nodeId: string,
   environment: { projectId: string; environmentId: string } | undefined,
   title: string,
+  workTarget?: LocalWorkTarget,
 ): CoordinatorWorkTarget | null {
   return environment
     ? {
@@ -237,6 +250,15 @@ function remoteTarget(
         projectId: environment.projectId,
         environmentId: environment.environmentId,
         title,
+        ...(workTarget
+          ? {
+              workTarget: {
+                ...workTarget,
+                projectId: environment.projectId,
+                environmentId: environment.environmentId,
+              },
+            }
+          : {}),
       }
     : null;
 }
@@ -254,7 +276,7 @@ function prReadingFor(
       prUrl: environment.prUrl,
       prState: environment.prState,
       hasMergeConflicts: environment.hasMergeConflicts ?? null,
-      checkSummary: monitor?.checkSummary ?? null,
+      checkSummary: monitor?.prUrl === environment.prUrl ? (monitor?.checkSummary ?? null) : null,
     };
   }
   return monitor;
@@ -387,6 +409,12 @@ function workerItem(
       first.nodeId,
       remote?.environment ? { projectId: remote.environment.projectId, environmentId } : undefined,
       name,
+      {
+        type: "worker-tab",
+        projectId: remote?.environment?.projectId ?? first.projectId,
+        environmentId,
+        tabId: latestDelegation?.workerTabId,
+      },
     );
     if (!target) unavailableReason = `${remote?.machine ?? first.nodeId} has not listed it yet.`;
   } else if (local) {
@@ -460,7 +488,11 @@ function buildItem(
     openDelegations: 0,
   };
   if (!pipeline) {
-    if (!nodeId && sources.missingResources?.has(`build-pipeline:${association.resourceId}`))
+    if (
+      sources.missingResources?.has(
+        `build-pipeline:${nodeId ? remoteWorkKey(nodeId, association.resourceId) : association.resourceId}`,
+      )
+    )
       return missingItem(base, createdAt);
     const target: CoordinatorWorkTarget | null = nodeId
       ? null
@@ -487,8 +519,9 @@ function buildItem(
     : prReadingFor(sources, environmentId);
   const prOpen = pr?.prState === "open" || outcomePrOpen(association);
   const cancelled = isCancelledBuildPipeline(pipeline);
-  const promptWaiting =
-    !nodeId && environmentId !== undefined && sources.promptEnvironmentIds.has(environmentId);
+  const promptWaiting = nodeId
+    ? remote?.environment?.activity === "waiting"
+    : environmentId !== undefined && sources.promptEnvironmentIds.has(environmentId);
 
   let bucket: CoordinatorWorkBucket;
   let stage: string;
@@ -515,6 +548,7 @@ function buildItem(
   const terminal = !isActiveBuildPhase(pipeline.phase) && pipeline.phase !== "paused";
   const finishedAt = terminal
     ? (latest(
+        time(pipeline.cancelledAt),
         ...pipeline.sessions.map((session) => time(session.completedAt)),
         time(pipeline.delivery?.decidedAt),
       ) ?? createdAt)
@@ -525,6 +559,7 @@ function buildItem(
         nodeId,
         environmentId ? { projectId: pipeline.projectId, environmentId } : undefined,
         name,
+        { type: "build", projectId: pipeline.projectId, pipelineId: pipeline.id, environmentId },
       )
     : {
         type: "build",
@@ -572,7 +607,11 @@ function reviewItem(
     prOpen: false,
   };
   if (!workflow) {
-    if (!nodeId && sources.missingResources?.has(`multi-review:${association.resourceId}`))
+    if (
+      sources.missingResources?.has(
+        `multi-review:${nodeId ? remoteWorkKey(nodeId, association.resourceId) : association.resourceId}`,
+      )
+    )
       return missingItem(base, createdAt);
     return {
       ...base,
@@ -593,11 +632,32 @@ function reviewItem(
   } else if (workflow.phase === "paused") {
     bucket = "needs-you";
     stage = "Review paused";
+  } else if (workflow.phase === "ready") {
+    const findings = Boolean(
+      workflow.consolidatedReport?.issues.length ||
+      workflow.consolidatedReport?.testCoverageGaps?.length,
+    );
+    const delivery = workflow.autoPrLaunch?.state;
+    bucket =
+      findings || delivery === "failed"
+        ? "needs-you"
+        : delivery === "pending"
+          ? "running"
+          : "finished";
+    stage = findings
+      ? "Review ready · findings need your decision"
+      : delivery === "pending"
+        ? "Review complete · opening PR"
+        : delivery === "failed"
+          ? "Review complete · PR launch failed"
+          : "Review complete";
   } else if (REVIEW_FINISHED.has(workflow.phase)) {
     bucket = "finished";
     stage = `Review ${REVIEW_PHASE_WORDS[workflow.phase]}`;
   } else {
-    const waiting = !nodeId && sources.promptEnvironmentIds.has(workflow.environmentId);
+    const waiting = nodeId
+      ? remote?.environment?.activity === "waiting"
+      : sources.promptEnvironmentIds.has(workflow.environmentId);
     bucket = waiting ? "needs-you" : "running";
     stage =
       workflow.phase === "reviewing"
@@ -605,7 +665,10 @@ function reviewItem(
         : `Review · ${REVIEW_PHASE_WORDS[workflow.phase]}`;
     if (waiting) stage += " · waiting for you";
   }
-  const terminal = REVIEW_FINISHED.has(workflow.phase) || workflow.phase === "failed";
+  const terminal =
+    REVIEW_FINISHED.has(workflow.phase) ||
+    workflow.phase === "failed" ||
+    (workflow.phase === "ready" && bucket === "finished");
   const finishedAt = terminal ? (time(workflow.updatedAt) ?? createdAt) : undefined;
   const target: CoordinatorWorkTarget | null = nodeId
     ? remoteTarget(
@@ -615,6 +678,12 @@ function reviewItem(
           environmentId: workflow.environmentId,
         },
         name,
+        {
+          type: "review",
+          projectId: workflow.projectId,
+          environmentId: workflow.environmentId,
+          workflowId: workflow.id,
+        },
       )
     : {
         type: "review",
@@ -719,6 +788,13 @@ function graphRunItem(
             environmentId: run.environmentId,
           },
           name,
+          {
+            type: "graph-run",
+            projectId: run.projectId,
+            environmentId: run.environmentId,
+            runId: run.id,
+            title: name,
+          },
         )
       : {
           type: "graph-run",
@@ -757,7 +833,7 @@ function pullRequestItem(
   const final = associations.map((a) => a.pullRequest?.final).find(Boolean);
   const remote = nodeId ? nodeLookup(sources, nodeId, environmentId) : undefined;
   const local = nodeId ? undefined : sources.environments.get(environmentId);
-  const reading = nodeId
+  const currentReading = nodeId
     ? remote?.environment?.prState
       ? {
           prUrl: null,
@@ -767,7 +843,8 @@ function pullRequestItem(
         }
       : undefined
     : prReadingFor(sources, environmentId);
-  const url = follow?.prUrl ?? final?.prUrl ?? reading?.prUrl ?? local?.prUrl ?? null;
+  const url = follow?.prUrl ?? final?.prUrl ?? currentReading?.prUrl ?? local?.prUrl ?? null;
+  const reading = currentReading?.prUrl === url ? currentReading : undefined;
   const prState = reading?.prState ?? final?.prState ?? null;
   const environmentName =
     local?.name ?? remote?.environment?.name ?? final?.name ?? first.workerOutcome?.name;
@@ -789,7 +866,7 @@ function pullRequestItem(
       ) ?? createdAt)
     : undefined;
   return {
-    key: `pull-request:${nodeId ?? ""}:${environmentId}`,
+    key: `pull-request:${nodeId ?? ""}:${environmentId}:${url ?? first.id}`,
     kind: "pull-request",
     bucket: finished ? "finished" : "running",
     name,
@@ -822,7 +899,7 @@ export function deriveCoordinatorWorkItems(sources: CoordinatorWorkSources): Coo
   const items: CoordinatorWorkItem[] = [];
   for (const association of associations) {
     if (association.kind === "environment" || association.kind === "pull-request") {
-      const key = `${association.kind}\u0000${association.nodeId ?? ""}\u0000${association.resourceId}`;
+      const key = `${association.kind}\u0000${association.nodeId ?? ""}\u0000${association.resourceId}\u0000${association.kind === "pull-request" ? (association.pullRequest?.prUrl ?? association.pullRequest?.final?.prUrl ?? association.id) : ""}`;
       const group = grouped.get(key);
       if (group) group.push(association);
       else grouped.set(key, [association]);

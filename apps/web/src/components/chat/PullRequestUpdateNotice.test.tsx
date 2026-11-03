@@ -54,6 +54,17 @@ describe("PullRequestUpdateNotice", () => {
     expect(open).toHaveBeenCalledWith({ owner: "acme", repo: "app", number: 12 }, undefined);
   });
 
+  test("a deleted pull request reads as one quiet line too", () => {
+    const deleted = mail({
+      body: 'Pull request #12 "Add the watch" in acme/app: deleted from GitHub.\nURL: x',
+      notice: { ...mail().notice!, state: "pr-gone", tone: "info" },
+    });
+    expect(watchedPullRequestSummary(deleted)).toBe("deleted from GitHub");
+    expect(watchedPullRequestSummary({ ...deleted, body: "Something else" })).toBe(
+      "no longer available",
+    );
+  });
+
   test("falls back to the state when the body has no summary", () => {
     expect(
       watchedPullRequestSummary(

@@ -13,8 +13,12 @@
  * notice (resource `watched-pull-request`), which the transcript draws as one
  * line rather than a mail tile. The notice says no action is expected. A
  * merged or closed pull request is reported once (unless it was
- * already settled at its first reading) and then no longer watched. Access-ambiguous
- * failures, including 404, retain the watch and back off.
+ * already settled at its first reading) and then no longer watched. So is a
+ * deleted one: a 404 or 410 is confirmed against the repository and issue
+ * (`confirmGitHubPullRequestDeleted`), because a 404 alone may only mean the
+ * token lost access. An unconfirmed 404 keeps the watch and backs off, until
+ * it has lasted `WATCHED_PR_MISSING_GIVE_UP_MS`, when the watch is dropped
+ * quietly. Other read failures keep the watch and back off.
  *
  * This is awareness, not ownership: a pull request a coordinator raised
  * through `create_pr` is followed by its `pull-request` association, which
@@ -43,6 +47,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { GitHubApiError } from "./github.js";
 import { resolveGitHubToken } from "./github-credentials.js";
 import {
+  confirmGitHubPullRequestDeleted,
   getGitHubPullRequestStatus,
   type GitHubPullRequestStatus,
 } from "./github-pull-requests.js";
@@ -60,6 +65,13 @@ export const WATCHED_PR_POLL_INTERVAL_MS = 120_000;
 export const WATCHED_PR_MAX_READS_PER_SWEEP = 15;
 /** A watched pull request seen again refreshes `lastSeenAt` at most this often. */
 export const WATCHED_PR_TOUCH_AFTER_MS = 60 * 60 * 1_000;
+/**
+ * How long a pull request may answer "not found" without GitHub confirming a
+ * deletion before the watch gives up on it. An explicit open watches it again.
+ */
+export const WATCHED_PR_MISSING_GIVE_UP_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The change phrase of a pull request GitHub confirmed deleted. */
+export const WATCHED_PR_DELETED_PHRASE = "deleted from GitHub";
 /** Same hold as other status notices, so changes landing together arrive together. */
 const WATCHED_PR_COALESCE_MS = 10_000;
 const MAX_TITLE_CHARS = 120;
@@ -85,6 +97,8 @@ export interface CoordinatorPullRequestWatchOptions {
     >;
   };
   readStatus?: (token: string, ref: GitHubPullRequestRef) => Promise<GitHubPullRequestStatus>;
+  /** After a 404 or 410: true only when GitHub positively shows the pull request is gone. */
+  confirmDeleted?: (token: string, ref: GitHubPullRequestRef) => Promise<boolean>;
   /** The Settings GitHub credential; undefined when none is configured. */
   token?: () => Promise<string | undefined>;
   now?: () => number;
@@ -225,6 +239,9 @@ export function renderWatchedPullRequestNotice(
 export class CoordinatorPullRequestWatches {
   private readonly storage: CoordinatorPullRequestWatchOptions["storage"];
   private readonly readStatus: NonNullable<CoordinatorPullRequestWatchOptions["readStatus"]>;
+  private readonly confirmDeleted: NonNullable<
+    CoordinatorPullRequestWatchOptions["confirmDeleted"]
+  >;
   private readonly token: NonNullable<CoordinatorPullRequestWatchOptions["token"]>;
   private readonly now: () => number;
   private readonly coalesceMs: number;
@@ -234,6 +251,8 @@ export class CoordinatorPullRequestWatches {
     this.storage = options.storage;
     this.readStatus =
       options.readStatus ?? ((token, ref) => getGitHubPullRequestStatus(token, ref));
+    this.confirmDeleted =
+      options.confirmDeleted ?? ((token, ref) => confirmGitHubPullRequestDeleted(token, ref));
     this.token =
       options.token ?? (async () => resolveGitHubToken((await this.storage.loadConfig()).global));
     this.now = options.now ?? (() => Date.now());
@@ -350,9 +369,16 @@ export class CoordinatorPullRequestWatches {
     } catch (error) {
       this.recordChecked(projectId, entry.key);
       if (error instanceof GitHubApiError && error.code === "rate-limit") return true;
+      const missing =
+        error instanceof GitHubApiError && (error.status === 404 || error.status === 410);
+      if (missing && (await this.confirmDeleted(token, ref).catch(() => false))) {
+        await this.settleDeleted(projectId, entry, notify);
+        return false;
+      }
       log.debug("pr-watch.read-failed", {
         code: error instanceof GitHubApiError ? error.code : "error",
       });
+      if (missing) this.recordMissing(projectId, entry.key);
       return false;
     }
     const previous = entry.reading;
@@ -377,21 +403,83 @@ export class CoordinatorPullRequestWatches {
       projectId,
       entry.key,
       new Date(this.now()),
-      (current) =>
-        settled
-          ? { kind: "settle" }
-          : {
-              kind: "keep",
-              entry: {
-                ...current,
-                ...(title ? { title } : {}),
-                reading,
-                checkedAt,
-                notices: Math.max(current.notices, notices),
-              },
-            },
+      (current) => {
+        if (settled) return { kind: "settle" };
+        const next: WatchedPullRequest = {
+          ...current,
+          ...(title ? { title } : {}),
+          reading,
+          checkedAt,
+          notices: Math.max(current.notices, notices),
+        };
+        // A successful reading ends any run of "not found" answers.
+        delete next.missingSince;
+        return { kind: "keep", entry: next };
+      },
     );
     return false;
+  }
+
+  /**
+   * GitHub confirmed the pull request is gone: tell the coordinator, when it
+   * had a baseline to compare against, and stop watching. A failed delivery
+   * throws before the settle, so the next interval retries the same notice.
+   */
+  private async settleDeleted(
+    projectId: string,
+    entry: WatchedPullRequest,
+    notify: boolean,
+  ): Promise<void> {
+    if (entry.reading && notify) {
+      await this.deliver(
+        projectId,
+        entry,
+        entry.title,
+        [WATCHED_PR_DELETED_PHRASE],
+        { state: "pr-gone", tone: "info" },
+        readingSignature("gone"),
+      );
+    }
+    this.storage.watchedPullRequests.updateWatchedPullRequest(
+      projectId,
+      entry.key,
+      new Date(this.now()),
+      () => ({ kind: "settle" }),
+    );
+    log.debug("pr-watch.removed", { projectId, reason: "deleted" });
+  }
+
+  /**
+   * An unconfirmed "not found": keep the watch and its baseline, since the
+   * token may only have lost access, but give up once it has lasted
+   * `WATCHED_PR_MISSING_GIVE_UP_MS` so a pull request lost with its
+   * repository is not read forever.
+   */
+  private recordMissing(projectId: string, key: string): void {
+    const nowMs = this.now();
+    let removed = false;
+    this.storage.watchedPullRequests.updateWatchedPullRequest(
+      projectId,
+      key,
+      new Date(nowMs),
+      (current) => {
+        const since = current.missingSince ? Date.parse(current.missingSince) : Number.NaN;
+        if (Number.isFinite(since) && nowMs - since >= WATCHED_PR_MISSING_GIVE_UP_MS) {
+          removed = true;
+          return { kind: "settle" };
+        }
+        return {
+          kind: "keep",
+          entry: {
+            ...current,
+            missingSince: Number.isFinite(since)
+              ? current.missingSince!
+              : new Date(nowMs).toISOString(),
+          },
+        };
+      },
+    );
+    if (removed) log.debug("pr-watch.removed", { projectId, reason: "unreadable" });
   }
 
   private async isFollowed(projectId: string, key: string): Promise<boolean> {

@@ -928,6 +928,42 @@ export async function getGitHubPullRequestStatus(
   };
 }
 
+/**
+ * True only when GitHub positively shows that a pull request no longer exists,
+ * after its own read answered 404 or 410. A 404 alone cannot tell a deleted
+ * pull request from a token that lost access, so this reads the repository
+ * first: only when the repository is readable with the same credential and
+ * the number answers 410 (deleted), 404 (no longer there) or an issue that is
+ * not a pull request does it count as gone. Any other answer, including an
+ * unreadable repository or one with issues turned off, is ambiguous and
+ * returns false.
+ */
+export async function confirmGitHubPullRequestDeleted(
+  token: string,
+  ref: GitHubPullRequestRef,
+  options: GitHubPullRequestRequestOptions = {},
+): Promise<boolean> {
+  assertPullRequestRef(ref);
+  const client = pullRequestClient(token, options);
+  try {
+    const { data } = await getJson(client, repoPath(ref), "load repository", { cached: false });
+    // With issues turned off the issue endpoint answers 410 for every number.
+    if (!isRecord(data) || data.has_issues === false) return false;
+  } catch {
+    return false;
+  }
+  try {
+    const { data } = await getJson(client, issuePath(ref), `load issue #${ref.number}`, {
+      cached: false,
+    });
+    return (
+      isRecord(data) && numberValue(data.number) === ref.number && !isRecord(data.pull_request)
+    );
+  } catch (error) {
+    return error instanceof GitHubApiError && (error.status === 404 || error.status === 410);
+  }
+}
+
 export function buildPullRequestDetail(
   ref: GitHubPullRequestRef,
   pull: Record<string, unknown>,

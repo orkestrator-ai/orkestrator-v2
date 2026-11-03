@@ -135,7 +135,8 @@ delays or fails the GitHub action.
 
 A pull request link of the project's repository that a coordinator renders or
 opens is also watched for status changes until it settles, read through
-`getGitHubPullRequestStatus` and the same conditional cache; see
+`getGitHubPullRequestStatus` and the same conditional cache (a 404 or 410 is
+confirmed as a deletion by `confirmGitHubPullRequestDeleted`); see
 [Watched pull requests](coordinator.md#watched-pull-requests).
 
 ## The Resolve button

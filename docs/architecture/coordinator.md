@@ -1820,11 +1820,22 @@ is reported once and ends the watch; a pull request already
 settled at its first reading ends silently. *Finished work only* (`off`)
 records changes without notices, and with no main conversation open the change
 is recorded without a notice, as for other status notices. Disabled messaging also records changes quietly.
-Read failures, including access-ambiguous 404s from the primary or subordinate endpoints, keep the watch and back off. A failed mail delivery advances the polling timestamp while retaining the comparison baseline for retry. GitHub polling never holds the coordinator repair promise.
+**Deleted pull requests.** A 404 alone cannot tell a deleted pull request
+from a credential that lost access, so a 404 or 410 from the status read is
+confirmed (`confirmGitHubPullRequestDeleted`): with the same credential the
+repository must be readable (and have issues turned on, since otherwise the
+issue endpoint answers 410 for every number) and the number must answer 410,
+404 or an issue that is not a pull request. A confirmed deletion sends one
+`pr-gone` notice ("deleted from GitHub") when a baseline exists, then ends the
+watch like a merge or close. An unconfirmed 404 keeps the watch and its
+baseline and records `missingSince`; a successful reading clears it, and after
+seven days of unbroken "not found" the watch is dropped quietly
+(`pr-watch.removed`, reason `unreadable`). An explicit open watches it again.
+Other read failures, including 403s, keep the watch and back off. A failed mail delivery advances the polling timestamp while retaining the comparison baseline for retry. GitHub polling never holds the coordinator repair promise.
 
 **Message.** A workflow notice (resource `watched-pull-request`, id
 `owner/repo#number`, label the title, states `pr-updated`, `pr-checks-failed`,
-`pr-conflicts`, `pr-changes-requested`, `pr-merged`, `pr-closed`),
+`pr-conflicts`, `pr-changes-requested`, `pr-merged`, `pr-closed`, `pr-gone`),
 subject `PR #12 updated: <title>`, and a body that says no action is expected
 unless it affects tracked work. It is budgeted per pull request
 (`statusBudgetKey`) and coalesced like other status notices. The transcript

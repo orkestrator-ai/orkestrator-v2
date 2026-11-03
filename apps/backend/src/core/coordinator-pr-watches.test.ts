@@ -5,6 +5,7 @@ import {
   CoordinatorPullRequestWatches,
   describeWatchedPullRequestChanges,
   WATCHED_PR_MAX_READS_PER_SWEEP,
+  WATCHED_PR_MISSING_GIVE_UP_MS,
   WATCHED_PR_POLL_INTERVAL_MS,
   watchedPullRequestReading,
 } from "./coordinator-pr-watches.js";
@@ -50,6 +51,9 @@ interface Harness {
   setCoordinator(present: boolean): void;
   setDeliveryError(error?: Error): void;
   setFollowed(followed: boolean): void;
+  /** What the deletion probe answers after a 404 or 410; false (ambiguous) by default. */
+  setDeleted(deleted: boolean): void;
+  deletionProbes: GitHubPullRequestRef[];
 }
 
 async function withHarness(run: (harness: Harness) => Promise<void>): Promise<void> {
@@ -67,6 +71,8 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     let coordinator = true;
     let deliveryError: Error | undefined;
     let followed = false;
+    let deleted = false;
+    const deletionProbes: GitHubPullRequestRef[] = [];
     const statuses = new Map<number, GitHubPullRequestStatus | Error>();
     const sent: SentMail[] = [];
     const reads: GitHubPullRequestRef[] = [];
@@ -121,6 +127,10 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
         if (next instanceof Error) throw next;
         return next;
       },
+      confirmDeleted: async (_token, ref) => {
+        deletionProbes.push(ref);
+        return deleted;
+      },
     });
     await run({
       storage,
@@ -147,6 +157,10 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
       setFollowed: (value) => {
         followed = value;
       },
+      setDeleted: (value) => {
+        deleted = value;
+      },
+      deletionProbes,
       setCoordinator: (present) => {
         coordinator = present;
       },
@@ -291,6 +305,113 @@ describe("watching a pull request", () => {
       advance(WATCHED_PR_POLL_INTERVAL_MS);
       await watches.sweep();
       expect(sent[0]?.body).toContain("checks passing");
+    });
+  });
+
+  test("a deletion GitHub confirms is reported once, then the pull request is no longer watched", async () => {
+    await withHarness(async ({ watches, sent, setStatus, setDeleted, advance, storage, reads }) => {
+      await watches.watch(PROJECT_ID, ref(9), "rendered");
+      await watches.sweep();
+      setStatus(9, new GitHubApiError("gone", { code: "not-found", status: 404 }));
+      setDeleted(true);
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.notice).toMatchObject({ state: "pr-gone", tone: "info" });
+      expect(sent[0]!.subject).toBe("PR #9 updated: Add the watch");
+      expect(sent[0]!.body).toContain("Acme/App: deleted from GitHub.");
+      expect(sent[0]!.body).toContain("no action is expected");
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toEqual([]);
+
+      expect(await watches.watch(PROJECT_ID, ref(9), "rendered")).toEqual({
+        watched: false,
+        reason: "settled",
+      });
+      const before = reads.length;
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(reads.length).toBe(before);
+    });
+  });
+
+  test("a 410 is probed too, and a pull request deleted before its baseline ends silently", async () => {
+    await withHarness(async ({ watches, sent, setStatus, setDeleted, storage, deletionProbes }) => {
+      setStatus(4, new GitHubApiError("gone", { code: "github", status: 410 }));
+      setDeleted(true);
+      await watches.watch(PROJECT_ID, ref(4), "rendered");
+      await watches.sweep();
+      expect(deletionProbes).toEqual([{ owner: "Acme", repo: "App", number: 4 }]);
+      expect(sent).toEqual([]);
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toEqual([]);
+    });
+  });
+
+  test("other read failures never probe for a deletion", async () => {
+    await withHarness(async ({ watches, setStatus, setDeleted, storage, deletionProbes }) => {
+      setStatus(4, new GitHubApiError("denied", { code: "permission", status: 403 }));
+      setDeleted(true);
+      await watches.watch(PROJECT_ID, ref(4), "rendered");
+      await watches.sweep();
+      expect(deletionProbes).toEqual([]);
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(1);
+    });
+  });
+
+  test("a failed deletion notice keeps the watch and is retried", async () => {
+    await withHarness(
+      async ({ watches, sent, setStatus, setDeleted, setDeliveryError, advance, storage }) => {
+        await watches.watch(PROJECT_ID, ref(9), "rendered");
+        await watches.sweep();
+        setStatus(9, new GitHubApiError("gone", { code: "not-found", status: 404 }));
+        setDeleted(true);
+        setDeliveryError(new Error("mail store unavailable"));
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        await watches.sweep();
+        expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(1);
+        setDeliveryError();
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        await watches.sweep();
+        expect(sent.map((mail) => mail.notice?.state)).toEqual(["pr-gone"]);
+        expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toEqual([]);
+      },
+    );
+  });
+
+  test("an unconfirmed 404 gives up quietly once it outlasts the give-up period", async () => {
+    await withHarness(async ({ watches, sent, setStatus, advance, storage }) => {
+      await watches.watch(PROJECT_ID, ref(9), "rendered");
+      await watches.sweep();
+      const notFound = new GitHubApiError("gone", { code: "not-found", status: 404 });
+      setStatus(9, notFound);
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      const [first] = storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID);
+      expect(first?.missingSince).toBeDefined();
+      expect(first?.reading?.state).toBe("open");
+
+      // A successful reading in between restarts the period.
+      advance(WATCHED_PR_MISSING_GIVE_UP_MS - WATCHED_PR_POLL_INTERVAL_MS);
+      setStatus(9, status());
+      await watches.sweep();
+      expect(
+        storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]?.missingSince,
+      ).toBeUndefined();
+      setStatus(9, notFound);
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      advance(WATCHED_PR_MISSING_GIVE_UP_MS - WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(1);
+
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toEqual([]);
+      expect(sent).toEqual([]);
+      // An explicit open watches it again.
+      expect(await watches.watch(PROJECT_ID, ref(9), "opened")).toEqual({
+        watched: true,
+        added: true,
+      });
     });
   });
 

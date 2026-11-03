@@ -27,6 +27,8 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
         "A watched pull request could not be observed; the next sweep retries.",
       "pr-watch.read-failed":
         "GitHub could not be read for a watched pull request; `code` is the error category.",
+      "pr-watch.removed":
+        "A watched pull request stopped being watched without a reading; `reason` is `deleted` (GitHub confirmed it is gone) or `unreadable` (not found for the give-up period).",
       "store.malformed": "The coordinator store was malformed and is treated as empty.",
       "store.unsupported-version":
         "The coordinator store has an unsupported version and is treated as empty.",

@@ -47,6 +47,11 @@ export interface WatchedPullRequest {
   lastSeenAt: string;
   /** Last time the watch read it from GitHub, successfully or not. */
   checkedAt?: string;
+  /**
+   * When GitHub first answered "not found" without confirming a deletion;
+   * cleared by the next successful reading. See `WATCHED_PR_MISSING_GIVE_UP_MS`.
+   */
+  missingSince?: string;
   /** The last reading; absent until the first one, which is the baseline. */
   reading?: WatchedPullRequestReading;
   /** Notices sent so far; part of each notice's request id. */
@@ -101,6 +106,7 @@ function storedEntry(value: unknown): WatchedPullRequest | null {
     addedAt,
     lastSeenAt,
     ...(typeof value.checkedAt === "string" ? { checkedAt: value.checkedAt } : {}),
+    ...(typeof value.missingSince === "string" ? { missingSince: value.missingSince } : {}),
     ...(reading ? { reading } : {}),
     notices:
       typeof value.notices === "number" && Number.isSafeInteger(value.notices) && value.notices > 0

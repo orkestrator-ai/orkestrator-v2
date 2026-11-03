@@ -631,7 +631,7 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("pause stops the panel and resume starts a fresh fan-out", async () => {
-    await withPipeline(async ({ service, read, provider }) => {
+    await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
       const started = await service.start(
@@ -652,11 +652,15 @@ describe("build pipeline multi-model review", () => {
         paused.reviewFanout?.reviewers.every((reviewer) => reviewer.status === "cancelled"),
       ).toBe(true);
       expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
+      const packagesBeforeResume = packageGeneration.count;
 
       await service.resume(started.id);
       await service.advanceNow(started.id);
       const resumed = await read(started.id);
       expect(resumed.phase).toBe("reviewing");
+      // The paused panel's package is still valid, so resume reviews it again
+      // rather than rebuilding it the way an explicit retry does.
+      expect(packageGeneration.count).toBe(packagesBeforeResume);
       expect(resumed.pendingPromptAttempt).toBeUndefined();
       expect(
         resumed.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),

@@ -352,6 +352,10 @@ const writeCoordinatorAttachmentMock = mock(
   async (environmentId: string, filename: string, _base64Data: string) =>
     `/data/coordinator-attachments/${environmentId}/${filename}`,
 );
+const writeBugReportAttachmentMock = mock(
+  async (reportId: string, filename: string, _base64Data: string) =>
+    `/tmp/orkestrator-bug-report-${reportId}/screenshots/${filename}`,
+);
 type StoredComposeDraft = {
   draftKey: string;
   ownerType: "environment" | "project";
@@ -448,6 +452,7 @@ mock.module("@/lib/backend", () => ({
   getFileTree: async () => [],
   getLocalFileTree: getLocalFileTreeMock,
   writeCoordinatorAttachment: writeCoordinatorAttachmentMock,
+  writeBugReportAttachment: writeBugReportAttachmentMock,
   getNativeAgentSyncCapabilities: async () => ({ projectionSyncVersions: [] }),
   getNativeAgentProjection: getNativeAgentProjectionMock,
   getComposeDraft: getComposeDraftMock,
@@ -636,6 +641,7 @@ afterEach(() => {
   getNativeAgentProjectionMock.mockImplementation(defaultProjection);
   getLocalFileTreeMock.mockClear();
   writeCoordinatorAttachmentMock.mockClear();
+  writeBugReportAttachmentMock.mockClear();
   getComposeDraftMock.mockClear();
   saveComposeDraftMock.mockClear();
   deleteComposeDraftMock.mockClear();
@@ -2729,6 +2735,38 @@ describe("AgentNativeTab", () => {
     expect(latestPasteOptions?.worktreePath).toBe("/tmp/local-worker");
     expect(latestPasteOptions?.writeImage).toBeUndefined();
   });
+
+  for (const assigned of [false, true]) {
+    test(`a ${assigned ? "assigned" : "unassigned"} bug-report composer stages pasted images by report ID`, async () => {
+      seedUnassignedDefaultCatalog();
+      useEnvironmentStore.setState({ environments: [] });
+      render(
+        <AgentNativeTab
+          tabId={`bug-report-paste-${assigned}`}
+          data={{
+            environmentId: "bug-report:report-1",
+            isLocal: true,
+            ...(assigned ? { platform: "claude" as const } : {}),
+          }}
+          isActive
+          coordinatorWorkspacePath="/tmp/orkestrator-bug-report-report-1"
+          onAssignPlatform={async () => undefined}
+          availablePlatforms={["claude", "codex"]}
+        />,
+      );
+      await waitFor(() => expect(latestPasteOptions?.writeImage).toBeDefined());
+      expect(latestPasteOptions?.worktreePath ?? null).toBeNull();
+      expect(await latestPasteOptions?.writeImage?.("clipboard.png", "cG5n")).toBe(
+        "/tmp/orkestrator-bug-report-report-1/screenshots/clipboard.png",
+      );
+      expect(writeBugReportAttachmentMock).toHaveBeenCalledWith(
+        "report-1",
+        "clipboard.png",
+        "cG5n",
+      );
+      expect(writeCoordinatorAttachmentMock).not.toHaveBeenCalled();
+    });
+  }
 
   test("a coordinator tab assigns through the backend instead of locking a pane", async () => {
     seedUnassignedDefaultCatalog();

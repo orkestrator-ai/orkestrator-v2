@@ -8,6 +8,7 @@ import {
   getBugReportSnapshot,
   markBugReportFiled,
   saveBugReportScreenshot,
+  writeBugReportAttachment,
 } from "./bug-report-service.js";
 
 /** The Report a bug sheet (`bug-report-service.ts`). */
@@ -27,6 +28,19 @@ export function registerBugReportCommands(register: CommandRegistrar): void {
   register("save_bug_report_screenshot", async (args, context) => {
     assertOnlyKeys(args, ["reportId", "base64Data"], "save_bug_report_screenshot argument");
     return saveBugReportScreenshot(context, asString(args.reportId, "reportId"), args.base64Data);
+  });
+  register("write_bug_report_attachment", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["reportId", "filename", "base64Data"],
+      "write_bug_report_attachment argument",
+    );
+    return writeBugReportAttachment(
+      context,
+      asString(args.reportId, "reportId"),
+      asString(args.filename, "filename"),
+      asString(args.base64Data, "base64Data"),
+    );
   });
   register("file_bug_report", (args, context) => {
     assertOnlyKeys(args, ["reportId", "title", "body", "via"], "file_bug_report argument");

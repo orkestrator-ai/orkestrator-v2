@@ -532,9 +532,12 @@ describe("task reports", () => {
         expect((updates[0]!.data as { message: NormalizedMessage }).message).toBe(message);
 
         // A later fallback refresh must reuse the stamped tracker object too.
+        const publishedVersion = readTranscriptVersion(session);
         refreshSettledToolRows(session, session.id, tracker, ["agent-1"], null);
         expect(message.parts[0]).toBe(stamped);
         expect(tracker.getTool("agent-1")).toBe(stamped);
+        expect(readTranscriptVersion(session)).toEqual(publishedVersion);
+        expect(events.filter((event) => event.type === "message.updated")).toHaveLength(1);
       } finally {
         stop();
       }

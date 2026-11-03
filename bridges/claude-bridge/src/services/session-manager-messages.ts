@@ -557,7 +557,7 @@ export function refreshSettledToolRows(
       pending.delete(part.toolUseId);
       if (published?.has(message)) return part;
       const tracked = toolTracker.getToolWithCreatedAt(part.toolUseId, part.createdAt);
-      if (!tracked) return part;
+      if (!tracked || tracked === part) return part;
       changed = true;
       return tracked;
     });

@@ -276,21 +276,23 @@ function writeDiagnostic(
   event: BridgeDiagnosticEntry["event"],
   payload: Record<string, unknown>,
   write: BridgeDiagnosticWrite,
-): void {
+): boolean {
   try {
     const json = JSON.stringify({ bridge, event, ...payload });
     const bytes = Buffer.byteLength(json);
     if (bytes <= MAX_BRIDGE_DIAGNOSTIC_BYTES) {
       write({ bridge, event, payload: json });
-      return;
+      return true;
     }
     write({
       bridge,
       event: "snapshot-overflow",
       payload: JSON.stringify({ bridge, event: "snapshot-overflow", omittedBytes: bytes }),
     });
+    return true;
   } catch {
     /* Diagnostic failures cannot affect execution. */
+    return false;
   }
 }
 
@@ -332,6 +334,7 @@ export class BridgeRunDiagnostics {
   private completedTools = 0;
   private readonly pending = new Map<string, PendingTool>();
   private phase: Phase = "sending";
+  private processScope = false;
   private terminal: Outcome = "pending";
   private stream: Outcome = "pending";
   private cancellation: "none" | Outcome = "none";
@@ -412,6 +415,7 @@ export class BridgeRunDiagnostics {
   }
 
   checkpoint(phase: Phase): void {
+    if (phase === "attached") this.processScope = true;
     this.phase = phase;
   }
   count(key: Counter, amount = 1): void {
@@ -480,7 +484,7 @@ export class BridgeRunDiagnostics {
         ageMs: age(tool.since),
       }));
     try {
-      writeDiagnostic(
+      const written = writeDiagnostic(
         this.bridge,
         event,
         {
@@ -512,6 +516,7 @@ export class BridgeRunDiagnostics {
         },
         this.write,
       );
+      if (!written) return;
       this.baseline = {
         at: now,
         phase: this.phase,
@@ -532,6 +537,8 @@ export class BridgeRunDiagnostics {
    * changes worth writing: deltas are still arriving, so the turn is moving.
    */
   private periodicDue(now: number, stall: StallState): boolean {
+    // Each late firing is a separate observation, not an age of a persistent stall.
+    if (stall.signals.has("tick-delay")) return true;
     const last = this.baseline;
     if (!last) return true;
     if (!sameSet(stall.signals, last.stall.signals) || !sameSet(stall.tools, last.stall.tools))
@@ -560,12 +567,11 @@ export class BridgeRunDiagnostics {
       if (now - tool.since >= STALL_TOOL_PENDING_MS) tools.add(key);
     }
     // A turn waits from its start; a process scope only while a request is pending.
-    const waitingSince =
-      this.phase === "attached"
-        ? oldestPending
-        : WAITING_PHASES.has(this.phase)
-          ? this.startedAt
-          : undefined;
+    const waitingSince = this.processScope
+      ? oldestPending
+      : WAITING_PHASES.has(this.phase)
+        ? this.startedAt
+        : undefined;
     if (waitingSince !== undefined) {
       const quietSince = Math.max(this.lastDelta ?? waitingSince, waitingSince);
       if (now - quietSince >= STALL_NO_DELTA_MS) signals.add("no-delta");

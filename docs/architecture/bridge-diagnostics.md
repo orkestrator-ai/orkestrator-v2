@@ -29,7 +29,7 @@ the scope clears it.
 | Kind | Event | Written | Detail it needs |
 | --- | --- | --- | --- |
 | Lifecycle | `send-started`, `send-resolved`, `cancel-requested`, `cancel-settled`, `closed`, `snapshot-overflow` | At the boundary, as before. | `info` |
-| Stall | `heartbeat` | At the first look where a stall signal starts or clears, or another tool crosses the pending threshold. | `info` |
+| Stall | `heartbeat` | At the first look where a stall signal starts or clears, another tool crosses the pending threshold, or any timer firing reaches the late-timer threshold. | `info` |
 | Change during a stall | `heartbeat` | At a look during a silent stall (no delta, or a late timer) where the phase, the set of pending tools or a counter changed since the last snapshot. | `info` |
 | Keepalive | `heartbeat` | When ten minutes (`BRIDGE_DIAGNOSTICS_KEEPALIVE_MS`) have passed since the scope's last snapshot of any kind. | `info` |
 | Per-minute | `heartbeat` | At every look, changed or not. This is the stream as it was before. | `debug` or `trace` |
@@ -47,13 +47,20 @@ to a turn already running, in both directions.
 | Tool pending | One entry in `pendingTools` has been pending for the threshold, even while deltas still arrive. | `STALL_TOOL_PENDING_MS`, 10 minutes | The app's own stall warning (Multi Review, the build pipeline) is ten minutes. A pending tool alone is weaker evidence than silence: builds and subagents run long, and unmatched starts are common ([cursor-diagnostics.md](cursor-diagnostics.md)). A tool that is pending *and* silent trips the no-delta signal first. |
 | Late timer | `tickDelayMs` reaches the threshold. | `STALL_TICK_DELAY_MS`, 10 seconds | The event-loop monitor's threshold for a stall that is always logged at `error`. |
 
-A stall is written once, when it starts, and again when it clears. In between,
+A persistent no-delta or tool-pending stall is written when it starts and again when it clears. In between,
 the snapshot is written again only when something changes while the turn is silent:
 the phase, the set of pending tools, or a counter by at least its threshold in
 `COUNTER_CHANGE_THRESHOLDS` (one timeout, protocol error, request, response or
 notification; 4 KiB of stderr). An unchanged stall is not repeated: its ages are what
 the last snapshot implies plus the time since. A tool-pending stall with deltas still
 arriving is a turn that is moving, so tools coming and going there are not written.
+Every qualifying late timer firing is written independently, including consecutive
+late firings: its delay describes that firing and cannot be inferred from an earlier
+snapshot. Process scopes retain their identity across cancellation, so an idle
+process without a pending request does not acquire a no-delta stall.
+
+Only a successful snapshot write (including an overflow record) advances the
+comparison baseline. A failed write is retried at the next qualifying look.
 
 **Reading a gap.** With the stream off, a scope that wrote `send-started` and then
 nothing is either moving normally or its diagnostic timer has died. The keepalive

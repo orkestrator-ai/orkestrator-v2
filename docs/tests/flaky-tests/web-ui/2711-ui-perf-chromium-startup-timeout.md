@@ -46,3 +46,19 @@ Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrato
 
 The completed aggregate root group reported 3,441 pass and 5 fail; the full
 aggregate exited 1 after 294.0 seconds.
+
+## R4 diagnostics review recurrence — 2026-11-03
+
+Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`
+with four backend workers and one root worker. The unnamed in-page deadlines hook exceeded 5000 ms (5004.61 ms).
+Backend totals: 13,378 passed, 99 skipped, two failed. Root totals: 3,451 passed,
+two failed, one error. Evidence: `.orkestrator/review-artifacts/review-validation-305987e4-d185-4d3f-bd05-a72e0c7df530/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone (exit 0, 5.1 s):
+
+```sh
+mise run test:logged -- --name ui-deadlines-rerun -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+This establishes intermittent behavior, not a root-cause fix. No assertion,
+timeout, skip, or unrelated implementation changed.

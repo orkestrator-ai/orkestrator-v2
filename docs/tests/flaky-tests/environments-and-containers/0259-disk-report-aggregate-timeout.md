@@ -398,3 +398,19 @@ The final staged-resolution aggregate, `mise run test:logged -- --name retry-fin
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-pass2-disk-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed in 2.0 s.
 - **Evidence:** `/tmp/orkestrator-test-run.EowbMk/root-and-agent-support-tests.log.gz`; enclosing aggregate evidence is under `/tmp/orkestrator-test-run.bAsP8q/`.
 - **Assessment:** existing aggregate deadline recurrence. Host contention remains a hypothesis; no disk-report source, assertion, timeout or skip changed.
+
+## R4 diagnostics review recurrence — 2026-11-03
+
+Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`
+with four backend workers and one root worker. The isolated-checkout case timed out at 5030.63 ms; process status was null rather than 0 at line 131.
+Backend totals: 13,378 passed, 99 skipped, two failed. Root totals: 3,451 passed,
+two failed, one error. Evidence: `.orkestrator/review-artifacts/review-validation-305987e4-d185-4d3f-bd05-a72e0c7df530/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone (exit 0, 0.9 s):
+
+```sh
+mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+This establishes intermittent behavior, not a root-cause fix. No assertion,
+timeout, skip, or unrelated implementation changed.

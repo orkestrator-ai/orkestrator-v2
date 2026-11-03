@@ -221,6 +221,95 @@ describe("change-driven snapshots at info", () => {
     }
   });
 
+  test("consecutive late ticks each preserve their independent delay", () => {
+    const h = harness();
+    try {
+      h.scope.checkpoint("attached");
+      h.tick(TICK + STALL_TICK_DELAY_MS);
+      h.tick(TICK + 70_000);
+      expect(
+        h.written.filter((entry) => entry.event === "heartbeat").map((entry) => entry.tickDelayMs),
+      ).toEqual([STALL_TICK_DELAY_MS, 70_000]);
+    } finally {
+      h.scope.close();
+    }
+  });
+
+  test.each(["sink", "serialization"])(
+    "a failed %s retries the unchanged stall on the next look",
+    (failure) => {
+      let now = 1_000_000;
+      let fail = false;
+      const written: Snapshot[] = [];
+      const state = { id: "session", revision: 0 };
+      const scope = new BridgeRunDiagnostics(
+        "pi",
+        state,
+        () => now,
+        ({ payload }) => {
+          if (fail && failure === "sink") throw new Error("unavailable");
+          written.push(JSON.parse(payload));
+        },
+        TICK,
+        undefined,
+        () => false,
+      );
+      try {
+        scope.sent("run");
+        fail = true;
+        // Force JSON.stringify to fail without changing any stall/counter inputs.
+        if (failure === "serialization")
+          Object.defineProperty(state, "revision", { get: () => 1n, configurable: true });
+        now += TICK;
+        scope.report("heartbeat");
+        now += TICK;
+        scope.report("heartbeat");
+        expect(written).toHaveLength(2);
+        fail = false;
+        if (failure === "serialization") Object.defineProperty(state, "revision", { value: 0 });
+        now += TICK;
+        scope.report("heartbeat");
+        expect(written.at(-1)).toMatchObject({ event: "heartbeat", lastDeltaAgoMs: null });
+        expect(written).toHaveLength(3);
+        now += TICK;
+        scope.report("heartbeat");
+        expect(written).toHaveLength(3);
+      } finally {
+        scope.close();
+      }
+    },
+  );
+
+  test("a written overflow record advances the baseline", () => {
+    let now = 1_000_000;
+    const written: Snapshot[] = [];
+    const state = { id: "session", revision: 0 };
+    const scope = new BridgeRunDiagnostics(
+      "pi",
+      state,
+      () => now,
+      ({ payload }) => written.push(JSON.parse(payload)),
+      TICK,
+      undefined,
+      () => false,
+    );
+    try {
+      // A malformed runtime metadata value still passes through the byte bound.
+      Object.defineProperty(state, "revision", { value: "x".repeat(9_000) });
+      now += TICK;
+      scope.report("heartbeat");
+      now += TICK;
+      scope.report("heartbeat");
+      expect(written.at(-1)).toMatchObject({ event: "snapshot-overflow" });
+      expect(written).toHaveLength(2);
+      now += TICK;
+      scope.report("heartbeat");
+      expect(written).toHaveLength(2);
+    } finally {
+      scope.close();
+    }
+  });
+
   describe("a change", () => {
     function stalled() {
       const h = harness();

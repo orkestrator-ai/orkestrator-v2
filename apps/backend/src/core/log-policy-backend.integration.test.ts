@@ -97,6 +97,13 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
         })
       ).status,
     ).toBe(201);
+    const lifecycleDeadline = Date.now() + 5_000;
+    const lifecycle = () =>
+      records().find(
+        (record) => record.area === "bridge.diagnostics" && record.event === "send-started",
+      );
+    while (!lifecycle() && Date.now() < lifecycleDeadline) await Bun.sleep(10);
+    expect(lifecycle()).toMatchObject({ level: "info", event: "send-started" });
     expect(heartbeats()).toEqual([]);
 
     const save = async (enabled: boolean, level: "info" | "debug") => {

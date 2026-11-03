@@ -1755,7 +1755,12 @@ periodic snapshot.
 Every signal is computed at the look from fields the snapshot already carries
 (`lastDeltaAgoMs` or the turn's start, `pendingTools[].ageMs`, `tickDelayMs`,
 `phase`, `counters`). No field was added. A stall is written when it starts and
-when it clears, not at every look while it lasts.
+when it clears, not at every look while it lasts. Each qualifying late timer
+firing is a separate observation and is always written, including consecutive
+late firings. Only a successful write advances the comparison baseline; a failed
+write remains eligible for retry at the next qualifying look. Process-scope
+identity survives cancellation, so an idle ACP process still needs a pending
+request before it can report a no-delta stall.
 
 ### The upgrade
 
@@ -1779,7 +1784,7 @@ default showed nothing at all, so nothing is lost against it):
 2. **Short pauses.** A silence of 60 to 119 seconds, visible in the old stream as a
    growing `lastDeltaAgoMs`, writes nothing. A stall is reported from two minutes,
    at the first look after it (so between 2 and 3 minutes after the last delta).
-3. **A stall's repeats.** While a stall lasts unchanged, the minute snapshots that
+3. **A persistent no-delta or tool-pending stall's repeats.** While it lasts unchanged, the minute snapshots that
    confirmed it and showed the timer alive are gone; the keepalive replaces them
    every ten minutes. The ages in them were implied by the first one.
 4. **Changes during a tool-pending stall with deltas arriving.** Other tools starting

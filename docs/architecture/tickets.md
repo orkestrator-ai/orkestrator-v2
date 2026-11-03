@@ -235,9 +235,9 @@ queued keeps the leaf's value until the command node has decided it.
 **Up.** A change made on a leaf to a replica (edit, status, comment, criteria
 results, the build or environment linked to it, deletion) is queued in that
 leaf's ticket outbox for that command node in the same commit as the change.
-A queued value of a field is replaced by a newer one (the outbox holds one
-pending value per field per ticket), and a comment added and removed offline
-never leaves. The leaf announces queued changes (`ticket-sync-outbox-ready`);
+Every queued operation remains immutable until acknowledged: later edits and
+deletions receive new sequences, even for newly created tickets or comments.
+This preserves changes made while an earlier operation is in transit. The leaf announces queued changes (`ticket-sync-outbox-ready`);
 the command node collects them (`collect_ticket_sync_outbox`) on that event,
 on every connect and stream resync, and every 60 s, applies them in order,
 then acknowledges (`ack_ticket_sync_outbox`). Each outbox has an epoch and a

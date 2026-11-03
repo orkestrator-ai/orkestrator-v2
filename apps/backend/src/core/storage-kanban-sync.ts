@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   TICKET_SYNC_LIMITS,
+  parseTicketSyncOp,
   ticketSyncConflictPreview,
   type TicketContentValue,
   type TicketSnapshot,
@@ -244,11 +245,8 @@ function opBytes(op: TicketSyncOp): number {
 }
 
 /**
- * Queues one change for a command node. A newer value of a field still queued
- * replaces the queued one (keeping the revision it was based on, which is
- * what the leaf saw), so the outbox holds at most one pending value per field
- * per ticket however often it is edited offline. Over the bounds the change is
- * refused rather than dropped.
+ * Queues an immutable change for a command node. Over the bounds the change
+ * is refused rather than dropped.
  */
 export function journalTicketOp(
   store: KanbanSyncStore,
@@ -258,55 +256,10 @@ export function journalTicketOp(
   op: TicketSyncOp,
   now: string,
 ): void {
+  parseTicketSyncOp(op);
   const outbox = outboxFor(store, controllerId);
-  const sameTicket = (item: TicketSyncOutboxItem) => item.ticketId === ticketId;
-  if (op.kind === "set-title" || op.kind === "set-content" || op.kind === "set-status") {
-    const queued = outbox.items.find((item) => sameTicket(item) && item.op.kind === op.kind);
-    if (queued) {
-      op = { ...op, baseRev: (queued.op as { baseRev: number }).baseRev } as TicketSyncOp;
-      outbox.items = outbox.items.filter((item) => item !== queued);
-    }
-    // A creation not yet collected carries the value instead.
-    const creation = outbox.items.find((item) => sameTicket(item) && item.op.kind === "create");
-    if (creation && creation.op.kind === "create") {
-      const ticket = { ...creation.op.ticket };
-      if (op.kind === "set-title") ticket.title = op.value;
-      if (op.kind === "set-status") ticket.status = op.value;
-      if (op.kind === "set-content") Object.assign(ticket, op.value);
-      creation.op = { kind: "create", ticket };
-      creation.bytes = opBytes(creation.op);
-      return;
-    }
-  }
-  if (op.kind === "work") {
-    outbox.items = outbox.items.filter((item) => !(sameTicket(item) && item.op.kind === "work"));
-  }
-  if (op.kind === "checks") {
-    const queued = outbox.items.find((item) => sameTicket(item) && item.op.kind === "checks");
-    if (queued && queued.op.kind === "checks") {
-      const merged = new Map(queued.op.checks.map((check) => [check.id, check]));
-      for (const check of op.checks) merged.set(check.id, check);
-      op = { kind: "checks", checks: [...merged.values()] };
-      outbox.items = outbox.items.filter((item) => item !== queued);
-    }
-  }
-  if (op.kind === "delete-comment") {
-    const added = outbox.items.find(
-      (item) =>
-        sameTicket(item) && item.op.kind === "add-comment" && item.op.comment.id === op.commentId,
-    );
-    if (added) {
-      // Added and removed while offline: the command node never needs to know.
-      outbox.items = outbox.items.filter((item) => item !== added);
-      return;
-    }
-  }
-  if (op.kind === "delete") {
-    const creation = outbox.items.find((item) => sameTicket(item) && item.op.kind === "create");
-    // Every queued change of the ticket is superseded by its deletion.
-    outbox.items = outbox.items.filter((item) => !sameTicket(item));
-    if (creation) return;
-  }
+  // Collection and acknowledgement are separate RPCs. Every queued record may
+  // already have been applied remotely, so its payload and sequence are immutable.
   const bytes = opBytes(op);
   const total = outbox.items.reduce((sum, item) => sum + item.bytes, 0) + bytes;
   if (

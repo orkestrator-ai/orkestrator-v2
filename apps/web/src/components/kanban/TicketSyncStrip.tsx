@@ -1,3 +1,4 @@
+import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import {
@@ -34,12 +35,14 @@ const STATE_DOTS: Record<TicketSyncNodeState["state"], string> = {
   error: "bg-red-500",
 };
 
+export type BoardTicketSyncStatus = TicketSyncStatusResult & { error?: string };
+
 /** The project's sync status, re-read on its event, a reconnect, a board change and every 30 s. */
 export function useTicketSyncStatus(
   projectId: string,
   boardRevision: unknown,
-): TicketSyncStatusResult | null {
-  const [status, setStatus] = useState<TicketSyncStatusResult | null>(null);
+): BoardTicketSyncStatus | null {
+  const [status, setStatus] = useState<BoardTicketSyncStatus | null>(null);
   useEffect(() => {
     let disposed = false;
     const refresh = () => {
@@ -47,8 +50,16 @@ export function useTicketSyncStatus(
         try {
           const next = await backend.getTicketSyncStatus(projectId);
           if (!disposed && next && Array.isArray(next.nodes)) setStatus(next);
-        } catch {
-          // An older backend has no sync status; the board shows nothing for it.
+        } catch (error) {
+          if (disposed) return;
+          if (isUnknownCommandError(error, "get_ticket_sync_status")) setStatus(null);
+          else
+            setStatus((previous) => ({
+              ...(previous?.projectId === projectId
+                ? previous
+                : { projectId, nodes: [], conflicts: [] }),
+              error: "Ticket sync status is unavailable. Retrying…",
+            }));
         }
       })();
     };
@@ -69,11 +80,11 @@ export function useTicketSyncStatus(
       for (const unlisten of unlisteners) unlisten();
     };
   }, [projectId, boardRevision]);
-  return status;
+  return status?.projectId === projectId ? status : null;
 }
 
-export function TicketSyncStrip({ status }: { status: TicketSyncStatusResult | null }) {
-  if (!status || status.nodes.length === 0) return null;
+export function TicketSyncStrip({ status }: { status: BoardTicketSyncStatus | null }) {
+  if (!status || (status.nodes.length === 0 && !status.error)) return null;
   const conflicts = status.conflicts;
   const latest = conflicts.at(-1);
   return (
@@ -81,7 +92,12 @@ export function TicketSyncStrip({ status }: { status: TicketSyncStatusResult | n
       data-testid="ticket-sync-strip"
       className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-3 text-xs text-muted-foreground sm:px-6"
     >
-      <span>Tickets shared with</span>
+      {status.error && (
+        <span role="status" className="text-amber-500">
+          {status.error}
+        </span>
+      )}
+      {status.nodes.length > 0 && <span>Tickets shared with</span>}
       {status.nodes.map((node) => {
         const label = STATE_LABELS[node.state];
         return (

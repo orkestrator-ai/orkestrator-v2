@@ -74,9 +74,7 @@ async function ticketNode(
   }
   const link = isBackendId(nodeId) ? context.nodes.link(nodeId) : null;
   const online = node.available && Boolean(link?.connected);
-  const syncs = online
-    ? hasBackendCapability(link?.hello, BACKEND_CAPABILITIES.ticketSync)
-    : (await context.storage.kanban.getTicketSyncOverview(projectId)).knownNodes.includes(nodeId);
+  const syncs = online ? hasBackendCapability(link?.hello, BACKEND_CAPABILITIES.ticketSync) : true; // Capability is unknown while offline: keep edits on the authoritative board.
   const call = async <T>(command: string, args: JsonRecord, requestKey?: string): Promise<T> => {
     if (!online) throw new Error(`${name} is not connected; changes to it are disabled.`);
     const routed = await portal
@@ -316,12 +314,23 @@ export async function prepareRemoteBuildTicket(
   }
   const service = context.nodeCoordination?.ticketSync;
   if (!service) throw new Error("Ticket sync is not available in this backend.");
-  const state = await service.syncAndReport(node.nodeId, projectId);
+  const state = await service.sync(node.nodeId);
   if (state?.state !== "in-sync") {
     throw Object.assign(
       new Error(
         `Ticket ${ticketId} could not be handed to ${node.nodeName} (${state?.message ?? "its ticket sync did not finish"}). Nothing was started; retry.`,
       ),
+      { code: "coordinator-build-ticket-required" },
+    );
+  }
+  const target = await ticketNode(context, projectId, node.nodeId);
+  const copies = await target?.call<KanbanTask[]>("get_kanban_tasks", {
+    projectId: target.projectId,
+  });
+  const copy = copies?.find((ticket) => ticket.id === ticketId);
+  if (!copy || (copy.sync?.replica?.seq ?? -1) < (own!.sync?.seq ?? 0)) {
+    throw Object.assign(
+      new Error(`Ticket ${ticketId} has not reached ${node.nodeName}. Nothing was started; retry.`),
       { code: "coordinator-build-ticket-required" },
     );
   }

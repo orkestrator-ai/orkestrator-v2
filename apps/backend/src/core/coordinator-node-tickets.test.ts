@@ -171,6 +171,7 @@ async function setup(options: { capability?: boolean } = {}) {
       },
     });
   return {
+    context,
     world,
     scope,
     leaf,
@@ -306,4 +307,44 @@ describe("an older leaf", () => {
     expect(f.started).toHaveLength(1);
     expect(f.routed).not.toContain("apply_ticket_sync");
   });
+});
+
+test("offline first contact keeps create and update on the command board", async () => {
+  const f = await setup();
+  f.state.connected = false;
+  const created = await f.ticketOnNode("create", { requestId: "first-offline", title: "Queued" });
+  const id = (created.ticket as { id: string }).id;
+  await f.ticketOnNode("update", { ticketId: id, title: "Updated offline" });
+  expect(await f.world.storage.kanban.getKanbanTask(id)).toMatchObject({
+    title: "Updated offline",
+  });
+  f.state.connected = true;
+  await f.ticketSync.sync("bk_leaf");
+  expect(await f.leaf.kanban.getKanbanTask(id)).toMatchObject({ title: "Updated offline" });
+});
+
+test("remote admission uses completed sync and leaf copy despite unrelated behind status", async () => {
+  const f = await setup();
+  const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
+  const status = f.ticketSync.status.bind(f.ticketSync);
+  f.ticketSync.status = async (projectId) => {
+    const result = await status(projectId);
+    return {
+      ...result,
+      nodes: result.nodes.map((node) => ({ ...node, state: "behind" as const })),
+    };
+  };
+  await f.build("racing-status", task.id);
+  expect(f.started).toHaveLength(1);
+});
+
+test("a started build returns a warning if work location cannot be persisted", async () => {
+  const f = await setup();
+  const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
+  f.world.storage.kanban.recordTicketRemoteWork = async () => {
+    throw new Error("disk failure");
+  };
+  const result = await f.build("work-write-failed", task.id);
+  expect(result.warning).toContain("build started");
+  expect(f.started).toHaveLength(1);
 });

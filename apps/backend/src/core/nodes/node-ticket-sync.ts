@@ -294,7 +294,8 @@ export class NodeTicketSync {
         };
       }
       // A change for a project that no longer exists here has nowhere to go.
-      const known = items.filter((item) => localIds.has(item.sourceProjectId));
+      const firstUnknown = items.findIndex((item) => !localIds.has(item.sourceProjectId));
+      const known = firstUnknown < 0 ? items : items.slice(0, firstUnknown);
       if (known.length !== items.length) log.warn("ticket-sync.unknown-project");
       const result = await this.deps.kanban.applyTicketSyncOps({
         nodeId,
@@ -304,9 +305,20 @@ export class NodeTicketSync {
       });
       applied += result.applied;
       conflicts += result.conflicts.length;
-      const upTo = items.at(-1)!.seq;
-      await link.invoke("ack_ticket_sync_outbox", { controllerId, epoch: batch.epoch, upTo });
-      after = upTo;
+      const upTo = known.at(-1)?.seq;
+      if (upTo !== undefined) {
+        await link.invoke("ack_ticket_sync_outbox", { controllerId, epoch: batch.epoch, upTo });
+        after = upTo;
+      }
+      if (firstUnknown >= 0)
+        return {
+          ...empty,
+          applied,
+          conflicts,
+          state: "error",
+          message:
+            "Ticket changes for an unknown project remain queued on the leaf. Restore the project to resume sync.",
+        };
       if (!batch.more) break;
     }
 

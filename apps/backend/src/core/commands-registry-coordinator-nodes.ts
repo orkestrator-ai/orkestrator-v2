@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import { createHash, randomUUID } from "node:crypto";
@@ -765,7 +766,14 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               buildPipelineId: workflow.id,
               updatedAt: new Date().toISOString(),
             })
-            .catch(() => undefined);
+            .catch(() => {
+              createLogger("nodes").warn("ticket-sync.work-record-failed", {
+                ticketId: String(input.taskId).trim(),
+                pipelineId: String(workflow.id),
+              });
+              workflow.warning =
+                "The build started, but its work location could not be saved on the ticket.";
+            });
         }
         return workflow;
       });

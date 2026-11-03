@@ -25,6 +25,7 @@ import {
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
   isTicketTombstone,
+  parseTicketSyncItem,
   ticketSyncConflictComment,
   TICKET_SYNC_LIMITS,
   type TicketSyncConflict,
@@ -278,6 +279,8 @@ export class KanbanRepository {
         stored: change.stored,
         now,
       });
+      // Reject values that peers cannot read before either store is committed.
+      if (change.stored) parseTicketSyncItem(ticketSnapshot(normalizeKanbanTask(change.stored)));
       if (controllers.length) queued = true;
     }
     const syncChanged = fresh || queued || store.nextSeq !== sequence || loaded !== undefined;
@@ -820,8 +823,10 @@ export class KanbanRepository {
         const index = next.findIndex((task) => task.id === item.id);
         const row = index >= 0 ? next[index]! : null;
         // An id that is another project's here, or another command node's copy.
-        if (row && row.projectId !== input.projectId) continue;
-        if (row?.sync?.replica && row.sync.replica.controllerId !== input.controllerId) continue;
+        if (row && row.projectId !== input.projectId)
+          throw new Error("Ticket sync id belongs to another project.");
+        if (row?.sync?.replica && row.sync.replica.controllerId !== input.controllerId)
+          throw new Error("Ticket sync id belongs to another controller.");
         if (isTicketTombstone(item)) {
           if (row) {
             removedImages.push(...row.images.map((image) => image.id));

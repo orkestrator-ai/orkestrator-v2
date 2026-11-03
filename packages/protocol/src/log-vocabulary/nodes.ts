@@ -15,6 +15,8 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "profile.record-failed": "A node profile could not be recorded.",
       "detach.unconfirmed": "A forgotten node has not confirmed the detach yet.",
       "handover.recovery-pending": "Command handover recovery is still pending.",
+      "ticket-sync.work-record-failed":
+        "A remote build started but its ticket work location could not be saved.",
       "ticket-sync.failed": "A Kanban sync with a node failed; it is retried.",
       "ticket-sync.unknown-project":
         "A node sent ticket changes for a project that no longer exists here.",

@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, spyOn, mock } from "bun:test";
+import { cleanup, render, screen, renderHook, waitFor } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
 import type { TicketSyncStatusResult } from "@orkestrator/protocol/ticket-sync";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import { KanbanCard } from "./KanbanCard";
-import { TicketSyncStrip } from "./TicketSyncStrip";
+import * as backend from "@/lib/backend";
+import { useTicketSyncStatus, TicketSyncStrip } from "./TicketSyncStrip";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  mock.restore();
+});
 
 function status(
   nodes: TicketSyncStatusResult["nodes"],
@@ -121,4 +125,47 @@ describe("KanbanCard on another machine", () => {
     );
     expect(screen.queryByTestId("kanban-card-runs-on")).toBeNull();
   });
+});
+
+test("status failure is visible while the last machine state remains readable", () => {
+  render(
+    <TicketSyncStrip
+      status={{
+        ...status([{ nodeId: "a", nodeName: "Mini", state: "in-sync", latestSeq: 4, cursor: 4 }]),
+        error: "Ticket sync status is unavailable. Retrying…",
+      }}
+    />,
+  );
+  expect(screen.getByRole("status").textContent).toContain("unavailable");
+  expect(screen.getByTestId("ticket-sync-node").textContent).toBe("Mini");
+});
+
+for (const missing of [false, true]) {
+  test(`status fetch failure; command missing: ${missing}`, async () => {
+    spyOn(backend, "getTicketSyncStatus").mockRejectedValue(
+      new Error(missing ? "Unknown backend command: get_ticket_sync_status" : "disk failure"),
+    );
+    const { result } = renderHook(() => useTicketSyncStatus("p1", 1));
+    if (missing) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(result.current).toBeNull();
+    } else await waitFor(() => expect(result.current?.error).toContain("unavailable"));
+  });
+}
+
+test("a status refresh failure retains the last nodes and recovery clears the error", async () => {
+  const read = spyOn(backend, "getTicketSyncStatus").mockResolvedValue(
+    status([{ nodeId: "a", nodeName: "Mini", state: "in-sync", latestSeq: 4, cursor: 4 }]),
+  );
+  const { result, rerender } = renderHook(({ revision }) => useTicketSyncStatus("p1", revision), {
+    initialProps: { revision: 1 },
+  });
+  await waitFor(() => expect(result.current?.nodes).toHaveLength(1));
+  read.mockRejectedValue(new Error("offline"));
+  rerender({ revision: 2 });
+  await waitFor(() => expect(result.current?.error).toContain("unavailable"));
+  expect(result.current?.nodes).toHaveLength(1);
+  read.mockResolvedValue(status([]));
+  rerender({ revision: 3 });
+  await waitFor(() => expect(result.current?.error).toBeUndefined());
 });

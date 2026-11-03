@@ -61,8 +61,23 @@ export interface PrMonitorPolicyConfig {
   /** Error backoff jitter: a fraction of the backed-off delay, capped. */
   errorJitterRatio: number;
   errorJitterMaxMs: number;
-  /** Cooldown after a rate-limit failure when `gh` gives no retry timing. */
+  /**
+   * Cooldown after a rate-limit failure when `gh` gives no retry timing. It
+   * doubles for each further rate limit in the same scope before a check
+   * there succeeds, up to {@link rateLimitCooldownMaxMs}.
+   */
   rateLimitCooldownMs: number;
+  rateLimitCooldownMaxMs: number;
+  /**
+   * Checks a cooldown held resume spread over this window, so a scope's
+   * entries do not all ask GitHub in the same second when it ends.
+   */
+  rateLimitResumeJitterMs: number;
+  /**
+   * How long a confirmed reading stays confirmed while rate limits stop the
+   * monitor from re-reading it. Past this, it counts as a failed check.
+   */
+  rateLimitGraceMs: number;
   /** Upper bound applied to any retry timing reported by the boundary. */
   maxRetryAfterMs: number;
   /** Per-entry bound on remembered task-reconciliation progress keys. */
@@ -84,6 +99,9 @@ export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
   errorJitterRatio: 0.1,
   errorJitterMaxMs: 30_000,
   rateLimitCooldownMs: 2 * 60_000,
+  rateLimitCooldownMaxMs: 30 * 60_000,
+  rateLimitResumeJitterMs: 30_000,
+  rateLimitGraceMs: 15 * 60_000,
   maxRetryAfterMs: 60 * 60_000,
   maxReconciliationKeys: 8,
   maxCooldownScopes: 64,
@@ -101,6 +119,7 @@ export function resolvePrMonitorPolicy(
   const positiveInteger = (value: number, fallback: number) =>
     Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
   const defaults = DEFAULT_PR_MONITOR_POLICY;
+  const rateLimitCooldownMs = nonNegative(merged.rateLimitCooldownMs, defaults.rateLimitCooldownMs);
   return {
     terminalDiscoveryIntervalMs: Math.max(
       PR_MONITOR_INTERVALS_MS.normal,
@@ -113,7 +132,16 @@ export function resolvePrMonitorPolicy(
     startupJitterMs: nonNegative(merged.startupJitterMs, defaults.startupJitterMs),
     errorJitterRatio: Math.min(1, nonNegative(merged.errorJitterRatio, defaults.errorJitterRatio)),
     errorJitterMaxMs: nonNegative(merged.errorJitterMaxMs, defaults.errorJitterMaxMs),
-    rateLimitCooldownMs: nonNegative(merged.rateLimitCooldownMs, defaults.rateLimitCooldownMs),
+    rateLimitCooldownMs,
+    rateLimitCooldownMaxMs: Math.max(
+      rateLimitCooldownMs,
+      nonNegative(merged.rateLimitCooldownMaxMs, defaults.rateLimitCooldownMaxMs),
+    ),
+    rateLimitResumeJitterMs: nonNegative(
+      merged.rateLimitResumeJitterMs,
+      defaults.rateLimitResumeJitterMs,
+    ),
+    rateLimitGraceMs: nonNegative(merged.rateLimitGraceMs, defaults.rateLimitGraceMs),
     maxRetryAfterMs: nonNegative(merged.maxRetryAfterMs, defaults.maxRetryAfterMs),
     maxReconciliationKeys: positiveInteger(
       merged.maxReconciliationKeys,
@@ -217,6 +245,21 @@ function restoreJitter(input: DelayInput, config: PrMonitorPolicyConfig): number
   return input.restored ? Math.floor(input.random * config.startupJitterMs) : 0;
 }
 
+/**
+ * Length of a rate-limit cooldown. Retry timing from the boundary wins
+ * (bounded); otherwise the default doubles per rate limit in a row
+ * (`strikes`, at least 1) in the scope, capped.
+ */
+export function rateLimitCooldown(
+  retryAfterMs: number | null,
+  strikes: number,
+  config: PrMonitorPolicyConfig,
+): number {
+  if (retryAfterMs !== null) return Math.min(retryAfterMs, config.maxRetryAfterMs);
+  const doublings = Math.min(Math.max(strikes, 1) - 1, 16);
+  return Math.min(config.rateLimitCooldownMs * 2 ** doublings, config.rateLimitCooldownMaxMs);
+}
+
 export type PrDetectionFailure =
   { kind: "rate-limited"; retryAfterMs: number | null } | { kind: "timeout" } | { kind: "failed" };
 
@@ -261,6 +304,8 @@ export function classifyPrDetectionFailure(error: unknown): PrDetectionFailure {
  */
 export class PrCooldownScopes {
   private readonly until = new Map<string, number>();
+  /** Rate limits in a row per scope since a check in it last succeeded. Bounded. */
+  private readonly strikes = new Map<string, number>();
 
   constructor(private readonly maxScopes: number) {}
 
@@ -276,6 +321,23 @@ export class PrCooldownScopes {
       if (oldest !== undefined) this.until.delete(oldest);
     }
     this.until.set(scope, untilMs);
+  }
+
+  /** Counts one more rate limit in a scope and returns how many in a row. */
+  strike(scope: string): number {
+    const count = (this.strikes.get(scope) ?? 0) + 1;
+    this.strikes.delete(scope);
+    if (this.strikes.size >= this.maxScopes) {
+      const oldest = this.strikes.keys().next().value;
+      if (oldest !== undefined) this.strikes.delete(oldest);
+    }
+    this.strikes.set(scope, count);
+    return count;
+  }
+
+  /** A check in the scope succeeded: the next rate limit starts afresh. */
+  clearStrikes(scope: string): void {
+    this.strikes.delete(scope);
   }
 
   /** Remaining cooldown in milliseconds, 0 when the scope may run. */
@@ -296,5 +358,6 @@ export class PrCooldownScopes {
 
   clear(): void {
     this.until.clear();
+    this.strikes.clear();
   }
 }

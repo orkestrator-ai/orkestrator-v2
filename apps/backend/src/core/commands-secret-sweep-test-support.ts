@@ -18,7 +18,7 @@ import { AUTH_SECRET_CANARIES } from "../../../../tests/helpers/auth-secret-cana
 
 /** Marker carried by every canary; see `tests/helpers/auth-secret-canaries.ts`. */
 const MARK = "ORKCANARY";
-/** A call that has not settled by then is recorded as `timeout`, not inspected. */
+/** An uninspected response fails the sweep; it must never count as coverage. */
 const CALL_TIMEOUT_MS = 2_000;
 
 /**
@@ -30,7 +30,7 @@ export type SweepVariant = "empty" | "seeded" | "shaped";
 export type SweepRecord = {
   command: string;
   variant: SweepVariant;
-  outcome: "resolved" | "rejected" | "timeout";
+  outcome: "resolved" | "rejected";
   /** Where a canary appeared: the answer, the error, or an event emitted during the call. */
   leaks: Array<"result" | "error" | "event">;
 };
@@ -80,12 +80,18 @@ function serialize(value: unknown): string {
   }
 }
 
-function settleWithin(work: () => unknown): Promise<{
+export function settleWithin(
+  work: () => unknown,
+  timeoutMs = CALL_TIMEOUT_MS,
+): Promise<{
   outcome: SweepRecord["outcome"];
   value?: unknown;
 }> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ outcome: "timeout" }), CALL_TIMEOUT_MS);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`secret sweep response uninspected after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
     const finish = (result: { outcome: SweepRecord["outcome"]; value?: unknown }) => {
       clearTimeout(timer);
       resolve(result);
@@ -185,8 +191,12 @@ async function main(root: string, resultFile: string): Promise<void> {
       // without those, so strict commands are reached past validation too.
       for (let attempt = 0; ; attempt += 1) {
         events.length = 0;
-        settled = await settleWithin(() => handler({ ...args }, context));
-        if (settled.outcome !== "timeout" && serialize(settled.value).includes(MARK)) {
+        try {
+          settled = await settleWithin(() => handler({ ...args }, context));
+        } catch (cause) {
+          throw new Error(`secret sweep incomplete: ${name} (${variant})`, { cause });
+        }
+        if (serialize(settled.value).includes(MARK)) {
           leaks.add(settled.outcome === "resolved" ? "result" : "error");
         }
         if (events.some((line) => line.includes(MARK))) leaks.add("event");

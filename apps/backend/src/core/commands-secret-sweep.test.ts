@@ -28,7 +28,11 @@ import os from "node:os";
 import path from "node:path";
 import { AUTH_SECRET_CANARIES } from "../../../../tests/helpers/auth-secret-canaries.js";
 import { createCommandRegistry } from "./commands.js";
-import type { SweepRecord, SweepVariant } from "./commands-secret-sweep-test-support.js";
+import {
+  settleWithin,
+  type SweepRecord,
+  type SweepVariant,
+} from "./commands-secret-sweep-test-support.js";
 
 jest.setTimeout(120_000);
 
@@ -237,3 +241,21 @@ describe("every registered command, with canary secrets planted", () => {
     expect(answered.size).toBeGreaterThan(150);
   });
 });
+
+// The sweep must fail even if the eventual secret-bearing response arrives
+// after the inspection deadline. Late rejections must remain handled too.
+for (const outcome of ["resolved", "rejected"] as const) {
+  test(`an uninspected delayed ${outcome} canary fails the sweep`, async () => {
+    let finish!: (value: unknown) => void;
+    const response = new Promise<unknown>((resolve, reject) => {
+      finish = outcome === "resolved" ? resolve : reject;
+    });
+    await expect(settleWithin(() => response, 1)).rejects.toThrow("response uninspected");
+    finish(
+      outcome === "resolved"
+        ? AUTH_SECRET_CANARIES.githubToken
+        : new Error(AUTH_SECRET_CANARIES.githubToken),
+    );
+    await Promise.resolve();
+  });
+}

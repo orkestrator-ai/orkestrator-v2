@@ -18,6 +18,8 @@ import {
   newestJsonlFindCommand,
   newestJsonlInDir,
   parseFreshJsonlFindOutput,
+  TRANSCRIPT_HEAD_BYTES,
+  transcriptHeadClaimsSession,
   parseTmuxSessionNames,
   parseTranscriptHeadOutput,
   PREVIOUS_SESSION_STAT_CONCURRENCY,
@@ -500,13 +502,67 @@ describe("newestJsonlInDir container backend", () => {
       async exec(_args: string[]) {
         return { stdout: findStdout, stderr: "", exitCode: 0 };
       },
-      async readFile(filePath: string) {
+      async readHead(filePath: string) {
         readPaths.push(filePath);
         return files[filePath];
       },
     } as unknown as Backend;
     return { backend, readPaths };
   }
+
+  test("rechecks a rejected sibling when mtime changes, including a full head", async () => {
+    const dir = "/home/node/.claude/projects/p";
+    let findStdout = `1700000003 ${dir}/other.jsonl\0`;
+    const files: Record<string, string> = {
+      [`${dir}/other.jsonl`]: `${JSON.stringify({ sessionId: "other" })}\n`,
+    };
+    const readPaths: string[] = [];
+    const backend = {
+      kind: "container",
+      async exec() {
+        return { stdout: findStdout, stderr: "", status: 0 };
+      },
+      async readTail() {
+        return "";
+      },
+      async readHead(filePath: string, maxBytes: number) {
+        readPaths.push(filePath);
+        expect(maxBytes).toBe(TRANSCRIPT_HEAD_BYTES);
+        return files[filePath];
+      },
+    } as unknown as Backend;
+    const rejected = new Map<string, number>();
+    await expect(newestJsonlInDir(backend, dir, 1700000000, "mine", rejected)).resolves.toBe(
+      undefined,
+    );
+    await expect(newestJsonlInDir(backend, dir, 1700000000, "mine", rejected)).resolves.toBe(
+      undefined,
+    );
+    // Unchanged sibling: one head read across both searches.
+    expect(readPaths).toEqual([`${dir}/other.jsonl`]);
+
+    // It grew (new mtime) while its head was still short: read again.
+    findStdout = `1700000009 ${dir}/other.jsonl\0`;
+    files[`${dir}/other.jsonl`] = "x".repeat(TRANSCRIPT_HEAD_BYTES);
+    await newestJsonlInDir(backend, dir, 1700000000, "mine", rejected);
+    expect(readPaths).toHaveLength(2);
+    // A resumed transcript may append its owner after the head; check the suffix again.
+    findStdout = `1700000099 ${dir}/other.jsonl\0`;
+    await newestJsonlInDir(backend, dir, 1700000000, "mine", rejected);
+    expect(readPaths).toHaveLength(3);
+  });
+
+  test("an opening record cut by the head bound still proves ownership", () => {
+    const record = JSON.stringify({ sessionId: "mine", message: "x".repeat(200) });
+    expect(transcriptHeadClaimsSession(record.slice(0, 60), "mine")).toBe(true);
+    expect(transcriptHeadClaimsSession(record.slice(0, 60), "other")).toBe(false);
+    expect(
+      transcriptHeadClaimsSession(
+        `${JSON.stringify({ nested: { session_id: "mine" } })}\n`,
+        "mine",
+      ),
+    ).toBe(true);
+  });
 
   test("resolves the single container jsonl owned by the session", async () => {
     const findStdout = `${[

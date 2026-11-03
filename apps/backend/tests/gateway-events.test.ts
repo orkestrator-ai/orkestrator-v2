@@ -93,6 +93,7 @@ type GzipWriterInternals = {
 
 type TerminalSocketInternals = {
   queuedBytes: number;
+  flushScheduled: boolean;
   channels: Map<number, unknown>;
   authTimer: unknown;
   credentialExpiryTimer: unknown;
@@ -954,10 +955,19 @@ describe("gateway terminal WebSocket", () => {
       return { stream, writer, state, pendingState };
     };
 
-    // Called synchronously before the revoking call, so the output is still
-    // in the channel queue rather than handed to the transport.
-    const queueTerminalOutput = (loaded: Awaited<ReturnType<typeof load>>, revision: number) => {
+    // Drain any earlier scheduled flush, then hold the scheduler latch so real
+    // channel bytes survive setToken's asynchronous token persistence. The
+    // retained state must be cleared by dispose, not a normal transport flush.
+    const queueTerminalOutput = async (
+      loaded: Awaited<ReturnType<typeof load>>,
+      revision: number,
+    ) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(loaded.state.flushScheduled).toBe(false);
+      loaded.state.flushScheduled = true;
       gateway.emit("terminal-output-queued", { text: "y".repeat(8192), generation: 1, revision });
+      expect(loaded.state.queuedBytes).toBeGreaterThan(0);
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(loaded.state.queuedBytes).toBeGreaterThan(0);
     };
 
@@ -999,13 +1009,13 @@ describe("gateway terminal WebSocket", () => {
 
     const rotated = await load(info.token);
     const replacement = "replacement-token-123456";
-    queueTerminalOutput(rotated, 1);
+    await queueTerminalOutput(rotated, 1);
     await gateway.setToken(replacement);
     await expectReleased(rotated, "Credential rotation");
 
     const stopped = await load(replacement);
     expect(internals.context.keepalive).not.toBeNull();
-    queueTerminalOutput(stopped, 1);
+    await queueTerminalOutput(stopped, 1);
     await gateway.stop();
     expect(internals.context.keepalive).toBeNull();
     await expectReleased(stopped, "Gateway stop");

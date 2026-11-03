@@ -132,11 +132,11 @@ Direct streams were already right. The checks found two bugs in proxied streams,
 Before this work, compressor release after rotation and stop was asserted (`gateway-streaming-compression.test.ts`, "credential rotation and gateway stop release every compressor lease"), and so were sockets closing on both ("closes active sockets on credential rotation and gateway shutdown"). No test showed that queued bytes, channels, the operation queue, per-socket timers or the keepalive interval were released at the same points. `gateway-events.test.ts` now has "returns compressor count and queued bytes to zero after credential rotation and gateway stop". Before each revocation, that test puts real bytes on every queue the gateway owns:
 
 - a gzip SSE writer whose compressor is corked, so its input stays pending;
-- terminal output in a channel queue (held through stop, because stop terminates the socket before the flush runs);
+- terminal output in a channel queue (held by the scheduler latch across asynchronous token persistence and stop; an event-loop turn confirms it stays queued);
 - a terminal write the backend has accepted but not finished;
 - a second socket still waiting to authenticate, with its timer armed.
 
-Each revocation must then leave every gauge at zero: compressor leases, event clients and their queued bytes, open and connecting streams, proxy requests, terminal sockets, upgrades and channels (state and metrics), queued terminal bytes, and the operation count, bytes and sessions. The per-socket authentication, credential-expiry and close timers must be cleared on the socket states the test held, and after stop the keepalive interval must be cleared too. The test passed 25 consecutive runs. Two deliberate breaks made it fail: keeping a terminal socket's queued bytes on dispose, and not destroying event clients on rotation.
+Each revocation must then leave every gauge at zero: compressor leases, event clients and their queued bytes, open and connecting streams, proxy requests, terminal sockets, upgrades and channels (state and metrics), queued terminal bytes, and the operation count, bytes and sessions. The per-socket authentication, credential-expiry and close timers must be cleared on the socket states the test held, and after stop the keepalive interval must be cleared too. The original test passed 25 consecutive runs. Review found that token persistence could yield to a normal terminal flush before rotation. The corrected test holds the flush scheduler latch, confirms real bytes remain after an event-loop turn, and passes the full gateway-events owner file. A rotation-specific negative control that removed the disposal byte reset failed with 8,208 retained bytes. Two original deliberate breaks made it fail: keeping a terminal socket's queued bytes on dispose, and not destroying event clients on rotation.
 
 The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as [3900](3900-terminal-operations-after-credential-rotation.md).
 
@@ -831,8 +831,9 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
   2026-10-27 had already drifted by about 80 lines. Titles survive that and are
   what `bun test -t` takes.
 - **Hold real bytes instead of pinning `writableLength`.** The new test corks
-  the gzip writer's compressor and queues terminal output synchronously before
-  `stop()`. The harness's `pinBufferedBytes` overrides the getter, so a release
+  the gzip writer's compressor and holds terminal output with the scheduler
+  latch before rotation and `stop()`. The harness's `pinBufferedBytes` overrides
+  the getter, so a release
   could not change what it reports, and an assertion of zero would prove
   nothing.
 - **Pin, rather than fix, the in-flight operation exception.** A write the
@@ -846,6 +847,25 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
   sockets as well as SSE, and the ticket names that file.
   `gateway-streaming-compression.test.ts` keeps its compressor-only rotation
   test (D13).
+
+### Task 4: hold channel bytes across token persistence (2026-11-03 review fix)
+
+The test now drains earlier scheduled flushes, sets the socket's `flushScheduled`
+latch before queuing real terminal output, and checks that bytes remain after
+another event-loop turn. This prevents token persistence from draining the queue
+before revocation. The same hold applies to rotation and stop. The private state
+belongs to the disposable test socket; production code is unchanged.
+
+- **Hold the scheduler latch (recommended, chosen).** Pros: retains real channel
+  bytes through asynchronous persistence and makes a missing disposal reset fail
+  during rotation. Cons: depends on private scheduler state.
+- **Narrow the claim to stop only.** Pros: avoids another test-internal field.
+  Cons: leaves rotation cleanup coverage incomplete.
+
+Validation: the full gateway-events file passes. Removing only the disposal byte
+reset makes the rotation assertion fail with 8,208 bytes; the production source
+was restored immediately after this negative control. Backend test-project
+checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
 
 ## Needs verification
 

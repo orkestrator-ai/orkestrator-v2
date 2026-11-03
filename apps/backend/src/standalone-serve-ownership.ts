@@ -6,7 +6,7 @@ import {
   createFileOwnershipStore,
   type ManagedWebClientOwnershipStore,
 } from "./managed-web-client.js";
-import { getTailscaleServeTargetPort } from "./tailscale-serve.js";
+import { getTailscaleServeTarget, serveOwnershipRecord } from "./tailscale-serve.js";
 
 /** Recover pre-ownership-file services from their last successful publication. */
 export function createStandaloneServeOwnershipStore(
@@ -33,8 +33,8 @@ export function createStandaloneServeOwnershipStore(
         if (browser.protocol !== "https:") return null;
         // Standalone Serve's primary gateway is the loopback browser listener.
         // Never infer ownership from arbitrary client/SSH or control endpoints.
-        const targetPort = getTailscaleServeTargetPort(descriptor.url);
-        return { version: 1, targetPort, httpsPort: Number(browser.port || 443) };
+        const target = getTailscaleServeTarget(descriptor.url);
+        return serveOwnershipRecord(target, Number(browser.port || 443));
       } catch {
         // Malformed or unrelated descriptors prove no ownership. Serve still
         // rejects a nonmatching root rather than guessing from its proxy port.

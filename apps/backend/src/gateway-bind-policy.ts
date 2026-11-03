@@ -29,15 +29,21 @@ function proxiedMode(
 }
 
 /**
- * Tailscale Serve proxies to `http://127.0.0.1:<port>` only
- * (`tailscale-serve.ts`), so a proxy-fronted mode refuses any other host
- * before startup rather than failing once the listener is already up.
+ * The startup check for a proxy-fronted mode's `--host`, run before anything
+ * binds. A loopback host (`127.0.0.1` or `::1`) starts; Tailscale Serve
+ * proxies to that same loopback address (`tailscale-serve.ts`). A host the
+ * bind guard would refuse is refused here with the guard's own message. Any
+ * other host (a Tailscale address, or a LAN one allowed by
+ * `--allow-non-tailscale-bind`) is refused because Serve cannot front it.
  */
 export function assertProxiedModeHost(options: GatewayBindOptions): void {
   const mode = proxiedMode(options);
-  if (mode && options.host && options.host !== PROXIED_DEFAULT_HOST) {
-    throw new Error(`${mode} requires --host ${PROXIED_DEFAULT_HOST}`);
-  }
+  if (!mode || !options.host || isLoopbackAddress(options.host)) return;
+  assertGatewayBindAllowed(options.host, {
+    allowNonTailscaleBind: gatewayAllowsNonTailscaleBind(options),
+    safeLoopbackFallback: false,
+  });
+  throw new Error(`${mode} requires a loopback --host (127.0.0.1 or ::1)`);
 }
 
 /** The address handed to the gateway; `undefined` lets it pick a Tailscale one. */

@@ -100,11 +100,31 @@ describe("without a proxy-fronted mode or the allow flag", () => {
   });
 });
 
+describe.each(["--tailscale-serve", "--desktop-web-client"])(
+  "%s on the command line, without the allow flag",
+  (flag) => {
+    // The startup host check and the bind guard together: what `main.ts` runs.
+    test.each(["127.0.0.1", "::1"])("--host %s starts", (host) => {
+      expect(startGuard([flag, "--host", host])).toBe(host);
+    });
+
+    test.each(["0.0.0.0", "192.168.1.20", "10.0.0.5", "::"])("--host %s is refused", (host) => {
+      expect(() => startGuard([flag, "--host", host])).toThrow(`${REFUSED}: ${host}`);
+    });
+
+    test("--host with a Tailscale address is refused: Serve can only front loopback", () => {
+      expect(() => startGuard([flag, "--host", "100.101.102.103"])).toThrow(
+        `${flag} requires a loopback --host (127.0.0.1 or ::1)`,
+      );
+    });
+  },
+);
+
 describe("proxy-fronted modes on the command line", () => {
-  test("--tailscale-serve --host 0.0.0.0 does not start", () => {
-    expect(() => startGuard(["--tailscale-serve", "--host", "0.0.0.0"])).toThrow(
-      "--tailscale-serve requires --host 127.0.0.1",
-    );
+  test("--allow-non-tailscale-bind does not let Serve front a LAN host", () => {
+    expect(() =>
+      startGuard(["--tailscale-serve", "--host", "0.0.0.0", "--allow-non-tailscale-bind"]),
+    ).toThrow("--tailscale-serve requires a loopback --host (127.0.0.1 or ::1)");
   });
 
   test("a LAN bind reaching the guard is refused even without the host check", () => {

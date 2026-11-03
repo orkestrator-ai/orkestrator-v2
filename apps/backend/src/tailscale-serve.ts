@@ -1,4 +1,7 @@
-import type { ManagedWebClientOwnershipStore } from "./managed-web-client.js";
+import type {
+  ManagedWebClientOwnership,
+  ManagedWebClientOwnershipStore,
+} from "./managed-web-client.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -35,11 +38,27 @@ export function extractTailscaleServeUrl(output: string): string | null {
   return null;
 }
 
-export function getTailscaleServeTargetPort(browserUrl: string): number {
+/** The loopback address a Serve root proxies to: the browser listener's bind. */
+export type TailscaleServeTargetHost = "127.0.0.1" | "::1";
+
+/** The target host of every listener recorded before `::1` was accepted. */
+export const DEFAULT_SERVE_TARGET_HOST: TailscaleServeTargetHost = "127.0.0.1";
+
+export type TailscaleServeTarget = { host: TailscaleServeTargetHost; port: number };
+
+/**
+ * The loopback listener Serve proxies to. Serve runs on this host, so only a
+ * loopback listener is a target; anything else would put plain HTTP on a
+ * network interface.
+ */
+export function getTailscaleServeTarget(browserUrl: string): TailscaleServeTarget {
   const target = new URL(browserUrl);
-  if (target.protocol !== "http:" || target.hostname !== "127.0.0.1") {
+  // WHATWG URLs keep the brackets around an IPv6 hostname.
+  const host =
+    target.hostname === "127.0.0.1" ? "127.0.0.1" : target.hostname === "[::1]" ? "::1" : null;
+  if (target.protocol !== "http:" || !host) {
     throw new Error(
-      "Tailscale Serve requires the backend browser listener to use http://127.0.0.1",
+      "Tailscale Serve requires the backend browser listener to use http://127.0.0.1 or http://[::1]",
     );
   }
 
@@ -47,7 +66,27 @@ export function getTailscaleServeTargetPort(browserUrl: string): number {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid backend browser listener port: ${target.port || "default"}`);
   }
-  return port;
+  return { host, port };
+}
+
+export function getTailscaleServeTargetPort(browserUrl: string): number {
+  return getTailscaleServeTarget(browserUrl).port;
+}
+
+/**
+ * The ownership record for a target. `targetHost` is written only for `::1`,
+ * so a `127.0.0.1` record keeps the shape earlier backends wrote and read.
+ */
+export function serveOwnershipRecord(
+  target: TailscaleServeTarget,
+  httpsPort: number,
+): ManagedWebClientOwnership {
+  return {
+    version: 1,
+    targetPort: target.port,
+    httpsPort,
+    ...(target.host === DEFAULT_SERVE_TARGET_HOST ? {} : { targetHost: target.host }),
+  };
 }
 
 type ServeStatus = {
@@ -116,8 +155,12 @@ function httpsHandlerPaths(status: ServeStatus, port: number): string[] {
   });
 }
 
-function expectedProxyTarget(targetPort: number): string {
-  return `http://127.0.0.1:${targetPort}`;
+function expectedProxyTarget(
+  targetPort: number,
+  targetHost: TailscaleServeTargetHost = DEFAULT_SERVE_TARGET_HOST,
+): string {
+  const host = targetHost === "::1" ? "[::1]" : targetHost;
+  return `http://${host}:${targetPort}`;
 }
 
 /**
@@ -145,9 +188,14 @@ function hasRootHandler(status: ServeStatus, httpsPort: number): boolean {
   return rootHandler(status, httpsPort) !== null;
 }
 
-function ownedServeUrl(status: ServeStatus, targetPort: number, httpsPort: number): string | null {
+function ownedServeUrl(
+  status: ServeStatus,
+  targetPort: number,
+  httpsPort: number,
+  targetHost?: TailscaleServeTargetHost,
+): string | null {
   const handler = rootHandler(status, httpsPort);
-  if (!handler || handler.proxy !== expectedProxyTarget(targetPort)) return null;
+  if (!handler || handler.proxy !== expectedProxyTarget(targetPort, targetHost)) return null;
   try {
     return `${new URL(`https://${handler.hostPort}`).origin}/`;
   } catch {
@@ -178,9 +226,10 @@ function adoptableServeUrl(
   status: ServeStatus,
   targetPort: number,
   httpsPort: number,
+  targetHost?: TailscaleServeTargetHost,
 ): string | null {
   if (!hasHttpsListener(status, httpsPort) || hasFunnel(status, httpsPort)) return null;
-  return ownedServeUrl(status, targetPort, httpsPort);
+  return ownedServeUrl(status, targetPort, httpsPort, targetHost);
 }
 
 function commandError(error: unknown): string {
@@ -190,7 +239,11 @@ function commandError(error: unknown): string {
 }
 
 export class TailscaleServeManager {
-  private activeServe: { targetPort: number; httpsPort: number } | null = null;
+  private activeServe: {
+    targetPort: number;
+    httpsPort: number;
+    targetHost: TailscaleServeTargetHost;
+  } | null = null;
 
   constructor(
     private readonly executable = "tailscale",
@@ -203,9 +256,13 @@ export class TailscaleServeManager {
     options: {
       adoptExisting?: boolean;
       previousTargetPort?: number;
+      previousTargetHost?: TailscaleServeTargetHost;
+      /** The loopback address the browser listener is bound to. */
+      targetHost?: TailscaleServeTargetHost;
       beforePublish?: () => Promise<void>;
     } = {},
   ): Promise<string> {
+    const targetHost = options.targetHost ?? DEFAULT_SERVE_TARGET_HOST;
     if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
       throw new Error(`Invalid Tailscale Serve target port: ${targetPort}`);
     }
@@ -221,10 +278,10 @@ export class TailscaleServeManager {
     }
     const status = parseServeStatus(existingStatus.stdout);
     if (configuredPort(status, httpsPort)) {
-      const existingUrl = adoptableServeUrl(status, targetPort, httpsPort);
+      const existingUrl = adoptableServeUrl(status, targetPort, httpsPort, targetHost);
       if (options.adoptExisting && existingUrl) {
         await options.beforePublish?.();
-        this.activeServe = { targetPort, httpsPort };
+        this.activeServe = { targetPort, httpsPort, targetHost };
         return existingUrl;
       }
       // Teardown removes only `/`, so a port the user also serves other paths
@@ -244,7 +301,12 @@ export class TailscaleServeManager {
       const ownedPreviousTarget =
         options.adoptExisting &&
         options.previousTargetPort !== undefined &&
-        adoptableServeUrl(status, options.previousTargetPort, httpsPort);
+        adoptableServeUrl(
+          status,
+          options.previousTargetPort,
+          httpsPort,
+          options.previousTargetHost,
+        );
       if (ownedPreviousTarget) {
         // Durable ownership identifies the old root after a crash or a port
         // change. Revalidate it before removing only that mount; foreign roots
@@ -263,7 +325,7 @@ export class TailscaleServeManager {
       "--bg",
       "--yes",
       `--https=${httpsPort}`,
-      `http://127.0.0.1:${targetPort}`,
+      expectedProxyTarget(targetPort, targetHost),
     ];
 
     let result: { stdout: string; stderr: string };
@@ -272,7 +334,7 @@ export class TailscaleServeManager {
     } catch (error) {
       throw new Error(`Unable to configure Tailscale Serve: ${commandError(error)}`);
     }
-    this.activeServe = { targetPort, httpsPort };
+    this.activeServe = { targetPort, httpsPort, targetHost };
 
     let url = extractTailscaleServeUrl(`${result.stdout}\n${result.stderr}`);
     if (!url) {
@@ -295,7 +357,7 @@ export class TailscaleServeManager {
   async stop(): Promise<void> {
     const activeServe = this.activeServe;
     if (!activeServe) return;
-    await this.stopOwned(activeServe.targetPort, activeServe.httpsPort);
+    await this.stopOwned(activeServe.targetPort, activeServe.httpsPort, activeServe.targetHost);
   }
 
   async clearHttpsPort(httpsPort = 443): Promise<void> {
@@ -344,7 +406,11 @@ export class TailscaleServeManager {
     if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
   }
 
-  async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {
+  async stopOwned(
+    targetPort: number,
+    httpsPort = 443,
+    targetHost: TailscaleServeTargetHost = DEFAULT_SERVE_TARGET_HOST,
+  ): Promise<boolean> {
     let existingStatus: { stdout: string; stderr: string };
     try {
       existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
@@ -353,11 +419,11 @@ export class TailscaleServeManager {
       // this listener the root handler is still known to be ours, and refusing
       // here would exit leaving a public HTTPS endpoint proxying to a port that
       // is about to disappear. Without that proof, fail closed.
-      if (!this.ownsActiveServe(targetPort, httpsPort)) {
+      if (!this.ownsActiveServe(targetPort, httpsPort, targetHost)) {
         throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
       }
       await this.removeRootHandler(httpsPort);
-      this.clearActiveServe(targetPort, httpsPort);
+      this.clearActiveServe(targetPort, httpsPort, targetHost);
       return true;
     }
     const status = parseServeStatus(existingStatus.stdout);
@@ -366,26 +432,38 @@ export class TailscaleServeManager {
     // Both mean there is nothing of ours left to remove, which keeps repeated
     // teardown idempotent instead of throwing "changed configuration".
     if (!configuredPort(status, httpsPort) || !hasRootHandler(status, httpsPort)) {
-      this.clearActiveServe(targetPort, httpsPort);
+      this.clearActiveServe(targetPort, httpsPort, targetHost);
       return false;
     }
-    if (!ownedServeUrl(status, targetPort, httpsPort)) {
+    if (!ownedServeUrl(status, targetPort, httpsPort, targetHost)) {
       throw new Error(
         `Refusing to remove a changed Tailscale Serve configuration on HTTPS port ${httpsPort}`,
       );
     }
     await this.removeRootHandler(httpsPort);
-    this.clearActiveServe(targetPort, httpsPort);
+    this.clearActiveServe(targetPort, httpsPort, targetHost);
     return true;
   }
 
   /** True when this process configured exactly this listener and still holds it. */
-  private ownsActiveServe(targetPort: number, httpsPort: number): boolean {
-    return this.activeServe?.targetPort === targetPort && this.activeServe.httpsPort === httpsPort;
+  private ownsActiveServe(
+    targetPort: number,
+    httpsPort: number,
+    targetHost: TailscaleServeTargetHost,
+  ): boolean {
+    return (
+      this.activeServe?.targetPort === targetPort &&
+      this.activeServe.httpsPort === httpsPort &&
+      this.activeServe.targetHost === targetHost
+    );
   }
 
-  private clearActiveServe(targetPort: number, httpsPort: number): void {
-    if (this.ownsActiveServe(targetPort, httpsPort)) this.activeServe = null;
+  private clearActiveServe(
+    targetPort: number,
+    httpsPort: number,
+    targetHost: TailscaleServeTargetHost,
+  ): void {
+    if (this.ownsActiveServe(targetPort, httpsPort, targetHost)) this.activeServe = null;
   }
 
   /**
@@ -421,14 +499,20 @@ export async function startStandaloneTailscaleServe(
   httpsPort: number,
   ownershipStore?: ManagedWebClientOwnershipStore,
 ): Promise<string> {
-  const targetPort = getTailscaleServeTargetPort(browserUrl);
+  const target = getTailscaleServeTarget(browserUrl);
   const ownership = await ownershipStore?.load();
-  return serve.start(targetPort, httpsPort, {
+  return serve.start(target.port, httpsPort, {
     adoptExisting: true,
-    ...(ownership?.httpsPort === httpsPort ? { previousTargetPort: ownership.targetPort } : {}),
+    ...(target.host === DEFAULT_SERVE_TARGET_HOST ? {} : { targetHost: target.host }),
+    ...(ownership?.httpsPort === httpsPort
+      ? {
+          previousTargetPort: ownership.targetPort,
+          ...(ownership.targetHost ? { previousTargetHost: ownership.targetHost } : {}),
+        }
+      : {}),
     ...(ownershipStore
       ? {
-          beforePublish: () => ownershipStore.save({ version: 1, targetPort, httpsPort }),
+          beforePublish: () => ownershipStore.save(serveOwnershipRecord(target, httpsPort)),
         }
       : {}),
   });

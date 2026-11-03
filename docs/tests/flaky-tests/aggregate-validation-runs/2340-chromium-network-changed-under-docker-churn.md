@@ -86,3 +86,14 @@ approval assertion rejecting rendered content. The broad run was interrupted
 with SIGINT to its recorded Playwright child after 436.6 seconds so it could be
 rerun without Docker churn. Evidence is retained under
 `output/agent-testing/home-mail-review-fix/evidence/` in the review workspace.
+
+After the Docker profile was stopped and reset, the one-worker approval spec
+passed all four cases (22.8 s): approve and decline at mobile and desktop widths,
+including Escape and keyboard assertions. The exact broad browser command was
+rerun, but stopped after 25.3 minutes with 34 failures and 587 passes; it is not a
+green aggregate result. Several unrelated cases reproduced on detached main;
+others remain unresolved. An additional concurrent PipelineFlow owner run also
+encountered `ENOENT` for trace files because these component-suite invocations
+share `output/playwright/test-results`; that run is not reliable isolation
+proof. Future component reruns must be serialized within one checkout as well
+as kept separate from Docker network churn.

@@ -97,3 +97,28 @@ No source-store code, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name merge-source-store-owner -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures` passed (exit 0, 1.1 s logged).
 - **Evidence:** `orkestrator-test-run.oLFJHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.0oakL2/merge-feature-tests.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the existing setup race; no source-store implementation, assertion, deadline or skip changed. The aggregate remains failed. After the frozen install, the complete desktop source-hint documentation test owner passed separately (exit 0, 1.3 s).
+
+
+## Environment-kind terminology review repair — 2026-11-02
+
+At `e4a98c7aa`, `mise run test:logged -- --name repair-default-suite -- mise run test` failed (exit 1, 1053.3 s including about 638 s queued for capacity). Workspace reserved six slots; root, bridges and protocol reserved one, two and one. Backend reported 13,338 passed, 99 skipped and three failed; web reported 11,409 passed, 10 skipped and zero failed. The third backend failure was the separate PreviewUpstreamPool idle-expiry assertion.
+
+Both unchanged lock-store cases repeated: `takes over a lock left by a dead process but not one held by a live process` threw on undefined `lockFile.endsWith` at line 191 (22.55 ms), then `a live holder whose identity cannot be verified is never taken over on age` got ENOENT instead of busy at line 231 (315.83 ms).
+
+The complete unchanged owner passed alone (exit 0, 0.6 s):
+
+```sh
+mise run test:logged -- --name mcp-source-store-isolated -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `output/agent-testing/env-kinds-review-fix/repair-default-suite.log.gz` in the terminology worktree; original inner artifact directory `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Ktt62a`. The setup-delay hypothesis remains unproven. No lock-store code, assertion, timeout or skip changed; the aggregate remains failed. A separately installed detached `origin/main` at `d7cdfaa8b` also passed the complete owner with `mise run test:logged -- --name baseline-mcp-source-store -- bun test --cwd apps/backend ./src/core/mcp-management/source-store.test.ts --parallel=1 --only-failures` (exit 0, 0.5 s). The two aggregate failures were not reproduced on the target branch and are not excused as environmental.
+
+## Environment-kind terminology fix round — 2026-11-02
+
+Further target-branch evidence for the recurrence above, on a detached `origin/main` at `d7cdfaa8b` (differs from the branch base `82598d869` only in `AGENTS.md`; `source-store.ts` and its test are identical on both):
+
+- The complete owner, `--parallel=1`, eight runs back to back while 54 `yes` processes saturated the 18-core host: all passed. CPU saturation alone does not reproduce it.
+- `ORKESTRATOR_BACKEND_TEST_WORKERS=4 mise run test:logged -- --name baseline-backend-workspace -- bun run --cwd apps/backend test:workspace`: 13,341 passed, 98 skipped, one failed (the unrelated PreviewUpstreamPool case, to-do [2920](../../../todo/previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)); both lock-store cases passed.
+- `mise run test:logged -- --name baseline-default-suite -- mise run test` (188.8 s, no capacity queue): backend 13,340 passed, one failed (PreviewUpstreamPool again); web 11,407 passed; every other group passed. Both lock-store cases passed.
+
+The branch's own preparation aggregate at `9940fb04a` (277.6 s) also failed only PreviewUpstreamPool. The lock-store cases have failed only in runs queued behind other worktrees' suites for host capacity (about 638 s on 2026-11-02), as in every earlier recurrence here. The failure has still not been reproduced on the target branch, so it stays open and unexcused. No lock-store code, assertion, timeout or skip changed. Evidence: `output/agent-testing/env-kinds-review-fix/baseline-backend-workspace-r2.log.gz` and `baseline-default-suite-r2.log.gz` in the terminology worktree.

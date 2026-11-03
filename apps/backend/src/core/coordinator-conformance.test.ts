@@ -311,6 +311,12 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_PR_RULE).toContain("create_pr");
     expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
     expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
+    expect(COORDINATOR_PR_RULE).toContain(
+      "A prompt environment (a worker that just runs a prompt)",
+    );
+    expect(COORDINATOR_PR_RULE).toContain(
+      "A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step",
+    );
     // It also says how a raised PR is followed, and that merging is the user's.
     expect(COORDINATOR_PR_RULE).toContain("You are woken when a pull request you raised opens");
     expect(COORDINATOR_PR_RULE).toContain("call resolve_conflicts");

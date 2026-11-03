@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * A straight pipe section with a flange at each end, drawn in lucide's style.
- * Lucide has no pipe glyph, and this marks build pipeline environments in the
+ * Lucide has no pipe glyph, and this marks pipeline environments in the
  * sidebar. Decorative, like lucide icons.
  */
 export function PipeIcon({ className }: { className?: string }) {

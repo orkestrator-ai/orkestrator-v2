@@ -78,19 +78,19 @@ const ACTION_DEFINITIONS: Record<
   review: {
     label: "Review",
     description:
-      "Used by the Code Review button, as the first model in Multi Review, and as Reviewer 1 in feature and ticket builds.",
+      "Used by the Code Review button, as the first model in Multi Review, and as Reviewer 1 in build pipelines.",
     icon: <Eye className="h-4 w-4" />,
   },
   review2: {
     label: "Review 2",
     description:
-      "Used as the second review model in Multi Review and as Reviewer 2 in feature and ticket builds.",
+      "Used as the second review model in Multi Review and as Reviewer 2 in build pipelines.",
     icon: <Eye className="h-4 w-4" />,
   },
   reviewPreparation: {
     label: "Review preparation & consolidation",
     description:
-      "Prepares the shared review package and consolidates findings for Multi Review and for feature and ticket builds.",
+      "Prepares the shared review package and consolidates findings for Multi Review and for build pipelines.",
     icon: <ScanSearch className="h-4 w-4" />,
   },
   fixReviewIssues: {

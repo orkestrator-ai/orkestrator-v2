@@ -109,7 +109,7 @@ export function ProjectNotesView({ projectId }: ProjectNotesViewProps) {
         <p>
           Project notes are stored in Orkestrator, not in the repository. Unlike AGENTS.md, they are
           never committed, but Orkestrator gives them to the agents that work on this project for
-          ticket builds, reviews and graphs.
+          build pipelines, reviews and graphs.
         </p>
       </div>
 

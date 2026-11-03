@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { CircleHelp, Loader2, Send, X } from "lucide-react";
 import {
   GRAPH_AGENT_QUESTION_BOUNDS,
@@ -7,6 +7,7 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 
 /**
@@ -101,6 +102,15 @@ export function GraphQuestionAnswerForm({
     }
   };
 
+  // ⌘↵ / Ctrl+Enter in the answer or on a choice sends, as the submit button
+  // does. Not on the whole section: `children` may hold an editor of its own.
+  const submitOnShortcut = (event: KeyboardEvent<HTMLElement>) => {
+    if (!isSubmitShortcut(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void submit("answered");
+  };
+
   return (
     <section
       aria-labelledby={headingId}
@@ -128,7 +138,12 @@ export function GraphQuestionAnswerForm({
       ) : (
         <>
           {choices.length > 0 ? (
-            <div role="radiogroup" aria-label="Choices" className="flex flex-wrap gap-1.5">
+            <div
+              role="radiogroup"
+              aria-label="Choices"
+              className="flex flex-wrap gap-1.5"
+              onKeyDown={submitOnShortcut}
+            >
               {choices.map((option) => (
                 <Button
                   key={option}
@@ -149,6 +164,7 @@ export function GraphQuestionAnswerForm({
           <Textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
+            onKeyDown={submitOnShortcut}
             maxLength={GRAPH_AGENT_QUESTION_BOUNDS.maxAnswerChars}
             rows={3}
             disabled={disabled || sending !== null}
@@ -171,6 +187,7 @@ export function GraphQuestionAnswerForm({
               size="sm"
               className="h-7 gap-1.5 text-xs"
               disabled={disabled || sending !== null}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => void submit("answered")}
             >
               {sending === "answered" ? (

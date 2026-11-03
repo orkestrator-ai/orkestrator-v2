@@ -1,6 +1,7 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { MessageCircleQuestion } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 import type { NativeAsyncQuestionPart } from "@/lib/chat/native-message-types";
 import {
@@ -107,12 +108,36 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
   }, [response]);
   const disabled = submitting || Boolean(response);
 
+  const submit = () => {
+    if (!respond || !canSubmit || disabled) return;
+    setSubmitting(true);
+    setError(null);
+    void respond(part.asyncQuestion.itemId, serializeAsyncQuestionAnswers(questions, answers))
+      .then(() => {
+        if (draftKey) usePromptDraftStore.getState().clearDraft(draftKey);
+      })
+      .catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "Failed to queue answer");
+      })
+      .finally(() => setSubmitting(false));
+  };
+
   useEffect(() => {
     if (response && draftKey) usePromptDraftStore.getState().clearDraft(draftKey);
   }, [draftKey, response]);
 
   return (
-    <div className="my-2 rounded-lg border border-primary/25 bg-primary/[0.035] p-3">
+    // ⌘↵ / Ctrl+Enter anywhere in the card (the text field or a picked
+    // option) sends the answer, as the button does.
+    <div
+      className="my-2 rounded-lg border border-primary/25 bg-primary/[0.035] p-3"
+      onKeyDown={(event) => {
+        if (!isSubmitShortcut(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        submit();
+      }}
+    >
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <MessageCircleQuestion className="size-4 text-primary" />
         Codex has a question
@@ -190,22 +215,8 @@ export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPar
             type="button"
             size="sm"
             disabled={!respond || !canSubmit || submitting}
-            onClick={() => {
-              if (!respond) return;
-              setSubmitting(true);
-              setError(null);
-              void respond(
-                part.asyncQuestion.itemId,
-                serializeAsyncQuestionAnswers(questions, answers),
-              )
-                .then(() => {
-                  if (draftKey) usePromptDraftStore.getState().clearDraft(draftKey);
-                })
-                .catch((reason: unknown) => {
-                  setError(reason instanceof Error ? reason.message : "Failed to queue answer");
-                })
-                .finally(() => setSubmitting(false));
-            }}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            onClick={submit}
           >
             {submitting ? "Sending…" : "Send answer"}
           </Button>

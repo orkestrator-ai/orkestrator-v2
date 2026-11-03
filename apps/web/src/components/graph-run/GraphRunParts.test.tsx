@@ -102,6 +102,53 @@ describe("GraphQuestionAnswerForm", () => {
     expect(screen.queryByRole("button", { name: "Send answer" }) === null).toBe(true);
     expect(screen.getByText("Yes")).toBeTruthy();
   });
+
+  test.each(["metaKey", "ctrlKey"])(
+    "%s+Enter requires a choice even with text",
+    async (modifier) => {
+      const onSubmit = mock(async () => {});
+      render(
+        <GraphQuestionAnswerForm
+          question={question}
+          asker="Fix"
+          requireChoice
+          onSubmit={onSubmit}
+        />,
+      );
+      const field = screen.getByRole("textbox");
+      fireEvent.change(field, { target: { value: "After lunch" } });
+      fireEvent.keyDown(field, { key: "Enter", [modifier]: true });
+      expect(screen.getByRole("alert").textContent).toBe("Choose an option first.");
+      expect(onSubmit).not.toHaveBeenCalled();
+      const yes = screen.getByRole("radio", { name: "Yes" });
+      fireEvent.click(yes);
+      fireEvent.keyDown(yes, { key: "Enter", [modifier]: true });
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit).toHaveBeenCalledWith({
+        kind: "answered",
+        choice: "Yes",
+        text: "After lunch",
+      });
+    },
+  );
+
+  test("⌘↵ in the answer or on a choice sends it; plain Enter does not", async () => {
+    const onSubmit = mock(async () => {});
+    render(<GraphQuestionAnswerForm question={question} asker="Fix" onSubmit={onSubmit} />);
+    const yes = screen.getByRole("radio", { name: "Yes" });
+    fireEvent.click(yes);
+    fireEvent.keyDown(yes, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenLastCalledWith({ kind: "answered", choice: "Yes" });
+
+    const field = screen.getByRole("textbox");
+    fireEvent.change(field, { target: { value: "After lunch" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit).toHaveBeenLastCalledWith({ kind: "answered", text: "After lunch" });
+  });
 });
 
 describe("GraphRunsList", () => {

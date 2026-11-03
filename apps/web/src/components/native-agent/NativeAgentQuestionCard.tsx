@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { PromptDeadline } from "@/components/chat/PromptDeadline";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { usePromptHold, type PromptHoldHandler } from "@/hooks/usePromptHold";
+import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
@@ -95,7 +96,17 @@ export function NativeAgentQuestionCard({
 
   const freeTextRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
   const wantsFreeTextFocus = useRef(false);
+  const questionPanelRef = useRef<HTMLDivElement>(null);
+  const wantsQuestionFocus = useRef(false);
   useEffect(() => {
+    if (wantsQuestionFocus.current) {
+      wantsQuestionFocus.current = false;
+      const panel = questionPanelRef.current;
+      const target = panel?.querySelector<HTMLElement>(
+        "textarea:not(:disabled), input:not(:disabled), button:not(:disabled)",
+      );
+      (target ?? panel)?.focus();
+    }
     if (!wantsFreeTextFocus.current) return;
     wantsFreeTextFocus.current = false;
     freeTextRef.current?.focus();
@@ -188,12 +199,30 @@ export function NativeAgentQuestionCard({
 
   const responseLabel = `${question.prompt} response`;
 
+  // ⌘↵ / Ctrl+Enter does what the footer's primary button does: Next until
+  // the last question, then Submit.
+  const advance = () => {
+    if (disabled) return;
+    if (!isLast) {
+      wantsQuestionFocus.current = true;
+      setStoredIndex(index + 1);
+    } else if (canSubmit) {
+      void resolve("answer");
+    }
+  };
+
   return (
     <div
       data-testid="agent-question-card"
       role="group"
       aria-label={interaction.presentation.title}
       aria-busy={submitting || undefined}
+      onKeyDown={(event) => {
+        if (!isSubmitShortcut(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        advance();
+      }}
       className="overflow-hidden rounded-lg border border-border/70 bg-zinc-900/90 shadow-sm shadow-black/15"
     >
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -283,6 +312,8 @@ export function NativeAgentQuestionCard({
       ) : null}
 
       <div
+        ref={questionPanelRef}
+        tabIndex={-1}
         id={`question-panel-${interaction.id}-${question.id}`}
         role={count > 1 ? "tabpanel" : undefined}
         aria-labelledby={count > 1 ? `question-tab-${interaction.id}-${question.id}` : undefined}
@@ -473,6 +504,7 @@ export function NativeAgentQuestionCard({
               type="button"
               size="sm"
               disabled={disabled || !canSubmit}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => {
                 void resolve("answer");
               }}
@@ -484,6 +516,7 @@ export function NativeAgentQuestionCard({
               type="button"
               size="sm"
               disabled={disabled}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => setStoredIndex(index + 1)}
             >
               Next

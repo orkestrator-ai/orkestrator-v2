@@ -4,6 +4,7 @@ import { MailWorld } from "../agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
 import { NodeCoordination } from "./node-coordination.js";
+import { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";
 
 /**
  * Leaf mail over the real mail store: a command node's coordinator mails an
@@ -481,7 +482,11 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
       requestId: "launch-remote",
       createdAt: new Date().toISOString(),
     });
-    await world.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
+    await world.storage.coordinators.openCoordinatorDelegation(
+      new WorkerTabCloseAdmission(),
+      association.id,
+      "startup-agent",
+    );
     let collected = false;
     const link = {
       connected: true,

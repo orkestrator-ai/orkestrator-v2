@@ -12,7 +12,6 @@ import {
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
-import { beginWorkerTabClose } from "./worker-tab-close-admission.js";
 import { launchWorkerPr, launchWorkerResolve } from "./coordinator-pr.js";
 import {
   coordinatorNodeTarget,
@@ -245,7 +244,11 @@ export function registerCoordinatorSurfaceActions(
     await remote.environment(environmentId);
     const release =
       edit.operation === "close"
-        ? beginWorkerTabClose(environmentId, edit.tabId, remote.nodeId)
+        ? context.runtime.coordinatorRequests.workerTabs.beginClose(
+            environmentId,
+            edit.tabId,
+            remote.nodeId,
+          )
         : () => {};
     try {
       // Delegations to that node's workers are kept here, not on the node.

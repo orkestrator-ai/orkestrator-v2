@@ -127,21 +127,34 @@ export function AgentMailBanner({
   const deliver = async () => {
     // A pending message is already queued with the rest; releasing it steers
     // the queue. Inbox mail is released message by message, all of it.
-    const deliverable = pending ? [pending] : releasable;
+    // Snapshots sort newest first, retaining send order for timestamp ties.
+    // Stable ascending sort keeps that tie order while releasing context first.
+    const deliverable = pending
+      ? [pending]
+      : releasable.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
     if (deliverable.length === 0) return;
     setActionError(undefined);
-    try {
-      // The tab's delivery policy is unchanged. An agent mid-turn has the
-      // mail steered into that turn when it can take it.
-      let result: Awaited<ReturnType<typeof backend.deliverAgentMailNow>> | undefined;
-      for (const message of deliverable) {
+    const failures: string[] = [];
+    let result: Awaited<ReturnType<typeof backend.deliverAgentMailNow>> | undefined;
+    for (const message of deliverable) {
+      try {
         result = await backend.deliverAgentMailNow(environmentId, tabId, message.id);
+      } catch (error) {
+        failures.push(`${message.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+    // Reconcile even after partial success or a refusal; queued mail may have
+    // changed while requests were in flight.
+    try {
       await refresh();
+    } catch (error) {
+      failures.push(`Refresh: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (failures.length > 0) {
+      reportActionError("deliver messages", new Error(failures.join("; ")));
+    } else {
       const notice = result ? deliverNowNotice(result) : null;
       if (notice) toast.info(notice.title, { description: notice.description });
-    } catch (error) {
-      reportActionError("deliver message", error);
     }
   };
   let text = "Message waiting";
@@ -166,6 +179,8 @@ export function AgentMailBanner({
     text = `${awaitingAgent.length} message${awaitingAgent.length === 1 ? "" : "s"} in inbox · ${agentAvailable ? "waiting for an agent" : "enable a qualified agent in Settings"}`;
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
+  else if (pending)
+    text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
   else if (releasable.length > 0) {
     const count = releasable.length;
     text = `${count} message${count === 1 ? "" : "s"} in inbox · pull only`;

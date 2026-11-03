@@ -1,14 +1,21 @@
 import { beforeEach, afterEach, expect, test } from "bun:test";
 import { armPullRequestFallback, settlePullRequestFallback } from "./pull-request-load-fallback";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
-import { installBackend, resetBackend } from "@/components/pull-requests/pull-request-test-fixtures";
+import { mockToastError } from "../../../../tests/mocks/sonner";
+import {
+  installBackend,
+  resetBackend,
+} from "@/components/pull-requests/pull-request-test-fixtures";
 
 const ref = { owner: "fallback", repo: "tests", number: 1 };
 let opened: string[];
 beforeEach(() => {
   opened = [];
   mockToastError.mockClear();
-  installBackend({ open_in_browser: (args) => { opened.push(String(args.url)); } });
+  installBackend({
+    open_in_browser: (args) => {
+      opened.push(String(args.url));
+    },
+  });
 });
 afterEach(resetBackend);
 
@@ -26,7 +33,8 @@ test("failed load keeps a persistent user-activated deep-link escape route", asy
   await settlePullRequestFallback(ref, true);
   expect(opened).toEqual([url]);
   const options = mockToastError.mock.calls[0]?.[1] as {
-    duration: number; action: { label: string; onClick: () => void };
+    duration: number;
+    action: { label: string; onClick: () => void };
   };
   expect(options.duration).toBe(Infinity);
   expect(options.action.label).toBe("Open on GitHub");
@@ -44,5 +52,6 @@ test("abandoned opens evict the oldest while rearming refreshes its position", a
   expect(opened).toEqual([]);
   await settlePullRequestFallback(ref, true);
   expect(opened).toEqual(["https://github.com/fallback/tests/pull/1/files"]);
-  for (let number = 3; number <= 101; number++) await settlePullRequestFallback({ ...ref, number }, false);
+  for (let number = 3; number <= 101; number++)
+    await settlePullRequestFallback({ ...ref, number }, false);
 });

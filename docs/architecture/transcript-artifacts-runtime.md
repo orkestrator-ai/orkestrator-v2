@@ -254,9 +254,7 @@ staged context's digest, in the git-ignored, host-local `image-pin.json`
 (local image ids are not reproducible across hosts), and labels the image with
 that digest as preparation does; when the configured tag matches that pin and the
 id is present, jobs run the id rather than the mutable tag. Without a pin, or
-when the pinned id is gone, the tag is used and a warning is logged. For a
-published image, push it and set the registry digest
-(`docker buildx imagetools inspect <name>:<tag>`).
+when the pinned id is gone, the tag is used and a warning is logged.
 
 Preparing the worker on demand (`transcript_artifact_prepare_worker`,
 `preview-worker-prepare.ts`). Packaged installs carry no repository, so the

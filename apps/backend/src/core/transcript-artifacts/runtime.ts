@@ -137,8 +137,9 @@ export interface TranscriptArtifactRuntime {
   /** State of on-demand container worker preparation (for capabilities). */
   workerPreparation(): ArtifactWorkerPreparationStatus;
   /**
-   * Build (or pull) the container worker image with fixed arguments, then
-   * re-run isolation auto-selection: under `auto` a successful preparation
+   * Build the container worker image from the shipped or staged context
+   * with fixed arguments, then re-run isolation auto-selection: under `auto`
+   * a successful preparation
    * switches previews to container isolation without a restart. One
    * preparation runs at a time; concurrent callers share it.
    */

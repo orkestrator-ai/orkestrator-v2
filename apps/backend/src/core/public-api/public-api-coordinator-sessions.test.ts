@@ -310,6 +310,72 @@ describe("Coordinator conversations are public sessions", () => {
     expect(stub.sends).toHaveLength(0);
   });
 
+  test("a drain that sees the stopped turn during close never sends the queued run", async () => {
+    const {
+      harness,
+      service,
+      stub,
+      sessionId,
+      environmentId,
+      tabId,
+      projectId,
+      providerSessionId,
+    } = await coordinatorSetup();
+    const repository = await harness.createRepository("coordinator-close-drain");
+    await harness.storage.updateProject(projectId, { localPath: repository.projectPath });
+    harness.context.coordinators = new CoordinatorService(harness.storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    setActivity(service, "claude", tabId, providerSessionId, "working", environmentId);
+    // The enqueue starts a drain. Hold its provider status read until the
+    // close has aborted the turn, then answer what the provider now reports:
+    // the turn stopped, so the session is idle. Under load the real drain
+    // reaches this read after the abort the same way.
+    let aborted = false;
+    let statusReads = 0;
+    let releaseDrain!: () => void;
+    const drainGate = new Promise<void>((resolve) => (releaseDrain = resolve));
+    let drainWaiting!: () => void;
+    const drainReachedStatus = new Promise<void>((resolve) => (drainWaiting = resolve));
+    stub.setStatus(async () => {
+      statusReads += 1;
+      if (statusReads === 1) {
+        drainWaiting();
+        await drainGate;
+        return "idle";
+      }
+      return aborted ? "idle" : "running";
+    });
+    const abort = stub.provider.abort as unknown as ReturnType<typeof mock>;
+    abort.mockImplementation(async () => {
+      aborted = true;
+      releaseDrain();
+      await Promise.all(collaborators(service).promptQueues.pendingDrains());
+    });
+
+    const queued = await harness.call<{ runId: string }>(
+      "session.prompt",
+      { sessionId, prompt: "Never send this", enqueue: true },
+      { requestId: "close-drain-queued" },
+    );
+    if (!queued.ok) throw new Error(queued.error.message);
+    await drainReachedStatus;
+    await harness.commands.get("close_coordinator_conversation")!(
+      { projectId, conversationId: "main" },
+      harness.context,
+    );
+    await Promise.all(collaborators(service).promptQueues.pendingDrains());
+
+    expect(stub.sends).toHaveLength(0);
+    const settled = await harness.call("run.get", { operationId: queued.result.runId });
+    expect(settled.receipt).toMatchObject({
+      state: "interrupted",
+      dispatch: { state: "not-sent" },
+    });
+  });
+
   test("observation retires a queued prompt left by an older close path", async () => {
     const { harness, service, sessionId, environmentId, tabId, projectId, providerSessionId } =
       await coordinatorSetup();

@@ -209,6 +209,10 @@ export function registerCoordinatorCommands(
     const runtimeId = coordinatorRuntimeId(current.workspace.id, item.id);
     const releaseOwner = context.userCommands?.beginOwnerClose?.(runtimeId);
     try {
+      // Retire queued prompts before anything stops the turn. A drain already
+      // in progress dispatches as soon as it reads the stopped turn as idle,
+      // and only a queue that is gone by then refuses it the reservation.
+      await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.userCommands?.terminateForEnvironment(runtimeId);
       context.humanPrompts?.clearEnvironment(runtimeId);
       // An unassigned conversation never reached a provider: there is no session
@@ -247,6 +251,7 @@ export function registerCoordinatorCommands(
         }
       }
       const snapshot = await context.coordinators.closeConversation(id, conversation);
+      // Again, for anything queued while the close was stopping the session.
       await context.storage.deletePromptQueuesByEnvironment(runtimeId);
       await context.storage.synchronizeAgentMailboxes();
       // A side agent's schedules end with it; the main's move to the next main.

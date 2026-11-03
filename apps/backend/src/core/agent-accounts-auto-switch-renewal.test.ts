@@ -87,7 +87,12 @@ function harness(options: {
       state.active = accountId;
       return true;
     },
-    sessionAccount: async () => null,
+    sessionAccount: async () => ({
+      platform: "claude",
+      source: "account",
+      account: summaries.find((account) => account.id === options.active)!,
+      running: true,
+    }),
     bridgeBusy: async () => false,
     notify: () => undefined,
     now: () => clock,
@@ -104,6 +109,74 @@ function harness(options: {
     lapse: (accountId: string) => renewed.delete(accountId),
   };
 }
+
+describe("renewing candidates after a weekly limit stop", () => {
+  const stop = (switcher: AgentAccountAutoSwitcher, requestId = "limited-turn") =>
+    switcher.handleLimitStop({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId,
+      error: "You've hit your limit · resets 3pm",
+      resends: 0,
+    });
+
+  test("renews an idle candidate, forces a reread and resends on the renewed account", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(100, 160) },
+        idle: { before: NEVER_READ, after: usage(5, 30) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("resend");
+    expect(h.renewLogin).toHaveBeenCalledWith("claude", "idle");
+    expect(h.reads).toEqual([
+      { accountId: "host", force: true },
+      { accountId: "idle", force: false },
+      { accountId: "idle", force: true },
+    ]);
+    expect(h.state.active).toBe("idle");
+  });
+
+  test("failed renewals leave known candidates usable and share backoff with evaluation", async () => {
+    const h = harness({
+      active: "host",
+      renewLogin: async () => false,
+      accounts: {
+        host: { before: usage(100, 160) },
+        idle: { before: NEVER_READ, after: usage(5, 30) },
+        other: { before: usage(10, 90) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("resend");
+    await h.switcher.evaluate("claude");
+    expect(await stop(h.switcher, "another-turn")).toBe("resend");
+    expect(h.renewLogin).toHaveBeenCalledTimes(1);
+    expect(h.reads.filter((read) => read.accountId === "idle")).toEqual([
+      { accountId: "idle", force: false },
+      { accountId: "idle", force: false },
+      { accountId: "idle", force: false },
+    ]);
+    expect(h.state.active).toBe("other");
+  });
+
+  test("a renewed candidate whose forced reading proves it full cannot trigger a resend", async () => {
+    const h = harness({
+      active: "host",
+      accounts: {
+        host: { before: usage(100, 160) },
+        idle: { before: NEVER_READ, after: usage(100, 30) },
+      },
+    });
+    expect(await stop(h.switcher)).toBe("stop");
+    expect(h.renewedIds()).toEqual(["idle"]);
+    expect(h.reads.filter((read) => read.accountId === "idle")).toEqual([
+      { accountId: "idle", force: false },
+      { accountId: "idle", force: true },
+    ]);
+    expect(h.state.active).toBe("host");
+  });
+});
 
 describe("renewing idle accounts so they can be ranked", () => {
   test("an idle account whose old reading's reset has passed is renewed, read and chosen", async () => {

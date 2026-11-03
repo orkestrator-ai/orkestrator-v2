@@ -150,3 +150,14 @@ whole file passed apart from one desktop Pi case that passed when rerun alone
 The line 719 mode recorded above (`The Cursor session has no running turn to
 steer`) was not reproduced and its cause is not established, so this case
 stays open.
+
+## Recurrence of the line 719 mode, 2026-11-03
+
+In the first rerun of the Cursor-only desktop command on head `08e817a45`
+(beside Docker network churn, see
+[2340](../aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md#2026-11-03-a-private-network-namespace-avoids-it)),
+the steering case failed at line 729 (`expect(filled.error).toBeUndefined()`)
+with `The Cursor session has no running turn to steer`; its trace held no
+`ERR_NETWORK_CHANGED`. It passed in the next two runs in a private network
+namespace (Cursor-only, then the whole file). Cause still not established;
+status stays open.

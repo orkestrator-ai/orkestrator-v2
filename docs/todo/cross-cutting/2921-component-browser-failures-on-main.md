@@ -99,6 +99,13 @@ frame now comes from `cursorPromptText` in `bridges/cursor-bridge/src/prompt.ts`
   steers). The deadline is now 60 s, with the reason in a comment. Flake
   [0963](../../tests/flaky-tests/web-ui/0963-close-retention-cursor-cases-under-load.md)
   records both causes; its separate `no running turn to steer` mode stays open.
+- **Verified on the final tree (head `08e817a45`).** On beelink, beside other
+  builds' Docker network churn, the Cursor-only desktop run failed twice from
+  `net::ERR_NETWORK_CHANGED` module loads after `page.reload()` (flake
+  [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md#2026-11-03-a-private-network-namespace-avoids-it)).
+  Run in a private loopback-only network namespace (`unshare -rn`), all six
+  Cursor cases passed (51.3 s), and so did the whole file in both projects
+  (71.6 s).
 
 ## Related
 

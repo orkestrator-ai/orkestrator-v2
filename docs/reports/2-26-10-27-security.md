@@ -94,7 +94,7 @@ The material risks are concentrated in four themes:
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
-| M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Verified |
+| M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
@@ -309,7 +309,19 @@ a container a pivot into the host's loopback, at minimum for blind requests.
 
 ### M3. `update_agent_messaging_settings` returns the full unredacted config
 
-**Status:** Verified
+**Status:** Fixed. Since 2026-11-03 the command answers with the normalised
+messaging settings alone (`normalizeAgentMessagingSettings` of what it stored),
+never the config; the renderer never read the old answer. The guard test
+`apps/backend/src/core/commands-secret-sweep.test.ts` calls every registered
+command three times (no arguments; the seeded project, environment and tab;
+those plus round-tripped settings bodies) against a private data directory
+whose stored `githubToken`, `anthropicApiKey`, `cursorApiKey` and
+`openCodeZenApiKey` are canaries, with canaries also in the inherited
+environment and the agents' credential files under a temporary HOME. It fails
+if any answer, error, emitted event or log line carries one. On its first run
+it caught only this command. A command that rejects the arguments it gets is
+checked only that far, so the guard is a floor, not proof for every code path.
+The original finding follows.
 
 **Where:** `apps/backend/src/core/commands-registry-mail.ts:269-276`.
 ```ts

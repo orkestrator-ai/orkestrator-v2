@@ -63,6 +63,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/commands-registry-project-home.test.ts",
     "src/core/commands-servers-coordinator-opencode.test.ts",
     "src/core/commands-servers-coordinator.test.ts",
+    // Isolated Bun command sweep with per-call and process deadlines.
+    "src/core/commands-secret-sweep.test.ts",
     "src/core/commands-state-sync.test.ts",
     "src/core/commands-terminal-terminate.test.ts",
     "src/core/container-git-fetch-git.test.ts",

@@ -164,7 +164,10 @@ export function getAgentMessagingSettings(): Promise<AgentMessagingSettings> {
   return invokeCommandNodeSetting("get_agent_messaging_settings");
 }
 
-export function updateAgentMessagingSettings(settings: AgentMessagingSettings): Promise<unknown> {
+/** Saves the command node's messaging settings and answers with what it stored. */
+export function updateAgentMessagingSettings(
+  settings: AgentMessagingSettings,
+): Promise<AgentMessagingSettings> {
   return invokeCommandNodeSetting("update_agent_messaging_settings", { settings });
 }
 

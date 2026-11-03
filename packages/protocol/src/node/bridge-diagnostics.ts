@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { EVENT_LOOP_STALL_ALWAYS_LOG_MS } from "../event-loop-stall-monitor.js";
 import { MAX_BRIDGE_DIAGNOSTIC_BYTES } from "../log-vocabulary/bridge.js";
-import { createLogger, type LogEventOf } from "../logger.js";
+import { createLogger, tryWriteLog, type LogEventOf } from "../logger.js";
 
 export { MAX_BRIDGE_DIAGNOSTIC_BYTES };
 
@@ -252,8 +252,8 @@ export interface BridgeDiagnosticEntry {
 }
 export type BridgeDiagnosticWrite = (entry: BridgeDiagnosticEntry) => void;
 
-export function writeBridgeDiagnostic({ bridge, event, payload }: BridgeDiagnosticEntry): void {
-  log.info(event, { bridge, payload });
+export function writeBridgeDiagnostic({ bridge, event, payload }: BridgeDiagnosticEntry): boolean {
+  return tryWriteLog("info", "bridge.diagnostics", event, { bridge, payload });
 }
 
 /** Read per call, so a level replaced at runtime applies to scopes already open. */
@@ -281,15 +281,15 @@ function writeDiagnostic(
     const json = JSON.stringify({ bridge, event, ...payload });
     const bytes = Buffer.byteLength(json);
     if (bytes <= MAX_BRIDGE_DIAGNOSTIC_BYTES) {
-      write({ bridge, event, payload: json });
-      return true;
+      const accepted: unknown = write({ bridge, event, payload: json });
+      return accepted !== false;
     }
-    write({
+    const accepted: unknown = write({
       bridge,
       event: "snapshot-overflow",
       payload: JSON.stringify({ bridge, event: "snapshot-overflow", omittedBytes: bytes }),
     });
-    return true;
+    return accepted !== false;
   } catch {
     /* Diagnostic failures cannot affect execution. */
     return false;

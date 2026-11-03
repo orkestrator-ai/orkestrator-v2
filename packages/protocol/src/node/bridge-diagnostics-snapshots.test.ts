@@ -310,6 +310,44 @@ describe("change-driven snapshots at info", () => {
     }
   });
 
+  test("the production logger's rejected sink write leaves the stall eligible for retry", () => {
+    let now = 1_000_000;
+    let reject = false;
+    const written: Snapshot[] = [];
+    configureLogger({
+      sink: ({ record }) => {
+        if (reject) throw new Error("unavailable");
+        written.push(JSON.parse(record!.fields!.payload as string));
+      },
+    });
+    const scope = new BridgeRunDiagnostics(
+      "pi",
+      { id: "session" },
+      () => now,
+      undefined,
+      TICK,
+      undefined,
+      () => false,
+    );
+    try {
+      reject = true;
+      now += TICK;
+      scope.report("heartbeat");
+      now += TICK;
+      scope.report("heartbeat");
+      expect(written).toHaveLength(1);
+      reject = false;
+      now += TICK;
+      scope.report("heartbeat");
+      expect(written.map((entry) => entry.event)).toEqual(["send-started", "heartbeat"]);
+      now += TICK;
+      scope.report("heartbeat");
+      expect(written).toHaveLength(2);
+    } finally {
+      scope.close();
+    }
+  });
+
   describe("a change", () => {
     function stalled() {
       const h = harness();

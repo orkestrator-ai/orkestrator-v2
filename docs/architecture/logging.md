@@ -32,6 +32,13 @@ Each entry has four parts:
 `packages/protocol/src/logger.ts` is browser-safe and has no dependencies.
 Node-only setup is in `src/node/logger-environment.ts`.
 
+Stateful diagnostics that advance a baseline only after writing use
+`tryWriteLog(level, area, event, fields)`. It applies the same levels, vocabulary,
+sanitization and formatting as `createLogger`, returning false when filtered or
+when the synchronous sink throws. Acceptance does not prove that an asynchronous
+file writer has persisted the entry. Ordinary logging calls still return void
+and contain sink failures.
+
 ### Choosing a level
 
 | Level | Means | By default |

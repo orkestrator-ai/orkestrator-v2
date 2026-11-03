@@ -8,6 +8,7 @@ import {
   parseLogRecordLine,
   renderLogLine,
   resetLogger,
+  tryWriteLog,
   writeProcessOutputLine,
   type LogFields,
   type LogOutput,
@@ -72,6 +73,21 @@ describe("levels", () => {
 });
 
 describe("hot paths", () => {
+  test("acknowledged writes follow levels, validate events, and report sink rejection", () => {
+    expect(tryWriteLog("debug", "updater", "check.failed")).toBe(false);
+    expect(outputs).toHaveLength(0);
+    expect(tryWriteLog("info", "updater", "check.failed", { attempt: 1 })).toBe(true);
+    expect(lines()).toEqual(["[updater] check.failed attempt=1"]);
+    expect(tryWriteLog("info", "updater", "private-event" as "check.failed")).toBe(true);
+    expect(lines().at(-1)).toBe("[updater] invalid-event");
+    configureLogger({
+      sink: () => {
+        throw new Error("unavailable");
+      },
+    });
+    expect(tryWriteLog("info", "updater", "check.failed")).toBe(false);
+    expect(() => log.info("check.failed")).not.toThrow();
+  });
   test("a fields function runs only when the level is on", () => {
     const build = mock(() => ({ attempt: 1 }));
     log.debug("check.failed", build);

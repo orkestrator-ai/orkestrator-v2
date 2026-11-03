@@ -21,3 +21,27 @@ mise run test:logged -- --name preview-pool-rerun -- bun test --cwd apps/backend
 
 Host contention delaying socket-close observation is a hypothesis, not an
 established cause. No assertion, timeout, skip or unrelated implementation changed.
+
+## Exact aggregate rerun and target-branch reproduction
+
+The repair aggregate repeated the destroyed=false assertion at line 85 after
+807.92 ms. Backend totals were 13,379 passed, 99 skipped, one failed; root and
+protocol groups passed. A Codex runtime helper timeout was the other aggregate
+failure. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.91L4AS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The owning implementation and tests have no diff in `origin/main...HEAD`.
+A detached `origin/main` worktree at
+`a1218b081d9fa328db99a4c83b4461d3f66336ec`, with its own independently installed
+frozen dependencies, reproduced the same assertion in every repetition:
+600 passed, 100 failed, 700 total in 67.22 s. The first failure took 649.62 ms
+and identified the same idle-connection test and line 85.
+
+```sh
+mise run test:logged -- --name r4-main-preview-owner -- bun test --cwd apps/backend ./src/preview-upstream-pool.test.ts --parallel=1 --rerun-each=100 --only-failures
+```
+
+Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.rxxQDQ/r4-main-preview-owner.log.gz`.
+This establishes an existing target-branch failure independently of R4. It does
+not establish the cause; the earlier host-contention hypothesis is unconfirmed.

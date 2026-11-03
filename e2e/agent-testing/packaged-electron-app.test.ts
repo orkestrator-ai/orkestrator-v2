@@ -78,7 +78,11 @@ describe("packaged Electron app launch", () => {
   });
 
   test("the packaged spec has its own config, outside the default Electron run", () => {
-    expect(packaged.testMatch).toEqual(["design-canvas-packaged-electron.spec.ts"]);
+    expect(packaged.testMatch).toEqual([
+      "design-canvas-packaged-electron.spec.ts",
+      "packaged-security-electron.spec.ts",
+    ]);
+    expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });

@@ -519,7 +519,7 @@ and narrow-pane checks, and
 drives the canvas in the real Electron window, with the renderer served by
 Vite; `design-canvas-packaged-electron.spec.ts`
 (`mise run test:agent:electron:packaged`, after
-`mise run package:linux:unpacked:test`) runs the same journey against the packaged
+`mise run package:linux:unpacked` and `mise run package:linux:unpacked:test`) runs the same journey against the packaged
 Linux app and its `file://` renderer. The opt-in
 `core/design/export-container.test.ts` (`ORKESTRATOR_TEST_DOCKER_DESIGN_IMAGE`)
 exports from a running container and interrupts it.

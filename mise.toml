@@ -304,7 +304,7 @@ description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
 
 [tasks."test:agent:electron:packaged"]
-description = "Run the Electron design spec against the packaged Linux app (build it with package:linux:unpacked:test)"
+description = "Run shipping package security smoke (macOS/Linux) and Linux packaged design journey; build shipping and packaged-test binaries first"
 run = "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts"
 
 [tasks."test:ios"]

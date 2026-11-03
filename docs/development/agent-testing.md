@@ -749,12 +749,15 @@ seeded copy.
 canvas Electron journey (`design-canvas-electron-journey.ts`, shared with
 `design-canvas-electron.spec.ts`) against the packaged Linux app: its own
 executable, `app.asar`, the bundled Bun backend and bridges, and the renderer
-loaded from `file://<resources>/web/index.html`. No other spec loads that
-renderer; the rest serve it from Vite. It has its own Playwright config,
+loaded from `file://<resources>/web/index.html`. The shipping security smoke
+also loads that renderer; dev specs serve it from Vite. It has its own Playwright config,
 `playwright.packaged-electron.config.ts`, so `mise run test:agent:electron`
 does not need a packaged build.
 
 ```bash
+# Build the shipping inspect-off binary for the security smoke (installs nothing).
+mise run package:linux:unpacked
+
 # Build release/packaged-test/linux-unpacked/ (bun install, download:bun,
 # build:all, electron-builder --linux --dir with
 # electron-builder.packaged-test.config.ts). Installs nothing.
@@ -773,15 +776,37 @@ cannot start a shipped build, whose fuses refuse `--inspect` and `NODE_OPTIONS`
 `onlyLoadAppFromAsar` included, is as shipped. The build goes to its own
 directory so `package:linux` and the release steps never pick it up.
 
-Do not use `mise run package:linux` or `package:linux:unpacked` for this: the
-first installs the app into `~/.local/share/orkestrator-v2` and `~/.local/bin`,
-replacing whatever Orkestrator the signed-in user has installed there, and
-Playwright cannot launch either build. Set
+Do not use `mise run package:linux`: it installs the app into
+`~/.local/share/orkestrator-v2` and `~/.local/bin`, replacing the installed app.
+The shipping `package:linux:unpacked` build is for the security smoke, while
+the design journey needs the inspect-enabled test build. Set
 `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build with the
 inspect fuse on (a path relative to the repository root, or absolute). Without
 it the spec is skipped outside Linux and fails with the build command when
 `release/packaged-test/` has no app. It tests whatever is there, so rebuild
 after changing the code under test.
+
+`packaged-security-electron.spec.ts` runs in the same config on macOS and Linux.
+It spawns the **shipping inspect-off binary directly**, using Chromium CDP only
+for renderer observation. With `ELECTRON_DEV=1`, a recording dev-server URL,
+`NODE_OPTIONS=--require=<marker script>` and a Node `--inspect` port, it asserts
+the bundled `file://` renderer, zero dev-server requests, no marker execution,
+the ignored-dev warning and a closed Node inspector port. A missing shipping
+package fails; it never silently skips on macOS. It defaults to
+`release/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2` on Apple
+Silicon, `release/mac/...` on Intel, or `release/linux[-<arch>]-unpacked/orkestrator-v2`.
+Override with `ORKESTRATOR_SHIPPED_APP_EXECUTABLE` for another shipping package.
+On macOS, build an ad-hoc local `--mac --dir --publish never` package without
+installing or notarizing it. Run just this smoke test with:
+
+```bash
+mise run test:logged -- --name packaged-security -- bunx playwright test \
+  --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts
+```
+
+This does not inspect the Node main process and therefore cannot use the
+inspect-enabled package as evidence of shipping security. Each run owns and
+stops its detached process group and removes its disposable profile.
 
 The app runs on a disposable agent-test profile under a private temporary
 directory, removed afterwards. `HOME` and the XDG base directories point inside

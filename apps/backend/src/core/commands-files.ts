@@ -3,6 +3,7 @@ import {
   getHostClaudeCredentials as readHostClaudeCredentials,
 } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
+import { neutralizeGitFilters } from "./git-filter-config.js";
 import { HARDENED_GIT_CONFIG, removeLegacyWorktreeFsmonitor } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
@@ -983,7 +984,7 @@ export async function getLocalGitStatusDetailed(
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   // The worktree's own config is not trusted: it must not name a program
-  // (fsmonitor hook, git hook) that this host-side scan would run. With
+  // (filter driver, fsmonitor hook, git hook) that this scan would run. With
   // fsmonitor off, a hung daemon cannot block these reads either, so they need
   // no retry without it.
   const git = [
@@ -994,13 +995,38 @@ export async function getLocalGitStatusDetailed(
     "-C",
     worktreePath,
   ];
+  // Read effective configuration (including includes and worktree config)
+  // before any command that can hash worktree bytes. Fail closed on read errors.
+  git.push(
+    ...(await neutralizeGitFilters(
+      async (args) => (await runCommand("git", [...git, ...args], { timeoutMs: 10_000 })).stdout,
+    )),
+  );
   const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
-    runCommand("git", [...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
-      timeoutMs: 60_000,
-    }),
-    runCommand("git", [...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
-      timeoutMs: 60_000,
-    }),
+    runCommand(
+      "git",
+      [
+        ...git,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-status",
+        "-z",
+        "-M",
+        base,
+        ...endRef,
+      ],
+      {
+        timeoutMs: 60_000,
+      },
+    ),
+    runCommand(
+      "git",
+      [...git, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "-M", base, ...endRef],
+      {
+        timeoutMs: 60_000,
+      },
+    ),
     includeUncommitted
       ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
           timeoutMs: 60_000,

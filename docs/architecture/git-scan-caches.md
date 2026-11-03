@@ -48,6 +48,13 @@ unconditionally. Capture and diff stats also pass `-c core.hooksPath=/dev/null`
 config, which whatever runs in it can write, must not name a program for them
 to run (security report L9).
 
+Diff stats also read the effective filter configuration before scanning, then
+blank each configured driver's clean, smudge and process commands and set
+`required=false` for that invocation (`git-filter-config.ts`). A configuration
+read error stops the scan; only Git's no-matching-key exit is accepted as an
+empty driver list. Both diff reads pass `--no-ext-diff --no-textconv`. These
+counts describe the raw worktree bytes rather than an external filter's output.
+
 The daemon is not macOS-only. Git 2.56.0 on Linux reports
 `feature: fsmonitor--daemon` in `git version --build-options`, and a daemon
 starts, watches and stops there. On that Linux host it costs nothing per call

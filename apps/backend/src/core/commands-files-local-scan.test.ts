@@ -127,3 +127,61 @@ test("scanning a worktree does not run a program its own Git config names", asyn
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+for (const setting of ["clean", "process"] as const) {
+  test(`local scans never execute a configured ${setting} filter`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-local-scan-filter-"));
+    try {
+      const repository = path.join(root, "repository");
+      const marker = path.join(root, "filter-ran");
+      const script = path.join(root, "filter.sh");
+      await fs.mkdir(repository);
+      const git = (...args: string[]) =>
+        runCommand(
+          "git",
+          ["-c", "user.email=test@example.invalid", "-c", "user.name=Test", ...args],
+          { cwd: repository },
+        );
+      await git("init", "-b", "main");
+      await fs.writeFile(
+        path.join(repository, ".gitattributes"),
+        "tracked.txt filter=evil.dotted\n",
+      );
+      await fs.writeFile(path.join(repository, "tracked.txt"), "original\n");
+      await git("add", ".");
+      await git("commit", "-m", "initial");
+      // process intentionally exits without a handshake after writing the marker.
+      await fs.writeFile(
+        script,
+        `#!/bin/sh\ntouch '${marker}'\n${setting === "clean" ? "cat" : "exit 1"}\n`,
+        { mode: 0o755 },
+      );
+      await git("config", `filter.evil.dotted.${setting}`, script);
+      await git("config", "filter.evil.dotted.required", "true");
+      await fs.writeFile(path.join(repository, "tracked.txt"), "modified\n");
+      await fs.utimes(
+        path.join(repository, "tracked.txt"),
+        new Date("2001-01-01"),
+        new Date("2001-01-01"),
+      );
+      const read = await getLocalGitStatusDetailed(repository, "main", true, {
+        ensureFetched: async () => undefined,
+      });
+      expect(read.changes).toMatchObject([
+        { path: "tracked.txt", status: "M", additions: 1, deletions: 1 },
+      ]);
+      expect(await fs.stat(marker).catch(() => null)).toBeNull();
+      // Both unhardened read modes must actually reach the external driver.
+      for (const args of [
+        ["status", "--porcelain=v1"],
+        ["diff", "--numstat", "HEAD"],
+      ]) {
+        await git("--no-optional-locks", ...args).catch(() => undefined);
+        expect(await fs.stat(marker).catch(() => null)).not.toBeNull();
+        await fs.unlink(marker);
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+}

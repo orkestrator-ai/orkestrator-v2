@@ -18,6 +18,8 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "wake.waiting-check-failed": "A waiting worker could not be checked; the next pass retries.",
       "wake.resolve-report-failed": "A finished Resolve tab could not be reported.",
       "wake.waiting-report-failed": "A waiting worker could not be reported.",
+      "wake.worker-outcomes-failed":
+        "Coordinator-owned workers' merges and deletions could not be checked; the next sweep retries.",
       "store.malformed": "The coordinator store was malformed and is treated as empty.",
       "store.unsupported-version":
         "The coordinator store has an unsupported version and is treated as empty.",

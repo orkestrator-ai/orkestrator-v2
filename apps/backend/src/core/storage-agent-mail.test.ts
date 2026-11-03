@@ -525,6 +525,38 @@ describe("StorageService agent mail", () => {
     }
   });
 
+  test("Deliver now refuses untrusted and muted inbox mail with a reason, changing nothing", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "off" });
+      const external = await storage.sendAgentMail(
+        { kind: "external" },
+        { requestId: "external", toEnvironmentId: "e2", toTabId: "agent", body: "From outside." },
+      );
+      const fromUser = await storage.sendAgentMail(
+        { kind: "user" },
+        { requestId: "from-user", toEnvironmentId: "e2", toTabId: "agent", body: "From a person." },
+      );
+      expect(external).toMatchObject({ placement: "stored", trust: "external" });
+
+      await expect(
+        storage.retryAgentMailInject("e2", "agent", external.id, { steer: true }),
+      ).rejects.toMatchObject({
+        code: "policy-denied",
+        message: expect.stringContaining("another project or an unidentified sender"),
+      });
+      await storage.updateAgentMailboxPolicy("e2", "agent", { mutedInbound: true });
+      await expect(
+        storage.retryAgentMailInject("e2", "agent", fromUser.id, { steer: true }),
+      ).rejects.toMatchObject({ code: "policy-denied", message: expect.stringContaining("muted") });
+      for (const id of [external.id, fromUser.id])
+        expect((await storage.getAgentMailMessage("e2", "agent", id)).placement).toBe("stored");
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(["off-to-inherit", "unmute-inherit"] as const)(
     "promotes stored mail with inherited idle policy: %s",
     async (transition) => {

@@ -817,6 +817,35 @@ describe("AgentMailBanner actions", () => {
     expect(toastInfo).not.toHaveBeenCalled();
   });
 
+  test("Deliver now releases every deliverable inbox message, and skips untrusted mail", async () => {
+    installBanner("stored");
+    const mailbox = useAgentMailStore.getState().mailboxes.get(AGENT_1)!;
+    const { body: _body, ...summary } = mail("stored");
+    mailbox.messages.push(
+      { ...summary, id: "message-2" },
+      { ...summary, id: "external", trust: "external" },
+    );
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() => expect(deliverAgentMailNow).toHaveBeenCalledTimes(2));
+    expect(deliverAgentMailNow.mock.calls.map((call) => call[2])).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+  });
+
+  test("Deliver now shows the backend's refusal instead of doing nothing", async () => {
+    installBanner("stored");
+    deliverAgentMailNow.mockImplementationOnce(async () => {
+      throw new Error("This thread has reached its reply limit.");
+    });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("reply limit");
+    expect(toastError).toHaveBeenCalled();
+  });
+
   test("Deliver now asks a busy recipient to take the message mid-turn", async () => {
     installBanner("pending-inject", { presence: "working" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);

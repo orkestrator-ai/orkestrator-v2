@@ -9,6 +9,7 @@ import { deliverNowNotice, openAgentMailForTab } from "./agent-mail-ui";
 import {
   AGENT_MAIL_HOURLY_LIMIT_REASON,
   agentMailAwaitingAgent,
+  agentMailReleaseRefusal,
   isAgentMailBudgetHeld,
 } from "@orkestrator/protocol/agent-mail";
 import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
@@ -68,21 +69,30 @@ export function AgentMailBanner({
   const awaitingAgent = capabilities
     ? messages.filter((message) => agentMailAwaitingAgent(message, capabilities))
     : [];
-  const pullOnly =
-    awaitingAgent.length === 0
-      ? messages.find(
-          (message) =>
-            message.placement === "stored" &&
-            !message.ackedAt &&
-            !message.discardedAt &&
-            mailbox?.descriptor.injectPolicy === "off",
+  // Mail the policy left in the inbox. Delivered and expired mail the agent
+  // never acknowledged is not waiting, so it is not counted here.
+  const inInbox =
+    awaitingAgent.length === 0 && mailbox?.descriptor.injectPolicy === "off"
+      ? messages.filter(
+          (message) => message.placement === "stored" && !message.ackedAt && !message.discardedAt,
         )
-      : undefined;
+      : [];
+  const refusalOf = (message: (typeof messages)[number]) =>
+    mailbox
+      ? agentMailReleaseRefusal(message, {
+          mutedInbound: mailbox.descriptor.mutedInbound,
+          canInject: mailbox.descriptor.capabilities.canInject,
+        })
+      : null;
+  const releasable = inInbox.filter((message) => !refusalOf(message));
+  const blockedCount = inInbox.length - releasable.length;
+  // Wraps rather than truncates: the reason is what the person acts on.
+  const undeliverable = releasable.length === 0 && blockedCount > 0;
   if (
     !failed &&
     !paused &&
     !pending &&
-    !pullOnly &&
+    inInbox.length === 0 &&
     awaitingAgent.length === 0 &&
     entry.pendingInjectCount === 0 &&
     entry.failedInjectCount === 0
@@ -115,15 +125,20 @@ export function AgentMailBanner({
     }
   };
   const deliver = async () => {
-    const deliverable = pending ?? pullOnly;
-    if (!deliverable) return;
+    // A pending message is already queued with the rest; releasing it steers
+    // the queue. Inbox mail is released message by message, all of it.
+    const deliverable = pending ? [pending] : releasable;
+    if (deliverable.length === 0) return;
     setActionError(undefined);
     try {
-      // Releases this one message; the tab's delivery policy is unchanged. An
-      // agent mid-turn has it steered into that turn when it can take it.
-      const result = await backend.deliverAgentMailNow(environmentId, tabId, deliverable.id);
+      // The tab's delivery policy is unchanged. An agent mid-turn has the
+      // mail steered into that turn when it can take it.
+      let result: Awaited<ReturnType<typeof backend.deliverAgentMailNow>> | undefined;
+      for (const message of deliverable) {
+        result = await backend.deliverAgentMailNow(environmentId, tabId, message.id);
+      }
       await refresh();
-      const notice = deliverNowNotice(result);
+      const notice = result ? deliverNowNotice(result) : null;
       if (notice) toast.info(notice.title, { description: notice.description });
     } catch (error) {
       reportActionError("deliver message", error);
@@ -151,10 +166,13 @@ export function AgentMailBanner({
     text = `${awaitingAgent.length} message${awaitingAgent.length === 1 ? "" : "s"} in inbox · ${agentAvailable ? "waiting for an agent" : "enable a qualified agent in Settings"}`;
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
-  else if (pullOnly) {
-    const count = Math.max(1, entry.agentUnackedCount);
+  else if (releasable.length > 0) {
+    const count = releasable.length;
     text = `${count} message${count === 1 ? "" : "s"} in inbox · pull only`;
-  } else
+    if (blockedCount > 0) text += ` · ${blockedCount} can't be delivered`;
+  } else if (blockedCount > 0)
+    text = `${blockedCount} message${blockedCount === 1 ? "" : "s"} in inbox · ${refusalOf(inInbox[0]!)}`;
+  else
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
   return (
@@ -168,13 +186,13 @@ export function AgentMailBanner({
       <span
         className={cn(
           "min-w-0 flex-1",
-          awaitingAgent.length === 0 && !delegationHeld && "truncate",
+          awaitingAgent.length === 0 && !delegationHeld && !undeliverable && "truncate",
         )}
       >
         {text}
       </span>
       {actionError && (
-        <span role="alert" className="max-w-48 truncate text-red-300">
+        <span role="alert" className="max-w-48 truncate text-red-300" title={actionError}>
           {actionError}
         </span>
       )}
@@ -194,7 +212,7 @@ export function AgentMailBanner({
           Resume
         </Button>
       )}
-      {(pending || pullOnly) && (
+      {(pending || releasable.length > 0) && (
         <Button size="sm" variant="ghost" onClick={() => void deliver()}>
           Deliver now
         </Button>

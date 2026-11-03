@@ -140,6 +140,53 @@ describe("AgentMailBanner", () => {
     expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
   });
 
+  test("counts only inbox mail, not delivered or expired mail the agent never acknowledged", () => {
+    install("stored", { policy: "off" });
+    const state = useAgentMailStore.getState();
+    state.summary.get(mailboxId)!.agentUnackedCount = 27;
+    state.mailboxes
+      .get(mailboxId)!
+      .messages.push(
+        { ...message("injected"), id: "delivered" },
+        { ...message("expired", "sender-deleted"), id: "expired" },
+      );
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("1 message in inbox · pull only")).toBeTruthy();
+  });
+
+  test("untrusted inbox mail says why it is not delivered and offers no Deliver now", () => {
+    install("stored", { policy: "off" });
+    const messages = useAgentMailStore.getState().mailboxes.get(mailboxId)!.messages;
+    messages[0]!.trust = "external";
+    messages.push({ ...message("stored"), id: "cross", trust: "cross-project" });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    const text = screen.getByText(/^2 messages in inbox · Mail from another project/);
+    expect(text.classList.contains("truncate")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "View" })).toBeTruthy();
+  });
+
+  test("a muted tab's inbox mail offers no Deliver now", () => {
+    install("stored", { policy: "off" });
+    useAgentMailStore.getState().mailboxes.get(mailboxId)!.descriptor.mutedInbound = true;
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(
+      screen.getByText("1 message in inbox · Incoming mail is muted for this tab."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deliver now" }) === null).toBe(true);
+  });
+
+  test("counts deliverable and undeliverable inbox mail separately", () => {
+    install("stored", { policy: "off" });
+    useAgentMailStore
+      .getState()
+      .mailboxes.get(mailboxId)!
+      .messages.push({ ...message("stored"), id: "external", trust: "external" });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    expect(screen.getByText("1 message in inbox · pull only · 1 can't be delivered")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deliver now" })).toBeTruthy();
+  });
+
   test("explains that a delegation report waits for the worker turn", () => {
     install("inject-held", { placementReason: COORDINATOR_DELEGATION_HOLD_REASON });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);

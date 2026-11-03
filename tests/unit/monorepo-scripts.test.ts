@@ -340,8 +340,10 @@ describe("monorepo orchestration scripts", () => {
     // pins the shape of the orchestration.
     const source = read("scripts/test-all.ts");
     expect(source).toContain("Promise.all(");
-    expect(source).toContain('"--filter=@orkestrator/web-public"');
-    expect(source).toContain('"--filter=orkestrator"');
+    // Turbo filters are built from these package names.
+    expect(source).toContain("`--filter=${name}`");
+    expect(source).toContain('"@orkestrator/web-public"');
+    expect(source).toContain('"orkestrator",');
     expect(source).toContain('command: "mise"');
     expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');

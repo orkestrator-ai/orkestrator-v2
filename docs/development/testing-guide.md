@@ -318,6 +318,21 @@ Each ordinary group reserves an estimated 1 GiB per worker (bounded by the host
 memory budget). These are admission estimates, not operating-system CPU or
 memory limits; measure peak use before increasing concurrency.
 
+`ORKESTRATOR_TEST_GROUPS` runs only some groups: a comma-separated list of
+`backend`, `workspace`, `root`, `bridges` and `codex-protocol`. `backend` and
+`workspace` split the workspace group into the backend package and every other
+workspace package; selecting both runs the combined group. An unknown name, or a
+selection with no group in the chosen tier, ends the run as incomplete (exit 75)
+instead of passing on less. A backend-only run sizes the backend pool for the
+whole host (one core left free, within the tier's ceiling). Unset runs every
+group.
+
+CI uses it to run `mise run test:full` as three shards on separate runners:
+`backend`; `workspace`; and `root,bridges,codex-protocol`, which also carries the
+paired Claude AppArmor qualification. The `Unit and integration tests` job passes
+only when every shard passed, so it stays the suite's single status.
+`tests/unit/ci-workflows.test.ts` checks that the shards cover every group once.
+
 The runner reports each group as soon as it finishes, but prints detailed
 failure sections in a stable order. It waits for every group, so one failure
 does not hide failures in groups that were already running.
@@ -942,10 +957,11 @@ mise run test:logged -- --name long-diagnostic -- command arg
 
 Do not make a larger limit the normal configuration. The deadline exists to
 catch a wedged run, not a slow one. The slowest group is the workspace group:
-roughly four minutes cold on the 18-core reference host, and 20–22 minutes on
-GitHub's four-core runner (see the reference timings below), which is the
-closest any group comes to the limit. A default `mise run test` that gets
-anywhere near thirty minutes needs investigation rather than a raised limit.
+roughly four minutes cold on the 18-core reference host. On GitHub's four-core
+runner it grew past 33 minutes in November 2026 (backend 23 minutes on one
+worker, then web 7), which is why CI now runs the backend as its own shard
+rather than raising the limit. A default `mise run test` that gets anywhere near
+thirty minutes needs investigation rather than a raised limit.
 
 If an interrupted manual command leaves a process behind, identify it by its
 exact command, working directory, PID, or owned port before stopping it. Never
@@ -1322,7 +1338,10 @@ pass criteria:
   1,215–1,296 s, with the backend package 700–755 s and web 377–407 s, which
   run one after the other at one worker each on four cores; root and
   agent-support 199–214 s; bridges 145–191 s, of which ACP is 140–152 s. The
-  test job takes about 21 minutes.
+  test job takes about 21 minutes. By `main` run 41549578197 (2026-11-02,
+  still one job) the workspace group took 1,998 s, with the backend 1,404 s and
+  web 416 s; root 253 s and bridges 178 s. That run was the last measured before
+  CI moved to shards, and the shards have no reference timing yet.
 
 ## Parallel isolation and Bun module mocks
 

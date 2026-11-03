@@ -30,7 +30,9 @@ import {
   runAllTests,
   TEST_LOG_DIRECTORY_ENV,
   TEST_LOG_RETENTION_MS,
+  TEST_GROUP_KEYS,
   TEST_GROUP_TIMEOUT_MS_ENV,
+  TEST_GROUPS_ENV,
   TEST_LEASE_DIRECTORY_ENV,
   TEST_MAX_OUTPUT_BYTES_ENV,
   TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
@@ -307,6 +309,90 @@ describe("scripts/test-all.ts", () => {
     expect(await runAllTests(dependencies)).toBe(75);
     expect(invocations).toHaveLength(0);
     expect(logs.join("\n")).toContain("ORKESTRATOR_TEST_TIER must be one of");
+  });
+
+  test("a group selection runs only the named groups", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: { [TEST_GROUPS_ENV]: " root, bridges ,codex-protocol" },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(invocations.map((entry) => entry.name).sort()).toEqual([BRIDGES, PROTOCOL, ROOT].sort());
+  });
+
+  test("an unknown or empty group selection fails before any group starts", async () => {
+    for (const value of ["backend,web", ","]) {
+      const { dependencies, invocations, logs } = createDependencies({
+        environment: { [TEST_GROUPS_ENV]: value },
+      });
+
+      expect(await runAllTests(dependencies)).toBe(75);
+      expect(invocations).toHaveLength(0);
+      expect(logs.join("\n")).toContain(`${TEST_GROUPS_ENV} must list groups from`);
+    }
+  });
+
+  test("a selection with no group in the tier is incomplete, not a pass", async () => {
+    const { dependencies, invocations, logs } = createDependencies({
+      environment: { [TEST_GROUPS_ENV]: "codex-protocol", [TEST_TIER_ENV]: "slow" },
+    });
+
+    expect(await runAllTests(dependencies)).toBe(75);
+    expect(invocations).toHaveLength(0);
+    expect(logs.join("\n")).toContain("selects no slow-tier test groups");
+  });
+
+  test("backend and workspace selections split the workspace group by package", () => {
+    const groupsFor = (keys: (typeof TEST_GROUP_KEYS)[number][], cores = 4, tier?: "all") =>
+      buildConcurrentGroups(cores, false, undefined, tier, new Set(keys));
+    const filters = (group: TestGroup) =>
+      group.args.filter((argument) => argument.startsWith("--filter="));
+
+    const combined = buildConcurrentGroups(8).find((group) => group.name === WORKSPACE)!;
+    // Selecting both is exactly the default combined group.
+    expect(groupsFor(["backend", "workspace"], 8)).toEqual(
+      buildConcurrentGroups(8).filter((group) => group.name === WORKSPACE),
+    );
+
+    const [backend] = groupsFor(["backend"]);
+    expect(backend!.name).toBe("backend");
+    expect(filters(backend!)).toEqual(["--filter=@orkestrator/backend"]);
+    expect(backend!.args).toContain("--concurrency=1");
+
+    const [workspace] = groupsFor(["workspace"]);
+    expect(workspace!.name).toBe("workspace (web, desktop, web-public, cli, protocol, toolchain)");
+    expect(filters(workspace!)).not.toContain("--filter=@orkestrator/backend");
+    // Together the two halves cover every package of the combined group.
+    expect([...filters(backend!), ...filters(workspace!)].sort()).toEqual(filters(combined).sort());
+    expect(workspace!.args).toContain("--concurrency=1");
+    expect(workspace!.workers).toBe(planWorkers(4).workspace);
+  });
+
+  test("a backend-only run uses its host, leaving one core and the tier ceiling", () => {
+    const backendOnly = (cores: number, tier: "default" | "all") =>
+      buildConcurrentGroups(cores, false, undefined, tier, new Set(["backend"] as const))[0]!;
+
+    // On a four-core CI shard the shared plan gave the backend one worker.
+    expect(planWorkers(4, "all").backend).toBe(1);
+    expect(backendOnly(4, "all").env?.[BACKEND_WORKERS_ENV]).toBe(
+      String(MAX_SLOW_BACKEND_TEST_WORKERS),
+    );
+    expect(backendOnly(4, "default").env?.[BACKEND_WORKERS_ENV]).toBe("3");
+    expect(backendOnly(4, "default").workers).toBe(3);
+    expect(backendOnly(64, "default").env?.[BACKEND_WORKERS_ENV]).toBe(
+      String(MAX_BACKEND_TEST_WORKERS),
+    );
+    expect(backendOnly(1, "default").env?.[BACKEND_WORKERS_ENV]).toBe("1");
+
+    // Beside another group it keeps the shared plan.
+    const shared = buildConcurrentGroups(
+      4,
+      false,
+      undefined,
+      "all",
+      new Set(["backend", "root"] as const),
+    ).find((group) => group.name === "backend")!;
+    expect(shared.env?.[BACKEND_WORKERS_ENV]).toBe(String(planWorkers(4, "all").backend));
   });
 
   test("removes ambient bridge diagnostics flags from every aggregate group", async () => {

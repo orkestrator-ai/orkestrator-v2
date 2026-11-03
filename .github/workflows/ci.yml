@@ -187,12 +187,29 @@ jobs:
       - name: Qualify real Claude hook-only execution
         run: mise run test:logged -- --name claude-hook-only-windows -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-coordinator-sandbox-live.test.ts --parallel=1 --test-name-pattern 'read-only turn without|hook-only adversarial'
 
-  test:
-    name: Unit and integration tests
+  # The suite runs as shards, one runner each. On a single four-core runner the
+  # workspace group (backend then web, one Turbo slot) took over 30 minutes
+  # and the concurrent groups slowed tests past their per-test timeouts.
+  # `ORKESTRATOR_TEST_GROUPS` picks each shard's groups; together the shards
+  # cover every group (tests/unit/ci-workflows.test.ts).
+  test-shard:
+    name: Tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: backend
+            groups: backend
+          - shard: workspace
+            groups: workspace
+          # The paired Claude qualification runs on exactly one host.
+          - shard: root-bridges
+            groups: root,bridges,codex-protocol
+            qualify-claude: true
 
     steps:
       - name: Check out repository
@@ -214,6 +231,7 @@ jobs:
           echo "$GITHUB_WORKSPACE/binaries" >> "$GITHUB_PATH"
 
       - name: Qualify Claude hook-only turns in a real Linux container
+        if: ${{ matrix.qualify-claude }}
         run: |
           docker run --rm --user root \
             --volume "$GITHUB_WORKSPACE:/repo" --workdir /repo \
@@ -234,6 +252,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends bubblewrap socat zsh fish
 
       - name: Qualify Claude under stock AppArmor policy
+        if: ${{ matrix.qualify-claude }}
         env:
           ORKESTRATOR_CLAUDE_APPARMOR_PHASE: restricted
           ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
@@ -262,6 +281,7 @@ jobs:
             unshare --user --map-root-user true
 
       - name: Qualify Claude after AppArmor remediation
+        if: ${{ matrix.qualify-claude }}
         env:
           ORKESTRATOR_CLAUDE_APPARMOR_PHASE: remediated
           ORKESTRATOR_POLICY_CLAUDE_PATH: ${{ github.workspace }}/binaries/claude
@@ -269,7 +289,7 @@ jobs:
         run: mise run test:logged -- --name claude-apparmor-remediated -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/conformance-apparmor-live.test.ts --parallel=1
 
       - name: Upload paired Claude AppArmor evidence
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.qualify-claude && !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: claude-apparmor-${{ github.run_id }}-${{ github.run_attempt }}
@@ -277,16 +297,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Run complete non-iOS suite
+      - name: Run this shard of the complete non-iOS suite
         env:
           # A known place for the failing groups' full logs, uploaded below.
           ORKESTRATOR_TEST_LOG_DIR: ${{ runner.temp }}/orkestrator-test-logs
-          # On this 4-core runner the planner gives the workspace group one
-          # Turbo slot, so web (~8.5 min) and the single-worker backend
-          # (~18 min, all tiers) run back to back and reached the 30-minute
-          # default group deadline in November 2026. The no-progress watchdog
-          # still catches a wedged group within five minutes.
-          ORKESTRATOR_TEST_GROUP_TIMEOUT_MS: "2700000"
+          ORKESTRATOR_TEST_GROUPS: ${{ matrix.groups }}
         run: mise run test:full
 
       # The console keeps only each failing group's tail and its failure
@@ -295,7 +310,22 @@ jobs:
         if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: test-logs-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/orkestrator-test-logs
           if-no-files-found: ignore
           retention-days: 7
+
+  # The one status for the whole suite, and the context the planned required
+  # check names (docs/todo/cross-cutting/0030-test-suite-and-ci-health.md).
+  test:
+    name: Unit and integration tests
+    needs: test-shard
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every test shard to pass
+        env:
+          SHARDS: ${{ needs.test-shard.result }}
+        run: test "$SHARDS" = success

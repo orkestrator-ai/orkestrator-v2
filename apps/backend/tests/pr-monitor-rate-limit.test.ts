@@ -81,6 +81,90 @@ describe("PR monitor under GitHub rate limits", () => {
     for (const id of ["a", "c", "d", "e"]) expect(harness.detections(id)).toBeGreaterThan(0);
   });
 
+  for (const upgrade of ["refresh", "merge-pending", "create-pending"] as const) {
+    test(`queued ${upgrade} bypasses a peer's new cooldown with a fresh detection`, async () => {
+      const harness = scopedHarness();
+      const refusal = deferred<PrDetection | null>();
+      const blocker = deferred<PrDetection | null>();
+      harness.detectors.set("a", () => refusal.promise);
+      harness.detectors.set("b", () => blocker.promise);
+      harness.detectors.set("c", async () => openDetection("c"));
+      const targets = ["a", "b", "c"].map((id) =>
+        harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" }),
+      );
+      harness.service.sync(targets);
+      await harness.advance(20_000);
+      expect(harness.admission.status()).toMatchObject({ active: 2, waiting: 1 });
+
+      if (upgrade === "refresh") harness.service.requestCheck("c");
+      else harness.service.requestMode(targets[2]!, upgrade);
+      // A weaker, later wake must not erase the interactive refresh.
+      harness.service.requestCheck("c", "completion");
+      await harness.flush();
+      refusal.reject(new Error(RATE_LIMITED));
+      await harness.flush();
+      expect(harness.detections("c")).toBe(1);
+      expect(
+        harness.calls.detect.find((call) => call.environmentId === "c")?.options,
+      ).toMatchObject({
+        fresh: true,
+        includeCheckSummary: upgrade !== "merge-pending",
+      });
+      // The queued detection itself answered the upgrade: no redundant pass.
+      await harness.advance(0);
+      expect(harness.detections("c")).toBe(1);
+      blocker.resolve(openDetection("b"));
+      await harness.flush();
+      harness.service.shutdown();
+    });
+  }
+
+  for (const sharedBatch of [false, true]) {
+    test(`concurrent ${sharedBatch ? "shared batch" : "independent"} refusals count as one strike`, async () => {
+      const harness = scopedHarness();
+      const first = deferred<PrDetection | null>();
+      const second = sharedBatch ? first : deferred<PrDetection | null>();
+      harness.detectors.set("a", () => first.promise);
+      harness.detectors.set("b", () => second.promise);
+      harness.service.sync(
+        ["a", "b"].map((id) =>
+          harness.addEnvironment(id, { prUrl: prUrlFor(id), prState: "open" }),
+        ),
+      );
+      await harness.advance(20_000);
+      expect(harness.detections()).toBe(2);
+      first.reject(new Error(RATE_LIMITED));
+      if (!sharedBatch) second.reject(new Error(RATE_LIMITED));
+      await harness.flush();
+      for (const id of ["a", "b"]) {
+        harness.detectors.set(id, async () => openDetection(id));
+      }
+      await harness.advance(2 * 60_000 - 1);
+      expect(harness.detections()).toBe(2);
+      await harness.advance(1);
+      expect(harness.detections("a")).toBe(2);
+      expect(harness.detections("b")).toBe(2);
+      harness.service.shutdown();
+    });
+  }
+
+  test("a later interactive refusal during cooldown is a new strike", async () => {
+    const harness = scopedHarness();
+    harness.detectors.set("a", async () => {
+      throw new Error(RATE_LIMITED);
+    });
+    harness.service.sync([harness.addEnvironment("a", { prUrl: prUrlFor("a"), prState: "open" })]);
+    await harness.advance(20_000);
+    harness.service.requestCheck("a");
+    await harness.advance(0);
+    expect(harness.detections()).toBe(2);
+    await harness.advance(4 * 60_000 - 1);
+    expect(harness.detections()).toBe(2);
+    await harness.advance(1);
+    expect(harness.detections()).toBe(3);
+    harness.service.shutdown();
+  });
+
   test("entries a cooldown held resume spread out, not in the same instant", async () => {
     const samples = [0.1, 0.9, 0.5, 0.3, 0.7];
     let next = 0;

@@ -396,6 +396,7 @@ export class PrMonitorService {
   private readonly policy: PrMonitorPolicyConfig;
   private readonly cooldownScope: (target: PrMonitorTarget) => string | null;
   private readonly cooldowns: PrCooldownScopes;
+  private detectionSequence = 0;
 
   constructor(options: PrMonitorServiceOptions) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
@@ -800,6 +801,7 @@ export class PrMonitorService {
     // Someone is acting on this PR: it is not quiet, whatever GitHub says.
     entry.lastActivityAt = this.options.monotonicNow();
     if (entry.phase === "waiting") {
+      entry.wake = strongerWake(entry.wake, reason);
       this.raiseWaitingPriority(entry, reason);
       return;
     }
@@ -1005,7 +1007,6 @@ export class PrMonitorService {
         this.metrics.requested("pr-detection");
         this.metrics.coalesced("pr-detection");
         const wake = entry.wake;
-        entry.wake = null;
         if (wake) this.raiseWaitingPriority(entry, wake);
       } else if (entry.phase === "detecting") {
         this.metrics.requested("pr-detection");
@@ -1067,6 +1068,12 @@ export class PrMonitorService {
       return;
     }
 
+    // Wakes and pending intents received while queued are answered by this
+    // detection, including their cooldown exemption and fresh-read requirement.
+    wake = strongerWake(wake, entry.wake);
+    entry.wake = null;
+    policy = this.policyOf(entry);
+
     if (wake !== "interactive" && policy !== "merge-pending" && policy !== "create-pending") {
       const remaining = this.cooldownRemaining(entry, this.options.monotonicNow());
       if (remaining > 0) {
@@ -1089,6 +1096,7 @@ export class PrMonitorService {
     const generation = entry.generation;
     const detectionTarget = entry.target;
     const checkStartedAt = this.options.now();
+    const detectionSequence = ++this.detectionSequence;
     let transition: PrMonitorTransition | undefined;
     try {
       let detection: PrDetection | null = null;
@@ -1124,7 +1132,9 @@ export class PrMonitorService {
 
       if (failure) {
         const grace = this.graceRemaining(entry, this.options.monotonicNow());
-        if (failure.kind === "rate-limited") this.startCooldown(entry, detectionTarget, failure);
+        if (failure.kind === "rate-limited") {
+          this.startCooldown(entry, detectionTarget, failure, detectionSequence);
+        }
         if (failure.kind === "rate-limited" && grace !== null && grace > 0) {
           // GitHub refused to answer; it did not report a change. The last
           // reading stays confirmed for the grace, counted if it runs out.
@@ -1232,12 +1242,15 @@ export class PrMonitorService {
     entry: PrMonitorEntry,
     target: PrMonitorTarget,
     failure: Extract<PrDetectionFailure, { kind: "rate-limited" }>,
+    detectionSequence: number,
   ): void {
     const now = this.options.monotonicNow();
     const scope = this.cooldownScopeOf(target);
     // Rate limits in a row lengthen the cooldown: a budget something else is
     // still spending is rarely back two minutes later.
-    const strikes = scope ? this.cooldowns.strike(scope) : (entry.rateLimitStrikes += 1);
+    const strikes = scope
+      ? this.cooldowns.strike(scope, detectionSequence, this.detectionSequence)
+      : (entry.rateLimitStrikes += 1);
     const cooldown = rateLimitCooldown(failure.retryAfterMs, strikes, this.policy);
     entry.cooldownUntil = Math.max(entry.cooldownUntil, now + cooldown);
     if (scope) this.cooldowns.set(scope, now + cooldown, now);

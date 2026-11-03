@@ -305,7 +305,7 @@ export function classifyPrDetectionFailure(error: unknown): PrDetectionFailure {
 export class PrCooldownScopes {
   private readonly until = new Map<string, number>();
   /** Rate limits in a row per scope since a check in it last succeeded. Bounded. */
-  private readonly strikes = new Map<string, number>();
+  private readonly strikes = new Map<string, { count: number; through: number }>();
 
   constructor(private readonly maxScopes: number) {}
 
@@ -324,14 +324,21 @@ export class PrCooldownScopes {
   }
 
   /** Counts one more rate limit in a scope and returns how many in a row. */
-  strike(scope: string): number {
-    const count = (this.strikes.get(scope) ?? 0) + 1;
+  strike(scope: string, detectionSequence?: number, latestDetectionSequence = 0): number {
+    const previous = this.strikes.get(scope);
+    // Every detection already in flight when a refusal arrives belongs to the
+    // same event (including readers of one rejected batch). A detection started
+    // afterwards can escalate, even when an interactive wake bypassed cooldown.
+    if (previous && detectionSequence !== undefined && detectionSequence <= previous.through) {
+      return previous.count;
+    }
+    const count = (previous?.count ?? 0) + 1;
     this.strikes.delete(scope);
     if (this.strikes.size >= this.maxScopes) {
       const oldest = this.strikes.keys().next().value;
       if (oldest !== undefined) this.strikes.delete(oldest);
     }
-    this.strikes.set(scope, count);
+    this.strikes.set(scope, { count, through: latestDetectionSequence });
     return count;
   }
 

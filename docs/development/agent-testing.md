@@ -916,7 +916,7 @@ and launches its Electron with the same switches and no display variables:
 
 ```bash
 ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 bunx playwright test \
-  --config e2e/agent-testing/playwright.electron.config.ts design-canvas-electron.spec.ts
+  --config e2e/agent-testing/playwright.electron-headless.config.ts
 ```
 
 Its Vite-served renderer is exposed to

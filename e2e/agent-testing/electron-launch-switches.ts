@@ -63,13 +63,14 @@ export function headlessElectronRequested(
 export function electronSpecDisplayProblem(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
+  headlessOnly = false,
 ): string | null {
   if (platform !== "linux" || env.DISPLAY || env.WAYLAND_DISPLAY) return null;
-  if (headlessElectronRequested(platform, env)) return null;
+  if (headlessOnly && headlessElectronRequested(platform, env)) return null;
   return [
     "The Electron specs open a real window, and this run has neither DISPLAY nor WAYLAND_DISPLAY.",
     "Give them a disposable display: xvfb-run -a mise run test:agent:electron.",
     "dev:test --headless does not apply to them; they launch their own Electron.",
-    "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 runs design-canvas-electron.spec.ts without a display.",
+    "For headless design-canvas only, set ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 and use playwright.electron-headless.config.ts.",
   ].join("\n");
 }

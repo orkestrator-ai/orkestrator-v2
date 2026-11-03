@@ -101,11 +101,14 @@ describe("display the Electron specs need", () => {
     );
   });
 
-  test("any display is enough, as is the headless opt-in or another platform", () => {
+  test("any display is enough; the opt-in requires a headless-only config", () => {
     expect(electronSpecDisplayProblem("linux", { DISPLAY: ":99" })).toBeNull();
     expect(electronSpecDisplayProblem("linux", { WAYLAND_DISPLAY: "wayland-1" })).toBeNull();
     expect(
       electronSpecDisplayProblem("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" }),
+    ).toContain("neither DISPLAY nor WAYLAND_DISPLAY");
+    expect(
+      electronSpecDisplayProblem("linux", { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON: "1" }, true),
     ).toBeNull();
     expect(electronSpecDisplayProblem("darwin", {})).toBeNull();
     expect(electronSpecDisplayProblem("win32", {})).toBeNull();
@@ -158,6 +161,25 @@ test("display setup permits startup when preflight succeeds", () => {
   try {
     expect(() => displaySetup()).not.toThrow();
     expect(problem).toHaveBeenCalledTimes(1);
+  } finally {
+    problem.mockRestore();
+  }
+});
+
+test("headless config selects only the supported journey", async () => {
+  const { default: config } = await import("./playwright.electron-headless.config");
+  expect(config.testMatch).toEqual(["design-canvas-electron.spec.ts"]);
+});
+
+test("global setup keeps a mixed Electron suite guarded despite the opt-in", () => {
+  const problem = spyOn(switches, "electronSpecDisplayProblem").mockReturnValue(null);
+  try {
+    const config = (testMatch: string[]) =>
+      ({ projects: [{ testMatch }] }) as unknown as Parameters<typeof displaySetup>[0];
+    displaySetup(config(["design-canvas-electron.spec.ts", "electron-main.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
+    displaySetup(config(["design-canvas-electron.spec.ts"]));
+    expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
   } finally {
     problem.mockRestore();
   }

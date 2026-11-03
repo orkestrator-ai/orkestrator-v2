@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { processTree } from "./process-tree";
 import { HEADLESS_ELECTRON_SWITCHES } from "../../apps/desktop/electron/runtime-profile";
 
 /**
@@ -33,18 +34,6 @@ function profileCommand<T>(command: string): T {
   });
   if (result.status !== 0) throw new Error(`${command} failed`);
   return JSON.parse(result.stdout) as T;
-}
-
-/** `pid` and its descendants; a process that exits during the walk is left out. */
-function processTree(pid: number): number[] {
-  let children: string;
-  try {
-    children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8");
-  } catch {
-    return [pid];
-  }
-  const descendants = children.split(/\s+/).filter(Boolean).map(Number);
-  return [pid, ...descendants.flatMap(processTree)];
 }
 
 function nullSeparated(file: string): string[] | null {

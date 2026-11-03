@@ -1,7 +1,7 @@
 # CLI project cascade browser case misses the fixture project
 
 - **ID:** 0901
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-25
 - **File:** `e2e/agent-testing/cli-ui.spec.ts:268`
 - **Test:** `a CLI-initialized project and its cascade removal reach an open renderer`.
@@ -14,3 +14,9 @@
 - **Assessment:** intermittent fixture-project hydration in the broader run; no assertion, timeout or skip in the owning CLI browser file changed.
 - **Root cause, beelink (Linux), 2026-11-03,** on the branch for to-do [2181](../../../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md). `login()` returned at `domcontentloaded` and the case navigated again at once, while the login page's module graph was still loading. The gateway then answered the new document's `/@vite/client` and `/src/main.tsx` with 502, and the page stayed blank with no retry, so `Expand project origin` never appeared. Two traces show exactly those two 502s: this case in `mise run test:agent:browser:isolated`, and `CLI changes reach an open renderer and survive a reload` (the same `login()`) in one of three repeats alone.
 - **Fix and verification:** `login()` in `e2e/agent-testing/cli-ui.spec.ts` waits for `load`, which module scripts delay, and no assertion changed. With it, both cases passed five of five with `--repeat-each=5 --workers=1` (10 passed, 0 failed, about 39 s). Why the gateway answers 502 in that race was not investigated; a spec that navigates twice this way could still hit it.
+
+## Recurrence during headless qualification, 2026-11-03
+
+At ae9974f79, `mise run test:agent:browser:isolated` reported 48 passed, 94 skipped and 2 failed. `browser-gateway.spec.ts` / `local environment move survives inactive navigation and reload` timed out waiting for the sidebar after reload; the screenshot was blank. Inspection of the saved trace confirms HTTP 502 for `/src/main.tsx`. This matches the CLI symptom, but does not establish why the gateway fails. The gateway cause remains unresolved, so this record is reopened. Original evidence: `.orkestrator/review-artifacts/review-validation-8806664c-f549-43fa-bbcb-bd646c7edbd8/validation-05.stdout.txt`.
+
+The browser-gateway login and both move-case reloads now wait for `load`, matching the CLI mitigation. This is navigation synchronization, not a demonstrated gateway root-cause fix.

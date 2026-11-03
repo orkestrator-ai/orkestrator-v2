@@ -99,7 +99,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
     throw new Error("dev:login returned invalid JSON");
   }
   if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
+  const response = await page.goto(login.loginUrl, { waitUntil: "load" });
   expect(response?.ok() ?? false).toBe(true);
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
   expect(page.url()).not.toContain("code=");
@@ -2690,7 +2690,7 @@ test("local environment move survives inactive navigation and reload", async ({ 
       await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
       await expect(page.getByRole("textbox", { name: "Destination folder" })).toBeVisible();
     };
-    await page.reload();
+    await page.reload({ waitUntil: "load" });
     await openSettings();
     const destination = path.join(root, "first");
     await page.getByRole("textbox", { name: "Destination folder" }).fill(destination);
@@ -2725,7 +2725,7 @@ test("local environment move survives inactive navigation and reload", async ({ 
       environmentId: source!.id,
       destinationDir: nextDestination,
     });
-    await page.reload();
+    await page.reload({ waitUntil: "load" });
     const moved = await moving;
     expect(moved.worktreePath).toBe(path.join(nextDestination, path.basename(original)));
     expect(await fs.readFile(path.join(moved.worktreePath!, "move-preserved.txt"), "utf8")).toBe(

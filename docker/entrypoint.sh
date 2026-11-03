@@ -895,7 +895,7 @@ fi
 # ~/.claude.json may be modified by Claude CLI running on the host (e.g., during
 # background environment naming). We write to a temp file first, validate it's
 # valid JSON, then move it to the final location.
-CLAUDE_JSON_ALLOWED_KEYS='["oauthAccount","hasCompletedOnboarding","hasAcknowledgedCostThreshold","hasSeenTasksHint","hasUsedBackslashReturn","hasIdeOnboardingBeenShown","bypassPermissionsModeAccepted","lastOnboardingVersion","lastReleaseNotesSeen","mcpServers"]'
+CLAUDE_JSON_ALLOWED_KEYS='["oauthAccount","hasCompletedOnboarding","hasAcknowledgedCostThreshold","hasSeenTasksHint","hasUsedBackslashReturn","hasIdeOnboardingBeenShown","bypassPermissionsModeAccepted","hasSeenAutoDefaultNudge","lastOnboardingVersion","lastReleaseNotesSeen","mcpServers"]'
 CLAUDE_JSON_INPUT=/claude-config.json
 if [ -f "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ]; then
     CLAUDE_JSON_INPUT="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT"

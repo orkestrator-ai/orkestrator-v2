@@ -22,6 +22,9 @@ export const CLAUDE_CONTAINER_ONBOARDING_FLAGS = [
   "hasUsedBackslashReturn",
   "hasIdeOnboardingBeenShown",
   "bypassPermissionsModeAccepted",
+  // Terminal Claude otherwise asks on every start whether to make auto mode
+  // the default (bypass permissions is the container's mode).
+  "hasSeenAutoDefaultNudge",
 ] as const;
 
 /** Versions Claude Code compares to decide whether to show onboarding or release notes. */

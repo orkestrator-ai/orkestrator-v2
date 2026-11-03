@@ -487,6 +487,13 @@ inherit only the same servers. Legacy images that bind the raw host file
 directly (`commands-containers.ts`, no staged inputs) are not covered; they
 belong to M9. Servers kept on purpose still carry the keys the user put in
 their headers or environment, because delivering them is the point.
+Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
+opt-in, in the container live qualification workflow) stages a fake host file
+from a throwaway HOME, boots the image with no network and fake credentials,
+and checks that no `node`-readable copy holds anything outside the allowlist
+and that interactive Claude starts in `/workspace` with no first-run, trust or
+auto-mode prompt. It passed on 2026-11-03 against an image built from this
+change.
 
 **Where:** `apps/backend/src/core/portable-inputs.ts:259-268` (no filter for the
 `claude.json` stage). `docker/entrypoint.sh:904-909` strips `projects` only from

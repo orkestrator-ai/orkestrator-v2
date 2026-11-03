@@ -27,6 +27,7 @@ function hostConfig(): Record<string, unknown> {
     cachedStatsigGates: { gate: true },
     oauthAccount: { accountUuid: "fixture-uuid", emailAddress: "fixture@example.invalid" },
     hasCompletedOnboarding: true,
+    hasSeenAutoDefaultNudge: true,
     hasSeenTasksHint: "yes",
     lastOnboardingVersion: "2.1.0",
     lastReleaseNotesSeen: "x".repeat(65),
@@ -60,6 +61,7 @@ describe("claudeContainerConfig", () => {
     expect(JSON.parse(text!)).toEqual({
       oauthAccount: { accountUuid: "fixture-uuid", emailAddress: "fixture@example.invalid" },
       hasCompletedOnboarding: true,
+      hasSeenAutoDefaultNudge: true,
       lastOnboardingVersion: "2.1.0",
       mcpServers: {
         github: {
@@ -237,6 +239,7 @@ describe("docker/entrypoint.sh .claude.json import", () => {
       [
         "bypassPermissionsModeAccepted",
         "hasCompletedOnboarding",
+        "hasSeenAutoDefaultNudge",
         "hasSeenTasksHint",
         "lastOnboardingVersion",
         "lastReleaseNotesSeen",

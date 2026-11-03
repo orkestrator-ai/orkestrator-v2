@@ -13,6 +13,7 @@ import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-
 import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,
+  COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_PR_STATUS_WAKE,
   COORDINATOR_VALIDATION_RULE,
@@ -2087,6 +2088,7 @@ describe("Orkestrator control MCP server", () => {
       const instructions =
         (initialized.body.result as { instructions?: string })?.instructions ?? "";
       expect(instructions.length).toBeGreaterThan(0);
+      expect(instructions.includes(COORDINATOR_ENVIRONMENT_CHOICE_RULE)).toBe(role === "main");
       expect(instructions.includes(COORDINATOR_PR_RULE)).toBe(role === "main");
       expect(instructions.includes(COORDINATOR_VALIDATION_RULE)).toBe(role === "main");
     },
@@ -3313,6 +3315,9 @@ describe("Orkestrator control MCP server", () => {
       | undefined;
     expect(launchTool?.description).toContain(
       "Coordinator launches require baseBranch and baseCommit from get_launch_options",
+    );
+    expect(launchTool?.description).toContain(
+      "when the whole spec is known, start a pipeline environment with start_build_pipeline instead",
     );
     expect(launchTool?.inputSchema?.required).toEqual(
       expect.arrayContaining(["baseBranch", "baseCommit"]),

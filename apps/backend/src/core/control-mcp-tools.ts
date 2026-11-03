@@ -13,6 +13,7 @@ import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_MAIL_ADDRESS,
@@ -568,9 +569,9 @@ export async function createControlMcp(
           : "") +
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
-        // Side agents launch nothing, so these two rules are the main coordinator's.
+        // Side agents launch nothing, so these rules are the main coordinator's.
         (coordinatorScope?.capabilities.includes("environments")
-          ? ` ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
+          ? ` ${COORDINATOR_ENVIRONMENT_CHOICE_RULE} ${COORDINATOR_PR_RULE} ${COORDINATOR_VALIDATION_RULE}`
           : "") +
         (coordinatorScope?.capabilities.includes("accounts") && schedulingEnabled
           ? ` ${COORDINATOR_TIMERS_AND_ACCOUNTS_RULE}`
@@ -1418,7 +1419,7 @@ export async function createControlMcp(
         "Create, configure, and start a prompt environment: an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
         `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort; advisory selections are pending startup. ` +
         (coordinatorScope
-          ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. ${COORDINATOR_WORKER_PROMPT_NOTE} `
+          ? `Coordinator launches require baseBranch and baseCommit from get_launch_options. Use a prompt environment for investigation or interactive work; when the whole spec is known, start a pipeline environment with start_build_pipeline instead. ${COORDINATOR_WORKER_PROMPT_NOTE} `
           : "") +
         "Reuse requestId when retrying.",
       inputSchema: z.object({

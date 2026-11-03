@@ -17,10 +17,10 @@ import electron from "./playwright.electron.config";
 const repositoryRoot = "/repo";
 
 describe("packaged Electron app launch", () => {
-  test("finds the unpacked Linux build under release/ unless overridden", () => {
+  test("finds the inspectable unpacked Linux build under release/packaged-test/ unless overridden", () => {
     const unpacked = process.arch === "x64" ? "linux-unpacked" : `linux-${process.arch}-unpacked`;
     expect(packagedAppExecutable(repositoryRoot, {})).toBe(
-      path.join(repositoryRoot, "release", unpacked, "orkestrator-v2"),
+      path.join(repositoryRoot, "release", "packaged-test", unpacked, "orkestrator-v2"),
     );
     expect(
       packagedAppExecutable(repositoryRoot, {

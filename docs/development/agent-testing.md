@@ -755,22 +755,33 @@ renderer; the rest serve it from Vite. It has its own Playwright config,
 does not need a packaged build.
 
 ```bash
-# Build release/linux-unpacked/ (bun install, download:bun, build:all,
-# electron-builder --linux --dir). Installs nothing.
-mise run package:linux:unpacked
+# Build release/packaged-test/linux-unpacked/ (bun install, download:bun,
+# build:all, electron-builder --linux --dir with
+# electron-builder.packaged-test.config.ts). Installs nothing.
+mise run package:linux:unpacked:test
 
 ORKESTRATOR_AGENT_TEST_RUN_ID=design-packaged \
 mise run test:logged -- --name agent-electron-packaged -- \
   mise run test:agent:electron:packaged
 ```
 
-Do not use `mise run package:linux` for this: it runs the same build and then
-installs the app into `~/.local/share/orkestrator-v2` and `~/.local/bin`,
-replacing whatever Orkestrator the signed-in user has installed there. Set
-`ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build (a path
-relative to the repository root, or absolute). Without it the spec is skipped
-outside Linux and fails with the build command when `release/` has no app. It
-tests whatever is in `release/`, so rebuild after changing the code under test.
+The test build is the shipped build with one Electron fuse turned back on:
+`enableNodeCliInspectArguments`. Playwright's `_electron.launch` passes
+`--inspect=0` and drives the main process through Node's inspector, so it
+cannot start a shipped build, whose fuses refuse `--inspect` and `NODE_OPTIONS`
+(security report L3). Every other fuse, asar integrity and
+`onlyLoadAppFromAsar` included, is as shipped. The build goes to its own
+directory so `package:linux` and the release steps never pick it up.
+
+Do not use `mise run package:linux` or `package:linux:unpacked` for this: the
+first installs the app into `~/.local/share/orkestrator-v2` and `~/.local/bin`,
+replacing whatever Orkestrator the signed-in user has installed there, and
+Playwright cannot launch either build. Set
+`ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build with the
+inspect fuse on (a path relative to the repository root, or absolute). Without
+it the spec is skipped outside Linux and fails with the build command when
+`release/packaged-test/` has no app. It tests whatever is there, so rebuild
+after changing the code under test.
 
 The app runs on a disposable agent-test profile under a private temporary
 directory, removed afterwards. `HOME` and the XDG base directories point inside

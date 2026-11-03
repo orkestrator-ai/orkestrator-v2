@@ -304,7 +304,7 @@ description = "Run agent tests in Electron"
 run = "bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts"
 
 [tasks."test:agent:electron:packaged"]
-description = "Run the Electron design spec against the packaged Linux app (build it with package:linux:unpacked)"
+description = "Run the Electron design spec against the packaged Linux app (build it with package:linux:unpacked:test)"
 run = "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts"
 
 [tasks."test:ios"]
@@ -450,6 +450,15 @@ run = [
   "mise run download:bun",
   "mise run build:all",
   "bunx electron-builder --linux --dir",
+]
+
+[tasks."package:linux:unpacked:test"]
+description = "Build the unpacked Linux application for the packaged Electron spec (inspect fuse on) under release/packaged-test without installing it"
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
 ]
 
 [tasks."package:release"]

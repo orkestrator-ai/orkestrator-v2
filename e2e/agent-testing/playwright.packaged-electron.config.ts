@@ -11,8 +11,8 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 /**
  * Electron specs that launch the packaged app (`mise run
- * package:linux:unpacked`) rather than the dev bundle and Vite. Kept apart
- * from playwright.electron.config.ts because they need that build first.
+ * package:linux:unpacked:test`) rather than the dev bundle and Vite. Kept
+ * apart from playwright.electron.config.ts because they need that build first.
  */
 export default defineConfig({
   testDir: import.meta.dirname,

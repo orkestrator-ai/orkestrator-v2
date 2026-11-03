@@ -1,7 +1,7 @@
 # ACP busy fork intermittently accepts
 
 - **ID:** 2391
-- **Status:** open
+- **Status:** resolved
 - **Test:** `POST /session/:id/fork > a busy source is refused before the fork extension`
 - **File:** `bridges/acp-bridge/src/acp-fork.test.ts:318`
 
@@ -51,3 +51,23 @@ the entire bridges group in `mise run test` (71.0 s); it reproduced the
 separate SSE exit-143 failure. This sighting confirms intermittency, but
 neither run reproduces the busy-fork defect on main, so independence is
 not claimed from these runs.
+
+
+## Fix — 2026-11-03, security H4 review
+
+Preparation at `2e57421e186fc12082f8ab62381df952bae1e701` again returned
+200 instead of 409 (483.13 ms) in `mise run test`. Evidence:
+`.orkestrator/review-artifacts/review-validation-48856735-cbac-4ef5-8681-5d3394fca749/validation-04.stdout.txt`.
+The unchanged owner passed alone (4.5 s):
+`mise run test:logged -- --name acp-fork-alone -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+
+The fake agent's `DIRECT:` branch returned `end_turn` immediately without
+consulting `FAKE_ACP_HOLD_TURN_FILE`. If it finished before the fork HTTP
+request arrived, the source was legitimately idle. Direct replies now use
+`whenReleased`, and the busy-fork test explicitly observes `running` before
+asserting 409. Assertions and timeouts remain intact.
+
+The complete owner passed ten repetitions (44.7 s):
+`mise run test:logged -- --name acp-fork-repaired -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --rerun-each=10 --only-failures`.
+This resolves the test's lifetime assumption rather than changing production
+fork admission. The fix is committed with the H4 concurrent-config repair.

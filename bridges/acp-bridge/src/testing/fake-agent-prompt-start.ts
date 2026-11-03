@@ -1,16 +1,5 @@
-import { appendFileSync, existsSync } from "node:fs";
-import {
-  grokConfig,
-  holdTurnFile,
-  isObject,
-  provider,
-  state,
-  whenFileExists,
-  whenReleased,
-  write,
-  writeIgnoredCursorTaskMarker,
-  type JsonObject,
-} from "./fake-agent-context.js";
+import { appendFileSync } from "node:fs";
+import { provider, state, whenReleased, write, type JsonObject } from "./fake-agent-context.js";
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../structured-prompt-marker.js";
 import { beginClientMethodExercise } from "./fake-agent-final.js";
@@ -330,7 +319,11 @@ export function handlePromptStart(message: JsonObject): boolean {
           },
         },
       });
-      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      // A test-configured hold must also cover direct replies; otherwise the
+      // turn can finish between prompt acceptance and a busy-state assertion.
+      whenReleased(() => {
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      });
       return true;
     }
     if (prompt.startsWith("STOP:")) {

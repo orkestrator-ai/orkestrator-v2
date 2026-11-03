@@ -489,26 +489,30 @@ session.post("/:id/config", async (c) => {
   );
   // Narrow-only (H4). The agent this bridge runs can read the bridge token, so
   // a token holder is not proof of the user's intent: a policy may only stay
-  // the same or get stricter here. Checked before anything is applied, so a
-  // refused request changes nothing.
-  const widened = nextPolicy
-    ? executionPolicyWidenings(sessionData.executionPolicy, nextPolicy)
-    : [];
-  if (widened.length > 0) {
-    log.warn("session.policy-widening-refused", {
-      sessionId: sessionData.id,
-      widened: widened.join(","),
-    });
-    return c.json(
-      {
-        error:
-          "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
-        code: "policy-widening-refused",
-        widened,
-      },
-      403,
-    );
-  }
+  // the same or get stricter here. Check before applying settings, and again
+  // after asynchronous SDK work before committing the policy.
+  const refusePolicyWidening = () => {
+    const widened = nextPolicy
+      ? executionPolicyWidenings(sessionData.executionPolicy, nextPolicy)
+      : [];
+    if (widened.length > 0) {
+      log.warn("session.policy-widening-refused", {
+        sessionId: sessionData.id,
+        widened: widened.join(","),
+      });
+      return c.json(
+        {
+          error:
+            "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
+          code: "policy-widening-refused",
+          widened,
+        },
+        403,
+      );
+    }
+  };
+  const refusal = refusePolicyWidening();
+  if (refusal) return refusal;
   const { effort, parameterValues } = resolveUltracodeEffort(
     typeof body.reasoningId === "string" ? body.reasoningId : undefined,
     body.parameterValues &&
@@ -541,6 +545,10 @@ session.post("/:id/config", async (c) => {
       sessionErrorStatus(error),
     );
   }
+  // SDK control calls above yield. Another request may have narrowed the
+  // policy meanwhile; revalidate and commit together without another await.
+  const stalePolicyRefusal = refusePolicyWidening();
+  if (stalePolicyRefusal) return stalePolicyRefusal;
   if (nextPolicy) {
     sessionData.executionPolicy = structuredClone(nextPolicy);
   }

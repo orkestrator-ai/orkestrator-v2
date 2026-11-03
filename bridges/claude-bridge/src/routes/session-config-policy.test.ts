@@ -105,4 +105,64 @@ describe("POST /session/:id/config execution policy", () => {
     expect(response.status).toBe(200);
     expect(session.executionPolicy).toEqual(askPolicy);
   });
+
+  test.each([
+    ["approvals", { approvals: "deny" }],
+    ["networkAccess", { networkAccess: "restricted" }],
+  ] as const)("a delayed config cannot restore wider %s", async (axis, patch) => {
+    const initial: NativeAgentExecutionPolicy = { ...askPolicy, networkAccess: "full" };
+    const session = sessionUnder(`config-policy-overlap-${axis}`, initial);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.queryControl = {
+      setModel: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    };
+    const delayed = configure(session.id, { policy: initial, model: "delayed-model" });
+    try {
+      await entered.promise;
+      const narrower: NativeAgentExecutionPolicy = { ...initial, ...patch };
+      const response = await configure(session.id, { policy: narrower });
+      expect(response.status).toBe(200);
+      expect(session.executionPolicy).toEqual(narrower);
+      release.resolve();
+      const stale = await delayed;
+      expect(stale.status).toBe(403);
+      expect(await stale.json()).toMatchObject({
+        code: "policy-widening-refused",
+        widened: [axis],
+      });
+      expect(session.executionPolicy).toEqual(narrower);
+    } finally {
+      release.resolve();
+      await delayed;
+    }
+  });
+
+  test("an SDK failure cannot overwrite a concurrent narrowing", async () => {
+    const session = sessionUnder("config-policy-overlap-failed", askPolicy);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    session.queryControl = {
+      setModel: async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("SDK settings failed");
+      },
+    };
+    const delayed = configure(session.id, { policy: askPolicy, model: "delayed-model" });
+    try {
+      await entered.promise;
+      const narrower = { ...askPolicy, approvals: "deny" as const };
+      expect((await configure(session.id, { policy: narrower })).status).toBe(200);
+      release.resolve();
+      expect((await delayed).status).toBe(500);
+      expect(session.executionPolicy).toEqual(narrower);
+    } finally {
+      release.resolve();
+      await delayed;
+    }
+  });
 });

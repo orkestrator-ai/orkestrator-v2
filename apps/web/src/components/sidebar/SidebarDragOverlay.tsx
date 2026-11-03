@@ -13,10 +13,14 @@ export type SidebarDragItem = {
  * The card that follows the pointer while a project, folder or environment
  * is dragged. Every sidebar list uses it (this window's tree, another
  * machine's tree, the merged lists), so a drag looks the same in each.
+ *
+ * The card takes no pointer input. After a drop it stays on screen for the
+ * drop animation and can sit over another row; without this, a press on that
+ * row would land on the card and the next drag or click would not start.
  */
 export function SidebarDragOverlay({ item }: { item: SidebarDragItem }) {
   return (
-    <DragOverlay>
+    <DragOverlay className="pointer-events-none">
       {item ? (
         <div
           className="rounded-md bg-card border border-border px-3 py-2 shadow-lg"

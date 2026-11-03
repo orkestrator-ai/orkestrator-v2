@@ -326,15 +326,16 @@ test("offline first contact keeps create and update on the command board", async
 test("remote admission uses completed sync and leaf copy despite unrelated behind status", async () => {
   const f = await setup();
   const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
-  const status = f.ticketSync.status.bind(f.ticketSync);
-  f.ticketSync.status = async (projectId) => {
-    const result = await status(projectId);
-    return {
-      ...result,
-      nodes: result.nodes.map((node) => ({ ...node, state: "behind" as const })),
-    };
+  const sync = f.ticketSync.sync.bind(f.ticketSync);
+  let concurrent: Promise<unknown> | undefined;
+  f.ticketSync.sync = async (nodeId) => {
+    const result = await sync(nodeId);
+    await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Unrelated change", "");
+    concurrent = sync(nodeId);
+    return result;
   };
   await f.build("racing-status", task.id);
+  await concurrent;
   expect(f.started).toHaveLength(1);
 });
 

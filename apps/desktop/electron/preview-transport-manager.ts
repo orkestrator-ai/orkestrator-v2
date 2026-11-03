@@ -19,6 +19,12 @@ import {
   rejectPreviewUpgrade,
   writePreviewError,
 } from "@orkestrator/protocol/node/preview-forward";
+import {
+  PREVIEW_CLIENT_METRICS_LIMITS,
+  PreviewClientMetricsBuffer,
+  type PreviewClientCounterName,
+  type PreviewClientHistogramName,
+} from "@orkestrator/protocol/preview-client-metrics";
 import type { PreviewHeaderPolicy } from "@orkestrator/protocol/preview-header-policy";
 import {
   isOpaquePreviewId,
@@ -99,6 +105,8 @@ export interface PreviewTransportManagerOptions {
   logger?: Pick<Logger<LogEventOf<"preview">>, "warn">;
   /** Resolve a host name to its addresses (injectable in tests). */
   lookupHost?: (hostname: string) => Promise<string[]>;
+  /** How often buffered ingress metrics are reported to the backend. */
+  metricsReportMs?: number;
 }
 
 export interface PreviewTransportDescriptor {
@@ -230,6 +238,8 @@ export class PreviewTransportManager {
   private readonly partitions = new Map<string, ServiceGroup>();
   private readonly hookedSessions = new WeakSet<object>();
   private readonly resolvedHosts = new Map<string, { expires: number; local: Promise<boolean> }>();
+  private readonly metrics = new PreviewClientMetricsBuffer();
+  private metricsTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
   constructor(private readonly options: PreviewTransportManagerOptions) {}
@@ -428,6 +438,44 @@ export class PreviewTransportManager {
   async disposeAll(): Promise<void> {
     this.disposed = true;
     await Promise.all(Array.from(this.groups.values()).map((group) => this.retire(group)));
+    await this.reportMetrics();
+  }
+
+  // -------------------------------------------------------------------------
+  // Ingress metrics, reported to this window's own backend
+
+  private count(name: PreviewClientCounterName, category?: PreviewError["category"]): void {
+    this.metrics.increment(name, category);
+    this.scheduleMetricsReport();
+  }
+
+  private observe(name: PreviewClientHistogramName, valueMs: number | undefined): void {
+    if (valueMs === undefined) return;
+    this.metrics.observe(name, valueMs);
+    this.scheduleMetricsReport();
+  }
+
+  /** One pending timer at most, and none while nothing is buffered. */
+  private scheduleMetricsReport(): void {
+    if (this.metricsTimer || this.disposed) return;
+    this.metricsTimer = setTimeout(
+      () => void this.reportMetrics(),
+      this.options.metricsReportMs ?? PREVIEW_CLIENT_METRICS_LIMITS.reportIntervalMs,
+    );
+    this.metricsTimer.unref?.();
+  }
+
+  /**
+   * Hand the buffer to the backend's preview metrics. A failed report (an
+   * older backend without the command, a dropped connection) is discarded:
+   * these are telemetry, and the buffer is bounded either way.
+   */
+  private async reportMetrics(): Promise<void> {
+    if (this.metricsTimer) clearTimeout(this.metricsTimer);
+    this.metricsTimer = null;
+    const report = this.metrics.take();
+    if (!report) return;
+    await this.options.invoke("record_preview_client_metrics", { report }).catch(() => undefined);
   }
 
   // -------------------------------------------------------------------------
@@ -509,8 +557,18 @@ export class PreviewTransportManager {
     }
   }
 
-  private attach(group: ServiceGroup): Promise<PreviewAttachmentDescriptor> {
-    group.attaching ??= (async () => {
+  /**
+   * Attach, or join the attach already in flight. `reconnectFor` names why an
+   * existing transport needs a fresh attachment; only the call that starts the
+   * attach counts it, so concurrent connections hitting one expiry count once.
+   */
+  private attach(
+    group: ServiceGroup,
+    reconnectFor?: PreviewError["category"],
+  ): Promise<PreviewAttachmentDescriptor> {
+    if (group.attaching) return group.attaching;
+    if (reconnectFor) this.count("desktop.reconnect", reconnectFor);
+    group.attaching = (async () => {
       const previous = group.attachment;
       const attachment = await this.options.invoke<PreviewAttachmentDescriptor>(
         "create_preview_attachment",
@@ -548,6 +606,14 @@ export class PreviewTransportManager {
     })().finally(() => {
       group.attaching = null;
     });
+    if (reconnectFor) {
+      group.attaching.catch((failure: unknown) =>
+        this.count(
+          "desktop.reconnect_failed",
+          previewErrorFromUnknown(failure)?.category ?? "internal",
+        ),
+      );
+    }
     return group.attaching;
   }
 
@@ -567,7 +633,7 @@ export class PreviewTransportManager {
         category === "generation-changed"
       ) {
         this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
-        await this.attach(group)
+        await this.attach(group, category)
           .then(() => this.setState(group, { mode: "desktop-tunnel", state: "ready" }))
           .catch((failure: unknown) => this.setUnavailable(group, failure));
       }
@@ -694,6 +760,7 @@ export class PreviewTransportManager {
           {
             connect: (signal) => this.connect(group, signal),
             reuse: (socket) => this.pool(group, socket),
+            onFirstByte: (ms) => this.observe("desktop.first_byte_ms", ms),
           },
         );
       },
@@ -760,9 +827,11 @@ export class PreviewTransportManager {
       {
         connect: (signal) => this.connect(group, signal),
         reuse: (socket) => this.pool(group, socket),
+        onFirstByte: (ms) => this.observe("desktop.first_byte_ms", ms),
       },
     ).catch(() => {
       writePreviewError(response, "internal");
+      return null;
     });
   }
 
@@ -815,12 +884,14 @@ export class PreviewTransportManager {
     if (!url) throw previewFailure("backend-unavailable");
     const open = async () => {
       const attachment = group.attachment ?? (await this.attach(group));
-      return openPreviewTunnel({
+      const stream = await openPreviewTunnel({
         url,
         attachmentId: attachment.attachmentId,
         credential: attachment.tunnel!.credential,
         signal,
       });
+      this.observe("desktop.connect_ms", stream.openMs);
+      return stream;
     };
     try {
       const socket = await open();
@@ -832,7 +903,7 @@ export class PreviewTransportManager {
         throw error;
       this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
       try {
-        await this.attach(group);
+        await this.attach(group, category);
       } catch (failure) {
         this.setUnavailable(group, failure);
         throw failure;

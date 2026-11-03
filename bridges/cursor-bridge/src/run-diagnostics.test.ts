@@ -57,7 +57,7 @@ describe("Cursor stall diagnostics", () => {
     }
   });
 
-  test("disabled by default and when the launcher passes off", () => {
+  test("the stream and SDK snapshots are off by default and when the launcher passes off", () => {
     for (const flag of ["", "0", "false", "off", "true", "secret"])
       expect(cursorDebugEnabled(flag)).toBe(false);
     expect(cursorDebugEnabled("1")).toBe(true);
@@ -73,7 +73,11 @@ describe("Cursor stall diagnostics", () => {
         const scope = createRunDiagnostics(newSessionState());
         scope.report("heartbeat");
         scope.close();
-        expect(lines).toEqual([]);
+        // Lifecycle only: no per-minute look and no SDK snapshot.
+        expect(lines.map((line) => bridgeDiagnosticPayload(line)?.event)).toEqual([
+          "send-started",
+          "closed",
+        ]);
       } finally {
         console.info = previousInfo;
       }
@@ -334,7 +338,11 @@ describe("Cursor stall diagnostics", () => {
       process.env.ORKESTRATOR_BRIDGE_DEBUG = "0";
       const count = lines.length;
       await expect(dispatchPrompt(state, failing, { prompt: "x", images: [] })).rejects.toThrow();
-      expect(lines.length).toBe(count);
+      // Off, the failed turn writes its lifecycle and no SDK snapshot.
+      expect(lines.slice(count).map((line) => JSON.parse(line)?.event)).toEqual([
+        "send-started",
+        "closed",
+      ]);
     } finally {
       log.mockRestore();
       if (previous === undefined) delete process.env.ORKESTRATOR_BRIDGE_DEBUG;
@@ -364,13 +372,14 @@ describe("detail turned on while a turn is already running", () => {
     setLiveBridgeDiagnostics(false);
     const scope = createRunDiagnostics(newSessionState());
     scope.delta({ type: "tool-call-started", callId: "call-1", toolCall: { type: "shell" } });
-    expect(lines).toEqual([]);
+    const events = () => lines.map((line) => bridgeDiagnosticPayload(line)?.event);
+    expect(events()).toEqual(["send-started"]);
     expect(installs).toBe(0);
 
     setLiveBridgeDiagnostics(true);
     expect(installs).toBe(1);
     const entries = lines.flatMap((line) => bridgeDiagnosticPayload(line) ?? []);
-    const publicSnapshot = entries.find((entry) => entry.pendingToolCount !== undefined);
+    const publicSnapshot = entries.find((entry) => entry.event === "heartbeat");
     expect(publicSnapshot).toMatchObject({
       event: "heartbeat",
       pendingToolCount: 1,

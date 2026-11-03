@@ -179,11 +179,14 @@ describe("dispatchPrompt", () => {
         stub.finish();
         await completion;
         expect(state.diagnostics).toBeUndefined();
-        if (enabled)
-          expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
-            '"event":"closed"',
-          );
-        else expect(lines).toHaveLength(0);
+        // Lifecycle is written either way; the looks only on the per-minute stream.
+        expect(JSON.stringify(bridgeDiagnosticPayloads(lines).at(-1))).toContain(
+          '"event":"closed"',
+        );
+        if (!enabled)
+          expect(
+            bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat"),
+          ).toEqual([]);
         expect(lines.join("\n")).not.toContain("PRIVATE");
       } finally {
         stub.finish();
@@ -212,9 +215,11 @@ describe("dispatchPrompt", () => {
         toolName: "bash",
         args: { command: "PRIVATE COMMAND" },
       });
-      expect(lines).toHaveLength(0);
+      const heartbeats = () =>
+        bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat");
+      expect(heartbeats()).toHaveLength(0);
       setLiveBridgeDiagnostics(true);
-      const snapshots = bridgeDiagnosticPayloads(lines);
+      const snapshots = heartbeats();
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0]).toMatchObject({ event: "heartbeat", pendingToolCount: 1 });
       expect(snapshots[0]?.pendingTools[0].kind).toBe("bash");

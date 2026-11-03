@@ -269,7 +269,7 @@ recorded.
 | L05 | Cursor and Pi `server.ts`, `BridgeLifecycle` (`packages/protocol/src/bridge-lifecycle.ts`) | 1 min idle sweep, 10 min idle detach; parent check every 1 s (`PARENT_WATCH_INTERVAL_MS`). `BridgeLifecycle` owns the handles, clears every timer on shutdown and rejects a repeated start. |
 | L06 | `packages/protocol/src/parent-watchdog.ts` | Every 1 s (`PARENT_WATCH_INTERVAL_MS`), used by every bridge; ACP can override it with `ACP_PARENT_WATCHDOG_INTERVAL_MS`. A restarted backend reaps orphans 5 to 7 s after it starts, so detection must come well inside that. On detection the Codex bridge interrupts running turns (2 s budget) before it drains. |
 | L07 | `bridges/acp-bridge/src/acp-client-disconnect.ts` | Event-only. ACP no longer polls sockets; request `aborted`, response `close` and socket `end`/`close` cover every tested disconnect shape. |
-| L08 | `packages/protocol/src/node/bridge-diagnostics.ts` | 60 s heartbeat and usage flush. |
+| L08 | `packages/protocol/src/node/bridge-diagnostics.ts` | One 60 s timer per open scope (written every tick only at debug; otherwise on a stall or the 10 min keepalive) and the buffered logger's 60 s flush. |
 | L09 | `packages/protocol/src/node/application-logging.ts` | Startup plus every 6 h. |
 | L10 | `packages/toolchain/src/manager.ts`, Claude `session-preferences.ts` | Lock heartbeat while an operation is owned. |
 | L11 | `scripts/test-admission.ts`, `host-test-scheduler.ts` | Test-only: 500 ms channel heartbeat, 100 ms admission polling. Not desktop idle cost. |

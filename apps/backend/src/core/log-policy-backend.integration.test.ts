@@ -70,6 +70,11 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
         .join("")
         .split("\n")
         .flatMap((line) => parseLogRecordLine(line) ?? []);
+    // Lifecycle is written at the default level; the per-minute look is what detail adds.
+    const heartbeats = () =>
+      records().filter(
+        (record) => record.area === "bridge.diagnostics" && record.event === "heartbeat",
+      );
     await storage.addEnvironment(
       lifecycleEnvironment({
         id: "log-fixture",
@@ -92,7 +97,7 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
         })
       ).status,
     ).toBe(201);
-    expect(records().filter((record) => record.area === "bridge.diagnostics")).toEqual([]);
+    expect(heartbeats()).toEqual([]);
 
     const save = async (enabled: boolean, level: "info" | "debug") => {
       const config = await storage.loadConfig();
@@ -109,12 +114,8 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
     };
     await save(true, "debug");
     const deadline = Date.now() + 5000;
-    while (
-      !records().some((record) => record.area === "bridge.diagnostics") &&
-      Date.now() < deadline
-    )
-      await Bun.sleep(10);
-    expect(records().some((record) => record.area === "bridge.diagnostics")).toBe(true);
+    while (heartbeats().length === 0 && Date.now() < deadline) await Bun.sleep(10);
+    expect(heartbeats().length).toBeGreaterThan(0);
     expect(logging!.settings().enabled).toBe(true);
     await logging!.flush();
     const files = await fs.readdir(logging!.logDirectory);

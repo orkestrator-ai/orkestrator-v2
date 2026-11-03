@@ -1,6 +1,7 @@
 import {
   BridgeRunDiagnostics,
   bridgeDebugEnabled,
+  bridgeDiagnosticsStreamEnabled,
   readBridgeDebugFlag,
   writeBridgeDiagnostic,
   type BridgeDiagnosticWrite,
@@ -77,7 +78,7 @@ export class CursorRunDiagnostics extends BridgeRunDiagnostics {
 }
 export function createRunDiagnostics(state: SessionState): CursorRunDiagnostics {
   return new CursorRunDiagnostics(state, undefined, undefined, undefined, () =>
-    bridgeDebugEnabled("cursor"),
+    bridgeDiagnosticsStreamEnabled("cursor"),
   );
 }
 

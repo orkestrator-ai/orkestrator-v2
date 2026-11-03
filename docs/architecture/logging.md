@@ -464,9 +464,13 @@ interrupts a running agent.
 
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
-([bridge-diagnostics.md](bridge-diagnostics.md)) run when the level in force for
-`bridge.diagnostics` is `debug` or `trace`, so `bridge=debug` or a global `debug`
-turns them on.
+([bridge-diagnostics.md](bridge-diagnostics.md#when-a-snapshot-is-written)) are
+change-driven at `info`: each scope's lifecycle, a snapshot when a turn stalls (no
+delta for 2 minutes, a tool pending for 10, or a diagnostic timer 10 seconds late),
+changes during a silent stall, and a keepalive every 10 minutes. When the level in
+force for `bridge.diagnostics` is `debug` or `trace` (`bridge=debug` or a global
+`debug` also does it) they add the per-minute stream: one snapshot every minute,
+changed or not. `bridge.diagnostics=warn` silences them all.
 
 Renderer-only areas (`web.*` and `terminal.setup`) stay registered in
 the vocabulary but are absent from these live override choices. They follow the
@@ -505,7 +509,9 @@ flowchart LR
   logs**.
 - **Upgrading.** Before the split, `debugLogging` meant saving and bridge snapshots.
   A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
-  maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults. The
+  maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults.
+  `bridge.diagnostics` inherits `debug` from `bridge`, so someone upgrading with it
+  on keeps the per-minute snapshot stream unchanged. The
   key names stay, so a downgrade still reads them. `resolveLogDetail` applies the
   same mapping for a reader that gets there first (Electron starts before its
   backend). A save from a client that predates `logDetail` keeps the stored value.
@@ -672,7 +678,9 @@ older image's bridge ignores both variables and keeps its plain lines.
 
 Levels are replaced through `configureLogger`, and a site never caches whether one
 is on: a logger reads its threshold on each call, and `bridgeDiagnosticsActive()` is
-read per snapshot. The diagnostics switch follows too. `POST /debug/log-policy` sets
+read per snapshot. Whether a scope's periodic look is written is decided at each look
+too, from `bridgeDiagnosticsStreamEnabled()`: the per-minute stream starts or stops
+for a turn already running. The diagnostics switch follows too. `POST /debug/log-policy` sets
 it with `setLiveBridgeDiagnostics`, which replaces `ORKESTRATOR_BRIDGE_DEBUG` from
 then on, and `createBridgeDiagnostics`, the buffered debug logger and the Claude
 bridge's `isDebugLoggingEnabled` read it per call.

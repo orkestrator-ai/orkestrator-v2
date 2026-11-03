@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EVENT_LOOP_STALL_ALWAYS_LOG_MS } from "../event-loop-stall-monitor.js";
 import { MAX_BRIDGE_DIAGNOSTIC_BYTES } from "../log-vocabulary/bridge.js";
 import { createLogger, type LogEventOf } from "../logger.js";
 
@@ -6,7 +7,26 @@ export { MAX_BRIDGE_DIAGNOSTIC_BYTES };
 
 const log = createLogger("bridge.diagnostics");
 
-const INTERVAL_MS = 60_000;
+/** How often a scope's timer looks at the turn; at debug, every look is written. */
+export const BRIDGE_DIAGNOSTICS_INTERVAL_MS = 60_000;
+const INTERVAL_MS = BRIDGE_DIAGNOSTICS_INTERVAL_MS;
+/**
+ * No delta for this long while the scope waits on its provider is a stall. Two
+ * intervals: one quiet look can be a model pause, and two quiet snapshots were
+ * the earliest the per-minute stream told a stall from a pause.
+ */
+export const STALL_NO_DELTA_MS = 2 * INTERVAL_MS;
+/**
+ * One tool pending this long is a stall even while deltas still arrive. The app's
+ * own stall warning (Multi Review, the build pipeline) is ten minutes; a pending
+ * tool alone is weaker evidence than silence, because builds and subagents run
+ * long and unmatched starts are common (cursor-diagnostics.md).
+ */
+export const STALL_TOOL_PENDING_MS = 10 * 60_000;
+/** A timer this late means the event loop was held: the threshold `error` already uses. */
+export const STALL_TICK_DELAY_MS = EVENT_LOOP_STALL_ALWAYS_LOG_MS;
+/** With nothing else to write, a scope still writes this often, so a gap is bounded. */
+export const BRIDGE_DIAGNOSTICS_KEEPALIVE_MS = 10 * 60_000;
 const MAX_PENDING_TOOLS = 128;
 const MAX_REPORTED_TOOLS = 8;
 const MAX_ID_LENGTH = 1024;
@@ -87,6 +107,44 @@ export type DiagnosticState = {
 export type CancellationReason = "user" | "timeout" | "turn-ended";
 type Outcome = "pending" | "resolved" | "rejected";
 type PendingTool = { kind: string; since: number; stage: "partial" | "started"; nested: boolean };
+export type StallSignal = "no-delta" | "tool-pending" | "tick-delay";
+/** Which stall signals hold, and which tools crossed the pending threshold. */
+type StallState = { signals: ReadonlySet<StallSignal>; tools: ReadonlySet<string> };
+/** What the last written snapshot showed: the change-driven rule compares against it. */
+type Baseline = {
+  at: number;
+  phase: Phase;
+  pending: ReadonlySet<string>;
+  counters: Readonly<Record<Counter, number>>;
+  stall: StallState;
+};
+
+/**
+ * A counter that moved this much since the last snapshot is a change. Errors and
+ * requests count once each; stderr counts in pages, so a trickle accumulates
+ * rather than writing every minute.
+ */
+export const COUNTER_CHANGE_THRESHOLDS: Readonly<Record<Counter, number>> = {
+  stderrBytes: 4096,
+  requestsSent: 1,
+  responsesReceived: 1,
+  timeouts: 1,
+  notificationsReceived: 1,
+  protocolErrors: 1,
+};
+/** Phases in which a turn scope is waiting on its provider. */
+const WAITING_PHASES: ReadonlySet<Phase> = new Set([
+  "sending",
+  "following",
+  "draining",
+  "cancelling",
+]);
+
+function sameSet<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) if (!b.has(value)) return false;
+  return true;
+}
 
 /** Provider-controlled identifiers are hashed, never printed or retained verbatim. */
 function identity(value: unknown): string | undefined {
@@ -203,6 +261,15 @@ export function bridgeDiagnosticsActive(): boolean {
   return log.isEnabled("info");
 }
 
+/**
+ * Whether a bridge writes the per-minute stream now: `bridge.diagnostics` at debug
+ * or trace, either as this process's level or as the switch the backend sends.
+ * Read per call, so turning it on or off applies to a turn already running.
+ */
+export function bridgeDiagnosticsStreamEnabled(bridge: BridgeName): boolean {
+  return bridgeDebugEnabled(bridge) || log.isEnabled("debug");
+}
+
 /** Bound every serialized diagnostic; sink errors never affect execution. */
 function writeDiagnostic(
   bridge: BridgeName,
@@ -228,10 +295,16 @@ function writeDiagnostic(
 }
 
 /**
- * Metadata only. SDK callbacks update bounded counters; the timer writes one
- * snapshot per minute off the producer path. No raw SDK logger is enabled:
- * its errors, arguments and payloads can contain credentials or user content.
+ * Metadata only. SDK callbacks update bounded counters; the timer looks at the
+ * turn once a minute off the producer path. No raw SDK logger is enabled: its
+ * errors, arguments and payloads can contain credentials or user content.
  * Lifetime belongs to the backend turn, including while the UI is unmounted.
+ *
+ * Lifecycle events are written whenever `bridge.diagnostics` allows `info`. A
+ * look is written every minute while `active()` says the per-minute stream is
+ * on (`bridge.diagnostics` at debug); otherwise only when a stall signal starts
+ * or clears, when something changes during a stall, or as a keepalive.
+ * docs/architecture/bridge-diagnostics.md, "When a snapshot is written".
  *
  * A scope counts whether or not it is writing. Turning detail on mid-turn is how
  * someone looks at a stuck agent, so the first snapshot has to cover the turn so
@@ -266,6 +339,7 @@ export class BridgeRunDiagnostics {
   private run?: string;
   private closed = false;
   private wasActive: boolean;
+  private baseline?: Baseline;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(
@@ -275,6 +349,7 @@ export class BridgeRunDiagnostics {
     private readonly write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
     private readonly intervalMs = INTERVAL_MS,
     private readonly metrics: () => Record<string, unknown> = () => ({}),
+    /** Whether the per-minute stream is on; read per tick. */
     protected readonly active: () => boolean = () => true,
   ) {
     this.startedAt = this.lastTick = now();
@@ -285,7 +360,7 @@ export class BridgeRunDiagnostics {
     this.report("send-started");
   }
 
-  /** The setting may have changed: a scope turned on reports where the turn is now. */
+  /** The setting may have changed: a stream turned on reports where the turn is now. */
   syncActive(): void {
     const active = this.active();
     if (active && !this.wasActive) this.report("heartbeat");
@@ -392,7 +467,9 @@ export class BridgeRunDiagnostics {
     const tickDelayMs =
       event === "heartbeat" ? Math.max(0, now - this.lastTick - this.intervalMs) : 0;
     if (event === "heartbeat") this.lastTick = now;
-    if (!this.active() || !bridgeDiagnosticsActive()) return;
+    if (!bridgeDiagnosticsActive()) return;
+    const stall = this.stallState(now, tickDelayMs);
+    if (event === "heartbeat" && !this.active() && !this.periodicDue(now, stall)) return;
     const pendingTools = Array.from(this.pending.entries())
       .slice(0, MAX_REPORTED_TOOLS)
       .map(([id, tool]) => ({
@@ -435,9 +512,67 @@ export class BridgeRunDiagnostics {
         },
         this.write,
       );
+      this.baseline = {
+        at: now,
+        phase: this.phase,
+        pending: new Set(this.pending.keys()),
+        counters: { ...this.counters },
+        stall,
+      };
     } catch {
       // A diagnostic sink must never fail an agent turn.
     }
+  }
+
+  /**
+   * Off the per-minute stream, a look is written only when it says something the
+   * last snapshot did not: a stall signal started or cleared (or another tool
+   * crossed the pending threshold); the turn changed while it was silent or its
+   * timer was late; or the keepalive is due. A pending tool alone does not make
+   * changes worth writing: deltas are still arriving, so the turn is moving.
+   */
+  private periodicDue(now: number, stall: StallState): boolean {
+    const last = this.baseline;
+    if (!last) return true;
+    if (!sameSet(stall.signals, last.stall.signals) || !sameSet(stall.tools, last.stall.tools))
+      return true;
+    const silent = stall.signals.has("no-delta") || stall.signals.has("tick-delay");
+    if (silent && this.changedSince(last)) return true;
+    return now - last.at >= BRIDGE_DIAGNOSTICS_KEEPALIVE_MS;
+  }
+
+  private changedSince(last: Baseline): boolean {
+    if (this.phase !== last.phase) return true;
+    if (this.pending.size !== last.pending.size) return true;
+    for (const key of this.pending.keys()) if (!last.pending.has(key)) return true;
+    for (const key of Object.keys(this.counters) as Counter[])
+      if (this.counters[key] - last.counters[key] >= COUNTER_CHANGE_THRESHOLDS[key]) return true;
+    return false;
+  }
+
+  /** From fields the snapshot already carries: `lastDeltaAgoMs`, `pendingTools`, `tickDelayMs`. */
+  private stallState(now: number, tickDelayMs: number): StallState {
+    const signals = new Set<StallSignal>();
+    const tools = new Set<string>();
+    let oldestPending: number | undefined;
+    for (const [key, tool] of this.pending) {
+      if (oldestPending === undefined || tool.since < oldestPending) oldestPending = tool.since;
+      if (now - tool.since >= STALL_TOOL_PENDING_MS) tools.add(key);
+    }
+    // A turn waits from its start; a process scope only while a request is pending.
+    const waitingSince =
+      this.phase === "attached"
+        ? oldestPending
+        : WAITING_PHASES.has(this.phase)
+          ? this.startedAt
+          : undefined;
+    if (waitingSince !== undefined) {
+      const quietSince = Math.max(this.lastDelta ?? waitingSince, waitingSince);
+      if (now - quietSince >= STALL_NO_DELTA_MS) signals.add("no-delta");
+    }
+    if (tools.size > 0) signals.add("tool-pending");
+    if (tickDelayMs >= STALL_TICK_DELAY_MS) signals.add("tick-delay");
+    return { signals, tools };
   }
 
   close(phase: "send-failed" | "finished" = "finished"): void {
@@ -457,11 +592,75 @@ export function createBridgeDiagnostics(
   metrics?: () => Record<string, unknown>,
 ): BridgeRunDiagnostics {
   return new BridgeRunDiagnostics(bridge, state, undefined, undefined, undefined, metrics, () =>
-    bridgeDebugEnabled(bridge),
+    bridgeDiagnosticsStreamEnabled(bridge),
   );
 }
 
-/** Batch legacy diagnostic sites too: no write per token and no arbitrary payloads. */
+/** A numeric metric across a batch: how many carried it, and their range and total. */
+type MetricSummary = { n: number; min: number; max: number; sum: number };
+/** A boolean or vocabulary metric across a batch: how many times each value was seen. */
+type MetricTally = Record<string, number>;
+type BufferedEntry = {
+  count: number;
+  numbers: Map<string, MetricSummary>;
+  values: Map<string, MetricTally>;
+};
+
+/** Open buffered loggers, flushed when the process exits or is signalled to. */
+const bufferedFlushes = new Set<() => void>();
+const SHUTDOWN_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+let shutdownFlushInstalled = false;
+
+/** Writes what every open buffered logger holds; for a bridge's own shutdown path. */
+export function flushBufferedDebugLoggers(): void {
+  for (const flush of Array.from(bufferedFlushes)) flush();
+}
+
+/**
+ * `exit` covers `process.exit()` and a drained loop. A signal flushes, then is
+ * left to whoever else handles it; with no one else, it is raised again so the
+ * process still ends the way it would have. Listeners never keep a process alive.
+ */
+function installShutdownFlush(): void {
+  if (shutdownFlushInstalled) return;
+  shutdownFlushInstalled = true;
+  process.once("exit", flushBufferedDebugLoggers);
+  for (const signal of SHUTDOWN_SIGNALS) {
+    process.once(signal, () => {
+      flushBufferedDebugLoggers();
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    });
+  }
+}
+
+function summarize(entry: BufferedEntry, metrics: Record<string, number | boolean | string>) {
+  for (const [key, value] of Object.entries(metrics)) {
+    if (typeof value === "number") {
+      const summary = entry.numbers.get(key);
+      if (!summary) {
+        entry.numbers.set(key, { n: 1, min: value, max: value, sum: value });
+        continue;
+      }
+      summary.n++;
+      summary.min = Math.min(summary.min, value);
+      summary.max = Math.max(summary.max, value);
+      summary.sum += value;
+      continue;
+    }
+    // Booleans, and `state`, whose vocabulary safeDiagnosticMetrics fixes.
+    const tally = entry.values.get(key) ?? {};
+    const label = String(value);
+    tally[label] = (tally[label] ?? 0) + 1;
+    entry.values.set(key, tally);
+  }
+}
+
+/**
+ * Batch legacy diagnostic sites too: no write per token and no arbitrary payloads.
+ * A batch keeps each label's count and its metrics summed up across the batch, not
+ * just the last call's. It is written every minute, on `flush`/`close`, and when
+ * the process shuts down.
+ */
 export function createBufferedDebugLogger(
   bridge: BridgeName,
   allowedEvents: ReadonlySet<string>,
@@ -469,10 +668,7 @@ export function createBufferedDebugLogger(
   enabled: () => boolean = () => bridgeDebugEnabled(bridge),
   write: BridgeDiagnosticWrite = writeBridgeDiagnostic,
 ) {
-  const entries = new Map<
-    string,
-    { count: number; metrics: Record<string, number | boolean | string> }
-  >();
+  const entries = new Map<string, BufferedEntry>();
   let dropped = 0;
   let closed = false;
   const flush = () => {
@@ -483,7 +679,14 @@ export function createBufferedDebugLogger(
         "debug-events",
         {
           dropped,
-          events: Array.from(entries.entries()).map(([event, value]) => ({ event, ...value })),
+          events: Array.from(entries.entries()).map(([event, value]) => ({
+            event,
+            count: value.count,
+            metrics: {
+              ...Object.fromEntries(value.numbers),
+              ...Object.fromEntries(value.values),
+            },
+          })),
         },
         write,
       );
@@ -495,6 +698,8 @@ export function createBufferedDebugLogger(
   };
   const timer = setInterval(flush, INTERVAL_MS);
   timer.unref();
+  bufferedFlushes.add(flush);
+  installShutdownFlush();
   return {
     record(event: unknown, ...args: unknown[]) {
       if (closed || !enabled() || !bridgeDiagnosticsActive()) return;
@@ -502,11 +707,16 @@ export function createBufferedDebugLogger(
         dropped++;
         return;
       }
-      const previous = entries.get(event);
-      if (!previous && entries.size >= 16) {
-        dropped++;
-        return;
+      let entry = entries.get(event);
+      if (!entry) {
+        if (entries.size >= 16) {
+          dropped++;
+          return;
+        }
+        entry = { count: 0, numbers: new Map(), values: new Map() };
+        entries.set(event, entry);
       }
+      entry.count++;
       // Read only fixed fields, never recurse into an Error, SDK message or config.
       const metrics: Record<string, number | boolean | string> = {};
       for (const arg of args.slice(0, 4)) {
@@ -514,12 +724,13 @@ export function createBufferedDebugLogger(
           Object.assign(metrics, safeDiagnosticMetrics(arg as Record<string, unknown>));
         }
       }
-      entries.set(event, { count: (previous?.count ?? 0) + 1, metrics });
+      summarize(entry, metrics);
     },
     flush,
     close() {
       flush();
       closed = true;
+      bufferedFlushes.delete(flush);
       clearInterval(timer);
       entries.clear();
     },

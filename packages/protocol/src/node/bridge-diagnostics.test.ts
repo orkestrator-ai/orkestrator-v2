@@ -76,7 +76,7 @@ describe("shared bridge diagnostics", () => {
       expect(lines).toHaveLength(1);
       expect(lines[0]).not.toContain("SECRET");
       expect(lines[0]).toContain('"count":10000');
-      expect(lines[0]).toContain('"durationMs":12');
+      expect(lines[0]).toContain('"durationMs":{"n":10000,"min":12,"max":12,"sum":120000}');
       expect(lines[0]).toContain('"dropped":1');
       logger.flush();
       expect(lines).toHaveLength(1);
@@ -280,49 +280,68 @@ describe("diagnostics that follow a live setting", () => {
 
   const parsed = () => bridgeDiagnosticPayloads(lines);
 
-  test("a scope opened while off writes nothing, and counts anyway", () => {
+  test("a scope opened with the stream off writes its lifecycle only, and counts anyway", () => {
     const scope = createBridgeDiagnostics("pi", state);
     scope.activity("message_update");
     scope.tool("call-1", "shell", "started");
     scope.report("heartbeat");
-    expect(lines).toEqual([]);
+    expect(parsed().map((entry) => entry.event)).toEqual(["send-started"]);
     scope.close();
-    expect(lines).toEqual([]);
+    expect(parsed().map((entry) => entry.event)).toEqual(["send-started", "closed"]);
+    expect(parsed().at(-1)?.deltaCount).toBe(1);
   });
 
   test("turning detail on mid-turn reports the turn so far at once", () => {
     const scope = createBridgeDiagnostics("pi", state);
-    scope.activity("message_update");
-    scope.tool("call-1", "shell", "started");
-    setLiveBridgeDiagnostics(true);
-    const [snapshot] = parsed();
-    expect(snapshot.event).toBe("heartbeat");
-    expect(snapshot.deltaCount).toBe(1);
-    expect(snapshot.pendingToolCount).toBe(1);
-    expect(snapshot.pendingTools[0].kind).toBe("shell");
-    scope.close();
+    try {
+      scope.activity("message_update");
+      scope.tool("call-1", "shell", "started");
+      setLiveBridgeDiagnostics(true);
+      const snapshot = parsed().at(-1)!;
+      expect(snapshot.event).toBe("heartbeat");
+      expect(snapshot.deltaCount).toBe(1);
+      expect(snapshot.pendingToolCount).toBe(1);
+      expect(snapshot.pendingTools[0].kind).toBe("shell");
+    } finally {
+      scope.close();
+    }
     expect(parsed().at(-1)?.event).toBe("closed");
   });
 
-  test("turning detail off stops a scope mid-turn; turning it on again resumes", () => {
+  test("turning detail off stops the stream mid-turn; turning it on again resumes", () => {
     setLiveBridgeDiagnostics(true);
     const scope = createBridgeDiagnostics("pi", state);
-    expect(parsed().map((entry) => entry.event)).toEqual(["send-started"]);
-    setLiveBridgeDiagnostics(false);
-    scope.report("heartbeat");
-    expect(lines).toHaveLength(1);
-    setLiveBridgeDiagnostics(true);
-    expect(lines).toHaveLength(2);
-    // Already on: a repeated setting is not a second snapshot.
-    setLiveBridgeDiagnostics(true);
-    expect(lines).toHaveLength(2);
-    scope.close();
+    try {
+      expect(parsed().map((entry) => entry.event)).toEqual(["send-started"]);
+      scope.report("heartbeat");
+      expect(lines).toHaveLength(2);
+      setLiveBridgeDiagnostics(false);
+      scope.report("heartbeat");
+      expect(lines).toHaveLength(2);
+      setLiveBridgeDiagnostics(true);
+      expect(lines).toHaveLength(3);
+      // Already on: a repeated setting is not a second snapshot.
+      setLiveBridgeDiagnostics(true);
+      expect(lines).toHaveLength(3);
+    } finally {
+      scope.close();
+    }
   });
 
   test("a closed scope is not reported again", () => {
     const scope = createBridgeDiagnostics("pi", state);
     scope.close();
+    const count = lines.length;
     setLiveBridgeDiagnostics(true);
+    scope.report("heartbeat");
+    expect(lines).toHaveLength(count);
+  });
+
+  test("bridge.diagnostics at warn writes nothing, lifecycle included", () => {
+    configureLogger({ areaLevels: { "bridge.diagnostics": "warn" } });
+    const scope = createBridgeDiagnostics("pi", state);
+    scope.report("heartbeat");
+    scope.close();
     expect(lines).toEqual([]);
   });
 

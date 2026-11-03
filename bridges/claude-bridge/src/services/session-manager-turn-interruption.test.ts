@@ -242,7 +242,8 @@ describe("restoring a session a restart cut short", () => {
         process.stdout.write(JSON.stringify(restoredTurnInterruption(${JSON.stringify({ turnInFlight: mark })})));
       `,
         ],
-        { stdout: "pipe", stderr: "pipe" },
+        // Detail off: with it on, the exit flush writes a debug batch after the answer.
+        { stdout: "pipe", stderr: "pipe", env: { ...process.env, ORKESTRATOR_BRIDGE_DEBUG: "0" } },
       );
       const observed = await new Response(observer.stdout).json();
       expect(await observer.exited).toBe(0);

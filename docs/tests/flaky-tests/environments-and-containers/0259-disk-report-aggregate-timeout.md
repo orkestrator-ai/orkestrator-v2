@@ -399,7 +399,6 @@ The final staged-resolution aggregate, `mise run test:logged -- --name retry-fin
 - **Evidence:** `/tmp/orkestrator-test-run.EowbMk/root-and-agent-support-tests.log.gz`; enclosing aggregate evidence is under `/tmp/orkestrator-test-run.bAsP8q/`.
 - **Assessment:** existing aggregate deadline recurrence. Host contention remains a hypothesis; no disk-report source, assertion, timeout or skip changed.
 
-
 ### Coordinator workflow retention review, 2026-11-02
 
 Preparation at `81d21fa80` ran `mise run test` (root group used parallel
@@ -417,3 +416,46 @@ an independently installed detached `origin/main` worktree at `d7cdfaa8b`
 aggregate timeout. The exact aggregate rerun passed the root group (214.1 s),
 including disk-report, but failed two other workspace owners; see cases 1314
 and 1653. Evidence: `/tmp/orkestrator-test-run.kQC3bQ/repaired-validation-test.log.gz`.
+
+## R4 diagnostics review recurrence — 2026-11-03
+
+Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`
+with four backend workers and one root worker. The isolated-checkout case timed out at 5030.63 ms; process status was null rather than 0 at line 131.
+Backend totals: 13,378 passed, 99 skipped, two failed. Root totals: 3,451 passed,
+two failed, one error. Evidence: `.orkestrator/review-artifacts/review-validation-305987e4-d185-4d3f-bd05-a72e0c7df530/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone (exit 0, 0.9 s):
+
+```sh
+mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+This establishes intermittent behavior, not a root-cause fix. No assertion,
+timeout, skip, or unrelated implementation changed.
+
+## R4 round 3 review repair — 2026-11-03
+
+Preparation at `8d022cf9b` repeated the checkout timeout at 5079.13 ms
+(`mise run test`, one root worker), with process status null at line 131 and
+an error between tests. Original evidence:
+`.orkestrator/review-artifacts/review-validation-00bb3ca2-3d93-47b8-a736-2f3fd4bf7ab4/validation-04.stdout.txt`.
+The owning test and disk-report implementation have no diff in
+`origin/main...HEAD`.
+
+The complete unchanged owner passed on the branch (exit 0, 1.4 s):
+
+```sh
+mise run test:logged -- --name r4-disk-owner-round3 -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures
+```
+
+A detached `origin/main` worktree at `5161688cf`, with its own independently
+installed frozen dependencies, passed ten repetitions (exit 0, 13.2 s):
+
+```sh
+mise run test:logged -- --name r4-main-disk-round3 -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --rerun-each=10 --only-failures
+```
+
+This confirms another isolated pass but does not reproduce the timeout on the
+target branch or establish an environmental cause. The recorded aggregate
+failure remains unresolved; it is not excused as environmental. No unrelated
+implementation, timeout, assertion or skip changed.

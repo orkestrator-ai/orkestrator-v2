@@ -55,3 +55,30 @@ when run alone, with `locator.click: Timeout 20000ms exceeded` on the leaf proje
 `origin/main` worktree (`7b726a04a`), so that branch did not cause it. The cause was
 not investigated further.
 
+
+## R4 diagnostics Electron qualification — 2026-11-03
+
+`mise run test:logged -- --name r4-electron -- mise run test:agent:electron`
+reported 48 passed, three skipped and two failed. The realm case timed out after
+20 s clicking the leaf-app button at line 326; the call log included the
+Continue Without GitHub CLI locator handler. The other failure was a renderer
+logging-settings count assertion. Full-suite evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.FYd7DL/r4-electron.log.gz`.
+
+The same realm click timeout at line 326 reproduced in a detached main worktree
+at `62e99ff599cfcfa2bfdd23f907b8f05039925d63`, with independently installed
+frozen dependencies. The realm and sidebar sources have no branch diff.
+Command (two Electron owners only):
+`ORKESTRATOR_AGENT_TEST_RUN_ID=r4-main-electron-owners mise run test:logged -- --name r4-main-electron-owners -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/renderer-log-boundary-electron.spec.ts e2e/agent-testing/workspace-realm-electron.spec.ts`.
+
+Both owners failed on main. The renderer owner stopped earlier at an AI CLI
+Required dialog, not the branch's count assertion, so this does not establish
+that assertion as a baseline failure. Rebuilding main's Claude and Codex bridges
+passed, but a renderer-only retry was still blocked after reload by missing
+profile CLI prerequisites. No unrelated code or tests were changed.
+
+Main evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.QDRFRH/r4-main-electron-owners.log.gz`;
+renderer retry: `orkestrator-test-run.hXakYF/r4-main-renderer-built.log.gz` below
+the same temporary root. A bounded missing-CLI excerpt is retained in the repair
+workspace at `output/agent-testing/r4-fix-main-evidence/`.

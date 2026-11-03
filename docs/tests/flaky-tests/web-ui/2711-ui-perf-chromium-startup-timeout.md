@@ -47,6 +47,72 @@ Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrato
 The completed aggregate root group reported 3,441 pass and 5 fail; the full
 aggregate exited 1 after 294.0 seconds.
 
+## R4 diagnostics review recurrence — 2026-11-03
+
+Preparation ran `mise run test` at `ced9dbce70ca0cab52b304fb548b58e15af716c2`
+with four backend workers and one root worker. The unnamed in-page deadlines hook exceeded 5000 ms (5004.61 ms).
+Backend totals: 13,378 passed, 99 skipped, two failed. Root totals: 3,451 passed,
+two failed, one error. Evidence: `.orkestrator/review-artifacts/review-validation-305987e4-d185-4d3f-bd05-a72e0c7df530/validation-04.stdout.txt`.
+
+The unchanged complete owner passed alone (exit 0, 5.1 s):
+
+```sh
+mise run test:logged -- --name ui-deadlines-rerun -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+This establishes intermittent behavior, not a root-cause fix. No assertion,
+timeout, skip, or unrelated implementation changed.
+
+## R4 round 2 review preparation and main reproduction — 2026-11-03
+
+Preparation at `3aa4546421145ebee86ecc8890e545a08825b9ef` repeated the same
+unnamed hook timeout after 5004.65 ms in `mise run test` (one root worker).
+Backend/root/web totals were 28,256 passed, two failed and 109 skipped; the other
+failure was the preview idle socket assertion tracked in case 3101. Evidence:
+`.orkestrator/review-artifacts/review-validation-0e5ecfc3-eaa5-4f5a-910f-d4fcb012f586/validation-04.stdout.txt`.
+
+The owner and its imported performance probe have no diff in
+`origin/main...HEAD`. A detached worktree at `origin/main` commit `b58d401e1`,
+with its own frozen dependency install, first passed the unchanged owner alone
+(exit 0, 8.9 s):
+
+```sh
+mise run test:logged -- --name r4-main-ui-deadlines-round2 -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+A repetition of that same owner on the detached main worktree reproduced the
+same unnamed 5000 ms hook timeout in nine of ten runs (5000.62–5015.62 ms):
+
+```sh
+mise run test:logged -- --name r4-main-ui-deadlines-repeat -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=10 --only-failures
+```
+
+Totals: 60 passed, nine failed, 69 tests, 86.69 s. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6VxcFo/r4-main-ui-deadlines-repeat.log.gz`.
+This independently establishes the target-branch recurrence; its cause remains
+unproven. No timeout, assertion, skip or unrelated code changed. The temporary
+worktree was removed.
+
+## R4 round 3 review repair — 2026-11-03
+
+Preparation at `8d022cf9b` repeated the unnamed 5000 ms hook timeout at
+5018.17 ms (`mise run test`, one root worker). Original evidence:
+`.orkestrator/review-artifacts/review-validation-00bb3ca2-3d93-47b8-a736-2f3fd4bf7ab4/validation-04.stdout.txt`.
+The owning test and imported performance probe have no diff in
+`origin/main...HEAD`.
+
+A detached `origin/main` worktree at `5161688cf`, with independently installed
+frozen dependencies, reproduced the same hook timeout at 5001.64 ms in the
+third repetition (18 passed, one failed, 23.28 s total).
+
+```sh
+mise run test:logged -- --name r4-main-ui-round3 -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --rerun-each=3 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.81RZZF/r4-main-ui-round3.log.gz`.
+This confirms the target-branch recurrence without establishing its cause.
+No unrelated implementation, timeout, assertion or skip changed.
+
 ## CI recurrence and fix applied, 2026-11-03
 
 GitHub Actions CI ("Unit and integration tests", `ubuntu-latest`, 4 cores) hit

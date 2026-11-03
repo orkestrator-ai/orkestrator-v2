@@ -2,17 +2,25 @@
 
 Checked against `main` at `2459b05c` (2026-10-15). Code items done on branch
 `todo-0045-preview-service-discovery-810be430b445` (2026-10-25, based on
-`20f6de91`). What is left is one in-app qualification run; see **Outstanding
-work**.
+`20f6de91`). The in-app qualification is now an Electron spec
+(`e2e/agent-testing/service-preview-seeded-electron.spec.ts`, 2026-11-03). What
+is left is the open question in task 2.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`. Re-checked 2026-11-03
+against `main` at `7b48c23f`: everything task 1 exercises is unchanged, and no
+spec or dev-test fixture set an `entryPort` yet. Task 1 was acted on that day.
 
 ### Tasks
 
-1. **In-app desktop qualification**: the five-step run in a `dev:test` desktop
-   profile with two local environments and real dev servers. Status: open.
+1. **In-app desktop qualification**: the five-step run in a desktop profile
+   with two local environments and real dev servers. Status: done (2026-11-03):
+   all five checks pass on macOS in
+   `e2e/agent-testing/service-preview-seeded-electron.spec.ts`; the restart
+   check found a timing gap, now
+   [3230](3230-restart-inside-verification-window.md). See **Assumptions and
+   decisions**, D10–D14.
 2. **`orkestrator environment exec` as a managed root**: the open question,
    whether detached exec workers should count as ownership roots. Status: open.
 
@@ -219,9 +227,14 @@ environments", §"Diagnostics" and §"Framework configuration".
   attributing a real listener through the `ss` fallback (this environment,
   another environment, unattributed, none). The two-environment PTY test is
   macOS-only.
-- **In-app qualification (open).** In a `dev:test` desktop profile with the
-  fixture project and an `entryPort` in its repository config, create two
-  local environments and confirm in the real window:
+- ~~In-app qualification~~ **Done on macOS 27 (Darwin 27.0.0), Bun 1.4.4,
+  2026-11-03,** as `e2e/agent-testing/service-preview-seeded-electron.spec.ts`
+  in `mise run test:agent:electron`. The spec launches the real Electron app
+  on a disposable agent-test profile under a temporary root, gives the
+  dev-test fixture project (`test-fixtures/agent-project`) an `entryPort` and a
+  `run` command, and creates two local environments from it. Each of the five
+  checks below passes; how each was observed, and what each does not cover, is
+  in D10–D14. The original plan was:
   1. the environment browser button opens the seeded `app` service, which
      shows "Waiting for this environment's server" until **Run** starts the
      dev server, then loads it without a retry (recheck backoff);
@@ -234,11 +247,41 @@ environments", §"Diagnostics" and §"Framework configuration".
   5. route details → **Framework setup hints** shows the private origin when
      publication is on, and **Copy** puts the snippet on the clipboard.
 
-  Not run in this change: it needs the desktop app driven through its UI with
-  two environments and real dev servers. Every layer under it is covered by
-  the tests above. Batch it with
-  [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
-  runs if convenient.
+  Results (two consecutive passing runs of the spec, about 25 s each on a
+  loaded host):
+  1. The browser button opens the seeded `app` service (`worktree`, entry
+     port), which shows "Waiting for this environment's server on port N" and
+     attaches nothing. After **Run**, the registry's own recheck resolves it to
+     `managed-process` with no Retry, and the tab shows this environment's
+     server.
+  2. With environment A's server on the entry port, B's seeded service shows
+     "Another environment's server is on port N" (listener
+     `other-environment`) and attaches nothing. B's server moves to N+1; the
+     ⌘⇧-click on the address it prints opens the link chooser with **Move app
+     from port N to N+1**, which moves B's service and loads B's server. A
+     still shows its own server on N.
+  3. After Ctrl-C and the same command in A's terminal, a request from the
+     open page, which is never reloaded, reaches the new process. That request
+     bumps the endpoint generation, and an attachment issued at the old
+     generation is refused on renewal. This holds only once the registry's
+     5 s verification window has passed since the last verified connection: a
+     restart faster than that was observed reaching the new process at the old
+     generation, with no revocation. See D12 and
+     [3230](3230-restart-inside-verification-window.md).
+  4. A plain click on a `localhost` link in an agent reply opens the system
+     browser (captured in the main process, never launched); ⌘⇧-click opens a
+     preview tab in that environment bound to its seeded service, showing its
+     server.
+  5. With publication on (throwaway CA and certificate for `preview.test`,
+     loopback listener on an ephemeral port), route details → **Framework
+     setup hints** shows `Public origin https://s-<id>.preview.test:<port>`,
+     and **Copy** on the Next.js hint puts `PUBLIC_ORIGIN=<origin>` on the
+     clipboard. The user's clipboard text is restored afterwards.
+
+  Not covered: Linux and Windows desktops (the spec is not platform-gated, but
+  was only run on macOS); a live agent transcript (D13); how a page shows a
+  restart by itself, which is the application's own client (D12); the real
+  system browser opening (deliberately captured).
 
 ## Constraints and rationale
 
@@ -331,6 +374,71 @@ edits the project; works for containers and local alike. Cons: the user picks
 the relevant entry; the catalogue must follow the forwarding rules in
 `browser-previews.md` §"Framework configuration".
 
+**D10. Task 1, where the checks live: a sibling Electron spec, not inside
+`service-preview-electron.spec.ts`.** Options: (a) add the five checks to
+`service-preview-electron.spec.ts` as the task recommended; (b) a sibling spec
+in the same Electron suite, sharing the launch code. **Chosen: (b),**
+`service-preview-seeded-electron.spec.ts`, listed in
+`playwright.electron.config.ts`. The existing spec was already 3,255 lines,
+over the repository's 2,000-line limit, and its stack (one environment, two
+user-registered services, a second backend) shares nothing with this one but
+the Electron launch. That launch moved to `service-preview-electron-launch.ts`,
+which both specs import, so the old spec shrank to 3,088 lines. Pros: runs in
+`mise run test:agent:electron` exactly as (a) would; independent setup; no
+growth of an oversized file. Cons: a second Electron start per suite run
+(about 20 s).
+
+**D11. Task 1, the fixture: entry port in the repository config, `run` in a
+committed `orkestrator-ai.json`, and a Vite-like dev server.** Options for the
+port: (a) set `entryPort` in `seedFixture` for every `dev:test` profile; (b)
+set it in the spec through `patch_repository_settings`. **Chosen: (b)**, on a
+reserved port pair (N and N+1 free): (a) would give every `dev:test` profile a
+seeded service on a fixed port that other agents' profiles on the same host
+share. For the server, the spec's `run` command starts
+`e2e/agent-testing/seeded-entry-dev-server.ts` with the bun on the test's
+PATH. Like Vite it moves to the next port when its own is taken, and its page
+marker names the worktree and the process id. The agent-project's own
+`server.ts` binds a fixed port and has a constant marker, so it could not show
+the port move or tell two processes apart; it is unchanged.
+
+**D12. Task 1, the restart pass criterion.** The task's recommended pass is
+"the tab shows the new process without a reload, and the old generation is
+refused". The tunnel re-attaches lazily, on the page's next upstream
+connection (`PreviewTransportManager.connect`), and nothing reloads the page,
+so a static page keeps showing the old process's HTML until it makes a
+request. A real dev server's client (Vite's HMR socket) is what makes such a
+request. **Chosen:** the check makes one request from inside the open,
+never-reloaded page and requires it to answer with the new process's marker;
+the document is still the first process's, and the tab and its service URL are
+unchanged. It then requires a newer endpoint generation, still
+`managed-process`, and an attachment issued before the restart refused on
+renewal. The check waits until 6 s after the old process exits before that
+request. Without the wait, a request made within the registry's 5 s
+verification window of the last verified connection reached the new process
+at the old generation: three runs saw the generation unchanged and no
+revocation for the next 30–90 s, and in the third an explicit probe then
+bumped it. That is the
+documented cost of D3, now observed; follow-up in
+[3230](3230-restart-inside-verification-window.md).
+
+**D13. Task 1, the agent reply is the real `MessageMarkdown`, not a live agent
+turn.** Options: (a) drive a real agent to print the link; (b) render the real
+`MessageMarkdown` inside the `PreviewLinkSourceContext` that `AgentNativeTab`
+provides, sourced from a tab of that environment. **Chosen: (b).** (a) needs a
+billed provider turn and credentials in the test profile. (b) runs the real
+`MarkdownLink` handler, `requestTerminalBrowserTab`, `TerminalContainer`'s
+listener, `linkBrowserTarget(…, "agent")` and the link chooser's resolution;
+only the provider of the context is skipped, which
+`MessageMarkdown.preview-links.test.tsx` covers. `shell.openExternal` is
+captured in the main process for the plain click, so no browser opens on the
+host.
+
+**D14. Task 1, the restart is typed into the same terminal through its
+backend session.** Ctrl-C and the command are written with
+`local_terminal_write` to the Run Commands tab's PTY, rather than typed with the
+keyboard, so the service tab stays visible throughout. The PTY, the shell and
+therefore the ownership root are the ones **Run** created.
+
 ## Open questions
 
 - Should `orkestrator environment exec` runs count as managed roots? They are
@@ -339,6 +447,8 @@ the relevant entry; the catalogue must follow the forwarding rules in
 
 ## Related
 
+- [3230-restart-inside-verification-window.md](3230-restart-inside-verification-window.md)
+  (a restart inside the 5 s verification window keeps the old generation).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md) (transports,
   qualification and legacy route).
 - [browser-previews.md](../../architecture/browser-previews.md) §"Local

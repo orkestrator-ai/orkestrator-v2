@@ -560,6 +560,15 @@ keep that variable and `ORKESTRATOR_PREVIEW_RELAY`) and two preview-app
 fixtures. Run it alone with
 `bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`.
 
+Seeded entry-port services in local environments have their own spec in the
+same suite, `e2e/agent-testing/service-preview-seeded-electron.spec.ts`. It
+gives the fixture project an `entryPort` and a `run` command, creates two local
+environments, and checks the wait state, two servers on one port with the
+port-move offer, a restart, agent links and framework hints in the real window
+([0045](../todo/previews-and-annotations/0045-preview-service-discovery.md),
+task 1). Both specs launch Electron through
+`e2e/agent-testing/service-preview-electron-launch.ts`.
+
 Record results in the evidence log of
 [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md#evidence-log).
 

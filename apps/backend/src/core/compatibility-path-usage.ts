@@ -58,6 +58,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-coordinator-mail.older-node",
   /**
+   * A command node's coordinator used ticket tools or a build with a `nodeId`
+   * on a leaf that does not advertise `ticket-sync`.
+   */
+  "ticket-sync.older-node",
+  /**
    * `/compact` sent instructions and the bridge compacted without confirming
    * them: it predates compaction instructions and ignored the body.
    */

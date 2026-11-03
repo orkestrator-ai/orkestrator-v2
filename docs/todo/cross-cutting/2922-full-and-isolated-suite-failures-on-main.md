@@ -78,6 +78,8 @@ On 2026-11-03, against `main` at `7b48c23fb` on a disposable codex profile (`dev
 
 With the fix at `04a57aefa`, on a fresh disposable codex profile (`dev:test --fixture --no-agent-credentials --agent-platforms codex --headless-electron`, load average ~47 on 16 cores), `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/graph-designer.spec.ts e2e/agent-testing/graph-run-view.spec.ts --workers=1 --retries=0` through `test:logged` passed twice in a row: 5 passed, 1 skipped (the opt-in profile-restart case at `graph-run-view.spec.ts:659`), 0 failed, including `graph-designer.spec.ts:33` and `graph-run-view.spec.ts:433`.
 
+Re-run on the branch head `7d99f7acc` (the last code change, which only adds the Docker dialog handler to `graph-designer-mock.spec.ts`) on 2026-11-03, on a fresh disposable codex profile started the same way (load average ~4.5): the same command passed twice in a row (49–51 s each, `test:logged` exit 0). The JSON reporter recorded 5 expected, 1 skipped, 0 unexpected, 0 flaky: `graph-designer.spec.ts:33` and `:239`, `graph-run-view.spec.ts:48`, `:188` and `:433` passed; `graph-run-view.spec.ts:659` (opt-in profile restart) skipped. `graph-designer-mock.spec.ts` passed on the same profile (1 passed). The profile was stopped and reset afterwards.
+
 **Decisions.**
 
 - **Where to start?**

@@ -14,13 +14,27 @@ import { spawnParentBoundCommand } from "./shell.js";
  * first start, per container, bounded in number.
  *
  * The same follower reports the installation's containers starting and ending,
- * so a state snapshot does not keep answering for a container that just died.
+ * so a state snapshot does not keep answering for a container that just died,
+ * and the loops that read a container stop when it does
+ * (`container-lifecycle-events.ts`).
  */
 
 const MAX_TRACKED = 256;
 const RESTART_MIN_MS = 1_000;
 const RESTART_MAX_MS = 60_000;
 const FOLLOWED_EVENTS = ["oom", "start", "die", "stop", "destroy"] as const;
+
+/** A followed event other than `oom`: the container started or ended. */
+export type ContainerLifecycleAction = Exclude<(typeof FOLLOWED_EVENTS)[number], "oom">;
+/** Receives every lifecycle event with the container's full id. */
+export type ContainerLifecycleListener = (
+  containerId: string,
+  action: ContainerLifecycleAction,
+) => void;
+
+function isLifecycleAction(action: string): action is ContainerLifecycleAction {
+  return action === "start" || action === "die" || action === "stop" || action === "destroy";
+}
 
 type Spawn = (command: string, args: string[]) => ReturnType<typeof spawnParentBoundCommand>;
 
@@ -53,7 +67,7 @@ export class OomEventWatcher {
     // Parent-bound: a backend killed without its shutdown path would otherwise
     // leave the follower running forever, since it only writes on an OOM.
     private readonly spawn: Spawn = spawnParentBoundCommand,
-    private readonly onLifecycle: () => void = () => undefined,
+    private readonly onLifecycle: ContainerLifecycleListener = () => undefined,
   ) {}
 
   start(): void {
@@ -105,7 +119,9 @@ export class OomEventWatcher {
     const at = BigInt(nanos);
     if (at > this.lastSeenNano) this.lastSeenNano = at;
     if (action !== "oom") {
-      this.onLifecycle();
+      // A replay after a restart can repeat an event; every receiver is a
+      // reconciliation, so a duplicate costs a re-check and nothing else.
+      if (isLifecycleAction(action)) this.onLifecycle(id, action);
       return;
     }
     if (at <= this.lastOomNano) return;
@@ -153,7 +169,7 @@ export class ContainerOomEvents {
 
   constructor(
     private readonly spawn: Spawn = spawnParentBoundCommand,
-    private readonly onLifecycle?: () => void,
+    private readonly onLifecycle?: ContainerLifecycleListener,
   ) {}
 
   /** Starts the backend's watcher (idempotent). */

@@ -137,6 +137,18 @@ export class TerminalRuntime {
     return count;
   }
 
+  /** Whether a live terminal shell runs in this container (a full or short id). */
+  hasContainerTerminal(containerId: string): boolean {
+    if (!containerId) return false;
+    for (const id of this.processes.keys()) {
+      const config = this.sessionConfigs.get(id);
+      if (config?.kind !== "container") continue;
+      if (config.containerId.startsWith(containerId) || containerId.startsWith(config.containerId))
+        return true;
+    }
+    return false;
+  }
+
   /** Live local terminal shells and the environment each was opened for. */
   localProcessRoots(): Array<{ environmentId: string; pid: number }> {
     const roots: Array<{ environmentId: string; pid: number }> = [];

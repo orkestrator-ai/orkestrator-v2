@@ -4,7 +4,11 @@ import {
   type AgentAccountsRuntimeOptions,
 } from "./agent-accounts-runtime.js";
 import { ContainerLogService, type ContainerLogServiceOptions } from "./container-log-service.js";
-import { ContainerOomEvents, type ContainerOomEventsOptions } from "./container-oom-events.js";
+import {
+  ContainerOomEvents,
+  type ContainerLifecycleListener,
+  type ContainerOomEventsOptions,
+} from "./container-oom-events.js";
 import { ContainerUsageSampler } from "./container-usage-sampler.js";
 import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
@@ -77,6 +81,7 @@ export class BackendRuntime {
   readonly containerUsage = new ContainerUsageSampler();
   /** The `docker events` OOM follower, started by the backend once it knows its owner. */
   readonly containerOom: ContainerOomEvents;
+  private readonly lifecycleListeners = new Set<ContainerLifecycleListener>();
   /** `docker logs -f` followers behind the log subscriptions. */
   readonly containerLogs: ContainerLogService;
   /** Reviewed Docker cleanup selection tokens. */
@@ -114,13 +119,28 @@ export class BackendRuntime {
     this.prMonitor = new PrMonitorRuntime(options.prMonitor);
     this.tmux = new TmuxRuntime(options.tmux);
     this.accounts = new AgentAccountsRuntime(options.accounts);
-    this.containerOom = new ContainerOomEvents(options.containerOom?.spawn, () =>
-      this.containerStates.invalidate(),
+    this.containerOom = new ContainerOomEvents(
+      options.containerOom?.spawn,
+      (containerId, action) => {
+        this.containerStates.invalidate();
+        for (const listener of Array.from(this.lifecycleListeners)) listener(containerId, action);
+      },
     );
     this.containerLogs = new ContainerLogService(
       options.containerLogs?.spawn,
       options.containerLogs?.now,
     );
+  }
+
+  /**
+   * Container start and end events from the `docker events` follower, after
+   * the state snapshot is invalidated. Listeners must not throw.
+   */
+  onContainerLifecycle(listener: ContainerLifecycleListener): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => {
+      this.lifecycleListeners.delete(listener);
+    };
   }
 
   attachChangeTracking(service: ChangeTrackingService): void {

@@ -63,6 +63,12 @@ export type ClaudeStatePoll = {
   pollRequested: boolean;
   inFlight?: Promise<void>;
   context: CommandContext;
+  /**
+   * Whether anything in the container can run terminal Claude: a terminal
+   * shell or a claude-tmux tab. Without one the hooks cannot write, so the
+   * poll keeps only the slow safety read (BG-7).
+   */
+  demand: boolean;
   /** When storage last confirmed the environment still owns a running container. */
   lastRetirementCheckAt?: number;
   /** This lineage's doorbell credential, while one is issued. */
@@ -244,12 +250,22 @@ export class ClaudeStatePollManager {
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
-  start(containerId: string, context: CommandContext): void {
+  start(containerId: string, context: CommandContext, demand = true): void {
     if (this.stopped) return;
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
       existing.context = context;
+      const gained = demand && !existing.demand;
+      existing.demand = demand;
+      if (gained) {
+        // A terminal or tab just opened: back to the fast read until the next
+        // observation decides the cadence, and read now.
+        if (!existing.signalConfirmed) {
+          this.reschedule(containerId, existing, CLAUDE_STATE_POLL_INTERVAL_MS);
+        }
+        this.requestPoll(containerId, existing);
+      }
       this.armSignal(containerId, existing);
       return;
     }
@@ -263,6 +279,7 @@ export class ClaudeStatePollManager {
       active: true,
       pollRequested: false,
       context,
+      demand,
       signalConfirmed: false,
       signalUnsupported: false,
       signalDemoted: false,
@@ -429,7 +446,11 @@ export class ClaudeStatePollManager {
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
       running.add(environment.containerId);
-      this.start(environment.containerId, context);
+      this.start(
+        environment.containerId,
+        context,
+        terminalClaudeDemand(context, environment.id, environment.containerId),
+      );
     }
     for (const containerId of this.polls.keys()) {
       if (!running.has(containerId)) this.shutdown(containerId);
@@ -444,6 +465,17 @@ export class ClaudeStatePollManager {
   shutdown(containerId: string): void {
     const poll = this.polls.get(containerId);
     if (poll) this.deactivate(containerId, poll);
+  }
+
+  /**
+   * {@link shutdown} for every poll whose container id matches `containerId`
+   * as a full or short id, as a `docker events` id may differ in length.
+   */
+  shutdownMatching(containerId: string): void {
+    if (!containerId) return;
+    for (const id of Array.from(this.polls.keys())) {
+      if (id.startsWith(containerId) || containerId.startsWith(id)) this.shutdown(id);
+    }
   }
 
   /** Permanently close admission and retire every poll at backend shutdown. */
@@ -498,8 +530,9 @@ export class ClaudeStatePollManager {
     poll.ringsAtPreviousRead = rings;
     poll.lastRevision = revision;
     poll.lastCompletions = completions;
-    // A legacy state has no way to expose a whole missed turn: keep fast polling.
-    const slow = poll.signalConfirmed && revision !== undefined;
+    // A legacy state has no way to expose a whole missed turn: keep fast polling,
+    // unless nothing in the container can run terminal Claude at all.
+    const slow = (poll.signalConfirmed && revision !== undefined) || !poll.demand;
     this.reschedule(
       containerId,
       poll,
@@ -714,6 +747,25 @@ export class ClaudeStatePollManager {
       warn(error);
     }
   }
+}
+
+/**
+ * Whether the container can be running terminal Claude: a terminal shell in
+ * it or a claude-tmux tab of its environment. A context without that runtime
+ * (lightweight fixtures) answers yes, the behaviour before the gate.
+ */
+export function terminalClaudeDemand(
+  context: CommandContext,
+  environmentId: string,
+  containerId: string,
+): boolean {
+  const runtime = context.runtime as Partial<CommandContext["runtime"]> | undefined;
+  const terminals = runtime?.terminals;
+  const sessions = runtime?.tmux?.sessions;
+  if (!terminals?.hasContainerTerminal || !sessions?.sessionsInEnvironment) return true;
+  return (
+    terminals.hasContainerTerminal(containerId) || sessions.sessionsInEnvironment(environmentId) > 0
+  );
 }
 
 /**

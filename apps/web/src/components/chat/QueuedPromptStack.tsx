@@ -29,8 +29,8 @@ export interface NativeComposeQueuedPrompt {
 export interface NativeComposeQueueState {
   length: number;
   error?: { message: string } | null;
-  /** Opens the full queue manager (edit, reorder, remove). */
-  onOpen: () => void;
+  /** Opens the full queue manager (edit, reorder, remove). Absent when a surface has none. */
+  onOpen?: () => void;
   /** Queued prompts in run order: the first one is sent next. */
   items: readonly NativeComposeQueuedPrompt[];
 }
@@ -258,26 +258,29 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
           {queue.error ? (
             <AlertCircle className="h-3 w-3 shrink-0 text-destructive" aria-hidden="true" />
           ) : null}
-          <span className="min-w-0 flex-1 truncate" aria-hidden="true">
+          {/* The button below announces the count when there is one. */}
+          <span className="min-w-0 flex-1 truncate" aria-hidden={queue.onOpen ? true : undefined}>
             {queue.error ? `Blocked: ${queue.error.message}` : `${length} queued`}
           </span>
-          <button
-            type="button"
-            onClick={queue.onOpen}
-            className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-            aria-label={
-              queue.error
-                ? `${length} queued prompts blocked: ${queue.error.message}`
-                : `View queued prompts (${length})`
-            }
-            title={
-              queue.error
-                ? `Queued prompt was not sent: ${queue.error.message}`
-                : "View queued prompts"
-            }
-          >
-            View all
-          </button>
+          {queue.onOpen ? (
+            <button
+              type="button"
+              onClick={queue.onOpen}
+              className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              aria-label={
+                queue.error
+                  ? `${length} queued prompts blocked: ${queue.error.message}`
+                  : `View queued prompts (${length})`
+              }
+              title={
+                queue.error
+                  ? `Queued prompt was not sent: ${queue.error.message}`
+                  : "View queued prompts"
+              }
+            >
+              View all
+            </button>
+          ) : null}
         </div>
         <span id={hintId} className="sr-only">
           Up and Down arrows move between queued prompts. Escape returns to the prompt input.

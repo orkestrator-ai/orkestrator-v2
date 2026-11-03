@@ -17,6 +17,8 @@
  *   the stage state machine.
  * - `build-pipeline-service-lifecycle.ts`: init/shutdown, admission, and the
  *   user controls.
+ * - `build-pipeline-service-user-messages.ts`: the user's message queue and
+ *   steering the running turn.
  *
  * Each part takes the context and the parts it calls; none extends another
  * (`tests/unit/inheritance-chains.test.ts`). The one call that runs back up
@@ -28,6 +30,7 @@ import type {
   BuildPipelineCodeRewindPreview,
   BuildPipeline,
   BuildPipelineAgent,
+  PipelineQueuedSteerDelivery,
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -42,6 +45,7 @@ import { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import { BuildPipelineLifecycle } from "./build-pipeline-service-lifecycle.js";
+import { BuildPipelineUserMessages } from "./build-pipeline-service-user-messages.js";
 import { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 import { BuildPipelineWorkerMail } from "./build-pipeline-worker-mail.js";
@@ -67,6 +71,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   private readonly interactions: BuildPipelineInteractions;
   private readonly stageSupervisor: BuildPipelineSupervisor;
   private readonly lifecycle: BuildPipelineLifecycle;
+  private readonly userMessages: BuildPipelineUserMessages;
   private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
   /** Each worker's mail state, steer and restart reconciliation, for the mail drain. */
   readonly workerMail: BuildPipelineWorkerMail;
@@ -100,6 +105,11 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       this.context,
       this.agents,
       this.recovery,
+      this.stageSupervisor,
+    );
+    this.userMessages = new BuildPipelineUserMessages(
+      this.context,
+      this.agents,
       this.stageSupervisor,
     );
     // Review, consolidation and Verify are certified against the worktree they
@@ -178,14 +188,32 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   }
 
   sendMessage(pipelineId: string, text: string): Promise<BuildPipeline> {
-    return this.lifecycle.sendMessage(pipelineId, text);
+    return this.userMessages.sendMessage(pipelineId, text);
   }
 
   steerMessage(
     pipelineId: string,
     text: string,
   ): Promise<{ pipeline: BuildPipeline; delivery: "steered" | "queued" }> {
-    return this.lifecycle.steerMessage(pipelineId, text);
+    return this.userMessages.steerMessage(pipelineId, text);
+  }
+
+  steerQueuedMessage(
+    pipelineId: string,
+    messageId: string,
+  ): Promise<{
+    pipeline: BuildPipeline;
+    delivery: PipelineQueuedSteerDelivery;
+    notice?: string;
+  }> {
+    return this.userMessages.steerQueuedMessage(pipelineId, messageId);
+  }
+
+  removeQueuedMessage(
+    pipelineId: string,
+    messageId: string,
+  ): Promise<{ pipeline: BuildPipeline; removed: boolean }> {
+    return this.userMessages.removeQueuedMessage(pipelineId, messageId);
   }
 
   retryReview(pipelineId: string): Promise<BuildPipeline> {

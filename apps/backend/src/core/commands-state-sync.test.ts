@@ -5160,6 +5160,14 @@ describe("build pipeline commands", () => {
       operation: "retry-interaction",
       id,
     }));
+    const steerQueuedMessage = mock(async (id: string, messageId: string) => ({
+      pipeline: { operation: "steer-queued", id, messageId },
+      delivery: "steered",
+    }));
+    const removeQueuedMessage = mock(async (id: string, messageId: string) => ({
+      pipeline: { operation: "remove-queued", id, messageId },
+      removed: true,
+    }));
     const supervisor = {
       start,
       pause,
@@ -5169,6 +5177,8 @@ describe("build pipeline commands", () => {
       remove,
       sendMessage,
       steerMessage,
+      steerQueuedMessage,
+      removeQueuedMessage,
       retryReview,
       retryStage,
       restartStep,
@@ -5218,6 +5228,24 @@ describe("build pipeline commands", () => {
           delivery: "steered",
         });
         expect(steerMessage).toHaveBeenCalledWith("pipeline-1", "use the existing helper");
+        await expect(
+          invoke("steer_queued_build_pipeline_message", {
+            pipelineId: "pipeline-1",
+            messageId: "message-1",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "steer-queued", id: "pipeline-1", messageId: "message-1" },
+          delivery: "steered",
+        });
+        await expect(
+          invoke("remove_queued_build_pipeline_message", {
+            pipelineId: "pipeline-1",
+            messageId: "message-2",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "remove-queued", id: "pipeline-1", messageId: "message-2" },
+          removed: true,
+        });
         await expect(
           invoke("retry_build_pipeline_review", {
             pipelineId: "pipeline-1",
@@ -5440,6 +5468,14 @@ describe("build pipeline commands", () => {
           },
         ],
         ["steer_build_pipeline", { pipelineId: "pipeline-1", text: "hello" }],
+        [
+          "steer_queued_build_pipeline_message",
+          { pipelineId: "pipeline-1", messageId: "message-1" },
+        ],
+        [
+          "remove_queued_build_pipeline_message",
+          { pipelineId: "pipeline-1", messageId: "message-1" },
+        ],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
         ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
         ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],

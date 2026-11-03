@@ -1,22 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowDown } from "lucide-react";
 import {
-  MAX_PIPELINE_USER_MESSAGE_LENGTH,
   REVIEW_PACKAGE_SESSION_LABEL,
   isSupersededPipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import {
-  SESSION_ACTION_SLASH_COMMANDS,
-  parseLeadingSlashCommand,
-} from "@orkestrator/protocol/agent-slash-commands";
-import {
-  useBuildPipelineStore,
-  type BuildPipeline,
-  type PipelineSession,
-} from "@/stores/buildPipelineStore";
-import * as backend from "@/lib/backend";
+import { type BuildPipeline, type PipelineSession } from "@/stores/buildPipelineStore";
 import {
   hydrateBuildPipeline,
   isBuildPipelineTranscriptStale,
@@ -31,8 +20,6 @@ import {
   showOnlyFinalVerificationMessage,
 } from "@orkestrator/protocol/structured-review-transcript";
 import { useVirtuosoScrollState } from "@/hooks";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -41,6 +28,7 @@ import { getNativeMessageSearchText } from "@/components/chat/native-message-sea
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { PipelineMessageComposer, usePipelineMessageComposer } from "./PipelineMessageComposer";
 import { toPipelineTranscript } from "./pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
@@ -162,15 +150,12 @@ export function PipelineSessionTranscript({
   containerId,
   composer,
 }: PipelineSessionTranscriptProps) {
-  const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   // Keeping the last session while another view is shown keeps the list, and
   // the reader's place in it, rather than emptying and remounting it.
   const [keptKey, setKeptKey] = useState(requested?.sessionKey);
   if (requested && requested.sessionKey !== keptKey) setKeptKey(requested.sessionKey);
   const session =
     requested ?? pipeline.sessions.find((candidate) => candidate.sessionKey === keptKey);
-  const [draft, setDraft] = useState("");
-  const [sendPending, setSendPending] = useState(false);
   // Stands in for messages that carry no time of their own when the stage has
   // no start time either; fixed so their rows do not drift on every update.
   const [transcriptFallbackCreatedAt] = useState(() => new Date().toISOString());
@@ -341,44 +326,12 @@ export function PipelineSessionTranscript({
   // Pause/cancel abort errors can leave a session at "running" after the
   // pipeline itself has stopped, so the footer only shimmers while it runs.
   const showThinking = visible && pipelineActive && session?.status === "running";
-  const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
-
-  const sendMessage = async (): Promise<void> => {
-    const text = draft.trim();
-    if (!text || sendPending) return;
-    // `/steer` reaches the turn the agent is running now. Queueing it like a
-    // message would hold it until the agent goes idle, which in a pipeline is
-    // when the stage ends and the work moves on to review.
-    const command = parseLeadingSlashCommand(text);
-    const steer = command?.name === "/steer";
-    if (steer && !command.arguments?.trim()) {
-      toast.error(SESSION_ACTION_SLASH_COMMANDS["/steer"]!.requiresArguments);
-      return;
-    }
-    setSendPending(true);
-    try {
-      if (steer) {
-        const result = await backend.steerBuildPipeline(pipeline.id, command.arguments!.trim());
-        replacePipeline(result.pipeline);
-        if (result.delivery === "steered") {
-          toast.success("Sent to the active turn");
-        } else {
-          toast.info("Could not steer the live turn, so the message was queued.");
-        }
-      } else {
-        replacePipeline(await backend.sendBuildPipelineMessage(pipeline.id, text));
-      }
-      // Cleared only after the backend has durably queued it, so a failed send
-      // leaves the user's text in the box to retry rather than losing it.
-      setDraft("");
-    } catch (error) {
-      toast.error("Failed to send the message", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setSendPending(false);
-    }
-  };
+  const composerState = usePipelineMessageComposer({
+    pipeline,
+    session,
+    agent: displayedAgent,
+    agentLabel,
+  });
 
   const showReviewReport = visible && reviewReport !== undefined;
   return (
@@ -474,8 +427,6 @@ export function PipelineSessionTranscript({
         </RichTranscriptScopeContext.Provider>
       </div>
       {visible && (composer || !isAtBottom) && (
-        // The native tabs dock their composer as a floating card rather than a
-        // bordered footer strip, so this matches that shape.
         <div className="shrink-0 px-3 pt-2 pb-4">
           {!isAtBottom && (
             <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
@@ -490,48 +441,7 @@ export function PipelineSessionTranscript({
               </button>
             </div>
           )}
-          {composer && (
-            <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
-              {queuedMessages > 0 && (
-                <div className="mb-1.5 text-[11px] text-muted-foreground">
-                  {queuedMessages === 1
-                    ? "1 message queued — it will be delivered when the agent is next idle."
-                    : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
-                </div>
-              )}
-              <div className="flex items-end gap-2">
-                <Textarea
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
-                  rows={2}
-                  className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
-                  placeholder="Send a message to the agent..."
-                  aria-label="Send a message to the agent"
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || event.shiftKey) return;
-                    event.preventDefault();
-                    void sendMessage();
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="icon"
-                  className="h-7 w-7 rounded-lg transition-colors"
-                  title="Send message"
-                  aria-label="Send message"
-                  disabled={sendPending || draft.trim().length === 0}
-                  onClick={() => void sendMessage()}
-                >
-                  {sendPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ArrowUp className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-          )}
+          {composer && <PipelineMessageComposer state={composerState} />}
         </div>
       )}
     </div>

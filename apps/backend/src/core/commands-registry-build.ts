@@ -73,6 +73,21 @@ export function registerBuildPipelineCommands(
       asString(text, "text"),
     );
   });
+  // The queue's Steer button: moves one queued message into the running turn.
+  register("steer_queued_build_pipeline_message", ({ pipelineId, messageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.steerQueuedMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(messageId, "messageId"),
+    );
+  });
+  register("remove_queued_build_pipeline_message", ({ pipelineId, messageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.removeQueuedMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(messageId, "messageId"),
+    );
+  });
   // Retained for existing command clients that explicitly re-review a working
   // tree, including from a failed pipeline. The header uses current-step restart.
   register("retry_build_pipeline_review", ({ pipelineId }, context) => {

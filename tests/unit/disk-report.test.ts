@@ -103,12 +103,19 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
+    // The host's Docker daemon is not under test: `docker system df` alone
+    // took over six seconds on a shared host, past this test's deadline. A
+    // stub that fails is "Docker cannot be asked", which drops the Docker rows.
+    const fakeBin = path.join(root, "bin");
+    await mkdir(fakeBin);
+    await writeFile(path.join(fakeBin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
           ...process.env,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: root,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),

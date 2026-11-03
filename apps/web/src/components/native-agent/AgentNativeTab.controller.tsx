@@ -122,6 +122,7 @@ import {
   openInBrowser,
   recoverMultiReviewFixSession,
   writeCoordinatorAttachment,
+  writeBugReportAttachment,
 } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
@@ -327,7 +328,8 @@ export function SharedNativeAgentController({
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   // A bug report's session runs in its own scratch directory, like a
   // coordinator without an Environment record or pane layout behind it.
-  const isBugReport = bugReportIdFromRuntimeId(data.environmentId) !== null;
+  const reportId = bugReportIdFromRuntimeId(data.environmentId);
+  const isBugReport = reportId !== null;
   const hasEnvironmentRecord = !isReadOnlyCoordinator && !isBugReport;
   const platform = data.platform!;
   const adapter = getNativeAgentAdapter(platform);
@@ -2588,18 +2590,18 @@ export function SharedNativeAgentController({
     },
     [sessionKey, updateDraft],
   );
-  const writeCoordinatorImage = useCallback(
+  const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
-      writeCoordinatorAttachment(data.environmentId, filename, base64Data),
-    [data.environmentId],
+      reportId
+        ? writeBugReportAttachment(reportId, filename, base64Data)
+        : writeCoordinatorAttachment(data.environmentId, filename, base64Data),
+    [data.environmentId, reportId],
   );
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: data.containerId ?? null,
-    worktreePath: isReadOnlyCoordinator
-      ? undefined
-      : (environment?.worktreePath ?? (isBugReport ? coordinatorWorkspacePath : undefined)),
-    writeImage: isReadOnlyCoordinator ? writeCoordinatorImage : undefined,
+    worktreePath: isReadOnlyCoordinator || isBugReport ? undefined : environment?.worktreePath,
+    writeImage: isReadOnlyCoordinator || isBugReport ? writeSpecialImage : undefined,
     onAttach: handlePastedImage,
     canAttachImage: () =>
       !queueEditPendingRef.current &&

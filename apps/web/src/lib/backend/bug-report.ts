@@ -24,6 +24,12 @@ export const saveBugReportScreenshot = (
 ): Promise<{ path: string; snapshot: BugReportSnapshot }> =>
   invoke("save_bug_report_screenshot", { reportId, base64Data });
 
+export const writeBugReportAttachment = (
+  reportId: string,
+  filename: string,
+  base64Data: string,
+): Promise<string> => invoke("write_bug_report_attachment", { reportId, filename, base64Data });
+
 export const fileBugReport = (
   reportId: string,
   issue: { title: string; body: string; via?: "browser" },

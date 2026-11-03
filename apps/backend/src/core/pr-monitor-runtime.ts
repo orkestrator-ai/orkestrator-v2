@@ -26,6 +26,8 @@ import {
   prViewerRepository,
 } from "./pr-viewer-permission.js";
 import { PrRequiredChecksCache } from "./pr-required-checks.js";
+import { ProjectCheckoutMergeFollower } from "./project-checkout-merge-follow.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");
@@ -55,6 +57,8 @@ export type PrMonitorRuntimeOptions = {
   scheduleMergeCleanup?: MergeCleanupScheduler;
   /** Clock and timers for deterministic runtime integration tests. */
   timing?: Pick<PrMonitorServiceOptions, "schedule" | "cancel" | "monotonicNow" | "random">;
+  /** Follows merges into project checkouts; tests pass one with their own timers. */
+  checkoutFollower?: ProjectCheckoutMergeFollower;
 };
 
 /**
@@ -88,9 +92,12 @@ export class PrMonitorRuntime {
    * re-read the summary; uneventful events (another error, the same rollup) do not.
    */
   private readonly relayedInputs = new Map<string, string>();
+  /** Fast-forwards a project's checkout after one of its environments' PRs merged. */
+  readonly checkoutFollower: ProjectCheckoutMergeFollower;
 
   constructor(private readonly options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
+    this.checkoutFollower = options.checkoutFollower ?? new ProjectCheckoutMergeFollower();
   }
 
   /** The polling service; callers reach it at call time, never hold it. */
@@ -197,6 +204,37 @@ export class PrMonitorRuntime {
   }
 
   /**
+   * Brings the project's checkout up to date with a merge, so its coordinator
+   * (and project home) read the merged code: fetches and fast-forwards
+   * whenever Git can do so cleanly, retrying while a turn holds the checkout
+   * (`project-checkout-merge-follow.ts`). Every merge path calls this: the
+   * backend's own merge commands when GitHub confirms the merge, and the
+   * monitor's terminal follow-up for a merge made anywhere else. The project
+   * home's own PR is not followed: its checkout is the PR's branch, not the
+   * base it merged into. Only a project with a coordinator or a project home
+   * is touched, since nothing else reads that checkout. Never throws.
+   */
+  followMergeIntoProjectCheckout(
+    environment: Pick<Environment, "projectId" | "prUrl" | "projectHome">,
+    context: CommandContext,
+  ): void {
+    if (this.closedService || isProjectHomeEnvironment(environment)) return;
+    const projectGit = context.projectGit;
+    const projectId = environment.projectId;
+    if (!projectGit || !projectId) return;
+    void (async () => {
+      const followed =
+        (await context.storage.coordinators.getCoordinatorWorkspace(projectId)) !== null ||
+        (await context.storage.getEnvironmentsByProject(projectId)).some(isProjectHomeEnvironment);
+      if (followed && !this.closedService) {
+        this.checkoutFollower.follow(projectId, projectGit, environment.prUrl ?? undefined);
+      }
+    })().catch((error: unknown) => {
+      log.warn("checkout.follow-merge-lookup-failed", { error: formatLogError(error) });
+    });
+  }
+
+  /**
    * The service's terminal follow-up, called once the terminal state is
    * persisted and the linked task is reconciled, so a cleanup deletion can no
    * longer orphan the task comment. The scheduler reads the durable cleanup
@@ -208,6 +246,15 @@ export class PrMonitorRuntime {
     observation: { url: string; state: "merged" | "closed" },
   ): void {
     if (this.closedService || observation.state !== "merged" || !this.context) return;
+    const context = this.context;
+    void Promise.resolve()
+      .then(() => context.storage.getEnvironment(environmentId))
+      .then((environment) => {
+        if (environment?.prUrl === observation.url) {
+          this.followMergeIntoProjectCheckout(environment, context);
+        }
+      })
+      .catch(() => undefined);
     if (this.scheduleMergeCleanup) {
       this.scheduleMergeCleanup(environmentId, this.context);
       return;
@@ -313,6 +360,7 @@ export class PrMonitorRuntime {
     this.viewerPermissions.clear();
     this.requiredChecks.clear();
     this.relayedInputs.clear();
+    this.checkoutFollower.shutdown();
     const monitor = this.monitor;
     this.monitor = null;
     monitor?.service.shutdown();

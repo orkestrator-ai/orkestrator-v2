@@ -193,19 +193,19 @@ describe("client state commands", () => {
     });
   }
 
-  test("advertise every capability", async () => {
+  test("advertise every capability but the retired auto-merge setting", async () => {
     await withCommands({}, async (call) => {
       expect(await call("get_client_state_capabilities")).toEqual({
         coordinatorPaneLayouts: true,
         coordinatorUpstreamMerge: true,
-        coordinatorUpstreamAutoMerge: true,
+        coordinatorUpstreamAutoMerge: false,
         noticeDismissals: true,
         environmentAttention: true,
       });
     });
   });
 
-  test("the upstream merge offer honours stored declines and running turns", async () => {
+  test("a mergeable checkout is always merged automatically, except under a running turn", async () => {
     let busy = false;
     let fetches = 0;
     const projectGit = {
@@ -219,15 +219,7 @@ describe("client state commands", () => {
       expect(await call("check_coordinator_upstream_merge", { projectId })).toEqual({
         offer: true,
         status: behind,
-      });
-      await call("decline_coordinator_upstream_merge", {
-        projectId,
-        upstream: "origin/main",
-        upstreamCommit: behind.upstreamCommit,
-      });
-      expect(await call("check_coordinator_upstream_merge", { projectId })).toMatchObject({
-        offer: false,
-        reason: "declined",
+        automatic: true,
       });
       busy = true;
       const before = fetches;
@@ -243,39 +235,42 @@ describe("client state commands", () => {
     });
   });
 
-  test("auto-merge makes the offer automatic, past a decline, until it is turned off", async () => {
+  test("a decline or the auto-merge setting an older client stores no longer holds a merge back", async () => {
     const projectGit = { isCheckoutBusy: async () => false, fetch: async () => behind };
     await withCommands(projectGit, async (call, projectId) => {
-      expect(await call("get_coordinator_upstream_auto_merge", { projectId })).toEqual({
-        enabled: false,
-      });
       await call("decline_coordinator_upstream_merge", {
         projectId,
         upstream: "origin/main",
         upstreamCommit: behind.upstreamCommit,
       });
       expect(
-        await call("set_coordinator_upstream_auto_merge", { projectId, enabled: true }),
-      ).toEqual({ enabled: true });
-      expect(await call("get_coordinator_upstream_auto_merge", { projectId })).toEqual({
-        enabled: true,
-      });
+        await call("set_coordinator_upstream_auto_merge", { projectId, enabled: false }),
+      ).toEqual({ enabled: false });
       expect(await call("check_coordinator_upstream_merge", { projectId })).toEqual({
         offer: true,
         status: behind,
         automatic: true,
       });
-      await call("set_coordinator_upstream_auto_merge", { projectId, enabled: false });
-      expect(await call("check_coordinator_upstream_merge", { projectId })).toMatchObject({
-        offer: false,
-        reason: "declined",
-      });
+      // The retired commands still validate what older clients send.
       await expect(
         call("set_coordinator_upstream_auto_merge", { projectId, enabled: "yes" }),
       ).rejects.toThrow("enabled must be a boolean");
       await expect(
         call("set_coordinator_upstream_auto_merge", { projectId: "missing", enabled: true }),
       ).rejects.toThrow("Project not found");
+    });
+  });
+
+  test("a blocked checkout is not offered", async () => {
+    const projectGit = {
+      isCheckoutBusy: async () => false,
+      fetch: async () => ({ ...behind, trackedChanges: 1 }),
+    };
+    await withCommands(projectGit, async (call, projectId) => {
+      expect(await call("check_coordinator_upstream_merge", { projectId })).toMatchObject({
+        offer: false,
+        reason: "blocked",
+      });
     });
   });
 

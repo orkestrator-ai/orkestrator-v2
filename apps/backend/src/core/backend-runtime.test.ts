@@ -338,7 +338,10 @@ describe("two BackendRuntimes in one process", () => {
     const second = runtimeWithScheduler("second");
     const contextWithNoEnvironments = (runtime: BackendRuntime): CommandContext => ({
       ...contextFor(runtime),
-      storage: { loadEnvironments: async () => [] } as unknown as StorageService,
+      storage: {
+        loadEnvironments: async () => [],
+        getEnvironment: async () => null,
+      } as unknown as StorageService,
     });
     await first.prMonitor.sync(contextWithNoEnvironments(first));
     await second.prMonitor.sync(contextWithNoEnvironments(second));

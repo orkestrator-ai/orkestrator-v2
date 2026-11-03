@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { ProjectGitStatus } from "./coordinator.js";
 import {
   behindFastForwardBlocker,
+  canFastForwardUpstream,
   decideUpstreamMergeOffer,
   parseCoordinatorUpstreamAutoMerge,
   parseCoordinatorUpstreamMergeCheck,
-  shouldOfferUpstreamMerge,
 } from "./coordinator-upstream-merge.js";
 
 const tip = "b".repeat(40);
@@ -36,9 +36,9 @@ const behind: ProjectGitStatus = {
   lastError: null,
 };
 
-describe("shouldOfferUpstreamMerge", () => {
-  test("asks when the checkout can fast-forward to unmerged upstream commits", () => {
-    expect(shouldOfferUpstreamMerge(behind, undefined)).toBe(true);
+describe("canFastForwardUpstream", () => {
+  test("is true when the checkout can fast-forward to unmerged upstream commits", () => {
+    expect(canFastForwardUpstream(behind)).toBe(true);
   });
 
   test.each([
@@ -46,8 +46,8 @@ describe("shouldOfferUpstreamMerge", () => {
     ["no upstream", { ...behind, upstream: null, behind: null }],
     ["up to date", { ...behind, behind: 0 }],
     ["unknown distance", { ...behind, behind: null }],
-  ])("does not ask with %s", (_label, status) => {
-    expect(shouldOfferUpstreamMerge(status, undefined)).toBe(false);
+  ])("is false with %s", (_label, status) => {
+    expect(canFastForwardUpstream(status)).toBe(false);
   });
 
   test.each([
@@ -59,73 +59,35 @@ describe("shouldOfferUpstreamMerge", () => {
       { ...behind, mergeInProgress: true, repositoryOperationBlockedReason: "Finish the merge." },
       "Finish the merge.",
     ],
-  ])("does not ask when %s block the fast-forward", (_label, status, reason) => {
+  ])("is false when %s block the fast-forward", (_label, status, reason) => {
     expect(behindFastForwardBlocker(status)).toContain(reason);
-    expect(shouldOfferUpstreamMerge(status, undefined)).toBe(false);
-  });
-
-  test("a decline holds while the upstream tip is unchanged", () => {
-    expect(shouldOfferUpstreamMerge(behind, { upstream: "origin/main", upstreamCommit: tip })).toBe(
-      false,
-    );
-    // More local catch-up does not change the answer for the same tip.
-    expect(
-      shouldOfferUpstreamMerge(
-        { ...behind, behind: 1 },
-        { upstream: "origin/main", upstreamCommit: tip },
-      ),
-    ).toBe(false);
-  });
-
-  test("asks again once a new upstream commit arrives", () => {
-    const declined = { upstream: "origin/main", upstreamCommit: tip };
-    expect(shouldOfferUpstreamMerge({ ...behind, upstreamCommit: "c".repeat(40) }, declined)).toBe(
-      true,
-    );
-  });
-
-  test("a decline for another upstream does not apply", () => {
-    expect(
-      shouldOfferUpstreamMerge(behind, { upstream: "origin/release", upstreamCommit: tip }),
-    ).toBe(true);
-  });
-
-  test("a status without the upstream tip cannot match a decline, so it asks", () => {
-    const { upstreamCommit: _omitted, ...legacy } = behind;
-    expect(shouldOfferUpstreamMerge(legacy, { upstream: "origin/main", upstreamCommit: tip })).toBe(
-      true,
-    );
+    expect(canFastForwardUpstream(status)).toBe(false);
   });
 });
 
 describe("decideUpstreamMergeOffer", () => {
-  test("names why it does not ask", () => {
-    expect(decideUpstreamMergeOffer(behind, null)).toEqual({ offer: true, status: behind });
-    expect(decideUpstreamMergeOffer(null, null)).toMatchObject({ reason: "no-status" });
-    expect(decideUpstreamMergeOffer({ ...behind, behind: 0 }, null)).toMatchObject({
-      reason: "not-behind",
-    });
-    expect(decideUpstreamMergeOffer({ ...behind, ahead: 1 }, null)).toMatchObject({
-      reason: "blocked",
-    });
-    expect(
-      decideUpstreamMergeOffer(behind, { upstream: "origin/main", upstreamCommit: tip }),
-    ).toMatchObject({ offer: false, reason: "declined" });
-  });
-
-  test("auto-merge merges without asking, past a decline, but never a blocked checkout", () => {
-    const declined = { upstream: "origin/main", upstreamCommit: tip };
-    expect(decideUpstreamMergeOffer(behind, declined, { autoMerge: true })).toEqual({
+  test("always merges a checkout that can fast-forward, without asking", () => {
+    expect(decideUpstreamMergeOffer(behind)).toEqual({
       offer: true,
       status: behind,
       automatic: true,
     });
-    expect(
-      decideUpstreamMergeOffer({ ...behind, ahead: 1 }, null, { autoMerge: true }),
-    ).toMatchObject({ offer: false, reason: "blocked" });
-    expect(
-      decideUpstreamMergeOffer({ ...behind, behind: 0 }, null, { autoMerge: true }),
-    ).toMatchObject({ offer: false, reason: "not-behind" });
+  });
+
+  test("names why it does not merge", () => {
+    expect(decideUpstreamMergeOffer(null)).toMatchObject({ reason: "no-status" });
+    expect(decideUpstreamMergeOffer({ ...behind, behind: 0 })).toMatchObject({
+      offer: false,
+      reason: "not-behind",
+    });
+    expect(decideUpstreamMergeOffer({ ...behind, ahead: 1 })).toMatchObject({
+      offer: false,
+      reason: "blocked",
+    });
+    expect(decideUpstreamMergeOffer({ ...behind, trackedChanges: 2 })).toMatchObject({
+      offer: false,
+      reason: "blocked",
+    });
   });
 
   test("answers parse back, and malformed ones are refused", () => {

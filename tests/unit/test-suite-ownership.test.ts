@@ -252,6 +252,8 @@ describe("test suite ownership", () => {
       // Build discovery must match the bridges desktop profiles build and check.
       "tests/unit/bridge-packaging.test.ts",
       "tests/unit/codex-bridge-environment.test.ts",
+      // Root launch arguments must agree with Docker scripts and image ownership.
+      "tests/unit/container-root-boundary.test.ts",
       // The disk report reads the database the backend writes, without migrating it.
       "tests/unit/disk-report.test.ts",
       "tests/unit/components/GitHubCloneIntegration.test.tsx",

@@ -645,13 +645,13 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- No dynamic testing was done. In particular, run H1/M1/M2 in Chromium and Safari, H3 against rootful and rootless Docker, and H2 against a built image.
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). Dynamic testing remains for H1/M1/M2 in Chromium and Safari and H3 against rootful and rootless Docker.
 
 ## 9. Recommended remediation order
 
 1. **H1 + M1.** Replace the token-valued cookie with an opaque session. Add a server-side `CSP: sandbox` on legacy previews and make the isolated transport the default. Together these close the cleanest container → host path.
 2. **H3.** `lstat` and realpath the `.env`/`opencode.json` sources and copy them instead of bind-mounting. This is a small change with large impact.
-3. **H2.** Fix the root PATH on root execs, stop root sourcing `node`-owned files, and make `/usr/local/share` root-owned.
+3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The remaining follow-up is retiring in-container firewall enforcement, tracked in todo 0018 task 4 after gateway qualification.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.

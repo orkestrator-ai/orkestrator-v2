@@ -13,6 +13,8 @@ import type {
 import type { StorageContext } from "./storage-context.js";
 import type { EnvironmentAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 const log = createLogger("storage");
 
@@ -99,6 +101,10 @@ export class StorageChanges {
    * Announces a committed mutation. Called only after the write has landed, so
    * a client that refetches in response is guaranteed to observe the new value
    * rather than race the write it was told about.
+   *
+   * A `native-agent-session` change carries its `cause` (todo 0049 task 4)
+   * and is counted by it in `nativeSessionInvalidationMetrics`; one that
+   * arrives without a cause is counted as a dropped label.
    */
   announce(
     resource: ResourceKind,
@@ -106,10 +112,13 @@ export class StorageChanges {
     projectId?: string,
     scope_?: { agent: string; logicalSessionKey: string },
     deleted = false,
+    cause?: NativeSessionInvalidationCause,
   ): void {
     // Announce-after-commit: an open atomic scope commits first, then replays these.
     if (
-      this.context.deferUntilCommit(() => this.announce(resource, id, projectId, scope_, deleted))
+      this.context.deferUntilCommit(() =>
+        this.announce(resource, id, projectId, scope_, deleted, cause),
+      )
     ) {
       return;
     }
@@ -121,7 +130,14 @@ export class StorageChanges {
       ...(projectId ? { projectId } : {}),
       ...(scope_ ? scope_ : {}),
       ...(deleted ? { deleted: true } : {}),
+      ...(cause ? { cause } : {}),
     };
+    if (resource === "native-agent-session") {
+      nativeSessionInvalidationMetrics.record(
+        cause as NativeSessionInvalidationCause,
+        scope_?.agent,
+      );
+    }
     const journalEntry = {
       change,
       ...(RESOURCE_MANIFEST_KINDS.includes(resource as ResourceManifestKind)

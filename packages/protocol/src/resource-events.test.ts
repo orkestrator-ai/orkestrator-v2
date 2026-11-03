@@ -69,6 +69,15 @@ describe("isResourceChange", () => {
     );
   });
 
+  test("accepts a native session cause, a newer backend's included, and rejects a malformed one", () => {
+    const native = { resource: "native-agent-session" as const, id: "env-1" };
+    expect(isResourceChange(change({ ...native, cause: "discovery-renewal" }))).toBe(true);
+    expect(isResourceChange({ ...(change(native) as object), cause: "a-later-cause" })).toBe(true);
+    for (const cause of ["", 7, "x".repeat(65)]) {
+      expect(isResourceChange({ ...(change(native) as object), cause })).toBe(false);
+    }
+  });
+
   test("accepts a change carrying extra fields", () => {
     expect(isResourceChange({ ...(change() as object), extra: "ignored" })).toBe(true);
   });

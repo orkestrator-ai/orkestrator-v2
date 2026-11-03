@@ -8,6 +8,8 @@
  * a client never has to trust a partial snapshot delivered out of band.
  */
 
+import type { NativeSessionInvalidationCause } from "./native-agent-observation.js";
+
 /** Persistent resources the backend owns and broadcasts changes for. */
 export const RESOURCE_KINDS = [
   "project",
@@ -219,6 +221,13 @@ export interface ResourceChange {
   /** The named scope was removed; clients still verify through its authoritative read. */
   deleted?: boolean;
   /**
+   * Why a `native-agent-session` change was announced: a content-free tag
+   * from `NATIVE_SESSION_INVALIDATION_CAUSES`. Diagnostic only; a client
+   * re-reads the same way whatever it says, and a newer backend may send one
+   * this client does not know.
+   */
+  cause?: NativeSessionInvalidationCause;
+  /**
    * Monotonic per-backend sequence number. Strictly increasing across every
    * resource kind, so a client can order changes and detect that it missed a
    * window without needing per-resource bookkeeping.
@@ -355,6 +364,10 @@ export function isResourceChange(value: unknown): value is ResourceChange {
         candidate.logicalSessionKey.length <= 4_096)) &&
     (candidate.agent === undefined) === (candidate.logicalSessionKey === undefined) &&
     (candidate.deleted === undefined || typeof candidate.deleted === "boolean") &&
+    (candidate.cause === undefined ||
+      (typeof candidate.cause === "string" &&
+        candidate.cause.length > 0 &&
+        candidate.cause.length <= 64)) &&
     typeof candidate.revision === "number" &&
     Number.isSafeInteger(candidate.revision) &&
     candidate.revision > 0

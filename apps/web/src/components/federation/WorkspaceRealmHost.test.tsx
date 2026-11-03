@@ -544,3 +544,64 @@ for (const ensured of [false, true]) {
     expect(screen.getByLabelText("Visible workspace").textContent).toBe("coordinator");
   });
 }
+
+test("remote worker selection activates its delegated tab after delayed realm layout hydration", async () => {
+  const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
+  const original = usePaneLayoutStore.getState();
+  try {
+    usePaneLayoutStore.setState({ environments: new Map(), hydration: new Map() });
+    openRealm({
+      projectId: project.id,
+      environmentId: home.id,
+      workTarget: {
+        type: "worker-tab",
+        projectId: project.id,
+        environmentId: home.id,
+        tabId: "delegated",
+      },
+    });
+    await act(async () => resolveProjects([project]));
+    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(home.id));
+    act(() =>
+      usePaneLayoutStore.setState({
+        activeEnvironmentId: home.id,
+        hydration: new Map([[home.id, "done"]]),
+        environments: new Map([
+          [
+            home.id,
+            {
+              containerId: null,
+              root: {
+                kind: "leaf",
+                id: "pane",
+                tabs: [
+                  { id: "terminal", type: "plain" },
+                  {
+                    id: "delegated",
+                    type: "agent-native",
+                    nativeAgentData: { environmentId: home.id, platform: "codex" },
+                  },
+                ],
+                activeTabId: "terminal",
+              },
+              activePaneId: "pane",
+              minimizedPaneIds: [],
+            },
+          ],
+        ]),
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getAllTabs(home.id)
+          .find((tab) => tab.id === "delegated"),
+      ).toBeDefined(),
+    );
+    const layout = usePaneLayoutStore.getState().environments.get(home.id)!;
+    expect(layout.root).toHaveProperty("activeTabId", "delegated");
+  } finally {
+    usePaneLayoutStore.setState(original, true);
+  }
+});

@@ -1,7 +1,7 @@
 # Native command filtering observes an extra projection read
 
 - **ID:** 0722
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-24
 - **Test:** `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`, `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx:607`.
 - **Original command:** `ORKESTRATOR_TEST_AREA_BASE=8454d18b8648d7482897c2544b538f0d915bc18c mise run test:logged -- --name merge-repository -- mise run test`, merging parents `e35d581044e5627566c5dbe06f908977ced611e3` and `712274379cc0a83226b8d2ab4b04e9a329fbcb14` on macOS with Bun 1.4.3. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; the web package used two isolated Bun workers alongside nine component-browser workers and other worktrees.
@@ -196,3 +196,20 @@ passed in 7.8 s on detached `origin/main` at `6c7539617`, with independently
 installed dependencies. Earlier attempts without `NODE_ENV=test` loaded
 production React (`React.act` unavailable) on both branches; those attempts
 do not test the projection-read assertion. No owning source or test changed.
+
+
+## Coordinator Work panel repair — 2026-11-03
+
+Preparation at `f4585a0b658be9e967463f3bb29a9cf826cb050c` recorded
+three projection reads instead of one in `mise run test` (two web workers).
+Evidence: `.orkestrator/review-artifacts/review-validation-9b70401f-1d7f-4fe4-83b2-c5065b3c50ed/validation-04.stdout.txt`, lines 3645–3652.
+The test renders 512 command options across twenty keystrokes. The session's
+read coordinator continues periodic projection reads on the wall clock while
+this happens, so the assertion counted background reads as typing-triggered
+reads whenever rendering crossed the refresh cadence.
+
+The repair injects the existing manual `FakeClock` into the shared read
+coordinator for this test, leaving typing, filtering and read-count assertions
+intact. Cleanup unmounts the component and restores the default coordinator.
+The complete owner passed with `mise run test:logged -- --name command-regression -- bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.commands.test.tsx --parallel=1 --only-failures` (2.0 s).
+Parallel verification passed with `mise run test:logged -- --name command-parallel -- bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.commands.test.tsx src/components/projects/CoordinatorPanel.test.tsx src/components/projects/useCoordinatorWorkItems.test.tsx --parallel=2 --only-failures` (11.4 s), including the changed coordinator tests. Aggregate verification is recorded in this repair's fix result.

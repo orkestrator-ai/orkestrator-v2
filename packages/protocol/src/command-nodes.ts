@@ -581,10 +581,21 @@ export function deriveNodeMode(input: {
 }
 
 /**
+ * Reads whose names put the verb last. Graph run commands name the run first
+ * (`graph_run_get`), so the verb rule below cannot see them; without this a
+ * routed read of a run on another node would count as a write.
+ */
+const NAMED_NODE_READ_COMMANDS: ReadonlySet<string> = new Set(["graph_run_get", "graph_runs_list"]);
+
+/**
  * Routed reads do not invalidate the machine’s project/environment summaries.
  * A read verb leads the name, optionally after one namespace
- * (`get_projects`, `changes_get_view`).
+ * (`get_projects`, `changes_get_view`), or the command is one of
+ * {@link NAMED_NODE_READ_COMMANDS}.
  */
 export function isNodeReadCommand(command: string): boolean {
-  return /^(?:[a-z0-9]+_)?(?:get|list|read|search|check|describe)_/.test(command);
+  return (
+    NAMED_NODE_READ_COMMANDS.has(command) ||
+    /^(?:[a-z0-9]+_)?(?:get|list|read|search|check|describe)_/.test(command)
+  );
 }

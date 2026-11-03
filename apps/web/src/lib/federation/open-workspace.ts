@@ -16,6 +16,7 @@ export interface MachineWorkspaceSpec {
   projectId: string;
   environmentId?: string;
   boardTab?: RealmBoardTab;
+  workTarget?: import("@/lib/coordinator-work-items").LocalWorkTarget;
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
   /**
@@ -65,6 +66,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
         projectId: spec.projectId,
         ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
         ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
+        ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
         title: spec.title,
       });
     return;
@@ -96,6 +98,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             projectId: spec.projectId,
             ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
             ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
+            ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
             ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },
   );

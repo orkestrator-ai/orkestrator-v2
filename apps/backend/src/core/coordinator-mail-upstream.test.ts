@@ -119,6 +119,25 @@ describe("fastForwardBeforeCoordinatorMail", () => {
     expect(git.sync).not.toHaveBeenCalled();
   });
 
+  test.each(["failure", "timeout"])("backs off repeated mail after %s", async (mode) => {
+    let now = 100;
+    const git = fakeGit({
+      fetch: mock(async () => {
+        if (mode === "failure") throw new Error("offline");
+        return new Promise<ProjectGitStatus>(() => undefined);
+      }),
+    });
+    const deps = { storage: storageWith(), git, timeoutMs: 1, now: () => now };
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe(
+      mode === "failure" ? "no-status" : "timed-out",
+    );
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe("cooldown");
+    expect(git.fetch).toHaveBeenCalledTimes(1);
+    now += 60_000;
+    await fastForwardBeforeCoordinatorMail(deps, runtimeId);
+    expect(git.fetch).toHaveBeenCalledTimes(2);
+  });
+
   test("never throws: a failing lookup or Git service reads as failed", async () => {
     const storage = {
       coordinators: {

@@ -42,6 +42,8 @@ export type CoordinatorMailUpstreamOutcome =
   | ProjectCheckoutFollowOutcome
   /** Not a coordinator, a side agent, or a coordinator that is not ready. */
   | "skipped"
+  /** Recent mail attempt, including a failed or timed-out fetch. */
+  | "cooldown"
   /** The fetch outlasted the bound; the mail went on without merging. */
   | "timed-out";
 
@@ -49,7 +51,13 @@ export interface CoordinatorMailUpstreamDeps {
   storage: Pick<StorageService, "coordinators">;
   git: ProjectCheckoutGit | undefined;
   timeoutMs?: number;
+  now?: () => number;
 }
+
+// Separate from fetchedAt: unsuccessful attempts must also back off. Weak keys
+// scope this bounded cache to the owning Git service/backend lifetime.
+const mailAttempts = new WeakMap<ProjectCheckoutGit, Map<string, number>>();
+const MAIL_ATTEMPT_COOLDOWN_MS = 60_000;
 
 /**
  * Fast-forwards the checkout behind `runtimeId` before mail is injected into
@@ -73,6 +81,14 @@ export async function fastForwardBeforeCoordinatorMail(
       return "skipped";
     }
     projectId = open.workspace.projectId;
+    const now = (deps.now ?? Date.now)();
+    const attempts = mailAttempts.get(git) ?? new Map<string, number>();
+    mailAttempts.set(git, attempts);
+    const previous = attempts.get(projectId);
+    if (previous !== undefined && now - previous < MAIL_ATTEMPT_COOLDOWN_MS) return "cooldown";
+    attempts.delete(projectId);
+    attempts.set(projectId, now);
+    if (attempts.size > 512) attempts.delete(attempts.keys().next().value!);
     let waiting = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const attempt = fastForwardProjectCheckout(git, projectId, {

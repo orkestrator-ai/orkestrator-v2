@@ -80,7 +80,8 @@ export function pendingCheckoutUpdate(
   };
 }
 
-const short = (commit: string | null) => (commit ? commit.slice(0, 12) : "an unknown commit");
+const short = (commit: string | null) =>
+  commit ? inline(commit.slice(0, 12)) : "an unknown commit";
 
 /**
  * Commit subjects and paths are repository content inside the coordinator
@@ -95,13 +96,13 @@ export function renderCheckoutUpdate(
   changes: CheckoutChanges | null,
 ): string {
   const onlyUpstream = update.sources.size === 1 && update.sources.has("upstream");
-  const branch = update.toBranch ?? "a detached HEAD";
+  const branch = inline(update.toBranch ?? "a detached HEAD");
   const range = `${short(update.fromCommit)} → ${short(update.toCommit)}`;
   let what: string;
   if (onlyUpstream) {
-    what = `was fast-forwarded to its upstream${upstream ? ` ${upstream}` : ""} (${branch}, ${range})`;
+    what = `was fast-forwarded to its upstream${upstream ? ` ${inline(upstream)}` : ""} (${branch}, ${range})`;
   } else if (update.fromBranch && update.toBranch && update.fromBranch !== update.toBranch) {
-    what = `moved from branch ${update.fromBranch} to ${update.toBranch} (${range})`;
+    what = `moved from branch ${inline(update.fromBranch)} to ${branch} (${range})`;
   } else {
     const how = update.sources.has("upstream")
       ? "was updated from its upstream and changed in other ways too"

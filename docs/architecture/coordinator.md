@@ -947,7 +947,12 @@ agent's question, a status notice), the backend does the same itself, since no
 client is involved (`coordinator-mail-upstream.ts`, the `beforeMailInject`
 hook of `NativeAgentService.dispatchMailInject`). It runs before the mail turn
 enters the session's dispatch fence, so the coordinator context block of that
-turn names the merged commit. The fetch is cooldown-bound and the wait for it
+turn names the merged commit. Independent environments drain mail concurrently
+from a snapshot of at most 100 pending entries; each environment retains serial
+delivery and batching. A slow coordinator fetch therefore does not block worker
+mail in the same pass. Mail attempts have a 60-second per-project backoff,
+including failed and timed-out attempts, separate from the successful-fetch
+cooldown. The fetch is cooldown-bound and the wait for it
 is capped at five seconds: past that the mail is delivered without merging,
 and the late fetch does not start a fast-forward afterwards. A fast-forward
 that has begun is finished first, because the turn's admission

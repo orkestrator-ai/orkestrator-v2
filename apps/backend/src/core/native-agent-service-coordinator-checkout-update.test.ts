@@ -21,7 +21,9 @@ import {
   createStorage,
   refusingInvoke,
 } from "./native-agent-service-projection-test-support.js";
-import type { CheckoutChanges } from "./project-git-service.js";
+import { ProjectGitService, type CheckoutChanges } from "./project-git-service.js";
+import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
+import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
 import { createProject } from "./storage.js";
 
 const before = "b".repeat(40);
@@ -31,6 +33,10 @@ async function withCoordinator(
   setup: {
     acknowledged?: number;
     events?: CoordinatorRepositoryContextEvent[];
+    configure?: (
+      storage: Awaited<ReturnType<typeof createStorage>>,
+      projectId: string,
+    ) => NativeAgentServiceOptions;
   },
   run: (context: {
     service: NativeAgentService;
@@ -78,7 +84,7 @@ async function withCoordinator(
       branch: "main",
       detached: false,
       unborn: false,
-      headCommit: after,
+      headCommit: setup.configure ? before : after,
       upstream: "origin/main",
       upstreamCommit: after,
       remote: "origin",
@@ -109,6 +115,7 @@ async function withCoordinator(
     provider: async () => provider.provider,
     beginCoordinatorTurn: () => () => undefined,
     coordinatorCheckoutChanges: changes,
+    ...setup.configure?.(storage, project.id),
   });
   const runtimeId = coordinatorRuntimeId("coordinator-1", "conversation-1");
   try {
@@ -117,7 +124,9 @@ async function withCoordinator(
       send: provider.send,
       changes,
       dispatch: (requestId) =>
-        service.dispatchPrompt({
+        (setup.configure
+          ? service.dispatchMailInject.bind(service)
+          : service.dispatchPrompt.bind(service))({
           environmentId: runtimeId,
           agent: "codex",
           logicalSessionKey: "coordinator-coordinator-1:conversation-1",
@@ -164,6 +173,77 @@ describe("coordinator checkout-update notice", () => {
 
         await dispatch("request-2");
         expect(send.mock.calls[1]![1]).not.toContain("Checkout update:");
+      },
+    );
+  });
+
+  test.each([false, true])("mail waits for sync beyond timeout (failure=%s)", async (fails) => {
+    let finish!: () => void;
+    let started!: () => void;
+    let timedOut!: () => void;
+    const syncStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const hookFinished = new Promise<void>((resolve) => {
+      timedOut = resolve;
+    });
+    await withCoordinator(
+      {
+        acknowledged: 3,
+        configure: (storage, projectId) => {
+          const git = new ProjectGitService(storage);
+          const sync = async () => {
+            started();
+            await new Promise<void>((resolve) => {
+              finish = resolve;
+            });
+            if (fails) throw new Error("offline");
+            await storage.coordinators.mutateCoordinatorWorkspace(projectId, (workspace) => ({
+              ...workspace!,
+              repositoryContextRevision: 4,
+              repositoryContextEvents: [{ ...fastForward, revision: 4 }],
+              repositoryStatus: { ...workspace!.repositoryStatus!, headCommit: after },
+            }));
+            return (await storage.coordinators.getCoordinatorWorkspace(projectId))!
+              .repositoryStatus!;
+          };
+          (git as unknown as { syncOnce: typeof sync }).syncOnce = sync;
+          git.isCheckoutBusy = async () => false;
+          git.fetch = async () =>
+            ({
+              projectId,
+              upstream: "origin/main",
+              upstreamCommit: after,
+              ahead: 0,
+              behind: 1,
+              trackedChanges: 0,
+              untrackedChanges: 0,
+              repositoryOperationBlockedReason: null,
+            }) as ProjectGitStatus;
+          return {
+            beforeMailInject: async (runtimeId) => {
+              expect(
+                await fastForwardBeforeCoordinatorMail({ storage, git, timeoutMs: 5 }, runtimeId),
+              ).toBe("timed-out");
+              timedOut();
+            },
+            waitForMergeSync: (id) => git.waitForMergeSync(id),
+            beginCoordinatorTurn: (id) => git.beginTurnAfterMergeSync(id),
+          };
+        },
+      },
+      async ({ dispatch, send, acknowledged }) => {
+        const delivery = dispatch("slow-sync");
+        await syncStarted;
+        await hookFinished;
+        expect(send).not.toHaveBeenCalled();
+        finish();
+        expect(await delivery).toMatchObject({ outcome: "accepted" });
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0]![1]).toContain(`Repository context revision: ${fails ? 3 : 4}`);
+        expect(send.mock.calls[0]![1]).toContain(`Commit: ${fails ? before : after}`);
+        if (!fails) expect(send.mock.calls[0]![1]).toContain(`abc1234 Fix the parser`);
+        expect(await acknowledged()).toBe(fails ? 3 : 4);
       },
     );
   });

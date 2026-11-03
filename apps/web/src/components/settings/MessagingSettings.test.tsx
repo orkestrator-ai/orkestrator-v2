@@ -10,7 +10,10 @@ import * as realBackend from "@/lib/backend";
 const getAgentMessagingSettings = mock(async (): Promise<AgentMessagingSettings> => ({
   ...DEFAULT_AGENT_MESSAGING_SETTINGS,
 }));
-const updateAgentMessagingSettings = mock(async (_settings: AgentMessagingSettings) => undefined);
+// The backend answers with the normalised settings it stored, never the config.
+const updateAgentMessagingSettings = mock(
+  async (settings: AgentMessagingSettings): Promise<AgentMessagingSettings> => settings,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackend,
@@ -43,7 +46,7 @@ beforeEach(() => {
   getAgentMessagingSettings.mockReset();
   getAgentMessagingSettings.mockResolvedValue({ ...DEFAULT_AGENT_MESSAGING_SETTINGS });
   updateAgentMessagingSettings.mockReset();
-  updateAgentMessagingSettings.mockResolvedValue(undefined);
+  updateAgentMessagingSettings.mockImplementation(async (settings) => settings);
 });
 
 afterEach(cleanup);

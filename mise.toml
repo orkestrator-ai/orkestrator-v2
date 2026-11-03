@@ -279,6 +279,11 @@ description = "Opt-in Chromium, Firefox and WebKit private-origin checks (set OR
 raw_args = true
 run = "bunx playwright test --config e2e/preview/playwright.preview.config.ts"
 
+[tasks."test:preview:webkit-libs"]
+description = "Prepare a private PLAYWRIGHT_BROWSERS_PATH whose WebKit has the Ubuntu 24.04 libraries an unsupported Linux host lacks"
+raw_args = true
+run = "bun scripts/playwright-webkit-host-libs.ts"
+
 [tasks."test:preview:bench"]
 description = "Opt-in loopback latency of the preview routes, and a loopback self-test of the two-machine baseline tool"
 # The bounded test console drops console.log unless asked; the numbers are the output.

@@ -254,6 +254,8 @@ export async function dispatchWorkerMailTurn(
     });
   if (!claim) return false;
   const previousRequestId = session.structuredRequestId;
+  const validationPlan =
+    pipeline.validationRun !== undefined || pipeline.activePromptContext?.validationPlan === true;
   try {
     if (pipeline.validationRun && !pipeline.reviewPackage) {
       const run = await ctx.invoke<ReviewValidationRun>("cancel_review_validation", {
@@ -279,6 +281,7 @@ export async function dispatchWorkerMailTurn(
       phase,
       prompt: claim.text,
       structuredReview: previousRequestId !== undefined,
+      validationPlan,
       resultTransport: session.resultTransport,
       useTaskImages: false,
       startedAt,

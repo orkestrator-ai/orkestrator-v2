@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type Ref } from "react";
+import { useId, useRef, type ReactNode, type Ref } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import {
   ChevronRight,
@@ -6,11 +6,17 @@ import {
   FolderInput,
   FolderMinus,
   LayoutGrid,
+  MessagesSquare,
   Plus,
   Settings2,
   Trash2,
 } from "lucide-react";
+import type { CoordinatorActivityState } from "@orkestrator/protocol/coordinator-activity";
 import { GithubIcon } from "@/components/icons/GithubIcon";
+import {
+  CoordinatorActivityIcon,
+  coordinatorActivityLabel,
+} from "@/components/projects/CoordinatorActivityIcon";
 import { Button } from "@/components/ui/button";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -77,6 +83,7 @@ export function ProjectGroupHeader({
   menu,
   writable,
   homeActivity,
+  coordinatorActivity = null,
   newEnvironment,
 }: {
   projectName: string;
@@ -101,10 +108,23 @@ export function ProjectGroupHeader({
   /** The owning machine accepts writes; settings, creation, copy and delete need it. */
   writable: boolean;
   homeActivity?: ReactNode;
+  /**
+   * The project's coordinator activity, ringed around the leading icon the way
+   * an environment row rings its dot. A project with no leading icon shows the
+   * coordinator's own icon there while it is active.
+   */
+  coordinatorActivity?: CoordinatorActivityState | null;
   newEnvironment: { label: string; title: string };
 }) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const tooltip = useHoverTooltip();
+  const leadingIcon =
+    icon ??
+    (coordinatorActivity ? (
+      <MessagesSquare aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+    ) : null);
+  const coordinatorLabel = coordinatorActivityLabel(coordinatorActivity);
+  const coordinatorDescriptionId = useId();
   return (
     <div
       ref={rowRef}
@@ -124,6 +144,15 @@ export function ProjectGroupHeader({
             type="button"
             aria-current={ariaCurrent}
             aria-label={accessibleLabel}
+            // Joined with the drag instructions dnd-kit describes the handle with.
+            aria-describedby={
+              [
+                sortable ? dragAttributes?.["aria-describedby"] : undefined,
+                coordinatorLabel ? coordinatorDescriptionId : undefined,
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
               sortable && "cursor-grab active:cursor-grabbing",
@@ -137,7 +166,11 @@ export function ProjectGroupHeader({
             onFocus={tooltip.show}
             onBlur={tooltip.hide}
           >
-            {icon}
+            {leadingIcon && (
+              <CoordinatorActivityIcon state={coordinatorActivity}>
+                {leadingIcon}
+              </CoordinatorActivityIcon>
+            )}
             <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
             {card.environmentCount > 0 && (
               <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
@@ -175,6 +208,7 @@ export function ProjectGroupHeader({
             {card.environmentCount !== 1 && "s"}
             {card.runningCount > 0 && ` (${card.runningCount} running)`}
           </p>
+          {coordinatorLabel && <p className="text-xs text-muted-foreground">{coordinatorLabel}</p>}
           <p className="text-xs text-muted-foreground">{card.openHint}</p>
         </HoverTooltipContent>
         <ContextMenuContent>
@@ -227,6 +261,11 @@ export function ProjectGroupHeader({
         </ContextMenuContent>
       </ContextMenu>
 
+      {coordinatorLabel && (
+        <span id={coordinatorDescriptionId} className="sr-only">
+          {coordinatorLabel}
+        </span>
+      )}
       {homeActivity}
 
       {/* Visible on compact layouts and revealed on desktop hover. */}

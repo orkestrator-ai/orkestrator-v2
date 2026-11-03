@@ -74,7 +74,7 @@ import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slas
 import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -782,6 +782,23 @@ export const NATIVE_DISCOVERY_RETRY_MS = 5_000;
  */
 export function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
   return nativeAgentCapabilities(agent);
+}
+
+/**
+ * Why compaction instructions cannot be sent to this platform, or `undefined`
+ * when there are none or the platform honours them
+ * (`actions.compactInstructions`). Both compact paths — the composer's
+ * projection action and a `/compact` prompt dispatch — ask this before the
+ * provider, so instructions are refused rather than silently dropped.
+ */
+export function compactInstructionsRefusal(
+  agent: BuildPipelineAgent,
+  instructions: string | undefined,
+): string | undefined {
+  if (!instructions) return undefined;
+  if (nativeCapabilities(agent).actions?.compactInstructions === true) return undefined;
+  const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
+  return `${label} cannot take compaction instructions. Run /compact on its own.`;
 }
 
 /**

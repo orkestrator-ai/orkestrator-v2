@@ -11,6 +11,8 @@ none of the tasks below had already merged. Rechecked again the same day
 against the upgraded pins (see "Recheck at the 2026-10-30 upgrade" under
 Assumptions and decisions). Task 4 rechecked 2026-11-02 against `main` at
 `38d55ee14` (Claude Agent SDK `0.3.314`) before its provenance half was built.
+Task 8 rechecked 2026-11-03 against `main` at `7b48c23fb` (Pi `1.4.0`, Codex
+`0.166.0`, OpenCode `1.19.5`) before its instructions half was built.
 
 The "Decided out" list is product decisions, not tasks; only where the current
 pins undercut one of them is it raised below (task 1).
@@ -24,7 +26,7 @@ pins undercut one of them is it raised below (task 1).
 5. **MCP Apps widgets**: Claude `readMcpResource` / `_meta.ui` and the Codex equivalent. Status: deferred (decision recorded: until a user-visible MCP server needs it).
 6. **Other unused Claude and Codex surfaces**: Claude `additionalDirectories` / `agents` / `skills`; Codex `config/*` writes, `command/exec`, `fs/*`, `feedback/upload`, `gitDiffToRemote`, dynamic tools, config requirements. Status: deferred (decision recorded: kept as candidates).
 7. **Cursor `askQuestion`**: no typed tool-call variant or answer path. Status: blocked (upstream Cursor SDK; still at `1.2.0`).
-8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: open (recommendation corrected: Codex and OpenCode cannot take instructions at the current pins, so it needs a capability bit).
+8. **Pi compaction controls**: custom instructions, `abortCompaction`, auto-compaction toggle. Status: done for custom instructions (2026-11-03: `/compact <instructions>` behind `actions.compactInstructions`, on for Claude and Pi); open for abort and the auto-compaction toggle.
 9. **Second ACP agent**: Gemini CLI or Claude-over-ACP through `AcpProviderConfig`. Status: deferred (decision recorded: until a user asks for a specific agent).
 10. **Grok MCP elicitation**: `mcp-form` and `mcp-url` cards over `_x.ai/mcp/elicit`. Status: done (2026-10-31; proved signed in on 1.0.67 through the bridge).
 11. **Grok `costUsdTicks` qualification**: two billed Grok turns to establish the tick unit. Status: open (Grok documents 10¹⁰ ticks per USD for `grok sessions`; whether the ACP field is the same quantity, per turn or cumulative, still needs billed turns).
@@ -180,11 +182,11 @@ Rechecked at `1.2.0` (2026-10-30): `askQuestion` is still only in `ToolName`, th
 
 ### 8. Pi compaction controls
 
-**Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction.
+**Problem.** Pi users cannot pass compaction instructions, abort a compaction or toggle auto-compaction. Instructions were built 2026-11-03; abort and the toggle remain.
 
 **Context.** Shared layer has no compaction-parameter surface yet; optional instructions need a shared field and a capability bit so the UI accepts them only for providers that can honour them.
 
-**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path. Rechecked at the 2026-10-30 pins: Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, and OpenCode `1.19.5`'s `summarize` body is unchanged. Cursor `1.2.0` adds `agent.summarize()` (no instructions), now adopted by the bridge.
+**Investigation.** The bridge calls `session.compact()` with no arguments (`bridges/pi-bridge/src/http.ts:911`). Pi `1.4.0` exposes `compact(customInstructions?)`, `abortCompaction()` and `setAutoCompactionEnabled()` / `autoCompactionEnabled` (`bridges/pi-bridge/node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.d.ts:726,730,771-773`). Rechecked 2026-10-30: the original recommendation's premise that Codex can also honour instructions is wrong at the current pins. Codex `0.164.0`'s `ThreadCompactStartParams` is `{ threadId }` only (`bridges/codex-bridge/src/app-server/generated/typescript/v2/ThreadCompactStartParams.ts`), and OpenCode `1.19.4`'s `session.summarize` body is `{ providerID, modelID, auto? }` (`apps/backend/node_modules/@opencode-ai/sdk/dist/v2/gen/types.gen.d.ts:8643`). Claude can honour them (its compact route sends the CLI's own `/compact`, `bridges/claude-bridge/src/routes/session.ts:1198`), and Grok may (the ACP bridge runs Grok's own `/compact` as a selected command, `bridges/acp-bridge/src/acp-http.ts:583-589`; whether that command takes input is unchecked). The shared `/compact` row also explicitly refuses arguments today (`rejectsArguments` in `packages/protocol/src/agent-slash-commands.ts:156-164`), so the change spans the protocol, the command dispatch, every provider's compact path and the web submission path. Rechecked at the 2026-10-30 pins: Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, and OpenCode `1.19.5`'s `summarize` body is unchanged. Cursor `1.2.0` adds `agent.summarize()` (no instructions), now adopted by the bridge. Rechecked 2026-11-03 at `7b48c23fb`: Pi `1.4.0` still has `compact(customInstructions?)`, Codex `0.166.0`'s `ThreadCompactStartParams` is still `{ threadId }`, OpenCode is still `1.19.5`, and nothing had been built. On Claude a live catalogue normally lists the SDK's own `/compact`, which wins the collision and already takes instructions as a provider command; the action path (and its missing instructions) matters when that row is absent.
 
 **Decisions.**
 
@@ -195,6 +197,14 @@ Rechecked at `1.2.0` (2026-10-30): `askQuestion` is still only in `ToolName`, th
   - **Abort and auto-toggle first.**
     - Pros: abort fixes a real "stuck compaction" case.
     - Cons: abort interacts with the claim and cancel logic in `http.ts:900-912`; the toggle is a Pi-only setting.
+
+- **How does the backend learn that an older bridge dropped the instructions?** (decided 2026-11-03; see "Task 8: instructions built" under Assumptions and decisions)
+  - **The new bridges echo `instructions: "applied"`; a missing echo is an applied outcome with `instructionsIgnored` (recommended).**
+    - Pros: no extra round trip; a plain compaction sends exactly what it always did; never reports a compaction that ran as failed.
+    - Cons: detected only after the older bridge compacted without the instructions, so the user is told rather than protected.
+  - **Advertise the capability per bridge through the command catalogue, so the row refuses arguments on an older bridge.**
+    - Pros: refuses before anything runs.
+    - Cons: needs a new catalogue field threaded through every `withSessionActionSlashCommands` caller; the window it protects is a container that predates the backend upgrade.
 
 ### 9. Second ACP agent
 
@@ -433,6 +443,45 @@ recommended. Task 8's Context and Decisions now state this capability-gated
 recommendation directly, replacing the stale claim that Codex can honour the
 shared argument. Task 8 remains open.
 
+### Task 8: instructions built
+
+Recorded 2026-11-03 against `main` at `7b48c23fb` by the worker that built
+the instructions half of task 8 (abort and the auto-compaction toggle stay
+open, as recommended).
+
+- **Capability bit.** `actions.compactInstructions` in
+  `nativeAgentCapabilities`, on for Claude and Pi only. Grok stays off: its
+  `/compact` input is still unverified, and turning the bit on later is the
+  whole change.
+- **Argument policy.** The `/compact` session-action row keeps one id and
+  binding revision; where the platform has the bit its `inputPolicy.arguments`
+  is `optional` with hint `[instructions]`, elsewhere it stays `none`. Chosen
+  over a second command id because a selection made before the capability
+  changed still binds, and the renderer and backend already resolve through
+  that policy, so nothing else needed a platform check.
+- **Wire.** `NativeAgentSessionAction` compact gains `instructions`, trimmed,
+  blank meaning none, bounded by `COMPACT_INSTRUCTIONS_MAX_LENGTH` (16 000
+  characters). Both backend compact paths (the composer's projection action and
+  a `/compact` prompt dispatch) refuse instructions for a platform without the
+  bit before calling the provider (`compactInstructionsRefusal`), and the HTTP
+  adapter refuses again rather than send them. Bridges read them with the shared
+  `parseCompactInstructionsBody`.
+- **Bridges.** Claude sends the CLI's own `/compact <instructions>`; Pi calls
+  `session.compact(instructions)`, reading the body only after its synchronous
+  claim so a prompt cannot slip into the gap. Both answer
+  `instructions: "applied"` when they used them, and a plain compaction's answer
+  is unchanged.
+- **Older bridges.** Chose the echo (Decisions above). The backend records
+  `compact.instructions-ignored` and returns an applied outcome with
+  `instructionsIgnored`; the composer clears the draft (a retry would compact
+  twice) and says the instructions were not used. Registered in
+  `version-compatibility.md`.
+- **Renderer skew, accepted.** A renderer older than this change talking to a
+  newer backend sees the row accept arguments but sends the action without
+  them, so it compacts plainly. The opposite pairing is safe: an older backend
+  publishes `none` and the newer composer refuses the text.
+- Tests use fake providers and bridges only; no billed turn was run.
+
 ### Task 10: built after a live probe
 
 A signed-in probe on 2026-10-31 answered the open question (Grok forwards
@@ -595,10 +644,9 @@ Unadopted today. Each line says what blocks it or what decision it needs.
   - `SendOptions.local.force` and `SDKAgentInfo.archived` are tracked in
     [0005-mid-turn-steer-and-interrupt.md](0005-mid-turn-steer-and-interrupt.md) and
     [0006-session-titles-and-history.md](0006-session-titles-and-history.md).
-- Pi (`bridges/pi-bridge`): compaction controls (custom instructions,
-  `abortCompaction`, an auto-compaction toggle). `session.compact()` is called
-  with no instructions (`http.ts`). Custom instructions need a capability bit,
-  because Codex and OpenCode cannot take them (task 8).
+- Pi (`bridges/pi-bridge`): the rest of the compaction controls
+  (`abortCompaction`, an auto-compaction toggle). Custom instructions were
+  built 2026-11-03 behind `actions.compactInstructions` (task 8).
 - ACP (`bridges/acp-bridge`):
   - A second ACP agent (Gemini CLI, Claude-over-ACP). The launcher now builds
     an `AcpProviderConfig` record (`acp-provider-config.ts`; the Grok record is

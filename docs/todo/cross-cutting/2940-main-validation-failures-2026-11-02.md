@@ -8,7 +8,7 @@ Analysed 2026-11-02 against `main` at `d7cdfaa8b`.
 
 1. **Preview upstream pool idle-expiry case fails deterministically**: `PreviewUpstreamPool > idle connections expire, and one the application closes is never handed out`. Status: done (fixed under [2920](../previews-and-annotations/2920-upstream-pool-idle-test-accept-race.md)).
 2. **Log Detail settings case fails in both viewports**: `e2e/GlobalSettings.spec.ts:3` `Log Detail offers only areas controlled by live policy`. Status: open.
-3. **Merged project list drag cases fail**: `e2e/MergedProjectList.spec.ts:168` `project/repository project and group drags ignore expanded environment rows`. Status: open.
+3. **Merged project list drag cases fail**: `e2e/MergedProjectList.spec.ts:168` `project/repository project and group drags ignore expanded environment rows`. Status: done (2026-11-03): the previous drag's card took the press during its drop animation (`0412ae2c4`); fixed under [2921](2921-component-browser-failures-on-main.md) task 2.
 4. **Four Cursor close-retention cases fail on desktop**: `e2e/CloseRetention.spec.ts:328`, `:422`, `:693`, `:801`. Status: open.
 
 ### 1. Preview upstream pool idle-expiry case fails deterministically
@@ -61,6 +61,8 @@ peer; the poll budget was not widened.
 **Context.** Mobile failed in both runs; desktop failed on `main` and passed on the PR-pane branch run.
 
 **Investigation.** Reproduced on detached `origin/main` `d7cdfaa8b` in the owner-only run named in task 2. The project case expects `Collapse folder Work` to carry an attribute value of `"true"` and gets `""`; the repository case expects the same of the `Open team-a/shared/app on …` button. Cause not investigated.
+
+Resolved 2026-11-03 under [2921](2921-component-browser-failures-on-main.md) task 2, which has the cause and the fix. `0412ae2c4` (#1603) gave the merged list a drag card. During its drop animation the card covered the next handle and took the press. The card no longer takes pointer input. Not a flake: on `main` at `7b48c23fb` it failed every run.
 
 **Decisions.**
 

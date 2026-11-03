@@ -78,3 +78,23 @@ Evidence: `orkestrator-test-run.kmeKkl/` and enclosing
 fixes change no logging implementation, timing assertion, deadline or skip.
 The isolated pass confirms intermittence, not a root cause or an aggregate
 pass.
+
+
+## CLI descriptor coverage review — 2026-11-03
+
+`mise run test:logged -- --name review-default-tests -- mise run test`
+ran after the descriptor-size coverage and scheduler-policy repair based on
+`1d85a718a`. Worker reservations were workspace/root/bridges/protocol 6/1/2/1.
+The desktop package failed
+`application logging shutdown > closes the log only after pending output settles`
+at line 760 (29.93 ms): `app.quitCount` was zero instead of one after a fixed
+five-millisecond sleep. Desktop totals: 1,622 pass, 16 skip, one fail across
+111 files (35.85 s).
+
+The complete unchanged owner passed alone (exit 0, 0.7 s):
+`mise run test:logged -- --name descriptor-review-logging-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./electron/application-logging.test.ts --parallel=1 --only-failures`.
+Passing case counts were not retained by the logged runner. Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.GsDDP5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+This confirms intermittence in another flush-completion sibling; the fixed sleep
+is an evidence-backed timing hypothesis, not a proven root cause. No desktop
+code, timeout, assertion or skip changed. Status remains open.

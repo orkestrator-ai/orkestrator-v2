@@ -29,6 +29,8 @@ import {
 import { executeAgentAccountSwitch } from "./node-account-switch.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./node-link.js";
 import { NodeMailCollector } from "./node-mail-collector.js";
+import { NodeTicketSync } from "./node-ticket-sync.js";
+import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 import {
   coordinatorContactKey,
   describeCommandCoordinatorMail,
@@ -134,6 +136,8 @@ export async function localCoordinatorContact(
 export class NodeCoordination {
   readonly leafMail: LeafNodeMail;
   readonly collector: NodeMailCollector;
+  /** Kanban sync with the leaves (command node) and the outbox announcements (leaf). */
+  readonly ticketSync: NodeTicketSync;
   readonly actions: NodeActionRequests;
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
@@ -141,6 +145,8 @@ export class NodeCoordination {
   private recoveryStarted = false;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
+  private unsubscribeKanban: (() => void) | undefined;
+  private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
 
   /** Called after backend recovery, links and portal storage are ready. */
   start(): void {
@@ -149,6 +155,13 @@ export class NodeCoordination {
     this.resumeActions();
     this.recoveryTimer = setInterval(() => this.resumeActions(), 30_000);
     this.recoveryTimer.unref?.();
+    // A last resort for anything an event did not trigger; a node with nothing
+    // new costs a cursor read and an empty collect.
+    this.ticketSyncTimer = setInterval(() => {
+      if (this.options.nodes.mode() === "command")
+        void this.ticketSync.syncAll().catch(() => undefined);
+    }, 60_000);
+    this.ticketSyncTimer.unref?.();
   }
 
   private resumeActions(): void {
@@ -161,8 +174,11 @@ export class NodeCoordination {
   dispose(): void {
     this.recoveryStarted = false;
     clearInterval(this.recoveryTimer);
+    clearInterval(this.ticketSyncTimer);
     this.unsubscribeNodes?.();
+    this.unsubscribeKanban?.();
     this.collector.dispose();
+    this.ticketSync.dispose();
   }
 
   constructor(
@@ -231,9 +247,47 @@ export class NodeCoordination {
         (await nodes.getNode(nodeId).catch(() => null))?.displayName ?? nodeId,
       deliver: (input) => this.deliverToCoordinator(input),
     });
-    portal.readModel.onNodeEvent((event, payload, nodeId) =>
-      this.collector.handleNodeEvent(event, payload, nodeId),
-    );
+    this.ticketSync = new NodeTicketSync({
+      selfId: () => nodes.selfIdentity(),
+      link: (nodeId) => (isBackendId(nodeId) ? nodes.link(nodeId) : null),
+      nodes: async () =>
+        (await portal.summaries()).nodes.map((node) => ({
+          nodeId: node.nodeId,
+          displayName: node.view.displayName,
+          available: node.available,
+          projects: node.projects.map((project) => ({
+            projectId: project.ref.projectId,
+            ...(project.repositoryHint ? { repositoryHint: project.repositoryHint } : {}),
+          })),
+        })),
+      localProjects: () => storage.loadProjects(),
+      kanban: storage.kanban,
+      emit: options.emit,
+    });
+    portal.readModel.onNodeEvent((event, payload, nodeId) => {
+      this.collector.handleNodeEvent(event, payload, nodeId);
+      this.ticketSync.handleNodeEvent(event, payload, nodeId);
+    });
+    // A board change here goes to the leaves with the project (command node);
+    // a change queued for a command node is announced to it (leaf).
+    this.unsubscribeKanban = storage.addResourceChangeListener((change) => {
+      if (change.resource !== "kanban") return;
+      if (nodes.mode() === "command") this.ticketSync.noteLocalChange(change.id);
+      if (nodes.listControllers().length === 0) return;
+      void storage.kanban
+        .ticketSyncOutboxControllers()
+        .then((controllers) => {
+          for (const controllerId of controllers) {
+            options.emit(TICKET_SYNC_OUTBOX_READY_EVENT, { controllerId });
+          }
+        })
+        .catch(() => undefined);
+    });
+    nodes.onControllerDetached((controllerId) => {
+      void storage.kanban.forgetTicketSyncController(controllerId).catch(() => {
+        log.warn("ticket-sync.forget-failed");
+      });
+    });
     // Every (re)connect collects whatever waited while the link was down.
     let connected = new Set<string>();
     this.unsubscribeNodes = nodes.subscribe(() => {
@@ -248,6 +302,7 @@ export class NodeCoordination {
           for (const nodeId of now)
             if (!connected.has(nodeId)) {
               void this.collector.collect(nodeId);
+              void this.ticketSync.sync(nodeId);
               this.resumeActions();
             }
           connected = now;

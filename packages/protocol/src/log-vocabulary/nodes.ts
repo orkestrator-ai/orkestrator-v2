@@ -2,7 +2,7 @@ import { defineLogAreas } from "./define.js";
 
 export const NODES_LOG_AREAS = defineLogAreas({
   nodes: {
-    description: "Command nodes: links, handovers, leaf mail and project copies.",
+    description: "Command nodes: links, handovers, leaf mail, ticket sync and project copies.",
     events: {
       "actions.resume-failed": "Approved actions could not be resumed; a later pass retries.",
       "project-copy.notify-failed": "The coordinator could not be told a project copy finished.",
@@ -15,6 +15,10 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "profile.record-failed": "A node profile could not be recorded.",
       "detach.unconfirmed": "A forgotten node has not confirmed the detach yet.",
       "handover.recovery-pending": "Command handover recovery is still pending.",
+      "ticket-sync.failed": "A Kanban sync with a node failed; it is retried.",
+      "ticket-sync.unknown-project":
+        "A node sent ticket changes for a project that no longer exists here.",
+      "ticket-sync.forget-failed": "A detached command node's ticket copies could not be released.",
     },
   },
 });

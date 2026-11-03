@@ -23,6 +23,7 @@ import {
   type AgentInteractionResolutionJournal,
 } from "@orkestrator/protocol/agent-interactions";
 import type { TicketKind, TicketSections } from "@orkestrator/protocol/ticket-sections";
+import type { TicketSyncMeta } from "@orkestrator/protocol/ticket-sync";
 import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
@@ -170,6 +171,12 @@ export type KanbanTask = {
   prUrl?: string;
   prState?: PrState;
   prMergeCommented?: boolean;
+  /**
+   * Sync with other machines: this node's change sequence and field
+   * revisions, and on a leaf's copy of a command node's ticket, that ticket's
+   * (`@orkestrator/protocol/ticket-sync`). Absent on rows never changed since.
+   */
+  sync?: TicketSyncMeta;
 };
 
 export type ProjectNotes = {

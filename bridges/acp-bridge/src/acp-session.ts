@@ -120,7 +120,11 @@ import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist, scheduleStreamingPersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
-import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
+import {
+  ACP_FILE_MUTATION_DENIALS,
+  ACP_SHELL_DENIALS,
+  effectiveTurnExecutionPolicy,
+} from "./acp-policy.js";
 import { sessionInstructionsMeta } from "./acp-provider-config.js";
 import { sessionInstructions } from "./acp-session-instructions.js";
 import {
@@ -898,8 +902,6 @@ function explicitlyDeniedPermissionTool(
   );
 }
 
-const FILE_MUTATION_DENIALS = ["file.write", "file.patch", "write", "edit", "apply_patch"];
-
 /**
  * Policy denials (`capabilityPolicy`, or a Codex-named `toolPolicy` override)
  * that rule out auto-approving an ACP tool kind.
@@ -908,10 +910,10 @@ const AUTO_APPROVE_DENIALS_BY_KIND: Readonly<Record<string, readonly string[]>> 
   read: [],
   search: [],
   think: [],
-  edit: FILE_MUTATION_DENIALS,
-  delete: FILE_MUTATION_DENIALS,
-  move: FILE_MUTATION_DENIALS,
-  execute: ["shell", "shell.mutate"],
+  edit: ACP_FILE_MUTATION_DENIALS,
+  delete: ACP_FILE_MUTATION_DENIALS,
+  move: ACP_FILE_MUTATION_DENIALS,
+  execute: ACP_SHELL_DENIALS,
   fetch: ["network"],
 };
 

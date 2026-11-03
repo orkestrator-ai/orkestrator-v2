@@ -82,3 +82,10 @@ implementation, assertion, timeout or skip changed.
 - **Complete unchanged owner:** `mise run test:logged -- --name artifact-engine-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures` passed, exit 0 in 178.3 seconds logged.
 - **Evidence:** `orkestrator-test-run.OeJQLs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** recurrence of this tracked intermittent hook failure. No implementation, assertion, timeout or skip changed in the owner; the aggregate result is not made green by the isolated pass.
+
+## Every CI run on main — 2026-11-03
+
+- **Original command:** the "Tests (backend)" shard of `mise run test:full` on `ubuntu-latest`. Main runs 41574469778 and 41607725738 and every PR run that morning (for example 41605456464) failed the same way, both here and in `served executable document in Chromium > (unnamed)` (`content-server.browser.test.ts`).
+- **Failure:** `(unnamed)` timed out after 5000 ms with "killed 1 dangling process". The engines file then printed `results` as `{}`, so `browser.version()` never ran: the hook that timed out is the `beforeAll` that launches Chromium, not a teardown hook.
+- **Change:** both Chromium launch hooks now take a 60 s timeout (`beforeAll(fn, 60_000)`), the same budget their tests already have. Bun's default for a hook is 5 s, which a cold Chromium launch on a shared CI runner exceeds.
+- **Status:** left open until a CI run on main passes both files with this change.

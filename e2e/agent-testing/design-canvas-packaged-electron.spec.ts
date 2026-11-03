@@ -5,10 +5,12 @@
  * renderer loaded from `file://<resources>/web/index.html`. That renderer is
  * what users run, and no dev-served spec ever loads it.
  *
- * Build the app first with `mise run package:linux:unpacked`, which writes
- * `release/linux-unpacked/` and installs nothing. Then run `mise run
+ * Build the app first with `mise run package:linux:unpacked:test`, which
+ * writes `release/packaged-test/linux-unpacked/` and installs nothing. That is
+ * the shipped build with the Node inspect fuse back on, which Playwright's
+ * `_electron.launch` needs; every other fuse is as shipped. Then run `mise run
  * test:agent:electron:packaged`, which tests that existing build without rebuilding. Set
- * `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build.
+ * `ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build with that fuse on.
  *
  * The app runs on a disposable agent-test profile under a temporary root, as
  * the dev spec's does: its `userData`, backend data, fixture repository and
@@ -55,7 +57,7 @@ test("the packaged app's file:// renderer opens, edits, exports, downloads, take
   const executablePath = packagedAppExecutable(repositoryRoot, process.env);
   expect(
     existsSync(executablePath),
-    `No packaged app at ${executablePath}. Run \`mise run package:linux:unpacked\` first.`,
+    `No packaged app at ${executablePath}. Run \`mise run package:linux:unpacked:test\` first.`,
   ).toBe(true);
 
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-design-packaged-"));

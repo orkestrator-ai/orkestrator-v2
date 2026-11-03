@@ -3850,8 +3850,8 @@ describe("remote gateway", () => {
     // The upstream policy is replaced by a sandbox, so the preview stays an
     // opaque origin even when opened top-level, outside the client's iframe.
     expect(page.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
-    expect(page.headers["access-control-allow-origin"]).toBe("null");
-    expect(page.headers["access-control-allow-credentials"]).toBe("true");
+    expect(page.headers["access-control-allow-origin"]).toBe("*");
+    expect(page.headers["access-control-allow-credentials"]).toBeUndefined();
 
     const script = await requestUrl(new URL(`${prefix}/src/main.js`, info.url).toString(), {
       headers,

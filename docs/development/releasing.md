@@ -102,11 +102,9 @@ pushes it. It refuses unless the working tree is clean and `HEAD` is already on
 at its `HEAD`. Either run refuses when the tag already names another commit,
 locally or on origin. Pushing the tag also starts the container image workflow.
 
-Packaged builds ship the preview worker pin checked in at
-`docker/artifact-preview-worker/published-image.json`. It is `null` and no
-workflow updates it, so the backend build prints `Preview worker: no published
-image for build context …` and installs build the worker image locally. That is
-expected and needs no release step. See
+The preview worker needs no release step: packaged builds ship its build
+context, and each install builds the worker image locally when it is first
+prepared. See
 [Preview worker](../architecture/transcript-artifacts-runtime.md#preview-worker).
 
 Each run installs dependencies, builds, and uploads to a **draft** release, so

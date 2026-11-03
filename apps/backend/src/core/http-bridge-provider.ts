@@ -94,6 +94,7 @@ import {
   bridgePromptAttachments,
 } from "./http-bridge-transport.js";
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
+import { compactBridgeSession } from "./http-bridge-compact.js";
 import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./http-bridge-change-evidence.js";
@@ -1298,14 +1299,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
     const base = `/session/${encodeURIComponent(sessionId)}`;
     if (action.kind === "compact") {
-      const response = await bridgeFetch(
-        this.connection,
-        `${base}/compact`,
-        { method: "POST" },
-        this.fetchImpl,
-      );
-      await assertOkWithErrorDetail(response, `${this.agent} session compaction`);
-      return { outcome: "applied" };
+      return await compactBridgeSession({
+        agent: this.agent,
+        connection: this.connection,
+        fetchImpl: this.fetchImpl,
+        sessionId,
+        ...(action.instructions ? { instructions: action.instructions } : {}),
+      });
     }
     if (this.agent === "claude" && action.kind === "rewind-files") {
       const response = await bridgeFetch(

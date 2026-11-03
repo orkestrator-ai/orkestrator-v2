@@ -4,7 +4,6 @@ import { createTranscriptArtifactRuntime } from "../runtime.js";
 // changes to the parent test runner's scratch directory.
 const runtime = await createTranscriptArtifactRuntime({
   dataDir: process.argv[3]!,
-  publishedPinFile: null,
   env: {
     ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: process.argv[2]!,
     ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: process.argv[4]!,

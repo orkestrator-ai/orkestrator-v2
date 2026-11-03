@@ -883,18 +883,25 @@ if [ -f "$CLAUDE_SETTINGS_INPUT" ] && [ ! -L "$CLAUDE_SETTINGS_INPUT" ]; then
 fi
 
 # Copy and filter ~/.claude.json if mounted
-# Remove githubRepoPaths and projects as they contain host-specific paths
+# The backend stages only an allowlist of the host file (claudeContainerConfig
+# in apps/backend/src/core/claude-container-config.ts): the login's identity,
+# onboarding flags and container-safe MCP servers. The same top-level allowlist
+# is applied again here, so host project paths, history, caches and keys never
+# reach the container's own copy even from an older staged revision. Keep
+# CLAUDE_JSON_ALLOWED_KEYS in step with CLAUDE_CONTAINER_CONFIG_KEYS.
 # Add bypass permissions settings for automated operation
 #
 # IMPORTANT: This uses a retry mechanism to handle race conditions where the host's
 # ~/.claude.json may be modified by Claude CLI running on the host (e.g., during
 # background environment naming). We write to a temp file first, validate it's
 # valid JSON, then move it to the final location.
+CLAUDE_JSON_ALLOWED_KEYS='["oauthAccount","hasCompletedOnboarding","hasAcknowledgedCostThreshold","hasSeenTasksHint","hasUsedBackslashReturn","hasIdeOnboardingBeenShown","bypassPermissionsModeAccepted","hasSeenAutoDefaultNudge","lastOnboardingVersion","lastReleaseNotesSeen","mcpServers"]'
 CLAUDE_JSON_INPUT=/claude-config.json
 if [ -f "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT" ]; then
     CLAUDE_JSON_INPUT="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$CLAUDE_JSON_INPUT"
 fi
-if [ -f "$CLAUDE_JSON_INPUT" ]; then
+# An emptied mount (revoked credentials) is treated as no host config.
+if [ -f "$CLAUDE_JSON_INPUT" ] && [ -s "$CLAUDE_JSON_INPUT" ]; then
     if [ -n "$DEBUG" ]; then
         echo "=== Processing .claude.json ==="
         echo "Size: $(wc -c < "$CLAUDE_JSON_INPUT") bytes"
@@ -902,7 +909,7 @@ if [ -f "$CLAUDE_JSON_INPUT" ]; then
     fi
 
     # Use jq to:
-    # 1. Remove host-specific attributes (githubRepoPaths, projects)
+    # 1. Keep only the allowlisted keys (drops projects, githubRepoPaths, keys)
     # 2. Add bypassPermissionsModeAccepted for --dangerously-skip-permissions
     # 3. Add hasCompletedOnboarding to skip first-run theme selection
     # 4. Add /workspace project settings with trust accepted
@@ -913,7 +920,9 @@ if [ -f "$CLAUDE_JSON_INPUT" ]; then
 
     for attempt in 1 2 3; do
         # Important: Don't redirect stderr to stdout (2>&1) as it corrupts the JSON output
-        if jq 'del(.githubRepoPaths, .projects) |
+        if jq --argjson keep "$CLAUDE_JSON_ALLOWED_KEYS" \
+              'if type == "object" then . else error("not an object") end |
+              with_entries(select(.key as $k | any($keep[]; . == $k))) |
               .bypassPermissionsModeAccepted = true |
               .hasCompletedOnboarding = true |
               .theme = "dark" |
@@ -926,7 +935,7 @@ if [ -f "$CLAUDE_JSON_INPUT" ]; then
                 chmod 600 "$HOME/.claude.json"
                 CLAUDE_JSON_SUCCESS=true
                 if [ -n "$DEBUG" ]; then
-                    echo "Filtered .claude.json (removed: githubRepoPaths, old projects; added: bypass permissions, workspace trust)"
+                    echo "Filtered .claude.json (kept: allowlisted keys; added: bypass permissions, workspace trust)"
                     echo "Output size: $(wc -c < "$HOME/.claude.json") bytes"
                     [ "$attempt" -gt 1 ] && echo "Succeeded on attempt $attempt"
                 fi

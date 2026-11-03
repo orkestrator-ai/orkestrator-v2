@@ -291,6 +291,35 @@ describe("BrowserPreviewManager", () => {
     });
   });
 
+  test("keeps the environment a legacy view was attached for, and never moves a view between environments (M2)", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({ ...input, environmentId: "env-a" });
+    const first = harness.views[0]!;
+    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBe("env-a");
+
+    // Resizes and in-tab navigation keep the view and its environment.
+    await harness.manager.attach({
+      ...input,
+      environmentId: "env-a",
+      bounds: { x: 1, y: 2, width: 3, height: 4 },
+    });
+    await harness.manager.navigate(input.tabId, "http://localhost:3000/next");
+    expect(harness.views).toHaveLength(1);
+    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBe("env-a");
+
+    // A different environment gets a fresh view, so no document of the old one keeps access.
+    await harness.manager.attach({ ...input, environmentId: "env-b" });
+    expect(harness.views).toHaveLength(2);
+    const second = harness.views[1]!;
+    expect(harness.manager.environmentForWebContents(second.webContents.id)).toBe("env-b");
+    expect(harness.manager.environmentForWebContents(first.webContents.id)).toBeNull();
+
+    // An older renderer names none.
+    const other = await harness.manager.attach({ ...input, tabId: "browser-2" });
+    expect(other.tabId).toBe("browser-2");
+    expect(harness.manager.environmentForWebContents(harness.views[2]!.webContents.id)).toBeNull();
+  });
+
   test("offers Interrogate and inspects the clicked element in that preview", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);

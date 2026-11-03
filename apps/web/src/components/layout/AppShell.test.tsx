@@ -36,6 +36,8 @@ import type { TabInfo } from "@/types/paneLayout";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 
 let realInfo = false;
+/** Renders of the stubbed button, which re-renders only when AppShell does. */
+const agentInfoRendered = mock(() => {});
 const uiStore = realUIStore;
 const INITIAL_PROJECT_BOARD_TAB = uiStore.getState().projectBoardTab;
 const realAgentInfoButtonSnapshot = { ...realAgentInfoButton };
@@ -105,7 +107,7 @@ mock.module("./OpenFileDialog", () => ({ OpenFileDialog: () => null }));
 // rather than through the real popover's rendering.
 mock.module("./AgentInfoButton", () => ({
   AgentInfoButton: ({ activeTab, mobile }: { activeTab: TabInfo | null; mobile?: boolean }) =>
-    realInfo ? (
+    (agentInfoRendered(), realInfo) ? (
       <realAgentInfoButtonSnapshot.AgentInfoButton activeTab={activeTab} mobile={mobile} />
     ) : (
       <div
@@ -820,6 +822,44 @@ describe("AppShell", () => {
     expect(screen.getByTestId("agent-info-button").getAttribute("data-active-tab-id")).toBe(
       "other-tab",
     );
+  });
+
+  test("does not re-render for a pane-layout change in another environment", () => {
+    isMobile = false;
+    seedPaneLayout([CLAUDE_TAB], "claude-tab");
+    const otherLayout = (activeTabId: string) => ({
+      root: {
+        kind: "leaf",
+        id: "other-pane",
+        tabs: [
+          { id: "other-a", type: "plain" },
+          { id: "other-b", type: "plain" },
+        ],
+        activeTabId,
+      },
+      activePaneId: "other-pane",
+      containerId: "container-2",
+    });
+    const setOtherLayout = (activeTabId: string) =>
+      usePaneLayoutStore.setState((state) => {
+        const environments = new Map(state.environments);
+        environments.set("environment-2", otherLayout(activeTabId) as never);
+        return { environments };
+      });
+    act(() => setOtherLayout("other-a"));
+    render(<AppShell>Workspace</AppShell>);
+    const button = screen.getByTestId("agent-info-button");
+    expect(button.getAttribute("data-active-tab-id")).toBe("claude-tab");
+
+    const before = agentInfoRendered.mock.calls.length;
+    act(() => setOtherLayout("other-b"));
+    act(() => setOtherLayout("other-a"));
+    expect(agentInfoRendered.mock.calls.length).toBe(before);
+
+    // The selected environment's own change still reaches the button.
+    act(() => seedPaneLayout([CLAUDE_TAB], "claude-tab", "pane-b"));
+    expect(agentInfoRendered.mock.calls.length).toBeGreaterThan(before);
+    expect(button.getAttribute("data-active-tab-id")).toBe("other-tab");
   });
 
   test.each([

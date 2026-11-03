@@ -940,7 +940,9 @@ credential helpers are reset (`withheldGitHubCredentialEnvironment`).
   `thread/start`, `thread/resume` and `thread/fork`) excludes the variables
   and any inherited `GIT_CONFIG_*` entries and sets the replacements, so no
   command the thread runs sees it. A thread value replaces the process value,
-  so a coordinator process's own exclude list is repeated. Stdio MCP servers
+  so the process's own exclude list is repeated: a coordinator's, and the
+  bridge-control credentials every session's commands lose
+  (`CODEX_SESSION_SHELL_EXCLUDE`, security report M13). Stdio MCP servers
   get only Codex's default variable set plus what their entry names, and a
   graph node loads only granted servers. Verified against 0.164.0, before and
   after a resume, by `live-github-credential.test.ts` (no credits).
@@ -1225,8 +1227,11 @@ session's CLI child and reloads it; it is never written into process env.
 `@agentclientprotocol/sdk` 2.1.0). An agent that negotiates any other version
 is terminated and the session fails with a message naming both versions; the
 bridge does not try to speak a version it was not built against. The bridge
-advertises `fs.readTextFile`, `fs.writeTextFile` and `terminal` client
-capabilities. It reads the agent's `promptCapabilities` to decide what the
+advertises `fs.readTextFile`, and `fs.writeTextFile` and `terminal` only when
+the child's policy permits them (`acpClientMethodGrant` in `acp-policy.ts`): a
+`file.write`/`file.patch` denial withholds writes, a `shell`/`shell.mutate`
+denial withholds terminals, and `approvals: "deny"` (which includes every
+read-only turn and coordinator) withholds both. It reads the agent's `promptCapabilities` to decide what the
 prompt route may send; `undeclaredPromptCapabilities()` can credit a provider
 known to understate one. That table is empty today: Grok 1.0.52 answered
 `image: false` while reading inline image blocks, and 1.0.67 and 1.0.70
@@ -1243,7 +1248,10 @@ Inbound, it handles `session/update` notifications
 - the ACP client methods `fs/read_text_file`, `fs/write_text_file` and
   `terminal/*` (`acp-client-methods.ts`). File access is confined to the
   session workspace and bounded in size; terminals are bounded in number and
-  output, and run without blocking the stdout read loop;
+  output, and run without blocking the stdout read loop. A write or terminal
+  call the child was not advertised is refused with `-32601` before anything
+  runs (security report M13), and a terminal's environment, like the agent's
+  own (`providerEnv`), omits the bridge token and the agent MCP credential;
 - vendor model updates sent as requests, and the record's
   `acknowledgedExtensionMethods`, answered with `{}`.
 

@@ -4,15 +4,37 @@ import type {
   WebFrameMain,
   WebRequest,
 } from "electron";
+import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
 
 const BROWSER_PREVIEW_PREFIX = "/__orkestrator/browser/loopback/";
 
 type GatewayRequestDetails = Pick<
   OnBeforeSendHeadersListenerDetails | OnHeadersReceivedListenerDetails,
-  "frame" | "referrer" | "resourceType" | "url"
+  "frame" | "referrer" | "resourceType" | "url" | "webContentsId"
 >;
 
-function browserPreviewScope(urlValue: string | undefined): string | null {
+export interface RemoteGatewayRequestAuthOptions {
+  /**
+   * A session holding only browser-preview views. Requests are authorized
+   * only inside the gateway preview namespace of the view that sent them.
+   */
+  browserPreviewOnly?: boolean;
+  /**
+   * The URL the app last asked a preview view to load. Its preview namespace
+   * is the only one that view's requests may authenticate to; without it a
+   * preview-only session authorizes nothing.
+   */
+  previewViewUrl?: (webContentsId: number | undefined) => string | null | undefined;
+  /**
+   * The environment the app attached a preview view for. Requests the view
+   * authenticates name it, so the gateway opens only that environment's
+   * preview targets; without it the gateway refuses them.
+   */
+  previewViewEnvironment?: (webContentsId: number | undefined) => string | null | undefined;
+}
+
+/** `<origin>/__orkestrator/browser/loopback/<port>` for a gateway preview URL, else null. */
+export function browserPreviewScope(urlValue: string | null | undefined): string | null {
   if (!urlValue) return null;
   try {
     const url = new URL(urlValue);
@@ -42,13 +64,18 @@ function previewInitiatorScope(details: GatewayRequestDetails): string | null {
 
 function canAttachGatewayAuthorization(
   details: GatewayRequestDetails,
-  browserPreviewOnly: boolean,
+  options: RemoteGatewayRequestAuthOptions,
 ): boolean {
   const initiatorScope = previewInitiatorScope(details);
   const targetScope = browserPreviewScope(details.url);
-  if (browserPreviewOnly) {
+  if (options.browserPreviewOnly === true) {
+    // Only the port the app opened this view on, so a preview page cannot
+    // carry the gateway credential to another port by navigating its own
+    // main frame there (security report M2).
+    const viewScope = browserPreviewScope(options.previewViewUrl?.(details.webContentsId));
     return (
       targetScope !== null &&
+      targetScope === viewScope &&
       (details.resourceType === "mainFrame" || targetScope === initiatorScope)
     );
   }
@@ -68,48 +95,60 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
       return (
         normalized !== "authorization" &&
         normalized !== "cookie" &&
-        normalized !== "proxy-authorization"
+        normalized !== "proxy-authorization" &&
+        normalized !== BROWSER_PREVIEW_ENVIRONMENT_HEADER
       );
     }),
+  );
+}
+
+/** Only main names a preview's environment; a page's own copy never reaches the gateway. */
+function withoutPreviewEnvironment(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== BROWSER_PREVIEW_ENVIRONMENT_HEADER,
+    ),
   );
 }
 
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
   getAuthorization: (url: string, webContentsId?: number) => string | null,
-  options: { browserPreviewOnly?: boolean } = {},
+  options: RemoteGatewayRequestAuthOptions = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
     const authorization = getAuthorization(details.url, details.webContentsId);
     if (!authorization) {
-      callback({ requestHeaders: details.requestHeaders });
+      callback({ requestHeaders: withoutPreviewEnvironment(details.requestHeaders) });
       return;
     }
-    if (!canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)) {
+    if (!canAttachGatewayAuthorization(details, options)) {
       callback({ requestHeaders: withoutAmbientGatewayCredentials(details.requestHeaders) });
       return;
     }
     const requestHeaders = Object.fromEntries(
-      Object.entries(details.requestHeaders).filter(([name]) => {
+      Object.entries(withoutPreviewEnvironment(details.requestHeaders)).filter(([name]) => {
         const normalized = name.toLowerCase();
         return normalized !== "authorization" && normalized !== "origin";
       }),
     );
+    const environmentId =
+      options.browserPreviewOnly === true
+        ? options.previewViewEnvironment?.(details.webContentsId)
+        : null;
     callback({
       requestHeaders: {
         ...requestHeaders,
         Authorization: authorization,
         Origin: "https://orkestrator.dev",
+        ...(environmentId ? { [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId } : {}),
       },
     });
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
     const authorization = getAuthorization(details.url, details.webContentsId);
-    if (
-      !authorization ||
-      !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)
-    ) {
+    if (!authorization || !canAttachGatewayAuthorization(details, options)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }

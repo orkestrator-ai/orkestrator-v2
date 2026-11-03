@@ -254,9 +254,7 @@ staged context's digest, in the git-ignored, host-local `image-pin.json`
 (local image ids are not reproducible across hosts), and labels the image with
 that digest as preparation does; when the configured tag matches that pin and the
 id is present, jobs run the id rather than the mutable tag. Without a pin, or
-when the pinned id is gone, the tag is used and a warning is logged. For a
-published image, push it and set the registry digest
-(`docker buildx imagetools inspect <name>:<tag>`).
+when the pinned id is gone, the tag is used and a warning is logged.
 
 Preparing the worker on demand (`transcript_artifact_prepare_worker`,
 `preview-worker-prepare.ts`). Packaged installs carry no repository, so the
@@ -264,23 +262,18 @@ backend build (`apps/backend/scripts/build.ts`) ships the complete worker
 build context in `dist/artifact-runtime/worker-context/` (exactly what
 `build.sh` stages: Dockerfile, npm manifest and lockfile, the Node worker
 bundle, every hash-verified pinned bundle, licenses) plus the seccomp
-profile and `published-image.json`. The command (and the "Prepare isolated
-preview worker" action the artifact card and draft inspector show when
-capabilities report `interactiveIsolation: "unavailable"` and
-`workerPreparation.available`) then runs one of two fixed routes. When
-`published-image.json` records a digest and its `contextDigest` equals the
-digest of the context this backend ships (a source checkout stages the
-context with `stage-context.ts` first), it runs `docker pull --quiet
-<image>@<digest>` and requires the pulled image's
-`orkestrator.artifact-preview-worker.context` label to equal that digest.
-Otherwise, or when the pull or label check fails, it runs `docker build
+profile. The command (and the "Prepare isolated preview worker" action the
+artifact card and draft inspector show when capabilities report
+`interactiveIsolation: "unavailable"` and `workerPreparation.available`)
+then builds that context, which is the only route: it runs `docker build
 --quiet --pull=false --label orkestrator.artifact-preview-worker=1 --tag
 orkestrator-artifact-preview-worker:1 <context>` (plus `--label
 orkestrator.artifact-preview-worker.context=<context digest>` whenever the
-context can be hashed), and the backend logs why the
-published image was not used (`context_mismatch`, `pull_failed` or
-`label_mismatch`). A build context is required for both routes, because a pin
-is trusted only for the context it names.
+context can be hashed). A source checkout stages the context with
+`stage-context.ts` into a temporary directory first and removes it after the
+build. Preparation needs a build context, shipped or stageable; it never
+pulls an image by name, so the worker is built only from the install's own
+files. Nothing in the product pushes, publishes or logs in to a registry.
 
 The context digest (`preview-worker-context-digest.ts`, printed by
 `docker/artifact-preview-worker/context-digest.ts <dir>`) is SHA-256 over
@@ -288,14 +281,11 @@ every regular file of the staged context in relative-path order, each framed
 as `<path>\0<length>\0<bytes>`; the seccomp profile copied beside it is
 excluded because it is passed to `docker run`, not built into the image. Any
 change to the worker bundle, a pinned renderer bundle, the Dockerfile or the
-npm lockfile changes it, so a backend never pulls a worker built from other
-sources. Staging runs from the repository root wherever it is invoked,
-because Bun writes module paths relative to the working directory into the
-bundle; the backend build, CI and a source checkout stage the same bytes.
-The backend build prints a notice when the checked-in pin is not for the
-context it ships. At startup a published image already present locally is
-preferred over the local tag only under the same condition (a packaged
-backend with a matching shipped context). Each Docker call has a fixed
+npm lockfile changes it, which is how a backend tells that a worker prepared
+before an upgrade was built from other sources (below). Staging runs from the
+repository root wherever it is invoked, because Bun writes module paths
+relative to the working directory into the bundle; the backend build, CI and
+a source checkout stage the same bytes. Each Docker call has a fixed
 argument vector and a 10-minute bound; output is never logged, only the
 image id is read. A built id is pinned, with its context digest, in
 `<data dir>/artifact-preview-worker/image-pin.json`, which later startups
@@ -306,44 +296,33 @@ the old runner closes once its admitted work drains (at most 60 s). An
 explicit `process` or `disabled` setting, or an explicit
 `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE`, is never overridden. One preparation
 runs at a time; its state (`idle`, `preparing`, `ready`, `failed`, method,
-content-free reason) is reported in `capabilities().workerPreparation`.
+content-free reason) is reported in `capabilities().workerPreparation`. The
+method is always `build`; the protocol type still allows `pull` because
+older backends could report it.
 
 After an upgrade, a packaged backend checks the locally prepared worker
-against the context it ships before using it. When the default tag is present, no published image
-was selected and `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` is unset, it hashes the
-shipped context (once per start, shared with the published-image check) and
-reads the `orkestrator.artifact-preview-worker.context` label of the image it
-would run (the pinned id, or the tag when there is no usable pin). The label
-is part of the content-addressed image, so it cannot disagree with the id a
-pin names. When the label is missing (an image built before images were
-labelled) or names another context, the worker is outdated: `auto` selects
-`process`, logs a warning, and `capabilities().workerPreparation` reports
-`outdated: true` with preparation available, so the artifact card and draft
-inspector show "Prepare isolated preview worker" with wording that says the
-worker was prepared by an earlier version. Preparing again builds the shipped
-context (or pulls a matching published image) and switches to `container`
-without a restart; the next start uses it directly. An explicit `container`
-setting keeps running the outdated image, with a warning and the same
-`outdated` flag. The backend never rebuilds on its own, because a build can
-take minutes and pulls the base image. A shipped context that cannot be hashed
-cannot prove an image stale, so the image is used as before. A source
-checkout ships no context, and staging one costs a Bun build at every start,
-so there the `build.sh` or data-directory pin is trusted as before; rebuild
-with `build.sh` after changing the worker. The replaced image is left for
-Docker's own pruning (`docker image prune` removes it once nothing tags it).
-
-Publishing. Nothing publishes the worker image automatically, and the
-checked-in `published-image.json` holds `null`, so every install builds the
-worker from its shipped context. The `publish-preview-worker` workflow that
-published one image per context digest and proposed pin pull requests was
-removed in November 2026: the image is the Playwright base plus a few small
-files, so a pull saves little over a local build, and the workflow needed a
-pin pull request merged before each release. `docker/artifact-preview-worker/publish.sh
-<repository> [tag]` can still publish an image and write the pin by hand after
-`docker login` (tag defaults to `ctx-<hex>`). Removing the pull route altogether
-is tracked in
-[todo 2681](../todo/transcripts-and-observation/2681-remove-preview-worker-pull-route.md).
-Nothing in the product pushes or logs in.
+against the context it ships before using it. When the default tag is present
+and `ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE` is unset, it hashes the shipped
+context (once per start) and reads the
+`orkestrator.artifact-preview-worker.context` label of the image it would run
+(the pinned id, or the tag when there is no usable pin). The label is part of
+the content-addressed image, so it cannot disagree with the id a pin names.
+When the label is missing (an image built before images were labelled) or
+names another context, the worker is outdated: `auto` selects `process`, logs
+a warning, and `capabilities().workerPreparation` reports `outdated: true`
+with preparation available, so the artifact card and draft inspector show
+"Prepare isolated preview worker" with wording that says the worker was
+prepared by an earlier version. Preparing again builds the shipped context
+and switches to `container` without a restart; the next start uses it
+directly. An explicit `container` setting keeps running the outdated image,
+with a warning and the same `outdated` flag. The backend never rebuilds on
+its own, because a build can take minutes and pulls the base image. A shipped
+context that cannot be hashed cannot prove an image stale, so the image is
+used as before. A source checkout ships no context, and staging one costs a
+Bun build at every start, so there the `build.sh` or data-directory pin is
+trusted as before; rebuild with `build.sh` after changing the worker. The
+replaced image is left for Docker's own pruning (`docker image prune` removes
+it once nothing tags it).
 
 Packaging. The worker image installs `playwright-core` with `npm ci` from
 `docker/artifact-preview-worker/package-lock.json` (generated with the base

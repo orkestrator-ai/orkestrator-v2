@@ -97,3 +97,29 @@ encountered `ENOENT` for trace files because these component-suite invocations
 share `output/playwright/test-results`; that run is not reliable isolation
 proof. Future component reruns must be serialized within one checkout as well
 as kept separate from Docker network churn.
+
+## 2026-11-03: a private network namespace avoids it
+
+While validating to-do 2921 task 3 (branch
+`close-retention-cases-4142aaf8cd0b-r1`, head `08e817a45`), the desktop Cursor
+cases of `e2e/CloseRetention.spec.ts` failed twice in a row on beelink (load
+average 63–87, about ten builds running), 5 failed and 1 passed each time.
+Every failure except one waited for `New agent tab` after `page.reload()`, and
+each of those traces held 111–359 `net::ERR_NETWORK_CHANGED` module requests;
+`ip monitor all` showed veth and bridge events from other builds' containers
+(interface indexes past 4,600).
+
+The same command then passed, run inside a new user and network namespace that
+has only loopback, so Chromium never sees the host's interfaces change:
+
+```sh
+unshare -rn sh -c 'ip link set lo up && ORKESTRATOR_E2E_PORT=<free port> mise run test:logged -- --name <name> -- bunx playwright test --config e2e/playwright.config.ts e2e/CloseRetention.spec.ts --project desktop-chromium --grep Cursor'
+```
+
+It passed all six Cursor cases (51.3 s), and the whole file in both projects
+passed too (71.6 s). It only works for suites that need nothing beyond
+loopback: the component fixture server, its fixture hosts and fake engines.
+Inside the namespace the process is uid 0 in its own user namespace, which
+Playwright's default (`chromiumSandbox: false`) already tolerates. It is not a
+fix for suites that reach Docker or the network. No product or test code was
+changed for this.

@@ -14,6 +14,7 @@ import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
 import { ProjectGroupHeader } from "./ProjectGroupHeader";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
 
 interface SortableProjectGroupProps {
   project: Project;
@@ -101,6 +102,7 @@ export function SortableProjectGroup({
 
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
+  const coordinatorActivity = useCoordinatorActivity(project.id);
   const messagingEnabled = useConfigStore(
     (state) => state.config.global.agentMessaging?.enabled === true,
   );
@@ -164,6 +166,7 @@ export function SortableProjectGroup({
               ...(onRemoveFromFolder ? { removeFromFolder: onRemoveFromFolder } : {}),
               deleteProject: () => setShowDeleteDialog(true),
             }}
+            coordinatorActivity={coordinatorActivity}
             homeActivity={
               home && <ProjectHomeActivity home={home} projectName={project.name} compact />
             }

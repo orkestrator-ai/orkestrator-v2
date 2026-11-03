@@ -8,7 +8,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### Tasks
 
-1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: open.
+1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: partly done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03, see "Assumptions and decisions"); the four moves and placing `keyed-record-format.ts` are open.
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: open.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
@@ -189,9 +189,15 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   and `scheduled-jobs/layout.ts` and `store.ts` (imported by the storage
   layer), and `scheduled-jobs/tools.ts` (imported by `agent-tools.ts` and
   `control-mcp-coordinator-tools.ts`). See "Assumptions and decisions".
-- Folders without an `index.ts` or a lint pattern: `core/mcp-management/`
-  (19 source files, 18 tests) and `core/public-api/` (27 source files, 6
-  tests).
+- Done (task 1's `index.ts` step, 2026-11-03): `core/mcp-management/` and
+  `core/public-api/` each have an `index.ts` and both lint patterns, and
+  production importers outside each folder go through it. Six leaf modules of
+  `public-api/` are named exceptions in the `apps/backend/src/**` pattern,
+  because `public-api/index.ts` reaches most of the backend through
+  `registry.js`: `attention-cursor.js`, `dispatch.js`, `errors.js`,
+  `exec-control.js`, `operation-ledger.js` and `revisions.js`.
+  `mcp-management/` needs none. No domain folder is now without an
+  `index.ts`.
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -268,8 +274,8 @@ Order: move the domains few others depend on first, so the procedure is proven
 before the busy ones move.
 
 1. **Wave 1 (leaves):** `opencode`, `web-annotations`, `http-bridge`,
-   `control-mcp`. Add an `index.ts` and both lint patterns to
-   `mcp-management/` and `public-api/`. Place `keyed-record-format.ts` rather
+   `control-mcp`. (Done: an `index.ts` and both lint patterns for
+   `mcp-management/` and `public-api/`.) Place `keyed-record-format.ts` rather
    than giving it a folder (see "Open questions").
 2. **Wave 2 (mid-tier):** `plan-usage`, `features`, `coordinator`,
    `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`,
@@ -322,9 +328,96 @@ Done when:
 
 ## Assumptions and decisions
 
-Decisions taken while doing tasks 5 and 6 (2026-10-28). Waves 1 to 4 (tasks 1
-to 4) were left open on purpose: they move many files that other work in
-flight touches.
+Decisions taken while doing tasks 5 and 6 (2026-10-28) and task 1's
+`index.ts` step (2026-11-03). The moves in waves 1 to 4 (tasks 1 to 4) were
+left open on purpose: they move many files that other work in flight touches.
+
+### Task 1: the `index.ts` step for `mcp-management/` and `public-api/` first
+
+- Chosen: the recommended option (2026-11-03, against `main` at
+  `b68b6e71`): the two `index.ts` files and lint patterns on their own, with
+  no file moves, using the procedure task 6 used for the four newer folders
+  (below). The four wave 1 moves and `keyed-record-format.ts` stay open.
+- Why: no renames, so no rebase conflicts for open branches; each rewritten
+  importer is a one-line (or one-statement) path change.
+
+### Task 1: what each `index.ts` exports
+
+- Chosen: exactly the symbols production code outside each folder imported on
+  `b68b6e71`, as explicit named re-exports, with `export type` or inline
+  `type` for types. `mcp-management/index.ts` re-exports `McpManagementService`
+  and the types `commands-registry-mcp.ts` and `commands-context.ts` use;
+  `public-api/index.ts` re-exports what the 18 production importers outside
+  the folder use, and 13 of them now import it through `index.ts`.
+- Importers that pulled several symbols from one folder now have one import
+  statement per folder (`commands-registry-mcp.ts`, `worker-turn-controls.ts`,
+  `native-agent-job-tab-reuse.ts`). `commands-context.ts`'s
+  `import("…")` type expression points at `mcp-management/index.js` too.
+- The exception modules are still re-exported from `public-api/index.ts`, and
+  importers outside the cycle (`environment-move.ts`,
+  `native-agent-goal-check.ts`, `control-mcp-server.ts`,
+  `worker-turn-controls.ts`) import them through it. Options: (a) re-export
+  them and route every importer that can through `index.ts`; (b) leave them
+  out of `index.ts` and have every importer import them directly. Chosen (a):
+  `index.ts` stays the complete list of what the domain offers, and the
+  exception list says only who may bypass it. Cons: the same symbol has two
+  allowed import paths. (Task 6's `scheduled-jobs/index.ts` already does the
+  same for `ScheduledJobCapacityError` from `store.js`.)
+- Not routed through `index.ts`: co-located tests and test support (the
+  tests-off override exempts them), `apps/backend/tests/**`, and the test-tier
+  path strings in `scripts/test-tiers.ts`.
+
+### Task 1: named exceptions where `public-api/index.ts` would close a runtime cycle
+
+- Problem found: `public-api/index.ts` re-exports `registry.js`,
+  `actions-sessions.js`, `sessions.js`, `dispatch.js`, `exec-control.js` and
+  `actions-session-commands.js`, each of which reaches most of the backend
+  (commands, storage, scheduled jobs, control MCP). Six of the 18 production
+  importers are inside that reach, so routing them through `index.ts` closes a
+  runtime import cycle: `storage-public-operations.ts` (through
+  `storage-repositories.ts` and `storage.ts`), `commands-environment.ts`,
+  `commands-servers.ts` and `container-replacement.ts` (through
+  `actions-projects.ts` and `commands-registry-projects.ts`),
+  `control-mcp-caller.ts` (through `scheduled-jobs/executor.ts` and
+  `control-mcp-tools.ts`) and `scheduled-jobs/executor.ts` (through
+  `actions-schedules.ts`). Found with a throwaway reachability script over the
+  same value-edge graph `tests/unit/module-import-cycles.test.ts` builds.
+  `mcp-management/index.ts` reaches neither of its two importers, so it has
+  no exceptions.
+- Options: (a) name the leaf modules those six files import as exceptions in
+  the `apps/backend/src/**` pattern; (b) keep the deep imports with an
+  `oxlint-disable-next-line` and a reason at each site; (c) make `registry.js`
+  the exception instead, so `index.ts` would not reach the backend; (d) break
+  the cycles by moving code.
+- Chosen: (a), as task 6 did. The exceptions are `attention-cursor.js`,
+  `dispatch.js`, `errors.js`, `exec-control.js`, `operation-ledger.js` and
+  `revisions.js`; the `public-api/index.ts` header names them and the files
+  that import them directly. The six files keep their imports unchanged,
+  except `scheduled-jobs/executor.ts`, whose type-only import of
+  `PublicActionHandler` (from `types.js`, not an exception) now comes from
+  `index.ts` as `import type`, which adds no runtime edge. The
+  `tests/unit/**` patterns stay strict (index only).
+- Why: (c) does not work: `actions-sessions.js`, `sessions.js`,
+  `dispatch.js`, `exec-control.js` and `actions-session-commands.js` reach the
+  same six files without `registry.js`, so it would need most of the surface
+  as exceptions. (d) is a non-path edit, outside this file's "pure moves"
+  rule. (b) scatters the same list over six files. (a) also leaves
+  `commands-environment.ts` and `commands-servers.ts`, which other open
+  branches edit, untouched.
+- Cons: six `public-api/` files are importable without `index.ts`; a reader
+  has to check the lint pattern or the `index.ts` header to see them. They can
+  go when `storage` and `commands` get their own folders and the cycle through
+  `registry.js` is broken at the composition root.
+
+### Task 1: neither pattern collides with the protocol package
+
+- `@orkestrator/protocol/public-api*` and `@orkestrator/protocol/mcp-management`
+  are single path segments, so `**/public-api/*` and `**/mcp-management/*`
+  do not match them; no `!@orkestrator/protocol/…` negation is needed. Checked
+  with a probe file (deleted): deep imports into both folders are reported
+  under `apps/backend/src/**` and `tests/unit/**`, the six exceptions and
+  `index.js` are not reported under `apps/backend/src/**`, an exception is
+  reported under `tests/unit/**`, and the protocol imports are not reported.
 
 ### Task 6: track the four folders here, as part of wave 1's `index.ts` step
 

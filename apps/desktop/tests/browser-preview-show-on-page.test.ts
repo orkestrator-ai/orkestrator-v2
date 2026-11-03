@@ -350,6 +350,7 @@ describe("responsive capture sets", () => {
       scroll: { x: 0, y: 0 },
       devicePixelRatio: 2,
       sensitive: [],
+      sensitiveComplete: true,
       rect: width === 390 ? null : { x: 10, y: 20, width: 30, height: 40 },
       state: width === 390 ? "missing" : "matched",
       stable: true,
@@ -364,6 +365,28 @@ describe("responsive capture sets", () => {
       ["page", `${fixtureTargets.element.label} (not found) · 390 px`],
       ["element", `${fixtureTargets.element.label} · 1024 px`],
     ]);
+  });
+
+  test("a width whose sensitive-field scan did not finish keeps no image", async () => {
+    const harness = createHarness();
+    const contents = await harness.attach("http://localhost:5173/settings");
+    contents.responsiveProbe = (width) => ({
+      viewport: { width: width!, height: 500 },
+      scroll: { x: 0, y: 0 },
+      devicePixelRatio: 2,
+      sensitive: [],
+      sensitiveComplete: width !== 390,
+      rect: null,
+      state: "none",
+      stable: true,
+    });
+    const result = await harness.manager.captureResponsiveSet({
+      tabId: "browser-1",
+      environmentId: "env-fixture",
+      widths: [390, 1024],
+    });
+    expect(result.failures).toEqual([{ viewportWidth: 390, code: "unsupported" }]);
+    expect(result.captures.map((descriptor) => descriptor.targetLabel)).toEqual(["Page · 1024 px"]);
   });
 
   test("capacity is reserved for the whole set, and a selection in progress blocks it", async () => {

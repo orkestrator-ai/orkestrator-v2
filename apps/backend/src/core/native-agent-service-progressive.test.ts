@@ -1623,7 +1623,7 @@ describe("native agent progressive remainder", () => {
           expect(recovered).toMatchObject([{ id: "prompt" }, { id: "response" }]);
           expect(messages).toHaveBeenCalledTimes(1);
           // An idle tab must be told, not left to its next slow poll.
-          expect(announced).toHaveBeenCalledWith("env-1", {
+          expect(announced).toHaveBeenCalledWith("env-1", "hydration", {
             agent: "codex",
             logicalSessionKey: identity.logicalSessionKey,
           });
@@ -2050,7 +2050,7 @@ describe("native agent progressive remainder", () => {
         await service.getDiscoveryUpdate(input);
         await waitForCondition(async () => announced.mock.calls.length === 2);
         expect(await readyRevision()).toBe(first + 1);
-        expect(announced).toHaveBeenLastCalledWith("env-1", {
+        expect(announced).toHaveBeenLastCalledWith("env-1", "discovery-renewal", {
           agent: "cursor",
           logicalSessionKey: "env-env-1:discovery-renewal",
         });
@@ -2197,7 +2197,7 @@ describe("native agent progressive remainder", () => {
             expect(recovered?.revision).toBe((first?.revision ?? 0) + 1);
             expect(recovered?.error).toBeUndefined();
             expect(announced).toHaveBeenCalledTimes(cached ? 1 : 2);
-            expect(announced).toHaveBeenLastCalledWith("env-1", {
+            expect(announced).toHaveBeenLastCalledWith("env-1", "discovery-renewal", {
               agent: "cursor",
               logicalSessionKey: input.logicalSessionKey,
             });
@@ -2241,7 +2241,7 @@ describe("native agent progressive remainder", () => {
         const announced = spyOn(storage, "announceNativeAgentSessionProjection");
         // The environment-wide hint is the catalogue renewal's own.
         const catalogueAnnouncements = () =>
-          announced.mock.calls.filter((call) => call.length === 1 || call[1] === undefined);
+          announced.mock.calls.filter((call) => call[1] === "model-catalog-refresh");
 
         now += 31_000;
         await service.getProjection(identity);

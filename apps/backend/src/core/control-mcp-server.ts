@@ -18,7 +18,7 @@ import {
 } from "./control-mcp-credentials.js";
 import type { ControlMcpCaller } from "./control-mcp-caller.js";
 import { createNodeTargets } from "./control-mcp-nodes.js";
-import { controlMcpAuthority } from "./public-api/operation-ledger.js";
+import { controlMcpAuthority } from "./public-api/index.js";
 import {
   COORDINATOR_CAPABILITIES,
   coordinatorToolGranted,

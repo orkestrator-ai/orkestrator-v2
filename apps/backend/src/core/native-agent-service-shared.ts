@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
@@ -73,7 +74,7 @@ import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slas
 import { boundTranscriptResponse } from "@orkestrator/protocol/node/transcript-window";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -402,6 +403,11 @@ export interface NativeAgentObservationInvalidation {
   logicalSessionKey: string;
   owner: "environment" | "coordinator";
   observation: ViewRevisionStamp;
+  /** Which observer path announced it; content-free (todo 0049 task 4). */
+  cause: Extract<
+    NativeSessionInvalidationCause,
+    "content-revision" | "session-content" | "runtime-stopped"
+  >;
 }
 
 /**
@@ -776,6 +782,23 @@ export const NATIVE_DISCOVERY_RETRY_MS = 5_000;
  */
 export function nativeCapabilities(agent: BuildPipelineAgent): NativeAgentCapabilities {
   return nativeAgentCapabilities(agent);
+}
+
+/**
+ * Why compaction instructions cannot be sent to this platform, or `undefined`
+ * when there are none or the platform honours them
+ * (`actions.compactInstructions`). Both compact paths — the composer's
+ * projection action and a `/compact` prompt dispatch — ask this before the
+ * provider, so instructions are refused rather than silently dropped.
+ */
+export function compactInstructionsRefusal(
+  agent: BuildPipelineAgent,
+  instructions: string | undefined,
+): string | undefined {
+  if (!instructions) return undefined;
+  if (nativeCapabilities(agent).actions?.compactInstructions === true) return undefined;
+  const label = AGENT_PLATFORM_LABELS[agent] ?? agent;
+  return `${label} cannot take compaction instructions. Run /compact on its own.`;
 }
 
 /**

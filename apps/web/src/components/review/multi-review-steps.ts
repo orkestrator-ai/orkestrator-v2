@@ -584,9 +584,16 @@ export function multiReviewStepRuntimeParts(
         (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession));
   if (!session) return null;
   const elapsed = fixSessionRuntimeSummary(session, now);
-  return elapsed
-    ? { elapsed, tokens: null, tokensPending: false, live: session.status === "running" }
-    : null;
+  if (!elapsed) return null;
+  return session.status === "running"
+    ? {
+        elapsed,
+        tokens: null,
+        tokensPending: false,
+        live: true,
+        liveStartedAt: Date.parse(session.startedAt),
+      }
+    : { elapsed, tokens: null, tokensPending: false, live: false };
 }
 
 export function multiReviewStepRuntimeSummary(

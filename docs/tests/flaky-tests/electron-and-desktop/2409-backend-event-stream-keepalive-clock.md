@@ -1,7 +1,7 @@
 # Backend event-stream keepalive fixture reaches its watchdog in the aggregate
 
 - **ID:** 2409
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-02
 - **Test:** `a stream that stops its keepalives, or an attempt nothing answers, is given up on`
 - **File:** `apps/desktop/tests/backend-event-stream.test.ts:196`
@@ -68,3 +68,68 @@ No assertion or timeout changed. The known wall-clock scheduling hypothesis
 remains unproven by this recurrence.
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6dWJ96/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 2
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** ERR_INVALID_STATE: Controller is already closed (126.41 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-stream -- bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 0.3 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.
+
+
+## Root cause and fix — 2026-11-03
+
+**Cause.** The test and `BackendHttpClient.consumeEvents`
+(`apps/desktop/electron/backend-process.ts`) both ran on the real wall clock.
+The listener's watchdog is a real `setInterval` (every 10 ms here) that aborts
+the attempt once `Date.now()` passes `lastActivity + 40 ms`; the test feeds a
+keepalive every real 20 ms. That leaves 20 ms of slack: any stretch of
+≥ ~40 ms in which the event loop does not reach the test's timer (GC, other
+work in a busy aggregate worker, descheduling) lets the overdue watchdog tick
+run first, see the deadline passed, and abort. The abort cancels the reader,
+which closes the fixture's `ReadableStream` controller, so the next keepalive
+`enqueue` throws `ERR_INVALID_STATE: Controller is already closed` at line
+196. The implementation behaved correctly for the time it observed; the
+fixture could not control that time.
+
+**Evidence.** A temporary copy of the unchanged test, with a `setTimeout`
+that busy-blocks the event loop for `STALL_MS` scheduled just after the second
+keepalive, gave (3 runs each): 0, 15 and 30 ms passed; 45 and 60 ms failed
+every time with the exact signature (`Controller is already closed` at the
+`push` line, 114.50 ms). Plain CPU contention did not reproduce it on this
+18-core Mac: 48 runs (16 concurrent × 3, 12 `yes` processes) and 96 runs (24
+concurrent × 4, 40 `yes` processes) of the unchanged owner all passed, so the
+aggregate trigger is an event-loop stall rather than CPU share alone.
+
+**Fix.** `BackendListenOptions` gains `streamNow?: () => number` (test override,
+default `Date.now`), used for the connect deadline, the silence deadline, every
+keepalive refresh and the watchdog comparison, and passed to
+`ReconnectBackoff` as its `now` — the same pattern the web gateway already
+uses with `eventReconnectNow`. The test now drives a manual clock: it pushes
+each keepalive, lets the reader and watchdog run, then advances the clock by
+20 ms (100 ms in total, past the 40 ms limit); it advances 40 ms more to make
+the stream silent, then checks the unanswered second attempt is still alive
+before advancing 40 ms to time it out. Real time only bounds the 5 s hang
+guards. Limits, assertions and skips are unchanged apart from one added
+assertion (`attempts[1].aborted` is false before its deadline).
+
+**Verification run.**
+- Same stall probe against the fixed test: `STALL_MS` 0, 45, 60, 200 — 3/3
+  passes each.
+- Mutation check: making keepalives not refresh the deadline fails the
+  rewritten test (restored afterwards).
+- `bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts`: 11 pass.
+- Stress: 24 concurrent runs × 4 rounds with 40 `yes` processes: 96/96 runs
+  passed (11 pass each).
+- `bun fmt --check` and `bunx oxlint` on both touched files: clean;
+  `bun check -p tsconfig.electron.json` and `-p tsconfig.test.json` in
+  `apps/desktop`: no type errors.

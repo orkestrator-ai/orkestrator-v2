@@ -169,52 +169,86 @@ describe("a cold app-server child", () => {
     scope: "user",
     pluginId: "review@curated",
   });
+  const withPlugins = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
 
-  async function waitFor(condition: () => boolean, timeoutMs = 2_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (!condition()) {
-      if (Date.now() > deadline) throw new Error("timed out");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+  /*
+   * Each settle delay is held until the test fires it. A real 20 ms timer
+   * raced every step below: a slow template scan or a delayed poll let a
+   * settling re-read run (and settle) before the test had set up its case.
+   */
+  function manualSettleTimer() {
+    const armed = new Set<() => void>();
+    return {
+      schedule: (fire: () => void) => {
+        armed.add(fire);
+        return () => {
+          armed.delete(fire);
+        };
+      },
+      get armed() {
+        return armed.size;
+      },
+      fire() {
+        const [next, ...rest] = armed;
+        if (!next || rest.length > 0) {
+          throw new Error(`expected one armed settle delay, found ${armed.size}`);
+        }
+        armed.delete(next);
+        next();
+      },
+    };
   }
 
-  function coldCatalogue(engine: ReturnType<typeof fakeEngine>["engine"]) {
+  /** The fakes answer on microtasks; no real timer is armed, so this is exact. */
+  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function coldCatalogue(
+    engine: ReturnType<typeof fakeEngine>["engine"],
+    settle: ReturnType<typeof manualSettleTimer>,
+  ) {
     return new CodexCommandCatalogue({
       engine,
       cwd,
       now: () => 1_000,
       skillTtlMs: 60_000,
       skillColdSettleMs: 20,
+      skillSettleTimer: settle.schedule,
     });
   }
 
   test("its first answer is stale until a settling re-read confirms the plugin skills", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     const first = await commands.list();
     expect(first.status).toBe("stale");
     expect(first.commands.map((row) => row.name)).toContain("$deploy");
     expect(first.commands.map((row) => row.name)).not.toContain("$plugin-review");
 
     // Plugin loading finishes without any notification.
-    state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
-    await waitFor(() => state.calls.length === 2);
+    state.response = withPlugins;
+    settle.fire();
+    await drain();
+    expect(state.calls).toHaveLength(2);
     // The settling read is an ordinary cached read, not a disk rescan.
     expect(state.calls[1]).toEqual({ cwd });
     // The revision moved, so the backend re-reads on the next status poll.
-    await waitFor(() => commands.revision > first.revision);
+    expect(commands.revision).toBeGreaterThan(first.revision);
     // The list changed, so it is not trusted until one more read agrees.
     const grown = await commands.list();
     expect(grown.status).toBe("stale");
     expect(grown.commands.map((row) => row.name)).toContain("$plugin-review");
 
-    await waitFor(() => state.calls.length === 3);
-    await waitFor(() => commands.revision > grown.revision);
+    settle.fire();
+    await drain();
+    expect(state.calls).toHaveLength(3);
+    expect(commands.revision).toBeGreaterThan(grown.revision);
     const settled = await commands.list();
     expect(settled.status).toBe("ready");
     expect(settled.commands.map((row) => row.name)).toContain("$plugin-review");
     expect(state.calls).toHaveLength(3);
     expect(commands.skills.stats.settlingReads).toBe(2);
+    expect(settle.armed).toBe(0);
     commands.dispose();
   });
 
@@ -229,31 +263,34 @@ describe("a cold app-server child", () => {
           calls.push(() => resolve({ result: answer, generation: 1 }));
         }),
     };
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     const firstRead = commands.list();
-    await waitFor(() => calls.length === 1);
+    expect(calls).toHaveLength(1);
     calls[0]!();
     expect((await firstRead).status).toBe("stale");
 
     // A forced read is sent before plugin loading finishes and is still
     // running when the settle timer fires.
     const racing = commands.skills.read({ forceReload: true });
-    await waitFor(() => calls.length === 2);
-    await waitFor(() => commands.skills.stats.settlingReads === 1);
-    response = {
-      data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }],
-    };
+    expect(calls).toHaveLength(2);
+    settle.fire();
+    expect(commands.skills.stats.settlingReads).toBe(1);
+    response = withPlugins;
     calls[1]!();
     const raced = await racing;
     expect(raced.settled).toBe(false);
     expect(raced.snapshot?.bindings.map((binding) => binding.name)).toEqual(["deploy"]);
 
     // The settling read is sent only after the racing one, and sees the plugins.
-    await waitFor(() => calls.length === 3);
+    await drain();
+    expect(calls).toHaveLength(3);
     calls[2]!();
-    await waitFor(() => commands.skills.stats.settlingReads === 2 && calls.length === 4);
+    await drain();
+    settle.fire();
+    expect(commands.skills.stats.settlingReads).toBe(2);
+    expect(calls).toHaveLength(4);
     calls[3]!();
-    await waitFor(() => commands.skills.current()?.bindings.length === 2);
     const settled = await commands.list();
     expect(settled.status).toBe("ready");
     expect(settled.commands.map((row) => row.name)).toContain("$plugin-review");
@@ -262,17 +299,24 @@ describe("a cold app-server child", () => {
 
   test("two pre-plugin answers stay stale until late plugins are observed and confirmed", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     try {
       expect((await commands.list()).status).toBe("stale");
-      await waitFor(() => state.calls.length === 2);
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(2);
       expect((await commands.list()).status).toBe("stale");
-      state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
-      await waitFor(() => state.calls.length === 3);
+      state.response = withPlugins;
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(3);
       const grown = await commands.list();
       expect(grown.status).toBe("stale");
       expect(grown.commands.map((row) => row.name)).toContain("$plugin-review");
-      await waitFor(() => state.calls.length === 4);
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(4);
       const settled = await commands.list();
       expect(settled.status).toBe("ready");
       expect(settled.commands.map((row) => row.name)).toContain("$plugin-review");
@@ -283,19 +327,26 @@ describe("a cold app-server child", () => {
 
   test("an explicit refresh cannot replace the baseline for an already armed delay", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     try {
       await commands.list();
-      await waitFor(() => state.calls.length === 2);
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(2);
       expect((await commands.list()).status).toBe("stale");
-      state.response = { data: [{ cwd: "/w", skills: [skill(), pluginSkill], errors: [] }] };
+      state.response = withPlugins;
       await commands.refresh();
       expect((await commands.list()).status).toBe("stale");
-      await waitFor(() => state.calls.length === 4);
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(4);
       // The second delayed read compares against the pre-plugin first round,
       // even though the explicit refresh already returned the plugin list.
       expect((await commands.list()).status).toBe("stale");
-      await waitFor(() => state.calls.length === 5);
+      settle.fire();
+      await drain();
+      expect(state.calls).toHaveLength(5);
       expect((await commands.list()).status).toBe("ready");
     } finally {
       commands.dispose();
@@ -312,11 +363,13 @@ describe("a cold app-server child", () => {
           result: { data: [{ cwd, skills: [skill()], errors: [] }] },
           generation,
         }));
+        const settle = manualSettleTimer();
         const inventory = new SkillInventory({
           cwd,
           generation: () => generation,
           now: Date.now,
           coldSettleMs: 20,
+          setSettleTimer: settle.schedule,
           list,
           onRefreshed,
         });
@@ -332,13 +385,15 @@ describe("a cold app-server child", () => {
               }),
           );
           const pending = inventory.read({ forceReload: true });
-          await waitFor(() => inventory.stats.settlingReads === 1);
+          settle.fire();
+          expect(inventory.stats.settlingReads).toBe(1);
           if (lifecycle === "dispose") inventory.dispose();
           else generation = 2;
           complete();
           await pending;
-          await new Promise((resolve) => setTimeout(resolve, 40));
+          await drain();
           expect(list).toHaveBeenCalledTimes(2);
+          expect(settle.armed).toBe(0);
           if (lifecycle === "dispose") expect(onRefreshed).toHaveBeenCalledTimes(1);
         } finally {
           inventory.dispose();
@@ -349,21 +404,30 @@ describe("a cold app-server child", () => {
 
   test("a failed settling read leaves the list stale until a read succeeds", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     expect((await commands.list()).status).toBe("stale");
     state.fail = true;
-    await waitFor(() => state.calls.length === 2);
+    settle.fire();
+    await drain();
+    expect(state.calls).toHaveLength(2);
+    expect(settle.armed).toBe(0);
     expect((await commands.list()).status).toBe("stale");
     state.fail = false;
+    // The next successful read answers the round the failed one still owes.
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 5);
+    expect(state.calls).toHaveLength(4);
+    settle.fire();
+    await drain();
+    expect(state.calls).toHaveLength(5);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });
 
   test("a list that keeps changing is trusted after the last settling read", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     let round = 0;
     const listSkills = engine.listSkills;
     engine.listSkills = async (options) => {
@@ -374,55 +438,75 @@ describe("a cold app-server child", () => {
       return listSkills(options);
     };
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(
-      () => commands.skills.stats.settlingReads === SKILL_INVENTORY_LIMITS.maxSettleReads,
-    );
-    await waitFor(() => state.calls.length === SKILL_INVENTORY_LIMITS.maxSettleReads + 1);
+    for (let read = 1; read <= SKILL_INVENTORY_LIMITS.maxSettleReads; read += 1) {
+      settle.fire();
+      await drain();
+    }
+    expect(commands.skills.stats.settlingReads).toBe(SKILL_INVENTORY_LIMITS.maxSettleReads);
+    expect(state.calls).toHaveLength(SKILL_INVENTORY_LIMITS.maxSettleReads + 1);
+    // The rounds are spent: nothing more is armed.
+    expect(settle.armed).toBe(0);
     const settled = await commands.list();
     expect(settled.status).toBe("ready");
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(commands.skills.stats.settlingReads).toBe(SKILL_INVENTORY_LIMITS.maxSettleReads);
     commands.dispose();
   });
 
   test("a restarted child settles again on its own first answer", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 3);
+    for (const _ of [1, 2]) {
+      settle.fire();
+      await drain();
+    }
+    expect(state.calls).toHaveLength(3);
     expect((await commands.list()).status).toBe("ready");
 
     state.generation = 2;
     commands.withdrawGeneration(2);
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 6);
+    for (const _ of [1, 2]) {
+      settle.fire();
+      await drain();
+    }
+    expect(state.calls).toHaveLength(6);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });
 
   test("a child that dies before its settling re-read never marks its successor settled", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     expect((await commands.list()).status).toBe("stale");
     state.generation = 2;
     commands.withdrawGeneration(2);
     // The first child's timer fires against the second child and does nothing.
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    settle.fire();
+    await drain();
     expect(state.calls).toHaveLength(1);
     expect(commands.skills.stats.settlingReads).toBe(0);
     // The second child's first answer is cold in its own right.
     expect((await commands.list()).status).toBe("stale");
-    await waitFor(() => state.calls.length === 4);
+    for (const _ of [1, 2]) {
+      settle.fire();
+      await drain();
+    }
+    expect(state.calls).toHaveLength(4);
     expect((await commands.list()).status).toBe("ready");
     commands.dispose();
   });
 
   test("disposal cancels a pending settling re-read", async () => {
     const { state, engine } = fakeEngine();
-    const commands = coldCatalogue(engine);
+    const settle = manualSettleTimer();
+    const commands = coldCatalogue(engine, settle);
     await commands.list();
+    expect(settle.armed).toBe(1);
     commands.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(settle.armed).toBe(0);
+    await drain();
     expect(state.calls).toHaveLength(1);
   });
 });

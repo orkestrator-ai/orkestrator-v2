@@ -116,7 +116,7 @@ The first human wait opens before the test can switch away, so its badge is clea
 
 ### Task 4: close the host Docker reachability dialog
 
-`e2e/agent-testing/docker-reachability-notice.ts` registers a locator handler that closes the dialog, the same handling `browser-gateway.spec.ts`, `container-wiring-support.ts` and others already do inline. `graph-designer.spec.ts`, `graph-run-view.spec.ts` and `graph-designer-editing.spec.ts` install it in `beforeEach`. Existing inline copies were left alone to keep the change scoped.
+`graph-designer.spec.ts`, `graph-run-view.spec.ts` and `graph-designer-editing.spec.ts` install the existing `acknowledgeDockerReachabilityWarning` helper from `e2e/docker-reachability-warning.ts` in `beforeEach`. The initial implementation overlooked that shared helper and added a duplicate; review caught this and the duplicate was removed. The shared helper now accepts an optional `TestInfo`: overlay callers retain their annotations, while local graph journeys dismiss the notice without an inaccurate docker-exec annotation. Reusing the helper avoids selector drift; retaining a separate copy would isolate callers but duplicate maintenance (reuse is recommended). Existing inline copies elsewhere were left alone to keep the change scoped.
 
 ### Task 4: a blank page after reload under load is recorded, not fixed
 

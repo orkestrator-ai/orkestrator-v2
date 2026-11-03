@@ -1,4 +1,4 @@
-import { closeDockerReachabilityNotice } from "./docker-reachability-notice";
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { ensureProjectExpanded, sidebarEnvironmentRow } from "./sidebar-project";
 import { expect, test, type Page } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
@@ -31,7 +31,7 @@ import { outlivingProcessEnv } from "../../tests/private-tmpdir";
  */
 
 test.use({ actionTimeout: 15_000 });
-test.beforeEach(async ({ page }) => closeDockerReachabilityNotice(page));
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 function devJson(command: string, profile: string) {
   return JSON.parse(

@@ -10,7 +10,7 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
 2. **`build pipeline commands` expects `restartStep` without its selection argument**: open.
 3. **The workflow baseline cannot capture a ticket delivery policy**: open.
 4. **Two graph journeys cannot find their environment in the sidebar**: done (spec drift, not a regression).
-5. **The container Files panel shows a change while the document is hidden**: open.
+5. **The container Files panel shows a change while the document is hidden**: done (2026-11-03: the backend's change projection delivers it; the spec was wrong and now checks the page poll on the All files tab).
 
 ### 1. The DOM-assertion scanner finds six offending test files
 
@@ -98,6 +98,22 @@ Re-run on the branch head `7d99f7acc` (the last code change, which only adds the
 
 **Investigation.** `mise run test:agent:docker:isolated` on a detached `origin/main` at `b0dcf1660` failed the same case at the same line (`toHaveCount(0)` received 1, 14 resolutions) with the same counts as the branch's preparation run: 1 failed, 19 passed, 4 skipped. The companion case `local Files panel shows a file whose announcement arrived while hidden` passed on both.
 
+Delivery path (2026-11-03, main at `7b48c23fb`, beelink, disposable `dev:test` profile with `--fixture-environments local,container --fixture-network full`, headless Chromium). The change reaches the Changes tab through the backend's change projection, not through any page poll:
+
+- Since `d9bc8b840` (agent change tracking, 2026-10-20) the Changes tab is `ChangesView` over `useEnvironmentChangeRows`. `useFilesPanel.ts` turns the 5 s coordinated poll off while the projection owns that tab (`projectionOwnsChanges`), so the "paused poll" the spec waited out does not run on the Changes tab at all, visible or hidden.
+- The backend scans every running container on its own clock (`diff-stats-service.ts`: every 15 s when the container's worktree signal is not armed, within about 2 s of a signal ring when it is), and `environment-projector.ts` publishes `CHANGE_PROJECTION_CHANGED_EVENT`. `lib/changes/subscriptions.ts` applies it and `useEnvironmentChangeRows` reads the first page (`changes_get_view`) with no visibility check.
+- A diagnostic spec sampled once a second while hidden. On the Changes tab: the backend `diff-scan` count advanced on its 15 s clock, the renderer's projection revision went up, the row appeared 4 s and, in a second run, about 13 s after the write, and the only command the page sent was `changes_get_view`. On the All files tab: visible, the page sent `get_file_tree` + `get_git_status` every 5 s; hidden for 32 s, it sent neither and the new tree entry did not appear; it appeared 0.3 to 1.3 s after return.
+- Why the result varied: on this host the container's worktree signal fails to arm (`[diff-stats] signal.demoted demotion=arm-failed`, the host's ufw blocks container-to-host), so delivery waits for the 15 s tick, which lands inside the spec's 12 s hidden window about four times in five; an unmodified rerun here passed. Where the signal arms, delivery takes about 2 s and the old assertion fails every time. The 2026-11-01 pass recorded in 0048 is the 15 s case landing late.
+
+So the product is right: a backend-owned projection keeps a hidden page current from pushed events and a backend cache read, which is what the background-work invariants ask for, and the container is not polled from the page while hidden. The spec assumed the Changes tab was still polled.
+
+**Fix.** `e2e/agent-testing/container-files-wiring.spec.ts` now records this page's own Files panel read commands (`get_git_status`, `get_file_tree`, `get_file_subtree` and their local forms) from its `/__orkestrator/invoke` requests, so another client of the profile cannot add or hide one, and splits the hidden step in two:
+
+- **Changes tab:** with the document hidden, a file written in the container shows while still hidden, within 40 s (one 15 s backend interval, a tick skipped after a recent scan, and the scan), and the page sends no Files panel read meanwhile.
+- **All files tab:** the visible tab is seen polling; once hidden, the page sends no Files panel read for 18 s (three poll intervals, past the container tree's 10 s cache) and a file written then is absent from the tree; it shows after return, and then on the Changes tab and after the reload.
+
+A run with the document left visible fails the new no-read assertion (10 reads recorded), so the check still catches a page that keeps polling a container while hidden. `docs/development/agent-testing.md` describes the split.
+
 **Decisions.**
 
 - **How to proceed?**
@@ -125,6 +141,18 @@ The first human wait opens before the test can switch away, so its badge is clea
 ### Task 4: a blank page after reload under load is recorded, not fixed
 
 One run failed `graph-run-view.spec.ts:48` with a blank page after `page.reload()` at load average ~56; it passed in the run before and alone afterwards. Recorded as flake [3610](../../tests/flaky-tests/web-ui/3610-graph-run-view-blank-page-after-reload.md).
+
+### Task 5: fix the spec, not the product
+
+The ticket asked to fix whichever of product or spec was wrong. Options: pause the change projection while the document is hidden (keeps the old spec, but drops pushed state the backend already computed, needs a catch-up read on return, and saves only a backend cache read per revision, since the container scan runs whatever the page does); or make the spec check what the hidden pause covers (recommended). I took the second: the hidden pause exists to stop the page polling containers, and the projection's live-while-hidden behaviour is already relied on by the local case in the same spec.
+
+### Task 5: assert on this page's requests rather than the backend's counters
+
+`get_recurring_work_diagnostics` counts reads from every client of the profile, and its `file-tree-read` count also rises on backend-side re-walks; one rose while the page was hidden. Recording the page's own `/__orkestrator/invoke` commands is exact for the page under test. The tree-entry absence check is kept as the user-visible half.
+
+### Task 5: run with a full-network fixture container
+
+On beelink, 29 leaked `reach-probe-net` networks from other owners fill Docker's default address pools (follow-up [3320](../containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)), so the fixture could not create its environment network. For the live runs a PATH shim outside the repository gave this profile's networks explicit `10.229.x.0/24` subnets. With that subnet the restricted container's egress gateway failed to apply its policy, so the fixture used `--fixture-network full`. The Files panel path does not depend on the network policy. Not run: the restricted-mode fixture and `mise run test:agent:docker:isolated` end to end.
 
 ## Related
 

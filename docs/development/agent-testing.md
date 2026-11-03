@@ -245,11 +245,14 @@ mise run dev:reset --profile grok-login-qa
 
 `e2e/agent-testing/container-files-wiring.spec.ts` checks the Files panel on a
 container in a real browser with no provider turns: a change written in the
-container shows through the 5 s poll, across an inactive-environment switch, a
-hidden document, a reload and a second window, and a revert from the panel
-restores the file without starting a container fetch. It also checks that a
-tree revision announced while the document was hidden still shows on a local
-worktree after return.
+container shows across an inactive-environment switch, a hidden document, a
+reload and a second window, and a revert from the panel restores the file
+without starting a container fetch. The Changes tab is the backend's change
+projection, which the page applies even while hidden (the backend scans the
+container on its own clock), so the hidden-document check for polling is on the
+All files tab: while hidden the page sends no Files panel read, and the new
+entry shows on return. It also checks that a tree revision announced while the
+document was hidden still shows on a local worktree after return.
 
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:

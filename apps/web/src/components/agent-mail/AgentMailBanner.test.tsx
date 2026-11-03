@@ -181,7 +181,7 @@ describe("AgentMailBanner", () => {
     });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
     expect(screen.getByText("1 message waiting · delivers when this agent is idle")).toBeTruthy();
-    expect(screen.queryByText(/pull only/)).toBeNull();
+    expect(screen.queryByText(/pull only/) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
     await waitFor(() =>
       expect(deliver).toHaveBeenCalledWith("env-1", "tab-1", "message-pending-inject"),

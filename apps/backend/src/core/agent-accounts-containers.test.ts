@@ -1534,7 +1534,8 @@ if (command === "inspect") {
   if (failure === "ambiguous-start") process.exit(17);
 } else if (command === "exec") {
   if (readFileSync(running, "utf8") !== "true") process.exit(18);
-  if (args.includes("--user")) {
+  // Root execs carry a fixed PATH before \`--user root\` (CONTAINER_ROOT_USER_ARGS).
+  if (args[args.indexOf("--user") + 1] === "root") {
     if (failure === "project-access") process.exit(19);
   } else {
     const text = args.at(-1);

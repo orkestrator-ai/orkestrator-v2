@@ -69,3 +69,12 @@ timeout or catalogue implementation changed.
   repetitions, so each repetition inherited the previous one's cache entry
   and probe count. It fails 198/200 with or without the fix and is not a
   valid reproduction for this test.
+
+**Independent verification on `oversized-test-file-45a00165c5f3-r1`.**
+The same clock-order fix was developed independently on this branch. A
+temporary (uncommitted) 5 ms `Bun.sleep` between the first read and the clock
+read made the old ordering fail with expected one probe / received two and
+the new ordering pass. The complete owning file passed alone with
+`mise run test:logged -- --name claude-catalog-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`
+(exit 0), with `--parallel=2` (23 pass, 0 fail), and in 30 back-to-back runs
+(0 failures).

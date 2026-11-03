@@ -1,7 +1,7 @@
 # Claude model catalogue cache expires before its boundary assertion
 
 - **ID:** 2406
-- **Status:** resolved (2026-11-03)
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `the model catalogue without a running CLI > the answer expires, as a backstop for a change nothing reported`
 - **File:** `bridges/claude-bridge/src/services/claude-model-catalog.test.ts:284`

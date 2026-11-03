@@ -82,6 +82,10 @@ After building, it runs Playwright's own dependency check (`ldd` over the eight 
 
 Without the private path, `bunx playwright test --config e2e/preview/playwright.preview.config.ts --project=webkit` failed at launch ("Host system is missing dependencies"; 3 failed, 16 did not run). With `PLAYWRIGHT_BROWSERS_PATH` from the script, the same WebKit project passed (19 passed, 1 skipped), the full suite with the Vite fixture passed (58 passed, 2 skipped: the Chromium-only `vite-page-load.spec.ts` under Firefox and WebKit), and `mise run test:logged -- --name preview-browser -- mise run test:preview:browser` without the fixture exited 0. The shared `~/.cache/ms-playwright/webkit-2370` was unchanged and no system package was installed.
 
+### Task 1: upkeep is tied to the Ubuntu release, not the WebKit revision
+
+The script does not warn when Playwright's WebKit revision differs from the verified `2370`; that fires on most Playwright bumps although the libraries depend only on the Ubuntu release (`UBUNTU_BASE`, currently the `ubuntu24.04` fallback; Playwright 1.64 already ships an `ubuntu26.04` build). A stale pin fails loudly instead: the library check names what is still missing and the script exits non-zero, and Launchpad keeps superseded package files so the current pins stay downloadable. Replacing the pins is needed only when a Playwright upgrade changes the fallback release.
+
 ### Task 2: three comment lines beside the install line
 
 The guide's `test:preview:browser` block names the missing libraries and points at `mise run test:preview:webkit-libs` and the `PLAYWRIGHT_BROWSERS_PATH` it prints. Validation stages on such a host still have to set the variable themselves; the plain command is unchanged.

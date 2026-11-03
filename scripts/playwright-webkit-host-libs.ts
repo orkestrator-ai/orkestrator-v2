@@ -48,11 +48,20 @@ import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
-/** The Ubuntu release Playwright builds its Linux WebKit bundle for. */
+/**
+ * The Ubuntu release whose WebKit bundle Playwright installs on a distribution
+ * it does not support (its platform detection falls back to `ubuntu24.04`).
+ *
+ * What needs maintaining is this pairing, not the WebKit revision: the
+ * libraries the bundle wants depend on the Ubuntu release it was built for, so
+ * a new Playwright revision on the same release needs nothing here. If a
+ * Playwright upgrade moves the fallback to another release (it already ships
+ * an `ubuntu26.04` build), the check at the end of `main` fails naming the
+ * libraries that are still missing; replace `HOST_LIBRARY_PACKAGES` with that
+ * release's packages and update this constant. Launchpad keeps superseded
+ * package files, so the current pins stay downloadable meanwhile.
+ */
 export const UBUNTU_BASE = "ubuntu24.04";
-
-/** The WebKit revision these packages were verified against. */
-export const VERIFIED_WEBKIT_REVISION = "2370";
 
 export interface HostLibraryPackage {
   name: string;
@@ -626,12 +635,6 @@ async function prepareLocked(options: PrepareOptions): Promise<string> {
       `${sharedWebkit} is not installed. Install the engine first: mise exec -- bunx playwright install webkit`,
     );
   }
-  if (revision !== VERIFIED_WEBKIT_REVISION) {
-    log(
-      `warning: these packages were verified against WebKit ${VERIFIED_WEBKIT_REVISION}; ` +
-        `Playwright now uses ${revision}. The dependency check below decides whether they still suffice.`,
-    );
-  }
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const privateWebkit = path.join(directory, webkitName);
   const fingerprint = packagesFingerprint(revision, packages);
@@ -823,7 +826,8 @@ export async function main(
   if (missing.length > 0) {
     throw new Error(
       `WebKit still cannot resolve: ${missing.join(", ")}. ` +
-        "Add the Ubuntu 24.04 package that provides them to HOST_LIBRARY_PACKAGES.",
+        `Add the ${UBUNTU_BASE} package that provides them to HOST_LIBRARY_PACKAGES, or, if ` +
+        "Playwright now installs a different Ubuntu release's WebKit, replace the pins (see UBUNTU_BASE).",
     );
   }
   log("ldd resolves every WebKit library");

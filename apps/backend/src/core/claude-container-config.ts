@@ -176,7 +176,8 @@ function isLoopbackHost(hostname: string): boolean {
     host === "::1" ||
     host === "::" ||
     /^::ffff:(7f[0-9a-f]{2}:|127\.)/.test(host) ||
-    host === "::ffff:0:0"
+    host === "::ffff:0:0" ||
+    host === "::ffff:0.0.0.0"
   );
 }
 

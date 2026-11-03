@@ -705,7 +705,14 @@ test("Claude refresh needs no staged copy update", async () => {
   });
 });
 
-test("Claude refresh inherits only the servers staging would hand a container", async () => {
+test("Claude refresh inherits only the servers staging would hand a container with differing homes", async () => {
+  await fixture.cleanup();
+  const secondHome = "/host-home-for-staging";
+  fixture = createFixture({
+    environmentType: "containerized",
+    env: { ORKESTRATOR_AGENT_TEST_HOST_HOME: secondHome },
+  });
+  fixture.environment.containerId = "container-1";
   fixture.containerFiles.set(CLAUDE, '{"theme":"dark","mcpServers":{}}');
   fixture.write(
     "home/.claude.json",
@@ -719,6 +726,7 @@ test("Claude refresh inherits only the servers staging would hand a container", 
         },
         hostService: { type: "http", url: "http://127.0.0.1:9000/mcp" },
         hostBinary: { command: path.join(fixture.home, "bin", "mcp") },
+        secondHostBinary: { command: path.join(secondHome, "bin", "mcp") },
       },
     }),
   );
@@ -734,6 +742,21 @@ test("Claude refresh inherits only the servers staging would hand a container", 
   expect(JSON.parse(written).mcpServers).toEqual({ fresh: { command: "fresh" } });
   expect(written).not.toContain(SENTINEL);
   expect(written).not.toContain(fixture.home);
+  expect(written).not.toContain(secondHome);
+
+  // Reset also reloads host defaults rather than reintroducing either host path.
+  const snapshot = await fixture.service.snapshot({ targetId });
+  await fixture.service.resolveOverlay({
+    resolution: {
+      targetId,
+      sourceId: "claude:user",
+      expectedRevision: revision(snapshot, "claude:user"),
+      action: { kind: "reset" },
+    },
+  });
+  expect(JSON.parse(fixture.containerFiles.get(CLAUDE)!).mcpServers).toEqual({
+    fresh: { command: "fresh" },
+  });
 });
 
 test("reset after a retained-output restart restores the recorded empty baseline", async () => {

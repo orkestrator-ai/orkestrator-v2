@@ -99,7 +99,7 @@ The material risks are concentrated in four themes:
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
 | M6 | Medium | Web/Electron | No CSP on the main renderer or the gateway-served app, which hold a generic command bridge | Verified |
 | M7 | Medium | Electron | OS sandbox disabled for every window that loads the preload | Reported |
-| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed (see §4) |
+| M8 | Medium | Container | Host `~/.claude.json` staged unfiltered and readable in the container | Fixed; running containers require stop/start (see §4) |
 | M9 | Medium | Container | Legacy images still mount whole host agent homes | Reported |
 | M10 | Medium | Mail | Coordinator mail can target the project-home environment (local path) | Potential |
 | M11 | Medium (design) | Mail | Prompt injection can propagate worker → coordinator → other worker | Reported |
@@ -487,6 +487,16 @@ inherit only the same servers. Legacy images that bind the raw host file
 directly (`commands-containers.ts`, no staged inputs) are not covered; they
 belong to M9. Servers kept on purpose still carry the keys the user put in
 their headers or environment, because delivering them is the point.
+
+**Upgrade requirement:** Stop and start containers that were already running
+when this fix was installed, using Orkestrator's environment controls. Merely
+upgrading or restarting the backend, or opening an already-running container,
+does not sanitize it. The stopped-container start path filters the staged file
+in place and the entrypoint rebuilds the relay and imported copies. Until that
+stop/start, those running containers can still expose the old raw content.
+This does not revoke any secrets previously read; rotate exposed API keys or
+Control MCP tokens as needed. Legacy direct mounts still require the M9 fix.
+
 Live qualification (`apps/backend/tests/claude-config-filter-docker.test.ts`,
 run by `mise run test:agent:docker:isolated` against the image it builds, so
 review of any image change runs it, and in the container live qualification

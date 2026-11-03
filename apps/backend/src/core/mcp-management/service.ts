@@ -1104,7 +1104,13 @@ export class McpManagementService {
     const loaded = (await loadCatalog(this.store, [host])).sources[0]!;
     // Only the servers staging would hand a container (security report M8).
     return host.provider === "claude"
-      ? containerSafeClaudeDefaults(loaded, [this.homes.home])
+      ? containerSafeClaudeDefaults(loaded, [
+          this.homes.home,
+          // Isolated staging can read from a second host home. Apply the same
+          // path exclusion here so refresh/reset cannot restore its host paths.
+          (this.options.env ?? process.env).ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim() ||
+            this.homes.home,
+        ])
       : loaded;
   }
 

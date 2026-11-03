@@ -132,6 +132,9 @@ describe("containerSafeMcpServer", () => {
       "http://[::1]:8080/mcp",
       "http://[::]/mcp",
       "http://[::ffff:127.0.0.1]/mcp",
+      "http://[::ffff:0.0.0.0]:34122/mcp",
+      "http://[::ffff:0:0]:34122/mcp",
+      "http://[0:0:0:0:0:ffff:0.0.0.0]/mcp",
       "file:///etc/passwd",
       "not a url",
     ]) {

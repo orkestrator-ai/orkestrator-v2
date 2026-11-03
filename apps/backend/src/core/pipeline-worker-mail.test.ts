@@ -624,3 +624,197 @@ describe("pipeline worker mailboxes", () => {
     ).toBeNull();
   });
 });
+
+test.each(["dispatched", "absent"] as const)(
+  "terminal pipeline reconciles an interrupted steer as %s",
+  async (outcome) => {
+    const h = await harness();
+    const { build, pipeline } = await runningBuild(h);
+    const main = await h.world.main();
+    const sent = await h.world.delegate(main, worker(h.environmentId, build), "Interrupted steer");
+    const inbox = await h.world.storage.getAgentMailMailbox(h.environmentId, sent.toTabId);
+    await h.world.storage.beginAgentMailInject(
+      inbox.descriptor.mailboxId,
+      sent.id,
+      inbox.descriptor.incarnationId,
+      undefined,
+      { steerRequestId: "terminal-steer" },
+    );
+    await h.world.storage.recordAgentMailInjectRequest(
+      inbox.descriptor.mailboxId,
+      [sent.id],
+      "terminal-steer",
+    );
+    pipeline.phase = "failed";
+    await h.save(pipeline);
+    expect(
+      (await h.world.storage.listInterruptedAgentMailInjects()).map((item) => item.message.id),
+    ).toContain(sent.id);
+    h.provider.recoveredSteer = outcome;
+    await h.world.restart();
+    const recovered = await h.world.storage.getAgentMailMessage(
+      h.environmentId,
+      sent.toTabId,
+      sent.id,
+    );
+    expect(recovered.placement).toBe(outcome === "dispatched" ? "injected" : "expired");
+    const notices = (
+      await h.world.storage.getAgentMailMailbox(main.environmentId, main.tabId)
+    ).messages.filter((message) => message.notice?.state === "mail-expired");
+    expect(notices).toHaveLength(outcome === "absent" ? 1 : 0);
+    expect(h.provider.steers).toHaveLength(0);
+  },
+);
+
+test.each(["accepted", "returned"] as const)(
+  "a claim settling %s after terminal synchronization keeps its outcome",
+  async (outcome) => {
+    const h = await harness();
+    const { build, pipeline } = await runningBuild(h);
+    const main = await h.world.main();
+    const sent = await h.world.delegate(main, worker(h.environmentId, build), "Racing closure");
+    // This test owns directory synchronization explicitly. Drain timer work
+    // first so a competing sync cannot publish expiry before its notice finishes.
+    await h.world.mail.shutdown();
+    await h.world.mail.claimPipelineWorkerMail(h.environmentId, sent.toTabId, "terminal-claim");
+    pipeline.phase = "complete";
+    await h.save(pipeline);
+    await h.world.mail.settlePipelineWorkerMail(h.environmentId, sent.toTabId, [sent.id], outcome);
+    expect(
+      (await h.world.storage.getAgentMailMessage(h.environmentId, sent.toTabId, sent.id)).placement,
+    ).toBe(outcome === "accepted" ? "injected" : "expired");
+    const notices = (
+      await h.world.storage.getAgentMailMailbox(main.environmentId, main.tabId)
+    ).messages.filter((message) => message.notice?.state === "mail-expired");
+    expect(notices).toHaveLength(outcome === "returned" ? 1 : 0);
+  },
+);
+
+test("expired command-node mail sends a notice through the node outbox", async () => {
+  const h = await harness();
+  const { build, pipeline } = await runningBuild(h);
+  const routed: unknown[] = [];
+  const outbox: unknown[] = [];
+  h.world.storage.nodeMailRouter = {
+    route: async (input) => {
+      routed.push(input);
+      return { controllerId: "bk_cmd" };
+    },
+    enqueue: async (destination, item) => {
+      outbox.push({ destination, item });
+      return { seq: 1 };
+    },
+  };
+  const sent = await h.world.storage.sendAgentMail(
+    {
+      kind: "node",
+      nodeId: "bk_cmd",
+      nodeName: "Command node",
+      role: "coordinator",
+      projectId: h.world.projectId,
+      environmentId: "coordinator:remote:main",
+      tabId: "coord-tab",
+      title: null,
+    },
+    {
+      requestId: "node-expiry",
+      toEnvironmentId: h.environmentId,
+      toTabId: pipelineWorkerTabId(build.sessionKey),
+      body: "Queued remote request",
+    },
+    { newDelegation: true },
+  );
+  pipeline.phase = "failed";
+  await h.save(pipeline);
+  expect(
+    (await h.world.storage.getAgentMailMessage(h.environmentId, sent.toTabId, sent.id)).placement,
+  ).toBe("expired");
+  expect(routed).toEqual([
+    {
+      fromEnvironmentId: h.environmentId,
+      fromTabId: sent.toTabId,
+      toEnvironmentId: "",
+      replyToMessageId: sent.id,
+    },
+  ]);
+  expect(outbox).toEqual([
+    {
+      destination: { controllerId: "bk_cmd" },
+      item: {
+        requestId: `pipeline-worker-mail-expired:${sent.id}`,
+        fromEnvironmentId: h.environmentId,
+        fromTabId: sent.toTabId,
+        subject: "Undelivered: your message",
+        body: expect.stringContaining(sent.id),
+      },
+    },
+  ]);
+  await h.world.storage.synchronizeAgentMailboxes();
+  expect(outbox).toHaveLength(1);
+});
+
+test.each(["complete", "failed"] as const)(
+  "transcripts remain readable after pipeline %s",
+  async (phase) => {
+    const h = await harness();
+    const build = stageSession("build", {
+      key: "terminal-build",
+      messages: [{ id: "retained", role: "assistant", content: "Retained result" }],
+    });
+    const pipeline = pipelineSnapshot(h.environmentId, h.world.projectId, [build]);
+    await h.save(pipeline);
+    pipeline.phase = phase;
+    await h.save(pipeline);
+    await h.world.restart();
+    const mailbox = await h.world.storage.getAgentMailMailbox(
+      h.environmentId,
+      pipelineWorkerTabId(build.sessionKey),
+    );
+    expect(mailbox.descriptor.tombstonedAt).toBeDefined();
+    const transcript = await readPipelineWorkerTranscript(h.world.storage, {
+      environmentId: h.environmentId,
+      ...workerAddress(build),
+    });
+    expect(transcript.messages).toEqual(build.messages);
+    expect(transcript.worker).toMatchObject({
+      status: phase === "complete" ? "finished" : "failed",
+    });
+  },
+);
+
+test.each(["applied", "rejected"] as const)(
+  "steer %s settles across terminal directory sync",
+  async (outcome) => {
+    const h = await harness();
+    const { build, pipeline } = await runningBuild(h);
+    const originalProvider = h.provider.provider.bind(h.provider);
+    h.provider.provider = () => ({
+      ...originalProvider(),
+      performSessionAction: async (_sessionId, action) => {
+        if (action.kind !== "steer") throw new Error("Expected a steer action");
+        pipeline.phase = "failed";
+        await h.save(pipeline);
+        return outcome === "rejected"
+          ? { outcome, reason: "steer-capacity-exceeded", requestId: action.requestId! }
+          : { outcome };
+      },
+    });
+    const main = await h.world.main();
+    const sent = await h.world.delegate(
+      main,
+      worker(h.environmentId, build),
+      "Race with termination",
+      { deliverNow: true },
+    );
+    const message = await h.world.storage.getAgentMailMessage(
+      h.environmentId,
+      sent.toTabId,
+      sent.id,
+    );
+    expect(message.placement).toBe(outcome === "applied" ? "injected" : "expired");
+    const notices = (
+      await h.world.storage.getAgentMailMailbox(main.environmentId, main.tabId)
+    ).messages.filter((item) => item.notice?.state === "mail-expired");
+    expect(notices).toHaveLength(outcome === "rejected" ? 1 : 0);
+  },
+);

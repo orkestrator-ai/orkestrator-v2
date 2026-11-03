@@ -616,7 +616,19 @@ export class AgentMailboxDirectory {
         }
       }
       for (const [mailboxId, mailbox] of Object.entries(store.mailboxes)) {
-        if (observed.has(mailboxId) || mailbox.tombstonedAt) continue;
+        if (observed.has(mailboxId)) continue;
+        if (mailbox.tombstonedAt) {
+          // Reconciliation may have returned a proven-unsent claim since closure.
+          if (
+            mailbox.kind === "pipeline" &&
+            mailbox.pipelineWorker &&
+            expirePipelineWorkerMail(store, mailbox, mailbox.pipelineWorker, expired)
+          ) {
+            mailbox.revision += 1;
+            changedMailboxIds.add(mailboxId);
+          }
+          continue;
+        }
         if (mailbox.kind === "pipeline" && mailbox.pipelineWorker) {
           // Its pipeline finished or was removed: keep the final status so a
           // later send is refused with it, and expire what it never read.
@@ -633,6 +645,8 @@ export class AgentMailboxDirectory {
         mailbox.injectOverride = "off";
         mailbox.revision += 1;
         for (const message of mailbox.messages) {
+          // Worker claims remain journaled until their own outcome is known.
+          if (mailbox.kind === "pipeline") continue;
           if (message.placement !== "pending-inject" && message.placement !== "inject-held")
             continue;
           message.placement = "undeliverable";

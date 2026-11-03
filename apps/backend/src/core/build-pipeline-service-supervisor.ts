@@ -628,8 +628,13 @@ export class BuildPipelineSupervisor {
       }
       const worker = sessionForCurrentPhase(pipeline);
       if (worker) {
-        const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, worker));
-        if (await this.dispatchWorkerMail(pipeline, provider, worker)) return;
+        if (
+          await dispatchWorkerMailTurn(this.ctx, pipeline, worker, async () => {
+            const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, worker));
+            await this.dispatchPending(pipeline, provider);
+          })
+        )
+          return;
       }
       await this.advanceValidation(pipeline);
       return;
@@ -892,6 +897,8 @@ export class BuildPipelineSupervisor {
       contextUsage,
       transcript.taken(),
     );
+    // Retain the result contract even if usage finalization defers this boundary.
+    session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
     const previousUsagePolls = session.usageFinalizationPolls;
@@ -1689,6 +1696,7 @@ export class BuildPipelineSupervisor {
         turnStartedAt: promptStartedAt,
         label,
         messageRevision: 0,
+        validationPlan: schema === REVIEW_VALIDATION_PLAN_SCHEMA,
         structuredRequestId: schema !== undefined ? requestId : undefined,
         resultTransport,
         resultSubmission: resultTransport === "tool-v1" ? ("preparing" as const) : undefined,

@@ -222,6 +222,7 @@ export async function withService(
     },
   ) => Promise<void>,
   options: {
+    beforeProvider?: () => void;
     realKanban?: boolean;
     toolMode?: boolean;
     workflowResultsWithoutTools?: boolean;
@@ -405,7 +406,10 @@ export async function withService(
   };
   const service = new BuildPipelineService(storage, invoke, {
     autoAdvance: false,
-    provider: async () => provider,
+    provider: async () => {
+      options.beforeProvider?.();
+      return provider;
+    },
     ...(controls.workflowResults
       ? {
           workflowResults: controls.workflowResults,

@@ -24,6 +24,15 @@ describe("review workers' mail identity", () => {
             { agent: "opencode", model: "provider/model" },
           ]),
         );
+        const delivered = new Set<string>();
+        service.setWorkerMailbox({
+          claim: async (_environment, tabId) => {
+            if (delivered.has(tabId)) return null;
+            delivered.add(tabId);
+            return { text: "Consider this review clarification.", messageIds: [tabId] };
+          },
+          settle: async () => {},
+        });
         const addressing = await advanceUntil(service, read, started.id, "addressing");
         expect(addressing.error ?? addressing.phase).toBe("addressing");
 
@@ -34,7 +43,7 @@ describe("review workers' mail identity", () => {
         for (const session of reviewSessions) {
           const tabId = pipelineWorkerTabId(session.sessionKey);
           const turns = sent.filter((entry) => entry.sessionId === session.sdkSessionId);
-          expect(turns.length).toBeGreaterThan(0);
+          expect(turns.length).toBeGreaterThanOrEqual(2);
           for (const turn of turns) {
             if (session.agent === "opencode") {
               expect(turn.agentMcp).toBeUndefined();

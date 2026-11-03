@@ -525,7 +525,7 @@ export class BuildPipelineReviewFanout {
       workerMailTurn: (reviewer) =>
         this.deps.workerMailTurn?.(
           pipeline,
-          reviewerSessionKey(pipeline, reviewer),
+          reviewer.sessionKey ?? reviewerSessionKey(pipeline, reviewer),
           reviewer.agent,
         ),
       ...(this.deps.artifactDispatch

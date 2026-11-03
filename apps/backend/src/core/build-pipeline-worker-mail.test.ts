@@ -5,7 +5,12 @@
  */
 import { describe, expect, test } from "bun:test";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
-import { pipeline, startBuilding, withService } from "./build-pipeline-service-test-support.js";
+import {
+  pipeline,
+  mutateStored,
+  startBuilding,
+  withService,
+} from "./build-pipeline-service-test-support.js";
 import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
 
 describe("worker mail at a pipeline worker's turn end", () => {
@@ -113,4 +118,123 @@ describe("a stage turn without a workflow-result capability", () => {
       },
     );
   });
+});
+
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+
+test("preparation mail retains its validation plan and commands run before review", async () => {
+  await withService(async (service, storage, provider, invocations, controls) => {
+    const { started } = await startBuilding(service, storage);
+    await service.retryReview(started.id);
+    const preparing = await pipeline(storage, started.id);
+    const session = preparing.sessions.at(-1)!;
+    expect(preparing.activePromptContext?.validationPlan).toBe(true);
+    let queued = true;
+    service.setWorkerMailbox({
+      claim: async () => {
+        if (!queued) return null;
+        queued = false;
+        return { text: "Include the targeted check.", messageIds: ["prep-mail"] };
+      },
+      settle: async () => {},
+    });
+    provider.structured = async <T>(_id: string, requestId: string) => ({
+      ok: true,
+      provider: "claude",
+      requestId,
+      value: {
+        headRef: controls.currentHead,
+        commands: [
+          {
+            id: "targeted",
+            command: "bun test ./target.test.ts",
+            cwd: ".",
+            dependsOn: [],
+            resources: [],
+            weight: 1,
+            timeoutMs: 60000,
+          },
+        ],
+        limitations: [],
+      } as T,
+    });
+    await service.advanceNow(started.id);
+    expect(provider.sent.at(-1)?.schema).toEqual(REVIEW_VALIDATION_PLAN_SCHEMA);
+    const followUp = await pipeline(storage, started.id);
+    expect(followUp.activePromptContext?.validationPlan).toBe(true);
+    expect(followUp.sessions.at(-1)?.validationPlan).toBe(true);
+    await service.advanceNow(started.id);
+    expect((await pipeline(storage, started.id)).validationRun?.plan.commands[0]?.id).toBe(
+      "targeted",
+    );
+    await service.advanceNow(started.id);
+    expect(invocations.some((entry) => entry.command === "start_review_validation")).toBe(true);
+    expect((await pipeline(storage, started.id)).phase).not.toBe("reviewing");
+    expect(session.producedReviewPackagePlan).toBe(true);
+  });
+});
+
+test("command validation advances without a provider when no worker mail is queued", async () => {
+  let unavailable = false;
+  await withService(
+    async (service, storage, _provider, invocations) => {
+      const { started } = await startBuilding(service, storage);
+      await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.validationRun = newReviewValidationRun("command-only", {
+          headRef: "1".repeat(40),
+          commands: [],
+          limitations: ["No commands configured."],
+        });
+      });
+      service.setWorkerMailbox({ claim: async () => null, settle: async () => {} });
+      unavailable = true;
+      await service.advanceNow(started.id);
+      expect(invocations.some((entry) => entry.command === "start_review_validation")).toBe(true);
+      expect((await pipeline(storage, started.id)).error).toBeUndefined();
+    },
+    {
+      beforeProvider: () => {
+        if (unavailable) throw new Error("bridge unavailable");
+      },
+    },
+  );
+});
+
+test("preparation mail renews a validation-plan tool slot", async () => {
+  await withService(
+    async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.retryReview(started.id);
+      const before = await pipeline(storage, started.id);
+      const oldKey = before.sessions.at(-1)!.structuredRequestId!;
+      let queued = true;
+      service.setWorkerMailbox({
+        claim: async () => {
+          if (!queued) return null;
+          queued = false;
+          return { text: "Clarify the validation plan.", messageIds: ["tool-prep-mail"] };
+        },
+        settle: async () => {},
+      });
+      await service.advanceNow(started.id);
+      const after = await pipeline(storage, started.id);
+      const key = after.sessions.at(-1)!.structuredRequestId!;
+      expect(key).not.toBe(oldKey);
+      const scope = { environmentId: "env-1", projectId: "project-1" };
+      expect(await controls.workflowResults!.binding(scope, key)).toMatchObject({
+        kind: "validation-plan",
+      });
+      expect(
+        await controls.workflowResults!.submit(scope, key, {
+          headRef: controls.currentHead,
+          commands: [],
+          limitations: ["No checks configured."],
+        }),
+      ).toMatchObject({ ok: true });
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).validationRun?.status).toBe("planned");
+    },
+    { toolMode: true },
+  );
 });

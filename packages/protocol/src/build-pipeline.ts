@@ -832,6 +832,8 @@ export function isPipelineTranscriptReference(
 }
 
 export interface PipelineSession {
+  /** Preparation result contract retained across turn completion and mail follow-ups. */
+  validationPlan?: boolean;
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
   /** Times this stage turn was resent after the weekly limit stopped it. */
@@ -1809,6 +1811,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.status === "running" || value.status === "idle" || value.status === "error") &&
     isIsoDate(value.startedAt) &&
     (value.completedAt === undefined || isIsoDate(value.completedAt)) &&
+    (value.validationPlan === undefined || typeof value.validationPlan === "boolean") &&
     (value.tokenCount === undefined || isNonNegativeInteger(value.tokenCount)) &&
     (value.usageFinalizationPolls === undefined ||
       (isNonNegativeInteger(value.usageFinalizationPolls) &&

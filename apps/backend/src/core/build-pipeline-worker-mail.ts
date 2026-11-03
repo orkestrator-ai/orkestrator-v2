@@ -94,9 +94,9 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
   }
 
   /** The provider session and harness a live worker runs on. */
-  private liveSession(pipeline: BuildPipeline, tabId: string) {
+  private liveSession(pipeline: BuildPipeline, tabId: string, includeEnded = false) {
     const worker = pipelineWorker(pipeline, tabId);
-    if (!worker || pipelineWorkerEnded(worker.status)) return null;
+    if (!worker || (!includeEnded && pipelineWorkerEnded(worker.status))) return null;
     const session = pipeline.sessions.find(
       (candidate) => candidate.sessionKey === worker.sessionKey,
     );
@@ -205,7 +205,7 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
     requestId: string,
   ): Promise<"dispatched" | "not-dispatched" | "unknown"> {
     const pipeline = await this.pipelineFor(environmentId, tabId).catch(() => null);
-    const live = pipeline ? this.liveSession(pipeline, tabId) : null;
+    const live = pipeline ? this.liveSession(pipeline, tabId, true) : null;
     if (!pipeline || !live) return "unknown";
     try {
       const provider = await this.agents.provider(pipeline, live.agent);
@@ -255,7 +255,9 @@ export async function dispatchWorkerMailTurn(
   if (!claim) return false;
   const previousRequestId = session.structuredRequestId;
   const validationPlan =
-    pipeline.validationRun !== undefined || pipeline.activePromptContext?.validationPlan === true;
+    session.validationPlan === true ||
+    pipeline.validationRun !== undefined ||
+    pipeline.activePromptContext?.validationPlan === true;
   try {
     if (pipeline.validationRun && !pipeline.reviewPackage) {
       const run = await ctx.invoke<ReviewValidationRun>("cancel_review_validation", {

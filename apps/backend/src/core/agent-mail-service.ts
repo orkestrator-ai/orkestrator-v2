@@ -247,6 +247,7 @@ export class AgentMailService {
       timer.unref?.();
     });
     const interrupted = await this.storage.listInterruptedAgentMailInjects();
+    let returnedWorkerClaim = false;
     for (const { mailbox, message, steerRequestId } of interrupted) {
       if (mailbox.kind === "pipeline" && this.hooks.pipelineWorkers && message.injectRequestId) {
         // A delivery the pipeline journaled before the restart is its own;
@@ -259,6 +260,7 @@ export class AgentMailService {
           : await port
               .reconcileDelivery(mailbox.environmentId, mailbox.tabId, message.injectRequestId)
               .catch(() => "unknown" as const);
+        if (status === "not-dispatched") returnedWorkerClaim = true;
         await this.applyInjectorMutation(() =>
           this.storage.finishAgentMailInject(
             mailbox.mailboxId,
@@ -309,6 +311,8 @@ export class AgentMailService {
         ),
       );
     }
+    // A terminal worker's proven-unsent claim now needs expiry and a sender notice.
+    if (returnedWorkerClaim) await this.storage.synchronizeAgentMailboxes();
     await this.storage.recoverInterruptedAgentMailInjects();
     // Presence recovery may clear a proven-unsent dispatch row. Reconcile the
     // interrupted mail first, while that durable refusal evidence still exists.
@@ -661,6 +665,7 @@ export class AgentMailService {
         ),
       );
     }
+    if (outcome === "returned") await this.storage.synchronizeAgentMailboxes();
     log.info("inject.dispatched", () => ({
       messageIds: messageIds.join(","),
       toEnvironmentId: environmentId,
@@ -1033,6 +1038,8 @@ export class AgentMailService {
             this.storage.finishAgentMailInject(mailbox.mailboxId, entry.id, result),
           );
         }
+        if (mailbox.kind === "pipeline" && result.outcome === "held")
+          await this.storage.synchronizeAgentMailboxes();
         log.info("inject.dispatched", () => ({
           messageIds: batched.map((entry) => entry.id).join(","),
           toEnvironmentId: mailbox.environmentId,

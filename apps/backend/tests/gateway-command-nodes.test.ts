@@ -376,7 +376,8 @@ describe("DP-03 relay through the command node", () => {
         headers: { authorization: `Bearer ${leafInfo.token}`, [CONTROLLER_HEADER]: "bk_command" },
       }),
     };
-    const { info } = await startGateway({ backendHello: async () => identity, nodeHooks });
+    const { gateway, info } = await startGateway({ backendHello: async () => identity, nodeHooks });
+    const session = (gateway as unknown as { issueBrowserSession(): string }).issueBrowserSession();
     const { WebSocket } = await import("ws");
     const { TERMINAL_WEBSOCKET_SUBPROTOCOL } =
       await import("@orkestrator/protocol/terminal-websocket");
@@ -385,7 +386,7 @@ describe("DP-03 relay through the command node", () => {
       TERMINAL_WEBSOCKET_SUBPROTOCOL,
       {
         headers: {
-          cookie: `orkestrator_gateway_auth=${info.token}`,
+          cookie: `orkestrator_gateway_auth=${session}`,
           origin: new URL(info.url).origin,
         },
       },

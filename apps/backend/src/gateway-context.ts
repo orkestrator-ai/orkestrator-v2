@@ -8,8 +8,8 @@ import { PreviewAdmission } from "./preview-admission.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayAuth } from "./gateway-auth.js";
+import { BrowserSessionStore, gatewayRequestCredential } from "./gateway-sessions.js";
 import {
-  AUTH_COOKIE,
   KEEPALIVE_MS,
   BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS,
   DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
@@ -17,8 +17,6 @@ import {
   resolveGatewayCompressionMode,
   GatewayMetricsStore,
   parseAllowedOrigins,
-  getCookie,
-  getBearerToken,
 } from "./gateway-internals.js";
 import type {
   BackendInvoker,
@@ -36,7 +34,10 @@ import type {
  */
 export type GatewayCredentialChecks = Pick<
   GatewayAuth,
-  "gatewayCredentialMatches" | "gatewayCredentialExpiresAt" | "isOriginAllowed"
+  | "gatewayCredentialMatches"
+  | "gatewayCredentialExpiresAt"
+  | "requestCredentialMatches"
+  | "isOriginAllowed"
 >;
 
 /**
@@ -91,11 +92,8 @@ export class GatewayContext {
   token = "";
   authFile = "";
   agentTestBootstraps = new Map<string, number>();
-  /**
-   * `expiresAt` slides with activity; `absoluteExpiresAt` never moves, so a
-   * continuously polled browser cannot hold a session open indefinitely.
-   */
-  agentTestSessions = new Map<string, { expiresAt: number; absoluteExpiresAt: number }>();
+  /** Opaque browser sessions behind the gateway cookie (login form and agent-test links). */
+  readonly browserSessions: BrowserSessionStore;
   clients = new Map<EventClientWriter, GatewayEventClient>();
   /**
    * Latest full-pane tmux frame dropped for each lagging client/session.
@@ -127,6 +125,7 @@ export class GatewayContext {
     this.strictPort = options.strictPort ?? false;
     this.agentTestMode = options.agentTestMode ?? false;
     this.agentTestProfile = options.agentTestProfile?.trim() || undefined;
+    this.browserSessions = new BrowserSessionStore(this.agentTestMode);
     this.controlBindAddress = options.controlBindAddress;
     this.controlPort = options.controlPort;
     this.loopbackClientPort = options.loopbackClientPort;
@@ -177,17 +176,15 @@ export class GatewayContext {
     this.metrics = new GatewayMetricsStore(this.compression);
     this.terminalWebSocket = new TerminalWebSocketGateway({
       backend: this.backend,
+      // A token sent in the authenticate frame is a bearer; otherwise the
+      // upgrade's own headers decide, where a cookie only carries a session.
       tokenMatches: (request, suppliedToken) =>
-        this.credentials.gatewayCredentialMatches(
-          suppliedToken ??
-            getBearerToken(request.headers) ??
-            getCookie(request.headers, AUTH_COOKIE),
-        ),
+        suppliedToken !== undefined
+          ? this.credentials.gatewayCredentialMatches(suppliedToken)
+          : this.credentials.requestCredentialMatches(request),
       credentialExpiresAt: (request, suppliedToken) =>
         this.credentials.gatewayCredentialExpiresAt(
-          suppliedToken ??
-            getBearerToken(request.headers) ??
-            getCookie(request.headers, AUTH_COOKIE),
+          suppliedToken ?? gatewayRequestCredential(request.headers),
         ),
       originAllowed: (request) =>
         Boolean(

@@ -226,6 +226,11 @@ and its shared origin, cookie rewriting and missing WebSockets.
 **Context.** "Enabling defaults" and open question 3. "An absence of
 complaints is not a metric." Every flip keeps the rollback drill passing
 (`apps/backend/tests/gateway-preview.test.ts:209`).
+Security finding M1 (`docs/reports/2-26-10-27-security.md`) also asks for
+this flip. Its first half shipped separately: every legacy
+`browser/loopback` response now carries `Content-Security-Policy: sandbox`,
+so the legacy route no longer runs preview HTML on the gateway origin and
+this flip is no longer the only fix for M1.
 
 **Investigation.** `DEFAULT_PREVIEW_SETTINGS` still has `transport: false`,
 `relay: false` (`apps/backend/src/core/storage-preview-services.ts:129-130`).

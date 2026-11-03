@@ -87,12 +87,12 @@ The material risks are concentrated in four themes:
 
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
-| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Verified (browser behaviour: standard) |
+| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Verified |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Verified code / Potential runtime |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
-| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Verified |
+| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Verified |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
@@ -116,7 +116,15 @@ grants nothing new.
 
 ### H1. The gateway auth cookie is the durable token and is sent to every port on the host
 
-**Status:** Verified (cookie port scoping is standard browser behaviour)
+**Status:** Fixed (2026-11-03). The cookie now holds an opaque, in-memory
+session id (`apps/backend/src/gateway-sessions.ts`) with a 12-hour idle and
+7-day absolute lifetime, revoked by logout, token rotation and a backend
+restart; it is `Secure` over HTTPS. A cookie holding the durable token is
+refused and expired, and the browser gets the login page. `gateway-settings`
+reveals or rotates the token only for the token sent as a bearer header. A
+leaked cookie still authenticates as that session until it ends. The
+`__Host-` name is read and stripped but not issued yet, because older iOS
+builds look the cookie up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
 
 **Where**
@@ -260,7 +268,13 @@ explicit opt-in with a scope warning. Avoid persisting the token in
 
 ### M1. Legacy loopback previews run agent HTML on the gateway origin, isolated only by the client's iframe sandbox
 
-**Status:** Verified
+**Status:** Fixed in part (2026-11-03). Every `browser/loopback` response now
+carries `Content-Security-Policy: sandbox allow-scripts allow-forms
+allow-pointer-lock allow-presentation` in place of the upstream policy, so a
+preview opened top-level is an opaque origin and cannot call gateway routes.
+Turning the isolated transport on by default is not yet low risk (its
+two-machine, Windows and threshold gates are open) and stays with
+`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7.
 
 **Where**
 - `apps/backend/src/gateway-proxy.ts:204-211`: for browser previews the proxy deletes upstream `x-frame-options`, `content-security-policy` and `content-security-policy-report-only`, and adds no `Content-Security-Policy: sandbox` of its own.

@@ -971,7 +971,7 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
     try {
       installBrowserGatewayApi(gatewayWindow, {
         ...DIRECT,
-        agentTestSessionActivity: false,
+        browserSessionActivity: false,
         eventReconnectDelayMs: 100,
         eventReconnectRandom: TOP_OF_RANGE,
       });
@@ -995,7 +995,7 @@ describe("gateway streams waiting out a backoff when the tab or network comes ba
 
       installBrowserGatewayApi(gatewayWindow, {
         ...DIRECT,
-        agentTestSessionActivity: false,
+        browserSessionActivity: false,
         replaceExisting: true,
       });
       expect(removeFromDocument).toHaveBeenCalledWith("visibilitychange", visibilityListener);
@@ -1124,7 +1124,7 @@ test("replacing a disconnected gateway reports idle and clears its state listene
     Window,
     "location" | "orkestrator" | "orkestratorGateway"
   >;
-  installBrowserGatewayApi(target);
+  installBrowserGatewayApi(target, { browserSessionActivity: false });
   const old = target.orkestrator!;
   const states: string[] = [];
   const stopState = old.eventStreamConnection!.subscribe((state) => states.push(state));
@@ -1135,7 +1135,7 @@ test("replacing a disconnected gateway reports idle and clears its state listene
   main.onerror?.();
   expect(old.eventStreamConnection!.state()).toBe("disconnected");
 
-  installBrowserGatewayApi(target, { replaceExisting: true });
+  installBrowserGatewayApi(target, { browserSessionActivity: false, replaceExisting: true });
   expect(old.eventStreamConnection!.state()).toBe("idle");
   expect(states).toEqual(["connecting", "connected", "disconnected", "idle"]);
   const stateCount = states.length;
@@ -1396,7 +1396,7 @@ describe("a stream the gateway refuses for its credential", () => {
       const timers = manualTimers();
       const probes: Array<{ signal: AbortSignal; resolve(response: Response): void }> = [];
       globalThis.fetch = mock((input: unknown, init?: RequestInit) => {
-        if (String(input).endsWith("/agent-test/session")) {
+        if (String(input).endsWith("/session")) {
           return Promise.resolve(new Response("{}"));
         }
         // Deliberately resolve even after abort: identity must fence late responses too.
@@ -1410,7 +1410,7 @@ describe("a stream the gateway refuses for its credential", () => {
       installBrowserGatewayApi(target, {
         eventReconnectDelayMs: 100,
         eventReconnectRandom: TOP_OF_RANGE,
-        agentTestSessionActivity: true,
+        browserSessionActivity: true,
         onCredentialLapsed: lapsed,
       });
       const api = target.orkestrator!;
@@ -1423,7 +1423,10 @@ describe("a stream the gateway refuses for its credential", () => {
         expect(probes).toHaveLength(1);
         if (supersededBy === "idle") stop();
         else if (supersededBy === "disposal") {
-          installBrowserGatewayApi(target, { replaceExisting: true });
+          installBrowserGatewayApi(target, {
+            browserSessionActivity: false,
+            replaceExisting: true,
+          });
         } else {
           timers.fire(100);
           const next = MockEventSource.instances.at(-1)!;
@@ -1453,12 +1456,12 @@ describe("a stream the gateway refuses for its credential", () => {
         }
       } finally {
         stop();
-        installBrowserGatewayApi(target, { replaceExisting: true });
+        installBrowserGatewayApi(target, { browserSessionActivity: false, replaceExisting: true });
       }
     });
   }
 
-  test("a same-origin 401 is no outage, and an agent-test tab leaves for its login page", async () => {
+  test("a same-origin 401 is no outage, and a cookie-session tab leaves for its login page", async () => {
     MockEventSource.instances = [];
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const lapsed = mock(() => undefined);
@@ -1466,13 +1469,13 @@ describe("a stream the gateway refuses for its credential", () => {
     globalThis.fetch = mock(async (input: unknown) => {
       requested.push(String(input));
       // The session check at startup succeeds; the credential then lapses.
-      return String(input).endsWith("/agent-test/session")
+      return String(input).endsWith("/session")
         ? new Response("{}", { status: 200 })
         : new Response("{}", { status: 401 });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       eventReconnectDelayMs: 60_000,
-      agentTestSessionActivity: true,
+      browserSessionActivity: true,
       onCredentialLapsed: lapsed,
     });
     await flushMicrotasks();
@@ -1487,7 +1490,7 @@ describe("a stream the gateway refuses for its credential", () => {
     await until(() => lapsed.mock.calls.length === 1, "The lapse was never noticed");
     // Reads run again and show the 401, instead of a banner promising a reconnect.
     expect(api.eventStreamConnection.state()).toBe("connecting");
-    expect(requested.at(-1)).toBe("/__orkestrator/gateway-settings");
+    expect(requested.at(-1)).toBe("/__orkestrator/status");
     stop();
   });
 

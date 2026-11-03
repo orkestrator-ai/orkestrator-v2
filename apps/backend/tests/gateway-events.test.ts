@@ -3,6 +3,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import {
+  BROWSER_PREVIEW_SANDBOX_CSP,
   canStartDynamicCompression,
   compressBody,
   COMPRESSION_MIN_BYTES,
@@ -159,7 +160,7 @@ describe("gateway terminal WebSocket", () => {
     terminalGateway.close();
   });
 
-  test("bounds unauthenticated sockets and accepts a same-origin auth cookie", async () => {
+  test("bounds unauthenticated sockets and accepts a same-origin session cookie", async () => {
     const { gateway, info } = await startGateway();
     const terminalWebSocket = (
       gateway as unknown as {
@@ -174,12 +175,24 @@ describe("gateway terminal WebSocket", () => {
     );
     expect(await timedOut).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
 
+    // The durable token in a cookie (what older gateways issued) is refused:
+    // a cookie reaches every port on the host, so it only carries a session.
     const origin = new URL(info.url).origin;
+    const tokenCookie = await openTerminalSocket(info, {
+      authenticate: false,
+      headers: { Origin: origin, Cookie: `orkestrator_gateway_auth=${info.token}` },
+    });
+    const tokenCookieClosed = new Promise<number>((resolve) =>
+      tokenCookie.socket.once("close", resolve),
+    );
+    expect(await tokenCookieClosed).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+
+    const session = (gateway as unknown as { issueBrowserSession(): string }).issueBrowserSession();
     const cookieAuthenticated = await openTerminalSocket(info, {
       authenticate: false,
       headers: {
         Origin: origin,
-        Cookie: `orkestrator_gateway_auth=${info.token}`,
+        Cookie: `orkestrator_gateway_auth=${session}`,
       },
     });
     expect(await nextTerminalControl(cookieAuthenticated.inbox, "ready")).toMatchObject({
@@ -352,9 +365,9 @@ describe("gateway terminal WebSocket", () => {
     const cookie = exchanged.headers["set-cookie"]![0]!;
     const sessions = (
       gateway as unknown as {
-        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
-    ).agentTestSessions;
+    ).browserSessions;
     [...sessions.values()][0]!.expiresAt = Date.now() + 40;
 
     const socket = await openTerminalSocket(info, {
@@ -384,9 +397,9 @@ describe("gateway terminal WebSocket", () => {
     });
     const sessions = (
       gateway as unknown as {
-        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
       }
-    ).agentTestSessions;
+    ).browserSessions;
     expect(sessions.size).toBeGreaterThan(0);
     // Sockets arm their expiry timer from the deadline seen at authentication, so
     // the short window has to exist before this one connects. An implementation
@@ -394,16 +407,9 @@ describe("gateway terminal WebSocket", () => {
     // presented would then hang up inside the observation window below.
     for (const entry of sessions.values()) entry.expiresAt = Date.now() + 60;
 
+    // Authenticated with the durable token in the authenticate frame.
     const socket = await openTerminalSocket(info, {
-      authenticate: false,
-      headers: {
-        Origin: new URL(info.url).origin,
-        Cookie: `orkestrator_gateway_auth=${info.token}`,
-      },
-    });
-    expect(await nextTerminalControl(socket.inbox, "ready")).toMatchObject({
-      type: "ready",
-      version: 1,
+      headers: { Origin: new URL(info.url).origin },
     });
 
     let closed: number | null = null;
@@ -3619,7 +3625,9 @@ describe("remote gateway", () => {
     expect(page.status).toBe(200);
     expect(page.body).toBe(`<script type="module" src="${prefix}/src/main.js"></script>`);
     expect(page.headers["x-frame-options"]).toBeUndefined();
-    expect(page.headers["content-security-policy"]).toBeUndefined();
+    // The upstream policy is replaced by a sandbox, so the preview stays an
+    // opaque origin even when opened top-level, outside the client's iframe.
+    expect(page.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
     expect(page.headers["access-control-allow-origin"]).toBe("null");
     expect(page.headers["access-control-allow-credentials"]).toBe("true");
 
@@ -3627,6 +3635,31 @@ describe("remote gateway", () => {
       headers,
     });
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
+    expect(script.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
+  });
+
+  test("sandboxes every legacy browser-preview response, including errors and login pages", async () => {
+    const { info } = await startGateway();
+    // Nothing listens on port 9: the gateway answers 502 itself.
+    const failed = await requestUrl(
+      new URL("/__orkestrator/browser/loopback/9/", info.url).toString(),
+      { headers: { authorization: `Bearer ${info.token}` } },
+    );
+    expect(failed.status).toBe(502);
+    expect(failed.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
+
+    const unauthenticated = await requestUrl(
+      new URL("/__orkestrator/browser/loopback/9/", info.url).toString(),
+      { headers: { accept: "text/html" } },
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers["content-security-policy"]).toBe(BROWSER_PREVIEW_SANDBOX_CSP);
+
+    // The gateway's own routes are not sandboxed.
+    const status = await requestUrl(new URL("/__orkestrator/status", info.url).toString(), {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(status.headers["content-security-policy"]).toBeUndefined();
   });
 
   test("recompresses bounded browser-preview text after rewriting", async () => {

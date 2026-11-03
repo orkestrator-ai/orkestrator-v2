@@ -10,6 +10,7 @@ import { pipeline, type Readable } from "node:stream";
 import path from "node:path";
 import { constants as zlibConstants, createGzip, type Gzip } from "node:zlib";
 import {
+  BROWSER_PREVIEW_SANDBOX_CSP,
   MAX_BROWSER_PREVIEW_BODY_BYTES,
   IMMUTABLE_ASSET_CACHE_CONTROL,
   REVALIDATED_DOCUMENT_CACHE_CONTROL,
@@ -223,8 +224,11 @@ export class GatewayProxy {
             .some((directive) => directive.trim() === "no-transform");
           if (browserPreview) {
             delete responseHeaders["x-frame-options"];
-            delete responseHeaders["content-security-policy"];
             delete responseHeaders["content-security-policy-report-only"];
+            // The upstream's own policy is replaced, not merged: its
+            // frame-ancestors would block the client's iframe, and the
+            // sandbox keeps the document off the gateway origin (M1).
+            responseHeaders["content-security-policy"] = BROWSER_PREVIEW_SANDBOX_CSP;
             if (request.headers.origin === "null") {
               responseHeaders["access-control-allow-origin"] = "null";
               responseHeaders["access-control-allow-credentials"] = "true";

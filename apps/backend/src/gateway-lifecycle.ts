@@ -313,7 +313,8 @@ export class GatewayLifecycle {
       this.ctx.token = token;
       this.ctx.authFile = authFile;
       this.ctx.agentTestBootstraps.clear();
-      this.ctx.agentTestSessions.clear();
+      // Every browser session was signed in under the previous token.
+      this.ctx.browserSessions.revokeAll();
       // Authentication is latched when a WebSocket becomes ready. Rotating
       // the credential must therefore revoke every connection authenticated
       // with the previous value rather than waiting for a reconnect.
@@ -344,7 +345,7 @@ export class GatewayLifecycle {
 
   async stop(): Promise<void> {
     this.ctx.agentTestBootstraps.clear();
-    this.ctx.agentTestSessions.clear();
+    this.ctx.browserSessions.revokeAll();
     if (this.ctx.keepalive) {
       clearInterval(this.ctx.keepalive);
       this.ctx.keepalive = null;

@@ -9,7 +9,7 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "../../apps/web/src/lib/nati
 
 const gateway = createBrowserGatewayApi({
   reportBootMetrics: false,
-  agentTestSessionActivity: false,
+  browserSessionActivity: false,
 });
 
 export function DataSavingGatewayFixture() {

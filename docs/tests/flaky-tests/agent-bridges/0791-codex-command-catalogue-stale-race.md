@@ -490,3 +490,24 @@ No catalogue code, assertion, timeout, or skip changed. The existing settling
 race remains a hypothesis.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/bridges.log.gz`.
+
+## Coordinator environment-choice review, 2026-11-03
+
+Preparation at `d2efad0d6` failed the original two-pre-plugin-answers case
+at line 273 (expected stale, received ready, 66.85 ms), in `mise run test`.
+Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-b82eab29-3f18-42ce-8dd3-4d2e4a59a7a0/validation-04.stdout.txt`.
+The bridge package used `--parallel=${ORKESTRATOR_TEST_WORKERS:-1}`.
+
+Two complete-owner reruns with `--parallel=1` and
+`--preload ../../tests/setup-node.ts` each had 29 pass / 1 fail: the first
+failed `a failed settling read leaves the list stale until a read succeeds`
+at line 358 (105.35 ms, expected stale, received ready); the second timed out
+`its first answer is stale until a settling re-read confirms the plugin skills`
+at line 211 (2147.45 ms). Logs are respectively
+`orkestrator-test-run.qnMbgR/recorded-codex-owner.log.gz` and
+`orkestrator-test-run.KOWFvz/codex-catalogue-owner-confirm.log.gz` under the
+host temporary directory. A separately installed detached `origin/main`
+at `eda57e938` passed ten complete-owner repeats (exit 0, 12.5 s).
+These focused runs do not establish target-branch reproduction of the failures.
+No bridge code, assertion, skip or timeout was changed.

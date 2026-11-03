@@ -1244,6 +1244,9 @@ describe("Orkestrator control MCP server", () => {
         }
       | undefined;
     expect(buildTool?.description).toContain(
+      "This is the default for any work whose whole spec is known (a ticket, or settled with the user).",
+    );
+    expect(buildTool?.description).toContain(
       "Override one only when the user has asked for a specific agent, model, effort or reviewer set",
     );
     expect(buildTool?.inputSchema?.properties?.steps?.description).toContain(

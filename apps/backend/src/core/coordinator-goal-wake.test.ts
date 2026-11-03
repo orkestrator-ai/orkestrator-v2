@@ -15,6 +15,7 @@ import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { runCommand } from "./shell.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { workerSessionGoal } from "./worker-session-activity.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 const TAB = "startup-agent";
 
@@ -104,6 +105,7 @@ async function fixture(options: { holdOnGoal?: boolean; check?: GoalCheckRun } =
   });
   // Old enough that the sweep's idle grace is over from the first look.
   await storage.coordinators.openCoordinatorDelegation(
+    new WorkerTabCloseAdmission(),
     association.id,
     TAB,
     new Date(0).toISOString(),

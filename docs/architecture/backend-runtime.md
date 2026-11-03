@@ -41,7 +41,7 @@ environment operations (`backend-runtime.test.ts`; the state moved by todo 1070 
 | `integrationLocks` | `IntegrationLocks` | GitHub and Linear completion comments per pipeline, workflow-label setup per repository and status updates per issue. The GitHub client functions take the narrow `GitHubWriteLocks`. |
 | `featureBuilds` | `FeatureBuildTasks` | Feature-build ticket resolutions per request and background title refinements per ticket. |
 | `publicApi` | `PublicApiReconciliations` | The public API's in-flight run observations and exec reconciliations per operation. |
-| `coordinatorRequests` | `CoordinatorRequestFlights` | Coordinator receipt attempts per coordinator and request id (`withCoordinatorReceipt`) and AGENTS.md pull request runs per request key. |
+| `coordinatorRequests` | `CoordinatorRequestFlights` | Coordinator receipt attempts per coordinator and request id (`withCoordinatorReceipt`), AGENTS.md pull request runs per request key, and the worker tab close admission (`workerTabs`, a `WorkerTabCloseAdmission`) that fences a tab close against a delegation to that tab being persisted. |
 | `changeTracking` | `ChangeTrackingService` | Attached once storage exists; absent in light fixtures. |
 
 The graph engine's system actions keep their memory on the system executor
@@ -66,7 +66,8 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `createGitEnvironmentCommandRunner(environment, fence)`,
   `ensureProjectHomeEnvironment(environments, ...)`,
   `withEnvironmentDraining(environments, ...)`,
-  `openAgentsMdPullRequest(coordinatorRequests, ...)`) or a narrow option
+  `openAgentsMdPullRequest(coordinatorRequests, ...)`,
+  `openCoordinatorDelegation(coordinatorRequests.workerTabs, ...)`) or a narrow option
   (`NativeAgentService`'s `localBridgeAccountId`, `environmentFence` and
   `openCodeCoordinatorResearch`, a
   bridge provider's `planUsage`, `gitHubCliEnv`'s config source), not the whole
@@ -166,8 +167,7 @@ The export-writer locks and `activeDynamicCompressions` were once proposed
 to move per backend; they stay because each bounds or orders host
 resources, not one backend's work.
 
-Three pieces of module state are per backend but not yet moved, each marked
-next to its declaration: `github-cli-binary.ts` (`managedGitHubCli`),
-`host-model-catalog-seed.ts` (`failedAt`, `generations`, `flights`) and
-`worker-tab-close-admission.ts` (`closing`, `pending`). They are tracked in
+Two pieces of module state are per backend but not yet moved, each marked
+next to its declaration: `github-cli-binary.ts` (`managedGitHubCli`) and
+`host-model-catalog-seed.ts` (`failedAt`, `generations`, `flights`). They are tracked in
 [1070-backend-module-state-beyond-0390.md](../todo/backend-structure/1070-backend-module-state-beyond-0390.md).

@@ -333,7 +333,11 @@ describe("edit_coordinator_worker_tab", () => {
       requestId: "delegation:job",
       createdAt: new Date().toISOString(),
     });
-    await storage.coordinators.openCoordinatorDelegation(association.id, "agent");
+    await storage.coordinators.openCoordinatorDelegation(
+      context.runtime.coordinatorRequests.workerTabs,
+      association.id,
+      "agent",
+    );
     await expect(
       call("edit_coordinator_worker_tab", {
         input: { environmentId: workerId, tabId: "agent", operation: "close" },
@@ -1030,7 +1034,11 @@ test("close reserves prompt and delegation admission through delayed durable lay
     createdAt: new Date().toISOString(),
   });
   await expect(
-    storage.coordinators.openCoordinatorDelegation(association.id, "shell"),
+    storage.coordinators.openCoordinatorDelegation(
+      context.runtime.coordinatorRequests.workerTabs,
+      association.id,
+      "shell",
+    ),
   ).rejects.toThrow("being closed");
   resume();
   await close;
@@ -1190,7 +1198,11 @@ test("persisted pending teardown prevents a new delegation while allowing close 
     createdAt: new Date().toISOString(),
   });
   await expect(
-    storage.coordinators.openCoordinatorDelegation(association.id, "shell"),
+    storage.coordinators.openCoordinatorDelegation(
+      context.runtime.coordinatorRequests.workerTabs,
+      association.id,
+      "shell",
+    ),
   ).rejects.toThrow("pending teardown");
   const teardown = mock(async () => ({}));
   commands.set("teardown_tab", teardown as unknown as CommandHandler);

@@ -25,7 +25,6 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
-import { beginWorkerTabDelegation } from "./worker-tab-close-admission.js";
 import {
   nodeCoordinatorMailbox,
   sendToNodeCoordinator,
@@ -238,6 +237,7 @@ async function openNodeDelegation(
     throw new Error("Coordinator request id was reused with a different delegation target");
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
+    context.runtime.coordinatorRequests.workerTabs,
     association.id,
     tabId,
   );
@@ -412,6 +412,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         if (!startError) {
           coordinatorDelegationOpened = Boolean(
             await context.storage.coordinators.openCoordinatorDelegation(
+              context.runtime.coordinatorRequests.workerTabs,
               receipt.association.id,
               STARTUP_AGENT_TAB_ID,
             ),
@@ -464,7 +465,11 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       );
       const worker = asNonBlankString(environmentId, "environmentId");
       const workerTab = asNonBlankString(tabId, "tabId");
-      const release = beginWorkerTabDelegation(worker, workerTab, target.nodeId);
+      const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
+        worker,
+        workerTab,
+        target.nodeId,
+      );
       try {
         await target.environment(worker);
         await recordOrigin(context, caller, target, worker);
@@ -554,7 +559,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           args.deliverNow === true && target.supports(BACKEND_CAPABILITIES.nodeMailSteer);
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
-        const release = beginWorkerTabDelegation(
+        const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
           toEnvironmentId,
           requestedTab || undefined,
           target.nodeId,

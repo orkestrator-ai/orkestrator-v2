@@ -19,6 +19,7 @@ import {
   type NativeAgentRuntimeProvider,
 } from "./agent-provider-contract.js";
 import type { PersistedNativeAgentSession } from "./models.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 /** Committed revision of the agent-mail store: any rewrite of the mail bumps it. */
 function agentMailRevision(dataDir: string): number | null {
@@ -371,7 +372,12 @@ describe("AgentMailService", () => {
       requestId: "launch-worker",
       createdAt: now,
     });
-    await storage.coordinators.openCoordinatorDelegation("delegation-1", "agent", now);
+    await storage.coordinators.openCoordinatorDelegation(
+      new WorkerTabCloseAdmission(),
+      "delegation-1",
+      "agent",
+      now,
+    );
 
     const dispatches: Array<Record<string, unknown>> = [];
     const service = new AgentMailService(

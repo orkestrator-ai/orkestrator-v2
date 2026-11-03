@@ -107,6 +107,7 @@ export async function openWorkerDelegation(
     throw new Error("Coordinator request id was reused with a different delegation target");
   }
   const opened = await context.storage.coordinators.openCoordinatorDelegation(
+    context.runtime.coordinatorRequests.workerTabs,
     association.id,
     workerTabId,
   );

@@ -1335,7 +1335,7 @@ exit 1
         context.runtime.prMonitor,
         "followMergeIntoProjectCheckout",
       ).mockImplementation((merged) => {
-        expect(merged.id).toBe(environment.id);
+        expect(merged).toMatchObject({ id: environment.id });
       });
       const task: KanbanTask = {
         id: "task-merge-cleanup",

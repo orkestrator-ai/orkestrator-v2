@@ -100,7 +100,7 @@ export function selectCoordinatorWorkflowsToClear(
     if (
       state === "active" ||
       (state === "unknown" &&
-        ["multi-review", "build-pipeline", "graph-run"].includes(association.kind))
+        ["multi-review", "build-pipeline", "graph-run", "feature-plan"].includes(association.kind))
     )
       return;
     if (!isFinished(association) && state !== "missing" && state !== "finished") return;

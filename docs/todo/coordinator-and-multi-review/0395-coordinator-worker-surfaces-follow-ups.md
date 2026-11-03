@@ -5,8 +5,8 @@ Checked against `main` at `863b5782` (2026-10-27).
 The worker surfaces built for
 [0142-coordinator-product-surfaces.md](0142-coordinator-product-surfaces.md)
 (terminal, browser, tab edits, reviewer tabs, custom fix, feature plans,
-the root-changes request) act on this node only, and feature plans never
-wake the coordinator. (A looped review surface was also built; it was removed
+the root-changes request) acted on this node only, and feature plans did not
+wake the coordinator (task 3 since added that). (A looped review surface was also built; it was removed
 with the Looped Review feature.) This file holds the work those decisions
 left.
 
@@ -28,11 +28,15 @@ as scope calls for the user; each subsection now ends with **Open for the
 user**, setting out the trade-off. Composable graphs (#1436, `3fa7d1733`) added
 a fourth association kind, `graph-run`, which task 3's context now cites.
 
+Rechecked 2026-11-03 against `main` at `7b48c23fb`: task 3 is done on branch
+`coordinator-feature-plan-a803a78f59d7-r1`, which adds a `feature-plan`
+association kind.
+
 ### Tasks
 
 1. **Worker surfaces on other nodes**: `nodeId` on `launch_terminal`, `open_worker_browser`, `edit_worker_tab`, `custom_fix_multi_review` and `open_multi_review` with `reviewerId`. Status: done.
 2. **Root changes into a worker on another node**: `request_root_changes` with `nodeId`, which needs the patch to cross the node link. Status: open (scope call for the user).
-3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: open (scope call for the user).
+3. **Status wakes for feature plans**: an association kind, listed by `list_workflows`, with status-wake rules. Status: done.
 4. **Live `surfaces` scenario**: a scenario in `mise run test:agent:coordinator` that calls each tool once on a real stack. Status: open (needs a live provider).
 5. **Adopting feature plans (open question)**: whether `adopt_workflow` should accept them. Status: open (depends on 3).
 
@@ -210,6 +214,14 @@ for. If the user accepts that an older backend may list or sweep a
 `feature-plan` association it does not understand, the recommended option
 holds. Task 5 follows from whatever is chosen here.
 
+**Status.** Done on 2026-11-03 against `main` at `7b48c23fb`, with both
+recommended options (the ticket settled the scope call: a `feature-plan` kind,
+waking on reply ready and failed, with older readers skipping unknown kinds).
+See [Assumptions and decisions](#assumptions-and-decisions) and
+[`coordinator.md`, "Status wakes"](../../architecture/coordinator.md#status-wakes).
+Adoption (task 5) already works on the new kind: `adopt_workflow` accepts any
+association, and re-opening it re-sends the reply notice to the adopter.
+
 ### 4. Live `surfaces` scenario
 
 **Problem.** The tools have unit and component evidence only.
@@ -276,10 +288,11 @@ works on the new kind unless it is filtered out.
   and `custom-fix` surfaces of `controller_multi_review_surface`), which are
   node-link only. `propose_agents_md_update` takes `nodeId` too.
 - `request_root_changes` still acts on this node only (task 2).
-- Feature plans have no `CoordinatorWorkflowAssociation` kind, so
-  `list_workflows` does not list them and status wakes
-  (`coordinator-status-wakes.ts`) never report them. Their tool results say
-  so and point at `create_schedule`.
+- Since task 3, each `launch_feature_plan` message writes a `feature-plan`
+  association naming its planning exchange (`featurePlan.operationId`),
+  before planning starts. Status wakes report its reply ready and each
+  failure (`coordinator-feature-plan-status.ts`), and `list_workflows` lists
+  it with the plan.
 
 ## Outstanding work
 
@@ -288,10 +301,7 @@ works on the new kind unless it is filtered out.
 1. **Root changes on other nodes.** `request_root_changes` across nodes needs
    the patch to travel from this node's checkout to a leaf worker, or a clear
    refusal. Waiting on the user's scope call; see task 2.
-2. **Status wakes for feature plans.** An association kind, listed by
-   `list_workflows`, and status-wake rules (planning reply ready, failed)
-   with the same ownership, budget
-   and restart guarantees as Multi Review. See task 3.
+2. **Status wakes for feature plans.** Done (task 3).
 
 ### Qualification
 
@@ -381,6 +391,57 @@ answer was `Unknown command: …`, but a real leaf answers
 task 4.) An older `controller_multi_review_surface` answers
 the new surfaces with "Expected surface root, fix or address.", and the
 command node maps that text to the same message.
+
+### Task 3: a `feature-plan` kind per message, waking on ready and failed (2026-11-03)
+
+The ticket for task 3 made the scope call: a new association kind, waking on
+the planning reply ready and on failure, with older readers skipping unknown
+kinds. I took the recommended options. Choices it left to me:
+
+- **One association per message, not per plan.** The association names the
+  planning exchange (`featurePlan.operationId`, the
+  `planning-coordinator-<key>` id the launch already derived). A plan takes
+  messages from the user too, so a per-plan record could not tell the
+  coordinator's reply from the user's. Its request ID is
+  `feature-plan:<requestId>`, so it cannot collide with another launch's
+  association under the same `requestId`, and a retry finds the same record.
+- **Task 3 review repair: reserve before planning starts (2026-11-03).**
+  Inside the receipt, after the plan exists and before `start_feature_planning`,
+  reserve a pending association so a full store refuses before a turn begins.
+  Activate after startup succeeds or the existing exchange is found; a
+  confirmed refusal before attachment releases the reservation. Reconciliation
+  ignores missing-operation evidence while pending and activates an attached
+  exchange after a crash. This retains admission before acting without
+  prematurely ending a follow. Writing an active association immediately
+  would be simpler but loses wakes during startup or a same-request retry;
+  writing it only after startup could refuse after work already began.
+- **Ready is found on the plan.** A successful exchange detaches its planning
+  record, so ready means an applied assistant message after the exchange's
+  own user message (id = operation id) and before the next user message. A
+  reply still pending or superseded does not count.
+- **Failed is not terminal.** The user can retry a failed exchange from the
+  Features board; the failure key includes when it occurred, so a retry's
+  failure or reply is reported too. Ready is terminal.
+- **Cancelled and deleted end quietly.** The ticket names ready and failed
+  only; the user did the cancel. The association is marked notified without a
+  wake.
+- **Content-free notices.** Like graph runs: title, status, story count and
+  the failure message, never the reply. The coordinator reads it with
+  `get_feature_plan`.
+- **Both statuses are sent whatever the wake setting.** They are the
+  exchange's terminal phases (`isTerminalFeaturePlanningPhase`), and `off`
+  keeps terminal workflow notices.
+- **Older readers.** The store reader already kept unknown kinds; I checked
+  the other paths. An older backend's status wakes filter by known kinds, its
+  `list_workflows` gives an unknown kind a null resource, and its cleanup
+  keeps a record with no notice and unknown state. This backend now does the
+  same explicitly: `observeAssociation` skips an unknown kind instead of
+  falling through to the Multi Review path. No receipt action was added (the
+  receipt reader drops unknown actions). Retention reads a feature plan's
+  state: active while its exchange is attached and not failed.
+- **Notice resource.** `AGENT_MAIL_NOTICE_RESOURCES` gained `feature-plan`.
+  An older reader's `normalizeAgentMailNotice` drops the structured notice
+  but keeps the message, so the coordinator still reads the body.
 
 ### Tasks 2 and 3: left open for the user (2026-10-30)
 

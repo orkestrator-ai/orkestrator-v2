@@ -50,6 +50,8 @@ export async function readStreamBounded(
     signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
+  // A small response usually arrives as one chunk: hand it over uncopied.
+  if (chunks.length === 1) return chunks[0]!;
   const output = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) {

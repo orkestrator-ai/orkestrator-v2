@@ -103,13 +103,22 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
+    // The report sizes everything in its temporary directory and asks Docker
+    // for its disk use. On a shared host those took over five seconds each
+    // (thousands of leftover directories, a busy daemon), so the script gets
+    // a temporary directory of its own and a Docker socket nothing answers.
+    const tmpDir = path.join(root, "tmp");
+    await mkdir(tmpDir);
+    const { DOCKER_CONTEXT: _dockerContext, ...hostEnv } = process.env;
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...hostEnv,
           HOME: root,
+          TMPDIR: tmpDir,
+          DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
         },
@@ -132,14 +141,14 @@ describe("disk report", () => {
     const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
     // Exercise collectReport's macOS root branch, including its prefix filter
     // and the same-root case: no private row is duplicated or mislabelled.
-    const privateRoot = privateTmpdirRoot(os.tmpdir());
+    const privateRoot = privateTmpdirRoot(tmpDir);
     expect(rows.filter((row) => row.location === `${privateRoot}/ork-test-tmp-*`)).toHaveLength(1);
-    if (privateRoot !== os.tmpdir()) {
+    if (privateRoot !== tmpDir) {
       expect(
         rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
       ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
       expect(
-        rows.some((row) => row.location === `${os.tmpdir()}/playwright_chromiumdev_profile-*`),
+        rows.some((row) => row.location === `${tmpDir}/playwright_chromiumdev_profile-*`),
       ).toBe(true);
     }
     expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(

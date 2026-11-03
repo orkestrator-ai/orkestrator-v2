@@ -1,7 +1,7 @@
 # Disk report checkout fixture times out in the aggregate
 
 - **ID:** 0259
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
 - **Owning file:** `tests/unit/disk-report.test.ts`
@@ -481,3 +481,26 @@ This confirms another isolated pass but does not reproduce the timeout on the
 target branch or establish an environmental cause. The recorded aggregate
 failure remains unresolved; it is not excused as environmental. No unrelated
 implementation, timeout, assertion or skip changed.
+
+## Root cause and fix — 2026-11-03 (feature-plan wake fix round)
+
+- **Reproduction:** the complete unchanged owner failed alone on this host
+  (`bun test tests/unit/disk-report.test.ts`: 18 passed, one failed, one error
+  between tests; deadline at 5072.71 ms, `report.status` null at line 131).
+- **Root cause:** the test isolated `HOME` and the data directory but not the
+  temporary directory or Docker. The spawned `scripts/disk-report.ts --json`
+  therefore ran `du` over every `orkestrator-*` and Playwright directory in the
+  host's real temporary directory and asked the host's Docker daemon for
+  `docker system df`. Timed separately on the same host: `docker system df`
+  took 6.4 s and `du` over the 2,583 `orkestrator-*` leftovers took 5.2 s, so
+  either alone exceeded the five-second test deadline. Both scale with what
+  other test runs and builds leave on the host, which is why the failure
+  tracked host load and history rather than this repository's code.
+- **Fix:** the test gives the script its own `TMPDIR` under the test root and a
+  `DOCKER_HOST` socket nothing listens on (and drops an inherited
+  `DOCKER_CONTEXT`), and its temporary-directory assertions use that
+  directory. No timeout, assertion strength or script behaviour changed; the
+  macOS `/private/tmp` private-root branch is still exercised.
+- **Verification:** the complete owner passed alone (19 passed, 2.5 s); the
+  checkout test alone took 1.44 s, and six concurrent copies each passed in
+  1.7–2.1 s wall time.

@@ -237,6 +237,90 @@ describe("session.transcript", () => {
     expect(moved.result.messages.map((message) => message.id)).toEqual(["m-0", "m-1"]);
     expect(moved.result.token).not.toBe(token);
   });
+
+  test("knownToken validates only the same newest-page limit; window history has no token", async () => {
+    const { harness, stub } = await setup();
+    const started = await harness.call<{ sessionId: string }>(
+      "session.start",
+      { environmentId: "env-1", agent: "claude", prompt: "hello" },
+      { requestId: "t-page-token" },
+    );
+    if (!started.ok) throw new Error(started.error.message);
+    const sessionId = started.result.sessionId;
+    for (let index = 0; index < 3; index += 1) {
+      stub.messages.push({
+        id: `page-${index}`,
+        role: "assistant",
+        content: `message ${index}`,
+        createdAt: new Date(index * 1_000).toISOString(),
+        parts: [],
+      });
+    }
+    const narrow = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 1,
+    });
+    if (!narrow.ok) throw new Error(narrow.error.message);
+    expect(narrow.result.messages.map((message) => message.id)).toEqual(["page-2"]);
+    expect(narrow.result.token).toEqual(expect.any(String));
+    const same = await harness.call("session.transcript", {
+      sessionId,
+      limit: 1,
+      knownToken: narrow.result.token,
+    });
+    expect(same.ok && same.result).toEqual({
+      sessionId,
+      status: "unchanged",
+      token: narrow.result.token,
+    });
+
+    const wide = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 100,
+      knownToken: narrow.result.token,
+    });
+    if (!wide.ok) throw new Error(wide.error.message);
+    expect(wide.result.messages.map((message) => message.id)).toEqual([
+      "page-0",
+      "page-1",
+      "page-2",
+    ]);
+    expect(wide.result.token).toEqual(expect.any(String));
+    expect(wide.result.token).not.toBe(narrow.result.token);
+    const sameWide = await harness.call("session.transcript", {
+      sessionId,
+      limit: 100,
+      knownToken: wide.result.token,
+    });
+    expect(sameWide.ok && sameWide.result).toEqual({
+      sessionId,
+      status: "unchanged",
+      token: wide.result.token,
+    });
+    const smaller = await harness.call<PublicTranscriptPage>("session.transcript", {
+      sessionId,
+      limit: 1,
+      knownToken: wide.result.token,
+    });
+    if (!smaller.ok) throw new Error(smaller.error.message);
+    expect(smaller.result.messages.map((message) => message.id)).toEqual(["page-2"]);
+    expect(smaller.result.token).toBe(narrow.result.token);
+
+    let before = narrow.result.olderCursor;
+    expect(before).toEqual(expect.any(String));
+    for (const id of ["page-1", "page-0"]) {
+      const older = await harness.call<PublicTranscriptPage>("session.transcript", {
+        sessionId,
+        limit: 1,
+        before,
+      });
+      if (!older.ok) throw new Error(older.error.message);
+      expect(older.result.messages.map((message) => message.id)).toEqual([id]);
+      expect(older.result.token).toBeNull();
+      before = older.result.olderCursor;
+    }
+    expect(before).toBeUndefined();
+  });
 });
 
 describe("unqualified providers", () => {

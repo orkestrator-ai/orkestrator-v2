@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import type {
   PublicTranscriptMessage,
@@ -28,7 +29,7 @@ import type { PublicActionHandler, ReadActionHandler } from "./types.js";
  * made by status polling or `run wait`.
  *
  * A newest-page read may carry the `token` of the page the caller already
- * holds (`knownToken`). When the live window still has that token the answer
+ * holds (`knownToken`). When the same newest page still has that token the answer
  * is `unchanged` with no messages, so a follower polling every two seconds
  * downloads a page only when something moved. The window is still read fresh
  * (`forceSnapshot`): the token is only compared, never trusted as a cache key.
@@ -266,11 +267,20 @@ const sessionTranscript: ReadActionHandler<{
         retryable: update.retryable !== false,
       });
     }
-    if (input.knownToken !== undefined && update.token === input.knownToken) {
+    // The provider token identifies the whole live window. Bind it to this
+    // session and effective page limit so a smaller page cannot validate a
+    // wider one. Older pages never issue a newest-page token.
+    const token =
+      !cursor && update.token !== undefined
+        ? `pt1:${createHash("sha256")
+            .update(JSON.stringify([session.sessionId, input.limit, update.token]))
+            .digest("base64url")}`
+        : null;
+    if (token !== null && input.knownToken === token) {
       const unchanged: PublicTranscriptUnchanged = {
         sessionId: session.sessionId,
         status: "unchanged",
-        token: update.token,
+        token,
       };
       return { result: unchanged };
     }
@@ -323,7 +333,7 @@ const sessionTranscript: ReadActionHandler<{
               },
             }
           : {}),
-      token: update.token ?? null,
+      token,
       historyEpoch: view.historyEpoch,
       freshness: view.freshness,
     };

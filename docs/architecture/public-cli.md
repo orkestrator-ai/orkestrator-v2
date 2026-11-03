@@ -687,7 +687,8 @@ Transcript reads are explicit content access; status reads and waits never
 read transcripts.
 
 A newest-page read may pass the `token` of the page it already holds as
-`knownToken`. While the live window still has that token the action answers
+`knownToken`. Tokens are scoped to the session, effective `limit`, and live
+window revision. While the same newest page still has that token the action answers
 `{sessionId, status: "unchanged", token}` with no messages; otherwise it
 returns the page as usual, so a stale or unknown token costs nothing but the
 page. The window is still read fresh, and `knownToken` with `before` is

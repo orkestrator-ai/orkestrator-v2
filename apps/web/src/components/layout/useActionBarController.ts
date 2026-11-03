@@ -65,6 +65,8 @@ import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import { mergePrControl } from "@/lib/merge-pr-control";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import { toast } from "sonner";
 import type { ResolveLaunchResult } from "./ActionBar.types";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -179,8 +181,34 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   cleanupTargetRef.current = cleanupTarget;
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
-  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeDialogOpenState, setMergeDialogOpenState] = useState(false);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
+  // A row's "Merge PR" menu item selects its environment and asks for the
+  // dialog the green button opens; it opens only while that button could be
+  // pressed, and a request that cannot be honoured is dropped (below).
+  const mergePrRequest = useMergePrRequestStore((state) => state.request);
+  const selectedMergePrControl = selectedEnvironment
+    ? mergePrControl(selectedEnvironment, {
+        dockerAvailable,
+        merging: mergingEnvironmentId === selectedEnvironmentId,
+      })
+    : null;
+  const mergePrRequested =
+    mergePrRequest !== null &&
+    mergePrRequest.environmentId === selectedEnvironmentId &&
+    selectedMergePrControl?.disabled === false;
+  const mergeDialogOpen = mergeDialogOpenState || mergePrRequested;
+  const setMergeDialogOpen = useCallback((open: boolean) => {
+    setMergeDialogOpenState(open);
+    if (open) return;
+    const request = useMergePrRequestStore.getState().request;
+    if (request) useMergePrRequestStore.getState().clearMergePrRequest(request.nonce);
+  }, []);
+  useEffect(() => {
+    if (mergePrRequest && !mergePrRequested) {
+      useMergePrRequestStore.getState().clearMergePrRequest(mergePrRequest.nonce);
+    }
+  }, [mergePrRequest, mergePrRequested]);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
 
@@ -2088,6 +2116,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       selectedEnvironment?.name,
       selectedEnvironmentId,
       prUrl,
+      setMergeDialogOpen,
     ],
   );
 

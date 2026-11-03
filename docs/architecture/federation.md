@@ -544,8 +544,10 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   clicking opens that machine's workspace, "Open workspace" and "Copy link"
   exist, writes are disabled while it is unavailable, it takes no part in this
   window's multi-select, and items that need this window's own host ("Copy
-  Address", "Copy Initial Prompt", the clickable port, the design-canvas
-  deletion notice) are absent. A section of a machine that has never been
+  Address", "Copy Initial Prompt", "Merge PR", the clickable port, the
+  design-canvas deletion notice) are absent. "Merge PR" opens this window's
+  action-bar merge dialog for the environment (`mergePrRequestStore`), so it
+  exists only where that dialog can act. A section of a machine that has never been
   reached says "Not available yet.", a state its own sidebar cannot have.
 - Container actions are gated by the machine's own Docker availability, which
   its summary read stamps on every row (`dockerAvailable`, from a 30-second

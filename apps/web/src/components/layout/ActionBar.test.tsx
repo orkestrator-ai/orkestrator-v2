@@ -27,6 +27,7 @@ import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
@@ -6794,6 +6795,68 @@ describe("ActionBar successful cleanup and merge actions", () => {
     await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
     expect(selectProjectMock).not.toHaveBeenCalled();
     expect(currentSelectedEnvironmentId).toBe("env-2");
+  });
+
+  describe("a row's Merge PR menu item", () => {
+    beforeEach(() => {
+      useMergePrRequestStore.setState({ request: null });
+    });
+
+    test("opens the same merge dialog and merges through it", async () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      render(<ActionBar />);
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+
+      expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+        "Merge Pull Request",
+      );
+      fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+      await waitFor(() =>
+        expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+      );
+      expect(useMergePrRequestStore.getState().request).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+    });
+
+    test("cancelling closes the dialog for good", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      const { rerender } = render(<ActionBar />);
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      rerender(<ActionBar />);
+
+      expect(useMergePrRequestStore.getState().request).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+    });
+
+    test("drops a request it cannot honour instead of opening the dialog later", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open", status: "stopped" };
+      const { rerender } = render(<ActionBar />);
+
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-1"));
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(useMergePrRequestStore.getState().request).toBeNull();
+
+      // Once the container runs, nothing pops up on its own.
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      rerender(<ActionBar />);
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+    });
+
+    test("ignores a request for an environment that is not selected", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      render(<ActionBar />);
+
+      act(() => useMergePrRequestStore.getState().requestMergePr("env-other"));
+
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(useMergePrRequestStore.getState().request).toBeNull();
+    });
   });
 
   test("discloses that draft pull requests are marked ready before merging", () => {

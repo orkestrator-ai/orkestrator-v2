@@ -119,6 +119,8 @@ for (const grouping of ["project", "machine"] as const) {
     await startKeyboardDrag(heading);
     const overlay = await screen.findByTestId("sidebar-drag-overlay");
     expect(overlay.textContent).toBe("Remote one");
+    // The card outlives the drop for its animation; it must not take the next press.
+    expect(overlay.closest(".pointer-events-none") === null).toBe(false);
     fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true));
   });

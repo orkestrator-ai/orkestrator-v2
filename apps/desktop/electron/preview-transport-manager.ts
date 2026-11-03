@@ -877,7 +877,8 @@ export class PreviewTransportManager {
   /**
    * Open (or reuse) an upstream connection through the tunnel. A connection
    * refused because access expired or the endpoint generation moved is
-   * retried once on a fresh attachment, reattaching only if the one it was
+   * retried on a replacement, with one further recovery if that replacement
+   * is also refused. Reattaching happens only if the attachment it was
    * refused on is still current — no application bytes have been sent at that
    * point, so this re-establishes transport, not an application write.
    */
@@ -913,11 +914,26 @@ export class PreviewTransportManager {
     try {
       return await open(attachment);
     } catch (error) {
-      const category = previewErrorFromUnknown(error)?.category;
+      let category = previewErrorFromUnknown(error)?.category;
       if (signal.aborted || (category !== "access-expired" && category !== "generation-changed"))
         throw error;
       const replacement = this.replacementFor(group, attachment);
-      if (replacement) return open(replacement);
+      if (replacement) {
+        try {
+          return await open(replacement);
+        } catch (failure) {
+          category = previewErrorFromUnknown(failure)?.category;
+          if (
+            signal.aborted ||
+            (category !== "access-expired" && category !== "generation-changed")
+          )
+            throw failure;
+          // The replacement may have been revoked before the original refusal
+          // arrived. Recover once, still reusing/joining any newer replacement.
+          const newer = this.replacementFor(group, replacement);
+          if (newer) return open(newer);
+        }
+      }
       this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
       let fresh: PreviewAttachmentDescriptor;
       try {

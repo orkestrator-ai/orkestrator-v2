@@ -71,12 +71,19 @@ another attach, which released the replacement. `renew` now returns without
 reattaching in that case. Without this, the connection fix would leave one route
 to the same failure.
 
-### Task 1: one retry stays the limit
+### Task 1: bounded recovery after a revoked replacement
 
-A connection still gets one retry. If the attachment it retries on is revoked as
-well (a second revocation inside that window), the request fails with the refusal
-rather than looping. This matches the behaviour before the fix, and bounds the
-work one request can cause.
+A late refusal on A may find replacement B already revoked by a second event.
+Reusing B now catches a retryable refusal and recovers once more, reusing a newer
+attachment or joining/starting its attach. The final open is not retried. This
+corrects the earlier claim of parity: the original reuse path could fail where
+the pre-fix unconditional attach recovered.
+
+The chosen option restores recovery for two revocations without an unbounded
+loop. Keeping one retry would do less work, but leave the reported regression;
+retrying indefinitely could cause attachment churn. Tests hold A's upgrade until
+B is revoked, cover a further attach already pending, and refuse the final open
+to verify the bound. These extend task 2's regression coverage.
 
 ### Task 1: pooled connections
 

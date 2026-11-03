@@ -176,6 +176,24 @@ The backend merges runtime actions into the provider list
   own `/steer` is kept, not deleted.
 - `/compact` **defers**: a provider that ships its own `/compact` (Claude's
   SDK) keeps it; otherwise the row runs the existing compact session action.
+  The action takes optional instructions for the summary
+  (`/compact <instructions>`) only where the platform advertises
+  `actions.compactInstructions` (Claude, whose bridge sends the CLI's
+  `/compact <instructions>`, and Pi, whose bridge calls
+  `session.compact(customInstructions)`). There the row's argument policy is
+  `optional` with hint `[instructions]`; on every other platform it stays
+  `none`, so the text is refused rather than dropped. Codex
+  `thread/compact/start` and OpenCode `session.summarize` take no
+  instructions, and Grok's `/compact` input is unverified. Instructions reach
+  the bridge as `POST /session/:id/compact` with `{ "instructions": "…" }`
+  (bounded by `COMPACT_INSTRUCTIONS_MAX_LENGTH`), and a bridge that used them
+  answers `instructions: "applied"`. A bridge that predates them compacts
+  plainly; the backend reports that as `instructionsIgnored` on an applied
+  outcome. Prompt dispatch also returns `instructionsIgnored: true` on its
+  accepted response when it observes that acknowledgement. A same-id replay
+  remains accepted without running compaction again; this advisory flag is not
+  persisted and is absent on replay (see the
+  [compatibility register](version-compatibility.md#register)).
 - `/goal` is **reserved** on platforms with `actions.goal`: the backend's goal
   loop replaces a provider's own `/goal`, so two loops can never stack on one
   session. It has no `busy` policy: it neither queues nor interrupts a turn, it

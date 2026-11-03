@@ -136,7 +136,10 @@ const enqueuePromptQueueMessageMock = mock(
   async (_queueKey: string, _environmentId: string, _message: unknown) => ({}),
 );
 const performNativeAgentSessionActionMock = mock(
-  async (_input: { agent: string; action: { kind: string } }) => ({ outcome: "applied" as const }),
+  async (_input: {
+    agent: string;
+    action: { kind: string };
+  }): Promise<{ outcome: "applied"; instructionsIgnored?: boolean }> => ({ outcome: "applied" }),
 );
 const refreshNativeAgentCommandsMock = mock(async (input: { agent: AgentPlatform }) => ({
   outcome: "reread" as const,
@@ -583,6 +586,52 @@ describe("AgentNativeTab commands", () => {
     expect(await screen.findByText(/takes no arguments/)).toBeTruthy();
     expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
     expect(draftFor(tabId)?.text).toBe("/compact please");
+  });
+
+  test("/compact <instructions> sends them where the row accepts them", async () => {
+    // Pi and Claude publish an argument-taking compact row.
+    projectionOptions = {
+      commands: [
+        {
+          ...COMPACT,
+          argumentHint: "[instructions]",
+          inputPolicy: { arguments: "optional", attachments: "none", busy: "idle" },
+        },
+      ],
+    };
+    const tabId = "tab-compact-instructions";
+    seedDraft(tabId, { text: "/compact keep the failing test names " });
+    const { input } = await renderTab(tabId, "pi");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
+    expect(performNativeAgentSessionActionMock.mock.calls[0]![0]).toMatchObject({
+      agent: "pi",
+      action: { kind: "compact", instructions: "keep the failing test names" },
+    });
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(draftFor(tabId)).toBeUndefined());
+  });
+
+  test("/compact says so when an older bridge compacted without the instructions", async () => {
+    performNativeAgentSessionActionMock.mockImplementation(async () => ({
+      outcome: "applied" as const,
+      instructionsIgnored: true,
+    }));
+    projectionOptions = {
+      commands: [
+        { ...COMPACT, inputPolicy: { arguments: "optional", attachments: "none", busy: "idle" } },
+      ],
+    };
+    const tabId = "tab-compact-ignored";
+    seedDraft(tabId, { text: "/compact keep the plan" });
+    const { input } = await renderTab(tabId, "pi");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText(/compacted without your instructions/)).toBeTruthy();
+    // It did compact: the text goes so a retry cannot compact twice. The notice
+    // stays on the draft, so it survives the tab remounting.
+    await waitFor(() => expect(draftFor(tabId)?.text ?? "").toBe(""));
+    expect(draftFor(tabId)?.submissionError).toContain("compacted without your instructions");
+    expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1);
   });
 
   test("a queued command carries its intent; /compact is refused while busy", async () => {

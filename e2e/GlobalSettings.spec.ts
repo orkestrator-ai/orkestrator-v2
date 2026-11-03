@@ -4,6 +4,7 @@ test("Log Detail offers only areas controlled by live policy", async ({ page }) 
   await page.goto("/global-settings?section=debug");
   await page.getByRole("button", { name: "Levels by area" }).click();
   for (const area of [
+    "terminal",
     "backend.activity",
     "desktop.startup",
     "updater",
@@ -14,8 +15,10 @@ test("Log Detail offers only areas controlled by live policy", async ({ page }) 
       page.getByRole("combobox", { name: `Log level for ${area}`, exact: true }),
     ).toHaveCount(1);
   }
+  // Renderer-only areas take their level from orkestrator:debug at startup. The bare
+  // `terminal` area is offered above because its backend sites follow live policy.
   await expect(
-    page.getByRole("combobox", { name: /^Log level for (web\.|terminal(?:\.|$))/ }),
+    page.getByRole("combobox", { name: /^Log level for (web\.|terminal\.)/ }),
   ).toHaveCount(0);
 });
 

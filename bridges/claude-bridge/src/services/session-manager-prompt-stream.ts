@@ -424,11 +424,14 @@ class PromptStream implements PromptStreamState {
    * Parts are never mutated in place: `ToolTracker` replaces a tool's object
    * when its result lands, and text/thinking parts are rebuilt from scratch
    * each time, so snapshotting the published array is enough to diff against.
+   *
+   * Returns whether a frame was published. Both publishing paths mark the
+   * transcript changed themselves; a no-op returns `false` and marks nothing.
    */
-  private emitRow(row: StreamRow): void {
+  private emitRow(row: StreamRow): boolean {
     const { session, sessionId } = this;
     const message = row.message;
-    if (!message) return;
+    if (!message) return false;
     const parts = message.parts;
 
     // A subscriber cannot patch a message it has never seen, so the first
@@ -446,7 +449,7 @@ class PromptStream implements PromptStreamState {
       // The stamp is serialized with the message, so it is transcript content.
       markTranscriptChanged(session);
       eventEmitter.emit({ type: "message.updated", sessionId, data: { message } });
-      return;
+      return true;
     }
 
     const changedParts: { index: number; part: NormalizedPart }[] = [];
@@ -461,7 +464,7 @@ class PromptStream implements PromptStreamState {
     // the client a re-render of identical content. The revision must not
     // advance either — no frame was published, so nobody fell behind.
     if (changedParts.length === 0 && parts.length === row.publishedParts.length) {
-      return;
+      return false;
     }
 
     row.publishedParts = parts.slice();
@@ -478,6 +481,7 @@ class PromptStream implements PromptStreamState {
         revision: message.revision,
       } satisfies MessagePatchEventData,
     });
+    return true;
   }
 
   private newestRowMessage(): NormalizedMessage | null {
@@ -517,6 +521,9 @@ class PromptStream implements PromptStreamState {
     if (rebuildBlocks) this.rebuildOrderedParts(row);
     const parts = buildMessageParts(row.orderedParts, this.toolTracker);
     const content = getMessageTextFromParts(parts);
+    // Serialized but not part of any frame, so a change to it alone still
+    // moves the transcript token.
+    let sdkUuidChanged = false;
     if (!row.message) {
       if (parts.length === 0 && !content) return;
       row.message = {
@@ -535,13 +542,19 @@ class PromptStream implements PromptStreamState {
       row.message.content = content;
       row.message.parts = parts;
       if (row.modelId) row.message.modelId = row.modelId;
-      if (row.sdkUuid) row.message.sdkUuid = row.sdkUuid;
+      if (row.sdkUuid && row.message.sdkUuid !== row.sdkUuid) {
+        row.message.sdkUuid = row.sdkUuid;
+        sdkUuidChanged = true;
+      }
     }
+    // A rebuild that publishes nothing changed nothing a reader can see: it
+    // must not move the transcript token or note the row as revised (BR-9).
+    // `emitRow` marks the transcript itself whenever it publishes.
+    if (!this.emitRow(row) && !sdkUuidChanged) return;
     if (row.message && session.messages.at(-1) !== row.message) {
       (session.revisedRows ??= new RecentlyRevisedRows()).note(row.message.id);
     }
     markTranscriptChanged(session);
-    this.emitRow(row);
   }
 
   // Streamed-delta coalescing. Deltas land in their row's blocks immediately;

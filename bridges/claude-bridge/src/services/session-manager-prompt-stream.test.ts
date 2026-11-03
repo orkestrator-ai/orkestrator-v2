@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { NormalizedMessage, SessionState, SSEEvent } from "../types/index.js";
+import type {
+  MessagePatchEventData,
+  NormalizedMessage,
+  SessionState,
+  SSEEvent,
+} from "../types/index.js";
 import { eventEmitter } from "./event-emitter.js";
 import type { OrderedPartEntry } from "./session-manager-messages.js";
 import {
@@ -573,5 +578,48 @@ describe("createPromptStreamState", () => {
       "steer",
       "msg_b",
     ]);
+  });
+
+  test("a finished tool keeps its part object across flushes, so a patch lists only the text", () => {
+    const session = bareSession();
+    const events = framesFor(session);
+    const stream = streamFor(session);
+    const receivedAt = "2026-11-03T09:00:00.000Z";
+
+    // A real record carries `receivedAt`, which the tool-ref entry takes as
+    // its timestamp; that is what made every build re-spread the tool part.
+    stream.toolTracker.addTool("tool-1", {
+      type: "tool-invocation",
+      toolName: "Read",
+      toolUseId: "tool-1",
+      toolState: "pending",
+    });
+    stream.applyAssistantRecord({
+      ...rootRecord("msg_a", [{ type: "tool-ref", value: "tool-1" }]),
+      receivedAt,
+    });
+    stream.toolTracker.updateToolResult("tool-1", { state: "success", output: "contents" });
+    stream.refreshToolRows(["tool-1"]);
+
+    // The same response goes on to stream a text block after the call.
+    stream.applyPartialAssistantMessage(messageStart("msg_a"));
+    stream.applyPartialAssistantMessage(blockStart(1, "text"));
+    stream.applyPartialAssistantMessage(delta(1, "first"));
+    stream.flushStreamedAssistantMessage();
+    const toolAfterFirst = row(session, "msg_a").parts[0];
+    expect(toolAfterFirst).toMatchObject({ toolUseId: "tool-1", toolState: "success" });
+    expect(toolAfterFirst?.createdAt).toBe(receivedAt);
+    events.length = 0;
+
+    stream.applyPartialAssistantMessage(delta(1, " second"));
+    stream.flushStreamedAssistantMessage();
+
+    expect(row(session, "msg_a").parts[0]).toBe(toolAfterFirst);
+    expect(stream.toolTracker.getTool("tool-1")).toBe(toolAfterFirst);
+    const patches = events.filter((event) => event.type === "message.patched");
+    expect(patches).toHaveLength(1);
+    const patch = patches[0]!.data as MessagePatchEventData;
+    expect(patch.changedParts.map(({ index }) => index)).toEqual([1]);
+    expect(patch.changedParts[0]?.part).toMatchObject({ type: "text", content: "first second" });
   });
 });

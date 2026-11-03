@@ -31,7 +31,7 @@ governs, marked "Decided".
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-8 and BR-9 done 2026-11-03; BR-2, BR-7, BR-10 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
@@ -212,7 +212,13 @@ Done 2026-11-02 (against `main` at `38d55ee1`), in the order decided below: the 
 - BR-5, `EncodedObjectSizes` in `transcript-budget.ts`: Pi's `chargeToolPart`, Cursor's `chargeToolPart` and ACP's `commitToolPartMutation` measure a card with exactly `JSON.stringify`'s byte count, but re-measure only string fields that changed, and a field that extends its previous value costs one prefix comparison plus its new suffix. Object and array fields are still measured every time, because the bridges mutate some in place. Cursor's shell-delta `continues` fast path is unchanged.
 - Tests: `bridge-transcript-text.test.ts` replays random streams (multibyte, split surrogate pairs, notices, caps below the marker) through verbatim copies of the old bridge helpers and requires the same text; `transcript-budget.test.ts` checks the row cache (only the newest and noted rows are measured, follower and identity checks, count bound, verification) and that `boundTranscriptInPlace` with the cache leaves exactly the state it leaves without it, and checks `EncodedObjectSizes` against `encodedJsonBytes` through random edits; `bridge-transcript-bounds.test.ts` covers the shared wrapper. The Pi, Cursor and ACP bridge suites pass unchanged with verification on.
 
-**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-8 (`session-manager-messages.ts`, read 2026-11-01: still spreads a fresh `{...tool, createdAt}`), BR-9 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-03 (against `main` at `b8862313`), the Claude half of BR-8 and BR-9:
+
+- BR-8: `buildMessageParts` spread a fresh `{ ...tool, createdAt }` on every build whenever the tool-ref entry had a timestamp (every real record has one, `receivedAt`), so `isSamePublishedPart` saw every tool part as changed and each 100 ms patch relisted every tool card on the row, subagent cards included. `ToolTracker.getToolWithCreatedAt` now stamps `createdAt` onto the tracker entry the first time one is known, so later builds return the same object; `refreshSettledToolRows` uses it too. A result, denial or command change still replaces the entry, so those still publish.
+- BR-9: `emitRow` returns whether it published, and `materializeRow` marks the transcript changed (and notes the row in `revisedRows`) only then, or when the row's `sdkUuid` changed, which is serialized but in no frame. `emitRow` already marked the transcript on both publishing paths.
+- Tests: `session-manager-prompt-stream.test.ts` ("a finished tool keeps its part object across flushes…": the tool part is the same object (`toBe`) across two flushes and the patch lists only the text part); `routes/session-activity.test.ts` ("a stream flush that changes nothing…": an empty delta's flush and a no-op `refreshToolRows` move neither `message.revision` nor `contentRevision`; a real delta moves both). Both fail on the old code.
+
+**Investigation.** Not re-checked since the report: BR-2 (`sessions/persistence.ts`), BR-7, BR-10 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
 
 What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
@@ -814,6 +820,11 @@ are installed from snapshot reads.
 A fixed one-second timer that is not reset by later chunks, so it is also the
 maximum wait. Every other change still persists through `schedulePersist`, and
 any such write carries the output so far.
+
+### Task 6: BR-8 and BR-9 in the Claude bridge (2026-11-03)
+
+- **Where the stamp lives (BR-8).** Stamped onto the `ToolTracker` entry by a new `getToolWithCreatedAt` rather than in `addTool`, because the timestamp belongs to the ordered-part entry, not to the call, and is only known at build time. The first known timestamp wins, as before. Other bridges and the Codex half (BR-2, BR-11) were not touched.
+- **What counts as a change (BR-9).** "Published a frame" is the test, with one addition: a changed `sdkUuid` alone still moves the transcript token, because it is serialized with the message (rewind reads it) but carried by no frame. A no-op rebuild also no longer notes the row in `revisedRows`; nothing a reader sees changed. `content` is derived from the text parts and model id changes force a full frame, so neither needs its own check.
 
 ### Task 7: stat-stamp settle window
 

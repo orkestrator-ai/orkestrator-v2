@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import session from "./session.js";
 import { sessionActivityBatch } from "./session-activity.js";
+import { createPromptStreamState } from "../services/session-manager-prompt-stream.js";
 
 const app = new Hono();
 app.route("/session", session);
@@ -203,6 +204,70 @@ describe("POST /sessions/activity", () => {
     const afterTranscript = await revision();
     expect(afterTranscript).not.toBe(afterTask);
     expect((await batch([state.id]))[state.id]).toEqual(await single(state.id));
+  });
+
+  test("a stream flush that changes nothing leaves the message and transcript revisions", async () => {
+    const state = createSession("no-op-flush");
+    track(state.id);
+    const stream = createPromptStreamState(state, state.id, {
+      flushIntervalMs: 60_000,
+      maxBlockIndex: 100,
+    });
+    try {
+      const revision = async () =>
+        ((await single(state.id)) as { contentRevision?: string }).contentRevision;
+      // A finished tool beside the streaming text: it must not count as a
+      // change on every flush either.
+      stream.toolTracker.addTool("tool-1", {
+        type: "tool-invocation",
+        toolName: "Read",
+        toolUseId: "tool-1",
+        toolState: "pending",
+      });
+      stream.applyAssistantRecord({
+        apiMessageId: "msg_a",
+        isRoot: true,
+        contentBlockCount: 1,
+        orderedParts: [{ type: "tool-ref", value: "tool-1", blockOffset: 0 }],
+        receivedAt: "2026-11-03T09:00:00.000Z",
+      });
+      stream.toolTracker.updateToolResult("tool-1", { state: "success", output: "contents" });
+      stream.refreshToolRows(["tool-1"]);
+      const event = (inner: object) => ({ type: "stream_event", event: inner });
+      stream.applyPartialAssistantMessage(
+        event({ type: "message_start", message: { id: "msg_a", model: "claude-opus-4-1" } }),
+      );
+      stream.applyPartialAssistantMessage(
+        event({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }),
+      );
+      const textDelta = (text: string) =>
+        stream.applyPartialAssistantMessage(
+          event({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text } }),
+        );
+      textDelta("hello");
+      stream.flushStreamedAssistantMessage();
+      const message = state.messages.find((candidate) => candidate.id === "msg_a")!;
+      const messageRevision = message.revision;
+      const contentRevision = await revision();
+      expect(typeof contentRevision).toBe("string");
+
+      // An empty delta schedules a flush that has nothing to publish.
+      textDelta("");
+      stream.flushStreamedAssistantMessage();
+      // A late result for a tool on no other row rebuilds the current row too.
+      stream.refreshToolRows(["tool-1"]);
+      expect(message.revision).toBe(messageRevision);
+      expect(await revision()).toBe(contentRevision);
+
+      // A real change still advances both.
+      textDelta(" world");
+      stream.flushStreamedAssistantMessage();
+      expect(message.content).toBe("hello world");
+      expect(message.revision).toBe((messageRevision ?? 0) + 1);
+      expect(await revision()).not.toBe(contentRevision);
+    } finally {
+      stream.clearFlushTimer();
+    }
   });
 
   test("refuses requests outside the contract", async () => {

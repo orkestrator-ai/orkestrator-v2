@@ -14,6 +14,17 @@ import { CommandFailedError, runCommand, type ExecResult } from "./shell.js";
 /** Prepended to a git invocation to keep it from consulting or starting a daemon. */
 export const GIT_FSMONITOR_DISABLED_ARGS = ["-c", "core.fsmonitor=false"] as const;
 
+/**
+ * Keeps a host git read from running a program the repository's own config
+ * names (an fsmonitor hook or a git hook). Worktree config is writable by
+ * whatever runs in the worktree, so the backend must not trust it.
+ */
+export const HARDENED_GIT_CONFIG = [
+  ...GIT_FSMONITOR_DISABLED_ARGS,
+  "-c",
+  "core.hooksPath=/dev/null",
+] as const;
+
 /** A healthy daemon answers a stop request in milliseconds. */
 const DAEMON_STOP_TIMEOUT_MS = 5_000;
 

@@ -454,6 +454,15 @@ async function assertMatchingCloneDestination(
 }
 
 /**
+ * Refuses a Git URL that git would read as an option. Local-path remotes stay
+ * accepted, but a stored URL reaches `git ls-remote`/`fetch`/`clone`, and any
+ * call that forgot `--` would run `--upload-pack=<program>` as given.
+ */
+export function assertGitUrlIsNotOption(gitUrl: string): void {
+  if (gitUrl.trim().startsWith("-")) throw new Error("Git URL must not start with '-'");
+}
+
+/**
  * Adds a remote-only project, adopts an existing local checkout, or clones the
  * remote when the requested local path is missing or an empty directory.
  */
@@ -473,6 +482,7 @@ export async function addExistingProject(
       acquireTimeoutMs: urlLockTimeoutMs,
     });
 
+  assertGitUrlIsNotOption(gitUrl);
   if (cloneOnly && requestedPath === undefined) throw new Error("Clone destination is required");
 
   if (requestedPath === undefined) {

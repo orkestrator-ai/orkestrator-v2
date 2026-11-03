@@ -50,7 +50,11 @@ mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolat
 ```
 
 It builds the worktree-specific development image, runs the final-image smoke,
-starts a credential-free local/container fixture with Codex, Grok and OpenCode,
+runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
+(`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
+`claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
+starts interactive Claude on it with no network and fake credentials; it fails
+rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok and OpenCode,
 and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
 resets the profile afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler

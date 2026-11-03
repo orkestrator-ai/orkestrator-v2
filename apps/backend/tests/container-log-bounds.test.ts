@@ -47,7 +47,7 @@ describe("diagnostic tail bounds", () => {
       "2026-11-03T09:00:00Z INFO bridge listening on 0.0.0.0:4096",
       "GET /session/ses_abc123/status 200 3ms",
       "warn: retrying model catalogue fetch (attempt 2 of 3)",
-    ];
+    ] as const;
     const text = [
       plain[0],
       `git push failed: https://x-access-token:${classicPat}@github.com/acme/repo.git`,

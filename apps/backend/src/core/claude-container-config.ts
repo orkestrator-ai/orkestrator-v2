@@ -1,5 +1,5 @@
 import { ORKESTRATOR_MCP_SERVER_NAME } from "@orkestrator/protocol/agent-mail";
-import type { LoadedSource } from "./mcp-management/catalog.js";
+import type { LoadedSource } from "./mcp-management/index.js";
 
 /**
  * What a container may see of the host's `~/.claude.json` (security report

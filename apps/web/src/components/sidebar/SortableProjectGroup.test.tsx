@@ -193,6 +193,8 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
   activity = {};
   view.rerender(<SortableProjectGroup {...props} />);
   await act(() => useCoordinatorActivityStore.getState().refresh());
-  await waitFor(() => expect(within(row).queryByTestId("coordinator-activity-icon")).toBeNull());
+  await waitFor(() =>
+    expect(within(row).queryByTestId("coordinator-activity-icon") === null).toBe(true),
+  );
   expect(row.getAttribute("aria-describedby")?.includes(description) ?? false).toBe(false);
 });

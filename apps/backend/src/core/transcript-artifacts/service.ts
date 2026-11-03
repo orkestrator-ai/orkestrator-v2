@@ -251,8 +251,9 @@ export class TranscriptArtifactService {
   }
 
   /**
-   * Build or pull the isolated container preview worker and re-select
-   * isolation (`transcript_artifact_prepare_worker`). Fixed arguments only;
+   * Build the isolated container preview worker from the shipped or staged
+   * context and re-select isolation (`transcript_artifact_prepare_worker`).
+   * Fixed arguments only;
    * nothing here is derived from artifacts.
    */
   async prepareWorker(): Promise<ArtifactPrepareWorkerResponse> {

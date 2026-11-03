@@ -265,7 +265,7 @@ describe("NativeAgentQuestionCard", () => {
       const option = screen.getByRole("button", { name: "TypeScript" });
       fireEvent.click(option);
       expect(fireEvent.keyDown(option, { key: "Enter", metaKey: true, ...ime })).toBe(true);
-      expect(screen.queryByText("Which runtime?")).toBeNull();
+      expect(screen.queryByText("Which runtime?") === null).toBe(true);
       fireEvent.keyDown(option, { key: "Enter", metaKey: true });
       const field = screen.getByLabelText("Which runtime? response");
       fireEvent.change(field, { target: { value: "Bun" } });

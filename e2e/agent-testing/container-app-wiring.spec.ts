@@ -78,6 +78,8 @@ type CoordinatorSnapshot = {
     conversations: Array<{ id: string; role?: string; agent?: AgentPlatform }>;
   };
   workflows: Array<{
+    coordinatorId: string;
+    kind: string;
     conversationId: string;
     resourceId: string;
     delegation?: { state: string };

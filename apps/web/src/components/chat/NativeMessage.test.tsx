@@ -219,7 +219,7 @@ describe("NativeMessage peer mail", () => {
         })}
       />,
     );
-    expect(container.querySelector("[data-mail-tile]")).toBeNull();
+    expect(container.querySelector("[data-mail-tile]") === null).toBe(true);
     const row = container.querySelector<HTMLElement>("[data-pr-update-notice]")!;
     expect(row.dataset.mailState).toBe("pr-checks-failed");
     expect(row.textContent).toContain("PR #12updated· Add the watch· checks failing");

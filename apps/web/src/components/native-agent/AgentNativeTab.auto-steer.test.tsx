@@ -377,7 +377,7 @@ test.each(["$deploy now", "/review changes"])(
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.queryByTitle("Steer the current Cursor Agent turn")).toBeNull();
+    expect(screen.queryByTitle("Steer the current Cursor Agent turn") === null).toBe(true);
     expect(screen.getByTitle("Add to queue")).toBeTruthy();
     await act(async () => {
       fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });

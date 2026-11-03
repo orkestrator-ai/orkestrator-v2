@@ -46,8 +46,8 @@ describe("PullRequestUpdateNotice", () => {
     const row = container.querySelector<HTMLElement>("[data-pr-update-notice]")!;
     expect(row.textContent).toBe("PR #12updated· Add the watch· checks passing, approved10:04");
     // Not a mail tile: no expandable body, no conversation button.
-    expect(container.querySelector("[data-mail-tile]")).toBeNull();
-    expect(container.querySelector("[data-mail-body]")).toBeNull();
+    expect(container.querySelector("[data-mail-tile]") === null).toBe(true);
+    expect(container.querySelector("[data-mail-body]") === null).toBe(true);
     expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 

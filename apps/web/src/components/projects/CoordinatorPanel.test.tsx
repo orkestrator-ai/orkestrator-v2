@@ -1889,8 +1889,8 @@ describe("CoordinatorPanel", () => {
 
     render(<CoordinatorPanel projectId="project-1" />);
     await screen.findByTestId("native-agent");
-    expect(screen.queryByText(/Waiting on/)).toBeNull();
-    expect(document.querySelector("[data-awaiting-workers]")).toBeNull();
+    expect(screen.queryByText(/Waiting on/) === null).toBe(true);
+    expect(document.querySelector("[data-awaiting-workers]") === null).toBe(true);
     // The test window is narrow, so the panel starts as its strip.
     const strip = screen.getByRole("button", { name: "Show work: 2 running, 0 need you" });
     fireEvent.click(strip);
@@ -1898,7 +1898,7 @@ describe("CoordinatorPanel", () => {
     expect(panel.getAttribute("data-open-delegations")).toBe("2");
     expect(within(panel).getByText("Worker worker-for-first")).toBeTruthy();
     expect(within(panel).getByText("Worker worker-for-second")).toBeTruthy();
-    expect(within(panel).queryByText("Worker worker-for-other")).toBeNull();
+    expect(within(panel).queryByText("Worker worker-for-other") === null).toBe(true);
   });
 
   test("moves a worker to Needs you when its waiting episode is announced, without a coordinator turn", async () => {

@@ -513,6 +513,20 @@ ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite \
 mise run test:preview:bench
 ```
 
+The helper serializes setup and publishes immutable WebKit generations through an
+atomic symlink swap. It remembers the source cache, so setup can be rerun after
+exporting its output (including with `--force`). `PLAYWRIGHT_BROWSERS_PATH=0`
+(package-local browsers) is explicitly unsupported: unset it before setup.
+
+Retired generations stay on disk so an already running browser can finish.
+When **all users of this private cache are stopped**, run
+`mise run test:preview:webkit-libs -- --prune` to remove superseded revisions,
+retired generations and abandoned staging copies. This is also required with
+`--force --prune` to migrate an older private cache containing a real WebKit
+directory instead of a symlink. Do not prune during browser tests. If a setup
+process crashes while holding `.prepare-lock`, confirm that process has stopped
+before removing that lock directory and retrying setup.
+
 The preview suite uses a browser-local loopback proxy, throwaway certificates
 and fresh contexts; it changes neither system DNS nor the trust store. Chromium
 pins the test leaf. Firefox and WebKit bypass certificate validation only in

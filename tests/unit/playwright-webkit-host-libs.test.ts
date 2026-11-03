@@ -17,12 +17,18 @@ import {
   readFile,
   readlink,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   HOST_LIBRARY_PACKAGES,
+  resolveSharedDirectory,
+  missingWebkitLibraries,
+  launchCheck,
+  main,
+  playwrightWebkitRevision,
   type HostLibraryPackage,
   defaultPrivateDirectory,
   downloadVerifiedPackage,
@@ -276,7 +282,9 @@ describe("private browsers directory", () => {
       expect(await readlink(path.join(options.directory, "chromium-1"))).toBe(
         path.join(shared, "chromium-1"),
       );
-      expect((await readdir(options.directory)).sort()).toEqual(["chromium-1", "webkit-9999"]);
+      expect(
+        (await readdir(options.directory)).filter((name) => !name.startsWith(".")).sort(),
+      ).toEqual(["chromium-1", "webkit-9999"]);
       expect((await readdir(sharedLibs)).sort()).toEqual(["libbundled.so.1"]);
 
       // A second run with the same pins reuses the prepared copy.
@@ -285,7 +293,9 @@ describe("private browsers directory", () => {
       // A changed pin rebuilds it.
       await preparePrivateBrowsers({ ...options, packages: [{ ...pin, version: "1.0-2" }] });
       expect(fetches).toBe(2);
-      expect((await readdir(options.directory)).sort()).toEqual(["chromium-1", "webkit-9999"]);
+      expect(
+        (await readdir(options.directory)).filter((name) => !name.startsWith(".")).sort(),
+      ).toEqual(["chromium-1", "webkit-9999"]);
     } finally {
       await rm(base, { recursive: true, force: true });
     }
@@ -344,8 +354,8 @@ describe("private browsers directory", () => {
     expect(sharedBrowsersDirectory({}, "/home/u")).toBe("/home/u/.cache/ms-playwright");
     expect(sharedBrowsersDirectory({ XDG_CACHE_HOME: "/x" }, "/home/u")).toBe("/x/ms-playwright");
     expect(sharedBrowsersDirectory({ PLAYWRIGHT_BROWSERS_PATH: "/b" }, "/home/u")).toBe("/b");
-    expect(sharedBrowsersDirectory({ PLAYWRIGHT_BROWSERS_PATH: "0" }, "/home/u")).toBe(
-      "/home/u/.cache/ms-playwright",
+    expect(() => sharedBrowsersDirectory({ PLAYWRIGHT_BROWSERS_PATH: "0" }, "/home/u")).toThrow(
+      /package-local/,
     );
     expect(defaultPrivateDirectory({}, "/home/u")).toBe(
       "/home/u/.cache/orkestrator/playwright-browsers-ubuntu24.04-libs",
@@ -407,5 +417,226 @@ describe("pins and command line", () => {
     );
     const guide = await readFile(path.join(root, "docs/development/testing-guide.md"), "utf8");
     expect(guide).toContain("mise run test:preview:webkit-libs");
+  });
+});
+
+describe("review regressions", () => {
+  test("rejects cache and repository aliases before any preparation writes", async () => {
+    const base = await tempDir();
+    try {
+      const shared = path.join(base, "shared");
+      await mkdir(shared);
+      await writeFile(path.join(shared, "sentinel"), "unchanged");
+      const alias = path.join(base, "alias");
+      await symlink(shared, alias);
+      const repoAlias = path.join(base, "repo");
+      await symlink(root, repoAlias);
+      for (const directory of [
+        alias,
+        path.join(alias, "new", "nested"),
+        path.join(repoAlias, "new"),
+      ]) {
+        await expect(
+          preparePrivateBrowsers({ directory, shared, revision: "1", log: () => {} }),
+        ).rejects.toThrow(/overlaps|inside the repository/);
+      }
+      expect(await readdir(shared)).toEqual(["sentinel"]);
+      expect(await readFile(path.join(shared, "sentinel"), "utf8")).toBe("unchanged");
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("exported paths reuse and force refresh; concurrent publishers preserve readers; idle pruning removes retired revisions", async () => {
+    const base = await tempDir();
+    try {
+      const shared = path.join(base, "shared");
+      for (const revision of ["1", "2"]) {
+        await mkdir(path.join(shared, `webkit-${revision}`, WEBKIT_LIBRARY_DIRECTORY), {
+          recursive: true,
+        });
+        await writeFile(path.join(shared, `webkit-${revision}`, "INSTALLATION_COMPLETE"), revision);
+      }
+      const directory = path.join(base, "private");
+      const deb = makeDeb([{ path: `${LIB}/libextra.so.1`, data: "extra" }]);
+      let release!: () => void;
+      let entered!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const options = {
+        directory,
+        shared,
+        revision: "1",
+        packages: [pinFor("extra", deb)],
+        log: () => {},
+      };
+      const browser = await preparePrivateBrowsers({
+        ...options,
+        fetchImpl: async () => new Response(deb),
+      });
+      const oldGeneration = await readlink(browser);
+      const source = await resolveSharedDirectory(directory, {
+        PLAYWRIGHT_BROWSERS_PATH: directory,
+      });
+      expect(source).toBe(shared);
+      await preparePrivateBrowsers({
+        ...options,
+        shared: source,
+        fetchImpl: async () => {
+          throw new Error("should reuse");
+        },
+      });
+      await expect(
+        preparePrivateBrowsers({
+          ...options,
+          force: true,
+          fetchImpl: async () => new Response("broken", { status: 404 }),
+        }),
+      ).rejects.toThrow(/HTTP 404/);
+      expect(await readlink(browser)).toBe(oldGeneration);
+      expect((await readdir(directory)).some((name) => name.includes(".tmp-"))).toBe(false);
+      const first = preparePrivateBrowsers({
+        ...options,
+        force: true,
+        fetchImpl: async () => {
+          entered();
+          await gate;
+          return new Response(deb);
+        },
+      });
+      await blocked;
+      const second = preparePrivateBrowsers({
+        ...options,
+        force: true,
+        fetchImpl: async () => new Response(deb),
+      });
+      let reading = true;
+      let reads = 0;
+      const reader = (async () => {
+        while (reading) {
+          expect(await readFile(path.join(browser, "INSTALLATION_COMPLETE"), "utf8")).toBe("1");
+          reads++;
+        }
+      })();
+      release();
+      try {
+        await Promise.all([first, second]);
+      } finally {
+        reading = false;
+        await reader;
+      }
+      expect(reads).toBeGreaterThan(0);
+      expect(
+        await readFile(path.join(directory, oldGeneration, "INSTALLATION_COMPLETE"), "utf8"),
+      ).toBe("1");
+      // Prune is explicitly an idle-cache operation: all readers above have stopped.
+      await preparePrivateBrowsers({
+        ...options,
+        revision: "2",
+        prune: true,
+        fetchImpl: async () => new Response(deb),
+      });
+      const entries = await readdir(directory);
+      expect(entries.filter((name) => name.startsWith(".generation-"))).toHaveLength(1);
+      expect((await lstat(path.join(directory, "webkit-1"))).isSymbolicLink()).toBe(true);
+      expect(await readlink(path.join(directory, "webkit-1"))).toBe(path.join(shared, "webkit-1"));
+      expect(await readdir(path.join(shared, "webkit-1", WEBKIT_LIBRARY_DIRECTORY))).toEqual([]);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy directories migrate only during an explicit idle prune", async () => {
+    const base = await tempDir();
+    try {
+      const shared = path.join(base, "shared");
+      const directory = path.join(base, "private");
+      const browser = path.join(directory, "webkit-1");
+      await mkdir(path.join(shared, "webkit-1"), { recursive: true });
+      await writeFile(path.join(shared, "webkit-1", "INSTALLATION_COMPLETE"), "source");
+      await mkdir(browser, { recursive: true });
+      await writeFile(path.join(browser, "INSTALLATION_COMPLETE"), "old");
+      const options = { shared, directory, revision: "1", packages: [], log: () => {} };
+      await expect(preparePrivateBrowsers(options)).rejects.toThrow(/legacy private cache/);
+      expect(await readFile(path.join(browser, "INSTALLATION_COMPLETE"), "utf8")).toBe("old");
+      await preparePrivateBrowsers({ ...options, prune: true });
+      expect((await lstat(browser)).isSymbolicLink()).toBe(true);
+      expect(await readFile(path.join(browser, "INSTALLATION_COMPLETE"), "utf8")).toBe("source");
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("dependency checks select libraries, deduplicate missing entries and pass the private search path", async () => {
+    const base = await tempDir();
+    try {
+      const libs = path.join(base, WEBKIT_LIBRARY_DIRECTORY);
+      await mkdir(libs, { recursive: true });
+      await writeFile(path.join(libs, "liba.so.1"), "synthetic");
+      await writeFile(path.join(libs, "readme"), "ignored");
+      const missing = await missingWebkitLibraries(base, async (command, args, options) => {
+        expect(command).toBe("ldd");
+        expect(args).toEqual([path.join(libs, "liba.so.1")]);
+        expect(options?.env?.LD_LIBRARY_PATH).toContain(libs);
+        return {
+          code: 0,
+          timedOut: false,
+          output: "libx.so.1 => not found\nlibx.so.1 => not found",
+        };
+      });
+      expect(missing).toEqual(["libx.so.1"]);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test("launch check handles success, failure and timeout using the requested private cache", async () => {
+    await launchCheck("/private", async (_command, args, options) => {
+      expect(options?.env?.PLAYWRIGHT_BROWSERS_PATH).toBe("/private");
+      expect(args[1]).toContain("webkit.launch");
+      return { code: 0, timedOut: false, output: "ok" };
+    });
+    await expect(
+      launchCheck("/private", async () => ({
+        code: 1,
+        timedOut: false,
+        output: "missing library",
+      })),
+    ).rejects.toThrow(/missing library/);
+    await expect(
+      launchCheck("/private", async () => ({ code: null, timedOut: true, output: "" })),
+    ).rejects.toThrow(/did not launch/);
+  });
+
+  test("main checks dependencies before launch and honors CLI switches", async () => {
+    expect(await playwrightWebkitRevision()).toMatch(/^\d+$/);
+    const base = await tempDir();
+    try {
+      let launches = 0;
+      const dependencies = {
+        prepare: async (options: Parameters<typeof preparePrivateBrowsers>[0]) => {
+          expect(options.force).toBe(true);
+          expect(options.prune).toBe(true);
+          return path.join(base, "webkit");
+        },
+        missing: async () => ["missing.so"],
+        launch: async () => {
+          launches++;
+        },
+      };
+      const argv = ["--dir", base, "--force", "--prune", "--print-path"];
+      await expect(main(argv, dependencies)).rejects.toThrow(/missing.so/);
+      expect(launches).toBe(0);
+      await main([...argv, "--no-launch-check"], { ...dependencies, missing: async () => [] });
+      expect(launches).toBe(0);
+      await main(argv, { ...dependencies, missing: async () => [] });
+      expect(launches).toBe(1);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });

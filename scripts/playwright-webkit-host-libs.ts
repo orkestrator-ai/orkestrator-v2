@@ -28,7 +28,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants, createWriteStream, existsSync } from "node:fs";
+import { constants as fsConstants, createWriteStream, existsSync, realpathSync } from "node:fs";
 import {
   cp,
   lstat,
@@ -418,7 +418,10 @@ async function isElfOrSharedLibrary(filePath: string): Promise<boolean> {
 }
 
 /** Every library `ldd` cannot resolve in the bundle, as Playwright checks before launch. */
-export async function missingWebkitLibraries(webkitDirectory: string): Promise<string[]> {
+export async function missingWebkitLibraries(
+  webkitDirectory: string,
+  runner = run,
+): Promise<string[]> {
   const directories = WEBKIT_LDD_DIRECTORIES.map((directory) =>
     path.join(webkitDirectory, directory),
   ).filter((directory) => existsSync(directory));
@@ -428,7 +431,7 @@ export async function missingWebkitLibraries(webkitDirectory: string): Promise<s
     for (const name of await readdir(directory)) {
       const filePath = path.join(directory, name);
       if (!(await isElfOrSharedLibrary(filePath))) continue;
-      const result = await run("ldd", [filePath], { cwd: directory, env });
+      const result = await runner("ldd", [filePath], { cwd: directory, env });
       if (result.code !== 0) continue;
       for (const library of parseLddMissing(result.output)) missing.add(library);
     }
@@ -444,10 +447,47 @@ export function sharedBrowsersDirectory(
   env: NodeJS.ProcessEnv = process.env,
   home = os.homedir(),
 ): string {
-  if (env.PLAYWRIGHT_BROWSERS_PATH && env.PLAYWRIGHT_BROWSERS_PATH !== "0") {
+  if (env.PLAYWRIGHT_BROWSERS_PATH === "0") {
+    throw new Error(
+      "PLAYWRIGHT_BROWSERS_PATH=0 uses package-local browsers; unset it or specify a shared cache path",
+    );
+  }
+  if (env.PLAYWRIGHT_BROWSERS_PATH) {
     return path.resolve(env.PLAYWRIGHT_BROWSERS_PATH);
   }
   return path.join(env.XDG_CACHE_HOME || path.join(home, ".cache"), "ms-playwright");
+}
+
+/** Recover the original source after exporting this helper's output. */
+export async function resolveSharedDirectory(
+  directory: string,
+  env = process.env,
+): Promise<string> {
+  const candidate = sharedBrowsersDirectory(env);
+  if (physicalPath(candidate) !== physicalPath(directory)) return candidate;
+  const source = JSON.parse(await readFile(path.join(directory, ".source.json"), "utf8")) as {
+    shared: string;
+  };
+  if (typeof source.shared !== "string") throw new Error("invalid private cache source metadata");
+  validatePrivateDirectory(directory, source.shared);
+  return source.shared;
+}
+
+/** Resolve aliases even when the final path does not exist yet. */
+function physicalPath(value: string): string {
+  let existing = path.resolve(value);
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      return path.join(realpathSync(existing), ...suffix);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      suffix.unshift(path.basename(existing));
+      const parent = path.dirname(existing);
+      if (parent === existing) throw error;
+      existing = parent;
+    }
+  }
 }
 
 export function defaultPrivateDirectory(
@@ -543,6 +583,8 @@ export interface PrepareOptions {
   shared: string;
   revision: string;
   force?: boolean;
+  /** Only when no browser or other cache reader is running. */
+  prune?: boolean;
   /** Injected by tests; defaults to the pinned Ubuntu packages. */
   packages?: readonly HostLibraryPackage[];
   fetchImpl?: Fetch;
@@ -550,6 +592,31 @@ export interface PrepareOptions {
 }
 
 export async function preparePrivateBrowsers(options: PrepareOptions): Promise<string> {
+  validatePrivateDirectory(options.directory, options.shared);
+  await mkdir(options.directory, { recursive: true, mode: 0o700 });
+  const lock = path.join(options.directory, ".prepare-lock");
+  const deadline = Date.now() + 300_000;
+  while (true) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() >= deadline)
+        throw new Error(
+          `cache locked: ${lock}; if its setup process died, remove this lock before retrying`,
+        );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  try {
+    return await prepareLocked(options);
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
+}
+
+async function prepareLocked(options: PrepareOptions): Promise<string> {
   const { directory, shared, revision, log } = options;
   const packages = options.packages ?? HOST_LIBRARY_PACKAGES;
   const webkitName = `webkit-${revision}`;
@@ -592,29 +659,55 @@ export async function preparePrivateBrowsers(options: PrepareOptions): Promise<s
         log(`added ${added} libraries from ${pkg.name}`);
       }
       await writeFile(path.join(staging, STAMP_FILE), fingerprint);
-      const previous = (await lstat(privateWebkit).catch(() => undefined))
-        ? `${privateWebkit}.old-${process.pid}-${randomBytes(4).toString("hex")}`
-        : undefined;
-      if (previous) await rename(privateWebkit, previous);
-      try {
-        await rename(staging, privateWebkit);
-      } catch (error) {
-        // Another run published the same directory first; keep theirs.
-        if ((await readStamp(privateWebkit)) !== fingerprint) throw error;
+      const generation = path.join(
+        directory,
+        `.generation-${webkitName}-${randomBytes(8).toString("hex")}`,
+      );
+      const existing = await lstat(privateWebkit).catch(() => undefined);
+      if (existing && !existing.isSymbolicLink()) {
+        // A legacy real directory cannot be replaced atomically by a symlink.
+        // Only migrate when the caller explicitly promises there are no readers.
+        if (!options.prune)
+          throw new Error("legacy private cache: stop readers and rerun with --prune");
+        await rm(privateWebkit, { recursive: true });
       }
-      if (previous) await rm(previous, { recursive: true, force: true });
+      await rename(staging, generation);
+      const pointer = `${staging}.link`;
+      try {
+        await symlink(path.basename(generation), pointer);
+        await rename(pointer, privateWebkit);
+      } finally {
+        await rm(pointer, { force: true });
+      }
     } finally {
       await rm(staging, { recursive: true, force: true });
       await rm(downloads, { recursive: true, force: true });
     }
   }
 
+  const sourceTemporary = path.join(directory, ".source.json.tmp");
+  await writeFile(sourceTemporary, JSON.stringify({ shared: physicalPath(shared) }));
+  await rename(sourceTemporary, path.join(directory, ".source.json"));
+  if (options.prune) {
+    const current = physicalPath(privateWebkit);
+    for (const name of await readdir(directory)) {
+      if (
+        !/^(?:webkit-\d+(?:\.old-[\w-]+)?$|\.generation-webkit-\d+-[a-f0-9]+$|\.webkit-\d+\.tmp-[\w.-]+$)/.test(
+          name,
+        )
+      )
+        continue;
+      const entry = path.join(directory, name);
+      if (entry === privateWebkit || physicalPath(entry) === current) continue;
+      await rm(entry, { recursive: true, force: true });
+    }
+  }
   await linkSharedBrowsers(shared, directory, webkitName);
   return privateWebkit;
 }
 
 /** Launch headless WebKit from the private directory and render a page. */
-async function launchCheck(directory: string): Promise<void> {
+export async function launchCheck(directory: string, runner = run): Promise<void> {
   const script = [
     'const { webkit } = require("playwright");',
     "(async () => {",
@@ -627,7 +720,7 @@ async function launchCheck(directory: string): Promise<void> {
     '  console.log("webkit launched");',
     "})().catch((error) => { console.error(String(error?.message ?? error)); process.exit(1); });",
   ].join("\n");
-  const result = await run(process.execPath, ["-e", script], {
+  const result = await runner(process.execPath, ["-e", script], {
     cwd: repoRoot,
     env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: directory },
     timeoutMs: LAUNCH_CHECK_TIMEOUT_MS,
@@ -644,12 +737,14 @@ launches on a Linux distribution Playwright does not support.
 
   --dir <path>         Private directory (default: ${defaultPrivateDirectory()})
   --print-path         Print only the directory on stdout (progress goes to stderr)
+  --prune              Remove retired copies (stop all cache readers first)
   --force              Rebuild the private WebKit copy even if it is current
   --no-launch-check    Skip launching headless WebKit after the dependency check
   -h, --help           Show this help`;
 
 export interface CliOptions {
   directory?: string;
+  prune?: boolean;
   printPath: boolean;
   force: boolean;
   launchCheck: boolean;
@@ -666,6 +761,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       options.directory = value;
     } else if (arg.startsWith("--dir=")) options.directory = arg.slice("--dir=".length);
     else if (arg === "--print-path") options.printPath = true;
+    else if (arg === "--prune") options.prune = true;
     else if (arg === "--force") options.force = true;
     else if (arg === "--no-launch-check") options.launchCheck = false;
     else if (arg === "-h" || arg === "--help") options.help = true;
@@ -675,7 +771,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 export function validatePrivateDirectory(directory: string, shared: string): void {
-  if (isInside(directory, repoRoot)) {
+  directory = physicalPath(directory);
+  shared = physicalPath(shared);
+  if (isInside(directory, physicalPath(repoRoot))) {
     throw new Error(
       `${directory} is inside the repository; choose a directory outside it ` +
         "(format:check scans untracked files and fails on the WebKit bundle)",
@@ -688,8 +786,15 @@ export function validatePrivateDirectory(directory: string, shared: string): voi
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+export async function main(
+  argv = process.argv.slice(2),
+  dependencies = {
+    prepare: preparePrivateBrowsers,
+    missing: missingWebkitLibraries,
+    launch: launchCheck,
+  },
+): Promise<void> {
+  const options = parseArgs(argv);
   if (options.help) {
     console.log(USAGE);
     return;
@@ -701,19 +806,20 @@ async function main(): Promise<void> {
   }
   const log = (message: string) => console.error(`[webkit-host-libs] ${message}`);
   const directory = path.resolve(options.directory ?? defaultPrivateDirectory());
-  const shared = sharedBrowsersDirectory();
+  const shared = await resolveSharedDirectory(directory);
   validatePrivateDirectory(directory, shared);
   const revision = await playwrightWebkitRevision();
 
-  const privateWebkit = await preparePrivateBrowsers({
+  const privateWebkit = await dependencies.prepare({
     directory,
     shared,
     revision,
     force: options.force,
+    prune: options.prune,
     log,
   });
 
-  const missing = await missingWebkitLibraries(privateWebkit);
+  const missing = await dependencies.missing(privateWebkit);
   if (missing.length > 0) {
     throw new Error(
       `WebKit still cannot resolve: ${missing.join(", ")}. ` +
@@ -723,7 +829,7 @@ async function main(): Promise<void> {
   log("ldd resolves every WebKit library");
 
   if (options.launchCheck) {
-    await launchCheck(directory);
+    await dependencies.launch(directory);
     log("headless WebKit launched and rendered a page");
   }
 

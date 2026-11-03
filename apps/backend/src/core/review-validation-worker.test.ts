@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,8 +79,11 @@ async function control(
   extraEnv: Record<string, string | undefined> = {},
   resultId?: string,
   workerSource = REVIEW_VALIDATION_WORKER,
+  targetRef?: string,
 ) {
-  const payload = Buffer.from(JSON.stringify({ root, run, action, resultId })).toString("base64");
+  const payload = Buffer.from(JSON.stringify({ root, run, action, resultId, targetRef })).toString(
+    "base64",
+  );
   const child = Bun.spawn(
     [process.execPath, "-e", REVIEW_VALIDATION_CONTROL, payload, workerSource],
     {
@@ -1827,3 +1830,118 @@ test("a bridge validation plan keeps every package's serial worker default", asy
     );
   }
 }, 20000);
+
+describe("repository-declared on-demand suites", () => {
+  /** A branch off `origin/main` that changed only `src/feature.ts`. */
+  async function onDemandFixture() {
+    const context = await fixture([
+      command("full", "printf full"),
+      command("docker", "printf docker"),
+      command("browser", "printf browser"),
+    ]);
+    context.git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await writeFile(
+      path.join(context.root, ".orkestrator-test-scheduler.json"),
+      JSON.stringify({
+        version: 1,
+        cooperativeCommands: [],
+        commandProfiles: {
+          "printf full": {
+            onDemand: { when: ["scripts/test-tiers.ts"], instead: "printf fallback" },
+          },
+          "printf docker": { onDemand: { when: ["docker/**"] } },
+          "printf browser": { onDemand: { when: ["src/**"] } },
+        },
+      }),
+    );
+    await mkdir(path.join(context.root, "src"), { recursive: true });
+    await writeFile(path.join(context.root, "src", "feature.ts"), "export {};\n");
+    context.git("add", ".");
+    context.git("commit", "-m", "feature");
+    context.run.plan.headRef = context.git("rev-parse", "HEAD");
+    return context;
+  }
+
+  async function run(root: string, validation: ReviewValidationRun, targetRef?: string) {
+    await control(root, validation, "start", {}, undefined, REVIEW_VALIDATION_WORKER, targetRef);
+    await observeUntil(
+      root,
+      validation,
+      (next) => !["planned", "running"].includes(next.status),
+      12_000,
+    );
+    return control(root, validation, "status");
+  }
+
+  const output = (root: string, result: ReviewValidationRun["results"][number]) =>
+    readFile(path.join(root, result.stdoutPath!), "utf8");
+
+  test("an untriggered suite runs its replacement or nothing; a triggered one runs", async () => {
+    const { root, run: validation } = await onDemandFixture();
+    const final = await run(root, validation, "origin/main");
+    expect(final.status).toBe("completed");
+    const [full, docker, browser] = final.results;
+    // The record keeps the planned command; the limitation says what ran.
+    expect(full).toMatchObject({ command: "printf full", status: "passed" });
+    expect(await output(root, full!)).toBe("fallback");
+    expect(full!.limitation).toBe(
+      "Ran printf fallback in its place: .orkestrator-test-scheduler.json runs printf full only when the change touches scripts/test-tiers.ts, and this change does not",
+    );
+    expect(docker).toMatchObject({ status: "skipped", stdoutPath: null });
+    expect(docker!.limitation).toStartWith("On demand, not run:");
+    expect(browser).toMatchObject({ status: "passed", limitation: null });
+    expect(await output(root, browser!)).toBe("browser");
+  }, 20000);
+
+  test("failed diff lookup keeps all planned suites", async () => {
+    const { root, run: validation } = await onDemandFixture();
+    const final = await run(root, validation, "origin/nonexistent");
+    expect(final.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+    expect(await output(root, final.results[0]!)).toBe("full");
+  }, 20000);
+
+  for (const succeeds of [true, false]) {
+    test(`replacement coverage and dependents preserve ${succeeds ? "success" : "failure"}`, async () => {
+      const replacement = succeeds ? "printf replacement" : "exit 1";
+      const context = await fixture([
+        command("full", "printf full"),
+        command("duplicate", replacement),
+        command("covered", "printf covered"),
+        command("after", "printf after", { dependsOn: ["covered"] }),
+        command("skipped", "printf optional"),
+        command("after-skipped", "printf unsafe", { dependsOn: ["skipped"] }),
+      ]);
+      context.git("update-ref", "refs/remotes/origin/main", "HEAD");
+      await writeFile(
+        path.join(context.root, ".orkestrator-test-scheduler.json"),
+        JSON.stringify({
+          version: 1,
+          cooperativeCommands: [],
+          commandProfiles: {
+            "printf full": { onDemand: { when: ["docker/**"], instead: replacement } },
+            [replacement]: { covers: ["printf covered"] },
+            "printf optional": { onDemand: { when: ["docker/**"] } },
+          },
+        }),
+      );
+      context.git("add", ".");
+      context.git("commit", "-m", "policy");
+      context.run.plan.headRef = context.git("rev-parse", "HEAD");
+      const final = await run(context.root, context.run, "origin/main");
+      expect(final.results.map((result) => result.status)).toEqual(
+        succeeds
+          ? ["passed", "skipped", "skipped", "passed", "skipped", "skipped"]
+          : ["failed", "incomplete", "incomplete", "skipped", "skipped", "skipped"],
+      );
+      expect(final.results[0]!.limitation).toContain("in its place");
+      expect(final.results[5]!.limitation).toBe("A prerequisite did not pass");
+    }, 20000);
+  }
+
+  test("without a target ref every command runs as planned", async () => {
+    const { root, run: validation } = await onDemandFixture();
+    const final = await run(root, validation);
+    expect(final.results.map((result) => result.status)).toEqual(["passed", "passed", "passed"]);
+    expect(await output(root, final.results[0]!)).toBe("full");
+  }, 20000);
+});

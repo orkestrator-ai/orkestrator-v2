@@ -241,6 +241,100 @@ describe("PipelineKeyInformationTab", () => {
     expect(leaf.activeTabId).toBe("build");
   });
 
+  test("the section list scrolls the tab smoothly to a section and marks it current", () => {
+    const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 9 });
+    const scroller = tab.querySelector<HTMLElement>(".overflow-y-auto")!;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
+    scroller.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+    section(tab, "Tests").getBoundingClientRect = () => ({ top: 1600 }) as DOMRect;
+    const scrollTo = mock((_options: ScrollToOptions) => undefined);
+    scroller.scrollTo = scrollTo as unknown as HTMLElement["scrollTo"];
+    const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+
+    fireEvent.click(within(nav).getByRole("button", { name: /^Tests/ }));
+
+    expect(scrollTo.mock.calls[0]![0]).toEqual({ top: 1500 - 12, behavior: "smooth" });
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^Tests/);
+  });
+
+  test("paired headings retain the selected member while scrolling within their row", async () => {
+    const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 10 });
+    const scroller = tab.querySelector<HTMLElement>(".overflow-y-auto")!;
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
+    scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    Array.from(scroller.querySelectorAll<HTMLElement>("section")).forEach((element, index) => {
+      const top = index === 2 ? 300 : index * 300;
+      element.getBoundingClientRect = () => ({ top: top - scroller.scrollTop }) as DOMRect;
+    });
+    scroller.scrollTo = ((options: ScrollToOptions) => {
+      scroller.scrollTop = options.top ?? 0;
+    }) as HTMLElement["scrollTo"];
+    const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+    for (const name of ["Context", "Solution"]) {
+      fireEvent.click(within(nav).getByRole("button", { name: new RegExp(`^${name}`) }));
+      await act(async () => {
+        fireEvent(scroller, new Event("scrollend"));
+        scroller.scrollTop += 5;
+        fireEvent.scroll(scroller);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(
+        new RegExp(`^${name}`),
+      );
+    }
+    await act(async () => {
+      scroller.scrollTop = 910;
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^What was done/);
+    await act(async () => {
+      scroller.scrollTop = 310;
+      fireEvent.scroll(scroller);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^Context/);
+  });
+
+  test("tab jumps honour reduced motion, clamp at the end and hold the highlight in flight", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = (() => ({ matches: true })) as unknown as typeof window.matchMedia;
+    try {
+      const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 11 });
+      const scroller = tab.querySelector<HTMLElement>(".overflow-y-auto")!;
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 400 });
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
+      scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+      Array.from(scroller.querySelectorAll<HTMLElement>("section")).forEach((element, index) => {
+        element.getBoundingClientRect = () =>
+          ({ top: index * 500 - scroller.scrollTop }) as DOMRect;
+      });
+      const scrollTo = mock((_options: ScrollToOptions) => undefined);
+      scroller.scrollTo = scrollTo as HTMLElement["scrollTo"];
+      const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+      fireEvent.click(within(nav).getByRole("button", { name: /^Update history/ }));
+      expect(scrollTo).toHaveBeenCalledWith({ top: 3600, behavior: "auto" });
+      await act(async () => {
+        scroller.scrollTop = 510;
+        fireEvent.scroll(scroller);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(
+        /^Update history/,
+      );
+      await act(async () => {
+        fireEvent(scroller, new Event("scrollend"));
+        fireEvent.scroll(scroller);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^Context/);
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
   test("offers no Open pipeline when the build tab is closed", () => {
     const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 6 }, [briefTab]);
     expect(within(tab).queryByRole("button", { name: "Open pipeline" }) === null).toBe(true);

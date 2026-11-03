@@ -19,6 +19,8 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "fix-usage.read-failed": "Reading a fix session's token usage failed.",
       "result.consume-deferred":
         "Consuming a workflow result failed; it stays staged and is retried.",
+      "failure-triage.failed":
+        "Classifying a review package's failing tests failed; the package is sealed without the triage and says so.",
     },
   },
   "pull-request": {
@@ -34,10 +36,26 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
       "monitor.start-failed": "Monitoring could not start for a newly opened pull request.",
       "cleanup-scheduler.missing":
         "A merged pull request was seen, but this runtime has no merge cleanup scheduler.",
-      "auto-merge.warning":
-        "An auto-merge evaluation or action failed. `detail` is the service's own text with identifiers only.",
-      "monitor.warning":
-        "A monitor step failed. `detail` is the service's own text with identifiers only.",
+      "auto-merge.evaluation-failed": "Evaluating an environment for auto-merge failed.",
+      "auto-merge.merge-failed":
+        "Auto-merge could not merge a pull request; the attempt is held and retried.",
+      "auto-merge.resolve-failed":
+        "Auto-merge could not launch Resolve for a pull request; the attempt is held and retried.",
+      "monitor.detection-failed": "Checking an environment for its pull request failed.",
+      "monitor.detection-admission-failed":
+        "A pull request check could not be admitted to the work pool.",
+      "monitor.terminal-repair-failed":
+        "Repairing a merged or closed pull request's side effects failed.",
+      "monitor.terminal-resume-failed":
+        "Resuming a merged or closed pull request's side effects failed.",
+      "monitor.stale-reading-ignored":
+        "A non-merged reading (`state`) for a pull request already merged was ignored as stale.",
+      "monitor.state-persist-failed": "A pull request's observed state could not be saved.",
+      "monitor.state-clear-failed": "A pull request's saved state could not be cleared.",
+      "monitor.task-reconcile-failed":
+        "Updating the Kanban task of a merged or closed (`state`) pull request failed.",
+      "monitor.task-store-failed": "A pull request could not be recorded on its Kanban task.",
+      "monitor.emit-failed": "A pull request monitor event could not be emitted to its sink.",
     },
   },
 });

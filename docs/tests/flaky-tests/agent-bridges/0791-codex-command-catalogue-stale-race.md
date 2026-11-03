@@ -490,3 +490,46 @@ No catalogue code, assertion, timeout, or skip changed. The existing settling
 race remains a hypothesis.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/bridges.log.gz`.
+
+## Coordinator environment-choice review, 2026-11-03
+
+Preparation at `d2efad0d6` failed the original two-pre-plugin-answers case
+at line 273 (expected stale, received ready, 66.85 ms), in `mise run test`.
+Original evidence remains in
+`.orkestrator/review-artifacts/review-validation-b82eab29-3f18-42ce-8dd3-4d2e4a59a7a0/validation-04.stdout.txt`.
+The bridge package used `--parallel=${ORKESTRATOR_TEST_WORKERS:-1}`.
+
+Two complete-owner reruns with `--parallel=1` and
+`--preload ../../tests/setup-node.ts` each had 29 pass / 1 fail: the first
+failed `a failed settling read leaves the list stale until a read succeeds`
+at line 358 (105.35 ms, expected stale, received ready); the second timed out
+`its first answer is stale until a settling re-read confirms the plugin skills`
+at line 211 (2147.45 ms). Logs are respectively
+`orkestrator-test-run.qnMbgR/recorded-codex-owner.log.gz` and
+`orkestrator-test-run.KOWFvz/codex-catalogue-owner-confirm.log.gz` under the
+host temporary directory. A separately installed detached `origin/main`
+at `eda57e938` passed ten complete-owner repeats (exit 0, 12.5 s).
+These focused runs do not establish target-branch reproduction of the failures.
+No bridge code, assertion, skip or timeout was changed.
+
+The subsequent detached-main full `mise run test` **did** reproduce the original
+line-273 failure (81.16 ms, expected stale, received ready). Codex reported
+2335 pass / 63 skip / 1 fail across 106 files, with the package configured for
+one parallel worker. Root and protocol groups passed; workspace and bridges
+failed. The full command exited 1 after 683.7 s including 332 s of host-resource
+queueing. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.p3moaJ/baseline-recorded-full-tests.log.gz`.
+This confirms the original failure exists on main without the coordinator change.
+
+## Coordinator auto-merge review — 2026-11-03
+
+Preparation at `a77d8d849` ran `mise run test`: the two-pre-plugin-answer
+case expected `stale`, received `ready` at line 273 (65.17 ms). This branch
+changes no catalogue files. A detached `origin/main` worktree at `eda57e938`,
+with its own frozen dependency install, passed the complete owner once (1.4 s).
+`mise run test:logged -- --name baseline-catalogue-stress -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --parallel=1 --rerun-each=40 --only-failures`
+then reproduced the exact mismatch, including run 1 (59.32 ms), with 1188 pass
+and 12 failures in 55.33 s; other settling cases also failed during repeats.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.N5MP6P/baseline-catalogue-stress.log.gz`.
+The real 20 ms settle timer remains a hypothesis; no catalogue assertion or
+implementation was changed.

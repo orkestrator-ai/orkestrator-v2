@@ -551,6 +551,17 @@ export class FakeGraphInvoke {
           bytes: contents.byteLength,
           changedFileCount: 2,
           limitations: [],
+          // A real seal of a failed run carries this; the graph's closed
+          // review-package@2 schema must not see it.
+          failureSummary: {
+            mergeBase: "c".repeat(40),
+            ids: ["0123456789abcdef"],
+            relatedIds: [],
+            related: 0,
+            unrelated: 1,
+            undetermined: 0,
+            unattributedCommands: 0,
+          },
         } as T;
       }
       default:

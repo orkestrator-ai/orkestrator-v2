@@ -1753,7 +1753,7 @@ describe("FeaturesView build action", () => {
       fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
       await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
+        expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
           description: "environment failed",
         }),
       );
@@ -2012,8 +2012,8 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
-        description: "Failed to create Kanban task for feature build",
+      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
+        description: "Failed to create the Kanban task for the build pipeline",
       }),
     );
     expect(startBuildMock).not.toHaveBeenCalled();
@@ -2029,7 +2029,7 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
         description: "task persistence failed",
       }),
     );
@@ -2045,7 +2045,7 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
         description: "Created build task was not found in the Kanban store",
       }),
     );
@@ -2063,7 +2063,7 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
         description: "build launch failed",
       }),
     );
@@ -2202,8 +2202,8 @@ describe("FeaturesView build action", () => {
     fireEvent.click(screen.getByRole("button", { name: "Build" }));
 
     await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith("Failed to start feature build", {
-        description: "Failed to persist the feature build state",
+      expect(mockToastError).toHaveBeenCalledWith("Failed to start the build pipeline", {
+        description: "Failed to save the build pipeline state for this feature",
       }),
     );
     expect(screen.getByRole("button", { name: "Build" }).hasAttribute("disabled")).toBe(false);

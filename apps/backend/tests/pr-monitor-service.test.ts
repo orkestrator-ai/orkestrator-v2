@@ -10,6 +10,7 @@ import {
   PrMonitorService,
   type PrDetection,
   type PrMonitorDetectionOptions,
+  type PrMonitorWarning,
   type PrMonitorTarget,
 } from "../src/core/pr-monitor";
 
@@ -24,7 +25,7 @@ interface HarnessTask {
 
 function createHarness() {
   const emitted: Array<{ event: string; payload: any }> = [];
-  const warnings: Array<{ message: string; error: unknown }> = [];
+  const warnings: Array<PrMonitorWarning & { error: unknown }> = [];
   const clock = { value: 1_000_000 };
   let nextTimerId = 1;
   const timers = new Map<number, { callback: () => void; delayMs: number }>();
@@ -51,7 +52,7 @@ function createHarness() {
 
   const service = new PrMonitorService({
     emit: (event, payload) => emitted.push({ event, payload }),
-    onWarning: (message, error) => warnings.push({ message, error }),
+    onWarning: (warning, error) => warnings.push({ ...warning, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,
     // No jitter: these lifecycle tests assert exact cadences. Jitter and
@@ -908,7 +909,13 @@ describe("PrMonitorService", () => {
         },
       },
     ]);
-    expect(harness.warnings.some((w) => w.message.includes("reconcile"))).toBe(true);
+    expect(harness.warnings).toContainEqual(
+      expect.objectContaining({
+        event: "monitor.task-reconcile-failed",
+        environmentId: "env-1",
+        state: "merged",
+      }),
+    );
 
     await harness.fireNext();
     expect(harness.calls.review).toHaveLength(1);

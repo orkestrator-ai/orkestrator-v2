@@ -1,3 +1,4 @@
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
@@ -41,7 +42,6 @@ import {
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   normalizeProjectFolderName,
@@ -62,9 +62,13 @@ import {
   machineKeyboardCoordinates,
   sidebarCollisionDetection,
 } from "@/lib/sidebar-collision";
-import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
+import {
+  sidebarFolderKey,
+  useMachineViewStore,
+  type OpenedRepository,
+} from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
-import type { ActivitySortOrder } from "@/stores/uiStore";
+import { useUIStore, type ActivitySortOrder } from "@/stores/uiStore";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import {
   ActivityEnvironmentList,
@@ -363,6 +367,46 @@ export function MachineSectionList({
   );
 }
 
+/**
+ * The repository heading that opened what the window shows, while it still
+ * shows that project with nothing else selected; `null` otherwise.
+ */
+function useShownRepositoryHeading(machines: readonly MachineView[]): OpenedRepository | null {
+  const opened = useMachineViewStore((state) => state.openedRepository);
+  const target = opened
+    ? machines.find((machine) =>
+        machine.projects.some((project) => project.key === opened.projectKey),
+      )
+    : undefined;
+  const projectId = target?.projects.find((project) => project.key === opened?.projectKey)?.ref
+    .projectId;
+  const homeId = target?.environmentsByProject
+    .get(projectId ?? "")
+    ?.find((environment) => environment.isProjectHome && !environment.deleting)?.ref.environmentId;
+  const localHomeId = useEnvironmentStore(
+    (state) =>
+      state.environments.find(
+        (environment) => environment.projectId === projectId && environment.projectHome,
+      )?.id,
+  );
+  const remoteShown = useRemoteWorkspaceStore((state) =>
+    state.active === null
+      ? null
+      : state.active.nodeId === target?.connectionId &&
+        state.active.projectId === projectId &&
+        (state.active.environmentId === null ||
+          state.active.projectHome === true ||
+          state.active.environmentId === homeId),
+  );
+  const localShown = useUIStore(
+    (state) =>
+      state.selectedProjectId === projectId &&
+      (state.selectedEnvironmentId === null || state.selectedEnvironmentId === localHomeId),
+  );
+  if (!opened || !target || projectId === undefined) return null;
+  return (remoteShown ?? (target.bound && localShown)) ? opened : null;
+}
+
 /** Where a merged list's folder (or repository group) keeps its collapsed state. */
 export function mergedFolderCollapseKey(mode: "project" | "repository", name: string): string {
   return sidebarFolderKey(mode, mode === "repository" ? name : projectFolderKey(name));
@@ -409,6 +453,7 @@ export function MergedProjectList({
   const setProjectKeyCollapsed = useMachineViewStore((state) => state.setProjectKeyCollapsed);
   const setFolderKeyCollapsed = useMachineViewStore((state) => state.setFolderKeyCollapsed);
   const { environmentsOf, reorder } = useRemoteEnvironments();
+  const openedRepository = useShownRepositoryHeading(machines);
   const [draggingProject, setDraggingProject] = useState(false);
   const [dragItem, setDragItem] = useState<SidebarDragItem>(null);
   const sensors = useDragSensors();
@@ -558,17 +603,24 @@ export function MergedProjectList({
         projectCount={entry.projects.length}
         isCollapsed={isFolderCollapsed(entry.name)}
         onToggleCollapse={() => setFolderKeyCollapsed(folderCollapseKey(entry.name))}
+        selected={opens !== null && openedRepository?.name === entry.name}
         onOpen={
           opens
             ? () => {
-                const onCommandNode = opens.machine.bound && portalState.status?.mode !== "leaf";
-                const boardTab = projectLandingBoardTab(mode, onCommandNode);
+                // The repository's coordinator: the command node's copy, else
+                // (none here) a leaf's, whose realm then opens its own
+                // coordinator directly. A window whose own node is in leaf
+                // mode lands on its home, since its coordinator is gated.
+                const gated = opens.machine.bound && portalState.status?.mode === "leaf";
                 openMachineWorkspace({
                   connectionId: opens.machine.connectionId,
                   projectId: opens.project.ref.projectId,
-                  ...(boardTab ? { boardTab } : {}),
+                  ...(gated ? {} : { boardTab: "coordinator" as const }),
                   title: opens.name,
                 });
+                useMachineViewStore
+                  .getState()
+                  .noteRepositoryOpened({ name: entry.name, projectKey: opens.id });
               }
             : undefined
         }

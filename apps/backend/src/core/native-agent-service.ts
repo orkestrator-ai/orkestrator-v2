@@ -82,6 +82,7 @@ import {
 import { COORDINATOR_AGENTS_MD_RULE } from "@orkestrator/protocol/agents-md-orkestrator";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
@@ -1261,6 +1262,7 @@ export class NativeAgentService {
           ? `Main coordinator: every worker in this project reports to you. Side agents (Side 1, Side 2…) may mail you; reach one with send_message to its environment id from list_mailboxes. Message a worker by its environment id; toTabId is optional.\n` +
             `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
             `${COORDINATOR_ROUTING_RULE}\n` +
+            `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
             `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
             `Workers: check a worker's work with get_worker_changes (its commits, changed files, uncommitted files and diff, local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
             launchBaseLine +

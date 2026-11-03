@@ -17,7 +17,9 @@ at `79f3bc97e` (same tree as `main`).
 9. [Suggested order of work](#suggested-order-of-work)
 10. [Appendix: evidence and limits](#appendix-evidence-and-limits)
 11. [Addendum: log output shortened by R5](#addendum-log-output-shortened-by-r5)
-12. [Addendum: renderer levels changed by R1](#addendum-renderer-levels-changed-by-r1)
+12. [Addendum: backend levels and evidence after the R1 backend slice](#addendum-backend-levels-and-evidence-after-the-r1-backend-slice)
+13. [Addendum: renderer levels changed by R1](#addendum-renderer-levels-changed-by-r1)
+14. [Addendum: levels and evidence changed by the R1 cleanup slice](#addendum-levels-and-evidence-changed-by-the-r1-cleanup-slice)
 
 ## Scope and method
 
@@ -1629,3 +1631,75 @@ at error level, `installRendererErrorRecorder` also keeps the line in memory and
 `collectBugReportClientContext` includes it in a user-started bug report. The report
 agent is instructed to redact it before filing a public issue, as with raw errors
 before this migration. This slice leaves that capture path unchanged.
+
+## Addendum: levels and evidence changed by the R1 cleanup slice
+
+Added 2026-11-02 for R1's last slice. With it the migration is finished: no
+application path writes to the raw `console`, and the only sites left are the
+permanent exclusions [linting.md](../development/linting.md#raw-console) lists.
+
+### Levels
+
+| Line | Was | Now | Evidence |
+| --- | --- | --- | --- |
+| `[bridge.claude] sse.keepalive-failed` | `debug` | `warn` | **Restored.** Before the bridge slice this was a raw `console.debug`, which always wrote. The slice made it a logger `debug`, off by default, so a failed keepalive left no line unless Log Detail was raised. It reports a failure, so it is `warn` and written by default again. |
+
+Nothing else changed level. The Codex bridge's `sse.keepalive-failed` stays at
+`warn`, where the bridge slice moved it from `error`: Codex logs the failure and
+keeps the stream open so later frames can still flow. Claude closes its connection.
+The Claude bridge's deliberate demotions stay at `debug`:
+`sse.subscribe-requested`, `sse.opened`, `sse.aborted`, `sse.cleanup`, `models.*`,
+`server.starting`, `prompt.accepted` and `question.answers-prepared`. Every
+converted warning below keeps its level.
+
+### Free text replaced by static events
+
+These services reported through a callback with their own message, which the backend
+slice kept in a `detail` field. Every message was ours and held identifiers only, so
+nothing is redacted that was not before. Each step is now its own listed event, and
+its identifiers are fields.
+
+| Was | Now |
+| --- | --- |
+| `[pull-request] monitor.warning detail="PR detection failed for <env>"`, and nine more messages | `monitor.detection-failed`, `detection-admission-failed`, `terminal-repair-failed`, `terminal-resume-failed`, `stale-reading-ignored`, `state-persist-failed`, `state-clear-failed`, `task-reconcile-failed`, `task-store-failed`, `emit-failed`, each with `environmentId` |
+| `[pull-request] auto-merge.warning detail=...` (three messages) | `auto-merge.evaluation-failed`, `merge-failed`, `resolve-failed`, with `environmentId` |
+| `[diff-stats] scan.warning detail=...` (six messages) | `scan.watcher-failed`, `scan.failed`, `scan.freshness-read-failed`, `scan.listener-failed`, `emit.diff-stats-failed`, `emit.worktree-snapshot-failed`, with `environmentId` where the step has one |
+| `[scheduler] service.warning detail="[scheduled-jobs] ..."` (four messages) | `tick.failed`, `job.claim-failed jobId=<id>`, `fire.heartbeat-failed`, `fire.outcome-record-failed fireId=<id>` |
+
+What a line holds now:
+
+- **No evidence is lost.** The error fields, the command failure `reason`, `exitCode`
+  and `signal` are as before. The PR state the text named after a failed Kanban
+  reconcile is now a `state` field.
+- **`monitor.stale-reading-ignored`** has no error fields. The monitor used to pass
+  `new Error(<state>)` so the text could carry the state, which gave the line an
+  `error.name=Error`, an `unclassified` reason and frames pointing at the monitor
+  itself. The event names the site and `state` holds the reading.
+
+### Raw error text replaced by `formatLogError`
+
+`[gateway] browser.unavailable` and `loopback.unavailable` logged a listener's start
+failure as `detail=<error.message>`, unbounded and unredacted. They now log
+`error.*`. **This gains evidence:** the code (`EADDRINUSE`, `EACCES`), `syscall` and
+frames are there, and the message is cut at 1 KiB and redacted as everywhere else.
+`browser.unavailable-degraded` held the fixed text "No Tailscale address was found",
+now `reason=no-tailscale-address`.
+
+### `detail` fields kept
+
+Most hold text from our own code; protocol violations have a peer-supplied exception:
+
+- `[docker.reachability] firewall.detected`: which host firewall is active, and ufw's
+  default input policy, one word matched from its config.
+- `[bridge.codex] app-server.protocol-violation`, `app-server.invariant-violation`:
+  descriptions of the rule broken. An unknown-response protocol violation includes
+  the peer-supplied response ID, which can be any string; this detail is not
+  guaranteed content-free. The line preview stays out.
+- `[bridge.codex] app-server.stderr`: identifier-shaped tokens (`level`, `target`,
+  `code`) and a byte count, never the line.
+- `[bridge.codex] recorder.notice`: dynamic and ours. It warns that notification
+  recording is on or refused, naming the directory the developer set in
+  `CODEX_BRIDGE_RECORD_NOTIFICATIONS`, and is loud on purpose.
+
+The `core/transcript-artifacts/` warnings stay silent: nothing passes them a logger,
+and turning them on would add lines, which is undecided.

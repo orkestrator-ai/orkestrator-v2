@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { FederationEffects } from "@/components/federation/FederationEffects";
+import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
@@ -188,5 +190,70 @@ for (const grouping of ["machine", "repository"] as const) {
     const row = image.closest("button")!;
     expect(row.textContent).toContain("local-app");
     expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
+  });
+}
+
+for (const delayed of [false, true]) {
+  test(`repository heading keeps bound Home selection (ensure delayed: ${delayed}) and hands back to explicit navigation`, async () => {
+    let finish!: (home: Environment) => void;
+    const pending = new Promise<Environment>((resolve) => {
+      finish = resolve;
+    });
+    installDesktopFake({
+      list: connectionList([remoteConnection("leaf", "leaf", "teal")]),
+      datasets: { leaf: { projects: [], environments: {} } },
+      respondPortal: (command) => {
+        if (command === "get_projects") return [localProject];
+        if (command === "get_environments" || command === "get_environment_snapshots")
+          return delayed ? [localFeature] : [localHome, localFeature];
+        if (command === "ensure_project_home_environment") return delayed ? pending : localHome;
+        return undefined;
+      },
+    });
+    useProjectStore.getState().setProjects([localProject]);
+    useEnvironmentStore
+      .getState()
+      .setEnvironments(delayed ? [localFeature] : [localHome, localFeature]);
+    useMachineViewStore.setState({
+      grouping: "repository",
+      machineFilter: "all",
+      collapsedFolderKeys: [],
+      collapsedProjectKeys: [],
+      openedRepository: null,
+    });
+    function Activation() {
+      useProjectHomeActivation();
+      return null;
+    }
+    render(
+      <FederationProvider>
+        <FederationEffects />
+        <HierarchicalSidebar />
+        <Activation />
+      </FederationProvider>,
+    );
+    const heading = await screen.findByRole("button", { name: /Open acme\/local-app on/ });
+    fireEvent.click(heading);
+    if (delayed) {
+      expect(heading.getAttribute("aria-current")).toBe("page");
+      await act(async () => finish(localHome));
+    }
+    await waitFor(() => expect(useUIStore.getState().selectedEnvironmentId).toBe(localHome.id));
+    expect(heading.getAttribute("aria-current")).toBe("page");
+    expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
+    expect(
+      heading.closest("[data-project-folder]")!.querySelectorAll('[aria-current="page"]').length,
+    ).toBe(1);
+    const add = screen.getByRole("button", { name: /New environment in local-app/ });
+    const member = add.parentElement!.querySelector("button")!;
+    expect(member.getAttribute("aria-current")).toBeNull();
+    act(() => useUIStore.getState().selectEnvironment(localFeature.id));
+    expect(heading.getAttribute("aria-current")).toBeNull();
+    expect(useMachineViewStore.getState().openedRepository).toBeNull();
+    fireEvent.click(heading);
+    await waitFor(() => expect(heading.getAttribute("aria-current")).toBe("page"));
+    fireEvent.click(member);
+    await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
+    expect(heading.getAttribute("aria-current")).toBeNull();
   });
 }

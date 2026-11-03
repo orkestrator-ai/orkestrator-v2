@@ -19,6 +19,13 @@ import {
   type CoordinatorSurfaceAction,
 } from "@orkestrator/protocol/coordinator-surfaces";
 
+import {
+  COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+  COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
+  COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
+  MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+  selectCoordinatorWorkflowsToClear,
+} from "./coordinator-workflow-retention.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -28,7 +35,6 @@ import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
 
-const MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS = 2_000;
 const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
 /** The payload hash of a request that joined a live pull-request follow. */
 const PULL_REQUEST_FOLLOW_ALIAS = "pull-request-follow";
@@ -126,6 +132,83 @@ export class CoordinatorsRepository {
       workflows,
       actionReceipts,
     };
+  }
+
+  /**
+   * Called under the store lock before a new workflow record is added. When
+   * the store is at its limit, clears a batch of the oldest finished records
+   * (`coordinator-workflow-retention.ts` says which records count as
+   * finished) and leaves the caller to write the result with its own record.
+   * Returns a synchronous cleanup action to run immediately before the write,
+   * so no await separates reading resource activity from saving the selection.
+   * Refuses, saying why, when every record is still in use.
+   */
+  private async makeRoomForWorkflowAssociation(store: {
+    workflows: CoordinatorWorkflowAssociation[];
+  }): Promise<() => void> {
+    if (store.workflows.length < MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) return () => {};
+    const environmentIds = new Set(
+      (await this.repos.projects.loadEnvironments()).map((environment) => environment.id),
+    );
+    return () => {
+      const needed = store.workflows.length - MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1;
+      const cleared = selectCoordinatorWorkflowsToClear({
+        workflows: store.workflows,
+        environmentExists: (environmentId) => environmentIds.has(environmentId),
+        resourceState: (association) => this.workflowResourceState(association),
+        batch: Math.max(COORDINATOR_WORKFLOW_CLEANUP_BATCH, needed),
+      });
+      if (cleared.size < needed) {
+        log.warn("store.workflows-in-use", {
+          records: store.workflows.length,
+          clearable: cleared.size,
+        });
+        throw new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR);
+      }
+      store.workflows = store.workflows.filter((association) => !cleared.has(association.id));
+      log.info("store.workflows-cleared", {
+        cleared: cleared.size,
+        remaining: store.workflows.length,
+      });
+    };
+  }
+
+  /** Synchronous reads keep selection and the coordinator write in one event-loop step.
+   * Unknown/remote state is never evidence that work stopped.
+   */
+  private workflowResourceState(
+    association: CoordinatorWorkflowAssociation,
+  ): "active" | "finished" | "missing" | "unknown" {
+    if (association.nodeId) return "unknown";
+    const file =
+      association.kind === "multi-review"
+        ? this.files.multiReviewsFile()
+        : association.kind === "build-pipeline"
+          ? this.files.buildPipelinesFile()
+          : association.kind === "graph-run"
+            ? path.join(this.context.dataDir, "graph-runs.json")
+            : undefined;
+    if (!file) return "unknown";
+    const value = this.context.loadStoreRow(file, association.resourceId) as Record<
+      string,
+      unknown
+    > | null;
+    if (!value) return "missing";
+    const snapshot = value.snapshot as Record<string, unknown> | undefined;
+    const phase = association.kind === "graph-run" ? value.status : snapshot?.phase;
+    if (typeof phase !== "string") return "unknown";
+    if (!["complete", "completed", "failed", "cancelled"].includes(phase)) return "active";
+    // Give undelivered terminal notices a full day to reconcile. Missing or
+    // unreadable timestamps cannot establish that this grace period elapsed.
+    if (!association.terminalNotifiedAt) {
+      const updatedAt = Date.parse(String(value.updatedAt ?? snapshot?.updatedAt ?? ""));
+      if (
+        !Number.isFinite(updatedAt) ||
+        Date.now() - updatedAt < COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS
+      )
+        return "unknown";
+    }
+    return "finished";
   }
 
   /**
@@ -348,9 +431,7 @@ export class CoordinatorsRepository {
         }
         return duplicate;
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      (await this.makeRoomForWorkflowAssociation(store))();
       store.workflows.push(association);
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
@@ -393,9 +474,7 @@ export class CoordinatorsRepository {
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         return { association: existing, claimed: true };
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      (await this.makeRoomForWorkflowAssociation(store))();
       const reserved = { ...association, pending: true, claimPid: process.pid };
       store.workflows.push(reserved);
       store.revision += 1;
@@ -445,7 +524,11 @@ export class CoordinatorsRepository {
         }
         const aliases = [
           ...(owner.requestAliases ?? []),
-          { requestId: association.requestId, payloadHash: association.payloadHash },
+          {
+            requestId: association.requestId,
+            payloadHash: association.payloadHash,
+            receivedAt: new Date().toISOString(),
+          },
           ...(association.requestAliases ?? []),
         ];
         if (aliases.length > MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
@@ -541,7 +624,10 @@ export class CoordinatorsRepository {
       if (aliases.length >= MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
         throw new Error("Coordinator workflow association has too many request aliases");
       }
-      association.requestAliases = [...aliases, { requestId, payloadHash }];
+      association.requestAliases = [
+        ...aliases,
+        { requestId, payloadHash, receivedAt: new Date().toISOString() },
+      ];
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
       return association;
@@ -727,6 +813,32 @@ export class CoordinatorsRepository {
   }
 
   /**
+   * Several associations' bookkeeping in one write (a sweep's worker outcome
+   * watches). Each mutation returns whether it changed its association; the
+   * store is written once, and only when one did. Never for a delegation's
+   * waiting episode, which announces itself through the single-record update.
+   */
+  async updateCoordinatorWorkflowAssociations(
+    mutations: ReadonlyArray<{
+      associationId: string;
+      mutate: (association: CoordinatorWorkflowAssociation) => boolean;
+    }>,
+  ): Promise<void> {
+    if (mutations.length === 0) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const { associationId, mutate } of mutations) {
+        const association = store.workflows.find((item) => item.id === associationId);
+        if (association && mutate(association)) changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /**
    * Follow a worker's pull request for one coordinator (a `pull-request`
    * association), or update the live record that already does.
    *
@@ -805,7 +917,11 @@ export class CoordinatorsRepository {
         if (aliases.length < MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
           live.requestAliases = [
             ...aliases,
-            { requestId: input.requestId, payloadHash: PULL_REQUEST_FOLLOW_ALIAS },
+            {
+              requestId: input.requestId,
+              payloadHash: PULL_REQUEST_FOLLOW_ALIAS,
+              receivedAt: new Date().toISOString(),
+            },
           ];
           changed = true;
         }
@@ -827,9 +943,7 @@ export class CoordinatorsRepository {
         await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
         return live;
       }
-      if (store.workflows.length >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-        throw new Error("Coordinator workflow association store is full");
-      }
+      (await this.makeRoomForWorkflowAssociation(store))();
       const createdAt = new Date().toISOString();
       const association: CoordinatorWorkflowAssociation = {
         id: randomUUID(),
@@ -1047,6 +1161,7 @@ export type CoordinatorsStorage = Pick<
   | "prepareCoordinatorDelegationWake"
   | "markCoordinatorDelegationWoken"
   | "updateCoordinatorWorkflowAssociation"
+  | "updateCoordinatorWorkflowAssociations"
   | "followCoordinatorPullRequest"
   | "markCoordinatorWorkflowNotified"
   | "adoptCoordinatorWorkflowAssociation"

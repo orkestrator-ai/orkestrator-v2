@@ -382,6 +382,8 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
   "graph-run",
   /** A worker's pull request a coordinator follows; `id` is the environment id. */
   "pull-request",
+  /** A coordinator-owned worker environment (merged, closed or deleted); `id` is its id. */
+  "environment",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 

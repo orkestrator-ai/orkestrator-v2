@@ -1,5 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@/lib/native/backend";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useUIStore } from "@/stores/uiStore";
+import type { Environment } from "@/types";
 import {
   PipelinePullRequestChecks,
   PipelinePullRequestView,
@@ -7,7 +12,58 @@ import {
   pipelineCheckSummary,
 } from "./PipelinePullRequestView";
 
-afterEach(cleanup);
+const invokeMock = invoke as unknown as ReturnType<typeof mock>;
+
+afterEach(() => {
+  cleanup();
+  useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+  useEnvironmentStore.setState({ environments: [] });
+  useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+});
+
+function renderShippedPullRequest() {
+  const url = "https://github.com/acme/app/pull/1";
+  useEnvironmentStore.setState({
+    environments: [{ id: "pipeline-env", projectId: "project-1", prUrl: url } as Environment],
+  });
+  useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "pipeline-env" });
+  render(
+    <PipelinePullRequestView
+      environmentId="pipeline-env"
+      shipped
+      pullRequest={{ url, state: "open", checks: null }}
+    />,
+  );
+  return url;
+}
+
+test.each([
+  ["the link", () => screen.getByRole("link")],
+  ["View PR", () => screen.getByRole("button", { name: "View PR" })],
+])("%s opens the pull request in the right-hand PR pane", async (_, target) => {
+  invokeMock.mockClear();
+  renderShippedPullRequest();
+  fireEvent.click(target());
+  await waitFor(() => expect(useFilesPanelStore.getState().isOpen).toBe(true));
+  expect(useFilesPanelStore.getState().pullRequestTabs["pipeline-env"]?.[0]?.ref).toEqual({
+    owner: "acme",
+    repo: "app",
+    number: 1,
+  });
+  expect(useUIStore.getState().selectedEnvironmentId).toBe("pipeline-env");
+  expect(invokeMock).not.toHaveBeenCalledWith("open_in_browser", expect.anything());
+});
+
+test.each([
+  ["Open on GitHub", () => fireEvent.click(screen.getByRole("button", { name: "Open on GitHub" }))],
+  ["a Cmd-click on the link", () => fireEvent.click(screen.getByRole("link"), { metaKey: true })],
+])("%s still opens the browser", async (_, act) => {
+  invokeMock.mockClear();
+  const url = renderShippedPullRequest();
+  act();
+  await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("open_in_browser", { url }));
+  expect(useFilesPanelStore.getState().isOpen).toBe(false);
+});
 
 test("failed checks take precedence over simultaneous pending checks", () => {
   const checks = { total: 4, passed: 2, pending: 1 };

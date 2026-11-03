@@ -40,7 +40,7 @@ const desktopLog = createLogger("desktop");
 /**
  * Relays one line of the backend's stdio into this process's log. A logger entry
  * crosses as a JSON record carrying its own level and is re-emitted at that
- * level. Anything else (an unmigrated console call, a crash dump) is captured as
+ * level. Anything else (a vendor's own printing, a crash dump) is captured as
  * it always was: stdout as LOG, stderr as ERROR.
  */
 export function relayBackendLine(

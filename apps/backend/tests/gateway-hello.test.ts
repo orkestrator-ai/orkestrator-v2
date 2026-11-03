@@ -1,5 +1,5 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
 import {
   BACKEND_CAPABILITIES,
@@ -7,6 +7,7 @@ import {
   CLIENT_API_VERSION,
   parseBackendHello,
 } from "@orkestrator/protocol/backend-profile";
+import { GatewayLifecycle } from "../src/gateway-lifecycle.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import {
   auxiliaryServers,
@@ -229,8 +230,21 @@ describe("loopback client gateway", () => {
     });
     expect(info.loopbackClientUrl).toBeUndefined();
     expect(info.loopbackClientError).toBeTruthy();
-    expect(logs.records().some((record) => record.event === "loopback.unavailable")).toBe(true);
-    logs.restore();
+    try {
+      const failure = logs.records().find((record) => record.event === "loopback.unavailable");
+      expect(failure).toMatchObject({
+        area: "gateway",
+        level: "error",
+        fields: {
+          address: "127.0.0.1",
+          port: busyPort,
+          error: { name: "Error", code: "EADDRINUSE" },
+        },
+      });
+      expect(failure?.fields).not.toHaveProperty("detail");
+    } finally {
+      logs.restore();
+    }
 
     const hello = await requestUrl(helloUrl(info.url), {
       headers: { authorization: `Bearer ${info.token}` },
@@ -239,5 +253,54 @@ describe("loopback client gateway", () => {
     expect(
       parseBackendHello(hello.json()).capabilities[BACKEND_CAPABILITIES.loopbackClientGateway],
     ).toBeUndefined();
+  });
+});
+
+describe("gateway startup diagnostics", () => {
+  test("browser bind failure has structured error fields while loopback starts", async () => {
+    const error = Object.assign(new Error("browser bind failed"), { code: "EADDRNOTAVAIL" });
+    const bind = spyOn(GatewayLifecycle.prototype, "listenWithPortFallback").mockRejectedValue(
+      error,
+    );
+    const logs = captureLogs();
+    try {
+      const { info } = await startGateway({ loopbackClientPort: 0 });
+      expect(info.browserUrl).toBeUndefined();
+      expect(info.loopbackClientUrl).toBeTruthy();
+      const failure = logs.records().find((record) => record.event === "browser.unavailable");
+      expect(failure).toMatchObject({
+        area: "gateway",
+        level: "error",
+        fields: { error: { name: "Error", code: "EADDRNOTAVAIL", message: "browser bind failed" } },
+      });
+      expect(failure?.fields).not.toHaveProperty("detail");
+    } finally {
+      bind.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test("missing Tailscale address logs a fixed reason before starting loopback", async () => {
+    const logs = captureLogs();
+    try {
+      const { info } = await startGateway({
+        bindAddress: undefined,
+        interfaces: {},
+        loopbackClientPort: 0,
+      });
+      expect(info.browserUrl).toBeUndefined();
+      expect(info.loopbackClientUrl).toBeTruthy();
+      const failure = logs
+        .records()
+        .find((record) => record.event === "browser.unavailable-degraded");
+      expect(failure).toMatchObject({
+        area: "gateway",
+        level: "warn",
+        fields: { reason: "no-tailscale-address", remaining: "loopback-client" },
+      });
+      expect(failure?.fields).not.toHaveProperty("detail");
+    } finally {
+      logs.restore();
+    }
   });
 });

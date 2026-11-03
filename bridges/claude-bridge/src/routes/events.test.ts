@@ -1,6 +1,8 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { Hono } from "hono";
-import { TransformStream } from "node:stream/web";
+import { SSEStreamingApi } from "hono/streaming";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+import { TransformStream, type ReadableStreamDefaultReader } from "node:stream/web";
 
 // hono's `streamSSE` constructs a `TransformStream` and immediately calls
 // `writable.getWriter()`. Bun's test runtime *does* expose a `TransformStream`
@@ -791,6 +793,51 @@ describe("GET /subscribe (SSE)", () => {
 
     await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
     await response.body?.cancel().catch(() => {});
+  });
+
+  test("a rejected keepalive logs a warning and closes its connection", async () => {
+    const keepaliveApp = new Hono();
+    const intervalMs = 30_000;
+    keepaliveApp.route("/", createEventsRouter({ keepaliveIntervalMs: intervalMs }));
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const logs = captureLogs();
+    const originalWrite = SSEStreamingApi.prototype.writeSSE;
+    const writes = spyOn(SSEStreamingApi.prototype, "writeSSE").mockImplementation(function (
+      this: SSEStreamingApi,
+      message,
+    ) {
+      if (message.event === "keepalive")
+        return Promise.reject(new Error("keepalive transport failed"));
+      return originalWrite.call(this, message);
+    });
+    const intervals = spyOn(globalThis, "setInterval");
+    const controller = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await keepaliveApp.request("/subscribe", { signal: controller.signal });
+      reader = response.body!.getReader();
+      await readUntil(reader, (buffer) => buffer.includes("event: connected"));
+      await waitFor(() => intervals.mock.calls.some((call) => call[1] === intervalMs));
+      const keepalive = intervals.mock.calls.find((call) => call[1] === intervalMs)![0];
+      (keepalive as () => void)();
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+      expect(
+        logs.records().find((record) => record.event === "sse.keepalive-failed"),
+      ).toMatchObject({
+        area: "bridge.claude",
+        level: "warn",
+        fields: { error: { name: "Error", message: "keepalive transport failed" } },
+      });
+      expect(logs.records().find((record) => record.event === "sse.closed")).toMatchObject({
+        fields: { reason: "keepalive failed" },
+      });
+    } finally {
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      writes.mockRestore();
+      intervals.mockRestore();
+      logs.restore();
+    }
   });
 
   test("emits keepalives on the configured interval and cleans up on abort", async () => {

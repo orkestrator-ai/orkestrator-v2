@@ -64,6 +64,12 @@ interface MachineViewState {
    * when the same project is chosen again. Not persisted.
    */
   revealedProject: { key: string; revision: number } | null;
+  /**
+   * The repository whose heading opened what the window shows, in the
+   * "by repository" list. The heading is highlighted instead of the member
+   * project it opened, until anything else is selected. Not persisted.
+   */
+  openedRepository: OpenedRepository | null;
   setMachineFilter: (filter: string) => void;
   setGrouping: (grouping: Exclude<SidebarGrouping, "activity">) => void;
   setCompactMachineLabels: (compact: boolean) => void;
@@ -75,6 +81,14 @@ interface MachineViewState {
   /** Moves keys to the front of `recentKeys`, the first one newest. */
   recordRecent: (keys: readonly string[]) => void;
   revealProject: (key: string | null) => void;
+  noteRepositoryOpened: (opened: OpenedRepository | null) => void;
+}
+
+/** A repository heading's open: the group's name and the member project it opened. */
+export interface OpenedRepository {
+  name: string;
+  /** The node-qualified key (`projectKey`) of the member project. */
+  projectKey: string;
 }
 
 export function withRecentKeys(list: readonly string[], keys: readonly string[]): string[] {
@@ -106,6 +120,7 @@ export const useMachineViewStore = create<MachineViewState>()(
       knownFolderKeys: [],
       recentKeys: [],
       revealedProject: null,
+      openedRepository: null,
       setMachineFilter: (machineFilter) => set({ machineFilter }),
       setGrouping: (grouping) => set({ grouping }),
       setCompactMachineLabels: (compactMachineLabels) => set({ compactMachineLabels }),
@@ -165,6 +180,12 @@ export const useMachineViewStore = create<MachineViewState>()(
                     ? null
                     : { key, revision: (state.revealedProject?.revision ?? 0) + 1 },
               },
+        ),
+      noteRepositoryOpened: (openedRepository) =>
+        set((state) =>
+          openedRepository === null && state.openedRepository === null
+            ? state
+            : { openedRepository, ...(openedRepository ? { revealedProject: null } : {}) },
         ),
     }),
     {

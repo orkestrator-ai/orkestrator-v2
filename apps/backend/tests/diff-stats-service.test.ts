@@ -4,6 +4,7 @@ import {
   DiffStatsService,
   type DiffScanResult,
   type DiffStatsTarget,
+  type DiffStatsWarning,
 } from "../src/core/diff-stats-service";
 
 interface Harness {
@@ -13,7 +14,7 @@ interface Harness {
   snapshotEvents: any[];
   /** One-shot retry timers the service armed; fired only on request. */
   delayed: Array<{ callback: () => void; delayMs: number; cancelled: boolean }>;
-  warnings: Array<{ message: string; error: unknown }>;
+  warnings: Array<DiffStatsWarning & { error: unknown }>;
   scans: DiffStatsTarget[];
   /** Fires the interval registered for a target, if any. */
   tick: (environmentId: string) => void;
@@ -43,7 +44,7 @@ function createHarness(
   const emitted: Array<{ event: string; payload: any }> = [];
   const snapshotEvents: any[] = [];
   const delayed: Array<{ callback: () => void; delayMs: number; cancelled: boolean }> = [];
-  const warnings: Array<{ message: string; error: unknown }> = [];
+  const warnings: Array<DiffStatsWarning & { error: unknown }> = [];
   const scans: DiffStatsTarget[] = [];
   const clock = { value: 1_000 };
 
@@ -87,7 +88,7 @@ function createHarness(
     cancelDelay: (timer) => {
       (timer as { cancelled: boolean }).cancelled = true;
     },
-    onWarning: (message, error) => warnings.push({ message, error }),
+    onWarning: (warning, error) => warnings.push({ ...warning, error }),
     now: () => new Date(clock.value).toISOString(),
     monotonicNow: () => clock.value,
     schedule: (callback, intervalMs) => {
@@ -328,7 +329,7 @@ describe("DiffStatsService", () => {
 
     expect(harness.intervalFor("env-local")).toBe(15_000);
     expect(harness.warnings).toEqual([
-      expect.objectContaining({ message: "Diff watcher failed for env-local" }),
+      expect.objectContaining({ event: "scan.watcher-failed", environmentId: "env-local" }),
     ]);
   });
 
@@ -341,7 +342,7 @@ describe("DiffStatsService", () => {
     expect(harness.service.isWatching("env-local")).toBe(false);
     expect(harness.intervalFor("env-local")).toBe(15_000);
     expect(harness.warnings).toEqual([
-      expect.objectContaining({ message: "Diff watcher failed for env-local" }),
+      expect.objectContaining({ event: "scan.watcher-failed", environmentId: "env-local" }),
     ]);
   });
 
@@ -381,7 +382,7 @@ describe("DiffStatsService", () => {
     expect(harness.emitted).toHaveLength(1);
     expect(harness.service.snapshot()[0]?.stats).toEqual(stats());
     expect(harness.warnings).toEqual([
-      expect.objectContaining({ message: "Diff scan failed for env-local" }),
+      expect.objectContaining({ event: "scan.failed", environmentId: "env-local" }),
     ]);
   });
 
@@ -645,9 +646,9 @@ describe("DiffStatsService", () => {
 
     expect(harness.scans).toHaveLength(2);
     expect(harness.service.snapshot()).toHaveLength(1);
-    expect(harness.warnings.filter((warning) => warning.message.includes("diff stats"))).toEqual([
-      expect.objectContaining({ message: "Failed to emit diff stats for env-local" }),
-    ]);
+    expect(
+      harness.warnings.filter((warning) => warning.event === "emit.diff-stats-failed"),
+    ).toEqual([expect.objectContaining({ environmentId: "env-local" })]);
   });
 
   test("a throwing warning reporter cannot break later scans", async () => {

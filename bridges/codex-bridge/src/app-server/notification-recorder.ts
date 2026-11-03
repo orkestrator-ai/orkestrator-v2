@@ -35,7 +35,11 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.codex");
 
-/** Fixed text plus the path the user chose; a recording's content never comes here. */
+/**
+ * The one dynamic `detail` the bridge logs, and it is ours: fixed text plus the
+ * directory the developer named in the environment, so the warning reads as a
+ * sentence to whoever armed the recorder. A recording's content never comes here.
+ */
 function recorderNotice(message: string): void {
   log.warn("recorder.notice", { detail: message });
 }

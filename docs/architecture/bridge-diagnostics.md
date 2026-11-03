@@ -36,6 +36,15 @@ A bridge's other log lines (`bridge.claude`, `bridge.codex`, `bridge.cursor`,
 every bridge a level change applies to the next line, in a running turn as anywhere
 else. A line skipped while its level was off is not written later.
 
+Event-stream failures are written by default. On the Claude and Codex bridges a
+keepalive that cannot be written is `sse.keepalive-failed` at `warn`, and the
+Claude connection closes. Codex logs the failure and keeps the stream open so later
+frames can still flow. The Claude bridge's `sse.write-failed` and `sse.handshake-failed`
+are `warn` too. Routine
+connection churn on the Claude bridge (`sse.subscribe-requested`, `sse.opened`,
+`sse.aborted`, `sse.cleanup`) is `debug`, so `bridge.claude=debug` shows each client
+coming and going.
+
 A bridge without the route (an older container image) keeps its startup setting until
 its next start.
 

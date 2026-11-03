@@ -200,6 +200,7 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
           ).toBeTruthy();
           expect(screen.queryByTestId("leaf-mode-coordinator-gate") === null).toBe(true);
           expect(useRemoteWorkspaceStore.getState().active).toBeNull();
+          expect(heading.getAttribute("aria-current")).toBe("page");
         }
       } finally {
         cleanup();
@@ -304,9 +305,58 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       );
 
       if (grouping === "repository") {
-        // The repository's own entry opens a leaf's copy on its home, too.
-        fireEvent.click(screen.getByRole("button", { name: "Open acme/app on Machine A" }));
-        await waitFor(() => expect(request()).toEqual({ type: "select", projectId: "project-1" }));
+        // With no copy on the command node, the repository's own entry opens
+        // a leaf's copy on its coordinator, and is highlighted in place of
+        // the member it opened.
+        const repository = screen.getByRole("button", { name: "Open acme/app on Machine A" });
+        const member = projectHeading("app", "Machine A");
+        act(() =>
+          useMachineViewStore
+            .getState()
+            .revealProject(projectKey(projectRef("bk_a" as BackendId, "project-1"))),
+        );
+        expect(member.getAttribute("aria-current")).toBe("true");
+        fireEvent.click(repository);
+        await waitFor(() =>
+          expect(request()).toEqual({
+            type: "select",
+            projectId: "project-1",
+            boardTab: "coordinator",
+          }),
+        );
+        expect(repository.getAttribute("aria-current")).toBe("page");
+        expect(member.getAttribute("aria-current")).toBeNull();
+
+        expect(useMachineViewStore.getState().revealedProject).toBeNull();
+        // The realm can ensure Home before the shell's next summary arrives.
+        act(() =>
+          useRemoteWorkspaceStore.getState().noteRealmSelection("bk_a", {
+            projectId: "project-1",
+            environmentId: "ensured-home",
+            projectHome: true,
+          }),
+        );
+        expect(repository.getAttribute("aria-current")).toBe("page");
+        expect(member.getAttribute("aria-current")).toBeNull();
+        expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.boardTab).toBe(
+          "coordinator",
+        );
+
+        // The member's own entry takes the highlight back.
+        fireEvent.click(member);
+        await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
+        expect(repository.getAttribute("aria-current")).toBeNull();
+
+        // So does anything else the realm selects.
+        fireEvent.click(repository);
+        await waitFor(() => expect(repository.getAttribute("aria-current")).toBe("page"));
+        act(() =>
+          useRemoteWorkspaceStore
+            .getState()
+            .noteRealmSelection("bk_a", { projectId: "project-1", environmentId: "env-1" }),
+        );
+        expect(repository.getAttribute("aria-current")).toBeNull();
+        expect(member.getAttribute("aria-current")).toBeNull();
       }
     });
   }

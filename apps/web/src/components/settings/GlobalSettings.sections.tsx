@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
 import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
 import { TerminalLinkTargetSetting } from "./TerminalLinkTargetSetting";
@@ -285,6 +286,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     sshAgentSocketPathValidationError,
     autoMergeRequireChecks,
     setAutoMergeRequireChecks,
+    autoSteer,
+    setAutoSteer,
     defaultProjectsDirectory,
     setDefaultProjectsDirectory,
     defaultProjectsDirectoryValidationError,
@@ -881,6 +884,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   const renderGeneral = () => (
     <SettingsPageLayout title="General">
       <DataSavingSetting />
+      {/* The composer reads this window's own config, not another machine's. */}
+      {isWindowMachine(machine) && (
+        <AutoSteerSetting checked={autoSteer} onCheckedChange={setAutoSteer} />
+      )}
 
       {/* Preferred Editor */}
       <div className="space-y-3">

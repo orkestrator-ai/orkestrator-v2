@@ -139,3 +139,11 @@ test("a different selected backend never changes this window's web server", asyn
   );
   expect(enable).not.toHaveBeenCalled();
 });
+
+for (const machine of ["leaf", "other", null]) {
+  test(`Auto-steer visibility for ${machine ?? "command node"}`, async () => {
+    mount("general", machine);
+    await screen.findByLabelText("Default projects folder");
+    expect(Boolean(screen.queryByRole("switch", { name: "Auto-steer" }))).toBe(machine === "leaf");
+  });
+}

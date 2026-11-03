@@ -592,6 +592,8 @@ export interface GlobalConfig {
   sshAgentSocketPath?: string;
   /** Auto-merge waits for non-required checks to pass. Absent is on. */
   autoMergeRequireChecks?: boolean;
+  /** A message sent while an agent turn runs steers that turn instead of queueing. Absent is off. */
+  autoSteer?: boolean;
   /** Absolute folder new projects are cloned into on this machine (copies from other machines). */
   defaultProjectsDirectory?: string;
   /** Deliver the host's Claude Code OAuth credential into containers. */

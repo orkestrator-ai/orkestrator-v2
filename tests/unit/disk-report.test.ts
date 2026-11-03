@@ -103,19 +103,23 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
-    // The report sizes everything in its temporary directory and asks Docker
-    // for its disk use. On a shared host those took over five seconds each
-    // (thousands of leftover directories, a busy daemon), so the script gets
-    // a temporary directory of its own and a Docker socket nothing answers.
+    // The report scans its temporary directory and asks Docker for disk use.
+    // Isolate both from the shared host: use a private TMPDIR and a Docker
+    // stub that fails so the report omits Docker rows, which are not under test.
     const tmpDir = path.join(root, "tmp");
     await mkdir(tmpDir);
-    const { DOCKER_CONTEXT: _dockerContext, ...hostEnv } = process.env;
+    const fakeBin = path.join(root, "bin");
+    await mkdir(fakeBin);
+    await writeFile(path.join(fakeBin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const hostEnv = { ...process.env };
+    delete hostEnv.DOCKER_CONTEXT;
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
           ...hostEnv,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: root,
           TMPDIR: tmpDir,
           DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,

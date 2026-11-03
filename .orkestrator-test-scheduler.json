@@ -2,6 +2,7 @@
   "version": 1,
   "cooperativeCommands": [
     "mise run test",
+    "mise run test:logged -- --name review-default-tests -- mise run test",
     "mise run test:slow",
     "mise run test:full",
     "mise run test:all",
@@ -59,6 +60,10 @@
     "mise run test": {
       "resources": ["workspace:build-outputs"],
       "covers": ["mise run test:changed"]
+    },
+    "mise run test:logged -- --name review-default-tests -- mise run test": {
+      "resources": ["workspace:build-outputs"],
+      "covers": ["mise run test", "mise run test:changed"]
     },
     "mise run test:slow": {
       "resources": ["workspace:build-outputs"],

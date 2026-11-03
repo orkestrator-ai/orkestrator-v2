@@ -496,6 +496,7 @@ export function registerCoordinatorCommands(
         // was successfully started. A failed start must not promise a wake.
         coordinatorDelegationOpened = Boolean(
           await context.storage.coordinators.openCoordinatorDelegation(
+            context.runtime.coordinatorRequests.workerTabs,
             receipt.association.id,
             STARTUP_AGENT_TAB_ID,
           ),

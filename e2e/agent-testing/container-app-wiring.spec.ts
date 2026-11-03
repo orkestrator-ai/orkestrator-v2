@@ -591,7 +591,8 @@ test("Docker fixture coordinator view follows delegations and context across swi
       git("checkout", "-q", "-b", contextBranch);
       await invoke("get_project_git_status", { projectId: container.projectId });
       for (const target of [panel, secondPanel]) {
-        await expect(target.getByText(`Context r${before + 1}`, { exact: true })).toBeVisible({
+        // The revision is in the isolation badge's hover text, not the header.
+        await expect(target.locator(`[data-context-revision="${before + 1}"]`)).toBeVisible({
           timeout: POLL_BUDGET_MS,
         });
         await expect(

@@ -16,6 +16,7 @@ import type {
 } from "./coordinator-remote.js";
 import { NodeMailCollector } from "./nodes/node-mail-collector.js";
 import { statusOnNode } from "./coordinator-status-wakes.js";
+import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 class FakeRemote implements CoordinatorRemoteAccess {
   available = true;
@@ -87,7 +88,11 @@ async function remoteWorld() {
     baseCommit: "a".repeat(40),
     createdAt: new Date().toISOString(),
   });
-  await world.storage.coordinators.openCoordinatorDelegation(association.id, "startup-agent");
+  await world.storage.coordinators.openCoordinatorDelegation(
+    new WorkerTabCloseAdmission(),
+    association.id,
+    "startup-agent",
+  );
   return { world, remote, main, association };
 }
 

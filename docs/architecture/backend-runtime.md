@@ -31,17 +31,17 @@ environment operations (`backend-runtime.test.ts`; the state moved by todo 1070 
 | `localServers` | `LocalServerRuntime` | Owned bridge processes and their launch facts (worktree, account, token expiry, loginless), renderer bridge tokens, Cursor credential fingerprints, reuse-health markers, stale-login flags, the per-environment and per-container operation queues, and the shutdown gate. `openCodeAgentTools` (`OpenCodeAgentToolsReconciler`) owns OpenCode MCP reconciliation and, as `research` (`OpenCodeCoordinatorResearch`), the coordinator research registrations it forgets with the same keys; `openCodeHostStart` (`OpenCodeHostStartGate`) takes host OpenCode starts one at a time and holds the locked-database retry delays; `piCatalog` (`PiCatalogProbes`) owns the Pi catalogue probe's single flight, empty-result backoff and generation counter; `cursorSdkLogin` (`CursorSdkLoginSlot`) holds the single in-flight Cursor SDK sign-in; `gitHubCliLogin` (`GitHubCliLoginSlot`) the single in-flight GitHub CLI sign-in, which isolates progress and cancellation only, since `gh auth login` writes the host's `gh` configuration; `openCodeProviderLogin` (`OpenCodeProviderLoginSlot`) the OpenCode provider sign-in, the reservation that lets one login change run at a time and the provider list single flight. |
 | `environments` | `EnvironmentOperations` | Setup sessions, the start/setup/baseline dedupe tasks, the per-environment lifecycle queue, the project-home ensures per project, the allowlist apply queue per environment, the environments a stop is draining (`container-readiness.ts` fences their containers), container replacement cancellations, and the delete and merge guards. `fence` (`EnvironmentMutationFence`) admits agent work, file writes and worker starts against a runtime replacement or a worktree move. |
 | `prMonitor` | `PrMonitorRuntime` | The `PrMonitorService` and its timers, its `external-pr` admission pool (both created on first use, because every pool registers in the process-wide diagnostics registry, capped at `MAX_DIAGNOSTIC_SOURCES` = 32, and most test runtimes never monitor a PR), the storage/emit binding of the latest caller (not the runtime's own `emit`, so tests that capture events through their context still see them), and the serialised sync queue. Merge cleanup is a construction option (`prMonitor.scheduleMergeCleanup`). |
-| `tmux` | `TmuxRuntime` | claude-tmux sessions and their install locks (`sessions`), interactive pane terminals (`interactiveTerminals`), Claude state polls (`claudeStatePolls`, registered as the `claude-state-signal` diagnostics source), the serialised activity writes, and the orphaned-session sweep's clock and first-seen times. A session's poll loop reaches it through the context it was started with. |
+| `tmux` | `TmuxRuntime` | claude-tmux sessions and their install locks (`sessions`), interactive pane terminals (`interactiveTerminals`), Claude state polls (`claudeStatePolls`, registered as the `claude-state-signal` diagnostics source), per-container claude-tmux hook doorbells (`hookSignals`, the `tmux-hook-signal` source), the serialised activity writes, and the orphaned-session sweep's clock and first-seen times. A session's poll loop reaches it through the context it was started with. |
 | `accounts` | `AgentAccountsRuntime` | The account mutation chain (`withMutation`), the single in-flight sign-in, per-account usage and its generations, the plan-usage cache and active account (`planUsage`, `PlanUsageState`) with the reader over them (`readPlanUsage`), the last plan-usage readings (`lastUsage`, `AgentAccountLastUsage`), what was pushed into each container, the host's MCP refresh digests (`hostMcpRefreshDigests`), the login keeper's refreshers (construction options) and the coordinator homes whose Keychain login was already removed. |
 | `containerStates` | `DockerContainerStateCache` | The short-lived `docker ps` snapshot shared by status reads; container creation invalidates it. |
 | `containerUsage` | `ContainerUsageSampler` | The shared container usage sample. It lists only this backend's owner-labelled containers, so it is per backend. |
-| `containerOom` | `ContainerOomEvents` | The `docker events` OOM follower, started by the backend once it knows its Docker owner namespace. |
+| `containerOom` | `ContainerOomEvents` | The `docker events` OOM and lifecycle follower, started by the backend once it knows its Docker owner namespace. Lifecycle events invalidate `containerStates` and reach `onContainerLifecycle` listeners; the backend's `ContainerLifecycleReactor` retires the loops of a container that ended (`container-lifecycle.md`). |
 | `containerLogs` | `ContainerLogService` | The `docker logs -f` followers behind `open_container_logs`/`read_container_logs`, their replay rings and subscription leases. Constructing it starts nothing; the lease sweep starts with the first subscription. |
 | `dockerCleanupGrants` | `DockerCleanupGrants` | Reviewed Docker cleanup selection tokens (at most eight, ten minutes each, consumed on use). |
 | `integrationLocks` | `IntegrationLocks` | GitHub and Linear completion comments per pipeline, workflow-label setup per repository and status updates per issue. The GitHub client functions take the narrow `GitHubWriteLocks`. |
 | `featureBuilds` | `FeatureBuildTasks` | Feature-build ticket resolutions per request and background title refinements per ticket. |
 | `publicApi` | `PublicApiReconciliations` | The public API's in-flight run observations and exec reconciliations per operation. |
-| `coordinatorRequests` | `CoordinatorRequestFlights` | Coordinator receipt attempts per coordinator and request id (`withCoordinatorReceipt`) and AGENTS.md pull request runs per request key. |
+| `coordinatorRequests` | `CoordinatorRequestFlights` | Coordinator receipt attempts per coordinator and request id (`withCoordinatorReceipt`), AGENTS.md pull request runs per request key, and the worker tab close admission (`workerTabs`, a `WorkerTabCloseAdmission`) that fences a tab close against a delegation to that tab being persisted. |
 | `changeTracking` | `ChangeTrackingService` | Attached once storage exists; absent in light fixtures. |
 
 The graph engine's system actions keep their memory on the system executor
@@ -66,7 +66,8 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `createGitEnvironmentCommandRunner(environment, fence)`,
   `ensureProjectHomeEnvironment(environments, ...)`,
   `withEnvironmentDraining(environments, ...)`,
-  `openAgentsMdPullRequest(coordinatorRequests, ...)`) or a narrow option
+  `openAgentsMdPullRequest(coordinatorRequests, ...)`,
+  `openCoordinatorDelegation(coordinatorRequests.workerTabs, ...)`) or a narrow option
   (`NativeAgentService`'s `localBridgeAccountId`, `environmentFence` and
   `openCodeCoordinatorResearch`, a
   bridge provider's `planUsage`, `gitHubCliEnv`'s config source), not the whole
@@ -79,13 +80,14 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `tmux: { localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory }`, so
   neither `pr-monitor-runtime.ts` nor the tmux modules import
   `commands-servers.ts`. `index.ts` also passes the Claude state doorbell
-  (`tmux.claudeStatePolls.signal`, from `backendClaudeStateSignal()`) and its
+  (`tmux.claudeStatePolls.signal`, from `backendClaudeStateSignal()`), the
+  tmux hook doorbell (`tmux.hookSignal`, from `backendTmuxHookSignal()`) and its
   login keeper's refreshers (`accounts.localClaudeLoginRefresher`,
   `hostClaudeLoginRefresher`, `localCodexLoginRefresher`) as closures that
   return `undefined` while no keeper runs, which callers read as "nothing
   was asked".
 - Test seams are construction options, not setters:
-  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, openCodeAgentTools, openCodeLockedStartRetryDelaysMs, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher }, containerOom: { spawn }, containerLogs: { spawn, now } })`.
+  `new BackendRuntime({ emit, terminals: { outputRetentionMs, history: { pageReadHook, serializeHook, maxHistoryDirectories } }, localServers: { spawn, terminateProcessTree, openCodeAgentTools, openCodeLockedStartRetryDelaysMs, piCatalog: { now } }, prMonitor: { scheduleMergeCleanup }, tmux: { localClaudeConfigDirectory, claudeStatePolls, hookSignal, interactiveTerminals }, accounts: { localClaudeLoginRefresher, hostClaudeLoginRefresher, localCodexLoginRefresher }, containerOom: { spawn }, containerLogs: { spawn, now } })`.
   A test that runs whole backends passes the two Docker follower seams to
   `OrkestratorBackend` as `dockerFollowers`, which keeps the backend's own
   refresher wiring (passing a whole `runtime` would replace it).
@@ -166,8 +168,7 @@ The export-writer locks and `activeDynamicCompressions` were once proposed
 to move per backend; they stay because each bounds or orders host
 resources, not one backend's work.
 
-Three pieces of module state are per backend but not yet moved, each marked
-next to its declaration: `github-cli-binary.ts` (`managedGitHubCli`),
-`host-model-catalog-seed.ts` (`failedAt`, `generations`, `flights`) and
-`worker-tab-close-admission.ts` (`closing`, `pending`). They are tracked in
+Two pieces of module state are per backend but not yet moved, each marked
+next to its declaration: `github-cli-binary.ts` (`managedGitHubCli`) and
+`host-model-catalog-seed.ts` (`failedAt`, `generations`, `flights`). They are tracked in
 [1070-backend-module-state-beyond-0390.md](../todo/backend-structure/1070-backend-module-state-beyond-0390.md).

@@ -34,7 +34,7 @@ async function waitUntil(predicate: () => Promise<boolean> | boolean) {
 describe("out-of-memory event watcher", () => {
   test("follows lifecycle events without counting them as kills", async () => {
     const child = new FakeChild();
-    const lifecycle = mock(() => undefined);
+    const lifecycle = mock((_id: string, _action: string) => undefined);
     const spawn = mock((_command: string, _args: string[]) => {
       return child as unknown as ReturnType<typeof spawnParentBoundCommand>;
     });
@@ -51,6 +51,7 @@ describe("out-of-memory event watcher", () => {
 
     child.stdout.write(`${ID}\t${nanos(10)}\tdie\n`);
     await waitUntil(() => lifecycle.mock.calls.length === 1);
+    expect(lifecycle).toHaveBeenCalledWith(ID, "die");
     expect(watcher.count(ID)).toBe(0);
 
     // A kill older than the lifecycle event just seen still counts, once.

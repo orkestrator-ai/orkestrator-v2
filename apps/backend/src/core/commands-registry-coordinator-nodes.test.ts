@@ -10,6 +10,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerControllerWorkflowCommands } from "./commands-registry-controller-workflows.js";
 import { registerNodeCommands } from "./commands-registry-nodes.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 
@@ -66,6 +67,7 @@ async function setup(
   const context = {
     storage: world.storage,
     coordinators: world.coordinator,
+    runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
     nodes: {
       status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
       link: (nodeId: string) =>

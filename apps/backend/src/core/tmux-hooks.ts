@@ -250,7 +250,22 @@ export function sessionHookPaths(
   };
 }
 
-export function hookScript(workspace: WorkspaceHookPaths): string {
+/** The image's doorbell script; `hook` rings the tmux hook credential only. */
+export const TMUX_HOOK_DOORBELL_COMMAND = "/usr/local/bin/orkestrator-state-signal";
+
+/**
+ * `doorbell` (container hooks) rings the backend after each hook file is
+ * written (`tmux-hook-signal.ts`). An image without the `hook` mode, or a
+ * container with no doorbell config, makes the ring a no-op; the backend then
+ * keeps polling, so the hook is never delayed by it.
+ */
+export function hookScript(
+  workspace: WorkspaceHookPaths,
+  options: { doorbell?: boolean } = {},
+): string {
+  const ring = options.doorbell
+    ? `if [ -x ${TMUX_HOOK_DOORBELL_COMMAND} ]; then ${TMUX_HOOK_DOORBELL_COMMAND} hook </dev/null >/dev/null 2>&1 || true; fi`
+    : ":";
   return `#!/usr/bin/env bash
 # orkestrator-v2 claude-tmux hook
 set -u
@@ -260,6 +275,11 @@ SESSIONS_DIR=${shellDq(workspace.sessionsDir)}
 TIMEOUT_SECS=${HOOK_TIMEOUT_SECS}
 HOLD_CEILING_SECS=${HOOK_HOLD_CEILING_SECS}
 HOOK_LIMIT_SECS=${HOOK_COMMAND_TIMEOUT_SECS - HOOK_LIMIT_MARGIN_SECS}
+
+# Tells the backend a hook file was written; never blocks or fails the hook.
+ring_doorbell() {
+  ${ring}
+}
 
 PAYLOAD="$(cat)"
 
@@ -405,6 +425,7 @@ case "$EVENT_KIND" in
       printf '{"requestedAt":%s,"expiresAt":%s}' "$REQUESTED_AT_MS" "$EXPIRES_AT_MS" > "$TIMING_FILE"
     fi
     printf '%s' "$PAYLOAD" > "$PENDING_FILE"
+    ring_doorbell
     arm_deadline "$TIMEOUT_SECS"
     while kill -0 "$TIMEOUT_PID" 2>/dev/null; do
       if [ -f "$RESPONSE_FILE" ]; then
@@ -424,6 +445,7 @@ case "$EVENT_KIND" in
     wait "$TIMEOUT_PID" 2>/dev/null || true
     printf '{"timed_out":true}' > "$TIMEOUT_FILE"
     rm -f "$PENDING_FILE" "$TIMING_FILE" "$TIMING_TMP" "$HOLD_FILE"
+    ring_doorbell
     case "$EVENT_KIND" in
       PreToolUse)
         echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Approval timed out without a user response."}}'
@@ -438,6 +460,7 @@ case "$EVENT_KIND" in
     ;;
   *)
     printf '%s' "$PAYLOAD" > "$PENDING_FILE"
+    ring_doorbell
     echo '{}'
     ;;
 esac
@@ -570,7 +593,10 @@ export async function installWorkspaceHooks(
   await backend.ensureDir(paths.sessionsDir);
   await ensureClaudeSettingsGitIgnored(backend);
 
-  await backend.writeFile(paths.script, hookScript(paths));
+  await backend.writeFile(
+    paths.script,
+    hookScript(paths, { doorbell: backend.kind === "container" }),
+  );
   const chmod = await backend.exec(["chmod", "+x", paths.script]);
   if (chmod.status !== 0) throw new Error(chmod.stderr || "failed to chmod hook script");
 
@@ -915,14 +941,18 @@ export async function findTranscriptPath(
   cwd: string,
   sessionId: string,
   minMtimeUnix?: number,
+  options: { skipExact?: boolean; rejected?: Map<string, number> } = {},
 ): Promise<string | undefined> {
   const projectDir = `${claudeHome}/projects/${encodeCwd(cwd)}`;
   const exact = `${projectDir}/${sessionId}.jsonl`;
-  if ((await backend.fileSize(exact)) > 0 || (await backend.readFile(exact)) !== undefined) {
+  if (
+    !options.skipExact &&
+    ((await backend.fileSize(exact)) > 0 || (await backend.readFile(exact)) !== undefined)
+  ) {
     return exact;
   }
   if (minMtimeUnix !== undefined) {
-    return newestJsonlInDir(backend, projectDir, minMtimeUnix, sessionId);
+    return newestJsonlInDir(backend, projectDir, minMtimeUnix, sessionId, options.rejected);
   }
   return undefined;
 }
@@ -944,16 +974,26 @@ export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): s
  * filename bytes is essential: splitting on them would let one filename forge
  * another path record.
  */
+/** How many rejected discovery candidates one session remembers. */
+export const TRANSCRIPT_REJECTED_MEMO_LIMIT = 256;
+
 /**
  * Finds the fresh (`mtime >= minMtimeUnix`) `.jsonl` in `dirPath` whose content is owned by
  * `sessionId`. Only resolves when exactly one file claims the session, so a newly started tab
  * never binds to another tab's transcript. Returns undefined when zero or multiple files match.
+ *
+ * Ownership is read from a bounded head and, when needed, a bounded suffix
+ * ({@link TRANSCRIPT_HEAD_BYTES} each). Resumes and forks can append ownership
+ * after the opening records. `rejected` remembers candidates by mtime,
+ * so unchanged sibling transcripts are read once
+ * rather than on every search.
  */
 export async function newestJsonlInDir(
   backend: TmuxBackend,
   dirPath: string,
   minMtimeUnix: number,
   sessionId: string,
+  rejected?: Map<string, number>,
 ): Promise<string | undefined> {
   let candidates: Array<{ path: string; mtime: number }>;
   if (backend.kind === "container") {
@@ -976,12 +1016,48 @@ export async function newestJsonlInDir(
 
   const matches: Array<{ path: string; mtime: number }> = [];
   for (const candidate of candidates) {
-    const content = (await backend.readFile(candidate.path)) ?? "";
-    if (transcriptContainsSessionId(content, sessionId)) {
+    const memo = rejected?.get(candidate.path);
+    if (memo !== undefined && memo === candidate.mtime) continue;
+    const head = await backend.readHead(candidate.path, TRANSCRIPT_HEAD_BYTES);
+    const suffix =
+      head !== undefined &&
+      Buffer.byteLength(head) >= TRANSCRIPT_HEAD_BYTES &&
+      !transcriptHeadClaimsSession(head, sessionId)
+        ? await backend.readTail(candidate.path, TRANSCRIPT_HEAD_BYTES)
+        : undefined;
+    if (
+      head !== undefined &&
+      (transcriptHeadClaimsSession(head, sessionId) ||
+        (suffix !== undefined && transcriptHeadClaimsSession(suffix, sessionId)))
+    ) {
       matches.push(candidate);
+    } else if (head !== undefined && rejected) {
+      rejected.delete(candidate.path);
+      rejected.set(candidate.path, candidate.mtime);
+      while (rejected.size > TRANSCRIPT_REJECTED_MEMO_LIMIT) {
+        const oldest = rejected.keys().next().value;
+        if (oldest === undefined) break;
+        rejected.delete(oldest);
+      }
     }
   }
   return matches.length === 1 ? matches[0]?.path : undefined;
+}
+
+/**
+ * Whether the head of a transcript names `sessionId` as its owner: any
+ * complete record (the same test as {@link transcriptContainsSessionId}), or
+ * the raw `"sessionId":"<id>"` key on a record cut by the head bound, which an
+ * opening prompt larger than the head produces.
+ */
+export function transcriptHeadClaimsSession(head: string, sessionId: string): boolean {
+  if (!head || !sessionId) return false;
+  const complete = head.lastIndexOf("\n");
+  if (complete >= 0 && transcriptContainsSessionId(head.slice(0, complete), sessionId)) {
+    return true;
+  }
+  const quoted = JSON.stringify(sessionId);
+  return head.includes(`"sessionId":${quoted}`) || head.includes(`"session_id":${quoted}`);
 }
 
 export function transcriptContainsSessionId(content: string, sessionId: string): boolean {

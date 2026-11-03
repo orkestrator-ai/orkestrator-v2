@@ -1,7 +1,7 @@
 # ACP busy fork intermittently accepts
 
 - **ID:** 2391
-- **Status:** open
+- **Status:** resolved
 - **Test:** `POST /session/:id/fork > a busy source is refused before the fork extension`
 - **File:** `bridges/acp-bridge/src/acp-fork.test.ts:318`
 
@@ -51,3 +51,60 @@ the entire bridges group in `mise run test` (71.0 s); it reproduced the
 separate SSE exit-143 failure. This sighting confirms intermittency, but
 neither run reproduces the busy-fork defect on main, so independence is
 not claimed from these runs.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 1
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** Expected HTTP 409, received 200 (366.08 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-fork -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 4.4 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.
+
+
+## Root cause and fix — 2026-11-03
+
+**Cause: the test, not the bridge.** The test set `FAKE_ACP_HOLD_TURN_FILE`
+and sent `DIRECT:one`, expecting the turn to stay running until it wrote the
+release file. The fake agent's `DIRECT:` branch
+(`bridges/acp-bridge/src/testing/fake-agent-prompt-start.ts`) never consults
+the hold file: it writes its answer and `end_turn` straight away. So the turn
+raced the fork request: the 202, then the fork's HTTP round trip, against the
+fake agent's reply and the bridge settling the turn to `idle`. When the reply
+settled first, `forkAcpSession` saw an idle session and forked (HTTP 200).
+
+The bridge itself is correct. The prompt route sets `state.dispatching = true`
+synchronously after the busy check and `state.status = "running"` before
+answering 202 (`src/acp-http.ts`, prompt route). `forkAcpSession` refuses while
+either is set (`src/acp-fork.ts`). A fork that arrives while an accepted turn
+is still running is always refused.
+
+**Fix (test-only):** the fake agent gains a `HELD:<text>` prompt form. It
+answers like `DIRECT:` but sends `end_turn` only once the hold file exists
+(`whenReleased`). The busy-fork test sends `HELD:one`. It also asserts that the
+session is still `running` after the 409, which proves the precondition the
+test depends on. `DIRECT:` is unchanged, because five other ACP test files set
+the hold file and also send `DIRECT:` prompts that must end at once. No bridge
+source, deadline, skip or retry changed. The 409 assertion is as strict as
+before.
+
+**Verification (this worktree, Bun 1.4.4):**
+
+- Before the fix: `for i in $(seq 1 40); do bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts -t "busy source" --preload ../../tests/setup-node.ts; done`
+  gave 32 pass and 8 fail, each `Received: 200`.
+- After the fix, the same loop: 40 of 40 passed.
+- After the fix, three loops of 10 ran concurrently with a full-file run of
+  `acp-fork.test.ts`: 30 of 30 passed, and the full file passed 26, failed 0.
+- After the fix: `bun test ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --only-failures --rerun-each=40`
+  (in `bridges/acp-bridge`) gave 1040 pass and 0 fail (153.2 s).
+- `bun fmt --check` passed on both touched files. `bunx oxlint` reported no
+  errors, only six existing unused-import warnings in lines 1-11 of
+  `fake-agent-prompt-start.ts`, which this change does not touch. The
+  acp-bridge `bun run typecheck` reported no type errors.

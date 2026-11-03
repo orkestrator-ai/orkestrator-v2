@@ -17,10 +17,10 @@ import electron from "./playwright.electron.config";
 const repositoryRoot = "/repo";
 
 describe("packaged Electron app launch", () => {
-  test("finds the unpacked Linux build under release/ unless overridden", () => {
+  test("finds the inspectable unpacked Linux build under release/packaged-test/ unless overridden", () => {
     const unpacked = process.arch === "x64" ? "linux-unpacked" : `linux-${process.arch}-unpacked`;
     expect(packagedAppExecutable(repositoryRoot, {})).toBe(
-      path.join(repositoryRoot, "release", unpacked, "orkestrator-v2"),
+      path.join(repositoryRoot, "release", "packaged-test", unpacked, "orkestrator-v2"),
     );
     expect(
       packagedAppExecutable(repositoryRoot, {
@@ -78,7 +78,11 @@ describe("packaged Electron app launch", () => {
   });
 
   test("the packaged spec has its own config, outside the default Electron run", () => {
-    expect(packaged.testMatch).toEqual(["design-canvas-packaged-electron.spec.ts"]);
+    expect(packaged.testMatch).toEqual([
+      "design-canvas-packaged-electron.spec.ts",
+      "packaged-security-electron.spec.ts",
+    ]);
+    expect(electron.testMatch).not.toContain("packaged-security-electron.spec.ts");
     expect(electron.testMatch).not.toContain("design-canvas-packaged-electron.spec.ts");
     expect(electron.testMatch).toContain("design-canvas-electron.spec.ts");
   });

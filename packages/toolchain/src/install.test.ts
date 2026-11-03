@@ -107,6 +107,16 @@ describe("planToolchainInstall", () => {
 });
 
 describe("installPinnedToolchains", () => {
+  test("passes a full-verification request through and leaves it off otherwise", async () => {
+    const directory = await dataDir({ global: { enabledAgentPlatforms: ["claude"] } });
+    const { ensure, calls } = fakeEnsure();
+
+    await installPinnedToolchains({ dataDir: directory, ensure });
+    await installPinnedToolchains({ dataDir: directory, ensure, fullVerification: true });
+
+    expect(calls.map((call) => call.fullVerification)).toEqual([undefined, true]);
+  });
+
   test("hands the manager only the selected artifacts and points current at the set", async () => {
     const directory = await dataDir({ global: { enabledAgentPlatforms: ["claude", "opencode"] } });
     const { ensure, calls } = fakeEnsure();

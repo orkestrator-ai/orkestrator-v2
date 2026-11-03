@@ -50,7 +50,11 @@
       "output": "release"
     },
     "electronFuses": {
-      "runAsNode": false
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
     },
     "files": [
       "apps/desktop/dist/**",

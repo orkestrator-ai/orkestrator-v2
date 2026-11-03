@@ -388,8 +388,20 @@ export interface CoordinatorWorkflowAssociation {
   /**
    * `graph-run`: a graph run the coordinator launched (item 214 records it at launch; resourceId is the run id).
    * `pull-request`: a worker's pull request it follows (resourceId is the environment id; see `pullRequest`).
+   * `feature-plan`: one planning exchange it started with `launch_feature_plan` (resourceId is the
+   * feature plan id; see `featurePlan`).
+   *
+   * Readers must skip a kind they do not know rather than fail or treat it as
+   * another kind: an older backend sharing the data directory keeps and writes
+   * back records of kinds added after it.
    */
-  kind: "environment" | "build-pipeline" | "multi-review" | "graph-run" | "pull-request";
+  kind:
+    | "environment"
+    | "build-pipeline"
+    | "multi-review"
+    | "graph-run"
+    | "pull-request"
+    | "feature-plan";
   resourceId: string;
   /**
    * The node that holds the resource, when it is not this one: a worker
@@ -418,6 +430,8 @@ export interface CoordinatorWorkflowAssociation {
   delegation?: CoordinatorDelegation;
   /** Present on `pull-request` associations. */
   pullRequest?: CoordinatorPullRequestFollow;
+  /** Present on `feature-plan` associations: the planning exchange this request started. */
+  featurePlan?: { operationId: string };
   /** `environment` and `build-pipeline`: the worker's outcome watch (see `CoordinatorWorkerOutcome`). */
   workerOutcome?: CoordinatorWorkerOutcome;
 }

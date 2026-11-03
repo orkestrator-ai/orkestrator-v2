@@ -175,6 +175,7 @@ import {
 } from "./native-agent-projection-encoding.js";
 import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-command-catalogue";
 import { goalPublicView, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
+import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { type CompatibilityPathId, compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
@@ -615,6 +616,7 @@ export class NativeAgentTranscriptProjection {
         { ...entry.projection, title },
         entry.generation,
         this.projectionEpochs.get(key) ?? 0,
+        "projection-title",
       );
     }
   }
@@ -1989,7 +1991,7 @@ export class NativeAgentTranscriptProjection {
             );
             // An idle view reads on a slow cadence. Say the recovered transcript
             // is there rather than leaving it to wait for the next poll.
-            this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+            this.storage.announceNativeAgentSessionProjection(input.environmentId, "hydration", {
               agent: input.agent,
               logicalSessionKey: input.logicalSessionKey,
             });
@@ -3604,7 +3606,7 @@ export class NativeAgentTranscriptProjection {
         error: "Discovery timed out",
       });
       if (!announce) return;
-      this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+      this.storage.announceNativeAgentSessionProjection(input.environmentId, "discovery-deadline", {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
       });
@@ -3633,10 +3635,14 @@ export class NativeAgentTranscriptProjection {
         // its quiet backoff) four times per expiry for nothing: a view reads
         // only values, and they did not change.
         if (!announce) return;
-        this.storage.announceNativeAgentSessionProjection(input.environmentId, {
-          agent: input.agent,
-          logicalSessionKey: input.logicalSessionKey,
-        });
+        this.storage.announceNativeAgentSessionProjection(
+          input.environmentId,
+          "discovery-renewal",
+          {
+            agent: input.agent,
+            logicalSessionKey: input.logicalSessionKey,
+          },
+        );
       })
       .catch((error) => {
         settled = true;
@@ -4334,7 +4340,10 @@ export class NativeAgentTranscriptProjection {
                 !this.host.isStopped() &&
                 modelCatalogKey(refreshed) !== modelCatalogKey(cached.models)
               ) {
-                this.storage.announceNativeAgentSessionProjection(input.environmentId);
+                this.storage.announceNativeAgentSessionProjection(
+                  input.environmentId,
+                  "model-catalog-refresh",
+                );
               }
             })
             .catch(() => {
@@ -4351,10 +4360,14 @@ export class NativeAgentTranscriptProjection {
           void refresh
             .then(() => {
               if (!this.host.isStopped()) {
-                this.storage.announceNativeAgentSessionProjection(input.environmentId, {
-                  agent: input.agent,
-                  logicalSessionKey: input.logicalSessionKey,
-                });
+                this.storage.announceNativeAgentSessionProjection(
+                  input.environmentId,
+                  "model-catalog-load",
+                  {
+                    agent: input.agent,
+                    logicalSessionKey: input.logicalSessionKey,
+                  },
+                );
               }
             })
             .catch(() => undefined);
@@ -4589,6 +4602,7 @@ export class NativeAgentTranscriptProjection {
         { ...entry.projection, interactions },
         entry.generation,
         epoch,
+        "projection-withdrawn",
       );
     }
   }
@@ -4948,7 +4962,14 @@ export class NativeAgentTranscriptProjection {
                 revision: 0,
                 generation,
               };
-        return this.commitProjection(key, windowed, projection, generation, epoch, !transient);
+        return this.commitProjection(
+          key,
+          windowed,
+          projection,
+          generation,
+          epoch,
+          transient ? null : "projection-read",
+        );
       }
       // The session answered, so this key's run of missing reads is over. Left
       // set, a later transient miss would inherit a spent deadline and report a
@@ -5313,7 +5334,14 @@ export class NativeAgentTranscriptProjection {
         cursor:
           snapshot.providerRevision === undefined ? undefined : String(snapshot.providerRevision),
       };
-      return this.commitProjection(key, windowed, projection, generation, epoch, !transient);
+      return this.commitProjection(
+        key,
+        windowed,
+        projection,
+        generation,
+        epoch,
+        transient ? null : "projection-read",
+      );
     } catch (error) {
       return this.commitProjection(
         key,
@@ -5326,7 +5354,7 @@ export class NativeAgentTranscriptProjection {
         ),
         generation,
         epoch,
-        !transient,
+        transient ? null : "projection-unreachable",
       );
     }
   }
@@ -5411,7 +5439,8 @@ export class NativeAgentTranscriptProjection {
     candidate: NativeAgentSessionProjection,
     generation: string,
     epoch: number,
-    announce = true,
+    /** Why a changed projection is announced; `null` commits it silently. */
+    cause: NativeSessionInvalidationCause | null,
   ): NativeAgentSessionProjection {
     if ((this.projectionEpochs.get(key) ?? 0) !== epoch) {
       /*
@@ -5474,8 +5503,8 @@ export class NativeAgentTranscriptProjection {
       fingerprint,
       generation,
     });
-    if (announce) {
-      this.storage.announceNativeAgentSessionProjection(input.environmentId, {
+    if (cause) {
+      this.storage.announceNativeAgentSessionProjection(input.environmentId, cause, {
         agent: input.agent,
         logicalSessionKey: input.logicalSessionKey,
       });

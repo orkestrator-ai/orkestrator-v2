@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  NATIVE_SESSION_INVALIDATION_CAUSES,
+  isNativeSessionInvalidationCause,
   NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
   orderNativeObservationStamp,
@@ -52,6 +54,20 @@ describe("native agent activity announcements", () => {
     expect(parseNativeAgentActivityAnnouncement({ ...content, reason: 1 })).toBeNull();
   });
 
+  test("parses a known cause, drops an unknown one and rejects a malformed one", () => {
+    const transition = {
+      environment_id: "env-1",
+      previous_state: "working",
+      state: "idle",
+      cause: "transition",
+    };
+    expect(parseNativeAgentActivityAnnouncement(transition)?.cause).toBe("transition");
+    const future = parseNativeAgentActivityAnnouncement({ ...transition, cause: "later-cause" });
+    expect(future).not.toBeNull();
+    expect(future?.cause).toBeUndefined();
+    expect(parseNativeAgentActivityAnnouncement({ ...transition, cause: 3 })).toBeNull();
+  });
+
   test("accepts an older backend's environment-only announcement", () => {
     expect(
       parseNativeAgentActivityAnnouncement({ environment_id: "env-1", state: "working" }),
@@ -101,5 +117,21 @@ describe("native agent activity announcements", () => {
       "claude",
       "codex",
     ]);
+  });
+});
+
+describe("native session invalidation causes", () => {
+  test("are unique, bounded labels that name code paths, not content", () => {
+    expect(new Set(NATIVE_SESSION_INVALIDATION_CAUSES).size).toBe(
+      NATIVE_SESSION_INVALIDATION_CAUSES.length,
+    );
+    for (const cause of NATIVE_SESSION_INVALIDATION_CAUSES) {
+      // Short kebab-case slugs: room for nothing but a fixed name.
+      expect(cause).toMatch(/^[a-z]+(-[a-z]+)*$/);
+      expect(cause.length).toBeLessThanOrEqual(32);
+      expect(isNativeSessionInvalidationCause(cause)).toBe(true);
+    }
+    expect(isNativeSessionInvalidationCause("env-env-1:tab-1")).toBe(false);
+    expect(isNativeSessionInvalidationCause(undefined)).toBe(false);
   });
 });

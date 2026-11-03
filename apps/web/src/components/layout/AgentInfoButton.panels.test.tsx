@@ -19,7 +19,7 @@ test("renders fallback windows with account attribution before any context usage
   expect(account.getByText("Weekly limit")).toBeTruthy();
   expect(account.getByText("62% used")).toBeTruthy();
   expect(account.getByText("(Work) (work@example.com)")).toBeTruthy();
-  expect(screen.queryByText(/Usage will appear/)).toBeNull();
+  expect(screen.queryByText(/Usage will appear/) === null).toBe(true);
   expect(screen.getByText("Provider reported")).toBeTruthy();
 });
 

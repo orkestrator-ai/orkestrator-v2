@@ -81,7 +81,7 @@ describe("CoordinatorWorkPanel", () => {
       <CoordinatorWorkPanel items={items} counts={counts} openDelegations={1} onOpen={() => {}} />,
     );
     const panel = screen.getByRole("complementary", { name: "Work" });
-    expect(screen.queryByRole("button", { name: /Show work/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Show work/ }) === null).toBe(true);
     const sections = within(panel)
       .getAllByRole("heading", { level: 3 })
       .map((heading) => heading.textContent);
@@ -115,7 +115,7 @@ describe("CoordinatorWorkPanel", () => {
     render(
       <CoordinatorWorkPanel items={items} counts={counts} openDelegations={1} onOpen={() => {}} />,
     );
-    expect(screen.queryByRole("complementary", { name: "Work" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Work" }) === null).toBe(true);
     const strip = screen.getByRole("button", { name: "Show work: 1 running, 1 needs you" });
     expect(strip.getAttribute("aria-expanded")).toBe("false");
     expect(strip.textContent).toContain("running");
@@ -138,7 +138,7 @@ describe("CoordinatorWorkPanel", () => {
       <CoordinatorWorkPanel items={items} counts={counts} openDelegations={0} onOpen={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Hide work panel" }));
-    expect(screen.queryByRole("complementary", { name: "Work" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Work" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Show work/ }));
     expect(screen.getByRole("complementary", { name: "Work" })).toBeTruthy();
   });

@@ -53,6 +53,23 @@
         ]
       }
     },
+    "mise run test:package:security": {
+      "resources": ["workspace:build-outputs", "workspace:release"],
+      "workers": 2,
+      "memoryMiB": 4096,
+      "noProgressTimeoutMs": 600000,
+      "onDemand": {
+        "when": [
+          "package.json",
+          "electron-builder*.ts",
+          "apps/desktop/electron/main.ts",
+          "apps/desktop/electron/dev-mode.ts",
+          "scripts/packaged-security.ts",
+          "scripts/verify-packaged-security.ts",
+          "e2e/agent-testing/packaged-security-electron.spec.ts"
+        ]
+      }
+    },
     "mise run test:changed": {
       "resources": ["workspace:build-outputs"]
     },

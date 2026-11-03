@@ -788,18 +788,38 @@ after changing the code under test.
 
 `packaged-security-electron.spec.ts` runs in the same config on macOS and Linux.
 It spawns the **shipping inspect-off binary directly**, using Chromium CDP only
-for renderer observation. With `ELECTRON_DEV=1`, a recording dev-server URL,
-`NODE_OPTIONS=--require=<marker script>` and a Node `--inspect` port, it asserts
-the bundled `file://` renderer, zero dev-server requests, no marker execution,
-the ignored-dev warning and a closed Node inspector port. A missing shipping
-package fails; it never silently skips on macOS. It defaults to
+for renderer observation. It first reads the fuse wire from the binary
+(`scripts/packaged-security.ts`) and fails unless `runAsNode`,
+`enableNodeOptionsEnvironmentVariable` and `enableNodeCliInspectArguments` are
+off, `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar` are on,
+the app is an `app.asar` with no `app/` folder beside it and, on macOS,
+Info.plist records `ElectronAsarIntegrity`. Then, with `ELECTRON_DEV=1`, a
+recording dev-server URL, `NODE_OPTIONS=--require=<marker script>` and a Node
+`--inspect` port, it asserts the bundled `file://` renderer, zero dev-server
+requests, no marker execution, the ignored-dev warning and a closed Node
+inspector port. A missing shipping package fails; it never silently skips on
+macOS. It defaults to
 `release/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2` on Apple
 Silicon, `release/mac/...` on Intel, or `release/linux[-<arch>]-unpacked/orkestrator-v2`.
 Override with `ORKESTRATOR_SHIPPED_APP_EXECUTABLE` for another shipping package.
-On macOS, build an ad-hoc local `--mac --dir --publish never` package without
-installing or notarizing it. Run just this smoke test with:
+
+`mise run test:package:security` is the one-shot qualification for security
+report L3 and L4. It builds this host's shipping package unsigned with
+`electron-builder --mac|--linux --dir --publish never` (package.json's own
+config: ad-hoc mac identity, no notarization, nothing installed), runs
+`bun scripts/verify-packaged-security.ts`, which prints one PASS/FAIL line per
+fuse and layout check and writes them to
+`output/package-security/<platform>-<arch>.json`, and then runs this spec.
 
 ```bash
+mise run test:logged -- --name package-security -- mise run test:package:security
+```
+
+To check an existing package without rebuilding, run the verifier and the spec
+on their own:
+
+```bash
+mise run test:logged -- --name packaged-fuses -- bun scripts/verify-packaged-security.ts
 mise run test:logged -- --name packaged-security -- bunx playwright test \
   --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts
 ```

@@ -14,30 +14,32 @@ import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scri
 import { ownProcessGroup, stopProcessGroup, withCleanup } from "../process-cleanup";
 import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { packagedLaunchEnvironment, packagedLaunchSwitches } from "./packaged-electron-app";
+import { shippingPackage, verifyShippingPackage } from "../../scripts/packaged-security";
 
 const root = path.resolve(import.meta.dirname, "../..");
 
-test("shipping binary ignores hostile dev variables, NODE_OPTIONS and Node inspector arguments", async () => {
+test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_OPTIONS and Node inspector arguments", async () => {
   test.skip(
     process.platform !== "darwin" && process.platform !== "linux",
     "macOS/Linux package smoke",
   );
-  const override = process.env.ORKESTRATOR_SHIPPED_APP_EXECUTABLE;
-  const executable = override
-    ? path.resolve(root, override)
-    : process.platform === "darwin"
-      ? path.join(
-          root,
-          `release/mac${process.arch === "arm64" ? "-arm64" : ""}/OrkestratorV2.app/Contents/MacOS/OrkestratorV2`,
-        )
-      : path.join(
-          root,
-          `release/linux${process.arch === "x64" ? "" : `-${process.arch}`}-unpacked/orkestrator-v2`,
-        );
+  const pkg = shippingPackage(
+    root,
+    process.platform,
+    process.arch,
+    process.env.ORKESTRATOR_SHIPPED_APP_EXECUTABLE?.trim() || undefined,
+  );
+  const executable = pkg.executable;
   // Missing packages fail rather than turning a green task into skipped qualification.
   expect(existsSync(executable), "Build the shipping --dir package first (not packaged-test)").toBe(
     true,
   );
+  // Security report L3: read the fuses this binary actually carries.
+  const report = await verifyShippingPackage(pkg);
+  expect(
+    report.checks.filter((check) => !check.passed),
+    report.checks.map((check) => `${check.check}: ${check.detail}`).join("; "),
+  ).toEqual([]);
   const scratch = await mkdtemp(path.join(os.tmpdir(), "orkestrator-package-security-"));
   let browser: Browser | undefined;
   let child: ReturnType<typeof spawn> | undefined;
@@ -115,11 +117,7 @@ test("shipping binary ignores hostile dev variables, NODE_OPTIONS and Node inspe
     browser = await chromium.connectOverCDP(
       /DevTools listening on (ws:\/\/[^\s]+)/.exec(stderr)![1]!,
     );
-    const resources =
-      process.platform === "darwin"
-        ? path.resolve(path.dirname(executable), "../Resources")
-        : path.join(path.dirname(executable), "resources");
-    const renderer = pathToFileURL(path.join(resources, "web/index.html")).href;
+    const renderer = pathToFileURL(path.join(pkg.resources, "web/index.html")).href;
     await expect
       .poll(
         () =>

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { SHIPPED_FUSE_STATES } from "../../../scripts/packaged-security";
 
 async function readJson<T>(relativePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(path.join(process.cwd(), relativePath), "utf8")) as T;
@@ -105,6 +106,34 @@ describe("Electron packaging configuration", () => {
       "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
     );
     expect(taskCommands("package:linux:unpacked:test")).not.toContain("install-packaged-app");
+    // L3 qualification: the shipping (not packaged-test) --dir build of this
+    // host, unsigned, fuses read from the binary, then the hostile-launch spec.
+    const securityTask = taskCommands("test:package:security");
+    expect(securityTask).toContain("mise run build:all");
+    expect(securityTask).toContain("--dir --publish never");
+    expect(securityTask).toContain("bun scripts/verify-packaged-security.ts");
+    expect(securityTask).toContain("packaged-security-electron.spec.ts");
+    const securityBuild = securityTask
+      .split("\n")
+      .find((command) => command.startsWith("bunx electron-builder"));
+    // package.json's own build: shipped fuses, ad-hoc mac identity, no notarization.
+    expect(securityBuild).not.toContain("--config");
+    for (const forbidden of [
+      "install-packaged-app",
+      "notarize",
+      "release.config",
+      "publish always",
+    ]) {
+      expect(securityTask).not.toContain(forbidden);
+    }
+    expect(securityTask.indexOf("electron-builder")).toBeLessThan(
+      securityTask.indexOf("verify-packaged-security"),
+    );
+    expect(packageJson.build.electronFuses).toEqual(
+      Object.fromEntries(
+        Object.entries(SHIPPED_FUSE_STATES).map(([name, state]) => [name, state === "enabled"]),
+      ),
+    );
     expect(taskCommands("package:release")).toContain("electron-builder.release.config.ts");
     expect(taskCommands("package:release")).toContain("bunx electron-builder --mac");
     expect(taskCommands("package:release")).toContain(

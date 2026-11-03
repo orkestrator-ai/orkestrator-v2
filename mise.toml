@@ -461,6 +461,18 @@ run = [
   "bunx electron-builder --linux --dir --config electron-builder.packaged-test.config.ts --publish never",
 ]
 
+[tasks."test:package:security"]
+description = "Build this host's unsigned shipping --dir package (macOS ad-hoc or Linux), read its fuses and run the shipping security smoke. Never signs with a Developer ID, notarizes, installs or publishes"
+env = { CSC_IDENTITY_AUTO_DISCOVERY = "false" }
+run = [
+  "bun install --frozen-lockfile",
+  "mise run download:bun",
+  "mise run build:all",
+  "bunx electron-builder --$(if [ \"$(uname -s)\" = Darwin ]; then echo mac; else echo linux; fi) --dir --publish never",
+  "bun scripts/verify-packaged-security.ts",
+  "bunx playwright test --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts",
+]
+
 [tasks."package:release"]
 description = "Build, sign, notarize, and install a macOS release"
 run = [

@@ -76,3 +76,19 @@ Final aggregate counts: desktop 1,580 pass / 16 skip / 2 fail; backend
 13,138 pass / 97 skip / 3 fail; web 11,230 pass / 10 skip / 7 fail; root
 3,418 pass / 3 fail. Bridges and Codex protocol verification passed.
 The aggregate exited 1 after 1,152.1 seconds; no watchdog or output limit fired.
+
+## Coordinator environment-choice review, 2026-11-03
+
+Preparation at `d2efad0d6` ran `mise run test` and failed the unchanged
+`abandoned uploads expire and remove worktree temporary files` at line 424
+(expected false, received true, 57.04 ms). The original output remains in
+`.orkestrator/review-artifacts/review-validation-b82eab29-3f18-42ce-8dd3-4d2e4a59a7a0/validation-04.stdout.txt`.
+The workspace and bridge groups failed; root and protocol groups passed.
+Preparation used the package scripts' configured parallel worker counts.
+
+The complete owner passed alone through
+`mise run test:logged -- --name upload-expiry-owner -- bun test --cwd apps/backend ./src/core/nodes/node-files.test.ts --parallel=1 --only-failures`
+(exit 0, 0.8 s). A detached `origin/main` at `eda57e938`, with its own frozen
+install, also passed this owner in 20 repeats in a three-owner run (680 pass,
+20 fail, all failures in PreviewUpstreamPool). This establishes intermittence,
+not target-branch reproduction of this exact failure. No upload code changed.

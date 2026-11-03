@@ -1006,6 +1006,21 @@ environment** is one a build pipeline created and runs in
 Environment dialog); the pipeline runs build, review, fix, verify, PR and
 conflict resolution itself.
 
+The main coordinator chooses between them by `COORDINATOR_ENVIRONMENT_CHOICE_RULE`
+(`packages/protocol/src/coordinator.ts`), carried in its context, in the
+Control MCP instructions, and in short form in the `launch_environment` and
+`start_build_pipeline` descriptions. It applies to every project:
+
+- A pipeline environment is the default. The coordinator starts one with
+  `start_build_pipeline` whenever the whole spec is known: a ticket, or what is
+  being built has been settled with the user.
+- A prompt environment is for investigation, or for interactive work that may
+  stop, raise many questions or need back-and-forth with the user.
+- With a prompt environment the coordinator owns the rest of the lifecycle.
+  When it judges the work ready it launches Multi Review, then sees it through
+  the fix, the PR and conflict resolution, as below. Investigation with no code
+  change ends with the worker's report.
+
 A worker never raises a pull request; a **PR tab** does, after review. In a
 prompt environment the flow is build → review or Multi Review → fix → PR →
 resolve conflicts:

@@ -138,14 +138,16 @@ export class BuildPipelineWorkerMail implements PipelineWorkerMailPort {
       if (active?.state !== "running") return { outcome: "idle" } as const;
       const discardPreparation = async () => {
         // A steered build or fix may change the work a preparation result
-        // described, exactly as a steer from the pipeline tab does.
+        // described, exactly as a steer from the pipeline tab does. Saved
+        // here, under the lock this steer already holds.
         if (!live.session || (pipeline.phase !== "building" && pipeline.phase !== "fixing")) return;
-        await this.ctx.mutate(pipeline.id, (candidate) => {
-          const session = candidate.sessions.find(
-            (item) => item.sessionKey === live.session!.sessionKey,
-          );
-          if (session) discardPreparationResult(session);
-        });
+        const record = await this.ctx.requireRecord(pipeline.id);
+        const fresh = record.snapshot as BuildPipeline;
+        fresh.backendRevision = record.revision;
+        const session = fresh.sessions.find((item) => item.sessionKey === live.session!.sessionKey);
+        if (!session) return;
+        discardPreparationResult(session);
+        await this.ctx.save(fresh, fresh.backendRevision);
       };
       let outcome;
       try {

@@ -1,11 +1,14 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
-import type {
-  GitHubPullRequestRef,
-  GitHubPullRequestViewTab,
+import {
+  parseGitHubPullRequestLink,
+  type GitHubPullRequestRef,
+  type GitHubPullRequestViewTab,
 } from "@orkestrator/protocol/github-pull-requests";
-import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFilesPanelStore } from "@/stores/filesPanelStore";
-import { useProjectPullRequestsStore } from "@/stores/projectPullRequestsStore";
+import { armPullRequestFallback } from "./pull-request-load-fallback";
+import { openInBrowser } from "@/lib/backend";
+import { projectRootFilesTargetId, useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useProjectStore } from "@/stores/projectStore";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
 /**
@@ -21,19 +24,20 @@ const PullRequestOpenerContext = createContext<PullRequestOpener | null>(null);
 
 /**
  * Routes pull requests opened inside a subtree (a pull request view, a list)
- * to the host showing it, so a link in a sidebar PR opens beside it and one
- * on the project page opens as another project tab.
+ * to the right-hand pane, with modal hosts able to close after opening.
  */
 export function PullRequestOpenerProvider({
   open,
   children,
 }: {
-  open: (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => void;
+  /** Returning false declines, so the link falls back to the browser. */
+  open: (ref: GitHubPullRequestRef, view?: GitHubPullRequestViewTab) => boolean | void;
   children: ReactNode;
 }) {
   const opener = useMemo<PullRequestOpener>(
     () => (ref, view) => {
-      open(ref, view);
+      if (open(ref, view) === false) return false;
+      armPullRequestFallback(ref);
       return true;
     },
     [open],
@@ -44,32 +48,56 @@ export function PullRequestOpenerProvider({
 }
 
 /**
- * Default routing outside any provider: an environment's pull requests open
- * in its files panel; on a project page they open as the project's tabs.
+ * The target whose pull request tabs the right-hand files panel shows now:
+ * the selected environment, or the selected project's root checkout. Mirrors
+ * `useFilesPanel`. Null when nothing is selected, as under another machine's
+ * workspace, which clears this window's selection and has its own panel.
+ */
+export function currentFilesPanelTargetId(): string | null {
+  const ui = useUIStore.getState();
+  if (ui.selectedEnvironmentId) return ui.selectedEnvironmentId;
+  if (!ui.selectedProjectId) return null;
+  const project = useProjectStore
+    .getState()
+    .projects.find((candidate) => candidate.id === ui.selectedProjectId);
+  return project ? projectRootFilesTargetId(project.id) : null;
+}
+
+/**
+ * Default routing outside any provider: the pull request opens in the
+ * right-hand files panel of whatever the main view shows, whichever project
+ * or environment the pull request belongs to. Nothing in the main view
+ * changes (no selection, board tab or pane tab), so closing the panel returns
+ * the user exactly where they were.
  */
 export function openPullRequestInApp(
   ref: GitHubPullRequestRef,
   view?: GitHubPullRequestViewTab,
 ): boolean {
-  const ui = useUIStore.getState();
-  const environment = ui.selectedEnvironmentId
-    ? useEnvironmentStore.getState().getEnvironmentById(ui.selectedEnvironmentId)
-    : undefined;
-  const projectId = environment?.projectId ?? ui.selectedProjectId;
-  // A project home under a board tab other than "home" shows the project page.
-  const showsProjectPage =
-    !!projectId &&
-    (!environment || (environment.projectHome === true && ui.projectBoardTab !== "home"));
+  if (useRemoteWorkspaceStore.getState().active) return false;
+  const targetId = currentFilesPanelTargetId();
+  if (!targetId) return false;
+  armPullRequestFallback(ref);
+  useFilesPanelStore.getState().openPullRequest(targetId, ref, view);
+  return true;
+}
 
-  if (showsProjectPage && projectId) {
-    useProjectPullRequestsStore.getState().openPullRequest(projectId, ref, view);
-    ui.setProjectBoardTab("pull-requests");
+/**
+ * Opens a GitHub pull request URL in the app, or in the external browser when
+ * it is not one the viewer can show (or nothing could host it). `external`
+ * forces the browser, for explicit "Open on GitHub" actions and modifier clicks.
+ * Resolves true when the pull request opened in the app.
+ */
+export async function openPullRequestUrl(
+  url: string,
+  options: { external?: boolean; opener?: PullRequestOpener } = {},
+): Promise<boolean> {
+  const pullRequest = options.external ? null : parseGitHubPullRequestLink(url);
+  if (pullRequest && (options.opener ?? openPullRequestInApp)(pullRequest, pullRequest.view)) {
+    armPullRequestFallback(pullRequest, url);
     return true;
   }
-  if (environment) {
-    useFilesPanelStore.getState().openPullRequest(environment.id, ref, view);
-    return true;
-  }
+  await openInBrowser(url);
   return false;
 }
 

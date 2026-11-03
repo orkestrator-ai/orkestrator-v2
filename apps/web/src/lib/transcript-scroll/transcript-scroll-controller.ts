@@ -247,6 +247,8 @@ export class TranscriptScrollController {
   /** When the reader last gave input that will scroll this transcript. */
   private lastInputAt = Number.NEGATIVE_INFINITY;
   private pointerHeld = false;
+  /** The held pointer went down on the scroller itself (its scrollbar), not its content. */
+  private pointerOnScroller = false;
   private lastPointerInside = false;
   private touchActive = false;
   private touchScrollTop = 0;
@@ -615,8 +617,30 @@ export class TranscriptScrollController {
     this.followGrowth();
   }
 
+  /**
+   * Rows are about to mount beyond the render window (keep-mounted overscan
+   * grew because a row took focus or a selection). Virtuoso places them at
+   * its estimated row height and, when they measure shorter or taller above
+   * the viewport, does not always compensate: the rows on screen jump with no
+   * scroll event. Hold a settled reader's place across that measurement.
+   */
+  holdPlaceAcrossOverscan(): void {
+    if (!this.state.active || this.op) return;
+    this.holdSettledPlace(true);
+  }
+
   /** Hold a settled reader through one tool-group fold, including its exit animation. */
   private holdPlaceAcrossToolGroupFold(): boolean {
+    return this.holdSettledPlace(false);
+  }
+
+  /**
+   * Restore the place captured once the reader last settled, as a bounded
+   * navigation their input still cancels. A pointer held on the transcript's
+   * content (a click that focuses a link) may be allowed; one held on the
+   * scroller itself is a scrollbar drag and never is.
+   */
+  private holdSettledPlace(allowContentPointer: boolean): boolean {
     const el = this.scroller;
     const anchor = this.lastReadingAnchor;
     if (
@@ -624,7 +648,7 @@ export class TranscriptScrollController {
       !anchor ||
       this.state.wantsFollow ||
       Math.abs(el.clientWidth - this.lastWidth) >= 1 ||
-      this.pointerHeld ||
+      (this.pointerHeld && !(allowContentPointer && !this.pointerOnScroller)) ||
       this.touchActive ||
       now() < Math.max(this.userScrollUntil, this.lastInputAt + INPUT_ARM_MS)
     )
@@ -1277,8 +1301,9 @@ export class TranscriptScrollController {
       }
     };
     const onScroll = () => this.handleScroll(el);
-    const onPointerDown = () => {
+    const onPointerDown = (event: PointerEvent) => {
       this.pointerHeld = true;
+      this.pointerOnScroller = event.target === el;
       this.lastPointerInside = true;
     };
     const onDocumentPointerDown = (event: PointerEvent) => {

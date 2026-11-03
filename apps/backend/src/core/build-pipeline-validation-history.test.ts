@@ -133,6 +133,22 @@ describe("validation history", () => {
             const { started } = await startBuilding(service, storage);
             await mutateStored(storage, started.id, (snapshot) => {
               snapshot.validationRun = original;
+              snapshot.reviewPackage = {
+                ...testGeneratedReviewPackage({
+                  packageId: original.id,
+                  round: 1,
+                  targetBranch: "main",
+                }),
+                failureSummary: {
+                  mergeBase: HEAD,
+                  ids: [],
+                  relatedIds: [],
+                  related: 0,
+                  unrelated: 0,
+                  undetermined: 0,
+                  unattributedCommands: 1,
+                },
+              } as never;
             });
             const snapshot = await service.retryReview(started.id);
             expect(
@@ -146,7 +162,15 @@ describe("validation history", () => {
             expect(snapshot.validationRun).toBeUndefined();
             expect(snapshot.sessions.at(-1)?.label).toBe("Package Preparation Session");
             expect(snapshot.validationHistory).toEqual([
-              summarizeValidationRun(valid ? cancelled : original, 0, false)!,
+              summarizeValidationRun(valid ? cancelled : original, 0, false, {
+                mergeBase: HEAD,
+                ids: [],
+                relatedIds: [],
+                related: 0,
+                unrelated: 0,
+                undetermined: 0,
+                unattributedCommands: 1,
+              })!,
             ]);
             expect(snapshot.validationHistory![0]!.commands[0]!.status).toBe(
               valid ? "passed" : "incomplete",
@@ -165,10 +189,21 @@ describe("validation history", () => {
       const leftover = run("leftover");
       leftover.results = leftover.results.map((result) => ({ ...result, durationMs: 1235 }));
       const reviewPackage = testGeneratedReviewPackage({
-        packageId: "old-package",
+        packageId: leftover.id,
         round: 1,
         targetBranch: "main",
       });
+      const failures = {
+        mergeBase: HEAD,
+        ids: ["a".repeat(16)],
+        relatedIds: [],
+        baseIds: ["a".repeat(16)],
+        related: 0,
+        unrelated: 1,
+        undetermined: 0,
+        unattributedCommands: 0,
+      };
+      reviewPackage.failureSummary = failures;
       if (!isPersistedReviewPackage(reviewPackage)) throw new Error("Invalid fixture package");
       provider.structured = async <T>(_sessionId: string, requestId: string) => ({
         ok: true as const,
@@ -191,7 +226,9 @@ describe("validation history", () => {
         snapshot = await pipeline(storage, started.id);
       }
       expect(snapshot.phase).toBe("building");
-      expect(snapshot.validationHistory).toEqual([summarizeValidationRun(leftover, 0, true)!]);
+      expect(snapshot.validationHistory).toEqual([
+        summarizeValidationRun(leftover, 0, true, failures)!,
+      ]);
       expect(snapshot.validationRun?.id).not.toBe(leftover.id);
       expect(snapshot.validationRun?.status).toBe("planned");
 
@@ -226,6 +263,22 @@ describe("validation history", () => {
         let snapshot = await pipeline(storage, started.id);
         for (let pass = 0; pass < 60; pass += 1) {
           if (snapshot.iteration === 1 && snapshot.validationRun) break;
+          if (snapshot.phase === "verifying" && snapshot.reviewPackage) {
+            await mutateStored(storage, started.id, (current) => {
+              if (current.reviewPackage && "kind" in current.reviewPackage) {
+                current.reviewPackage.failureSummary = {
+                  mergeBase: HEAD,
+                  ids: ["b".repeat(16)],
+                  relatedIds: [],
+                  baseIds: [],
+                  related: 0,
+                  unrelated: 0,
+                  undetermined: 1,
+                  unattributedCommands: 0,
+                };
+              }
+            });
+          }
           await service.advanceNow(started.id);
           snapshot = await pipeline(storage, started.id);
         }
@@ -235,6 +288,7 @@ describe("validation history", () => {
           iteration: 0,
           status: "completed",
           commands: [],
+          failures: { ids: ["b".repeat(16)], undetermined: 1 },
         });
         expect(snapshot.validationHistory![0]!.runId).not.toBe(snapshot.validationRun!.id);
         expect(isBuildPipeline(snapshot)).toBe(true);

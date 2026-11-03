@@ -11,7 +11,9 @@ import {
   type CoordinatorPaneLayoutSaveResult,
 } from "@orkestrator/protocol/coordinator-pane-layout";
 import {
+  parseCoordinatorUpstreamAutoMerge,
   parseCoordinatorUpstreamMergeCheck,
+  type CoordinatorUpstreamAutoMerge,
   type CoordinatorUpstreamMergeCheck,
   type DeclinedUpstreamMerge,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
@@ -64,6 +66,21 @@ export const declineCoordinatorUpstreamMerge = (
     upstreamCommit: decline.upstreamCommit,
     ...(options.onlyIfAbsent ? { onlyIfAbsent: true } : {}),
   });
+
+export const getCoordinatorUpstreamAutoMerge = async (
+  projectId: string,
+): Promise<CoordinatorUpstreamAutoMerge | null> =>
+  parseCoordinatorUpstreamAutoMerge(
+    await invoke("get_coordinator_upstream_auto_merge", { projectId }),
+  );
+
+export const setCoordinatorUpstreamAutoMerge = async (
+  projectId: string,
+  enabled: boolean,
+): Promise<CoordinatorUpstreamAutoMerge | null> =>
+  parseCoordinatorUpstreamAutoMerge(
+    await invoke("set_coordinator_upstream_auto_merge", { projectId, enabled }),
+  );
 
 export const listNoticeDismissals = async (): Promise<NoticeDismissalSnapshot | null> =>
   parseNoticeDismissalSnapshot(await invoke("list_notice_dismissals"));

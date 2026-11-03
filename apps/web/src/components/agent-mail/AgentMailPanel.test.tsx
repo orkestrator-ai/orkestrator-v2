@@ -10,6 +10,8 @@ import type {
 } from "@orkestrator/protocol/agent-mail";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
+import { useUIStore } from "@/stores/uiStore";
 import {
   mockToastError as toastError,
   mockToastInfo as toastInfo,
@@ -631,6 +633,46 @@ describe("AgentMailPanel", () => {
     expect(screen.queryByRole("link", { name: "Unsafe" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("link", { name: "Docs" }));
     await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith("https://example.com/docs"));
+  });
+});
+
+describe("pull request links in mail", () => {
+  const body = "Opened [the PR](https://github.com/acme/widget/pull/42) for review.";
+  async function openMailWithPullRequestLink() {
+    getAgentMailConversation.mockImplementation(async () =>
+      conversation([agent1, user], [mail("stored", { userSeenAt: "seen", body })]),
+    );
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    return screen.findByRole("link", { name: "the PR" });
+  }
+
+  test("open in the right-hand PR pane and close the mail sheet that covers it", async () => {
+    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+    useFilesPanelStore.setState({ isOpen: false, activeTab: "changes", pullRequestTabs: {} });
+    try {
+      fireEvent.click(await openMailWithPullRequestLink());
+      expect(useFilesPanelStore.getState().pullRequestTabs["env-1"]?.[0]?.ref).toEqual({
+        owner: "acme",
+        repo: "widget",
+        number: 42,
+      });
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useAgentMailStore.getState().panel).toBeNull();
+      expect(openInBrowser).not.toHaveBeenCalled();
+    } finally {
+      useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+      useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    }
+  });
+
+  test("fall back to GitHub and keep the sheet open when nothing can host the pane", async () => {
+    useUIStore.setState({ selectedProjectId: null, selectedEnvironmentId: null });
+    fireEvent.click(await openMailWithPullRequestLink());
+    await waitFor(() =>
+      expect(openInBrowser).toHaveBeenCalledWith("https://github.com/acme/widget/pull/42"),
+    );
+    expect(useAgentMailStore.getState().panel).not.toBeNull();
   });
 });
 

@@ -379,7 +379,8 @@ async function execute(cmd, index, readyAt) {
       const unavailable = failure ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
       result.status = unavailable ? "incomplete" : code === 0 ? "passed" : "failed";
       delete result.queueReason;
-      result.limitation = unavailable;
+      // A replaced on-demand suite keeps saying what ran in its place.
+      result.limitation = [unavailable, cmd.onDemandNote].filter(Boolean).join(". ").slice(0, 1024) || null;
       result.durationMs = cooperative && projection ? projection.executionMs : Math.round(performance.now() - started);
       const cpuMs = childCpuMs(cpuPath);
       if (cpuMs !== undefined) result.cpuMs = cpuMs;
@@ -409,7 +410,7 @@ async function execute(cmd, index, readyAt) {
   });
   } catch (error) {
     result.status = "incomplete";
-    result.limitation = error.message || "Validation infrastructure was unavailable";
+    result.limitation = [error.message || "Validation infrastructure was unavailable", cmd.onDemandNote].filter(Boolean).join(". ").slice(0, 1024);
     result.queuedMs = Date.now() - queuedAt;
     // A command that expired or was cancelled while queued never reaches the
     // close handler, so clear its last scheduler explanation here too.
@@ -477,9 +478,39 @@ async function main() {
         run.error = schedulingLimitation;
       }
     }
+    // A repository-declared on-demand suite (commandProfiles[...].onDemand)
+    // runs only when the change touches one of its trigger paths. Otherwise
+    // its declared replacement runs in its place, or it is skipped. The plan
+    // and each result keep the planned command line; the limitation says what
+    // ran instead and why. When the changed paths cannot be read, every
+    // command runs as planned.
+    const onDemandSkipped = new Map();
+    const onDemandReplacements = new Map();
+    const onDemandRules = run.plan.commands.map(cmd => cmd.cwd === "." ? policy.profiles[cmd.command]?.onDemand : undefined);
+    if (onDemandRules.some(Boolean) && typeof input.targetRef === "string") {
+      const diff = spawnSync("git", ["diff", "--name-only", "-z", input.targetRef + "...HEAD"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20000 });
+      const changed = diff.status === 0 ? diff.stdout.split("\0").filter(Boolean) : null;
+      const globToRegExp = pattern => new RegExp("^" + pattern.split("**").map(part => part.split("*").map(piece => piece.replace(/[.+?^$(){}|[\]\\]/g, "\\$&")).join("[^/]*")).join(".*") + "$");
+      if (changed) {
+        for (const [index, rule] of onDemandRules.entries()) {
+          if (!rule) continue;
+          const triggers = rule.when.map(globToRegExp);
+          if (changed.some(file => triggers.some(trigger => trigger.test(file)))) continue;
+          const planned = run.plan.commands[index].command;
+          const reason = ".orkestrator-test-scheduler.json runs " + planned + " only when the change touches " + (rule.when.length ? rule.when.join(", ") : "nothing automatically") + ", and this change does not";
+          if (rule.instead) {
+            onDemandReplacements.set(index, { command: rule.instead, note: "Ran " + rule.instead + " in its place: " + reason });
+          } else {
+            onDemandSkipped.set(index, ("On demand, not run: " + reason).slice(0, 1024));
+          }
+        }
+      }
+    }
     // Execution metadata is separate from the immutable discovered plan, whose
     // identity is checked on every reconnect by the controller.
-    const commands = run.plan.commands.map(cmd => {
+    const commands = run.plan.commands.map((planned, index) => {
+      const replacement = onDemandReplacements.get(index);
+      const cmd = replacement ? { ...planned, command: replacement.command, onDemandNote: replacement.note } : planned;
       const profile = cmd.cwd === "." ? policy.profiles[cmd.command] ?? {} : {};
       return { ...cmd, resources: profile.resources ?? cmd.resources, weight: profile.workers === 1 ? 1 : cmd.weight };
     });
@@ -499,7 +530,8 @@ async function main() {
     const candidates = commands.map((cmd, index) => ({ index, covers: cmd.cwd === "." ? policy.profiles[cmd.command]?.covers ?? [] : [] }))
       .sort((a, b) => b.covers.length - a.covers.length || a.index - b.index);
     for (const candidate of candidates) {
-      if (coveredBy.has(candidate.index)) continue;
+      // A skipped on-demand suite runs nothing, so it covers nothing.
+      if (coveredBy.has(candidate.index) || onDemandSkipped.has(candidate.index)) continue;
       for (const [index, cmd] of commands.entries()) {
         if (index !== candidate.index && cmd.cwd === "." && !coveredBy.has(index) && !Array.from(coveredBy.values()).includes(index) && candidate.covers.includes(cmd.command) && !dependsOn(candidate.index, index) && cmd.dependsOn.every(id => dependsOn(candidate.index, commands.findIndex(dependency => dependency.id === id)))) coveredBy.set(index, candidate.index);
       }
@@ -509,8 +541,8 @@ async function main() {
     // waits on setup the first does not, which may make the rerun meaningful.
     const repeats = new Set();
     for (const [index, cmd] of commands.entries()) {
-      if (coveredBy.has(index)) continue;
-      const first = commands.findIndex(other => other.command === cmd.command && other.cwd === cmd.cwd);
+      if (coveredBy.has(index) || onDemandSkipped.has(index)) continue;
+      const first = commands.findIndex((other, otherIndex) => !onDemandSkipped.has(otherIndex) && other.command === cmd.command && other.cwd === cmd.cwd);
       if (first === index) continue;
       const prerequisites = cmd.dependsOn.map(id => commands.findIndex(dependency => dependency.id === id));
       if (!prerequisites.every(dependency => dependency === first || dependsOn(first, dependency))) continue;
@@ -524,6 +556,12 @@ async function main() {
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = commands[index];
+        if (onDemandSkipped.has(index)) {
+          Object.assign(run.results[index], { status: "skipped", limitation: onDemandSkipped.get(index) });
+          pending.delete(index);
+          persist();
+          continue;
+        }
         if (stoppedCommands.has(cmd.id)) {
           // Dependents observe a prerequisite that did not pass and are skipped.
           Object.assign(run.results[index], { status: "incomplete", limitation: STOPPED_BEFORE_START });
@@ -698,7 +736,7 @@ async function main() {
       claimed = true;
     } catch (error) { if (error.code !== "EEXIST") throw error; }
     if (claimed) {
-      const payload = Buffer.from(JSON.stringify({ root, directory, run: input.run })).toString("base64");
+      const payload = Buffer.from(JSON.stringify({ root, directory, run: input.run, ...(typeof input.targetRef === "string" ? { targetRef: input.targetRef } : {}) })).toString("base64");
       const child = spawn(process.execPath, ["-e", process.argv[2], payload], { cwd: "/", detached: true, stdio: "ignore", env: process.env });
       child.on("error", () => {});
       child.unref();

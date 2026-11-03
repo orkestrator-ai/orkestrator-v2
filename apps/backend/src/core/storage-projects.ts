@@ -492,7 +492,7 @@ export class ProjectsRepository {
     }
     // Its template trust records and capability ceiling (item 109) go with it.
     this.repos.graphTemplates.deleteGraphProjectSettings(projectId);
-    // Its coordinator tab groups and upstream-merge decline.
+    // Its coordinator tab groups, upstream-merge decline and auto-merge setting.
     this.repos.clientState.deleteProjectClientState(projectId);
     // So do the setup commands approved for it on this machine.
     this.repos.setupApprovals.deleteSetupApprovalsForProject(projectId);

@@ -6,8 +6,10 @@ import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   checkUpstreamMergeOffer,
   declineUpstreamMerge,
+  getUpstreamAutoMerge,
   LEGACY_UPSTREAM_DECLINE_KEY,
   resetUpstreamCheckForTests,
+  setUpstreamAutoMerge,
 } from "./coordinator-upstream-check";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
@@ -26,6 +28,7 @@ const behind = {
 const capabilities = (coordinatorUpstreamMerge: boolean): ClientStateCapabilities => ({
   coordinatorPaneLayouts: false,
   coordinatorUpstreamMerge,
+  coordinatorUpstreamAutoMerge: coordinatorUpstreamMerge,
   noticeDismissals: false,
   environmentAttention: false,
 });
@@ -78,6 +81,28 @@ describe("against a backend that decides", () => {
       upstream: "origin/main",
       upstreamCommit: tip,
     });
+    expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
+  });
+
+  test("passes an automatic offer through and keeps the auto-merge setting on the backend", async () => {
+    invokeMock.mockImplementation(async (command: string, args: { enabled?: boolean }) => {
+      if (command === "check_coordinator_upstream_merge") {
+        return { offer: true, status: behind, automatic: true };
+      }
+      if (command === "set_coordinator_upstream_auto_merge") return { enabled: args.enabled };
+      return { enabled: true };
+    });
+    expect(await checkUpstreamMergeOffer("p", { turnRunning: () => false })).toEqual({
+      offer: true,
+      status: behind,
+      automatic: true,
+    });
+    expect(await setUpstreamAutoMerge("p", true)).toBe(true);
+    expect(callsTo("set_coordinator_upstream_auto_merge")[0]?.[1]).toEqual({
+      projectId: "p",
+      enabled: true,
+    });
+    expect(await getUpstreamAutoMerge("p")).toBe(true);
     expect(localStorage.getItem(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
   });
 
@@ -139,6 +164,12 @@ describe("against an older backend", () => {
         onStatus: () => undefined,
       }),
     ).toMatchObject({ status: behind });
+  });
+
+  test("has no auto-merge setting to read or change", async () => {
+    expect(await getUpstreamAutoMerge("p")).toBeNull();
+    await expect(setUpstreamAutoMerge("p", true)).rejects.toThrow("cannot remember");
+    expect(callsTo("set_coordinator_upstream_auto_merge")).toHaveLength(0);
   });
 
   test("a running turn is not asked about and starts no fetch", async () => {

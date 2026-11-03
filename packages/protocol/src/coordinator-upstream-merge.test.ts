@@ -3,6 +3,7 @@ import type { ProjectGitStatus } from "./coordinator.js";
 import {
   behindFastForwardBlocker,
   decideUpstreamMergeOffer,
+  parseCoordinatorUpstreamAutoMerge,
   parseCoordinatorUpstreamMergeCheck,
   shouldOfferUpstreamMerge,
 } from "./coordinator-upstream-merge.js";
@@ -112,7 +113,31 @@ describe("decideUpstreamMergeOffer", () => {
     ).toMatchObject({ offer: false, reason: "declined" });
   });
 
+  test("auto-merge merges without asking, past a decline, but never a blocked checkout", () => {
+    const declined = { upstream: "origin/main", upstreamCommit: tip };
+    expect(decideUpstreamMergeOffer(behind, declined, { autoMerge: true })).toEqual({
+      offer: true,
+      status: behind,
+      automatic: true,
+    });
+    expect(
+      decideUpstreamMergeOffer({ ...behind, ahead: 1 }, null, { autoMerge: true }),
+    ).toMatchObject({ offer: false, reason: "blocked" });
+    expect(
+      decideUpstreamMergeOffer({ ...behind, behind: 0 }, null, { autoMerge: true }),
+    ).toMatchObject({ offer: false, reason: "not-behind" });
+  });
+
   test("answers parse back, and malformed ones are refused", () => {
+    expect(
+      parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind, automatic: true }),
+    ).toEqual({ offer: true, status: behind, automatic: true });
+    expect(
+      parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind, automatic: "yes" }),
+    ).toEqual({ offer: true, status: behind });
+    expect(parseCoordinatorUpstreamAutoMerge({ enabled: true })).toEqual({ enabled: true });
+    expect(parseCoordinatorUpstreamAutoMerge({ enabled: "true" })).toBeNull();
+    expect(parseCoordinatorUpstreamAutoMerge(null)).toBeNull();
     expect(parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind })).toEqual({
       offer: true,
       status: behind,

@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { useUIStore } from "@/stores/uiStore";
+import { useFilesPanelStore } from "@/stores/filesPanelStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -406,6 +409,108 @@ describe("KanbanTaskDialog", () => {
     mock.module("@/lib/backend", () => realBackendSnapshot);
     mock.module("@/lib/native/clipboard", () => realClipboardSnapshot);
     mock.restore();
+  });
+
+  test("ticket Markdown opens the pane and dismisses the full dialog", async () => {
+    const ui = useUIStore.getState();
+    const panel = useFilesPanelStore.getState();
+    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    function Ticket() {
+      const [open, setOpen] = useState(true);
+      return (
+        <KanbanTaskDialog
+          task={makeTask({ description: "[Review PR](https://github.com/o/r/pull/42)" })}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      );
+    }
+    try {
+      render(<Ticket />);
+      fireEvent.click(screen.getByRole("link", { name: "Review PR" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(openInBrowserMock).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      useUIStore.setState(ui);
+      useFilesPanelStore.setState(panel);
+    }
+  });
+
+  test("ticket comment opens the pane and dismisses the full dialog", async () => {
+    const ui = useUIStore.getState();
+    const panel = useFilesPanelStore.getState();
+    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    function Ticket() {
+      const [open, setOpen] = useState(true);
+      return (
+        <KanbanTaskDialog
+          task={makeTask({
+            comments: [
+              {
+                id: "pr",
+                text: "https://github.com/o/r/pull/42",
+                createdAt: "2026-01-01T00:00:00Z",
+              },
+            ],
+          })}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      );
+    }
+    try {
+      render(<Ticket />);
+      fireEvent.click(screen.getByRole("button", { name: "https://github.com/o/r/pull/42" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(useFilesPanelStore.getState().isOpen).toBe(true);
+      expect(useFilesPanelStore.getState().pullRequestTabs["env-pr"]?.[0]?.ref.number).toBe(42);
+      expect(openInBrowserMock).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      useUIStore.setState(ui);
+      useFilesPanelStore.setState(panel);
+    }
+  });
+
+  test("editing comment PR links open externally and preserve the unsaved draft", async () => {
+    const ui = useUIStore.getState();
+    const panel = useFilesPanelStore.getState();
+    useUIStore.setState({ selectedEnvironmentId: "env-pr" });
+    useFilesPanelStore.setState({ isOpen: false, pullRequestTabs: {} });
+    const onOpenChange = mock(() => {});
+    const url = "https://github.com/o/r/pull/42";
+    try {
+      render(
+        <KanbanTaskDialog
+          task={makeTask({
+            comments: [{ id: "pr", text: url, createdAt: "2026-01-01T00:00:00Z" }],
+          })}
+          open
+          onOpenChange={onOpenChange}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      fireEvent.change(screen.getByLabelText("Ticket text"), {
+        target: { value: "Unsaved draft" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: url }));
+      await waitFor(() => expect(openInBrowserMock).toHaveBeenCalledWith(url));
+      expect(useFilesPanelStore.getState().isOpen).toBe(false);
+      expect((screen.getByLabelText("Ticket text") as HTMLTextAreaElement).value).toBe(
+        "Unsaved draft",
+      );
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(onOpenChange).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      useUIStore.setState(ui);
+      useFilesPanelStore.setState(panel);
+    }
   });
 
   test("create mode renders an sr-only dialog description", () => {

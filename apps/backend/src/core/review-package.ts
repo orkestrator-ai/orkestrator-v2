@@ -5,6 +5,7 @@ import {
   type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
+import { summarizeValidationFailureTriage } from "@orkestrator/protocol/validation-failure-triage";
 import { createHash } from "node:crypto";
 
 /** Bounds one environment-local package file independently of snapshot storage. */
@@ -93,6 +94,9 @@ export function reviewPackageReference(
     bytes: contents.byteLength,
     changedFileCount: reviewPackage.changedFiles.length,
     limitations: [...reviewPackage.limitations],
+    ...(reviewPackage.failureTriage
+      ? { failureSummary: summarizeValidationFailureTriage(reviewPackage.failureTriage) }
+      : {}),
   };
 }
 

@@ -15,6 +15,8 @@ export interface ClientStateCapabilities {
   coordinatorPaneLayouts: boolean;
   /** "Merge upstream first?" decision and declines (`check/decline_coordinator_upstream_merge`). */
   coordinatorUpstreamMerge: boolean;
+  /** "Always merge" per project (`get/set_coordinator_upstream_auto_merge`). */
+  coordinatorUpstreamAutoMerge: boolean;
   /** Notice dismissals (`list/dismiss/reconcile_notice_dismissals`). */
   noticeDismissals: boolean;
   /** `environment-attention` events (`@orkestrator/protocol/environment-attention`). */
@@ -24,6 +26,7 @@ export interface ClientStateCapabilities {
 export const NO_CLIENT_STATE_CAPABILITIES: Readonly<ClientStateCapabilities> = Object.freeze({
   coordinatorPaneLayouts: false,
   coordinatorUpstreamMerge: false,
+  coordinatorUpstreamAutoMerge: false,
   noticeDismissals: false,
   environmentAttention: false,
 });
@@ -36,6 +39,7 @@ export function parseClientStateCapabilities(value: unknown): ClientStateCapabil
   return {
     coordinatorPaneLayouts: record.coordinatorPaneLayouts === true,
     coordinatorUpstreamMerge: record.coordinatorUpstreamMerge === true,
+    coordinatorUpstreamAutoMerge: record.coordinatorUpstreamAutoMerge === true,
     noticeDismissals: record.noticeDismissals === true,
     environmentAttention: record.environmentAttention === true,
   };

@@ -1168,6 +1168,15 @@ by its first copy the same way, recorded as `(identical command)`, unless the
 repeat waits on a prerequisite the first copy did not, which may make the rerun
 meaningful. Discovery is also told never to plan a command twice.
 
+`commandProfiles[command].onDemand` keeps a slow suite out of automated review
+validation unless the change needs it: `{ "when": [<path globs>], "instead":
+<command> }`. When the branch touches none of the `when` paths, the worker runs
+`instead` in its place (recorded in that result's limitation) or skips it. This
+repository uses it for `test:full`, `test:slow`, `test:all` and the
+`test:agent:*:isolated` suites; see
+[review preparation](../architecture/review-preparation.md#validation-commands).
+Running a suite yourself is unaffected.
+
 A missing `.orkestrator-test-scheduler.json` is normal and silent. One that is
 present but unreadable, oversized, or invalid is *ignored* rather than fatal:
 the run continues with no cooperative commands and no profiles, and reports the

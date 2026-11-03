@@ -342,6 +342,44 @@ describe("patching global settings", () => {
     },
   );
 
+  test("selected-machine Auto-steer edits stay on the command node and return its effective value", async () => {
+    installCommandWindow();
+    let autoSteer: boolean | undefined;
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "invoke_on_node") {
+        return {
+          outcome: "ok",
+          result: { ...config("leaf"), global: { ...config("leaf").global, autoSteer: true } },
+        };
+      }
+      if (command === "patch_global_config") {
+        autoSteer = (args?.patch as Partial<GlobalConfig> | undefined)?.autoSteer;
+      }
+      return { ...config("command"), global: { ...config("command").global, autoSteer } };
+    });
+    expect(
+      (await patchGlobalConfig({ autoSteer: true }, { machine: "bk_leaf" })).global.autoSteer,
+    ).toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", { patch: { autoSteer: true } });
+    expect(
+      (await patchGlobalConfig({}, { unset: ["autoSteer"], machine: "bk_leaf" })).global.autoSteer,
+    ).toBeUndefined();
+    expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+      patch: {},
+      unset: ["autoSteer"],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("invoke_on_node", {
+      nodeId: "bk_leaf",
+      command: "get_config",
+      args: {},
+      requestKey: expect.any(String),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "invoke_on_node",
+      expect.objectContaining({ command: "patch_global_config" }),
+    );
+  });
+
   test("a leaf window writes nothing to a node with no changed keys", async () => {
     const portal = installLeafWindow();
     await patchGlobalConfig({ allowedDomains: ["edited.test"] });

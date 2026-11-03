@@ -870,6 +870,12 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       });
       // Always advance the raw baseline, even when the resolved form values did
       // not change. Also preserve edits made while this save was in flight.
+      // A directly opened leaf can have this preference masked by its command
+      // node. Adopt the effective value or autosave keeps submitting the same
+      // rejected edit. Keep a newer edit made while this request was in flight.
+      setAutoSteer((current) =>
+        current === autoSteer ? (newConfig.global.autoSteer ?? false) : current,
+      );
       syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
       syncedGlobalRef.current = newConfig.global;
       setConfig(newConfig);

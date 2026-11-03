@@ -135,3 +135,27 @@ test("container budgets survive Settings section changes on the selected machine
   }
   expect(await page.evaluate(() => localStorage.getItem("settings-machine:leaf"))).toBeNull();
 });
+
+test("a directly opened leaf reconciles masked Auto-steer without repeated saves", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/settings-machines?direct-leaf");
+  const toggle = page.getByRole("switch", { name: "Auto-steer" });
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await toggle.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `output/visual-previews/auto-steer-direct-leaf-before-${testInfo.project.name}.png`,
+  });
+  await toggle.click();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("settings-machine:patch-count")))
+    .toBe("1");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => localStorage.getItem("settings-machine:patch-count"))).toBe("1");
+  await page.screenshot({
+    path: `output/visual-previews/auto-steer-direct-leaf-after-${testInfo.project.name}.png`,
+  });
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+});

@@ -61,6 +61,7 @@ import {
   autoSwitchSettings,
   listAgentAccounts,
   readAgentAccountUsage,
+  renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
 import {
@@ -93,7 +94,8 @@ import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
 import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
-import { backendClaudeStateSignal } from "./claude-state-signal.js";
+import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
+import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -368,12 +370,15 @@ export class OrkestratorBackend {
         | "servicePort"
         | "issueStateSignal"
         | "issueWorktreeSignal"
+        | "issueTmuxHookSignal"
         | "callToolAs"
         | "listToolsAs"
         | "setScheduledJobs"
       >
     >;
   private readonly scheduledJobs: ScheduledJobService;
+  /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
+  private removeContainerLifecycleListener: (() => void) | null = null;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -429,6 +434,7 @@ export class OrkestratorBackend {
           | "servicePort"
           | "issueStateSignal"
           | "issueWorktreeSignal"
+          | "issueTmuxHookSignal"
           | "callToolAs"
           | "listToolsAs"
           | "setScheduledJobs"
@@ -598,6 +604,7 @@ export class OrkestratorBackend {
         tmux: {
           localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory,
           claudeStatePolls: { signal: backendClaudeStateSignal() },
+          hookSignal: backendTmuxHookSignal(),
         },
         // Read at call time: the keeper and the Codex refresher exist only
         // between init() and shutdown(); outside that nothing is asked.
@@ -874,6 +881,10 @@ export class OrkestratorBackend {
           force,
           reader: (readContext, readPlatform, readOptions) =>
             readContext.runtime.accounts.readPlanUsage(readContext, readPlatform, readOptions),
+        }),
+      renewLogin: (platform, accountId) =>
+        renewAgentAccountLogin(context, platform, accountId, {
+          refresh: (account) => refreshHostClaudeLogin(context, account),
         }),
       switchAccount: (platform, accountId, automatic) =>
         applyAutomaticAccountSwitch(context, platform, accountId, automatic),
@@ -1894,6 +1905,13 @@ export class OrkestratorBackend {
     // Counts out-of-memory kills of this installation's containers for the
     // usage view; a read-only observer, stopped at shutdown.
     this.runtime.containerOom.start(dockerOwnerNamespace(this.context.storage.getDataDir()));
+    // The same follower's start and end events retire (or re-adopt) the loops
+    // that read each container, instead of leaving them to fail their execs.
+    const lifecycleReactor = new ContainerLifecycleReactor(() => this.context);
+    this.removeContainerLifecycleListener?.();
+    this.removeContainerLifecycleListener = this.runtime.onContainerLifecycle(
+      (containerId, action) => lifecycleReactor.handle(containerId, action),
+    );
     await this.agentTools.start();
     this.reserveOwnedPreviewPorts();
     // No renderer can be alive yet, so every persisted `frontend` activity
@@ -2849,6 +2867,8 @@ export class OrkestratorBackend {
     this.codexLoginRefresher = null;
     // Observers; stopping them never touches containers. Only this backend's
     // followers stop: another backend in the process keeps its own.
+    this.removeContainerLifecycleListener?.();
+    this.removeContainerLifecycleListener = null;
     this.runtime.containerOom.stop();
     this.runtime.containerLogs.shutdown();
     if (this.nativeActivitySweep) {

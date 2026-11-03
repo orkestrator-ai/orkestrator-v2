@@ -9,7 +9,7 @@ import {
   ClaudeStatePollManager,
   type ClaudeStateSignalSupport,
 } from "../src/core/tmux";
-import { CLAUDE_STATE_ABSENT_MARKER } from "../src/core/tmux-poll";
+import { CLAUDE_STATE_ABSENT_MARKER, terminalClaudeDemand } from "../src/core/tmux-poll";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { ManualTime, deferred, flushMicrotasks } from "../src/core/recurring-test-support";
 import { createEnvironment } from "./tmux-test-harness.js";
@@ -551,6 +551,45 @@ describe("Claude state signal", () => {
     expect(harness.intervals).toEqual([CLAUDE_STATE_POLL_INTERVAL_MS]);
     expect(harness.reads).toHaveLength(11);
     harness.manager.shutdown(CONTAINER);
+  });
+
+  test("an older image with no terminal or tmux tab keeps only the safety read (BG-7)", async () => {
+    const harness = createSignalHarness({ support: ["unsupported"] });
+    harness.manager.start(CONTAINER, harness.context, false);
+    await flushMicrotasks();
+    await harness.time.advance(10_000);
+    // One read on adoption (it may still settle a stale state), then the slow read.
+    expect(harness.reads).toHaveLength(1);
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+
+    // A terminal opens: back to the 1 s poll, reading at once.
+    harness.manager.start(CONTAINER, harness.context, true);
+    await flushMicrotasks();
+    expect(harness.reads).toHaveLength(2);
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
+    await harness.time.advance(3_000);
+    expect(harness.reads).toHaveLength(5);
+
+    // It closes again: the next observation drops back to the safety read.
+    harness.manager.start(CONTAINER, harness.context, false);
+    await harness.time.advance(1_000);
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  test("demand is a terminal shell in the container or a tmux tab of its environment", () => {
+    const runtime = (terminal: boolean, tabs: number) =>
+      ({
+        runtime: {
+          terminals: { hasContainerTerminal: (id: string) => terminal && id === CONTAINER },
+          tmux: { sessions: { sessionsInEnvironment: () => tabs } },
+        },
+      }) as unknown as CommandContext;
+    expect(terminalClaudeDemand(runtime(false, 0), "env", CONTAINER)).toBe(false);
+    expect(terminalClaudeDemand(runtime(true, 0), "env", CONTAINER)).toBe(true);
+    expect(terminalClaudeDemand(runtime(false, 1), "env", CONTAINER)).toBe(true);
+    // A fixture without that runtime keeps the behaviour before the gate.
+    expect(terminalClaudeDemand({} as CommandContext, "env", CONTAINER)).toBe(true);
   });
 
   test("a context without the doorbell keeps the 1 s poll", async () => {

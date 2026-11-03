@@ -5,7 +5,8 @@ Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
 fault tests and single-machine runs against `b83ae534` (2026-10-22); node
 retention, tunnel liveness, compatibility cases and UI items against
 `00a0cb82` (2026-10-25); the preview flakes (task 11) against `93b99bfba`
-(2026-11-01); task 6's metric additions against `7b48c23fb` (2026-11-03).
+(2026-11-01); the Next.js fixture (task 5) and task 6's metric additions
+against `7b48c23fb` (2026-11-03).
 
 ## Task analysis
 
@@ -25,7 +26,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 4. **Docker Desktop on Windows**: binding inspection, Auto ports, recreation
    and the exec relay. Status: blocked (on a Windows host).
 5. **Remaining compatibility cases**: a streaming or router framework fixture
-   and real-provider OAuth. Status: open.
+   and real-provider OAuth. Status: partly done (2026-11-03): the Next.js
+   16.4.3 app-router fixture and its spec pass in Chromium and Firefox (WebKit
+   not run on beelink, 2680). Real-provider OAuth is still deferred (D13).
 6. **Performance thresholds and missing metrics**: set thresholds from task
    1's baseline; add HMR, reconnect and desktop-ingress measurements. Status:
    blocked (thresholds on task 1); metric additions done (2026-11-03:
@@ -166,16 +169,28 @@ is Windows-specific.
 ### 5. Remaining compatibility cases
 
 **Problem.** Only Vite 7.3.6 (and the repository's Vite 8) and a plain fixture
-are covered; a streaming or router framework and real OAuth have not run.
+were covered; a streaming or router framework and real OAuth had not run.
+Since 2026-11-03 the framework half is covered; real-provider OAuth has
+still not run and stays deferred.
 
 **Context.** Synthetic external redirects are covered since 2026-10-23.
 
-**Investigation.** `test-fixtures/` has only `preview-app`, `preview-vite`,
+**Investigation.** `test-fixtures/` had only `preview-app`, `preview-vite`,
 `agent-project` and `test-diagnostics`; no Next.js, Remix or Astro fixture.
+`test-fixtures/preview-next` (Next.js 16.4.3, React 19.3.1, exact pins) and
+`e2e/preview/next-app-router.spec.ts` now cover a streamed Suspense boundary,
+hydration, client-side router navigation and deep links, a Server Action,
+the request a route handler sees, an absolute redirect and Fast Refresh over
+the HMR socket, all through the private origin (see the 2026-11-03 evidence
+entry). The first run found a real gap: Next.js builds `request.url` from
+`X-Forwarded-Proto` and its own port, so a route handler's absolute redirect
+pointed at `https://localhost:<appPort>`, which `mapLocation` did not map,
+and the browser left the preview. `mapLocation` now maps the private origins
+under the public scheme on the same port (D12).
 
 **Decisions.**
 
-- **Which framework?**
+- **Which framework?** Chose the Next.js fixture (2026-11-03, D14).
   - **A minimal Next.js app router fixture (recommended).**
     - Pros: streaming, RSC and router in one; the most common framework; the
       framework hints already cover Next.js 14 to 16.
@@ -185,7 +200,7 @@ are covered; a streaming or router framework and real OAuth have not run.
     - Pros: no dependencies; exact control of chunking.
     - Cons: does not catch real framework assumptions (absolute URLs,
       `Host` handling).
-- **Real OAuth?**
+- **Real OAuth?** Still deferred (2026-11-03, D13).
   - **Defer and rely on the synthetic redirect cases (recommended).**
     - Pros: no real provider credentials in a test.
     - Cons: provider-specific redirect URI checks stay untested.
@@ -207,7 +222,7 @@ peak queue and decode bytes, socket counts.
 (`apps/desktop/electron/preview-transport-manager.ts`,
 `preview-tunnel-client.ts`) recorded no metrics, and there was no
 HMR-delivery or reconnect series anywhere. Re-checked against `main` at
-`7b48c23fb`: still true. The metric additions are now in (D12): desktop
+`7b48c23fb`: still true. The metric additions are now in (D15): desktop
 windows report `desktop.connect_ms`, `desktop.first_byte_ms`,
 `desktop.reconnect{category}` and `desktop.reconnect_failed{category}` to
 their backend, where they appear in `get_preview_diagnostics`. HMR delivery
@@ -711,10 +726,12 @@ log below.
   route, source maps, IndexedDB, BroadcastChannel, service-worker and Cache
   isolation between siblings, frame denial of bootstrap, session and refusal
   pages and the web client's no-opener popup, and an IPv6-only (`::1`)
-  target. Still not run in a real browser:
-  - a streaming or router framework fixture alongside the pinned Vite 7.3.6;
-  - real-provider OAuth compatibility (synthetic external redirects into a
-    same-service frame and top-level return are covered since 2026-10-23).
+  target. The Next.js 16.4.3 app-router fixture passed in Chromium and
+  Firefox on 2026-11-03 (see the evidence log; WebKit not run on beelink,
+  2680). Still not run in a real browser:
+  - real-provider OAuth compatibility, deferred (D13; synthetic external
+    redirects into a same-service frame and top-level return are covered
+    since 2026-10-23).
 - Performance thresholds. Set them from the two-machine baseline (first byte,
   connect time, HMR delivery, peak queue and decode bytes, socket counts)
   before any cohort counts as passing. Not set: no two-machine baseline
@@ -724,7 +741,7 @@ log below.
   histograms. Since 2026-11-03 desktop windows also report their ingress
   `desktop.connect_ms` and `desktop.first_byte_ms` series and
   `desktop.reconnect{category}` / `desktop.reconnect_failed{category}`
-  counts into the same diagnostics (task 6, D12). HMR delivery stays a
+  counts into the same diagnostics (task 6, D15). HMR delivery stays a
   client-side measurement: `scripts/preview-latency-baseline.ts` measures
   it, with connect and first byte per route.
 
@@ -1551,6 +1568,56 @@ for single tests.
   on the host later that morning belong to other builds' owners and were left
   alone. Evidence: `output/agent-testing/d5ab-*` in the worktree.
 
+2026-11-03, the Next.js app-router fixture (task 5), working tree based on
+`7b48c23fb`, beelink (Arch Linux, Linux 7.1.8, x86_64), about ten other builds
+running.
+
+| Item | Version |
+| --- | --- |
+| Bun / Node (mise) | 1.4.4 / 26.7.0 |
+| Next.js fixture | 16.4.3 (Turbopack dev server), React and React DOM 19.3.1, isolated copy at `/tmp/preview-next-hgEXO8` installed with `bun install` |
+| Browsers | Playwright Chromium and Firefox, headless |
+
+- Opt-in variable: `ORKESTRATOR_TEST_PREVIEW_NEXT_DIR` (the spec hands it to
+  the harness as `ORKESTRATOR_TEST_PREVIEW_HARNESS_NEXT_DIR`, so other preview
+  specs do not start Next.js). The harness registers `next dev` on its own
+  port, with no counting relay, and runs it under Node in its own process
+  group.
+- `ORKESTRATOR_TEST_PREVIEW_NEXT_DIR=/tmp/preview-next-hgEXO8 mise run
+  test:logged -- --name preview-next-chromium -- bunx playwright test --config
+  e2e/preview/playwright.preview.config.ts next-app-router --project
+  chromium`: before the `mapLocation` change 4 passed, 1 failed, 1 did not
+  run. The absolute redirect from `/go` went to
+  `https://localhost:<appPort>/items/7` and failed with
+  `net::ERR_SSL_PROTOCOL_ERROR`. After it: 6 passed. The same command with
+  `--project firefox`: 6 passed.
+- `--project webkit`: every case failed at browser launch with the missing
+  `libicu74`, `libxml2` and `libflite1` of
+  [2680](../cross-cutting/2680-playwright-webkit-missing-host-libraries.md).
+  The private `PLAYWRIGHT_BROWSERS_PATH` workaround was not set up for this run.
+- The whole preview suite with the Next.js variable set, `bunx playwright
+  test --config e2e/preview/playwright.preview.config.ts --project chromium
+  --project firefox`: 48 passed, 4 skipped (the Vite cases, no Vite fixture
+  installed).
+- `packages/protocol/src/node/preview-forward.test.ts` (new case for
+  forwarded-scheme redirects) passed.
+- Covered through the private origin: a document whose Suspense boundary
+  resolves 1.5 s later arrives in at least two reads at least 750 ms apart
+  (not buffered); hydration; `Link` navigation to `/items/42` and back
+  without a document load; a deep link to `/items/7`; a Server Action through
+  `useActionState` (mapped `Origin`, no `allowedOrigins`); a route handler
+  sees `Host: localhost:<port>`, the public `X-Forwarded-Host` and
+  `X-Forwarded-Proto: https`; the `/go` absolute redirect lands on the public
+  origin; editing `app/hmr-label.js` updates the page by Fast Refresh with the
+  counter state and a window marker kept.
+- Not run: the legacy `/__orkestrator/browser/loopback/<port>/` route (Next.js
+  serves `/_next/` from the root, so it needs a `basePath` it does not have),
+  the desktop tunnel and relay transports, Electron, WebKit, real OAuth.
+- Cleanup: each harness stopped its `next dev` process group on shutdown and
+  the spec restored `app/hmr-label.js`. Next.js's detached telemetry flush
+  helper (a no-op with telemetry disabled) exits by itself. No container,
+  profile or Docker network was created.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -1783,11 +1850,47 @@ Recorded 2026-11-01 for task 11 (flakes 0620 and 0622), on branch
   afterwards (the leak 0241 and 0730 closed for the CLI harnesses). Cons: the
   allowlist grows by one policy switch; other Electron specs still probe and
   can show the dialog on such hosts until they set it too.
+- **D12. Absolute redirects built from the forwarded scheme** (task 5,
+  2026-11-03). Next.js route handlers build `request.url` from
+  `X-Forwarded-Proto` and their listening port, so a plain HTTP app behind an
+  HTTPS preview redirects to `https://localhost:<appPort>/…`. Options: (a)
+  leave `mapLocation` alone and record the gap; (b) stop sending
+  `X-Forwarded-Proto: https`; (c) also map the private origins under the
+  public origin's scheme on the same port. Chose (c)
+  (`forwardedSchemeOrigins` in `preview-header-policy.ts`). Pros: only this
+  application listens on that port, so the redirect is still same-service and
+  now stays inside the preview; no request header changes. Cons: one more
+  origin form to keep canonical (a default port is spelled out, so
+  `https://localhost` is not taken for an app on port 80). (a) leaves a common
+  Next.js pattern broken; (b) would break Secure-cookie decisions the
+  2026-10-16 header work relies on.
+- **D13. Real-provider OAuth** (task 5, 2026-11-03). Options: defer and rely
+  on the synthetic redirect cases; one run against a provider's test tenant.
+  Chose to defer. Pros: no provider credential in a test or on this shared
+  host; the build's constraints exclude real logins. Cons: provider-specific
+  redirect-URI checks stay untested. Revisit when a test tenant and a place to
+  keep its credential exist.
+- **D14. The Next.js fixture's shape** (task 5, 2026-11-03).
+  - Version: Next.js 16.4.3 rather than the newest 16.4.4, published the day
+    before the run; React 19.3.1. Pros: not a day-old release. Cons: one patch
+    behind; bump it like the Vite pin.
+  - Install pinning: exact direct versions and no lockfile, as the Vite
+    fixture. Pros: no third standalone `bun.lock` for the drift test and the
+    lockfile rules; Next.js pins its own runtime dependencies exactly apart
+    from browser-data packages. Cons: those two packages float.
+  - Plain JavaScript pages. Pros: `next dev` does not install TypeScript or
+    write a `tsconfig.json` into the copy. Cons: none for the checks made.
+  - No relay in front of `next dev`, unlike Vite. Pros: Next.js puts its own
+    listening port in absolute URLs; behind a relay the redirect would name a
+    port the preview does not know, testing the harness rather than the app.
+    Cons: no upstream connection counts for Next.js.
+  - Browsers: Chromium and Firefox; WebKit is blocked on beelink by 2680 and
+    the spec has no engine-specific skip, so it runs wherever WebKit launches.
 
 Recorded 2026-11-03 for task 6's metric additions, on branch
 `preview-reconnect-metrics-ca90ec0df07b-r1`.
 
-- **D12. How desktop ingress metrics reach the existing preview metrics
+- **D15. How desktop ingress metrics reach the existing preview metrics
   (task 6).** Options: (a) Electron keeps its own `PreviewMetrics` and exposes
   it to the renderer over IPC; (b) Electron buffers the series and reports
   them to the window's own backend with a new command,
@@ -1804,7 +1907,7 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   otherwise, so nothing free-form can reach diagnostics. (a) would leave the
   numbers invisible to the CLI and scripts; (c) gives no production telemetry
   for task 7.
-- **D13. What counts as a reconnect (task 6).** Options: (a) every connection
+- **D16. What counts as a reconnect (task 6).** Options: (a) every connection
   refused with `access-expired` or `generation-changed`; (b) every reattach
   actually started, from a refused connection or a refused renewal
   (`access-expired`, `generation-changed`, `not-found`). Chose (b), labelled
@@ -1814,7 +1917,7 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   flight do not inflate it. Cons: the race in
   [3270](3270-desktop-tunnel-double-reattach.md) can still start two
   reattaches for one revocation, and both are counted.
-- **D14. Where connect and first byte are measured (task 6).** Connect is
+- **D17. Where connect and first byte are measured (task 6).** Connect is
   `openPreviewTunnel` from the WebSocket connect to `OPEN_OK`
   (`PreviewTunnelStream.openMs`), for new upstream connections only (pooled
   reuse is not a connect), excluding any attach. First byte is the shared

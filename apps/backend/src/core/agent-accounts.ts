@@ -475,6 +475,11 @@ export async function removeAgentAccount(
     throw new Error("An agent is still running on this account. Try again once it is idle.");
   }
   return context.runtime.accounts.withMutation(async () => {
+    if (context.runtime.accounts.isRenewingLogin(`${platform}:${accountId}`)) {
+      throw new Error(
+        "Orkestrator is renewing this account's sign-in to read its usage. Try again in a minute.",
+      );
+    }
     if (context.runtime.terminals.isAccountHomeInUse(homeFor(context, platform, accountId))) {
       throw new Error(
         "A terminal is still running on this account. Close it before removing the account.",
@@ -883,8 +888,9 @@ function bumpUsageGeneration(context: CommandContext, platform: AgentAccountPlat
  * platform's usage card and running sessions keep current. Any other account
  * is read from its own directory. Orkestrator never refreshes a token itself,
  * so an inactive Claude account's short-lived access token lapses until that
- * account is used again. Until then, as after any failed read, the account's
- * last known usage is shown, marked stale.
+ * account is used again, or automatic switching has Claude Code renew it
+ * (`renewAgentAccountLogin`). Until then, as after any failed read, the
+ * account's last known usage is shown, marked stale.
  */
 export async function readAgentAccountUsage(
   context: CommandContext,
@@ -971,4 +977,69 @@ export async function readAgentAccountUsage(
     ));
   }
   return publish(snapshot, retryAfterMs, true);
+}
+
+/**
+ * Have Claude Code renew one account's lapsed sign-in, so its plan usage can be
+ * read again. True when the account holds a live access token afterwards.
+ *
+ * An idle account's access token lapses within hours and nothing renews it, so
+ * its reading only ages. Automatic switching ranks an account whose old
+ * reading's reset has passed after every account with a known reset, so such an
+ * account would never be chosen and never read again. `refresh` is
+ * `refreshHostClaudeLogin`: Claude Code's own renewal under its own lock, with a
+ * request that fails before any inference, so it spends no usage and Orkestrator
+ * never handles the refresh token. Never in an agent-test profile, which must
+ * not rotate the host logins it borrows. Codex tokens last days, so Codex is
+ * left alone.
+ */
+export async function renewAgentAccountLogin(
+  context: CommandContext,
+  platform: AgentAccountPlatform,
+  accountId: string,
+  options: {
+    refresh: (account: { accountId: string; home?: string }) => Promise<void>;
+    now?: () => number;
+    /** Tests only: stands in for the Keychain and credentials-file read. */
+    readCredentials?: (home: string | undefined) => Promise<string | undefined>;
+  },
+): Promise<boolean> {
+  if (platform !== "claude" || context.runtimeFlavor === "agent-test") return false;
+  assertKnownAccountId(accountId);
+  const now = options.now ?? Date.now;
+  const readCredentials =
+    options.readCredentials ??
+    ((home: string | undefined) => readClaudeCredentialsFor(context, home));
+  const accounts = context.runtime.accounts;
+  const key = `${platform}:${accountId}`;
+  const home = await accounts.withMutation(async () => {
+    const store = await context.storage.agentAccounts.loadAgentAccounts();
+    const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
+    if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) return null;
+    if (!stored && (await context.storage.loadConfig()).global.useHostClaudeCredentials === false) {
+      return null;
+    }
+    if (accounts.isRenewingLogin(key)) return null;
+    accounts.beginLoginRenewal(key);
+    return { home: stored ? homeFor(context, platform, stored.id) : undefined };
+  });
+  if (!home) return false;
+  try {
+    const before = await readCredentials(home.home);
+    if (getClaudeOAuthAccessToken(before, now())) return true;
+    // Signed out: there is nothing to renew, and `claude` would only fail.
+    if (!claudeAccountLoginState(before, undefined, now()).signedIn) return false;
+    try {
+      await options.refresh({ accountId, ...(home.home ? { home: home.home } : {}) });
+    } catch {
+      // CLI output may contain credentials; only fixed diagnostics escape.
+      log.warn("login-renewal.failed", { platform });
+      return false;
+    }
+    const renewed = getClaudeOAuthAccessToken(await readCredentials(home.home), now());
+    if (!renewed) log.warn("login-renewal.not-extended", { platform });
+    return renewed !== undefined;
+  } finally {
+    accounts.endLoginRenewal(key);
+  }
 }

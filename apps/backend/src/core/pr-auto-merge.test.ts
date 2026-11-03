@@ -282,6 +282,7 @@ describe("PrAutoMergeController", () => {
       title: "Resolve",
       conversationMode: "build",
       completionAction: "refresh-pr-after-agent-completion",
+      tabReuse: "any-agent",
       activateTab: false,
     });
     expect(String(launch?.args.prompt)).toContain("develop");
@@ -535,3 +536,31 @@ test.each(["merge", "resolve"] as const)(
     }
   },
 );
+
+test("a conflict-free reading ends the Resolve hold and backoff, so the next conflict launches at once", async () => {
+  const h = harness(environment({ hasMergeConflicts: true, prMergeability: "dirty" }));
+  h.failNextInvoke(new Error("agent unavailable"));
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+  const backoff = h.timers.at(-1)!;
+  // Still conflicting: the failed launch waits for its backoff.
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+
+  h.set({ ...h.stored, hasMergeConflicts: false, prMergeability: "blocked" });
+  await h.controller.evaluate("env-1");
+  expect(backoff.cancelled).toBe(true);
+  h.set({ ...h.stored, hasMergeConflicts: true, prMergeability: "dirty" });
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(2);
+  expect(h.invocations[1]?.args).toMatchObject({ tabReuse: "any-agent" });
+});
+
+test("a conflict-free reading does not lift a pending merge's hold", async () => {
+  const h = harness(environment());
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+  await h.controller.evaluate("env-1");
+  expect(h.invocations).toHaveLength(1);
+  expect(h.timers.at(-1)!.cancelled).toBe(false);
+});

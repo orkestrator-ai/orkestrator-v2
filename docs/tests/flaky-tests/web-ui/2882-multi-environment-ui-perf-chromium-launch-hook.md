@@ -17,3 +17,18 @@
   host. Not reproduced under controlled load, and the changes on that branch do not
   touch this file or anything it loads, so this is unproven. If so, an explicit hook
   timeout would be the fix.
+
+## CI recurrence and fix applied, 2026-11-03
+
+GitHub Actions CI ("Unit and integration tests", `ubuntu-latest`, 4 cores) hit
+this in four of six runs checked between `d6040915c` and `b0dcf1660` (for
+example run 41549578197). There the first case's `browser.newPage()` ran past
+Bun's 5 s test timeout (5000.39 ms), and the next two cases then failed at once
+with "Target page, context or browser has been closed".
+
+Branch `debug-ci-failures-a629816c8619-r1` gives the
+`beforeAll` hook a 60 s budget and opens and closes a warm-up page inside it,
+so Chromium's start-up cost is paid there, and gives each case a 30 s budget.
+No assertion was changed. The timeout could not be reproduced locally: with
+32 busy-loop processes on a 16-core host, both the old and new file passed
+3 of 3 runs. Mark this resolved once CI on that change shows the file green.

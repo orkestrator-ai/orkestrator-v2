@@ -395,7 +395,9 @@ disposable workspace. These invariants are enforced by the backend:
   neither the worktree nor the branch step.
 - A coordinator credential cannot target it (scoped invoker, Multi Review
   launch, and address), because that would let a read-only coordinator delegate
-  writes into the checkout it may only read.
+  writes into the checkout it may only read. The one exception is a message,
+  which needs a reason and usually the user's approval; see
+  [Messaging the project home](#messaging-the-project-home).
 
 ## Choosing an agent
 
@@ -870,6 +872,19 @@ the renderer applies the same protocol rule to its own fetch and browser copy of
 the declines; otherwise that copy is imported once (never replacing a newer
 answer) and deleted.
 
+The question also offers **Always merge**: it merges now and saves a
+per-project setting in this machine's backend
+(`set_coordinator_upstream_auto_merge`, store
+`coordinator-upstream-auto-merge`). While it is on, the check answers
+`{ offer: true, automatic: true }`, past any stored decline, and the panel
+fast-forwards before the message without showing the question. Every other
+condition still applies: nothing is merged under a running turn or into a
+blocked checkout, and a failed fast-forward keeps the draft. The fast-forward
+toggle in the toolbar (`get/set_coordinator_upstream_auto_merge`) shows the
+setting and turns it off or on. Both are shown only when the backend advertises
+`coordinatorUpstreamAutoMerge`; a client that predates `automatic` shows the
+question, the safe reading.
+
 A chip in the same toolbar shows **Waiting on N workers** when the selected
 conversation has open delegations. It is a projection from the snapshot, not
 from anything this page observed, so it is correct after a reload. A worker
@@ -966,6 +981,64 @@ required.
 
 ## Worker delegation
 
+### Routing
+
+The main coordinator's context carries a short routing section,
+`COORDINATOR_ROUTING_RULE` (`packages/protocol/src/coordinator.ts`):
+
+| Work | Route |
+| --- | --- |
+| Fully specified: it can be written up as a ticket with acceptance criteria | `create_ticket`, then `start_build_pipeline` for it |
+| Smaller or interactive | `launch_environment` with a prompt, then back and forth with that worker |
+| Anything that would run in the project home | Exceptional circumstances only, after telling the user why an environment will not do |
+
+All work runs in an environment with its own worktree or container. The
+project home is the user's own checkout, and an agent working there conflicts
+with the user's own work in it. The role line says the coordinator gets the
+project's work done through workers and never alters the checkout itself.
+
+### Messaging the project home
+
+Every other coordinator action refuses the project home (see
+[Project home](#project-home)). `send_message` to it is allowed but gated by
+`send_coordinator_agent_mail` (`apps/backend/src/core/coordinator-worker-mail.ts`):
+
+- **A reason is required.** Without `projectHomeReason` (why an isolated
+  environment will not do) the call is refused with an error that names
+  `start_build_pipeline` and `launch_environment`, and nothing is sent or held.
+  Held messages also validate optional delivery fields; malformed tab IDs,
+  subjects or reply IDs are refused rather than silently dropped.
+- **Within 3 hours of a sent message** to that project home from this
+  coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
+  sent at once and the tool result carries a `warning` that this is
+  discouraged.
+- **Otherwise the message is held** as a `message-project-home` node action
+  request, shown in the same approval dialog as `request_environment_deletion`
+  and `answer_worker_question` (`ProjectHomeMessageApprovalDialog`), with the
+  message and the coordinator's reason. The tool result says nothing was sent
+  and that the coordinator is woken by mail. Approving sends the message as
+  written, from the conversation that asked, under its own `requestId`
+  (`send_approved_project_home_message`, which the coordinator's invoker and
+  the node link both refuse); declining sends nothing, and the outcome mail
+  says so.
+- **Replay.** The approval request id is derived from the coordinator and its
+  `requestId`, so a retry with the same `requestId` returns the same request
+  (pending, declined, or the sent mail once approved) rather than creating a
+  second one. The same `requestId` with a different message is a conflict.
+
+Only sent mail opens the window: it is read from the mail store
+(`latestCoordinatorMailTo`), counting this coordinator's messages to that
+environment that were not bounced or undeliverable, whether sent directly or
+after an approval. The user's own work in the Home tab is not coordinator mail
+and does not count. A declined or expired request opens nothing.
+
+A connected node's project home cannot be messaged at all: `send_message` with
+`nodeId` (and a reply routed back to another node) goes through
+`coordinatorNodeTarget().environment()`, which refuses the node's project
+checkout as not a worker environment. That refusal is unchanged.
+
+### Delegation round trip
+
 Delegation is a round trip. `launch_environment` goes out over MCP, and the
 worker's result comes back as agent mail — so a platform needs both an MCP
 client and a native mailbox that can pull, ack, and be injected into.
@@ -985,6 +1058,29 @@ approves a `request_root_changes` request (see
 can start only from a commit published to a remote branch; unpublished commits
 remain available to local workers.
 
+Workers come in two kinds. A **prompt environment** runs one prompt
+(`launch_environment`, or "With a prompt" in the New Environment dialog); its
+review and PR are started by hand or by the coordinator. A **pipeline
+environment** is one a build pipeline created and runs in
+(`start_build_pipeline`, a ticket's Build button, or "A feature" in the New
+Environment dialog); the pipeline runs build, review, fix, verify, PR and
+conflict resolution itself.
+
+The main coordinator chooses between them by `COORDINATOR_ENVIRONMENT_CHOICE_RULE`
+(`packages/protocol/src/coordinator.ts`), carried in its context, in the
+Control MCP instructions, and in short form in the `launch_environment` and
+`start_build_pipeline` descriptions. It applies to every project:
+
+- A pipeline environment is the default. The coordinator starts one with
+  `start_build_pipeline` whenever the whole spec is known: a ticket, or what is
+  being built has been settled with the user.
+- A prompt environment is for investigation, or for interactive work that may
+  stop, raise many questions or need back-and-forth with the user.
+- With a prompt environment the coordinator owns the rest of the lifecycle.
+  When it judges the work ready it launches Multi Review, then sees it through
+  the fix, the PR and conflict resolution, as below. Investigation with no code
+  change ends with the worker's report.
+
 A worker never raises a pull request; a **PR tab** does, after review. In a
 prompt environment the flow is build → review or Multi Review → fix → PR →
 resolve conflicts:
@@ -996,7 +1092,9 @@ resolve conflicts:
   its fix finished. Pass `nodeId` for a worker on a connected node; that node
   validates its project and worker and uses its own PR base branch and agent
   defaults. Retries reuse the same PR job on that node.
-- A build pipeline, feature builds included, has its own PR step;
+- A pipeline environment (one a build pipeline runs, whether started by
+  `start_build_pipeline`, a ticket's Build button or a feature from the New
+  Environment dialog) has its own PR step;
   `create_pr` refuses its own worker while the pipeline can still raise the PR.
   Forks and workers left by a removed, failed, cancelled or completed pipeline
   can use `create_pr`.
@@ -2210,6 +2308,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`worker-question-relay-remote.test.ts`), the approval executor
   (`node-worker-answer.test.ts`), and the approval dialog
   (`WorkerQuestionApprovalDialog.test.tsx`)
+- project-home messages: a reason required, held outside the 3-hour window,
+  approve, decline, replay, the window opened only by sent mail, and ordinary
+  workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
+  shapes (`control-mcp-server.test.ts`); the dialog
+  (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
   `coordinator-conformance.test.ts`

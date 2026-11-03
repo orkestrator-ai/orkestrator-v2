@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   AGENT_MAIL_MAX_IDEMPOTENCY_ROWS,
+  AGENT_MAIL_MAX_THREAD_HOPS,
   AGENT_MAIL_MAX_STORE_BYTES,
 } from "@orkestrator/protocol/agent-mail";
 import {
@@ -21,6 +22,8 @@ import {
 } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 import { fixture, type StoredMail } from "./agent-mail-storage-test-support.js";
+
+import type { PersistedAgentMailStore } from "./storage-agent-mail-store.js";
 
 const PURGE_MARKER = "purge-marker-4b9e1c";
 
@@ -524,6 +527,72 @@ describe("StorageService agent mail", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  test("Deliver now refuses untrusted and muted inbox mail with a reason, changing nothing", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "off" });
+      const external = await storage.sendAgentMail(
+        { kind: "external" },
+        { requestId: "external", toEnvironmentId: "e2", toTabId: "agent", body: "From outside." },
+      );
+      const fromUser = await storage.sendAgentMail(
+        { kind: "user" },
+        { requestId: "from-user", toEnvironmentId: "e2", toTabId: "agent", body: "From a person." },
+      );
+      expect(external).toMatchObject({ placement: "stored", trust: "external" });
+
+      await expect(
+        storage.retryAgentMailInject("e2", "agent", external.id, { steer: true }),
+      ).rejects.toMatchObject({
+        code: "policy-denied",
+        message: expect.stringContaining("another project or an unidentified sender"),
+      });
+      await storage.updateAgentMailboxPolicy("e2", "agent", { mutedInbound: true });
+      await expect(
+        storage.retryAgentMailInject("e2", "agent", fromUser.id, { steer: true }),
+      ).rejects.toMatchObject({ code: "policy-denied", message: expect.stringContaining("muted") });
+      for (const id of [external.id, fromUser.id])
+        expect((await storage.getAgentMailMessage("e2", "agent", id)).placement).toBe("stored");
+      expect(await storage.listPendingAgentMailInjects()).toHaveLength(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["hop limit", { hopCount: AGENT_MAIL_MAX_THREAD_HOPS }, "reply limit"],
+    ["reply loop", { injectDepth: 1 }, "reply loop"],
+  ] as const)(
+    "Deliver now refuses stored mail at the %s without queuing it",
+    async (_name, fields, reason) => {
+      const { storage, dataDir } = await fixture();
+      try {
+        await storage.updateAgentMailboxPolicy("e2", "agent", { inject: "off" });
+        const sent = await storage.sendAgentMail(
+          { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
+          { requestId: "refused", toEnvironmentId: "e2", toTabId: "agent", body: "Stored reply" },
+        );
+        const persisted = readStoredValue<PersistedAgentMailStore>(dataDir, "agent-mail.json")!;
+        const stored = persisted.mailboxes["e2\0agent"]!.messages.find(({ id }) => id === sent.id)!;
+        Object.assign(stored, fields);
+        seedStore(dataDir, "agent-mail.json", persisted);
+        const restarted = new StorageService(dataDir);
+        await restarted.init();
+        const before = await restarted.getAgentMailMessage("e2", "agent", sent.id);
+        await expect(
+          restarted.retryAgentMailInject("e2", "agent", sent.id, { steer: true }),
+        ).rejects.toMatchObject({
+          code: "policy-denied",
+          message: expect.stringContaining(reason),
+        });
+        expect(await restarted.getAgentMailMessage("e2", "agent", sent.id)).toEqual(before);
+        expect(await restarted.listPendingAgentMailInjects()).toHaveLength(0);
+      } finally {
+        await fs.rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.each(["off-to-inherit", "unmute-inherit"] as const)(
     "promotes stored mail with inherited idle policy: %s",

@@ -272,7 +272,10 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       settings,
       normalizeAgentMessagingSettings(current.global.agentMessaging),
     );
-    return storage.patchGlobalConfig({ agentMessaging: normalized });
+    // Answer with the settings alone: the full config carries stored
+    // credentials, and no client needs more than what it just saved.
+    const updated = await storage.patchGlobalConfig({ agentMessaging: normalized });
+    return normalizeAgentMessagingSettings(updated.global.agentMessaging);
   });
   register("set_agent_messaging_paused", async ({ paused }, { storage }) => {
     if (typeof paused !== "boolean") throw new Error("paused must be a boolean");

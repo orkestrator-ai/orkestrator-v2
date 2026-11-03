@@ -36,7 +36,7 @@ export const WEB_ENVIRONMENT_LOG_AREAS = defineLogAreas({
       "models.opencode-cache-load-failed":
         "The create dialog could not read cached OpenCode models.",
       "github-credential.check-failed": "The GitHub credential check before creating failed.",
-      "feature-build.start-failed": "Starting a feature build from the dialog failed.",
+      "feature-build.start-failed": "Starting a pipeline environment from the dialog failed.",
       "settings.extensions-load-failed": "The settings dialog could not load extensions.",
       "settings.container-reset-failed": "The settings dialog could not reset the container.",
       "settings.save-failed": "The settings dialog could not save.",

@@ -2,6 +2,10 @@ import { isReviewValidationRun, type ReviewValidationRun } from "./review-valida
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
+  isValidationFailureSummary,
+  type ValidationFailureSummary,
+} from "./validation-failure-triage.js";
+import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
   REVIEW_FANOUT_MIN_REVIEWERS,
@@ -311,6 +315,12 @@ export interface PipelineValidationSummary {
   /** Set when the user skipped the run. */
   skipped?: boolean;
   commands: PipelineValidationCommandSummary[];
+  /**
+   * The failing tests the run's review package classified
+   * (`ReviewPackageReference.failureSummary`). The loop breaker compares
+   * rounds with it, and other pipelines on the same merge-base read it.
+   */
+  failures?: ValidationFailureSummary;
 }
 
 export interface PipelineValidationCommandSummary {
@@ -2199,7 +2209,8 @@ function isPipelineValidationSummary(value: unknown): value is PipelineValidatio
     (value.skipped === undefined || typeof value.skipped === "boolean") &&
     Array.isArray(value.commands) &&
     value.commands.length <= 32 &&
-    value.commands.every(isPipelineValidationCommandSummary)
+    value.commands.every(isPipelineValidationCommandSummary) &&
+    (value.failures === undefined || isValidationFailureSummary(value.failures))
   );
 }
 

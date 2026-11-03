@@ -78,6 +78,7 @@ describe("from the backend's attention events", () => {
     resetClientStateCapabilitiesForTests({
       coordinatorPaneLayouts: false,
       coordinatorUpstreamMerge: false,
+      coordinatorUpstreamAutoMerge: false,
       noticeDismissals: false,
       environmentAttention: true,
     });

@@ -30,3 +30,14 @@ no cause or target-branch failure was reproduced. This is a credible flake
 because the complete unchanged owner passed alone. It does not excuse the
 failed aggregate run. Coordinator workflow retention changes do not touch
 this owner or the mail implementation. No unrelated code or test was changed.
+
+## Recurrence, 2026-11-03
+
+`ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=2700000 mise run test:logged -- --name full-default -- mise run test`
+on branch `debug-ci-failures-a629816c8619-r1` (on `main` at `62e99ff59`, 16-core
+Linux host) repeated the line 119 assertion: expected `pending-inject`, received
+`injected` (51.14 ms). It was the only failure in the run: root, bridges and the
+codex protocol lockfile groups passed. The unchanged owner then passed alone three
+times (`bun test src/core/nodes/node-coordination.test.ts` from `apps/backend`,
+24 pass each). It did not fail in any of the six GitHub Actions CI runs checked
+between `d6040915c` and `b0dcf1660`.

@@ -155,7 +155,7 @@ describe("PipelineKeyInformationTab", () => {
     renderCold();
     await act(async () => {});
     expect(screen.getByRole("status").textContent).toBe("This pipeline is no longer available.");
-    expect(screen.queryByText("Loading key information…")).toBeNull();
+    expect(screen.queryByText("Loading key information…") === null).toBe(true);
   });
 
   test("explains that nothing is recorded yet", () => {

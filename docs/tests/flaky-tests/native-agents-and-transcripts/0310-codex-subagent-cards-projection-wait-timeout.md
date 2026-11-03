@@ -221,3 +221,19 @@ Recorded `mise run test:all` at 27f6d5eba reported `recovering` instead of
 It also passed in a four-owner focused baseline run on origin/main 63e202c27
 (248 pass, three unrelated failures). No assertion or timing changed.
 Original evidence: `.orkestrator/review-artifacts/review-validation-2c183b1f-33d1-45e1-b1fe-0f5647dd9025/validation-01.stdout.txt`.
+
+## Main merge validation — 2026-11-03
+
+Merge parents: `75a0942990e169213c57b193efb5dfe87589abc2` and
+`b58d401e12b948de0f9c4d966c706bfe00d04225`. The owner was not conflicted.
+`mise run test:logged -- --name merge-tests -- mise run test` failed in the
+workspace group (323.4 s overall); backend used four workers and reported
+13,478 pass, 100 skip, 3 fail across 908 files. The test
+`each child keeps one card, its transcript and status across a fresh backend and a cold restart`
+received `recovering` instead of `idle` at line 170 (947.19 ms).
+
+The unchanged complete owner passed alone:
+`mise run test:logged -- --name merge-codex-cards-rerun -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures`
+(exit 0, 1.0 s; passing counts not retained). This repeats the open cold-restart
+projection race; no root cause is established. Original group evidence:
+`/tmp/orkestrator-test-run.svBnLQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

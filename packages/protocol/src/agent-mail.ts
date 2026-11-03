@@ -728,6 +728,22 @@ export function agentMailAwaitingAgent(
   );
 }
 
+/**
+ * Why Deliver now cannot hand a stored message to its recipient's agent, or
+ * null when the recipient's mailbox does not rule it out. The backend also
+ * applies the reply-loop and hop limits, which a mailbox view does not carry.
+ */
+export function agentMailReleaseRefusal(
+  message: Pick<AgentMailMessage, "trust">,
+  recipient: { mutedInbound: boolean; canInject: boolean },
+): string | null {
+  if (message.trust === "external" || message.trust === "cross-project")
+    return "Mail from another project or an unidentified sender is never delivered to an agent. Read or discard it in the inbox.";
+  if (recipient.mutedInbound) return "Incoming mail is muted for this tab.";
+  if (!recipient.canInject) return "This tab's agent can't receive messages.";
+  return null;
+}
+
 export const AGENT_MAIL_DEFAULT_CONVERSATION_LIMIT = 50;
 export const AGENT_MAIL_CONVERSATION_PREVIEW_LENGTH = 160;
 

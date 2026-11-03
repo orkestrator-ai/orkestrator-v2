@@ -980,7 +980,7 @@ export function CreateEnvironmentDialog({
         skippedFeatureFiles = files.length - imageCandidates.length;
         files = imageCandidates;
         if (files.length === 0) {
-          toast.error("Only images can be attached to a feature build");
+          toast.error("Only images can be attached to a feature");
           return;
         }
       }
@@ -2070,7 +2070,7 @@ export function CreateEnvironmentDialog({
                   <div className="space-y-1.5">
                     <Label className="text-sm">Reference images</Label>
                     <p className="text-xs text-muted-foreground">
-                      Paste or drop images to include them in the feature build.
+                      Paste or drop images to include them with the feature.
                     </p>
                     {isDraggingAttachments && (
                       <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">

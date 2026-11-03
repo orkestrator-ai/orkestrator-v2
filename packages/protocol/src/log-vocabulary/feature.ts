@@ -2,7 +2,7 @@ import { defineLogAreas } from "./define.js";
 
 export const FEATURE_LOG_AREAS = defineLogAreas({
   feature: {
-    description: "Feature builds and feature planning.",
+    description: "Pipeline environments started from a feature, and feature planning.",
     events: {
       "naming.fallback":
         "Automatic naming failed, so a local fallback name is used. Error kind only: the description stays out.",

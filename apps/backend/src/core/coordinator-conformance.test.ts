@@ -18,6 +18,7 @@ import { coordinatorProcessPolicy as grokCoordinatorPolicy } from "../../../../b
 import { resolvePiMcpServers } from "../../../../bridges/pi-bridge/src/mcp-config.js";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_VALIDATION_RULE,
   type CoordinatorProviderTier,
@@ -303,6 +304,30 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_ASYNC_CONTRACT).toContain("silence means the work is still running");
   });
 
+  test("a pipeline environment is the default once the spec is known", () => {
+    // Coordinators used to launch a prompt environment for a ticket and then
+    // hand-run review, fix and PR that a build pipeline does on its own.
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
+      "a pipeline environment is the default. Start one with start_build_pipeline whenever the whole spec is known",
+    );
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
+      "a ticket, or what is being built has been settled with the user",
+    );
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
+      "Use a prompt environment (launch_environment) for investigation, or for interactive work",
+    );
+    // A prompt environment's review, fix, PR and conflicts are the coordinator's.
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
+      "when you judge the work ready, launch Multi Review, then see it through its fix, the pull request and conflict resolution",
+    );
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).toContain(
+      "Investigation with no code change ends with the worker's report",
+    );
+    // The PR mechanics stay in the Pull requests line alone.
+    expect(COORDINATOR_ENVIRONMENT_CHOICE_RULE).not.toContain("create_pr");
+    expect(COORDINATOR_PR_RULE).not.toContain("then review or Multi Review, then fix");
+  });
+
   test("a pull request comes from a PR tab, never from a delegated worker", () => {
     // Coordinators used to end build instructions with "prepare commit + PR",
     // so the worker opened a PR before any review ran.
@@ -311,6 +336,12 @@ describe("coordinator read-only conformance", () => {
     expect(COORDINATOR_PR_RULE).toContain("create_pr");
     expect(COORDINATOR_PR_RULE).toContain("auto-PR raises the PR itself");
     expect(COORDINATOR_PR_RULE).toContain("has its own PR step");
+    expect(COORDINATOR_PR_RULE).toContain(
+      "For a prompt environment, a Multi Review with auto-fix and auto-PR raises the PR itself",
+    );
+    expect(COORDINATOR_PR_RULE).toContain(
+      "A pipeline environment (one a build pipeline runs, from start_build_pipeline or a Build button) has its own PR step",
+    );
     // It also says how a raised PR is followed, and that merging is the user's.
     expect(COORDINATOR_PR_RULE).toContain("You are woken when a pull request you raised opens");
     expect(COORDINATOR_PR_RULE).toContain("call resolve_conflicts");

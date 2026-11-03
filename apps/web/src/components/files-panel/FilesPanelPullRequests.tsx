@@ -60,7 +60,9 @@ export function FilesPanelPullRequests({ targetId }: { targetId: string | null }
 
   const open = useCallback(
     (ref: GitHubPullRequestRef, view?: Parameters<typeof openPullRequest>[2]) => {
-      if (targetId) openPullRequest(targetId, ref, view);
+      if (!targetId) return false;
+      openPullRequest(targetId, ref, view);
+      return true;
     },
     [openPullRequest, targetId],
   );

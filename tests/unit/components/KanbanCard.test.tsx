@@ -362,7 +362,7 @@ test.each([undefined, "current"])(
       });
       renderCard(makeTask({ buildPipelineId }), { buildPhase: "complete" });
       expect(screen.getByText("Creating PR")).toBeTruthy();
-      expect(screen.queryByText("Pushing")).toBeNull();
+      expect(screen.queryByText("Pushing") === null).toBe(true);
     } finally {
       cleanup();
       useBuildPipelineStore.setState({ pipelines: previous });

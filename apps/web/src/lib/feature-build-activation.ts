@@ -29,7 +29,7 @@ function activate(projectId: string, environmentId: string, pipelineId: string):
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
 
-  // Feature environments are created by the backend pipeline rather than by
+  // Pipeline environments are created by the backend pipeline rather than by
   // useEnvironments.createEnvironment(), so they do not pass through the
   // renderer's optimistic add path. Selecting only the ID leaves App on the
   // project board until a separate environment-list announcement happens to

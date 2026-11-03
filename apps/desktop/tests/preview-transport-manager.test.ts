@@ -464,6 +464,171 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     );
   });
 
+  const invocations = (command: string) => invoked.filter((entry) => entry === command).length;
+
+  for (const pooled of [false, true]) {
+    test(`two concurrent requests after a revocation recover on one reattach (${pooled ? "pooled connection" : "no pooled connection"})`, async () => {
+      const descriptor = await manager.acquire(target(), "tab-1");
+      const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+      if (pooled) expect((await get(`${descriptor.origin}/health`, headers)).status).toBe(200);
+      harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+      const responses = await Promise.all([
+        get(`${descriptor.origin}/health`, headers),
+        get(`${descriptor.origin}/assets/app.css`, headers),
+      ]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      expect(invocations("create_preview_attachment")).toBe(2);
+      expect(invocations("release_preview_attachment")).toBe(1);
+      expect(manager.transportState(descriptor.serviceKey)).toEqual({
+        mode: "desktop-tunnel",
+        state: "ready",
+      });
+      await manager.disposeAll();
+      expect(harness.runtime.metrics.snapshot().counters["desktop.reconnect{access-expired}"]).toBe(
+        1,
+      );
+    });
+  }
+
+  test("two concurrent requests after a generation change recover on one reattach", async () => {
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    // The first attachment is the only one bound to the old generation.
+    const access = harness.runtime.access;
+    const authenticate = access.authenticateTunnel.bind(access);
+    let stale: string | undefined;
+    access.authenticateTunnel = (attachmentId, credential) => {
+      stale ??= attachmentId;
+      if (attachmentId === stale) throw previewFailure("generation-changed");
+      return authenticate(attachmentId, credential);
+    };
+    const responses = await Promise.all([
+      get(`${descriptor.origin}/health`, headers),
+      get(`${descriptor.origin}/assets/app.css`, headers),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(invocations("create_preview_attachment")).toBe(2);
+    await manager.disposeAll();
+    expect(
+      harness.runtime.metrics.snapshot().counters["desktop.reconnect{generation-changed}"],
+    ).toBe(1);
+  });
+
+  test("a connection refused after its attachment was replaced retries without reattaching", async () => {
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+    // Hold both tunnel opens so each is sent on the revoked attachment, then
+    // let the second reach the server only after the first has fully recovered.
+    const held: Array<() => void> = [];
+    let holding = true;
+    gateway.removeAllListeners("upgrade");
+    gateway.on("upgrade", (request, socket, head) => {
+      const accept = () => {
+        if (!tunnel.handleUpgrade(request, socket, head)) socket.destroy();
+      };
+      if (holding) held.push(accept);
+      else accept();
+    });
+    const requests = [
+      get(`${descriptor.origin}/health`, headers),
+      get(`${descriptor.origin}/assets/app.css`, headers),
+    ];
+    const deadline = Date.now() + 2_000;
+    while (held.length < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(held).toHaveLength(2);
+    holding = false;
+    held[0]!();
+    const first = await Promise.race(requests);
+    expect(first.status).toBe(200);
+    expect(invocations("create_preview_attachment")).toBe(2);
+
+    held[1]!();
+    const responses = await Promise.all(requests);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(invocations("create_preview_attachment")).toBe(2);
+    expect(invocations("release_preview_attachment")).toBe(1);
+    expect(manager.transportState(descriptor.serviceKey)).toEqual({
+      mode: "desktop-tunnel",
+      state: "ready",
+    });
+    await manager.disposeAll();
+    expect(harness.runtime.metrics.snapshot().counters["desktop.reconnect{access-expired}"]).toBe(
+      1,
+    );
+  });
+
+  for (const recovery of ["revoked replacement", "pending attach", "refused final open"] as const) {
+    test(`a delayed refusal recovers across a second revocation (${recovery})`, async () => {
+      const descriptor = await manager.acquire(target(), "tab-1");
+      const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+      const held: Array<() => void> = [];
+      let holding = true;
+      let releaseAttach!: () => void;
+      const attachGate = new Promise<void>((resolve) => {
+        releaseAttach = resolve;
+      });
+      gateway.removeAllListeners("upgrade");
+      gateway.on("upgrade", (request, socket, head) => {
+        const accept = () => {
+          if (recovery === "refused final open" && invocations("create_preview_attachment") === 3)
+            harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+          if (!tunnel.handleUpgrade(request, socket, head)) socket.destroy();
+        };
+        if (holding) held.push(accept);
+        else accept();
+      });
+      harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+      const requests = [get(descriptor.url, headers), get(descriptor.url, headers)];
+      const waitFor = async (condition: () => boolean) => {
+        const deadline = Date.now() + 2_000;
+        while (!condition() && Date.now() < deadline) await Bun.sleep(5);
+        expect(condition()).toBe(true);
+      };
+      try {
+        await waitFor(() => held.length === 2);
+        holding = false;
+        held[0]!();
+        expect((await Promise.race(requests)).status).toBe(200);
+        expect(invocations("create_preview_attachment")).toBe(2);
+        harness.runtime.access.revokeServices([serviceId], "operator-revoked");
+        if (recovery === "pending attach") {
+          beforeAttach = () => attachGate;
+          const third = get(descriptor.url, headers);
+          requests.push(third);
+          await waitFor(() => invocations("create_preview_attachment") === 3);
+        }
+        let lateRefused = false;
+        const authenticate = harness.runtime.access.authenticateTunnel.bind(harness.runtime.access);
+        harness.runtime.access.authenticateTunnel = (id, credential) => {
+          lateRefused = true;
+          return authenticate(id, credential);
+        };
+        held[1]!();
+        await waitFor(() => lateRefused);
+        // Let the refused open join the pending attach before completing it.
+        if (recovery === "pending attach") await Bun.sleep(30);
+        releaseAttach();
+        const responses = await Promise.all(requests);
+        if (recovery === "refused final open")
+          expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+        else expect(responses.every((response) => response.status === 200)).toBe(true);
+        expect(invocations("create_preview_attachment")).toBe(3);
+        expect(invocations("release_preview_attachment")).toBe(2);
+        expect(manager.transportState(descriptor.serviceKey)).toEqual({
+          mode: "desktop-tunnel",
+          state: "ready",
+        });
+        await manager.disposeAll();
+        expect(
+          harness.runtime.metrics.snapshot().counters["desktop.reconnect{access-expired}"],
+        ).toBe(2);
+      } finally {
+        releaseAttach();
+      }
+    });
+  }
+
   test("buffered ingress metrics are reported on a timer while the window stays open", async () => {
     const reports: unknown[] = [];
     const session = new FakeSession();
@@ -726,6 +891,71 @@ describe("PreviewTransportManager lifecycle and local-network policy", () => {
       histograms: {},
     });
   });
+
+  for (const pending of [false, true]) {
+    test(`a renewal refused after replacement ${pending ? "joins the next attach" : "does not reattach again"}`, async () => {
+      let releaseAttach!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseAttach = resolve;
+      });
+      let refuseSlowRenewal!: (failure: unknown) => void;
+      const slowRenewal = new Promise<void>((_resolve, reject) => {
+        refuseSlowRenewal = reject;
+      });
+      let attaches = 0;
+      let renewals = 0;
+      const { manager, invoked } = setup({
+        attach: async () => {
+          const id = ++attaches;
+          if (pending && id === 3) await gate;
+          return attachment(`att_${id}`);
+        },
+        renew: async () => {
+          renewals += 1;
+          // The first renewal of att_1 is still pending when the second replaces it.
+          if (renewals === 1) return slowRenewal;
+          if (renewals === 2 || (pending && renewals === 3))
+            throw previewFailure("generation-changed");
+          return undefined;
+        },
+      });
+      const called = (command: string) => invoked.filter((entry) => entry.command === command);
+      const descriptor = await manager.acquire(target, "tab-1");
+      const deadline = Date.now() + 2_000;
+      while (called("release_preview_attachment").length < 1 && Date.now() < deadline)
+        await Bun.sleep(5);
+      if (pending) {
+        while (called("create_preview_attachment").length < 3 && Date.now() < deadline)
+          await Bun.sleep(5);
+        expect(called("create_preview_attachment")).toHaveLength(3);
+      }
+      // The backend refuses the pending renewal because att_1 has been released.
+      refuseSlowRenewal(previewFailure("not-found"));
+      await Bun.sleep(20);
+      expect(called("create_preview_attachment")).toHaveLength(pending ? 3 : 2);
+      releaseAttach();
+      while (
+        called("release_preview_attachment").length < (pending ? 2 : 1) &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(5);
+      expect(called("release_preview_attachment").map((entry) => entry.args)).toEqual([
+        { attachmentId: "att_1" },
+        ...(pending ? [{ attachmentId: "att_2" }] : []),
+      ]);
+      expect(manager.transportState(descriptor.serviceKey)).toEqual({
+        mode: "desktop-tunnel",
+        state: "ready",
+      });
+      await manager.disposeAll();
+      expect(called("record_preview_client_metrics")[0]!.args.report).toEqual({
+        counters: [
+          { name: "desktop.reconnect", category: "generation-changed", count: pending ? 2 : 1 },
+        ],
+        histograms: {},
+      });
+    });
+  }
 
   test("a failed renewal reattach counts its trigger and failure once", async () => {
     let attaches = 0;

@@ -617,6 +617,20 @@ export class PreviewTransportManager {
     return group.attaching;
   }
 
+  /**
+   * The attachment that has already replaced a refused one, if any. One
+   * revocation gets one reattach: a later attach would release the replacement
+   * that other connections are opening on. While an attach is in flight the
+   * current attachment is about to go too, so callers join that attach instead.
+   */
+  private replacementFor(
+    group: ServiceGroup,
+    refused: PreviewAttachmentDescriptor,
+  ): PreviewAttachmentDescriptor | null {
+    const current = group.attachment;
+    return current && current !== refused && !group.attaching ? current : null;
+  }
+
   private async renew(group: ServiceGroup): Promise<void> {
     const attachment = group.attachment;
     if (!attachment || group.disposed) return;
@@ -632,6 +646,7 @@ export class PreviewTransportManager {
         category === "not-found" ||
         category === "generation-changed"
       ) {
+        if (this.replacementFor(group, attachment)) return;
         this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
         await this.attach(group, category)
           .then(() => this.setState(group, { mode: "desktop-tunnel", state: "ready" }))
@@ -862,8 +877,10 @@ export class PreviewTransportManager {
   /**
    * Open (or reuse) an upstream connection through the tunnel. A connection
    * refused because access expired or the endpoint generation moved is
-   * retried once with a fresh attachment — no application bytes have been sent
-   * at that point, so this re-establishes transport, not an application write.
+   * retried on a replacement, with one further recovery if that replacement
+   * is also refused. Reattaching happens only if the attachment it was
+   * refused on is still current — no application bytes have been sent at that
+   * point, so this re-establishes transport, not an application write.
    */
   private async connect(
     group: ServiceGroup,
@@ -882,8 +899,7 @@ export class PreviewTransportManager {
     }
     const url = this.options.tunnelUrl();
     if (!url) throw previewFailure("backend-unavailable");
-    const open = async () => {
-      const attachment = group.attachment ?? (await this.attach(group));
+    const open = async (attachment: PreviewAttachmentDescriptor) => {
       const stream = await openPreviewTunnel({
         url,
         attachmentId: attachment.attachmentId,
@@ -891,25 +907,43 @@ export class PreviewTransportManager {
         signal,
       });
       this.observe("desktop.connect_ms", stream.openMs);
+      this.restoreReady(group);
       return stream;
     };
+    const attachment = group.attachment ?? (await this.attach(group));
     try {
-      const socket = await open();
-      this.restoreReady(group);
-      return socket;
+      return await open(attachment);
     } catch (error) {
-      const category = previewErrorFromUnknown(error)?.category;
+      let category = previewErrorFromUnknown(error)?.category;
       if (signal.aborted || (category !== "access-expired" && category !== "generation-changed"))
         throw error;
+      const replacement = this.replacementFor(group, attachment);
+      if (replacement) {
+        try {
+          return await open(replacement);
+        } catch (failure) {
+          category = previewErrorFromUnknown(failure)?.category;
+          if (
+            signal.aborted ||
+            (category !== "access-expired" && category !== "generation-changed")
+          )
+            throw failure;
+          // The replacement may have been revoked before the original refusal
+          // arrived. Recover once, still reusing/joining any newer replacement.
+          const newer = this.replacementFor(group, replacement);
+          if (newer) return open(newer);
+        }
+      }
       this.setState(group, { mode: "desktop-tunnel", state: "reconnecting" });
+      let fresh: PreviewAttachmentDescriptor;
       try {
-        await this.attach(group, category);
+        fresh = await this.attach(group, category);
       } catch (failure) {
         this.setUnavailable(group, failure);
         throw failure;
       }
       this.setState(group, { mode: "desktop-tunnel", state: "ready" });
-      return open();
+      return open(fresh);
     }
   }
 

@@ -83,6 +83,7 @@
     "./container-resources": "./src/container-resources.ts",
     "./controller-settings": "./src/controller-settings.ts",
     "./coordinator": "./src/coordinator.ts",
+    "./coordinator-activity": "./src/coordinator-activity.ts",
     "./coordinator-pane-layout": "./src/coordinator-pane-layout.ts",
     "./coordinator-upstream-merge": "./src/coordinator-upstream-merge.ts",
     "./client-state": "./src/client-state.ts",

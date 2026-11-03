@@ -58,7 +58,9 @@ function updateInputSchema() {
     decisions: z
       .array(
         z.object({
-          decision: text(limits.decisionLength).describe("What had to be decided."),
+          decision: text(limits.decisionLength).describe(
+            "The material technical choice the user should know about.",
+          ),
           options: z
             .array(
               z.object({
@@ -68,13 +70,19 @@ function updateInputSchema() {
               }),
             )
             .max(limits.options * INPUT_SLACK),
-          chosen: text(limits.optionLength).describe("The option suggested and taken."),
-          rationale: text(limits.rationaleLength).optional(),
+          chosen: text(limits.optionLength).describe("The option implemented or selected."),
+          rationale: text(limits.rationaleLength)
+            .optional()
+            .describe(
+              "Brief engineering justification supported by requirements, code, constraints or tests; never private internal reasoning or chain of thought.",
+            ),
         }),
       )
       .max(limits.decisions * INPUT_SLACK)
       .optional()
-      .describe("Decisions made, each with every option considered and its pros and cons."),
+      .describe(
+        "Concise records of material technical decisions: the chosen option and relevant alternatives with engineering pros and cons. Do not invent alternatives or claim an exhaustive record of options considered. Do not perform reasoning extraction or disclose or reconstruct private internal reasoning, hidden deliberations or chain of thought.",
+      ),
     notDone: textList(limits.listItems, limits.itemLength)
       .optional()
       .describe("What was not done or needs further work."),
@@ -168,7 +176,7 @@ export async function registerKeyInformationTools(
     {
       title: "Update the pipeline's key information",
       description:
-        "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. Write for a reader who has not seen the transcript: short, specific and accurate.",
+        "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. Write for a reader who has not seen the transcript: short, specific and accurate. Record observable work and concise engineering decision summaries only. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought.",
       inputSchema: updateInputSchema(),
       annotations: {
         readOnlyHint: false,

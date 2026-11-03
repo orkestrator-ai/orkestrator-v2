@@ -996,14 +996,14 @@ export function resolveConflictsLocallyPrompt(targetBranch: string): string {
 }
 
 const KEY_INFORMATION_PREAMBLE =
-  "**Key information**: the user follows this pipeline through its key information, a short brief shown in the pipeline header. Call the Orkestrator `get_key_information` tool first to see what earlier stages recorded, then call `update_key_information` before you finish. Each field you pass replaces that whole section, so keep the earlier entries that still hold. Write for a reader who has not seen this transcript: short, specific and accurate.";
+  "**Key information**: the user follows this pipeline through its key information, a short brief shown in the pipeline header. Call the Orkestrator `get_key_information` tool first to see what earlier stages recorded, then call `update_key_information` before you finish. Each field you pass replaces that whole section, so keep the earlier entries that still hold. Write for a reader who has not seen this transcript: short, specific and accurate. Document only observable work and material technical decisions, supported by requirements, code, documented constraints or test results. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought. Provide only a concise engineering decision summary, never a step-by-step account of how you thought. Do not invent alternatives or claim an exhaustive record of options considered; omit unsupported details.";
 
 const KEY_INFORMATION_CLOSING =
   "These tools write only to Orkestrator's record of the pipeline, never to the workspace, and they do not replace this stage's result. If they are not available, continue without them.";
 
 const KEY_INFORMATION_STAGE_GUIDANCE: Partial<Record<PipelineSessionPhase, string>> = {
   build:
-    "Record: `framing` (`problem` when the ticket fixes something that is wrong, which is the default, or `objective` when it adds or changes something that was not broken); `statement` (the problem or the objective); `context`; `solution`; `workDone` (what you did); `decisions` (each decision you made, every option you considered with its pros and cons, and the option you took and why); `notDone` (what was not done or needs further work); and `tests` (each test or check you ran and its result).",
+    "Record: `framing` (`problem` when the ticket fixes something that is wrong, which is the default, or `objective` when it adds or changes something that was not broken); `statement` (the problem or the objective); `context`; `solution`; `workDone` (what you did); `decisions` (material technical decisions the user should know about: the chosen option, relevant alternatives with their engineering pros and cons, and a brief justification tied to requirements, code, constraints or tests); `notDone` (what was not done or needs further work); and `tests` (each test or check you ran and its result).",
   fix: "Update the sections your fix changes: `solution`, `workDone`, `decisions`, `notDone` and `tests`, adding what this round did to the entries that still hold.",
   address:
     "Record `issues`: every issue the review reported for this round, how you solved it (or why you did not) and its status. Update `workDone`, `decisions`, `notDone` and `tests` where your changes affect them.",

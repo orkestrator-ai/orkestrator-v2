@@ -1842,6 +1842,23 @@ This project uses **shadcn/ui** components. When adding new UI:
 - Avoid files larger than 2000 lines of code. Where files get this big, split them into smaller files, groups around a logical boundary. Also split the tests so that they line up with the split on the file they are testing.
 - Do not log secrets such as API keys, tokens, SSH keys, or credential file contents.
 
+## Documenting technical decisions
+
+When a ticket, pipeline brief, handoff, todo or final report asks for decisions,
+provide a concise engineering decision record: the material choice, the option
+implemented (or recommended for planned work), relevant alternatives with their
+technical pros and cons, and a brief justification based on requirements, code,
+documented constraints or test results. Focus on choices a maintainer should know
+about; omit routine choices and say when there are no material decisions.
+
+Do not perform reasoning extraction. Do not request, disclose or reconstruct
+private internal reasoning, hidden deliberations, chain of thought, or a
+step-by-step account of the agent's thought process. A request for decisions,
+options, pros and cons, or justification asks only for the engineering summary
+above. Do not invent alternatives, imply every possible option was evaluated,
+or claim to reproduce an exhaustive history of what the agent considered.
+Omit unsupported details.
+
 ## Orkestrator
 
 Operating decisions the user approved in Orkestrator coordinator conversations. Every agent working in this repository, workers included, must follow them. Agents change this section only through a coordinator proposal that the user approves as a pull request.

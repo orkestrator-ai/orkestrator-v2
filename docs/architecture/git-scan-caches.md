@@ -40,9 +40,13 @@ cheap. So it was removed rather than made opt-in: there was no existing
 per-project git-tuning setting to hang it on, and an opt-in that is slow on the
 main host would be a trap. A user who wants it can still set it in their own
 git config; the fallbacks below keep that safe. Orkestrator does not override
-a `core.fsmonitor` the user set (for example in `~/.gitconfig`) on its own
-reads; only `change-tracking/capture.ts` and the stop and migration calls pass
-`-c core.fsmonitor=false` unconditionally.
+a `core.fsmonitor` the user set (for example in `~/.gitconfig`) on most of its
+own reads. `change-tracking/capture.ts`, diff stats (`getLocalGitStatusDetailed`)
+and the stop and migration calls pass `-c core.fsmonitor=false`
+unconditionally. Capture and diff stats also pass `-c core.hooksPath=/dev/null`
+(`HARDENED_GIT_CONFIG` in `git-fsmonitor.ts`): they scan worktrees on the host, and a worktree's own
+config, which whatever runs in it can write, must not name a program for them
+to run (security report L9).
 
 The daemon is not macOS-only. Git 2.56.0 on Linux reports
 `feature: fsmonitor--daemon` in `git version --build-options`, and a daemon
@@ -107,7 +111,6 @@ for this document.
 These reads already had timeouts; on a timeout each now retries once with
 `-c core.fsmonitor=false` instead of failing:
 
-- diff stats (`getLocalGitStatusDetailed`: name-status, numstat, status; 60 s);
 - the project home's status (`project-git-service.ts`, 10 s);
 - the review package's worktree status (`commands-review.ts`, 30 s);
 - the validation worker's drift check (10 s, `spawnSync` `ETIMEDOUT`);
@@ -153,7 +156,9 @@ inventory, bounded at 30 s), and the fingerprint probe's streaming `diff`
 (its own process/capture bounds apply, and it inherits disabled fsmonitor
 after a status timeout). The host and container change-tracking inventory
 and scope readers already disable fsmonitor through `SAFE_GIT_CONFIG` or
-their embedded equivalent, so they need no retry.
+their embedded equivalent, and diff stats (`getLocalGitStatusDetailed`:
+name-status, numstat, status; 60 s each) through `HARDENED_GIT_CONFIG`, so
+they need no retry.
 
 ## Tests
 

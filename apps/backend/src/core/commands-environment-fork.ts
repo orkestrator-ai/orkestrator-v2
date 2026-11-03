@@ -124,7 +124,7 @@ function remoteRefsContainCommit(stdout: string): boolean {
 }
 
 async function lsRemoteCommitTips(remoteUrl: string): Promise<string> {
-  const { stdout } = await runRemoteGit("ls-remote", [remoteUrl], {
+  const { stdout } = await runRemoteGit("ls-remote", ["--", remoteUrl], {
     timeoutMs: GIT_REMOTE_QUERY_TIMEOUT_MS,
   });
   return stdout;
@@ -138,7 +138,7 @@ async function fetchProjectRemotes(localPath: string, remoteUrl?: string): Promi
     });
   } catch (error) {
     if (!remoteUrl) throw error;
-    await runRemoteGit("fetch", ["--prune", remoteUrl], {
+    await runRemoteGit("fetch", ["--prune", "--", remoteUrl], {
       cwd: localPath,
       timeoutMs: GIT_FETCH_TIMEOUT_MS,
     });

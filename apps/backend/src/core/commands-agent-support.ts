@@ -274,7 +274,7 @@ async function remoteGitBranchesWithPrefix(options: {
   const remote = options.projectPath ? "origin" : options.remoteUrl?.trim();
   if (!remote) return new Set();
 
-  const result = await runRemoteGit("ls-remote", ["--heads", remote, `refs/heads/${base}*`], {
+  const result = await runRemoteGit("ls-remote", ["--heads", "--", remote, `refs/heads/${base}*`], {
     timeoutMs: GIT_REMOTE_BRANCH_LOOKUP_TIMEOUT_MS,
     cwd: options.projectPath ?? undefined,
   }).catch(() => null);

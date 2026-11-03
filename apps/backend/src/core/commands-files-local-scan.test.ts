@@ -88,3 +88,42 @@ test("scanning a stat-dirty but content-clean linked worktree leaves its index u
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("scanning a worktree does not run a program its own Git config names", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-local-scan-config-"));
+  try {
+    const repository = path.join(root, "repository");
+    const marker = path.join(root, "fsmonitor-ran");
+    const hook = path.join(root, "fsmonitor.sh");
+    await fs.writeFile(hook, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+    const git = (...args: string[]) =>
+      runCommand(
+        "git",
+        ["-c", "user.email=test@example.invalid", "-c", "user.name=Test", ...args],
+        { cwd: repository },
+      );
+    await fs.mkdir(repository);
+    await git("init", "-b", "main");
+    await fs.writeFile(path.join(repository, "tracked.txt"), "unchanged\n");
+    await git("add", ".");
+    await git("commit", "-m", "initial");
+    // Whatever runs in the worktree can write this; the repository config
+    // overrides the test preload's global `core.fsmonitor=false`.
+    await git("config", "core.fsmonitor", hook);
+    await fs.writeFile(path.join(repository, "untracked.txt"), "new\n");
+
+    const read = await getLocalGitStatusDetailed(repository, "main", true, {
+      ensureFetched: async () => undefined,
+    });
+    expect(read.changes.map(({ path, status }) => ({ path, status }))).toEqual([
+      { path: "untracked.txt", status: "?" },
+    ]);
+    expect(await fs.stat(marker).catch(() => null)).toBeNull();
+
+    // Positive control: an unhardened status in the same worktree runs it.
+    await git("--no-optional-locks", "status", "--porcelain=v1");
+    expect(await fs.stat(marker).catch(() => null)).not.toBeNull();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

@@ -4,16 +4,20 @@
  * finish, and a pin whose host is defined (and attaches its root) after pins
  * were shown resolves without waiting for an unrelated DOM change.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { Element, ShadowRoot } from "happy-dom";
 import { WEB_ANNOTATION_MAX_SHADOW_DEPTH } from "@orkestrator/protocol/web-annotations";
 import { browserPreviewAnchorKit } from "../electron/browser-preview-anchor-script";
 import { BROWSER_PREVIEW_CAPTURE_CANCEL_SCRIPT } from "../electron/browser-preview-annotation-script";
 import {
   BROWSER_PREVIEW_PINS_SNAPSHOT_SCRIPT,
+  BROWSER_PREVIEW_PINS_CLEAR_SCRIPT,
+  BROWSER_PREVIEW_PINS_KEY,
   browserPreviewPinsShowScript,
   type BrowserPreviewPinsScriptLimits,
 } from "../electron/browser-preview-pins-script";
+import { browserPreviewResponsiveProbeScript } from "../electron/browser-preview-capture-responsive";
+import { browserPreviewCaptureProbeScript } from "../electron/browser-preview-annotation-script";
 import { click, page, setRect, type Json } from "./browser-preview-page-harness";
 
 type Harness = ReturnType<typeof page>;
@@ -74,6 +78,46 @@ describe("sensitive-field masks inside open shadow roots", () => {
     expect(probe.sensitiveComplete).toBe(true);
     expect(harness.ui().filter(isMask)).toHaveLength(4);
   });
+
+  test("a shadow field attached after prepare appears in the post-capture probe", async () => {
+    const harness = page(`<x-form></x-form><button id="go">Go</button>`);
+    harness.start("element");
+    click(harness, harness.document.getElementById("go")!);
+    expect((await harness.prepare())!.sensitive).toEqual([]);
+    const root = harness.document.querySelector("x-form")!.attachShadow({ mode: "open" });
+    root.innerHTML = `<input type="password">`;
+    const rect = { x: 10, y: 40, width: 100, height: 20 };
+    setRect(root.querySelector("input")!, rect);
+
+    const after = JSON.parse(
+      harness.window.eval(browserPreviewCaptureProbeScript("capture-1")) as string,
+    );
+    expect(after.sensitive).toEqual([rect]);
+    expect(after.sensitiveComplete).toBe(true);
+  });
+
+  test.each([1, 33])(
+    "responsive page script delivers scan rectangles and completeness for %i fields",
+    async (count) => {
+      const harness = page(`<x-form></x-form>`);
+      const root = harness.document.querySelector("x-form")!.attachShadow({ mode: "open" });
+      root.innerHTML = Array.from({ length: count }, () => `<input type="password">`).join("");
+      const rect = { x: 10, y: 40, width: 100, height: 20 };
+      for (const input of root.querySelectorAll("input")) setRect(input, rect);
+      const encoded = await harness.window.eval(
+        browserPreviewResponsiveProbeScript({
+          target: null,
+          deadlineMs: 100,
+          quietMs: 1,
+        }),
+      );
+      const probe = JSON.parse(encoded as string);
+      expect(probe.sensitive).toEqual(Array.from({ length: Math.min(count, 32) }, () => rect));
+      expect(probe.sensitiveComplete).toBe(count <= 32);
+      expect(probe.viewport).toEqual({ width: 1024, height: 768 });
+      expect(probe.state).toBe("none");
+    },
+  );
 
   test("a page with no sensitive fields and no roots scans complete", () => {
     const harness = page(`<main><p>Hello</p><button>Go</button></main>`);
@@ -258,6 +302,67 @@ describe("pins on hosts that attach their shadow root late", () => {
     expect(checks).toBe(4);
     expect(snapshotOf(harness).diagnostics.passes).toBe(1);
   });
+
+  test.each(["clear", "resend"])(
+    "%s clears a pending isolated-world definition timer",
+    async (action) => {
+      const target = lateTarget();
+      const harness = page(`<main><x-late></x-late></main>`);
+      withoutRegistry(harness);
+      const host = harness.document.querySelector("x-late")!;
+      const matches = host.matches.bind(host);
+      let checks = 0;
+      Object.defineProperty(host, "matches", {
+        value: (selector: string) => {
+          if (selector !== ":defined") return matches(selector);
+          checks += 1;
+          return false;
+        },
+      });
+      const timers = spyOn(harness.window, "setTimeout");
+      const cleared = spyOn(harness.window, "clearTimeout");
+      showPins(harness, [target], { definitionCheckMs: 20 });
+      const definitionTimer = timers.mock.results.find(
+        (_, index) => timers.mock.calls[index]?.[1] === 20,
+      )!.value;
+      expect(checks).toBe(1);
+      if (action === "clear") harness.window.eval(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+      else showPins(harness, []);
+      expect(cleared).toHaveBeenCalledWith(definitionTimer);
+      await new Promise((done) => setTimeout(done, 80));
+      expect(checks).toBe(1);
+      if (action === "resend") expect(snapshotOf(harness).diagnostics.passes).toBe(1);
+    },
+  );
+
+  test.each(["clear", "resend"])(
+    "%s prevents a late whenDefined callback scheduling work",
+    async (action) => {
+      const target = lateTarget();
+      const harness = page(`<main><x-late></x-late></main>`);
+      let resolveDefinition!: () => void;
+      let registrations = 0;
+      Object.defineProperty(harness.window.customElements, "whenDefined", {
+        value: () => {
+          registrations += 1;
+          return new Promise<void>((resolve) => {
+            resolveDefinition = resolve;
+          });
+        },
+      });
+      showPins(harness, [target]);
+      expect(registrations).toBe(1);
+      const runtime = (harness.window as unknown as Record<string, { snapshot: () => string }>)[
+        BROWSER_PREVIEW_PINS_KEY
+      ];
+      if (action === "clear") harness.window.eval(BROWSER_PREVIEW_PINS_CLEAR_SCRIPT);
+      else showPins(harness, []);
+      resolveDefinition();
+      await new Promise((done) => setTimeout(done, 80));
+      expect(JSON.parse(runtime!.snapshot()).diagnostics.passes).toBe(1);
+      if (action === "resend") expect(snapshotOf(harness).diagnostics.passes).toBe(1);
+    },
+  );
 
   test("a built-in host without a root is not waited on", async () => {
     const target = lateTarget();

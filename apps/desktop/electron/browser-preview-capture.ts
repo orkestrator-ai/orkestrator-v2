@@ -582,10 +582,11 @@ export class BrowserPreviewCaptureSessions {
           view.viewport,
           this.options.nativeImage,
         );
-        if (!outcome.probe?.sensitiveComplete || (rects.length > 0 && !maskedImage.masked)) {
+        if (!outcome.privacyVerified || (rects.length > 0 && !maskedImage.masked)) {
           // Sensitive fields (or redactions to reapply) are on screen and could
           // not be painted over, or the page could not finish looking for them
-          // (budget, nesting): keep text evidence only rather than spool pixels.
+          // (budget, nesting), or the sensitive rectangles changed during capture:
+          // keep text evidence only rather than spool pixels.
           unmaskable = true;
         } else {
           sensitiveCount = sensitive.length;
@@ -729,13 +730,18 @@ export class BrowserPreviewCaptureSessions {
    * Read geometry before and after `capturePage()`. One retry for a transient
    * change; never a loop. Navigation drops the pixels, which may show another page.
    */
-  private async coherentCapture(
-    session: CaptureSession,
-  ): Promise<{ image: CaptureImageLike | null; probe: Probe | null; staleReason: string | null }> {
+  private async coherentCapture(session: CaptureSession): Promise<{
+    image: CaptureImageLike | null;
+    probe: Probe | null;
+    staleReason: string | null;
+    privacyVerified: boolean;
+  }> {
     let reason: string | null = null;
     let image: CaptureImageLike | null = null;
+    let privacyVerified = false;
     let probe: Probe | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      privacyVerified = false;
       const handle = this.options.preview(session.tabId);
       if (!handle || handle.contents !== session.contents || session.contents.isDestroyed()) {
         throw new CaptureFailure("stale-session");
@@ -779,6 +785,22 @@ export class BrowserPreviewCaptureSessions {
         session,
       );
       image = captured;
+      // The prepare-time masks cannot cover fields added or moved during its
+      // paint wait or capturePage. Only retain pixels if both scans completed
+      // and the sensitive rectangles stayed identical. Missing probes fail closed.
+      privacyVerified =
+        before.sensitiveComplete &&
+        after?.sensitiveComplete === true &&
+        before.sensitive.length === after.sensitive.length &&
+        before.sensitive.every((rect, index) => {
+          const next = after.sensitive[index]!;
+          return (
+            rect.x === next.x &&
+            rect.y === next.y &&
+            rect.width === next.width &&
+            rect.height === next.height
+          );
+        });
       const current = this.options.preview(session.tabId);
       if (
         !current ||
@@ -793,7 +815,7 @@ export class BrowserPreviewCaptureSessions {
       if (!reason) break;
     }
     if (reason === STALE_REASONS.navigation) image = null;
-    return { image, probe, staleReason: reason };
+    return { image, probe, staleReason: reason, privacyVerified };
   }
 
   // -- Spool ----------------------------------------------------------------

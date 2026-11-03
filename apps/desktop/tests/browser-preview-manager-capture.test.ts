@@ -344,6 +344,43 @@ describe("BrowserPreviewManager trusted capture", () => {
     expect(validateWebAnnotationCaptureInput(pending.capture).ok).toBe(true);
   });
 
+  test.each(["incomplete", "missing", "added", "moved", "removed"])(
+    "excludes pixels when the post-capture sensitive scan is %s despite stable target geometry",
+    async (change) => {
+      const harness = createHarness();
+      const contents = await harness.attach();
+      await start(harness.manager);
+      contents.selection = elementSelection();
+      const before = { ...contents.probe };
+      const after =
+        change === "missing"
+          ? null
+          : {
+              ...before,
+              sensitiveComplete: change !== "incomplete",
+              sensitive:
+                change === "added"
+                  ? [...before.sensitive, { x: 200, y: 20, width: 80, height: 20 }]
+                  : change === "moved"
+                    ? [{ ...before.sensitive[0], x: 200 }]
+                    : change === "removed"
+                      ? []
+                      : before.sensitive,
+            };
+      contents.probes = [before, after, before, after];
+
+      const status = await harness.manager.getCaptureStatus("browser-1");
+
+      expect(status.status).toBe("captured");
+      if (status.status !== "captured") throw new Error("expected capture");
+      const pending = (await harness.manager.readPendingCapture(status.captureId))!;
+      expect(pending.imageDataUrl).toBeNull();
+      expect(pending.capture.geometry?.image).toBeNull();
+      expect(pending.capture.redaction.imageExcluded).toBe(true);
+      expect(pending.capture.evidence).not.toBeNull();
+    },
+  );
+
   test("an image is not spooled when the page could not finish looking for sensitive fields", async () => {
     // The page scan ran out of budget (or nested past the shadow-root limit),
     // so a field it never reached could be on screen unmasked.

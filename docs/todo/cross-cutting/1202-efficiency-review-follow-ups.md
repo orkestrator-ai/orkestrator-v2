@@ -33,7 +33,7 @@ governs, marked "Decided".
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (first halves of BG-1, BG-2 and BG-8 done).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: open.
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
@@ -319,19 +319,50 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
 
 **Problem.** Each tmux tab still runs up to four separate execs per tick, and container lifecycle changes do not stop the loops that depend on them.
 
-**Context.** Decided 2026-11-01: do the structural container work now. Done that day: an unbound tab searches for its transcript at 2 s backing off to 10 s, and at once on any hook (BG-1); a quiet tab polls at 1 s after eight quiet ticks (BG-2, `TMUX_IDLE_*` in `tmux-shared.ts`); the `docker events` follower also reports `start`, `die`, `stop` and `destroy` and invalidates the shared `docker ps` snapshot (BG-8, `container-oom-events.ts`).
+**Context.** Decided 2026-11-01: do the structural container work now. Done that day: an unbound tab searches for its transcript at 2 s backing off to 10 s, and at once on any hook (BG-1); a quiet tab polls at 1 s after eight quiet ticks (BG-2, `TMUX_IDLE_*` in `tmux-shared.ts`); the `docker events` follower also reports `start`, `die`, `stop` and `destroy` and invalidates the shared `docker ps` snapshot (BG-8, `container-oom-events.ts`). Checked against `main` at `7b48c23f` on 2026-11-03: #1612 changed the Claude state signal to version 3 (`StopFailure`) and left the tmux loop as described.
 
-**Investigation.** Still to do: BG-1's bounded head ownership check and memo of rejected `(path, size)` pairs, and folding discovery into `pollSnapshotScript`; BG-2's `has-session` and `capture-pane` in the same snapshot exec, then one long-lived `docker exec -i` co-process per container or a hook-directory doorbell on the `claude-state-signal` pattern; BG-8's use of lifecycle events to retire the tmux, state, diff and PR loops; BG-7 (Claude state poll only with a Claude or tmux session); BG-14 (tail paging on reopen); BG-15. The discovery throttle has no direct test.
+Done 2026-11-03 (see [container-lifecycle.md](../../architecture/container-lifecycle.md), "claude-tmux hook doorbell" and "Container lifecycle events"):
+
+- BG-2: one `docker exec` per tick. `pollSnapshotScript` also carries `tmux has-session`, the pane (framed by a per-call nonce) and the expected transcript. The doorbell decided below: `orkestrator-state-signal hook` (`tmux-hook-signal=1`) rings `/tmux-hook-signal` after the container hook script writes a hook file; `TmuxHookSignalManager` (`tmux-hook-signal.ts`) arms it per container like the Claude state signal and wakes that container's tab loops. A confirmed idle tab sleeps until a ring or a 2.5 s safety read; a hook file no ring announced demotes it. Older images keep the per-tick poll.
+- BG-1: the snapshot binds `<session id>.jsonl` the moment it exists, so the fallback search runs only for a tab it cannot bind, after the tick's snapshot. That search reads a 64 KiB head per candidate (`transcriptHeadClaimsSession`) and remembers rejected candidates by mtime, or for good once the head is full (`TRANSCRIPT_REJECTED_MEMO_LIMIT`, 256).
+- BG-8: `ContainerLifecycleReactor` (`container-lifecycle-events.ts`). `die`, `stop` and `destroy` retire the container's Claude state poll, hook doorbell and tmux tabs at once. Unless a lifecycle operation owns the environment, the reactor then reconciles stored status with one inspect and re-syncs the diff, PR and state loops; a start outside the app re-adopts them.
+- BG-7: a Claude state poll keeps the 1 s cadence only while the container has a terminal shell or a claude-tmux tab (`terminalClaudeDemand`); otherwise one read on adoption, then the 30 s safety read.
+
+Exec counts per tab (`apps/backend/scripts/tmux-exec-count.ts`: the real loop against a fake container, 600 simulated seconds; before is `7b48c23f`):
+
+| Tab | Before | Older image | Doorbell |
+| --- | --- | --- | --- |
+| Idle, transcript bound | 1.85/s (snapshot 1.01, has-session 0.50, capture-pane 0.34) | 1.01/s | 0.42/s |
+| Idle, unbound | 2.57/s (discovery 0.72) | 1.12/s (discovery 0.11) | 0.52/s |
+| Busy | 6.50/s (capture-pane 2.00) | 4.00/s | 4.00/s |
+
+Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb95362a6` (`tmux-hook-signal-docker.test.ts`): a real idle tab on a real tmux session cost 4 execs in 10 s, and a rung hook was drained in under 2 s.
+
+**Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
-- **Co-process or doorbell for BG-2?**
+- **Co-process or doorbell for BG-2?** Decided and done 2026-11-03: the doorbell.
   - **A doorbell on the hook directories, reusing `claude-state-signal` (recommended).**
     - Pros: a pattern already in the image; idle tabs cost nothing until a hook fires.
     - Cons: needs an image change, so older containers keep polling and need a fallback.
   - **One long-lived `docker exec -i` co-process per container.**
     - Pros: no image change.
     - Cons: a new long-lived process to supervise, bound and restart; its death must be detected.
+- **BG-14: how to stop a reopen replaying the whole transcript?**
+  - **Page from the tail, as native transcripts page their history (recommended).**
+    - Pros: one bounded read per reopen; the renderer already has a paged history view for native tabs.
+    - Cons: the tmux chat tab has to move onto paged history; renderer and backend change together.
+  - **Resume from the client's last byte offset.**
+    - Pros: small backend change.
+    - Cons: the offset is lost with the tab's state, and the task list must still be rebuilt from the start of the file.
+- **BG-15: pass the presence snapshot into the mail inject?**
+  - **Leave it (recommended).**
+    - Pros: the repeat is three keyed reads and one deliberate fresh `has-session` per delivered message, not per tick; the fresh probe is what keeps mail from reaching a dead session (task 10).
+    - Cons: a few reads per delivery remain.
+  - **Pass the presence answer through.**
+    - Pros: saves those reads.
+    - Cons: dispatch would act on an answer up to 3 s old, which task 10 ruled out.
 
 ### 9. PR monitor cost
 
@@ -826,6 +857,49 @@ both blobs, so a different or pruned store still reports `body-unavailable`.
 Eight quiet ticks (2 s) before polling at 1 s; liveness every two idle ticks, so
 an ended session is still noticed in about 2 s. A hook can take one idle
 interval to be seen, within the 2 s approval budget.
+
+### Task 8: signalled idle safety read
+
+Made on 2026-11-03. A tab whose doorbell is confirmed reads every 2.5 s when no
+hook rings, and that read carries liveness and the pane. 2.5 s keeps the 3 s
+hidden-tab pane cadence and stays inside the 3 s liveness age mail presence
+accepts, so presence never probes on its own. A longer read (5 s) would halve
+the idle cost again but let presence spawn its own `has-session` and slow pane
+observation; it was not chosen.
+
+### Task 8: a ring wakes, never speeds up
+
+A ring only ends a wait early; the loop still keeps 250 ms after its previous
+read. A container can therefore never make the host read faster than the
+per-tick poll, so the doorbell needs no ring-rate limit of its own (the Claude
+state signal has one because each ring there is a read).
+
+### Task 8: missed-ring judgement a read later
+
+A safety read that finds an unannounced hook file demotes the doorbell only if
+no ring has arrived by the next read, about 250 ms later. The hook rings after
+writing, so a safety read can see the file just before its ring lands.
+
+### Task 8: discovery memo by mtime
+
+BG-1 asked for a memo of rejected `(path, size)` pairs. The `find` already
+returns mtimes, so the memo keys on mtime instead: a candidate is read again
+only if it changed while its head was short, and never once its head is full.
+
+### Task 8: one image script, one more capability
+
+The doorbell is a `hook` mode of `orkestrator-state-signal` with its own
+config file and credential route rather than a new script. An older image's
+script exits 0 on the unknown argument, so the new hook script is safe on it,
+and the separate credential keeps tmux hooks (several per turn) out of the
+Claude state signal's 30-a-minute flood limit.
+
+### Task 8: BG-7 keeps one adoption read
+
+A container with no terminal shell or tmux tab keeps its Claude state poll
+but at the 30 s safety read, after one read on adoption that can still correct
+a state stored before a restart. Dropping the poll entirely would lose that
+correction.
 
 ### Task 10: paused messaging
 

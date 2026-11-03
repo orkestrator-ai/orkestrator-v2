@@ -542,6 +542,21 @@ export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
   "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /**
+ * How long after a coordinator's last sent message to a project home the next
+ * one is sent without the user's approval (still with a warning).
+ */
+export const COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS = 3 * 60 * 60_000;
+
+/**
+ * Where work runs, told to every main coordinator verbatim.
+ *
+ * Coordinators otherwise reached for `launch_environment` for everything, and
+ * nothing stopped one prompting the project home, the user's own writable
+ * checkout. `send_message` enforces the project-home half (reason, approval).
+ */
+export const COORDINATOR_ROUTING_RULE =
+  "Routing: run all work in an isolated environment with its own worktree or container. Fully specified work, which can be written up as a ticket with acceptance criteria: create the ticket with create_ticket, then start_build_pipeline for it. Smaller or interactive work: launch_environment with a prompt, then work with that worker back and forth. The project home is the user's own checkout, and an agent working there conflicts with the user's own work in it, so use it only in exceptional circumstances and first tell the user why an environment will not do. send_message to the project home needs projectHomeReason, and waits for the user's approval unless you messaged it in the last 3 hours.";
+/**
  * Which kind of worker environment to use, told to every main coordinator
  * verbatim.
  *

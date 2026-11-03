@@ -10,6 +10,7 @@ import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrato
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import { parseProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import {
   parseWorkerQuestionRelay,
   workerQuestionAnswerProblem,
@@ -304,6 +305,7 @@ export class NodeCoordination {
         "apply-root-changes": (request, approval) => this.executeRootChanges(request, approval),
         "answer-worker-question": (request, approval) =>
           this.executeWorkerAnswer(request, approval),
+        "message-project-home": (request) => this.executeProjectHomeMessage(request),
         "update-agents-md": (request, approval) => this.executeAgentsMdUpdate(request, approval),
         "switch-agent-account": (request) =>
           executeAgentAccountSwitch(request, {
@@ -709,6 +711,7 @@ export class NodeCoordination {
         "update-agents-md",
         "switch-agent-account",
         "answer-worker-question",
+        "message-project-home",
       ].includes(kind)
     ) {
       throw new Error("Unknown request kind.");
@@ -758,6 +761,12 @@ export class NodeCoordination {
       kind === "answer-worker-question" ? parseWorkerQuestionRelay(args.workerQuestion) : undefined;
     if (kind === "answer-worker-question" && !workerQuestion)
       throw new Error("A worker question request carries the question and the proposed answer.");
+    const projectHomeMessage =
+      kind === "message-project-home"
+        ? parseProjectHomeMessage(args.projectHomeMessage)
+        : undefined;
+    if (kind === "message-project-home" && (!projectHomeMessage || targets.length !== 1))
+      throw new Error("A project home message request carries one target and the message.");
     return this.actions.create({
       ...(typeof args.requestId === "string" ? { requestId: args.requestId } : {}),
       kind,
@@ -772,6 +781,7 @@ export class NodeCoordination {
         ? { agentsMd: { changes: parseAgentsMdChanges(agentsMdPayload(args.agentsMd)) } }
         : {}),
       ...(workerQuestion ? { workerQuestion } : {}),
+      ...(projectHomeMessage ? { projectHomeMessage } : {}),
     });
   }
 
@@ -1017,6 +1027,30 @@ export class NodeCoordination {
   }
 
   /**
+   * Approved: send the held coordinator message to this node's project home,
+   * through the same delivery as an ordinary coordinator message
+   * (`send_approved_project_home_message`, which coordinators cannot call).
+   */
+  private async executeProjectHomeMessage(request: NodeActionRequest) {
+    const outcome = await this.options.invoke<{ result?: unknown; reason?: unknown }>(
+      "send_approved_project_home_message",
+      { approvalRequestId: request.requestId },
+    );
+    const where = `“${request.targets[0]?.environmentName ?? request.targets[0]?.environmentId ?? "the project home"}”`;
+    if (outcome?.result === "stale")
+      return {
+        code: "stale",
+        stale: true,
+        message: `${typeof outcome.reason === "string" ? outcome.reason.slice(0, 200) : "The project home is gone."} Nothing was sent.`,
+      };
+    if (outcome?.result !== "sent") throw new Error("The message gave no send outcome.");
+    return {
+      code: "sent",
+      message: `Sent the coordinator's message to the project home ${where}.`,
+    };
+  }
+
+  /**
    * Approved: copy the coordinator's project (this node's copy) to each
    * target, with the location and files the user settled on while approving.
    * The copy runs in the background; its outcome is mailed when it ends.
@@ -1108,7 +1142,11 @@ export class NodeCoordination {
               ? " The question is still waiting in the worker's tab for the user; do not propose the same answer again unless the user asks."
               : request.kind === "answer-worker-question" && request.state === "executed"
                 ? " Its delegation still wakes you when the worker's turn ends."
-                : ""
+                : request.kind === "message-project-home" && request.state === "executed"
+                  ? " For the next 3 hours your messages to the project home are sent without approval, but working there is still discouraged: prefer an isolated environment."
+                  : request.kind === "message-project-home"
+                    ? " The message was not sent. Do the work in an isolated environment instead (start_build_pipeline or launch_environment), or ask the user."
+                    : ""
         }`.trim(),
       },
     );

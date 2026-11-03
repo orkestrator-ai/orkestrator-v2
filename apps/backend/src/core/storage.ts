@@ -1741,6 +1741,13 @@ export class StorageService {
     return this.repos.agentMail.withAgentMailWorkerAdmission(environmentId, operation);
   }
 
+  replayAgentMail(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<AgentMailMessage | null> {
+    return this.repos.agentMail.replayAgentMail(sender, input);
+  }
+
   sendAgentMail(
     sender: AgentMailSender,
     input: AgentMailSendInput,
@@ -1935,6 +1942,10 @@ export class StorageService {
     tabId: string,
   ): Promise<AgentMailMessageSummary[]> {
     return this.repos.agentMail.listAgentMailSentByMailbox(environmentId, tabId);
+  }
+
+  latestCoordinatorMailTo(environmentId: string, coordinatorId: string): Promise<string | null> {
+    return this.repos.agentMail.latestCoordinatorMailTo(environmentId, coordinatorId);
   }
 
   listUserSentAgentMail(): Promise<AgentMailMessageSummary[]> {

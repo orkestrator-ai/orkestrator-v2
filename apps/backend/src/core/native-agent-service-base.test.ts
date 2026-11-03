@@ -53,6 +53,7 @@ import {
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_PR_RULE,
+  COORDINATOR_ROUTING_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
   COORDINATOR_VALIDATION_RULE,
   COORDINATOR_WORKER_PROMPT_FORMAT_RULE,
@@ -3579,6 +3580,12 @@ describe("NativeAgentService", () => {
       expect(sent).toContain(COORDINATOR_ENVIRONMENT_CHOICE_RULE);
       // Without this a coordinator asks build workers to raise the PR before review.
       expect(sent).toContain(COORDINATOR_PR_RULE);
+      // Fully specified work goes to a build pipeline, the rest to a prompt
+      // environment, and never to the project home.
+      expect(sent).toContain(COORDINATOR_ROUTING_RULE);
+      // The coordinator does the work through others, but never in the checkout.
+      expect(sent).toContain("You get the project's work done");
+      expect(sent).toContain("Never attempt to alter the project checkout directly.");
       // Without this a coordinator asks for the suite Multi Review is about to run.
       expect(sent).toContain(COORDINATOR_VALIDATION_RULE);
       // Worker prompts are shown verbatim in the worker transcript.

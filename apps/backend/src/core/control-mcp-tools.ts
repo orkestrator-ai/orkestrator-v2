@@ -1905,7 +1905,7 @@ export async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued.'
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
@@ -1929,6 +1929,15 @@ export async function createControlMcp(
                   .optional()
                   .describe(
                     "Steer this message into the worker's running turn instead of waiting for it to end. For course corrections only. Default false.",
+                  ),
+                projectHomeReason: z
+                  .string()
+                  .trim()
+                  .min(1)
+                  .max(500)
+                  .optional()
+                  .describe(
+                    "Required only when toEnvironmentId is the project home: why an isolated environment will not do. Shown to the user if the message needs their approval.",
                   ),
               }
             : {}),
@@ -2039,14 +2048,29 @@ export async function createControlMcp(
           ...(coordinatorScope && deliverNow === true ? { deliverNow: true } : {}),
         });
         if (!isRecord(message)) throw new Error("Message send returned no result");
+        // A project-home message held for (or refused by) the user: nothing was sent.
+        if (message.projectHome === true && message.sent === false)
+          return toolResult({
+            projectHomeApproval: message,
+            ...(message.state === "pending"
+              ? {
+                  delivery: "async",
+                  wake: "You will be woken by mail when the user approves (the message is then sent) or declines it.",
+                  nextStep: "Finish your turn now. Do not poll.",
+                }
+              : {}),
+          });
         const {
           body: _body,
           coordinatorDelegationOpened: delegationOpened,
           deliverNow: deliverNowOutcome,
           deliverNowNote,
+          projectHome: _projectHome,
+          projectHomeWarning,
           ...summary
         } = message;
         return toolResult({
+          ...(typeof projectHomeWarning === "string" ? { warning: projectHomeWarning } : {}),
           message: summary,
           ...(deliverNowOutcome !== undefined
             ? { deliverNow: deliverNowOutcome, deliverNowNote }

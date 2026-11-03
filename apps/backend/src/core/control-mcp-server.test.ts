@@ -3621,6 +3621,83 @@ describe("Orkestrator control MCP server", () => {
     expect(routine.body.result?.structuredContent).not.toHaveProperty("deliverNow");
   });
 
+  test("coordinator send_message to the project home forwards the reason and reports a held message or a warning", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+      },
+    }));
+    let held = true;
+    overrides.set("send_coordinator_agent_mail", (args) =>
+      held
+        ? {
+            projectHome: true,
+            sent: false,
+            state: "pending",
+            approvalRequestId: "project-home-message-1",
+            toEnvironmentId: args.toEnvironmentId,
+            note: "Not sent yet.",
+          }
+        : {
+            id: "message-1",
+            requestId: args.requestId,
+            placement: "pending-inject",
+            body: "never echoed",
+            coordinatorDelegationOpened: true,
+            projectHome: true,
+            projectHomeWarning: "Sent to the project home. This is discouraged.",
+          },
+    );
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["mail"],
+    });
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const sendTool = listed.body.result?.tools?.find((tool) => tool.name === "send_message") as
+      | { inputSchema?: { required?: string[]; properties?: Record<string, { type?: string }> } }
+      | undefined;
+    expect(sendTool?.inputSchema?.properties?.projectHomeReason?.type).toBe("string");
+    expect(sendTool?.inputSchema?.required).not.toContain("projectHomeReason");
+
+    const arguments_ = {
+      requestId: "home-1",
+      toEnvironmentId: "home",
+      body: "Rebase the checkout.",
+      projectHomeReason: "The user asked for their own checkout.",
+    };
+    const pending = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: arguments_,
+    });
+    expect(
+      invocations.findLast(({ command }) => command === "send_coordinator_agent_mail")?.args,
+    ).toMatchObject({ projectHomeReason: "The user asked for their own checkout." });
+    expect(pending.body.result?.structuredContent).toMatchObject({
+      projectHomeApproval: { state: "pending", approvalRequestId: "project-home-message-1" },
+      delivery: "async",
+    });
+    expect(pending.body.result?.structuredContent).not.toHaveProperty("message");
+
+    held = false;
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: arguments_,
+    });
+    expect(sent.body.result?.structuredContent).toMatchObject({
+      warning: "Sent to the project home. This is discouraged.",
+      message: { id: "message-1" },
+    });
+    expect(sent.body.result?.structuredContent?.message).not.toHaveProperty("projectHomeWarning");
+  });
+
   // A leaf without `node-mail-steer` answers with no outcome of its own.
   for (const [placement, reason, outcome, leafOutcome] of [
     ["pending-inject", undefined, "unsupported, queued"],

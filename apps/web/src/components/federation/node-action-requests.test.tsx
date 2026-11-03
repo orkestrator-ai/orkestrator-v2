@@ -361,3 +361,65 @@ test("an account switch names the machine, the provider and the account, and say
   fireEvent.click(screen.getByRole("button", { name: "Approve" }));
   await waitFor(() => expect(resolved).toEqual([{ requestId: "req-switch", decision: "approve" }]));
 });
+
+describe("the user approves a coordinator's message to the project home", () => {
+  const homeRequest = {
+    requestId: "home-req",
+    kind: "message-project-home",
+    targets: [
+      {
+        nodeId: "bk_self",
+        nodeName: "this machine",
+        environmentId: "home",
+        environmentName: "web",
+      },
+    ],
+    reason: "The user asked for their own checkout to be rebased.",
+    projectHomeMessage: {
+      mailRequestId: "home-1",
+      subject: "Rebase",
+      body: "Rebase the checkout on origin/main.",
+    },
+    state: "pending",
+  };
+
+  for (const [button, decision] of [
+    ["Approve and send", "approve"],
+    ["Decline", "reject"],
+  ] as const) {
+    test(`shows the message and the reason; ${button} resolves ${decision}`, async () => {
+      const resolved: Array<Record<string, unknown>> = [];
+      invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === "list_node_action_requests") return resolved.length ? [] : [homeRequest];
+        if (command === "resolve_node_action_request") {
+          resolved.push(args);
+          return {
+            ...homeRequest,
+            state: decision === "approve" ? "executed" : "rejected",
+            result: { code: "sent", message: "Sent." },
+          };
+        }
+        return undefined;
+      });
+      render(
+        <FederationProvider>
+          <NodeActionRequestsDialog />
+        </FederationProvider>,
+      );
+      const dialog = await screen.findByTestId("project-home-message-request");
+      expect(dialog.textContent).toContain("project home “web”");
+      expect(screen.getByTestId("project-home-message-body").textContent).toBe(
+        "Rebase the checkout on origin/main.",
+      );
+      expect(screen.getByTestId("project-home-reason").textContent).toBe(
+        "The user asked for their own checkout to be rebased.",
+      );
+      expect(resolved).toEqual([]);
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      await waitFor(() => expect(resolved).toEqual([{ requestId: "home-req", decision }]));
+      await waitFor(() =>
+        expect(screen.queryByTestId("project-home-message-request") === null).toBe(true),
+      );
+    });
+  }
+});

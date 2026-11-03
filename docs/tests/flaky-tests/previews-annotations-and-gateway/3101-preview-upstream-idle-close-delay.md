@@ -51,3 +51,23 @@ main at `62e99ff599cfcfa2bfdd23f907b8f05039925d63`, an explicit setup-node prelo
 also reproduced it in all ten repetitions (60 passed, ten failed, 6.72 s):
 `mise run test:logged -- --name r4-main-preview-preloaded -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --parallel=1 --rerun-each=10 --only-failures`.
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.szuLqe/r4-main-preview-preloaded.log.gz`.
+
+## R4 round 2 review preparation — 2026-11-03
+
+At `3aa4546421145ebee86ecc8890e545a08825b9ef`, `mise run test` repeated the
+same assertion after 837.95 ms, with four backend workers. Backend/root/web
+reported totals were 28,256 passed, two failed and 109 skipped. The other failure
+was the UI deadlines hook tracked in case 2711. Preparation evidence remains at
+`.orkestrator/review-artifacts/review-validation-0e5ecfc3-eaa5-4f5a-910f-d4fcb012f586/validation-04.stdout.txt`.
+
+The owning test and implementation still have no diff in `origin/main...HEAD`.
+A new detached worktree at `origin/main` commit
+`b58d401e1`, with its own `bun install --frozen-lockfile`, reproduced the exact
+assertion at lines 85/199 after 736.04 ms (six passed, one failed, 770 ms total):
+
+```sh
+mise run test:logged -- --name r4-main-preview-round2 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-upstream-pool.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.dr1x7z/r4-main-preview-round2.log.gz`.
+No unrelated code or test was changed; the temporary worktree was removed.

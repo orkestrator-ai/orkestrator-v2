@@ -91,7 +91,7 @@ test.afterEach(async ({ page }) => {
 
 type Platform = "cursor" | "pi" | "opencode" | "grok";
 type Vendor = {
-  cursor: Array<{ id: string; prompts: string[]; statuses: string[] }>;
+  cursor: Array<{ id: string; prompts: string[]; sent: string[]; statuses: string[] }>;
   cursorSdk: string[];
   pi: { calls: string[][]; startup: string[]; abortedRequests: string[] };
   grok: { sessions: Array<{ id: string; prompts: string[] }>; events: string[] };
@@ -337,6 +337,16 @@ for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
 
     await completeTurn(page, platform, first);
     await expect.poll(() => conversationsWith(request, platform, marker)).toEqual([[first]]);
+    if (platform === "cursor") {
+      // The vendor records the user's text with the bridge's instructions
+      // frame stripped; the SDK was still sent the frame after that text.
+      const [sent] = (await vendor(request)).cursor.find((a) => a.prompts.includes(first))!.sent;
+      expect(sent).toMatch(
+        new RegExp(
+          `^${first}\\n\\n<orkestrator-system-instructions>\\n[\\s\\S]+\\n</orkestrator-system-instructions>$`,
+        ),
+      );
+    }
 
     await closeTab(page, platform);
     if (platform === "opencode") {
@@ -719,10 +729,14 @@ test("steering a Cursor turn whose steer history is full is refused, the turn ca
   expect(filled.error).toBeUndefined();
   expect(filled.refused).toBe("steer-capacity-exceeded");
 
-  // The runtime panel says steering is full and the turn keeps running.
+  // The runtime panel says steering is full and the turn keeps running. The
+  // history was filled at the bridge, behind the backend's back, so the panel
+  // learns of it only when the backend's cached runtime health expires
+  // (`INTERACTIVE_RUNTIME_METADATA_TTL_MS`, 30 s from the session's first
+  // snapshot) and the next snapshot refreshes it. The deadline covers that TTL.
   await page.getByRole("button", { name: "Open agent information" }).click();
   await expect(page.getByTestId("agent-runtime-steer-saturated")).toBeVisible({
-    timeout: 30_000,
+    timeout: 60_000,
   });
   await expect(page.getByText("Steering is full for this turn")).toBeVisible();
   await page.keyboard.press("Escape");

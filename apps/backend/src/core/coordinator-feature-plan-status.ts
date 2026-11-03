@@ -165,6 +165,20 @@ export async function observeCoordinatorFeaturePlan(
   const { storage } = dependencies;
   const stored = await storage.kanban.getFeaturePlan(association.resourceId);
   const plan = stored?.projectId === association.projectId ? stored : null;
+  if (association.pending) {
+    // A crash may leave the reservation pending after the exchange attached.
+    // Missing operation evidence during startup is not evidence it ended.
+    if (
+      !plan ||
+      (plan.planning?.operationId !== operationId &&
+        !plan.messages.some((entry) => entry.id === operationId))
+    )
+      return;
+    await storage.coordinators.completeCoordinatorWorkflowAssociation(
+      association.id,
+      association.resourceId,
+    );
+  }
   const observed = featurePlanCoordinatorStatus(plan, operationId);
   if (!observed) return;
   if ("ended" in observed) {

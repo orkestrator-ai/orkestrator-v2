@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorRuntimeId,
+  type CoordinatorWorkflowAssociation,
+} from "@orkestrator/protocol/coordinator";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
@@ -108,8 +111,8 @@ async function followFeaturePlan(
   context: CommandContext,
   caller: CoordinatorCaller,
   input: { featureId: string; operationId: string; requestId: string },
-): Promise<void> {
-  await context.storage.coordinators.saveCoordinatorWorkflowAssociation({
+): Promise<CoordinatorWorkflowAssociation> {
+  const reservation = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
     id: randomUUID(),
     projectId: caller.projectId,
     coordinatorId: caller.coordinatorId,
@@ -120,6 +123,7 @@ async function followFeaturePlan(
     featurePlan: { operationId: input.operationId },
     createdAt: new Date().toISOString(),
   });
+  return reservation.association;
 }
 
 /** The connected node `nodeId` names; none for this node, even by its own ID. */
@@ -405,20 +409,46 @@ export function registerCoordinatorSurfaceActions(
           ).id;
         const operationId = `planning-coordinator-${key}`;
         // Before planning starts: a full workflow store refuses here, not after the turn began.
-        await followFeaturePlan(context, caller, { featureId: id, operationId, requestId });
-        const plan = await context.storage.kanban.getFeaturePlan(id);
-        if (
-          plan?.planning?.operationId === operationId ||
-          plan?.messages.some((entry) => entry.id === operationId)
-        )
-          return { featureId: id, phase: plan.planning?.phase ?? null, reused: true };
-        const planning = await run<JsonRecord>(context, "start_feature_planning", {
+        const association = await followFeaturePlan(context, caller, {
           featureId: id,
           operationId,
-          kind: "feature",
-          userMessage: message,
+          requestId,
         });
-        return { featureId: id, phase: planning.phase ?? null, reused: false };
+        const attached = (
+          plan: Awaited<ReturnType<typeof context.storage.kanban.getFeaturePlan>>,
+        ) =>
+          plan?.planning?.operationId === operationId ||
+          Boolean(plan?.messages.some((entry) => entry.id === operationId));
+        const plan = await context.storage.kanban.getFeaturePlan(id);
+        if (attached(plan)) {
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+            association.id,
+            id,
+          );
+          return { featureId: id, phase: plan?.planning?.phase ?? null, reused: true };
+        }
+        try {
+          const planning = await run<JsonRecord>(context, "start_feature_planning", {
+            featureId: id,
+            operationId,
+            kind: "feature",
+            userMessage: message,
+          });
+          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+            association.id,
+            id,
+          );
+          return { featureId: id, phase: planning.phase ?? null, reused: false };
+        } catch (error) {
+          // Release only a confirmed pre-start refusal. An attached exchange (or
+          // an unreadable plan) keeps its reservation for reconciliation/retry.
+          const current = await context.storage.kanban.getFeaturePlan(id);
+          if (!attached(current))
+            await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+              association.id,
+            );
+          throw error;
+        }
       },
     );
   });

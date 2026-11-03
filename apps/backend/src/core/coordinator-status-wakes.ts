@@ -1016,7 +1016,6 @@ export class CoordinatorStatusWakes {
         (association) =>
           association.kind === "feature-plan" &&
           association.projectId === projectId &&
-          !association.pending &&
           !association.terminalNotifiedAt,
       );
       if (owned.length === 0) return;
@@ -1101,7 +1100,7 @@ export class CoordinatorStatusWakes {
             association.kind === "graph-run" ||
             association.kind === "pull-request" ||
             association.kind === "feature-plan") &&
-          !association.pending &&
+          (!association.pending || association.kind === "feature-plan") &&
           !association.terminalNotifiedAt
         ) {
           await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(

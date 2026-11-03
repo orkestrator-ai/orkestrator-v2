@@ -533,3 +533,19 @@ and 12 failures in 55.33 s; other settling cases also failed during repeats.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.N5MP6P/baseline-catalogue-stress.log.gz`.
 The real 20 ms settle timer remains a hypothesis; no catalogue assertion or
 implementation was changed.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 1
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** waitFor timed out in a read already in flight when the settle timer fires does not settle the list (2038.58 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 1.3 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.

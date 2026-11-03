@@ -271,3 +271,19 @@ unconfirmed.
 - **Unchanged owner rerun:** `mise run test:logged -- --name merge-activity-batch-owner -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed, exit 0 (1.2 s).
 - **Evidence:** `orkestrator-test-run.LzSOdM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and enclosing `orkestrator-test-run.WvH9mv/merge-default-tests.log.gz` under the host temporary directory.
 - **Assessment:** unchanged owner passed in isolation; no implementation, assertion, deadline or skip changed. Timing or host contention remains a hypothesis. The aggregate remains non-green.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; package worker counts
+  were not retained in the compact review report.
+- **Failure:** Expected [POST, GET, GET], received [] (40.16 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-activity -- bun test --cwd apps/backend ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 2.0 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.

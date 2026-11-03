@@ -68,3 +68,19 @@ No assertion or timeout changed. The known wall-clock scheduling hypothesis
 remains unproven by this recurrence.
 
 Aggregate evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.6dWJ96/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 2
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** ERR_INVALID_STATE: Controller is already closed (126.41 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-stream -- bun test --cwd apps/desktop ./tests/backend-event-stream.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 0.3 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.

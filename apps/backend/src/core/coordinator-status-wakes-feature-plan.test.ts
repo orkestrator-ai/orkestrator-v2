@@ -6,9 +6,12 @@
  * skipped. Storage, routes, budgets and the injection drain are production
  * code; only the agents, the clock and the timers are simulated.
  */
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { FEATURE_PLANNING_RECORD_VERSION } from "@orkestrator/protocol/feature-planning";
+import type { CommandContext, CommandHandler } from "./commands-context.js";
+import { createCommandRegistry } from "./commands-registry.js";
+import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { featurePlanCoordinatorStatus } from "./coordinator-feature-plan-status.js";
 import {
@@ -156,6 +159,201 @@ async function association(current: MailWorld, operationId: string) {
   return (
     await current.storage.coordinators.listCoordinatorWorkflowAssociations(current.projectId)
   ).find((item) => item.id === `association-${operationId}`);
+}
+
+/** Real launch/receipt/association code; only the planner is controlled. */
+async function launcher(current: MailWorld, start: CommandHandler) {
+  const commands = createCommandRegistry();
+  commands.set("start_feature_planning", start);
+  const main = await current.main();
+  const context = {
+    storage: current.storage,
+    coordinators: current.coordinator,
+    runtime: { coordinatorRequests: new CoordinatorRequestFlights() },
+  } as CommandContext;
+  return (requestId = "launch") =>
+    commands.get("launch_coordinator_feature_plan")!(
+      {
+        scope: {
+          projectId: current.projectId,
+          coordinatorId: current.coordinatorId,
+          conversationId: main.conversationId,
+        },
+        input: { requestId, message: "Add dark mode" },
+      },
+      context,
+    );
+}
+
+for (const outcome of ["ready", "failed"] as const) {
+  test(`startup reconciliation preserves the eventual ${outcome} wake`, async () => {
+    const current = await createWorld();
+    current.coordinator.startStatusWakes();
+    const main = await current.main();
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let featureId = "";
+    let operationId = "";
+    const launch = await launcher(current, async (args) => {
+      featureId = args.featureId as string;
+      operationId = args.operationId as string;
+      entered.resolve();
+      await resume.promise;
+      await startPlanning(current, featureId, operationId);
+      return { phase: "running" };
+    });
+    const launching = launch();
+    try {
+      await entered.promise;
+      await settle(current);
+      await observeSaves(current);
+      const [pending] = await current.storage.coordinators.listCoordinatorWorkflowAssociations(
+        current.projectId,
+      );
+      expect(pending).toMatchObject({ pending: true });
+      expect(pending?.terminalNotifiedAt).toBeUndefined();
+      expect(current.wakes(main)).toBe(0);
+    } finally {
+      resume.resolve();
+      await launching;
+    }
+    if (outcome === "ready") await reply(current, featureId, operationId);
+    else await fail(current, featureId, operationId);
+    await settle(current);
+    await current.finishTurn(main);
+    await settle(current);
+    expect(current.wakes(main)).toBe(1);
+    expect(current.carriers(main)[0]![0]).toMatchObject({ notice: { state: outcome } });
+  });
+
+  test(`refused startup, reconciliation and a same-request retry deliver one ${outcome} wake`, async () => {
+    const current = await createWorld();
+    const main = await current.main();
+    let featureId = "";
+    let operationId = "";
+    const start = mock(async (args: Record<string, unknown>) => {
+      featureId = args.featureId as string;
+      operationId = args.operationId as string;
+      await startPlanning(current, featureId, operationId);
+      return { phase: "running" };
+    }).mockRejectedValueOnce(new Error("not ready"));
+    const launch = await launcher(current, start);
+    await expect(launch()).rejects.toThrow("not ready");
+    await settle(current);
+    expect(
+      await current.storage.coordinators.listCoordinatorWorkflowAssociations(current.projectId),
+    ).toHaveLength(0);
+    await launch();
+    expect(start.mock.calls[0]).toEqual(start.mock.calls[1]);
+    if (outcome === "ready") await reply(current, featureId, operationId);
+    else await fail(current, featureId, operationId);
+    await settle(current);
+    await current.finishTurn(main);
+    await settle(current);
+    expect(current.wakes(main)).toBe(1);
+    expect(current.carriers(main)[0]![0]).toMatchObject({ notice: { state: outcome } });
+  });
+}
+
+test("restart recovers an attached exchange whose association activation never landed", async () => {
+  const current = await createWorld();
+  const main = await current.main();
+  let featureId = "";
+  let operationId = "";
+  const launch = await launcher(current, async (args) => {
+    featureId = args.featureId as string;
+    operationId = args.operationId as string;
+    await startPlanning(current, featureId, operationId);
+    return { phase: "running" };
+  });
+  const complete = spyOn(
+    current.storage.coordinators,
+    "completeCoordinatorWorkflowAssociation",
+  ).mockRejectedValueOnce(new Error("activation write failed"));
+  try {
+    await expect(launch()).rejects.toThrow("activation write failed");
+  } finally {
+    complete.mockRestore();
+  }
+  const [pending] = await current.storage.coordinators.listCoordinatorWorkflowAssociations(
+    current.projectId,
+  );
+  expect(pending?.pending).toBe(true);
+  await current.restart();
+  await reply(current, featureId, operationId);
+  await settle(current);
+  await current.finishTurn(main);
+  await settle(current);
+  expect(current.wakes(main)).toBe(1);
+  const [recovered] = await current.storage.coordinators.listCoordinatorWorkflowAssociations(
+    current.projectId,
+  );
+  expect(recovered).toMatchObject({ pending: false, statusNotice: { key: "ready" } });
+});
+
+test("tool-v1 reports an applied reply before result consumption, once", async () => {
+  const current = await createWorld();
+  const main = await current.main();
+  const plan = await current.storage.kanban.createFeaturePlan(current.projectId, "tool-plan");
+  await associate(current, plan.id, "tool-op");
+  await startPlanning(current, plan.id, "tool-op");
+  await current.storage.kanban.mutateFeaturePlanning(plan.id, "tool-op", (plan, record) => {
+    record.resultTransport = "tool-v1";
+    record.phase = "persisting";
+    plan.messages.push({
+      id: "tool-reply",
+      role: "assistant",
+      content: "Ready",
+      createdAt: new Date().toISOString(),
+      stateApplication: "pending",
+    });
+  });
+  await settle(current);
+  expect(current.wakes(main)).toBe(0);
+  await current.storage.kanban.mutateFeaturePlanning(plan.id, "tool-op", (plan, record) => {
+    record.resultAppliedAt = new Date().toISOString();
+    plan.messages.find((message) => message.id === "tool-reply")!.stateApplication = "applied";
+  });
+  await settle(current);
+  expect(current.wakes(main)).toBe(1);
+  expect((await current.storage.kanban.getFeaturePlan(plan.id))?.planning).toMatchObject({
+    resultTransport: "tool-v1",
+    phase: "persisting",
+  });
+  await current.finishTurn(main);
+  await current.storage.kanban.mutateFeaturePlanning(plan.id, "tool-op", (_plan, record) => {
+    record.phase = "complete";
+  });
+  await current.storage.kanban.clearFeaturePlanning(plan.id, "tool-op");
+  await settle(current);
+  expect(current.wakes(main)).toBe(1);
+});
+
+for (const status of ["building", "built"] as const) {
+  test(`a reply superseded when the plan is ${status} never wakes ready`, async () => {
+    const current = await createWorld();
+    const main = await current.main();
+    const plan = await current.storage.kanban.createFeaturePlan(
+      current.projectId,
+      "superseded-plan",
+    );
+    await associate(current, plan.id, "superseded-op");
+    await startPlanning(current, plan.id, "superseded-op");
+    await current.storage.kanban.mutateFeaturePlanning(plan.id, "superseded-op", (plan) => {
+      plan.status = status;
+      plan.messages.push({
+        id: "superseded-reply",
+        role: "assistant",
+        content: "Old reply",
+        createdAt: new Date().toISOString(),
+        stateApplication: "superseded",
+      });
+    });
+    await current.storage.kanban.clearFeaturePlanning(plan.id, "superseded-op");
+    await settle(current);
+    expect(current.wakes(main)).toBe(0);
+    expect((await association(current, "superseded-op"))?.terminalNotifiedAt).toBeDefined();
+  });
 }
 
 describe("feature plan status wakes", () => {

@@ -51,3 +51,19 @@ the entire bridges group in `mise run test` (71.0 s); it reproduced the
 separate SSE exit-143 failure. This sighting confirms intermittency, but
 neither run reproduces the busy-fork defect on main, so independence is
 not claimed from these runs.
+
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 1
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** Expected HTTP 409, received 200 (366.08 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-fork -- bun test --cwd bridges/acp-bridge ./src/acp-fork.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 4.4 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.

@@ -405,10 +405,16 @@ kinds. I took the recommended options. Choices it left to me:
   coordinator's reply from the user's. Its request ID is
   `feature-plan:<requestId>`, so it cannot collide with another launch's
   association under the same `requestId`, and a retry finds the same record.
-- **Written before planning starts.** Inside the receipt, after the plan
-  exists and before `start_feature_planning`. A full workflow store then
-  refuses before a turn begins; a failed start leaves a record whose exchange
-  never began, which the observer ends without a wake.
+- **Task 3 review repair: reserve before planning starts (2026-11-03).**
+  Inside the receipt, after the plan exists and before `start_feature_planning`,
+  reserve a pending association so a full store refuses before a turn begins.
+  Activate after startup succeeds or the existing exchange is found; a
+  confirmed refusal before attachment releases the reservation. Reconciliation
+  ignores missing-operation evidence while pending and activates an attached
+  exchange after a crash. This retains admission before acting without
+  prematurely ending a follow. Writing an active association immediately
+  would be simpler but loses wakes during startup or a same-request retry;
+  writing it only after startup could refuse after work already began.
 - **Ready is found on the plan.** A successful exchange detaches its planning
   record, so ready means an applied assistant message after the exchange's
   own user message (id = operation id) and before the next user message. A

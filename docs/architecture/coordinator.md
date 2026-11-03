@@ -1471,7 +1471,12 @@ only delay. `launch_graph` takes no `nodeId`, and the observer skips a
 A feature plan is reduced by `featurePlanCoordinatorStatus`
 (`coordinator-feature-plan-status.ts`). A `feature-plan` association names
 one planning exchange (`featurePlan.operationId`); the plan takes many
-messages from the user and the coordinator. A successful exchange detaches
+messages from the user and the coordinator. Launch reserves a pending follow
+before starting the planner, then activates it after startup succeeds or an
+existing operation is found. Reconciliation leaves a pending follow alone
+until its operation is attached; it can activate an attached exchange after a
+backend restart. A confirmed pre-start refusal releases the reservation, so a
+same-request retry can reserve it again. A successful exchange detaches
 its planning record, so the reply is found on the plan: an applied assistant
 message after the exchange's own user message (whose id is the operation id),
 before the next user message. Plan saves announce the project id, so a save

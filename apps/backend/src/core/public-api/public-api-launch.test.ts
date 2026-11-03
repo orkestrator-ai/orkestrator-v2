@@ -147,6 +147,16 @@ describe("session.transcript", () => {
     ]);
     expect(newest.result.messages.at(-1)!.textTruncated).toBe(true);
     expect(newest.result.olderCursor).toBeDefined();
+    expect(newest.result.token).toEqual(expect.any(String));
+    const conditionalOlder = await harness.call("session.transcript", {
+      sessionId: started.result.sessionId,
+      limit: 5,
+      before: newest.result.olderCursor,
+      knownToken: newest.result.token,
+    });
+    expect(!conditionalOlder.ok && conditionalOlder.error.code).toBe("invalid-input");
+    // The same valid cursor works without knownToken: rejection above must
+    // enforce mutual exclusion rather than merely reject a malformed cursor.
     const older = await harness.call<PublicTranscriptPage>("session.transcript", {
       sessionId: started.result.sessionId,
       limit: 5,
@@ -226,14 +236,6 @@ describe("session.transcript", () => {
     if (!moved.ok) throw new Error(`${moved.error.code}: ${moved.error.message}`);
     expect(moved.result.messages.map((message) => message.id)).toEqual(["m-0", "m-1"]);
     expect(moved.result.token).not.toBe(token);
-
-    // Older pages have no token to compare.
-    const paged = await harness.call("session.transcript", {
-      sessionId,
-      knownToken: token,
-      before: "anything",
-    });
-    expect(!paged.ok && paged.error.code).toBe("invalid-input");
   });
 });
 

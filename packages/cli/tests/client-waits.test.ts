@@ -861,4 +861,90 @@ describe("transcript following", () => {
       gateway.requests.filter((request) => request.body.args.action === "capabilities"),
     ).toHaveLength(1);
   });
+
+  test.each([true, false])(
+    "--node follow uses the leaf's knownToken capability (%s), not the hub's",
+    async (leafSupportsToken) => {
+      const leaf = "bk_leaf";
+      const box = await createSandbox();
+      cleanups.push(() => box.cleanup());
+      let polls = 0;
+      const gateway = await startFakeGateway((request) => {
+        const { action, node, input } = request.body.args;
+        if (action === "capabilities") {
+          const own = capabilities();
+          return envelope(
+            publicSuccessEnvelope("capabilities", {
+              ...own,
+              features: {
+                ...own.features,
+                nodeRouting: true,
+                // Deliberately disagree so using the hub's flag fails either case.
+                ...(node === leaf
+                  ? leafSupportsToken && { transcriptKnownToken: true }
+                  : { transcriptKnownToken: !leafSupportsToken }),
+              },
+            }),
+          );
+        }
+        if (action === "session.transcript" && node === leaf) {
+          polls += 1;
+          const token = polls < 3 ? "t1" : "t2";
+          const knownToken = (input as { knownToken?: string }).knownToken;
+          if (!leafSupportsToken && knownToken !== undefined) {
+            return envelope(
+              publicErrorEnvelope("session.transcript", {
+                code: "invalid-input",
+                message: "This leaf does not accept knownToken",
+              }),
+            );
+          }
+          return envelope({
+            ...publicSuccessEnvelope(
+              "session.transcript",
+              leafSupportsToken && knownToken === token
+                ? { sessionId: "ses_eA", status: "unchanged", token }
+                : page(polls < 3 ? ["a", "b"] : ["a", "b", "c"], token),
+            ),
+            node: { nodeId: leaf, name: "Studio" },
+          });
+        }
+        return defaultResponder()(request);
+      });
+      cleanups.push(() => gateway.stop());
+      const dataDir = await box.publishDescriptor(gateway);
+      const added = await box.run([
+        "connection",
+        "add",
+        "local",
+        "--data-dir",
+        dataDir,
+        "--default",
+        "--no-check",
+      ]);
+      expect(added.code).toBe(0);
+      gateway.requests.length = 0;
+
+      const result = await box.run(["--node", leaf, ...FOLLOW, "2s"]);
+      expect(result.code).toBe(0);
+      expect(followed(result.out)).toEqual(["a", "b", "c"]);
+      expect(
+        gateway.requests
+          .filter((request) => request.body.args.action === "capabilities")
+          .map((request) => request.body.args.node),
+      ).toEqual([undefined, leaf]);
+      const transcriptRequests = gateway.requests.filter(
+        (request) => request.body.args.action === "session.transcript",
+      );
+      expect(transcriptRequests.length).toBeGreaterThanOrEqual(4);
+      expect(transcriptRequests.every((request) => request.body.args.node === leaf)).toBe(true);
+      const tokens = sentTokens(gateway);
+      expect(tokens.slice(0, 4)).toEqual(
+        leafSupportsToken ? [undefined, "t1", "t1", "t2"] : Array(4).fill(undefined),
+      );
+      expect(
+        tokens.slice(4).every((token) => token === (leafSupportsToken ? "t2" : undefined)),
+      ).toBe(true);
+    },
+  );
 });

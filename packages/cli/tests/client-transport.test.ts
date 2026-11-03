@@ -121,9 +121,17 @@ describe("authenticated transport", () => {
             }),
           ),
       );
-      expect(await transport.invoke("x", {}, { mutation: false })).toEqual({
-        text: "é".repeat(64),
-      });
+      // Count readers across all streams, including any replacement Response.
+      // The former read -> new Response -> read path acquires two readers.
+      const readers = spyOn(ReadableStream.prototype, "getReader");
+      try {
+        expect(await transport.invoke("x", {}, { mutation: false })).toEqual({
+          text: "é".repeat(64),
+        });
+        expect(readers).toHaveBeenCalledTimes(1);
+      } finally {
+        readers.mockRestore();
+      }
     }
   });
 
@@ -156,6 +164,48 @@ describe("authenticated transport", () => {
     expect(cancelled).toBe(true);
     // The stream may prefill its queue once; the client never drains it.
     expect(pulled).toBeLessThanOrEqual(1);
+  });
+
+  test("a safe read cancels a 401 body before refreshing its token and retrying once", async () => {
+    let pulled = 0;
+    let tokenReads = 0;
+    const events: string[] = [];
+    const authorizations: Array<string | null> = [];
+    const transport = new GatewayTransport(
+      {
+        baseUrl: "http://127.0.0.1:1",
+        identity: { name: "test", kind: "connection", endpoint: "test" },
+        readToken: async () => {
+          tokenReads += 1;
+          events.push(`token-${tokenReads}`);
+          return tokenReads === 1 ? "expired-token" : "rotated-token";
+        },
+      },
+      async (_url, init) => {
+        authorizations.push(new Headers(init.headers).get("authorization"));
+        events.push(`fetch-${authorizations.length}`);
+        if (authorizations.length === 2) return json({ result: { retried: true } });
+        return new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                pulled += 1;
+                controller.enqueue(new Uint8Array(1024));
+              },
+              cancel() {
+                events.push("cancel-401");
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status: 401 },
+        );
+      },
+    );
+    expect(await transport.invoke("x", {}, { mutation: false })).toEqual({ retried: true });
+    expect(authorizations).toEqual(["Bearer expired-token", "Bearer rotated-token"]);
+    expect(events).toEqual(["token-1", "fetch-1", "cancel-401", "token-2", "fetch-2"]);
+    expect(pulled).toBe(0);
   });
 
   test("request deadline includes a body stalled after headers", async () => {

@@ -481,3 +481,25 @@ This confirms another isolated pass but does not reproduce the timeout on the
 target branch or establish an environmental cause. The recorded aggregate
 failure remains unresolved; it is not excused as environmental. No unrelated
 implementation, timeout, assertion or skip changed.
+
+## Transcript follow review fixes — 2026-11-03
+
+- **Original command:** `mise run test` at `ca81bfd7fb1ba9a14c0e95b1c7104e51df522c82`;
+  root/support used one parallel worker alongside the other default groups.
+- **Failure:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
+  timed out after 5000 ms (5110.58 ms observed), with `report.status` null
+  instead of zero and an error between tests.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-be9d5c72-45fb-49aa-9d92-ed62c4c95458/validation-04.stdout.txt`,
+  lines 4099–4119. The original package and output remain unchanged.
+- **Suite counts:** root/support reported 3,480 passed, two failed and one
+  error across 3,482 tests in 173 files (316.49 s of test execution).
+- **Isolated rerun:** `mise run test:logged -- --name follow-review-disk-owner -- bun test tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed the complete unchanged owner (exit 0, 3.8 s). The logged runner
+  deleted passing output; per-test counts were not retained.
+- **Assessment:** confirmed recurrence, without a root-cause repair. The package
+  marks it `related` through an import of `packages/protocol/src/public-api.ts`;
+  that file's branch diff adds only an optional interface property. Neither the
+  owning test nor disk-report implementation changed. The import association
+  does not establish timeout causality, and the isolated pass does not excuse
+  the recorded failure as environmental. Leave it unresolved for verification;
+  no timeout, assertion, skip or implementation changed.

@@ -115,12 +115,12 @@ for (const grouping of ["project", "machine"] as const) {
       environments: {},
     });
     const heading = await screen.findByRole("button", { name: "Open Remote one on Machine A" });
-    expect(screen.queryByTestId("sidebar-drag-overlay")).toBeNull();
+    expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true);
     await startKeyboardDrag(heading);
     const overlay = await screen.findByTestId("sidebar-drag-overlay");
     expect(overlay.textContent).toBe("Remote one");
     fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
-    await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("sidebar-drag-overlay") === null).toBe(true));
   });
 }
 
@@ -158,13 +158,13 @@ for (const mode of ["project", "repository"] as const) {
       }
       const view = render(<List loading />);
       expect(screen.getByText("Loading projects...")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Add your first project" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Add your first project" }) === null).toBe(true);
       view.rerender(<List loading={false} />);
       expect(screen.getByText("No projects yet")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
       if (source === "remote") {
         view.rerender(<List loading shown={false} />);
-        expect(screen.queryByText("Loading projects...")).toBeNull();
+        expect(screen.queryByText("Loading projects...") === null).toBe(true);
         expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
       }
     });

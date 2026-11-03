@@ -126,9 +126,12 @@ const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
 
 function isolatedRunnerEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const environment = { ...process.env, ...overrides };
+  const environment = { ...process.env };
   delete environment[TEST_LOG_DIRECTORY_ENV];
-  return environment;
+  // CI raises the group deadline through this variable, and it takes
+  // precedence over a fixture's own timeoutMs.
+  delete environment[TEST_GROUP_TIMEOUT_MS_ENV];
+  return { ...environment, ...overrides };
 }
 
 describe("scripts/test-all.ts", () => {

@@ -247,7 +247,7 @@ describe("ProjectNotesView", () => {
       expect(editor.value).toBe("unsaved during failure");
       expect(editor.disabled).toBe(false);
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
       expect(editor.value).toBe("unsaved during failure");
       expect(editor.disabled).toBe(false);
     } finally {

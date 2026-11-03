@@ -183,5 +183,5 @@ describe("FeatureBuildFields build step speed", () => {
 test("customized Ship card describes the selected push-only delivery", () => {
   render(<Harness onModels={() => undefined} deliveryPolicy="push-no-pr" />);
   expect(screen.getByText("Pushes the branch. No pull request is opened.")).toBeTruthy();
-  expect(screen.queryByText("Pushes the branch and opens the pull request.")).toBeNull();
+  expect(screen.queryByText("Pushes the branch and opens the pull request.") === null).toBe(true);
 });

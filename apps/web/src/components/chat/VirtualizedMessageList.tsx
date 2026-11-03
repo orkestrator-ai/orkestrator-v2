@@ -636,6 +636,18 @@ export function VirtualizedMessageList<TMessage>({
     appliedOverscan.current.top = keepMounted?.top ?? 0;
     appliedOverscan.current.bottom = keepMounted?.bottom ?? 0;
   }, [appliedOverscan, keepMounted?.top, keepMounted?.bottom]);
+  // Growing the overscan mounts rows Virtuoso has only estimated; hold the
+  // reader's place while they are measured, so focusing a link (clicking a
+  // PR link that opens the side pane) does not move the conversation.
+  const heldOverscan = useRef<{ top: number; bottom: number } | null>(null);
+  useLayoutEffect(() => {
+    const previous = heldOverscan.current;
+    heldOverscan.current = keepMounted;
+    if (!keepMounted) return;
+    if (previous && keepMounted.top <= previous.top && keepMounted.bottom <= previous.bottom)
+      return;
+    controller?.holdPlaceAcrossOverscan();
+  }, [controller, keepMounted]);
 
   // Auto-follow pauses while the reader selects text here, uses find, or
   // has an expanded artifact or viewer open; it resumes when they stop.

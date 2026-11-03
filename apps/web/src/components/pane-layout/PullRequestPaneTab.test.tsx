@@ -119,10 +119,11 @@ test("reopening after failure waits for the pending new load and preserves a ter
     },
   });
   const url = "https://github.com/acme/widget/pull/42/files?view=split#diff-123";
-  createTerminalLinkActivator({ environmentId: "env", openExternal: async () => {} })(
-    { button: 0, ctrlKey: true, shiftKey: false, metaKey: false } as MouseEvent,
-    url,
-  );
+  createTerminalLinkActivator({
+    environmentId: "env",
+    sourceTabId: "terminal",
+    openExternal: async () => {},
+  })({ button: 0, ctrlKey: true, shiftKey: false, metaKey: false } as MouseEvent, url);
   render(
     <TooltipProvider>
       <FilesPanelPullRequests targetId="env" />

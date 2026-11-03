@@ -269,6 +269,43 @@ describe("transcript reading ownership", () => {
     expect(view.controller.wantsFollow).toBe(false);
   });
 
+  test("rows mounted above for a focused link do not move a settled reader", async () => {
+    const view = harness();
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    await frames();
+    expect(view.controller.currentOwner).toBeNull();
+    // A click on a link inside a row holds the pointer while focus moves.
+    view.row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    view.controller.holdPlaceAcrossOverscan();
+    expect(view.controller.currentOwner).toBe("reflow");
+    // Estimated rows measure shorter: everything below moves up, no scroll event.
+    view.changeHeightAbove(-464);
+    view.controller.notifyLayout("resize");
+    expect(view.row.getBoundingClientRect().top).toBe(80);
+    await frames();
+    expect(view.row.getBoundingClientRect().top).toBe(80);
+    expect(view.controller.currentOwner).toBeNull();
+    expect(view.controller.wantsFollow).toBe(false);
+    window.dispatchEvent(new PointerEvent("pointerup"));
+  });
+
+  test("keep-mounted growth holds neither a scrollbar drag nor a follower", async () => {
+    const follower = harness();
+    follower.controller.holdPlaceAcrossOverscan();
+    expect(follower.controller.currentOwner).toBeNull();
+
+    const view = harness();
+    view.controller.navigateTo({ kind: "row", index: 5, key: "k5", offsetPx: 80 }, "find");
+    await frames();
+    const writes = view.controller.diagnostics().writes;
+    view.scroller.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    view.controller.holdPlaceAcrossOverscan();
+    expect(view.controller.currentOwner).toBeNull();
+    await frames(1);
+    expect(view.controller.diagnostics().writes).toBe(writes);
+    window.dispatchEvent(new PointerEvent("pointerup"));
+  });
+
   test("history restoration holds the group when folding removes the captured member", async () => {
     const view = harness();
     view.row.innerHTML =

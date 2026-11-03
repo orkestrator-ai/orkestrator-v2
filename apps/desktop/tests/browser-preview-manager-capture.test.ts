@@ -344,6 +344,36 @@ describe("BrowserPreviewManager trusted capture", () => {
     expect(validateWebAnnotationCaptureInput(pending.capture).ok).toBe(true);
   });
 
+  test("an image is not spooled when the page could not finish looking for sensitive fields", async () => {
+    // The page scan ran out of budget (or nested past the shadow-root limit),
+    // so a field it never reached could be on screen unmasked.
+    for (const probe of [
+      { sensitive: [], sensitiveComplete: false },
+      { sensitive: [{ x: 10, y: 10, width: 100, height: 20 }], sensitiveComplete: false },
+      { sensitive: [] as unknown[] },
+    ]) {
+      const harness = createHarness();
+      const contents = await harness.attach();
+      const { sensitiveComplete: _complete, ...base } = contents.probe;
+      contents.probe = { ...base, ...probe };
+      await start(harness.manager);
+      contents.selection = elementSelection();
+
+      const status = await harness.manager.getCaptureStatus("browser-1");
+
+      if (status.status !== "captured")
+        throw new Error(`expected capture, got ${JSON.stringify(status)}`);
+      expect(status.pending.image).toBeNull();
+      const pending = (await harness.manager.readPendingCapture(status.captureId))!;
+      expect(pending.imageDataUrl).toBeNull();
+      expect(pending.capture.redaction).toMatchObject({
+        sensitiveRegionsMasked: 0,
+        imageExcluded: true,
+      });
+      expect(validateWebAnnotationCaptureInput(pending.capture).ok).toBe(true);
+    }
+  });
+
   test("an unmaskable image with no sensitive fields is still captured", async () => {
     const harness = createHarness();
     const contents = await harness.attach();

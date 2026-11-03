@@ -582,9 +582,10 @@ export class BrowserPreviewCaptureSessions {
           view.viewport,
           this.options.nativeImage,
         );
-        if (rects.length > 0 && !maskedImage.masked) {
+        if (!outcome.probe?.sensitiveComplete || (rects.length > 0 && !maskedImage.masked)) {
           // Sensitive fields (or redactions to reapply) are on screen and could
-          // not be painted over: keep text evidence only rather than spool pixels.
+          // not be painted over, or the page could not finish looking for them
+          // (budget, nesting): keep text evidence only rather than spool pixels.
           unmaskable = true;
         } else {
           sensitiveCount = sensitive.length;

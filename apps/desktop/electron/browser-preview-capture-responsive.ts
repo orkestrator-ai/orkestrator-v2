@@ -102,11 +102,13 @@ function responsiveProbe(
       state = resolution.state;
       rect = resolution.state === "matched" ? resolution.rect : null;
     }
+    const sensitive = kit.sensitiveScan();
     return JSON.stringify({
       viewport: { width: window.innerWidth, height: window.innerHeight },
       scroll: { x: window.scrollX, y: window.scrollY },
       devicePixelRatio: window.devicePixelRatio,
-      sensitive: kit.sensitiveRects(),
+      sensitive: sensitive.rects,
+      sensitiveComplete: sensitive.complete,
       rect,
       state,
       stable: quiet && fontsReady,
@@ -128,6 +130,8 @@ interface ResponsiveProbe {
   scroll: { x: number; y: number };
   devicePixelRatio: number;
   sensitive: WebAnnotationRect[];
+  /** False when the page could not rule out an unlisted sensitive field: keep no pixels. */
+  sensitiveComplete: boolean;
   rect: WebAnnotationRect | null;
 }
 
@@ -151,6 +155,7 @@ function parseResponsiveProbe(encoded: unknown): ResponsiveProbe | null {
   return {
     ...view,
     sensitive: sensitive as WebAnnotationRect[],
+    sensitiveComplete: parsed.sensitiveComplete === true,
     rect: rect as WebAnnotationRect | null,
   };
 }
@@ -255,6 +260,11 @@ export async function captureResponsiveSet(
         continue;
       }
       try {
+        if (!probe.sensitiveComplete) {
+          // A sensitive field may be on screen unlisted: keep no pixels.
+          fail(width, "unsupported");
+          continue;
+        }
         const masked = maskCaptureImage(image, probe.sensitive, probe.viewport, deps.nativeImage);
         if (probe.sensitive.length > 0 && !masked.masked) {
           fail(width, "unsupported");

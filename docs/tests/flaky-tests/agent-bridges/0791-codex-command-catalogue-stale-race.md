@@ -533,3 +533,21 @@ and 12 failures in 55.33 s; other settling cases also failed during repeats.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.N5MP6P/baseline-catalogue-stress.log.gz`.
 The real 20 ms settle timer remains a hypothesis; no catalogue assertion or
 implementation was changed.
+
+
+## CLI descriptor coverage review — 2026-11-03
+
+`mise run test:logged -- --name review-default-tests -- mise run test`
+ran after the descriptor-size coverage and scheduler-policy repair based on
+`1d85a718a`. Worker reservations were workspace/root/bridges/protocol 6/1/2/1;
+Codex used one test worker. The Codex package failed
+`a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay`
+at line 293 (125.89 ms): expected `stale`, received `ready`. Package totals:
+2,335 pass, 63 skip, one fail across 106 files (53.93 s).
+
+The complete unchanged owner passed alone (exit 0, 1.5 s):
+`mise run test:logged -- --name descriptor-review-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+Passing case counts were not retained by the logged runner. Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.GsDDP5/bridges.log.gz`.
+No catalogue implementation, assertion, timeout or skip changed. The real
+settle-timer race remains a hypothesis and this case stays open.

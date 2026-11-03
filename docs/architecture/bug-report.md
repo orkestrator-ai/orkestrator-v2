@@ -109,6 +109,11 @@ The renderer errors are recorded by `installRendererErrorRecorder` from the
 renderer entry, and the briefing tells the agent to redact them.
 **Capture window** captures the requesting page (the realm captures its own
 workspace) into `screenshots/` and attaches it to the next message.
+Pasted images use `write_bug_report_attachment` in both the assigned and
+unassigned composers. The command resolves the scratch directory from the
+stored report ID and writes a generated filename through the confined report
+writer. It accepts no root path; `read_local_file` and `write_local_file`
+remain restricted to registered local environments.
 Screenshots are never uploaded: the filed notice tells the user to drag them
 into the issue.
 

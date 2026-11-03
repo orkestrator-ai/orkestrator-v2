@@ -692,6 +692,14 @@ write and terminal calls when the policy denies them.
   (`get_claude_server_log`, `commands-registry-servers.ts:296-300`) are
   returned without `redactBridgeOutput`. Give internal tokens a prefix
   (e.g. `okb_`) and redact those tails.
+  **Status:** Fixed in part (2026-11-03). Tail redaction is done:
+  `boundDiagnosticTail` (`apps/backend/src/core/container-log-bounds.ts`)
+  now runs `redactBridgeOutput`, so every container log tail is scrubbed. That
+  covers the five `get_*_server_log` commands and the bridge startup-failure
+  error in `commands-containers.ts`. The byte and line caps are unchanged. A
+  token that the source's `tail -c` cut through has lost its prefix and is not
+  caught. Still open: the `okb_` prefix for internal tokens. Without it,
+  redaction cannot recognise a bridge, gateway or MCP token by its shape.
 
 ## 7. Controls reviewed that look correct
 

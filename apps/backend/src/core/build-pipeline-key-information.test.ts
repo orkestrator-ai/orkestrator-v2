@@ -401,7 +401,9 @@ describe("AgentToolsServer with a key information host", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  async function listTools(): Promise<Array<{ name: string; inputSchema?: unknown }>> {
+  async function listTools(): Promise<
+    Array<{ name: string; description?: string; inputSchema?: unknown }>
+  > {
     const { url, token } = server.connection("env-1", "project-1", "host");
     const response = await fetch(url, {
       method: "POST",
@@ -456,10 +458,38 @@ describe("AgentToolsServer with a key information host", () => {
     );
     expect(schema).not.toContain("$ref");
     expect(schema).not.toContain("$defs");
+    expect(schema).toContain("relevant alternatives with engineering pros and cons");
+    expect(schema).toContain("Do not perform reasoning extraction");
+    expect(schema).toContain("never private internal reasoning or chain of thought");
+    expect(schema).not.toContain("every option considered");
+    expect(tools.find((tool) => tool.name === "update_key_information")?.description).toContain(
+      "Do not perform reasoning extraction",
+    );
   });
 });
 
 describe("keyInformationInstruction", () => {
+  test("requests evidence-based decision summaries and excludes private reasoning in every brief stage", () => {
+    for (const phase of ["build", "fix", "address", "verify"] as const) {
+      const instruction = keyInformationInstruction(phase);
+      expect(instruction).toContain("material technical decisions");
+      expect(instruction).toContain("Do not perform reasoning extraction");
+      expect(instruction).toContain(
+        "do not disclose, reconstruct or request private internal reasoning",
+      );
+      expect(instruction).toContain("hidden deliberations or chain of thought");
+      expect(instruction).toContain("Do not invent alternatives");
+      expect(instruction).toContain("omit unsupported details");
+      expect(instruction).not.toContain("every option you considered");
+    }
+    expect(keyInformationInstruction("build")).toContain(
+      "relevant alternatives with their engineering pros and cons",
+    );
+    expect(keyInformationInstruction("build")).toContain(
+      "brief justification tied to requirements",
+    );
+  });
+
   test("asks Build, Fix, Address and Verify to keep the brief, and no other stage", () => {
     expect(keyInformationInstruction("build")).toContain("`framing`");
     expect(keyInformationInstruction("build")).toContain("pros and cons");

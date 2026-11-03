@@ -1,5 +1,5 @@
 import { gitHubCli } from "./github-cli-binary.js";
-import { gitHubCliEnv } from "./github-credentials.js";
+import { gitHubCliEnv, gitHubCredentialSource } from "./github-credentials.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 import type { PrDetection, PrMonitorKanbanTask, PrMonitorTarget } from "./pr-monitor.js";
@@ -32,6 +32,12 @@ import {
   type PrRequiredChecksCache,
 } from "./pr-required-checks.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
+import {
+  prBatchMember,
+  type PrBatchGroup,
+  type PrBatchReading,
+  type PrMonitorBatchReader,
+} from "./commands-pr-monitor-batch.js";
 
 export type StoredKanbanTask = Awaited<ReturnType<KanbanStorage["getKanbanTasks"]>>[number];
 
@@ -114,8 +120,8 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
       target.prUrl,
       "--json",
       target.projectHome
-        ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,headRefName,baseRefName,isCrossRepository"
-        : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,baseRefName",
+        ? "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,headRefName,baseRefName,isCrossRepository"
+        : "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName",
     ];
     return {
       args,
@@ -210,6 +216,59 @@ async function withRequiredFailures(
     parsePrRequiredChecks(await runGh(args), headSha, failing),
   );
   return requiredFailed === null ? summary : { ...summary, requiredFailed };
+}
+
+/**
+ * The activity signals of a known PR's lookup, for the monitor's quiet
+ * backoff: GitHub's `updatedAt` and whether GitHub's own auto-merge is armed.
+ * Absent from branch discovery, which does not feed the backoff.
+ */
+export function prMonitorActivity(
+  request: PrMonitorDetectionRequest,
+  stdout: string,
+): Pick<PrDetection, "updatedAt" | "autoMergeRequested"> {
+  if (!request.knownPrUrl) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const { updatedAt, autoMergeRequest } = parsed as Record<string, unknown>;
+  return {
+    ...(typeof updatedAt === "string" ? { updatedAt } : {}),
+    ...(autoMergeRequest === null
+      ? { autoMergeRequested: false }
+      : typeof autoMergeRequest === "object" && autoMergeRequest !== undefined
+        ? { autoMergeRequested: true }
+        : {}),
+  };
+}
+
+function parseMonitorDetection(
+  request: PrMonitorDetectionRequest,
+  stdout: string,
+): (PrDetectionResult & Pick<PrDetection, "updatedAt" | "autoMergeRequested">) | null {
+  const parsed = parsePrMonitorDetectionResponse(request, stdout);
+  return parsed ? { ...parsed, ...prMonitorActivity(request, stdout) } : null;
+}
+
+/**
+ * The batch group of a local known-PR lookup: one per GitHub host and
+ * Settings credential source. Every local `gh` run uses that credential
+ * (`gitHubCliEnv`), so members provably share it; containers never batch.
+ * Null for a PR a batch cannot name (another host).
+ */
+export async function localPrBatchGroup(
+  prUrl: string,
+  storage: StorageService | undefined,
+): Promise<PrBatchGroup | null> {
+  const repository = prViewerRepository(prUrl);
+  if (!repository || !prBatchMember(prUrl)) return null;
+  const global = (await storage?.loadConfig())?.global;
+  const source = global ? gitHubCredentialSource(global) : "host-cli";
+  return { key: `local-gh:${repository.host}:${source}`, host: repository.host };
 }
 
 export function parsePrMonitorDetectionResponse(
@@ -343,6 +402,14 @@ export async function detectEnvironmentPullRequest(
     viewerPermissions?: PrViewerPermissionCache;
     /** Fills the check summary's `requiredFailed` when a check fails; omitted, it stays absent. */
     requiredChecks?: PrRequiredChecksCache;
+    /**
+     * Reads a local open PR together with the others of its host and
+     * credential (`commands-pr-monitor-batch.ts`); omitted, every lookup is
+     * its own `gh pr view`. Containers never batch.
+     */
+    batch?: PrMonitorBatchReader;
+    /** Skip a shared reading: someone is waiting on GitHub's current answer. */
+    fresh?: boolean;
   } = {},
 ): Promise<PrDetection | null> {
   if (target.projectHome) {
@@ -367,13 +434,26 @@ export async function detectEnvironmentPullRequest(
   const request = getPrMonitorDetectionRequest(detectionTarget);
   if (target.kind === "local") {
     if (!target.worktreePath) throw new Error("Local environment has no worktree path");
-    const { stdout } = await runCommand(gitHubCli(), request.args, {
-      cwd: target.worktreePath,
-      timeoutMs: PR_DETECTION_TIMEOUT_MS,
-      env: await gitHubCliEnv(options.storage),
-    });
+    const batch =
+      options.batch && request.knownPrUrl
+        ? await localPrBatchGroup(request.knownPrUrl, options.storage)
+        : null;
+    let reading: PrBatchReading | null = null;
+    if (batch && options.batch && request.knownPrUrl) {
+      reading = await options.batch.read(batch, request.knownPrUrl, { fresh: options.fresh });
+      if (!reading) options.batch.forget(batch, request.knownPrUrl);
+    }
+    const stdout = reading
+      ? JSON.stringify(reading.pullRequest)
+      : (
+          await runCommand(gitHubCli(), request.args, {
+            cwd: target.worktreePath,
+            timeoutMs: PR_DETECTION_TIMEOUT_MS,
+            env: await gitHubCliEnv(options.storage),
+          })
+        ).stdout;
     const worktreePath = target.worktreePath;
-    const parsed = parsePrMonitorDetectionResponse(request, stdout);
+    const parsed = parseMonitorDetection(request, stdout);
     if (!parsed) return null;
     const detection = await withViewerPermission(
       parsed,
@@ -402,9 +482,21 @@ export async function detectEnvironmentPullRequest(
             env: await gitHubCliEnv(options.storage),
           })
         ).stdout;
+      // The batch read the rollup with the head it describes; otherwise it
+      // stays the separate per-PR read.
+      const batchRollup =
+        reading?.rollup && reading.pullRequest.headRefOid === detection.headSha
+          ? JSON.stringify({
+              headRefOid: reading.pullRequest.headRefOid,
+              statusCheckRollup: reading.rollup,
+            })
+          : null;
       const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
         withRequiredFailures(
-          parsePrMonitorCheckRollup(await runGh(checkRequest.args, 10_000), detection.headSha),
+          parsePrMonitorCheckRollup(
+            batchRollup ?? (await runGh(checkRequest.args, 10_000)),
+            detection.headSha,
+          ),
           detection.url,
           options.requiredChecks,
           (args) => runGh(args, PR_REQUIRED_CHECKS_TIMEOUT_MS),
@@ -428,7 +520,7 @@ export async function detectEnvironmentPullRequest(
     PR_DETECTION_TIMEOUT_MS,
   );
   const containerId = target.containerId;
-  const parsed = parsePrMonitorDetectionResponse(request, output);
+  const parsed = parseMonitorDetection(request, output);
   if (!parsed) return null;
   const detection = await withViewerPermission(parsed, target, options.viewerPermissions, (args) =>
     dockerExec(
@@ -492,6 +584,7 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
     prMergeability: environment.prMergeability ?? null,
     projectHome: environment.projectHome,
+    ...(environment.autoMerge === true ? { autoMerge: true } : {}),
   };
 }
 

@@ -106,6 +106,8 @@ export interface PrMonitorTarget {
   hasMergeConflicts: boolean | null;
   /** Persisted GitHub merge state; absent from targets built before it existed. */
   prMergeability?: GitHubPullRequestMergeability | null;
+  /** The environment's auto-merge switch (`pr-auto-merge.ts`); its PR is never polled slowly. */
+  autoMerge?: boolean;
 }
 
 /**
@@ -151,11 +153,21 @@ export interface PrDetection {
    * observation did not look (a repair, or a terminal PR).
    */
   viewerCanMerge?: boolean | null;
+  /** GitHub's `updatedAt` for a known PR; absent when the lookup did not return it. */
+  updatedAt?: string;
+  /** Whether GitHub's own auto-merge is armed; absent when unknown. */
+  autoMergeRequested?: boolean;
 }
 
 export interface PrMonitorDetectionOptions {
   /** Whether this detection should also pay for the separate check-rollup query. */
   includeCheckSummary: boolean;
+  /**
+   * Present (true) when a user, a pending intent or an agent completion is
+   * waiting on GitHub's current answer, so a reading shared with other PRs
+   * a few seconds ago will not do.
+   */
+  fresh?: true;
 }
 
 /** The slice of a kanban task the reconciliation side effects need. */
@@ -326,6 +338,20 @@ interface PrMonitorEntry {
   restoreJitter: boolean;
   /** Restored by reconciliation: spread the first terminal discovery over a period. */
   spreadFirstDiscovery: boolean;
+  /**
+   * Monotonic time the PR last showed activity: a changed reading, a new
+   * `updatedAt`, or any wake. An open PR quiet for long enough is polled at
+   * the slower quiet cadence (`isQuiet`).
+   */
+  lastActivityAt: number;
+  /** What the last reading said, compared to notice activity. */
+  activityKey: string | null;
+  /** The last attempted rollup read succeeded, so `checkSummary` is a real answer. */
+  rollupKnown: boolean;
+  /** GitHub's `updatedAt` from the last reading that carried one. */
+  updatedAt: string | null;
+  /** GitHub's own auto-merge, from the last reading that said. */
+  autoMergeRequested: boolean | null;
 }
 
 export class PrMonitorService {
@@ -400,6 +426,7 @@ export class PrMonitorService {
         // Storage is authoritative for the persisted PR fields; the entry's
         // copy exists so a check can see what the previous reading was.
         const policyBefore = this.policyOf(entry);
+        const quietBefore = this.isQuiet(entry);
         const targetChanged = this.replaceTarget(entry, target);
         if (targetChanged && entry.lastEmitted) this.emitState(entry);
         if (!target.ready && entry.active) this.pause(target.environmentId);
@@ -411,6 +438,9 @@ export class PrMonitorService {
         ) {
           // Storage moved a quiet terminal entry to another lifecycle (a
           // replacement PR stored by another path): leave the five-minute wait.
+          this.scheduleNext(entry);
+        } else if (entry.active && !entry.checkInProgress && quietBefore && !this.isQuiet(entry)) {
+          // Auto-merge turned on (or the PR changed): leave the quiet wait.
           this.scheduleNext(entry);
         } else if (target.ready && !entry.active) {
           entry.active = true;
@@ -477,6 +507,18 @@ export class PrMonitorService {
     const entry = this.entries.get(environmentId);
     if (!entry || !entry.active) return;
     this.wakeEntry(entry, reason);
+  }
+
+  /**
+   * A reading shared with other PRs showed this environment's PR changed.
+   * A quiet entry checks now, as an ordinary background check (it reads the
+   * shared reading rather than asking GitHub again); an entry on the normal
+   * cadence is due soon anyway and is left alone.
+   */
+  noteSharedActivity(environmentId: string): void {
+    const entry = this.entries.get(environmentId);
+    if (!entry || !entry.active || entry.checkInProgress || !this.isQuiet(entry)) return;
+    this.scheduleNext(entry, 0);
   }
 
   /**
@@ -693,6 +735,11 @@ export class PrMonitorService {
       cooldownUntil: 0,
       restoreJitter: behaviour.restored === true,
       spreadFirstDiscovery: behaviour.restored === true,
+      lastActivityAt: now,
+      activityKey: null,
+      rollupKnown: false,
+      updatedAt: null,
+      autoMergeRequested: null,
     };
     this.entries.set(target.environmentId, entry);
     // Probes stay unannounced until they find something, so a probe that finds
@@ -726,6 +773,8 @@ export class PrMonitorService {
    * pass afterwards, which `performCheck`'s coalescing arranges.
    */
   private wakeEntry(entry: PrMonitorEntry, reason: PrMonitorWakeReason): void {
+    // Someone is acting on this PR: it is not quiet, whatever GitHub says.
+    entry.lastActivityAt = this.options.monotonicNow();
     if (entry.phase === "waiting") {
       this.raiseWaitingPriority(entry, reason);
       return;
@@ -781,6 +830,7 @@ export class PrMonitorService {
         consecutiveErrors: entry.consecutiveErrors,
         repairFailures: entry.repairFailures,
         restored,
+        quiet: this.isQuiet(entry),
         random: this.sample(),
       },
       this.policy,
@@ -790,6 +840,22 @@ export class PrMonitorService {
       delay = Math.max(delay, this.cooldownRemaining(entry, this.options.monotonicNow()));
     }
     return delay;
+  }
+
+  /**
+   * An open PR nobody is acting on: no activity for `quietAfterMs`, a
+   * successful rollup with nothing pending, known mergeability, and neither
+   * Orkestrator's nor GitHub's auto-merge waiting on it. A finishing check
+   * need not change `updatedAt`, so pending checks and auto-merge keep the
+   * normal cadence. Any wake ends it.
+   */
+  private isQuiet(entry: PrMonitorEntry): boolean {
+    if (this.policyOf(entry) !== "open" || entry.mode !== "normal") return false;
+    if (entry.target.prState !== "open" || entry.target.hasMergeConflicts === null) return false;
+    if (entry.consecutiveErrors > 0 || entry.recheckRequested || entry.wake) return false;
+    if (entry.target.autoMerge === true || entry.autoMergeRequested !== false) return false;
+    if (!entry.rollupKnown || (entry.checkSummary?.pending ?? 0) > 0) return false;
+    return this.options.monotonicNow() - entry.lastActivityAt >= this.policy.quietAfterMs;
   }
 
   /** Lifecycle observation policy; see `pr-monitor-policy.ts`. */
@@ -952,8 +1018,12 @@ export class PrMonitorService {
           entry.mode !== "merge-pending" &&
           (entry.lastCheckSummaryAt === null ||
             startedAt - entry.lastCheckSummaryAt >= PR_CHECK_SUMMARY_REFRESH_INTERVAL_MS);
+        const fresh = wake !== null || policy === "merge-pending" || policy === "create-pending";
         detection = await this.metrics.observe("pr-detection", () =>
-          this.options.effects.detect(detectionTarget, { includeCheckSummary }),
+          this.options.effects.detect(detectionTarget, {
+            includeCheckSummary,
+            ...(fresh ? { fresh: true as const } : {}),
+          }),
         );
         if (includeCheckSummary && detection?.checkSummaryStatus !== "skipped") {
           entry.lastCheckSummaryAt = startedAt;
@@ -1329,11 +1399,22 @@ export class PrMonitorService {
     if (detection.url !== previous.prUrl || detection.state !== "open") {
       entry.checkSummary = null;
     }
+    if (detection.url !== previous.prUrl || detection.state !== "open") {
+      entry.rollupKnown = false;
+      entry.updatedAt = null;
+      entry.autoMergeRequested = null;
+    }
     if (detection.checkSummaryStatus === "failed") {
       entry.checkSummary = null;
+      entry.rollupKnown = false;
     } else if (detection.checkSummaryStatus === "succeeded") {
       entry.checkSummary =
         detection.checkSummary && detection.checkSummary.total > 0 ? detection.checkSummary : null;
+      entry.rollupKnown = true;
+    }
+    if (detection.updatedAt !== undefined) entry.updatedAt = detection.updatedAt;
+    if (detection.autoMergeRequested !== undefined) {
+      entry.autoMergeRequested = detection.autoMergeRequested;
     }
     // Only a head with checks read for that head can authorize unattended merge.
     entry.headSha =
@@ -1346,7 +1427,29 @@ export class PrMonitorService {
     if (detection.state === "open" && detection.viewerCanMerge !== undefined) {
       entry.viewerCanMerge = detection.viewerCanMerge;
     }
+    this.noteActivity(entry, detection);
     return transition;
+  }
+
+  /** Resets the quiet clock when anything the reading shows has moved. */
+  private noteActivity(entry: PrMonitorEntry, detection: PrDetection): void {
+    const summary = entry.checkSummary;
+    const key = JSON.stringify([
+      detection.url,
+      detection.state,
+      detection.hasMergeConflicts,
+      entry.target.prMergeability ?? null,
+      detection.baseBranch ?? null,
+      detection.headSha ?? null,
+      entry.updatedAt,
+      entry.autoMergeRequested,
+      entry.rollupKnown,
+      summary ? [summary.passed, summary.total, summary.pending] : null,
+    ]);
+    if (key !== entry.activityKey) {
+      if (entry.activityKey !== null) entry.lastActivityAt = this.options.monotonicNow();
+      entry.activityKey = key;
+    }
   }
 
   private async applyNotFound(entry: PrMonitorEntry, generation: number): Promise<void> {

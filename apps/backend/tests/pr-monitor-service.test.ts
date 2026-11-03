@@ -533,7 +533,9 @@ describe("PrMonitorService", () => {
     createHarnessInstance.setDetect(async () => null);
     createHarnessInstance.service.requestMode(target(), "create-pending");
     await createHarnessInstance.fireNext();
-    expect(createHarnessInstance.calls.detectOptions).toEqual([{ includeCheckSummary: true }]);
+    expect(createHarnessInstance.calls.detectOptions).toEqual([
+      { includeCheckSummary: true, fresh: true },
+    ]);
   });
 
   test("does not consume the CI throttle when primary PR detection throws", async () => {
@@ -659,7 +661,7 @@ describe("PrMonitorService", () => {
       prUrl: "https://github.com/org/repo/pull/3",
       checkSummary: { passed: 2, total: 3, pending: 1 },
     });
-    expect(harness.calls.detectOptions).toEqual([{ includeCheckSummary: true }]);
+    expect(harness.calls.detectOptions).toEqual([{ includeCheckSummary: true, fresh: true }]);
     expect(harness.pendingDelays()).toEqual([20_000]);
   });
 

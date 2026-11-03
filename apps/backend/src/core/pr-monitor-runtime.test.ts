@@ -321,3 +321,53 @@ test("a merge permission error clears the cached answer for that PR's repository
     runtime.shutdown();
   }
 });
+
+test("syncs queued behind a running one share one storage read (BG-13)", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let started!: () => void;
+  const firstLoad = new Promise<void>((resolve) => (started = resolve));
+  let loads = 0;
+  const loadEnvironments = mock(async () => {
+    loads += 1;
+    if (loads === 1) {
+      started();
+      await gate;
+    }
+    return [];
+  });
+  const context: CommandContext = {
+    runtime,
+    storage: { loadEnvironments } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  };
+  try {
+    const running = runtime.prMonitor.sync(context);
+    await firstLoad;
+    // Every `get_environments` asks for a sync; the queued ones are one.
+    const queued = [1, 2, 3].map(() => runtime.prMonitor.sync(context));
+    // A sync after an invalidation must not join a sync that will be discarded.
+    runtime.prMonitor.invalidatePendingSync();
+    const afterInvalidation = runtime.prMonitor.sync(context);
+    release();
+    await Promise.all([running, ...queued, afterInvalidation]);
+    expect(loads).toBe(3);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("a credential rotation also drops the PR batch readings of that scope", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const invalidate = spyOn(runtime.prMonitor.prBatches, "invalidate");
+  try {
+    await runtime.prMonitor.viewerPermissions.rotateScope("local-gh", async () => undefined);
+    expect(invalidate.mock.calls).toEqual([["local-gh"], ["local-gh"]]);
+  } finally {
+    runtime.shutdown();
+  }
+});

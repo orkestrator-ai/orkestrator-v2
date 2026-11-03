@@ -21,9 +21,15 @@ import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-wor
  * | `merge-pending`      | a client asked for merge confirmation                       | detection             | 1 s                            |
  * | `create-pending`     | a client asked for creation confirmation                    | detection             | 5 s                            |
  * | `provisional`        | one-shot discovery after an agent completion edge           | detection             | immediate, then retired        |
- * | `open`               | an open PR (or one whose persistence is still pending)      | detection             | 20 s                           |
+ * | `open`               | an open PR (or one whose persistence is still pending)      | detection             | 20 s; 2 min once quiet (below) |
  * | `terminal-repair`    | merged/closed, local obligations not yet confirmed settled  | local repair (no gh)  | 20 s, own backoff              |
  * | `terminal-discovery` | merged/closed and every obligation settled                  | branch discovery      | 5 min (+ bounded jitter)       |
+ *
+ * An open PR is *quiet* when its reading has not moved for `quietAfterMs`, its
+ * last rollup succeeded with nothing pending, its mergeability is known and no
+ * auto-merge (Orkestrator's or GitHub's) waits on it. Quiet PRs are polled at
+ * `quietIntervalMs`; any wake, a changed reading, or a change seen in a
+ * shared batch reading returns them to 20 s at once.
  *
  * Every policy is recomputed from runtime state after each action; nothing
  * here is persisted. An immediate explicit refresh, a new pending intent and an
@@ -63,6 +69,12 @@ export interface PrMonitorPolicyConfig {
   maxReconciliationKeys: number;
   /** Bound on remembered shared cooldown scopes. */
   maxCooldownScopes: number;
+  /** An open PR whose reading has not moved for this long may be polled slowly. */
+  quietAfterMs: number;
+  /** Poll interval of a quiet open PR. Never below the normal interval. */
+  quietIntervalMs: number;
+  /** Bounded jitter added to every quiet poll so quiet PRs do not align. */
+  quietJitterMs: number;
 }
 
 export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
@@ -75,6 +87,9 @@ export const DEFAULT_PR_MONITOR_POLICY: Readonly<PrMonitorPolicyConfig> = {
   maxRetryAfterMs: 60 * 60_000,
   maxReconciliationKeys: 8,
   maxCooldownScopes: 64,
+  quietAfterMs: 15 * 60_000,
+  quietIntervalMs: 2 * 60_000,
+  quietJitterMs: 15_000,
 };
 
 export function resolvePrMonitorPolicy(
@@ -105,6 +120,12 @@ export function resolvePrMonitorPolicy(
       defaults.maxReconciliationKeys,
     ),
     maxCooldownScopes: positiveInteger(merged.maxCooldownScopes, defaults.maxCooldownScopes),
+    quietAfterMs: nonNegative(merged.quietAfterMs, defaults.quietAfterMs),
+    quietIntervalMs: Math.max(
+      PR_MONITOR_INTERVALS_MS.normal,
+      nonNegative(merged.quietIntervalMs, defaults.quietIntervalMs),
+    ),
+    quietJitterMs: nonNegative(merged.quietJitterMs, defaults.quietJitterMs),
   };
 }
 
@@ -132,6 +153,8 @@ export interface DelayInput {
   repairFailures: number;
   /** First schedule after reconciliation restored or resumed the entry. */
   restored: boolean;
+  /** An open PR nobody is acting on (see the table above); only `open` reads it. */
+  quiet?: boolean;
   /** A uniform sample in [0, 1). */
   random: number;
 }
@@ -142,6 +165,9 @@ export interface DelayInput {
  */
 export function backgroundDelay(input: DelayInput, config: PrMonitorPolicyConfig): number {
   const sample = Math.min(Math.max(input.random, 0), 0.999_999);
+  if (input.policy === "open" && input.quiet && input.consecutiveErrors <= 0) {
+    return config.quietIntervalMs + Math.floor(sample * config.quietJitterMs);
+  }
   switch (input.policy) {
     case "terminal-discovery": {
       const backedOff = getEffectivePrMonitorInterval("normal", input.consecutiveErrors);

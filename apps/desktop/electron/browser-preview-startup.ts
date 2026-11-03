@@ -131,6 +131,8 @@ export function initializeBrowserPreviews({
     browserPreviewOnly: true,
     previewViewUrl: (webContentsId) =>
       webContentsId === undefined ? undefined : manager.requestedUrlForWebContents(webContentsId),
+    previewViewEnvironment: (webContentsId) =>
+      webContentsId === undefined ? null : manager.environmentForWebContents(webContentsId),
   });
   return { manager, browserSession };
 }

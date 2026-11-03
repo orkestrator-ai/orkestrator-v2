@@ -86,7 +86,10 @@ export class GatewayContext {
     perBackend: 128,
   });
   readonly browserPreviewHeadersTimeoutMs: number;
-  readonly legacyPreviewPortAccess: (port: number) => Promise<LegacyLoopbackPortAccess>;
+  readonly legacyPreviewPortAccess: (
+    port: number,
+    environmentId: string | null,
+  ) => Promise<LegacyLoopbackPortAccess>;
   servers = new Set<Server>();
   /** Set once the loopback client listener is serving. */
   loopbackClientUrl: string | null = null;
@@ -147,7 +150,7 @@ export class GatewayContext {
     this.legacyPreviewPortAccess =
       options.legacyPreviewPortAccess ??
       (previews
-        ? (port) => previews.legacyLoopbackPortAccess(port)
+        ? (port, environmentId) => previews.legacyLoopbackPortAccess(port, environmentId)
         : async () => "unknown" as const);
     this.previewMetrics = this.previews?.metrics ?? new PreviewMetrics();
     if (this.previews) {

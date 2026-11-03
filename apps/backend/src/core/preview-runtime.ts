@@ -70,8 +70,12 @@ export interface PreviewRuntimeOptions {
   listenerOwnership?: ConstructorParameters<typeof PreviewTargetResolver>[0]["listenerOwnership"];
 }
 
-/** Answer for a legacy loopback-route port: see `PreviewRuntime.legacyLoopbackPortAccess`. */
-export type LegacyLoopbackPortAccess = "allowed" | "reserved" | "unknown";
+/**
+ * Answer for a legacy loopback-route port: see
+ * `PreviewRuntime.legacyLoopbackPortAccess`. `unscoped` means the request
+ * named no environment (an older desktop app).
+ */
+export type LegacyLoopbackPortAccess = "allowed" | "reserved" | "unknown" | "unscoped";
 
 const defaultDockerRunner: DockerRunner = (args, { timeoutMs }) =>
   runCommand("docker", args, { timeoutMs });
@@ -226,17 +230,23 @@ export class PreviewRuntime {
 
   /**
    * Whether the legacy `/__orkestrator/browser/loopback/<port>/` route may open
-   * this backend-host port. Only the verified binding of an enabled service
-   * qualifies, so the route can no longer reach a bridge, the gateway or an
-   * unrelated host-only service (security report M2). The request names no
-   * environment, so a port is admitted for whichever environment owns it.
+   * this backend-host port for the requesting environment. Only the verified
+   * binding of an enabled service of that same environment qualifies, so the
+   * route can no longer reach a bridge, the gateway, an unrelated host-only
+   * service or another environment's application (security report M2).
    */
-  async legacyLoopbackPortAccess(port: number): Promise<LegacyLoopbackPortAccess> {
+  async legacyLoopbackPortAccess(
+    port: number,
+    environmentId: string | null,
+  ): Promise<LegacyLoopbackPortAccess> {
     if (isAlwaysReservedPort(port)) return "reserved";
     // A stopped environment's agent ports stay reserved while free, so a
     // container could publish one; the reserved set wins over a binding.
     if ((await this.reservedPorts()).has(port)) return "reserved";
-    return (await this.registry.hostLoopbackTargetOwner(port)) === null ? "unknown" : "allowed";
+    if (environmentId === null) return "unscoped";
+    return (await this.registry.isHostLoopbackTargetOf(environmentId, port))
+      ? "allowed"
+      : "unknown";
   }
 
   private envFlag(name: string): boolean | undefined {

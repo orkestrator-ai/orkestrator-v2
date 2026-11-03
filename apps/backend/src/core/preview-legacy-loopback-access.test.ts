@@ -4,8 +4,8 @@ import { createPreviewHarness, type PreviewHarness } from "./preview-test-suppor
 
 /**
  * Which backend-host ports the legacy `browser/loopback/<port>/` route may
- * open (security report M2): only the verified binding of an enabled service,
- * never a reserved port.
+ * open (security report M2): only the verified binding of an enabled service
+ * of the requesting environment, never a reserved port.
  */
 describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
   let harness: PreviewHarness;
@@ -46,30 +46,47 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
     publish("a", "container-a", { 3000: 49152, 8080: 18080 });
     const runtime = await settled();
 
-    expect(await runtime.legacyLoopbackPortAccess(49152)).toBe("allowed");
-    expect(await runtime.legacyLoopbackPortAccess(18080)).toBe("allowed");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "a")).toBe("allowed");
+    expect(await runtime.legacyLoopbackPortAccess(18080, "a")).toBe("allowed");
     // The application port inside the container is not a host port.
-    expect(await runtime.legacyLoopbackPortAccess(3000)).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("unknown");
     // Any other host port, listening or not.
-    expect(await runtime.legacyLoopbackPortAccess(49153)).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(49153, "a")).toBe("unknown");
+  });
+
+  test("admits a port only for the environment that owns it", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    await harness.addContainerEnvironment("b", { entryPort: 3000 });
+    publish("a", "container-a", { 3000: 49152 });
+    publish("b", "container-b", { 3000: 49153 });
+    const runtime = await settled();
+
+    expect(await runtime.legacyLoopbackPortAccess(49152, "a")).toBe("allowed");
+    expect(await runtime.legacyLoopbackPortAccess(49153, "b")).toBe("allowed");
+    // Another environment's verified binding is not a target of this one.
+    expect(await runtime.legacyLoopbackPortAccess(49153, "a")).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "b")).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "missing")).toBe("unknown");
+    // A request naming no environment (an older desktop) opens nothing.
+    expect(await runtime.legacyLoopbackPortAccess(49152, null)).toBe("unscoped");
   });
 
   test("forgets a binding once the service loses it", async () => {
     await harness.addContainerEnvironment("a", { entryPort: 3000 });
     publish("a", "container-a", { 3000: 49152 });
     const runtime = await settled();
-    expect(await runtime.legacyLoopbackPortAccess(49152)).toBe("allowed");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "a")).toBe("allowed");
 
     await harness.storage.updateEnvironment("a", { status: "stopped" });
     await runtime.registry.settle();
-    expect(await runtime.legacyLoopbackPortAccess(49152)).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "a")).toBe("unknown");
   });
 
   test("an unpublished container port is never admitted", async () => {
     await harness.addContainerEnvironment("a", { entryPort: 3000 });
     publish("a", "container-a", {});
     const runtime = await settled();
-    expect(await runtime.legacyLoopbackPortAccess(3000)).toBe("unknown");
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("unknown");
   });
 
   test("a healthy relay target never admits its container application port", async () => {
@@ -82,7 +99,7 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
       const service = runtime.registry.snapshot({ environmentId: "a" }).services[0]!;
       expect(service.endpoint.state).toBe("available");
       expect(service.endpoint.transportKind).toBe("container-relay");
-      expect(await runtime.legacyLoopbackPortAccess(3000)).toBe("unknown");
+      expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("unknown");
     } finally {
       healthy.mockRestore();
     }
@@ -111,7 +128,7 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
       return target;
     });
     try {
-      const access = runtime.legacyLoopbackPortAccess(49152);
+      const access = runtime.legacyLoopbackPortAccess(49152, "a");
       await started;
       await runtime.registry.update(
         service.definition.serviceId,
@@ -132,9 +149,10 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
     const runtime = await settled();
 
     runtime.reservePorts("gateway", [49152]);
-    expect(await runtime.legacyLoopbackPortAccess(49152)).toBe("reserved");
+    expect(await runtime.legacyLoopbackPortAccess(49152, "a")).toBe("reserved");
+    expect(await runtime.legacyLoopbackPortAccess(49152, null)).toBe("reserved");
     // Docker's daemon ports are always reserved.
-    expect(await runtime.legacyLoopbackPortAccess(2375)).toBe("reserved");
-    expect(await runtime.legacyLoopbackPortAccess(2376)).toBe("reserved");
+    expect(await runtime.legacyLoopbackPortAccess(2375, "a")).toBe("reserved");
+    expect(await runtime.legacyLoopbackPortAccess(2376, "a")).toBe("reserved");
   });
 });

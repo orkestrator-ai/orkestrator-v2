@@ -4,6 +4,7 @@ import type {
   WebFrameMain,
   WebRequest,
 } from "electron";
+import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
 
 const BROWSER_PREVIEW_PREFIX = "/__orkestrator/browser/loopback/";
 
@@ -24,6 +25,12 @@ export interface RemoteGatewayRequestAuthOptions {
    * preview-only session authorizes nothing.
    */
   previewViewUrl?: (webContentsId: number | undefined) => string | null | undefined;
+  /**
+   * The environment the app attached a preview view for. Requests the view
+   * authenticates name it, so the gateway opens only that environment's
+   * preview targets; without it the gateway refuses them.
+   */
+  previewViewEnvironment?: (webContentsId: number | undefined) => string | null | undefined;
 }
 
 /** `<origin>/__orkestrator/browser/loopback/<port>` for a gateway preview URL, else null. */
@@ -88,9 +95,19 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
       return (
         normalized !== "authorization" &&
         normalized !== "cookie" &&
-        normalized !== "proxy-authorization"
+        normalized !== "proxy-authorization" &&
+        normalized !== BROWSER_PREVIEW_ENVIRONMENT_HEADER
       );
     }),
+  );
+}
+
+/** Only main names a preview's environment; a page's own copy never reaches the gateway. */
+function withoutPreviewEnvironment(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== BROWSER_PREVIEW_ENVIRONMENT_HEADER,
+    ),
   );
 }
 
@@ -103,7 +120,7 @@ export function installRemoteGatewayRequestAuth(
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
     const authorization = getAuthorization(details.url, details.webContentsId);
     if (!authorization) {
-      callback({ requestHeaders: details.requestHeaders });
+      callback({ requestHeaders: withoutPreviewEnvironment(details.requestHeaders) });
       return;
     }
     if (!canAttachGatewayAuthorization(details, options)) {
@@ -111,16 +128,21 @@ export function installRemoteGatewayRequestAuth(
       return;
     }
     const requestHeaders = Object.fromEntries(
-      Object.entries(details.requestHeaders).filter(([name]) => {
+      Object.entries(withoutPreviewEnvironment(details.requestHeaders)).filter(([name]) => {
         const normalized = name.toLowerCase();
         return normalized !== "authorization" && normalized !== "origin";
       }),
     );
+    const environmentId =
+      options.browserPreviewOnly === true
+        ? options.previewViewEnvironment?.(details.webContentsId)
+        : null;
     callback({
       requestHeaders: {
         ...requestHeaders,
         Authorization: authorization,
         Origin: "https://orkestrator.dev",
+        ...(environmentId ? { [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId } : {}),
       },
     });
   });

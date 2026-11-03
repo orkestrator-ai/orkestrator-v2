@@ -323,35 +323,40 @@ isolated preview transport by default and retire the legacy route.
 **Status:** Fixed (2026-11-03). All three parts of the fix below are in:
 
 - The gateway proxies `browser/loopback/<port>/` only to a port that is the
-  verified binding of an enabled preview service: a loopback publication of an
-  environment's own container, or a backend-host or worktree listener the
-  resolver accepted (`PreviewRuntime.legacyLoopbackPortAccess`,
-  `PreviewServiceRegistry.hostLoopbackTargetOwner`). Docker's daemon ports and
-  the reserved set (gateway, control MCP, agent tools, local bridge ports) are
-  refused first, even when a service is bound there. Any other port answers
-  403 before a connection is made. A gateway without a preview registry
-  refuses every port.
+  verified binding of an enabled preview service of the requesting
+  environment: a loopback publication of that environment's own container, or
+  a backend-host or worktree listener the resolver accepted for it
+  (`PreviewRuntime.legacyLoopbackPortAccess`,
+  `PreviewServiceRegistry.isHostLoopbackTargetOf`). The requesting environment
+  is the `x-orkestrator-preview-environment` header, which Electron main sets
+  on the preview requests it authenticates, from the environment the renderer
+  attached the view for; it drops any copy a page sent, and the gateway strips
+  it before proxying. Docker's daemon ports and the reserved set (gateway,
+  control MCP, agent tools, local bridge ports) are refused first, even when a
+  service is bound there. Another environment's service, an unregistered port
+  and a request naming no environment all answer 403 before a connection is
+  made. A gateway without a preview registry refuses every port.
 - `Origin: null` gets `access-control-allow-origin: *` and never
   `access-control-allow-credentials`, on preflights, proxied responses and the
   Referer redirect.
 - In Electron's dedicated preview session a request is authorized only inside
   the gateway namespace of the URL the app last asked that view to load
   (`previewViewUrl` in `remote-gateway-request-auth.ts`), main-frame
-  navigations included. A view without a known URL authorizes nothing.
+  navigations included. A view without a known URL authorizes nothing. A view
+  attached for another environment is a fresh view.
 
-Covered by `apps/backend/tests/gateway-preview.test.ts` (known, unknown,
-disabled and reserved ports through a real gateway and registry),
-`apps/backend/src/core/preview-legacy-loopback-access.test.ts` (container
-publications), `apps/backend/tests/gateway-proxy.test.ts` (no credentialed
-CORS) and `apps/desktop/tests/remote-gateway-request-auth.test.ts`.
+Covered by `apps/backend/tests/gateway-preview.test.ts` (own, other-environment,
+unscoped, unknown, disabled and reserved ports through a real gateway and
+registry), `apps/backend/src/core/preview-legacy-loopback-access.test.ts`
+(container publications per environment), `apps/backend/tests/gateway-proxy.test.ts`
+(no credentialed CORS), `apps/desktop/tests/remote-gateway-request-auth.test.ts`
+(view port scope, environment header), `browser-preview-manager.test.ts`,
+`browser-preview-startup.test.ts` and `main-ipc.test.ts`.
 
-What remains: the route carries no environment identity, so a port is
-admitted for whichever environment owns it rather than for "the requesting
-environment" only. A preview page could still name another environment's
-service port, but after the Electron change its request carries no gateway
-credential and is refused as unauthenticated. A user who previewed an
-arbitrary backend-host port through a legacy URL tab must now register it as a
-service. The authenticated `proxy/loopback/<port>/` route used by the main
+What remains: a desktop app older than this fix names no environment, so its
+legacy previews are refused with a message asking for an update. A user who
+previewed an arbitrary backend-host port through a legacy URL tab must now
+register it as a service of that environment. The authenticated `proxy/loopback/<port>/` route used by the main
 renderer (ACP bridges, the local entry port) still reaches any port; it is not
 reachable with credentials from a preview. Dynamic browser testing remains as
 listed in §8. The original finding follows.

@@ -149,11 +149,14 @@ export interface OrkestratorGatewayOptions {
   previews?: import("./core/preview-runtime.js").PreviewRuntime;
   /**
    * Which backend-host ports the legacy `browser/loopback/<port>/` route may
-   * open. Defaults to `previews.legacyLoopbackPortAccess`; with neither, the
-   * route refuses every port.
+   * open for the environment the request names (its
+   * `x-orkestrator-preview-environment` header, or null). Defaults to
+   * `previews.legacyLoopbackPortAccess`; with neither, the route refuses every
+   * port.
    */
   legacyPreviewPortAccess?: (
     port: number,
+    environmentId: string | null,
   ) => Promise<import("./core/preview-runtime.js").LegacyLoopbackPortAccess>;
   eventReplay?: {
     frameCapacity?: number;

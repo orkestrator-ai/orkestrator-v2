@@ -576,8 +576,12 @@ procedure.
   [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md)
   task 7.
 - The legacy route opens only a port that is the verified binding of an
-  enabled preview service (a container's own loopback publication, or a
-  backend-host or worktree listener the resolver accepted). Docker's daemon
+  enabled preview service of the requesting environment (a container's own
+  loopback publication, or a backend-host or worktree listener the resolver
+  accepted). The environment is the `x-orkestrator-preview-environment`
+  header Electron main sets from the view's tab; a page cannot set it, the
+  gateway strips it before proxying, and a request without it is refused.
+  Docker's daemon
   ports and Orkestrator's reserved ports (gateway, control MCP, agent tools,
   local bridges) are refused even when a service is bound there; every other
   port answers 403 (security report M2). `Origin: null` gets a wildcard

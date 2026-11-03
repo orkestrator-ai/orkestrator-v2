@@ -186,6 +186,7 @@ describe("browser preview startup wiring", () => {
     await runtime.manager.attach({
       tabId: "browser-1",
       url: "http://localhost:3000/",
+      environmentId: "env-1",
       bounds: { x: 1, y: 2, width: 300, height: 200 },
       visible: true,
     });
@@ -289,6 +290,8 @@ describe("browser preview startup wiring", () => {
       requestHeaders: {
         Authorization: "Bearer test",
         Origin: "https://orkestrator.dev",
+        // The environment the renderer attached the view for (M2).
+        "x-orkestrator-preview-environment": "env-1",
       },
     });
 

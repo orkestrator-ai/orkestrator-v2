@@ -414,12 +414,17 @@ export class PreviewServiceRegistry {
   }
 
   /**
-   * The environment owning an enabled service whose verified binding is this
-   * backend-host loopback port, or null. Only a binding the resolver verified
+   * Whether this backend-host loopback port is the verified binding of an
+   * enabled service of this environment. Only a binding the resolver verified
    * counts (a published port of the environment's own container, or a
-   * loopback listener it accepted); relay targets have no host port.
+   * loopback listener it accepted); relay targets have no host port, and
+   * another environment's service never counts.
    */
-  async hostLoopbackTargetOwner(port: number): Promise<string | null> {
+  async isHostLoopbackTargetOf(environmentId: string, port: number): Promise<boolean> {
+    const owned = (serviceId: string) => {
+      const definition = this.definitions.get(serviceId);
+      return definition?.enabled === true && definition.environmentId === environmentId;
+    };
     const matches = (target: ResolvedPreviewTarget | null) =>
       target !== null &&
       target.transportKind !== "container-relay" &&
@@ -427,7 +432,7 @@ export class PreviewServiceRegistry {
       target.addressFamily === "ipv4" &&
       target.port === port;
     for (const [serviceId, entry] of this.runtime) {
-      if (!matches(entry.target) || !this.definitions.get(serviceId)?.enabled) continue;
+      if (!matches(entry.target) || !owned(serviceId)) continue;
       const generation = entry.endpoint.endpointGeneration;
       let target: ResolvedPreviewTarget;
       try {
@@ -439,17 +444,16 @@ export class PreviewServiceRegistry {
       // Acquisition may yield to lifecycle changes. Never admit a replacement
       // generation, disabled definition, or a target on a different address.
       const current = this.runtime.get(serviceId);
-      const definition = this.definitions.get(serviceId);
       if (
-        definition?.enabled &&
+        owned(serviceId) &&
         current?.endpoint.endpointGeneration === generation &&
         current.endpoint.state === "available" &&
         current.target === target &&
         matches(target)
       )
-        return definition.environmentId;
+        return true;
     }
-    return null;
+    return false;
   }
 
   diagnostics() {

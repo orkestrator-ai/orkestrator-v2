@@ -407,6 +407,103 @@ describe("remote gateway renderer request authentication", () => {
     }
   });
 
+  test("names the view's environment on the preview requests it authorizes (M2)", () => {
+    const harness = installHarness({
+      ...previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/app"),
+      previewViewEnvironment: (webContentsId) => (webContentsId === 7 ? "env-a" : null),
+    });
+    const previewFrame = {
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/app",
+      parent: null,
+    };
+
+    // A page cannot pick the environment: its own copy is replaced.
+    const subresource = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/api",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "X-Orkestrator-Preview-Environment": "env-b", Accept: "*/*" },
+      },
+      subresource,
+    );
+    expect(subresource).toHaveBeenCalledWith({
+      requestHeaders: {
+        Accept: "*/*",
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+        "x-orkestrator-preview-environment": "env-a",
+      },
+    });
+
+    // An unauthorized request carries neither the credential nor any environment.
+    const crossPort = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      crossPort,
+    );
+    expect(crossPort).toHaveBeenCalledWith({ requestHeaders: {} });
+
+    // Nor does a request to a host that is not the gateway.
+    const external = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://example.com/",
+        resourceType: "xhr",
+        webContentsId: 7,
+        frame: previewFrame,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b", Accept: "*/*" },
+      },
+      external,
+    );
+    expect(external).toHaveBeenCalledWith({ requestHeaders: { Accept: "*/*" } });
+  });
+
+  test("a preview view attached without an environment names none", () => {
+    const harness = installHarness({
+      ...previewOnly("https://desk.example/__orkestrator/browser/loopback/3000/"),
+      previewViewEnvironment: () => null,
+    });
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+        resourceType: "mainFrame",
+        webContentsId: 7,
+        frame: null,
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      callback,
+    );
+    // The gateway refuses such a request rather than guessing an environment.
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: { Authorization: "Bearer gateway-token", Origin: "https://orkestrator.dev" },
+    });
+  });
+
+  test("the main renderer session never names a preview environment", () => {
+    const harness = installHarness({ previewViewEnvironment: () => "env-a" });
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/invoke",
+        requestHeaders: { "x-orkestrator-preview-environment": "env-b" },
+      },
+      callback,
+    );
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: { Authorization: "Bearer gateway-token", Origin: "https://orkestrator.dev" },
+    });
+  });
+
   test("a preview-only session without a view lookup authorizes nothing", () => {
     const harness = installHarness({ browserPreviewOnly: true });
     const preview = mock(() => undefined);

@@ -89,7 +89,9 @@ export function EnvironmentSettingsDrawerFixture() {
         <AppDialogHost />
         <MobileAppShellLayout
           selectedProjectId="settings-drawer-project"
-          selectedEnvironmentId={null}
+          selectedEnvironmentId={
+            new URLSearchParams(location.search).has("merge") ? ENVIRONMENT_ID : null
+          }
           title="Settings drawer fixture"
           filesPanelOpen={false}
           centralPanelStyle={{}}
@@ -100,7 +102,7 @@ export function EnvironmentSettingsDrawerFixture() {
               <div className="min-h-0 flex-1 pt-12">
                 <EnvironmentItem
                   environment={environment}
-                  isSelected={false}
+                  isSelected={new URLSearchParams(location.search).has("merge")}
                   onSelect={() => {}}
                   onDelete={() => {}}
                   onStart={() => {}}

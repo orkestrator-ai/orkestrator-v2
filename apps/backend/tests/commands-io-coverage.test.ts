@@ -1051,6 +1051,7 @@ case "$*" in
   *"/workspace/src/binary.dat"*) printf 'AAE=\\n' ;;
   *"/workspace/src/invalid.txt"*) printf '//79\\n' ;;
   *"/workspace/src/oversized.txt"*) printf 'File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})\\n' >&2; exit 1 ;;
+  *"/workspace/.env"*) printf 'Rk9PPWJhcg==\\n' ;;
   *"/workspace/src/app.ts"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMjsK\\n' ;;
   *"git cat-file -s 'main:src/app.ts'"*) printf '24\\n' ;;
   *"git cat-file -s 'missing:src/app.ts'"*) ;;
@@ -1113,8 +1114,14 @@ esac
       ).resolves.toEqual({
         path: "src/app.ts",
         content: "export const value = 2;\n",
-        language: "ts",
+        language: "typescript",
       });
+      await expect(
+        commands.get("read_container_file")?.(
+          { containerId: "container-1", filePath: ".env" },
+          context,
+        ),
+      ).resolves.toEqual({ path: ".env", content: "FOO=bar", language: "dotenv" });
       await expect(
         commands.get("read_container_file")?.(
           { containerId: "container-1", filePath: "src/binary.dat" },
@@ -1143,7 +1150,7 @@ esac
       ).resolves.toEqual({
         path: "src/app.ts",
         content: "export const value = 1;\n",
-        language: "ts",
+        language: "typescript",
       });
       await expect(
         commands.get("read_file_at_branch")?.(

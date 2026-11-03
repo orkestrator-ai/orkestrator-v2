@@ -4,6 +4,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
+import { registerDotenvLanguage } from "@/lib/monaco-dotenv";
 import { Button } from "@/components/ui/button";
 
 interface MonacoFileEditorProps {
@@ -33,6 +34,11 @@ export function disableMonacoFileDiagnostics(monaco: MonacoBeforeMountApi): void
   monaco.json.jsonDefaults.setDiagnosticsOptions({
     validate: false,
   });
+}
+
+export function configureMonacoFileEditor(monaco: MonacoBeforeMountApi): void {
+  disableMonacoFileDiagnostics(monaco);
+  registerDotenvLanguage(monaco);
 }
 
 export function registerMonacoFileSaveCommand(
@@ -105,7 +111,7 @@ export function MonacoFileEditor({
     };
   }, [monacoAttempt, monacoReady]);
 
-  const handleEditorWillMount: BeforeMount = disableMonacoFileDiagnostics;
+  const handleEditorWillMount: BeforeMount = configureMonacoFileEditor;
 
   const handleEditorMount: OnMount = useCallback(
     (editor, monaco) => {

@@ -401,16 +401,18 @@ describe("sendPrompt", () => {
       const call = await nextQueryCall();
       finish = () => call.finish();
       jest.advanceTimersByTime(60_001);
-      const snapshots = () => bridgeDiagnosticPayloads(lines);
-      expect(snapshots()).toHaveLength(0);
+      const heartbeats = () =>
+        bridgeDiagnosticPayloads(lines).filter((entry) => entry.event === "heartbeat");
+      // Off, the turn writes its lifecycle only, and a minute is not yet a stall.
+      expect(heartbeats()).toHaveLength(0);
       expect(isDebugLoggingEnabled()).toBe(false);
 
       setLiveBridgeDiagnostics(true);
       expect(isDebugLoggingEnabled()).toBe(true);
-      expect(snapshots()).toHaveLength(1);
-      expect(snapshots()[0]).toMatchObject({ event: "heartbeat", terminal: "pending" });
+      expect(heartbeats()).toHaveLength(1);
+      expect(heartbeats()[0]).toMatchObject({ event: "heartbeat", terminal: "pending" });
       jest.advanceTimersByTime(60_001);
-      expect(snapshots().length).toBeGreaterThan(1);
+      expect(heartbeats().length).toBeGreaterThan(1);
       expect(lines.join("\n")).not.toContain("PRIVATE PROMPT");
       call.finish();
       await promptPromise;
@@ -443,16 +445,20 @@ describe("sendPrompt", () => {
         const call = await nextQueryCall();
         finish = () => call.finish();
         jest.advanceTimersByTime(60_001);
-        const snapshots = bridgeDiagnosticPayloads(lines).map((entry) => JSON.stringify(entry));
-        expect(snapshots.some((line) => line.includes('"event":"heartbeat"'))).toBe(enabled);
-        if (enabled) {
-          const heartbeat = snapshots.find((line) => line.includes('"event":"heartbeat"'))!;
-          expect(heartbeat).toContain('"lastDeltaAgoMs":null');
-          expect(heartbeat).toContain('"sdkMessageCount":0');
-          expect(heartbeat).toContain('"terminal":"pending"');
-        } else {
-          expect(snapshots).toHaveLength(0);
-        }
+        const heartbeats = () =>
+          bridgeDiagnosticPayloads(lines)
+            .filter((entry) => entry.event === "heartbeat")
+            .map((entry) => JSON.stringify(entry));
+        // Lifecycle is written either way; a minute's look only on the per-minute stream.
+        expect(bridgeDiagnosticPayloads(lines)[0]).toMatchObject({ event: "send-started" });
+        expect(heartbeats().length > 0).toBe(enabled);
+        // Two silent minutes are a stall, written whether or not detail is on.
+        jest.advanceTimersByTime(60_000);
+        const heartbeat = heartbeats().at(-1)!;
+        expect(heartbeat).toContain('"lastDeltaAgoMs":null');
+        expect(heartbeat).toContain('"sdkMessageCount":0');
+        expect(heartbeat).toContain('"terminal":"pending"');
+        expect(heartbeats()).toHaveLength(enabled ? 2 : 1);
         expect(lines.join("\n")).not.toContain("PRIVATE PROMPT");
         call.finish();
         await promptPromise;

@@ -175,3 +175,35 @@ The bridge group reserved two workers; evidence is host temporary directory
 `orkestrator-test-run.Db1a7X/bridges.log` (compressed on finalization).
 Unchanged owning-file rerun passed: `mise run test:logged -- --name repair-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`.
 No root cause or independence from the branch is claimed; this case remains open.
+
+## R4 diagnostics repair validation — 2026-11-03
+
+`mise run test:logged -- --name r4-fixed-default-suite -- mise run test`
+failed the exact helper-refresh case after 15,003.74 ms. Codex used one file
+worker and reported 2,335 passed, 63 skipped, one failed. The workspace group
+also had one preview-pool assertion failure; root and protocol groups passed.
+Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.91L4AS/bridges.log.gz`.
+
+The unchanged complete owner passed alone on the repair branch (exit 0, 0.4 s):
+
+```sh
+mise run test:logged -- --name r4-codex-runtime-owner -- bun test ./bridges/codex-bridge/src/runtime-env.test.ts --parallel=1 --only-failures
+```
+
+A detached `origin/main` worktree at
+`a1218b081d9fa328db99a4c83b4461d3f66336ec`, with independently installed frozen
+dependencies, passed 100 repetitions (exit 0, 6.4 s):
+
+```sh
+mise run test:logged -- --name r4-main-codex-runtime-owner -- bun test ./bridges/codex-bridge/src/runtime-env.test.ts --parallel=1 --rerun-each=100 --only-failures
+```
+
+This confirms intermittent behavior, not target-branch reproduction of the
+timeout or proof of an environmental cause. No implementation, assertion,
+timeout or skip changed.
+
+The final exact aggregate rerun after logger sink acknowledgement passed the
+entire bridges group (74.1 s), including this owner. Root and protocol groups
+also passed. Backend still had the independently reproduced preview failure
+and a Git fsmonitor timeout; no full-suite success is claimed. Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.OdacnP/summary.json`.

@@ -159,6 +159,7 @@ describe("MonacoFileEditor component", () => {
     const onChange = mock((_value: string) => {});
     let command: (() => void) | undefined;
     const setDiagnosticsOptions = mock((_options: unknown) => {});
+    const register = mock((_language: { id: string }) => {});
     const monaco = {
       KeyMod: { CtrlCmd: 4 },
       KeyCode: { KeyS: 8 },
@@ -168,6 +169,12 @@ describe("MonacoFileEditor component", () => {
       },
       json: {
         jsonDefaults: { setDiagnosticsOptions },
+      },
+      languages: {
+        getLanguages: () => [] as { id: string }[],
+        register,
+        setMonarchTokensProvider: mock(() => ({ dispose() {} })),
+        setLanguageConfiguration: mock(() => ({ dispose() {} })),
       },
     };
     const editor = {
@@ -200,6 +207,7 @@ describe("MonacoFileEditor component", () => {
     renderedEditorProps?.beforeMount?.(monaco);
     renderedEditorProps?.onMount?.(editor, monaco);
     expect(setDiagnosticsOptions).toHaveBeenCalledTimes(3);
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({ id: "dotenv" }));
 
     fireEvent.change(screen.getByRole("textbox", { name: "Mock Monaco editor" }), {
       target: { value: "updated" },

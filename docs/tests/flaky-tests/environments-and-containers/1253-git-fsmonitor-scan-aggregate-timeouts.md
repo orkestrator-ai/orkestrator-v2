@@ -230,3 +230,32 @@ The complete unchanged owner passed alone, exit 0 in 3.5 s:
 `mise run test:logged -- --name merge-rerun-git-fsmonitor -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
 No Git implementation, assertion, timeout, or skip changed. Evidence:
 `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LvO7CJ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## R4 diagnostics final validation — 2026-11-03
+
+`mise run test:logged -- --name r4-final-default-suite -- mise run test` timed
+out `git fsmonitor > a scan retries migration after a transient --unset failure`
+at 5029.46 ms. Backend totals: 13,378 passed, 99 skipped, two failed and one
+error; the other failure was preview-upstream-pool. The root, bridges and
+protocol groups passed. The owner and implementation have no diff in
+`origin/main...HEAD`.
+
+The complete unchanged branch owner passed alone (exit 0, 3.6 s):
+`mise run test:logged -- --name r4-git-fsmonitor-owner -- bun test --cwd apps/backend ./src/core/git-fsmonitor.test.ts --parallel=1 --only-failures`.
+
+A detached main worktree at `62e99ff599cfcfa2bfdd23f907b8f05039925d63`, with
+independently installed frozen dependencies, reproduced the exact --unset scan
+timeout at 5006.19 ms:
+`mise run test:logged -- --name r4-main-git-fsmonitor-preloaded -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/git-fsmonitor.test.ts --parallel=1 --rerun-each=10 --only-failures`.
+It reported 218 passed, 12 failed and three errors across 230 cases. Ten failures
+were the fixture's fsmonitor-off prerequisite; the remaining failures included
+--get and --unset scan timeouts. An earlier 20-repeat main run reported 438
+passed, 22 failed and three errors, including --get timeouts. These are observed
+baseline failures, not a root-cause diagnosis or a production fix.
+
+Evidence:
+- Branch: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.OdacnP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Main (10 repeats): `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.7G8PDc/r4-main-git-fsmonitor-preloaded.log.gz`.
+- Main (20 repeats): `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.P19uWS/r4-main-git-fsmonitor-owner.log.gz`.
+
+No assertion, timeout, skip, or unrelated implementation changed.

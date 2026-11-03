@@ -2,6 +2,7 @@ import { createRef, useLayoutEffect, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NativeComposeBar } from "./NativeComposeBar";
+import { QueuedPromptStack } from "./QueuedPromptStack";
 import type { MentionableInputRef } from "./MentionableInput";
 import type { NativeComposeQueuedPrompt } from "./QueuedPromptStack";
 
@@ -387,5 +388,21 @@ describe("queued prompt stack", () => {
     });
     expect(steered).toEqual(["q3"]);
     expect(document.activeElement).toBe(input);
+  });
+});
+
+describe("QueuedPromptStack without a queue manager", () => {
+  afterEach(cleanup);
+
+  test("announces the count itself and offers no View all", () => {
+    render(
+      <QueuedPromptStack
+        queue={{ length: 1, items: [{ id: "q1", text: "First queued" }] }}
+        onExit={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /View queued prompts/ })).toBeNull();
+    expect(screen.getByText("1 queued").getAttribute("aria-hidden")).toBeNull();
   });
 });

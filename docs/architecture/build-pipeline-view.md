@@ -426,6 +426,20 @@ focused pane publishes its selected session to the shell and owns transcript
 find shortcuts; activation republishes that pane’s independent selection. A Prepare node with a
 validation run has a Tests view; the transcript stays mounted behind it.
 
+The message box (`PipelineMessageComposer`) treats a message the way a native
+agent tab does. Queued messages show as the same strips above the box
+(`QueuedPromptStack`), each with Steer (while a turn that can be steered is
+running), Edit and Remove; the pipeline has no reorder dialog, so there is no
+View all. With the Auto-steer setting on, a plain message sent while such a turn
+runs is queued and then steered out of the queue, the same path as the Steer
+button (`steer_queued_build_pipeline_message`). Commands stay queued, because the
+pipeline has no catalogue to classify them against. The transfer happens under
+the pipeline lock: a message the agent refused, or that arrived after the turn
+ended, stays queued in its place; one whose delivery cannot be confirmed leaves
+the queue and returns to the box with a warning, because the queue would
+otherwise deliver it a second time. A typed `/steer` still goes straight to the
+live turn (`steer_build_pipeline`).
+
 Actions sit in each node's context menu and in the inspector: open the session
 (Open Fix session on a Fix node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed

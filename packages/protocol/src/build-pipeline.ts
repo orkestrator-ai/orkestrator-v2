@@ -1266,6 +1266,16 @@ export interface PipelineUserMessage {
   createdAt: string;
 }
 
+/**
+ * What became of a queued message the user asked to steer into the running turn:
+ * - `steered`: it is in the turn and out of the queue;
+ * - `queued`: nothing was sent and it is still queued;
+ * - `unconfirmed`: it may have reached the agent, so it left the queue rather
+ *   than risk a second delivery;
+ * - `gone`: it had already left the queue, as the agent's next turn.
+ */
+export type PipelineQueuedSteerDelivery = "steered" | "queued" | "unconfirmed" | "gone";
+
 export const MAX_PIPELINE_USER_MESSAGES = 20;
 export const MAX_PIPELINE_USER_MESSAGE_LENGTH = 16_000;
 export const MAX_BUILD_PIPELINE_ITERATIONS = 10;

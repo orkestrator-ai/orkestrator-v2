@@ -31,6 +31,7 @@ import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
+import { validationStallReason } from "./build-pipeline-validation-stall.js";
 import {
   errorMessage,
   resumablePhase,
@@ -279,9 +280,25 @@ export class BuildPipelineRecovery {
         `Verification failed after ${pipeline.maxIterations} iterations: ${rationale}`,
       );
     }
-    delete pipeline.reviewPackage;
+    // Read before archiving: the stall check compares this round's package
+    // with the previous round's archived summary.
+    const stall = validationStallReason(pipeline, criterionResults);
+    // Archive first so the history keeps this round's failure summary.
     archiveValidationRun(pipeline);
+    delete pipeline.reviewPackage;
     pipeline.iteration += 1;
+    if (stall) {
+      // The round is queued, not dispatched: Resume runs it.
+      pipeline.restartRequest = { kind: "session", phase: "fix" };
+      pipeline.pausedFromPhase = "fixing";
+      pipeline.phase = "paused";
+      pipeline.pauseCause = "supervisor";
+      pipeline.error = stall;
+      delete pipeline.stallWarning;
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
+      return;
+    }
     await this.stageSupervisor.startStage(pipeline, "fix", "fixing");
     await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
   }

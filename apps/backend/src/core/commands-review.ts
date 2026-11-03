@@ -7,6 +7,7 @@ import {
   isProjectHomeEnvironment,
 } from "./project-home-environment.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
+import { triageValidationFailures } from "./validation-failure-triage-service.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -994,6 +995,16 @@ export function parseGitPorcelainPaths(output: string): string[] {
   return paths;
 }
 
+/**
+ * The working directory a sealed validation command ran in. Preparation
+ * records each command as `cd <quoted cwd> && <command>`
+ * (`validationPreparation`); anything else ran at the workspace root.
+ */
+export function validationCommandCwd(command: string): string {
+  const match = /^cd '((?:[^']|'"'"')*)' && /.exec(command);
+  return match ? match[1]!.replaceAll(`'"'"'`, "'") : ".";
+}
+
 export async function generateReviewPackage(
   environmentId: string,
   packageId: string,
@@ -1129,6 +1140,29 @@ export async function generateReviewPackage(
     };
   });
 
+  // Which failing tests this branch caused, from the recorded output and
+  // existing evidence only. Never fatal: the package seals without it.
+  const triage = await triageValidationFailures({
+    environment,
+    runner,
+    context,
+    targetRef: baseName,
+    changedFiles: changedFiles.map((file) => file.path),
+    commands: hydratedValidation.flatMap((entry) =>
+      (entry.status === "failed" || entry.status === "incomplete") && entry.stdoutPath
+        ? [
+            {
+              command: entry.command,
+              cwd: validationCommandCwd(entry.command),
+              status: entry.status,
+              stdoutPath: entry.stdoutPath,
+              stderrPath: entry.stderrPath,
+            },
+          ]
+        : [],
+    ),
+  });
+
   // Nothing above reads file contents, so the window this closes is short. It
   // still has to close: a package naming a HEAD the environment has already
   // moved off would send every reviewer to the wrong commit.
@@ -1155,8 +1189,11 @@ export async function generateReviewPackage(
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),
+    ...(triage.triage ? { failureTriage: triage.triage } : {}),
     uncommittedFiles: recordedUncommittedFiles,
-    limitations: packageLimitations,
+    limitations: triage.limitation
+      ? [...packageLimitations, triage.limitation]
+      : packageLimitations,
     // Deliberately absent rather than `null`. The context is supplied by the
     // workflow, not by package generation, and a null here is not a valid
     // `ReviewPackageContext` — persisting it would make the snapshot fail

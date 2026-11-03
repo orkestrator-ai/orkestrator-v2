@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-7 to BR-14, BR-15's SSE replay rings and BR-16 open).
@@ -133,7 +133,7 @@ governs, marked "Decided".
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), broad store subscriptions in `AppShell` and `usePullRequest` (WEB-7), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14 and WEB-16 to WEB-19. WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -161,6 +161,37 @@ governs, marked "Decided".
   - **Lengthen or remove them.**
     - Pros: fewer reads.
     - Cons: needs a gap signal for the portal stream and the ephemeral resource first.
+
+#### WEB-7 and WEB-17 (done 2026-11-03)
+
+Re-checked against `main` at `b8862313` first; both were still true, and `BuildChatTab` no longer has a timer, so it was left alone. Each change has a render-count test that fails on the previous code:
+
+- WEB-7, `AppShell`: it subscribed to the whole pane-layout `environments` Map and used only the selected environment's entry. It now selects that environment's active pane tab (`selectActivePaneTab`), which keeps its identity when another environment's layout changes. `AppShell.test.tsx` ("does not re-render for a pane-layout change in another environment"): two layout writes to another environment re-rendered the shell twice before, now not at all; the selected environment's own change still does.
+- WEB-7, `usePullRequest`: it called `useEnvironmentStore()` with no selector, so every store write re-rendered the action bar and the pipeline views using it. It now selects `prUrl`, `prState`, `hasMergeConflicts` and `setEnvironmentPR` one by one. `usePullRequest.render-count.test.tsx`: three writes to another environment in one batch (status, PR, deleting flag) re-rendered the consumer once before, now not at all; a change to its own PR fields still does.
+- WEB-17, `ClaudeTmuxChatTab`: the 1 s `elapsedSeconds` interval at the tab root is gone; the thinking indicator renders `LiveElapsed` from the same `busyStartedAt`, with the same text and class. `tests/unit/components/ClaudeTmuxChatTab.test.tsx` ("ticks the elapsed text without re-rendering the tab root while busy"): the tab root rendered twice in two real seconds before, now 0 times, while the text goes `1m 5s`, `1m 6s`, `1m 7s`.
+- WEB-17, `MultiReviewTab`: `reviewPanelNow` state is replaced by a per-tab `RuntimeClock` (`lib/review/runtime-clock.ts`) that the root starts and stops (active and something running, as before) but never subscribes to. It is shared through `RuntimeClockContext`; the five places that print a time subscribe: the header elapsed (`MultiReviewElapsed`), each flow-graph node's runtime and accessible name (`useLiveRuntimeParts` in `FlowGraph.tsx`), `StepFacts`, the reviewer's inspector line and `ReviewValidationStatus` (when no `now` prop is passed). Live `RuntimeParts` now carry `liveStartedAt`, from which a leaf re-derives `elapsed` (`runtimePartsAt`); settled parts never subscribe. The pipeline and graph-run views provide no clock, so their nodes behave as before. `MultiReviewTab.clock.test.tsx`: three ticks rendered the root three times before, now 0, while the header, node and inspector clocks advance each second and a settled step's runtime stays put. `runtime-clock.test.ts` covers the clock's start, stop and reference count.
+
+No React Profiler run was made; the numbers are render counts from tests.
+
+**Decisions.**
+
+- **How should the Multi Review clock reach its leaves (WEB-17)?**
+  - **A per-tab clock object in context, read with `useSyncExternalStore` by the components that print a time (recommended, done).**
+    - Pros: the root renders only on real changes; one tick still advances every clock on the tab together; the shared flow graph needs no new props, and views without a clock are unchanged.
+    - Cons: a new optional field (`liveStartedAt`) on the shared `RuntimeParts`; each live node re-renders itself once a second.
+  - **Pass `now` down as a prop to each leaf.**
+    - Pros: no context.
+    - Cons: the root would still have to re-render to pass a new `now`, which is the cost being removed.
+  - **One `LiveElapsed`-style timer per leaf.**
+    - Pros: simplest per leaf.
+    - Cons: the clocks on one tab tick apart, and the "freeze while inactive, read the time at once on return" rule would have to be repeated in every leaf.
+- **What should `AppShell` select (WEB-7)?**
+  - **The selected environment's active tab (recommended, done).**
+    - Pros: narrowest; a change to another pane in the same environment no longer re-renders the shell either.
+    - Cons: the pane walk runs in the selector on every pane-layout write (a few leaves, cheap).
+  - **The selected environment's entry.**
+    - Pros: what the report suggested; the selector is a single `get`.
+    - Cons: still re-renders on every change inside that environment.
 
 ### 4. Live agent view requests
 
@@ -835,6 +866,24 @@ the 2 s fallback are exported as `REBUILD_BACKSTOP_POLL_MS` and
 `REBUILD_POLL_MS`. A regression invokes the registered 15 s timer without
 emitting an event or resync and verifies both newer progress and completion
 are installed from snapshot reads.
+
+### Task 3: test seams for the WEB-7 and WEB-17 render counts
+
+Made on 2026-11-03. The counts observe the root without mocking the module
+under test: `AppShell` and the tmux tab count renders of a direct child stub
+that has no subscriptions of its own (the existing `AgentInfoButton` and
+`react-virtuoso` stubs), and the Multi Review test counts reads of the
+`workflowId` getter on its tab data, which only the root's render reads. Each
+test also shows the counter moving when the root really renders. The tmux test
+uses two real one-second ticks over a controlled `Date.now`, because the tab
+mounts its interval before fake timers could be installed; it adds about two
+seconds to that file.
+
+### Task 3: `ClaudeTmuxChatTab.test.tsx` stays one file
+
+Made on 2026-11-03. The tmux render-count test went into the existing
+3,900-line file next to the elapsed-status test it extends, because it needs
+that file's whole mock setup. Splitting the file is separate work.
 
 ### Task 6: ACP persistence interval
 

@@ -122,7 +122,8 @@ export type CoordinatorPullRequestWatchResult =
   | { watched: true; added: boolean }
   | {
       watched: false;
-      reason: "other-repository" | "no-repository" | "no-coordinator" | "settled";
+      reason:
+        "other-repository" | "no-repository" | "no-coordinator" | "settled" | "already-followed";
     };
 
 /**

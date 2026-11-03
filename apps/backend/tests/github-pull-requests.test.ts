@@ -3,6 +3,7 @@ import {
   buildPullRequestSearchQuery,
   createGitHubConditionalCache,
   getGitHubPullRequest,
+  getGitHubPullRequestStatus,
   listGitHubPullRequests,
   mergeabilityFromApi,
   mergeChecks,
@@ -13,6 +14,7 @@ import {
   REF,
   TOKEN,
   apiUser,
+  apiPull,
   createFakeGitHub,
   json,
   routePullRequestDetail,
@@ -574,4 +576,88 @@ test("same-app check IDs remain distinct while repeated API IDs update in place"
   expect(checks).toHaveLength(2);
   expect(checks.map((x) => x.conclusion)).toEqual(["success", "failure"]);
   expect(rollUpChecks(checks)).toBe("failure");
+});
+
+describe("lightweight watched PR status", () => {
+  test("aggregates checks and reviews without loading detail-only resources", async () => {
+    const fake = createFakeGitHub();
+    routePullRequestDetail(fake, {
+      reviews: [
+        { user: apiUser("reviewer"), state: "APPROVED", submitted_at: "2026-10-03T00:00:00Z" },
+      ],
+    });
+    fake.on("GET", `/repos/acme/repo/commits/${HEAD_SHA}/check-runs`, {
+      check_runs: [{ id: 1, name: "test", status: "completed", conclusion: "success" }],
+    });
+    const result = await getGitHubPullRequestStatus(TOKEN, REF, fake.options);
+    expect(result).toMatchObject({
+      state: "open",
+      checksState: "success",
+      reviewDecision: "approved",
+    });
+    expect(fake.requests).toHaveLength(4);
+    expect(fake.unexpected).toEqual([]);
+  });
+
+  test.each(["closed", "merged"] as const)(
+    "a %s PR only loads its primary record",
+    async (state) => {
+      const fake = createFakeGitHub();
+      fake.on(
+        "GET",
+        "/repos/acme/repo/pulls/7",
+        apiPull({ state: "closed", merged: state === "merged" }),
+      );
+      expect(await getGitHubPullRequestStatus(TOKEN, REF, fake.options)).toMatchObject({ state });
+      expect(fake.requests).toHaveLength(1);
+    },
+  );
+
+  test("reuses the conditional primary response on 304", async () => {
+    const fake = createFakeGitHub();
+    routePullRequestDetail(fake);
+    fake.on("GET", "/repos/acme/repo/pulls/7", (request) =>
+      request.headers.has("if-none-match")
+        ? new Response(null, { status: 304 })
+        : json(apiPull(), { headers: { etag: '"watch-v1"' } }),
+    );
+    const first = await getGitHubPullRequestStatus(TOKEN, REF, fake.options);
+    expect(await getGitHubPullRequestStatus(TOKEN, REF, fake.options)).toEqual(first);
+    expect(
+      fake.requestsTo("GET", "/repos/acme/repo/pulls/7")[1]?.headers.get("if-none-match"),
+    ).toBe('"watch-v1"');
+  });
+
+  test.each([403, 404])(
+    "tolerates inaccessible checks (%s) without losing PR state",
+    async (code) => {
+      const fake = createFakeGitHub();
+      routePullRequestDetail(fake);
+      for (const endpoint of ["check-runs", "status"]) {
+        fake.on("GET", `/repos/acme/repo/commits/${HEAD_SHA}/${endpoint}`, () =>
+          json({ message: "Resource not accessible" }, { status: code }),
+        );
+      }
+      expect(await getGitHubPullRequestStatus(TOKEN, REF, fake.options)).toMatchObject({
+        state: "open",
+        checksState: "none",
+      });
+    },
+  );
+
+  test.each([403, 404])(
+    "primary and review errors (%s) remain errors, never terminal readings",
+    async (code) => {
+      for (const endpoint of ["/repos/acme/repo/pulls/7", "/repos/acme/repo/pulls/7/reviews"]) {
+        const fake = createFakeGitHub();
+        routePullRequestDetail(fake);
+        fake.on("GET", endpoint, () =>
+          json({ message: "Resource not accessible" }, { status: code }),
+        );
+        await expect(getGitHubPullRequestStatus(TOKEN, REF, fake.options)).rejects.toMatchObject({
+          code: code === 404 ? "not-found" : "permission",
+        });
+      }
+    },
+  );
 });

@@ -7,13 +7,19 @@ export const MAX_WATCHED_PULL_REQUESTS_PER_PROJECT = 100;
 export const MAX_SETTLED_PULL_REQUESTS_PER_PROJECT = 200;
 /**
  * How long a settled (merged, closed, gone) pull request is refused as a new
- * watch. A coordinator transcript keeps rendering the link of a merged PR;
+ * rendered watch; explicit opens revalidate it on the next sweep. A coordinator transcript keeps rendering the link of a merged PR;
  * without this every render would cost a read that only finds it settled.
  */
 export const WATCHED_PULL_REQUEST_SETTLED_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export const WATCHED_PULL_REQUEST_STATES = ["open", "draft", "closed", "merged"] as const;
-export const WATCHED_PULL_REQUEST_CHECKS = ["passing", "failing", "pending", "none"] as const;
+export const WATCHED_PULL_REQUEST_CHECKS = [
+  "passing",
+  "failing",
+  "pending",
+  "neutral",
+  "none",
+] as const;
 export const WATCHED_PULL_REQUEST_REVIEWS = ["approved", "changes-requested", "none"] as const;
 export const WATCHED_PULL_REQUEST_SOURCES = ["rendered", "opened"] as const;
 
@@ -155,7 +161,8 @@ export class WatchedPullRequestsRepository {
   /**
    * Adds the pull request to the project's watch, or refreshes `lastSeenAt`
    * when it is already watched (written at most once per `touchAfterMs`). A
-   * pull request settled within the last week is refused.
+   * rendered pull request settled within the last week is refused. An explicit
+   * open clears the tombstone and revalidates at the next sweep.
    */
   watchPullRequest(
     projectId: string,
@@ -177,9 +184,10 @@ export class WatchedPullRequestsRepository {
           existing.lastSeenAt = at;
           return { result: { watched: true, added: false }, value };
         }
-        if (settledRecently(value.settled, input.key, now.getTime())) {
+        if (input.source !== "opened" && settledRecently(value.settled, input.key, now.getTime())) {
           return { result: { watched: false, reason: "settled" } };
         }
+        value.settled = value.settled.filter((item) => item.key !== input.key);
         const entries = [...value.entries, { ...input, addedAt: at, lastSeenAt: at, notices: 0 }]
           .sort((a, b) => Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt))
           .slice(0, MAX_WATCHED_PULL_REQUESTS_PER_PROJECT);

@@ -12,8 +12,9 @@
  * decision is sent to the project's main coordinator as a small workflow
  * notice (resource `watched-pull-request`), which the transcript draws as one
  * line rather than a mail tile. The notice says no action is expected. A
- * merged, closed or vanished pull request is reported once (unless it was
- * already settled at its first reading) and then no longer watched.
+ * merged or closed pull request is reported once (unless it was
+ * already settled at its first reading) and then no longer watched. Access-ambiguous
+ * failures, including 404, retain the watch and back off.
  *
  * This is awareness, not ownership: a pull request a coordinator raised
  * through `create_pr` is followed by its `pull-request` association, which
@@ -34,6 +35,7 @@ import {
 import {
   gitHubPullRequestKey,
   gitHubPullRequestUrl,
+  parseGitHubPullRequestLink,
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
@@ -66,7 +68,8 @@ export type WatchPullRequestOutcome =
   | { watched: true; added: boolean }
   | {
       watched: false;
-      reason: "other-repository" | "no-repository" | "no-coordinator" | "settled";
+      reason:
+        "other-repository" | "no-repository" | "no-coordinator" | "settled" | "already-followed";
     };
 
 export type WatchPullRequestSource = WatchedPullRequest["source"];
@@ -75,7 +78,12 @@ export interface CoordinatorPullRequestWatchOptions {
   storage: Pick<
     StorageService,
     "watchedPullRequests" | "getProject" | "loadProjects" | "loadConfig" | "sendAgentMail"
-  > & { coordinators: Pick<CoordinatorsStorage, "getCoordinatorWorkspace"> };
+  > & {
+    coordinators: Pick<
+      CoordinatorsStorage,
+      "getCoordinatorWorkspace" | "listCoordinatorWorkflowAssociations"
+    >;
+  };
   readStatus?: (token: string, ref: GitHubPullRequestRef) => Promise<GitHubPullRequestStatus>;
   /** The Settings GitHub credential; undefined when none is configured. */
   token?: () => Promise<string | undefined>;
@@ -96,7 +104,9 @@ export function watchedPullRequestReading(
         ? "passing"
         : status.checksState === "pending"
           ? "pending"
-          : "none";
+          : status.checksState === "neutral"
+            ? "neutral"
+            : "none";
   const computed =
     status.mergeability === "dirty"
       ? true
@@ -115,6 +125,7 @@ const CHECK_PHRASES: Record<WatchedPullRequestReading["checks"], string> = {
   failing: "checks failing",
   pending: "checks running",
   none: "no checks reported",
+  neutral: "checks neutral or skipped",
 };
 
 /** What changed between two readings, as short phrases; empty when nothing did. */
@@ -133,7 +144,11 @@ export function describeWatchedPullRequestChanges(
   // A settled pull request's checks, conflicts and reviews are not news.
   if (next.state === "merged" || next.state === "closed") return changes;
   if (previous.checks !== next.checks) changes.push(CHECK_PHRASES[next.checks]);
-  if (next.conflicts !== null && previous.conflicts !== next.conflicts) {
+  if (
+    previous.conflicts !== null &&
+    next.conflicts !== null &&
+    previous.conflicts !== next.conflicts
+  ) {
     changes.push(next.conflicts ? "has merge conflicts" : "merge conflicts resolved");
   }
   if (previous.review !== next.review) {
@@ -248,6 +263,9 @@ export class CoordinatorPullRequestWatches {
     if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) {
       return { watched: false, reason: "no-coordinator" };
     }
+    if (await this.isFollowed(projectId, gitHubPullRequestKey(ref))) {
+      return { watched: false, reason: "already-followed" };
+    }
     const result = this.storage.watchedPullRequests.watchPullRequest(
       projectId,
       {
@@ -289,9 +307,8 @@ export class CoordinatorPullRequestWatches {
     const token = await this.token().catch(() => undefined);
     if (!token) return;
     const config = await this.storage.loadConfig();
-    const notify =
-      normalizeAgentMessagingSettings(config.global.agentMessaging).coordinatorStatusWakes !==
-      "off";
+    const messaging = normalizeAgentMessagingSettings(config.global.agentMessaging);
+    const notify = messaging.enabled && messaging.coordinatorStatusWakes !== "off";
     // Never read first, then longest unread.
     due.sort(
       (a, b) =>
@@ -314,15 +331,23 @@ export class CoordinatorPullRequestWatches {
     token: string,
     notify: boolean,
   ): Promise<boolean> {
+    if (await this.isFollowed(projectId, entry.key)) {
+      this.storage.watchedPullRequests.updateWatchedPullRequest(
+        projectId,
+        entry.key,
+        new Date(this.now()),
+        () => ({ kind: "settle" }),
+      );
+      return false;
+    }
+    // Advance due order even if delivery fails. Keep the previous reading until
+    // delivery succeeds so the same deterministic notice is retried next interval.
+    this.recordChecked(projectId, entry.key);
     const ref = { owner: entry.owner, repo: entry.repo, number: entry.number };
     let status: GitHubPullRequestStatus;
     try {
       status = await this.readStatus(token, ref);
     } catch (error) {
-      if (error instanceof GitHubApiError && error.code === "not-found") {
-        await this.settleGone(projectId, entry, notify);
-        return false;
-      }
       this.recordChecked(projectId, entry.key);
       if (error instanceof GitHubApiError && error.code === "rate-limit") return true;
       log.debug("pr-watch.read-failed", {
@@ -369,28 +394,19 @@ export class CoordinatorPullRequestWatches {
     return false;
   }
 
-  /** GitHub no longer has it (deleted, or the repository is gone): report once and stop. */
-  private async settleGone(
-    projectId: string,
-    entry: WatchedPullRequest,
-    notify: boolean,
-  ): Promise<void> {
-    if (entry.reading && notify) {
-      await this.deliver(
-        projectId,
-        entry,
-        entry.title,
-        ["no longer available on GitHub, so it is no longer watched"],
-        { state: "pr-gone", tone: "info" },
-        readingSignature("gone"),
-      );
-    }
-    this.storage.watchedPullRequests.updateWatchedPullRequest(
-      projectId,
-      entry.key,
-      new Date(this.now()),
-      () => ({ kind: "settle" }),
-    );
+  private async isFollowed(projectId: string, key: string): Promise<boolean> {
+    const associations =
+      await this.storage.coordinators.listCoordinatorWorkflowAssociations(projectId);
+    return associations.some((association) => {
+      if (
+        association.kind !== "pull-request" ||
+        association.pending ||
+        association.terminalNotifiedAt
+      )
+        return false;
+      const ref = parseGitHubPullRequestLink(association.pullRequest?.prUrl ?? "");
+      return ref !== null && gitHubPullRequestKey(ref) === key;
+    });
   }
 
   private recordChecked(projectId: string, key: string): void {

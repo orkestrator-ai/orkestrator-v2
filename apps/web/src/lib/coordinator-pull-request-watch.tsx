@@ -44,17 +44,21 @@ export const COORDINATOR_PR_WATCH_REPORT_TTL_MS = 15 * 60 * 1_000;
 const MAX_REMEMBERED_REPORTS = 500;
 
 const reported = new Map<string, number>();
+const pending = new Map<string, { timer?: ReturnType<typeof setTimeout> }>();
+export const COORDINATOR_PR_WATCH_RETRY_MS = 5_000;
 
 /** Test hook: forget every report, so each test starts clean. */
 export function resetCoordinatorPullRequestWatchReports(): void {
   reported.clear();
+  for (const entry of pending.values()) if (entry.timer) clearTimeout(entry.timer);
+  pending.clear();
 }
 
 /**
  * Tell the backend a coordinator of `projectId` showed this pull request.
  * Best effort: a rendered link is reported once per window, an opened one
- * always (opening is the stronger signal and rare). Failures, including an
- * older backend without the command, are ignored.
+ * always (opening is the stronger signal and rare). Failed reports retry up
+ * to five times with bounded exponential backoff, even if the link unmounts.
  */
 export function reportCoordinatorPullRequest(
   projectId: string,
@@ -70,18 +74,47 @@ export function reportCoordinatorPullRequest(
     now - last < COORDINATOR_PR_WATCH_REPORT_TTL_MS
   )
     return;
-  reported.delete(key);
-  reported.set(key, now);
-  while (reported.size > MAX_REMEMBERED_REPORTS) {
-    const oldest = reported.keys().next().value;
-    if (oldest === undefined) break;
-    reported.delete(oldest);
+  if (source === "rendered" && pending.has(key)) return;
+  // A click upgrades a pending rendered report to an explicit open.
+  const old = pending.get(key);
+  if (old?.timer) clearTimeout(old.timer);
+  const entry: { timer?: ReturnType<typeof setTimeout> } = {};
+  pending.set(key, entry);
+  while (pending.size > MAX_REMEMBERED_REPORTS) {
+    const oldest = pending.keys().next().value!;
+    const evicted = pending.get(oldest);
+    if (evicted?.timer) clearTimeout(evicted.timer);
+    pending.delete(oldest);
   }
-  void watchCoordinatorPullRequest(
-    projectId,
-    { owner: ref.owner, repo: ref.repo, number: ref.number },
-    source,
-  ).catch(() => undefined);
+  const attempt = (retry: number) => {
+    void watchCoordinatorPullRequest(
+      projectId,
+      { owner: ref.owner, repo: ref.repo, number: ref.number },
+      source,
+    )
+      .then(() => {
+        if (pending.get(key) !== entry) return;
+        pending.delete(key);
+        reported.delete(key);
+        reported.set(key, now + (Date.now() - started));
+        while (reported.size > MAX_REMEMBERED_REPORTS) {
+          reported.delete(reported.keys().next().value!);
+        }
+      })
+      .catch(() => {
+        if (pending.get(key) !== entry) return;
+        if (retry >= 5) {
+          pending.delete(key);
+          return;
+        }
+        entry.timer = setTimeout(
+          () => attempt(retry + 1),
+          Math.min(COORDINATOR_PR_WATCH_RETRY_MS * 2 ** retry, 60_000),
+        );
+      });
+  };
+  const started = Date.now();
+  attempt(0);
 }
 
 /**

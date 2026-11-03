@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test, spyOn } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { MarkdownLink } from "@/components/chat/MessageMarkdown";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
@@ -25,6 +25,7 @@ describe("coordinator pull request watch", () => {
     resetCoordinatorPullRequestWatchReports();
   });
   afterEach(() => {
+    resetCoordinatorPullRequestWatchReports();
     cleanup();
   });
 
@@ -65,14 +66,74 @@ describe("coordinator pull request watch", () => {
     expect(watchCalls()).toEqual([]);
   });
 
-  test("a rendered report is repeated only after the window", () => {
+  test("a rendered report is repeated only after the window", async () => {
     const ref = { owner: "acme", repo: "app", number: 3 };
     reportCoordinatorPullRequest("project-a", ref, "rendered", 0);
     reportCoordinatorPullRequest("project-a", ref, "rendered", 1_000);
     // Another project is another watch.
     reportCoordinatorPullRequest("project-b", ref, "rendered", 1_000);
     expect(watchCalls()).toHaveLength(2);
-    reportCoordinatorPullRequest("project-a", ref, "rendered", COORDINATOR_PR_WATCH_REPORT_TTL_MS);
+    await waitFor(() => expect(watchCalls()).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    reportCoordinatorPullRequest(
+      "project-a",
+      ref,
+      "rendered",
+      COORDINATOR_PR_WATCH_REPORT_TTL_MS + 100,
+    );
     expect(watchCalls()).toHaveLength(3);
   });
+});
+
+test("a failed mounted report retries and a failed remounted report is not cached", async () => {
+  resetCoordinatorPullRequestWatchReports();
+  nativeInvoke.mockClear();
+  const timers: Array<() => void> = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: () => void,
+    delay?: number,
+  ) => {
+    if (delay === 5_000) {
+      timers.push(callback);
+      return 1;
+    }
+    return realSetTimeout(callback, delay);
+  }) as typeof setTimeout);
+  try {
+    nativeInvoke.mockRejectedValueOnce(new Error("offline"));
+    const view = render(
+      <CoordinatorPullRequestWatchProvider projectId="retry-project">
+        <MarkdownLink href={PR_URL}>retry</MarkdownLink>
+      </CoordinatorPullRequestWatchProvider>,
+    );
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+    expect(timers).toHaveLength(1);
+    timers.shift()!();
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+    expect(watchCalls()).toHaveLength(2);
+    view.unmount();
+    resetCoordinatorPullRequestWatchReports();
+    nativeInvoke.mockRejectedValueOnce(new Error("offline"));
+    const mountAgain = () =>
+      render(
+        <CoordinatorPullRequestWatchProvider projectId="remount">
+          <MarkdownLink href={PR_URL}>remounted</MarkdownLink>
+        </CoordinatorPullRequestWatchProvider>,
+      );
+    const failed = mountAgain();
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+    expect(timers).toHaveLength(1);
+    failed.unmount();
+    mountAgain();
+    // The remounted link shares the outstanding retry rather than caching failure.
+    expect(watchCalls()).toHaveLength(3);
+    timers.shift()!();
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+    expect(watchCalls()).toHaveLength(4);
+  } finally {
+    timer.mockRestore();
+    resetCoordinatorPullRequestWatchReports();
+    cleanup();
+  }
 });

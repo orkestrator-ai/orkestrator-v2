@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
+import { AgentMailError, type AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { GitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import {
   CoordinatorPullRequestWatches,
@@ -48,6 +48,8 @@ interface Harness {
   setMode(mode: "off" | "settled" | "stages"): Promise<void>;
   setToken(token: string | undefined): void;
   setCoordinator(present: boolean): void;
+  setDeliveryError(error?: Error): void;
+  setFollowed(followed: boolean): void;
 }
 
 async function withHarness(run: (harness: Harness) => Promise<void>): Promise<void> {
@@ -63,6 +65,8 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
     let now = Date.parse("2026-11-03T10:00:00.000Z");
     let token: string | undefined = "token";
     let coordinator = true;
+    let deliveryError: Error | undefined;
+    let followed = false;
     const statuses = new Map<number, GitHubPullRequestStatus | Error>();
     const sent: SentMail[] = [];
     const reads: GitHubPullRequestRef[] = [];
@@ -90,10 +94,20 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
         input: Omit<SentMail, "notice" | "statusBudgetKey">,
         options: { notice?: AgentMailNotice; statusBudgetKey?: string },
       ) => {
+        if (deliveryError) throw deliveryError;
         sent.push({ ...input, notice: options.notice, statusBudgetKey: options.statusBudgetKey });
         return {} as never;
       },
       coordinators: {
+        listCoordinatorWorkflowAssociations: async () =>
+          followed
+            ? [
+                {
+                  kind: "pull-request",
+                  pullRequest: { prUrl: "https://github.com/acme/app/pull/7" },
+                },
+              ]
+            : [],
         getCoordinatorWorkspace: async () => (coordinator ? (workspace as never) : null),
       },
     } as unknown as ConstructorParameters<typeof CoordinatorPullRequestWatches>[0]["storage"];
@@ -126,6 +140,12 @@ async function withHarness(run: (harness: Harness) => Promise<void>): Promise<vo
       },
       setToken: (next) => {
         token = next;
+      },
+      setDeliveryError: (error) => {
+        deliveryError = error;
+      },
+      setFollowed: (value) => {
+        followed = value;
       },
       setCoordinator: (present) => {
         coordinator = present;
@@ -256,17 +276,124 @@ describe("watching a pull request", () => {
     });
   });
 
-  test("a pull request GitHub no longer has is reported and dropped", async () => {
+  test("an ambiguous 404 preserves the baseline and recovers after access returns", async () => {
     await withHarness(async ({ watches, sent, setStatus, advance, storage }) => {
       await watches.watch(PROJECT_ID, ref(9), "rendered");
       await watches.sweep();
       setStatus(9, new GitHubApiError("gone", { code: "not-found", status: 404 }));
       advance(WATCHED_PR_POLL_INTERVAL_MS);
       await watches.sweep();
-      expect(sent.map((mail) => mail.notice?.state)).toEqual(["pr-gone"]);
-      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toEqual([]);
+      expect(sent).toEqual([]);
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(1);
+      setStatus(9, status({ checksState: "success" }));
+      await watches.sweep();
+      expect(sent).toEqual([]);
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(sent[0]?.body).toContain("checks passing");
     });
   });
+
+  test("explicit opens revalidate closed PRs and resume a reopened watch", async () => {
+    await withHarness(async ({ watches, setStatus, advance, sent, storage }) => {
+      await watches.watch(PROJECT_ID, ref(7), "rendered");
+      await watches.sweep();
+      setStatus(7, status({ state: "closed" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(await watches.watch(PROJECT_ID, ref(7), "rendered")).toMatchObject({
+        reason: "settled",
+      });
+      await watches.watch(PROJECT_ID, ref(7), "opened");
+      await watches.sweep();
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(0);
+      setStatus(7, status());
+      await watches.watch(PROJECT_ID, ref(7), "opened");
+      await watches.sweep();
+      setStatus(7, status({ checksState: "success" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(sent).toHaveLength(2);
+    });
+  });
+
+  test("delivery failure advances due order and retries without losing the change", async () => {
+    await withHarness(
+      async ({ watches, setStatus, advance, setDeliveryError, reads, sent, storage }) => {
+        await watches.watch(PROJECT_ID, ref(7), "rendered");
+        await watches.sweep();
+        setStatus(7, status({ checksState: "failure" }));
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        setDeliveryError(new AgentMailError("messaging-disabled", "disabled"));
+        await watches.sweep();
+        const checked =
+          storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]?.checkedAt;
+        expect(checked).toBeDefined();
+        await watches.sweep();
+        expect(reads).toHaveLength(2);
+        setDeliveryError();
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        await watches.sweep();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.body).toContain("checks failing");
+      },
+    );
+  });
+
+  test("generic read failures back off without changing the baseline", async () => {
+    await withHarness(async ({ watches, setStatus, reads, storage }) => {
+      await watches.watch(PROJECT_ID, ref(7), "rendered");
+      setStatus(7, new Error("network unavailable"));
+      await watches.sweep();
+      expect(
+        storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]?.checkedAt,
+      ).toBeDefined();
+      await watches.sweep();
+      expect(reads).toHaveLength(1);
+    });
+  });
+
+  test("missing repository is refused and associated PRs have only their existing follow", async () => {
+    await withHarness(async ({ watches, storage, setFollowed, setStatus, advance, sent }) => {
+      await storage.addProject({
+        id: "no-repo",
+        name: "None",
+        gitUrl: "",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 1,
+      });
+      expect(await watches.watch("no-repo", ref(7), "rendered")).toMatchObject({
+        reason: "no-repository",
+      });
+      await watches.watch(PROJECT_ID, ref(7), "rendered");
+      await watches.sweep();
+      setFollowed(true);
+      expect(await watches.watch(PROJECT_ID, ref(7), "opened")).toMatchObject({
+        reason: "already-followed",
+      });
+      setStatus(7, status({ checksState: "failure" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(sent).toEqual([]);
+      expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(0);
+    });
+  });
+
+  test.each(["clean", "blocked"] as const)(
+    "unknown to %s mergeability is a silent baseline",
+    async (mergeability) => {
+      await withHarness(async ({ watches, setStatus, advance, sent }) => {
+        setStatus(7, status({ mergeability: "unknown" }));
+        await watches.watch(PROJECT_ID, ref(7), "rendered");
+        await watches.sweep();
+        setStatus(7, status({ mergeability }));
+        advance(WATCHED_PR_POLL_INTERVAL_MS);
+        await watches.sweep();
+        expect(sent).toEqual([]);
+      });
+    },
+  );
 
   test("other read failures keep the watch and stop the sweep on a rate limit", async () => {
     await withHarness(async ({ watches, sent, setStatus, reads, storage }) => {
@@ -278,6 +405,25 @@ describe("watching a pull request", () => {
       expect(reads).toHaveLength(1);
       expect(sent).toEqual([]);
       expect(storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)).toHaveLength(2);
+    });
+  });
+
+  test("disabled messaging records readings without attempting delivery", async () => {
+    await withHarness(async ({ watches, storage, setStatus, advance, setDeliveryError }) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...config.global.agentMessaging!, enabled: false },
+      });
+      setDeliveryError(new Error("must not attempt delivery"));
+      await watches.watch(PROJECT_ID, ref(7), "rendered");
+      await watches.sweep();
+      setStatus(7, status({ checksState: "failure" }));
+      advance(WATCHED_PR_POLL_INTERVAL_MS);
+      await watches.sweep();
+      expect(
+        storage.watchedPullRequests.listWatchedPullRequests(PROJECT_ID)[0]?.reading?.checks,
+      ).toBe("failing");
     });
   });
 
@@ -338,6 +484,20 @@ describe("readings", () => {
     );
     expect(watchedPullRequestReading(status({ mergeability: "dirty" })).conflicts).toBe(true);
     expect(watchedPullRequestReading(status({ isDraft: true })).state).toBe("draft");
+  });
+
+  test("neutral checks stay distinct and first known conflicts are silent", () => {
+    const previous = { state: "open", checks: "passing", conflicts: null, review: "none" } as const;
+    const next = watchedPullRequestReading(
+      status({ checksState: "neutral", mergeability: "clean" }),
+    );
+    expect(next.checks).toBe("neutral");
+    expect(describeWatchedPullRequestChanges(previous, next)).toEqual([
+      "checks neutral or skipped",
+    ]);
+    expect(describeWatchedPullRequestChanges(previous, { ...previous, conflicts: false })).toEqual(
+      [],
+    );
   });
 
   test("changes are described briefly, and a settled pull request only by its outcome", () => {

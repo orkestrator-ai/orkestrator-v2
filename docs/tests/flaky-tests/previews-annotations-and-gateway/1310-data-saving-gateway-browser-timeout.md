@@ -122,3 +122,15 @@ to stderr, keeping stdout JSON-only. No browser assertion, timeout or skip
 changed between these runs. The passing rerun was after a conflict-free rebase
 onto `origin/main` at `38d55ee14`; the backend, protocol and gateway fixture
 sources were identical across the rebase.
+
+## Opaque session review — 2026-11-03
+
+Recorded `mise run test:browser` at 27f6d5eba failed the mobile owner at its
+60 s deadline (cleanup at line 170); aggregate totals: 29 failed, 24 flaky,
+118 skipped, 1109 passed. The complete owner passed unchanged at both
+viewports alone with one worker in 38.7 s:
+
+`ORKESTRATOR_E2E_PORT=18473 mise run test:logged -- --name data-saving-gateway -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --workers=1`
+
+Original evidence: `.orkestrator/review-artifacts/review-validation-2c183b1f-33d1-45e1-b1fe-0f5647dd9025/validation-05.stderr.txt`.
+No assertion or timeout changed. Host contention remains a hypothesis.

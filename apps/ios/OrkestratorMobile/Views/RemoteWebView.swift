@@ -306,8 +306,11 @@ struct RemoteWebView: UIViewRepresentable {
                 guard let name = field.key as? String else { return }
                 result[name] = String(describing: field.value)
             }
-            guard let cookie = HTTPCookie.cookies(withResponseHeaderFields: headers, for: loginURL)
-                .first(where: { $0.name == "orkestrator_gateway_auth" }) else {
+            // The cookie holds an opaque gateway session. The `__Host-` name is
+            // accepted ahead of the backend issuing it over HTTPS.
+            let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: loginURL)
+            guard let cookie = cookies.first(where: { $0.name == "__Host-orkestrator_gateway_auth" })
+                ?? cookies.first(where: { $0.name == "orkestrator_gateway_auth" }) else {
                 throw NativeGatewayLoginError.missingCookie
             }
             return cookie

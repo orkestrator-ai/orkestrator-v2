@@ -1317,10 +1317,18 @@ test("backend restart, real UI: banner during the outage, login page on the laps
     const listeningAt = Date.now();
 
     // The session lapsed with the old backend. Whatever notices first, the tab
-    // must not sit on a stale screen behind a "Reconnecting" banner.
+    // must not sit on a stale screen behind a "Reconnecting" banner: it reloads
+    // and the gateway answers with its login form.
     await expect
-      .poll(() => new URL(tab!.page.url()).pathname, { timeout: LAPSE_BUDGET_MS })
-      .toBe("/__orkestrator/login");
+      .poll(
+        () =>
+          tab!.page
+            .locator('form[action="/__orkestrator/login"]')
+            .count()
+            .catch(() => 0),
+        { timeout: LAPSE_BUDGET_MS },
+      )
+      .toBe(1);
     const loginAt = Date.now();
 
     await tab.page.goto(new URL(mintLoginPath(), tab.link.url).href, {

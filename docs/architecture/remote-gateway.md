@@ -396,9 +396,10 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   attempts still unanswered once it reopens.
 - A stream refused with `401` is no outage, because the link is up and no retry
   will help. The state goes back to `connecting` while retries continue, so reads
-  run again and show the failure, and an agent-test tab goes to its login page.
-  An `EventSource` cannot read the status that closed it, so an HTTP failure on
-  one asks the same gate with `GET /__orkestrator/gateway-settings`.
+  run again and show the failure, and a tab signed in with a cookie session
+  goes to its login page. An `EventSource` cannot read the status that closed
+  it, so an HTTP failure on one asks the same gate with
+  `GET /__orkestrator/status`.
 - Going offline in the browser pauses and resets nothing, because a local
   backend stays reachable without internet.
 - The opt-in terminal WebSocket has its own reconnect owner
@@ -418,8 +419,36 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
 
 ## Security notes
 
-- The gateway requires a token before serving the app, backend API, event
-  stream, or loopback proxy routes.
+- The gateway requires a credential before serving the app, backend API, event
+  stream, or loopback proxy routes: the gateway token as a bearer header, a
+  client grant, or a browser session cookie.
+- Signing in with the login form (or a `dev:login` link) sets
+  `orkestrator_gateway_auth` to an opaque session id, never the gateway token.
+  Cookies are scoped by host, not port, so every other service on the same
+  host (a container dev server on a published loopback port, any HTTP service
+  on the Tailscale address) receives the cookie; the session limits what that
+  exposes. It is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
+  browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
+  a same-host `https:` `Origin`). The gateway reads and strips the
+  `__Host-orkestrator_gateway_auth` name too, but does not issue it yet: older
+  iOS builds look the cookie up by its plain name (todo
+  [2960](../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md)).
+- Sessions live only in the backend's memory (`gateway-sessions.ts`). A session
+  expires after 12 hours without explicit keyboard or pointer activity (the
+  client renews through `POST /__orkestrator/session` at most once a minute;
+  API polling does not count) and after 7 days whatever the activity; an
+  agent-test profile uses 30 minutes and 12 hours. Logout revokes the session,
+  token rotation revokes every session, and a backend restart ends them all.
+  At most 64 are held; the one closest to expiry is evicted first.
+- A cookie never authenticates with the gateway token itself. A browser still
+  holding a cookie from a gateway that stored the token there gets the login
+  page with "Your browser session has ended", and that cookie is expired in the
+  same response. A tab whose session lapses is sent to the login page too.
+- `GET` and `PUT /__orkestrator/gateway-settings` (reading or rotating the
+  token) need the gateway token as a bearer header. A cookie session, a
+  session id sent as a bearer, or a client grant gets `403`, so a browser
+  signed in through the login form cannot show the token in Settings → Web
+  client; Electron, the hosted client and the CLI send the bearer.
 - Default bind is Tailscale-only. `--allow-non-tailscale-bind` is for local
   development.
 - Do not use Tailscale Funnel.
@@ -535,8 +564,17 @@ procedure.
   authenticate the app, the backend API, the event stream, or the legacy
   loopback proxy.
 - Rotating the gateway token revokes all active preview access.
-- The legacy loopback proxy (`/__orkestrator/browser/loopback/<port>/`) is
-  unchanged for older clients.
+- The legacy loopback proxy (`/__orkestrator/browser/loopback/<port>/`) stays
+  for older clients. Every response under it, error and login pages included,
+  carries `Content-Security-Policy: sandbox allow-scripts allow-forms
+  allow-pointer-lock allow-presentation` in place of the application's own
+  policy, the same flags as the client's preview iframe. The page stays an
+  opaque origin even when opened top-level, so it cannot call gateway routes
+  as the signed-in user. It also has no storage or cookies of its own there;
+  applications that need them use the tunnel or a private origin. Making the
+  isolated transports the default is
+  [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md)
+  task 7.
 - `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` (`0`/`1`)
   override the stored preview settings.
 

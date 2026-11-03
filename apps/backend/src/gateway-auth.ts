@@ -27,18 +27,19 @@ import type { GatewayLifecycle } from "./gateway-lifecycle.js";
 import type { GatewayProxy } from "./gateway-proxy.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
+import { GatewayTokenValidationError } from "@orkestrator/protocol/gateway-token";
 import {
-  GatewayTokenValidationError,
-  gatewayTokenCookieHeader,
-} from "@orkestrator/protocol/gateway-token";
+  clearedGatewayCookies,
+  gatewayRequestCredential,
+  gatewaySessionCookie,
+  getGatewayAuthCookie,
+  requestIsHttps,
+} from "./gateway-sessions.js";
 import {
-  AUTH_COOKIE,
   API_PREFIX,
   AGENT_TEST_BOOTSTRAP_TTL_MS,
-  AGENT_TEST_SESSION_IDLE_TTL_MS,
-  AGENT_TEST_SESSION_MAX_LIFETIME_MS,
+  BROWSER_PREVIEW_SANDBOX_CSP,
   MAX_AGENT_TEST_BOOTSTRAPS,
-  MAX_AGENT_TEST_SESSIONS,
   CORS_ALLOWED_METHODS,
   CORS_ALLOWED_HEADERS,
   InvalidRequestBodyError,
@@ -56,7 +57,6 @@ import {
   responseCompressionContexts,
   jsonResponse,
   textResponse,
-  getCookie,
   getBearerToken,
   tokenMatches,
   readJsonBody,
@@ -105,14 +105,36 @@ export class GatewayAuth {
   ) {}
 
   authenticated(request: IncomingMessage): boolean {
-    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
-    return this.gatewayCredentialMatches(credential);
+    return this.requestCredentialMatches(request);
+  }
+
+  /**
+   * A bearer header may carry any gateway credential. The cookie only ever
+   * carries a browser session or a client grant: the durable token in a cookie
+   * (what older gateways issued) is refused, because a cookie is sent to every
+   * port on the host and so is never the place for it.
+   */
+  requestCredentialMatches(request: IncomingMessage): boolean {
+    const bearer = getBearerToken(request.headers);
+    if (bearer) return this.gatewayCredentialMatches(bearer);
+    return this.cookieCredentialMatches(getGatewayAuthCookie(request.headers));
+  }
+
+  private cookieCredentialMatches(candidate: string | null): boolean {
+    if (!candidate) return false;
+    if (this.grantExpiresAt(candidate) !== null) return true;
+    return this.ctx.browserSessions.matches(candidate);
   }
 
   /** The request is authenticated by a client grant (a leaf workspace), not the gateway token. */
   private authenticatedByGrant(request: IncomingMessage): boolean {
-    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
+    const credential = gatewayRequestCredential(request.headers);
     return Boolean(credential && this.grantExpiresAt(credential) !== null);
+  }
+
+  /** Only the durable token, sent as a bearer header, may read or rotate itself. */
+  private authenticatedWithDurableBearer(request: IncomingMessage): boolean {
+    return tokenMatches(this.ctx.token, getBearerToken(request.headers));
   }
 
   private grantExpiresAt(candidate: string): number | null {
@@ -142,34 +164,17 @@ export class GatewayAuth {
     return true;
   }
 
-  private authenticatedWithAgentTestSession(request: IncomingMessage): boolean {
-    if (!this.ctx.agentTestMode) return false;
-    const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
-    return Boolean(
-      credential &&
-      !tokenMatches(this.ctx.token, credential) &&
-      this.ctx.agentTestSessions.has(credential),
-    );
-  }
-
   gatewayCredentialMatches(candidate: string | null): boolean {
     if (tokenMatches(this.ctx.token, candidate)) return true;
-    if (candidate && this.grantExpiresAt(candidate) !== null) return true;
-    if (!this.ctx.agentTestMode || !candidate) return false;
-    const session = this.ctx.agentTestSessions.get(candidate);
-    if (session === undefined) return false;
-    const now = Date.now();
-    if (session.expiresAt <= now || session.absoluteExpiresAt <= now) {
-      this.ctx.agentTestSessions.delete(candidate);
-      return false;
-    }
-    return true;
+    if (!candidate) return false;
+    if (this.grantExpiresAt(candidate) !== null) return true;
+    return this.ctx.browserSessions.matches(candidate);
   }
 
   /**
    * Current deadline for a credential already accepted by
    * `gatewayCredentialMatches`. Durable gateway tokens have no session
-   * deadline; agent-test session cookies are bounded by both clocks.
+   * deadline; browser sessions are bounded by both of their clocks.
    */
   gatewayCredentialExpiresAt(candidate: string | null): number | null {
     if (tokenMatches(this.ctx.token, candidate)) return null;
@@ -177,74 +182,18 @@ export class GatewayAuth {
       const grantExpiry = this.grantExpiresAt(candidate);
       if (grantExpiry !== null) return grantExpiry;
     }
-    if (!this.ctx.agentTestMode || !candidate) return null;
-    const session = this.ctx.agentTestSessions.get(candidate);
-    return session ? Math.min(session.expiresAt, session.absoluteExpiresAt) : null;
+    return candidate ? this.ctx.browserSessions.expiresAt(candidate) : null;
   }
 
-  refreshAgentTestSession(candidate: string, now = Date.now()): boolean {
-    const session = this.ctx.agentTestSessions.get(candidate);
-    if (!session || session.expiresAt <= now || session.absoluteExpiresAt <= now) {
-      this.ctx.agentTestSessions.delete(candidate);
-      return false;
-    }
-    session.expiresAt = Math.min(now + AGENT_TEST_SESSION_IDLE_TTL_MS, session.absoluteExpiresAt);
-    return true;
-  }
-
-  pruneAgentTestCredentials(now = Date.now()): void {
+  pruneAgentTestBootstraps(now = Date.now()): void {
     for (const [code, expiresAt] of this.ctx.agentTestBootstraps) {
       if (expiresAt <= now) this.ctx.agentTestBootstraps.delete(code);
     }
-    for (const [session, expiry] of this.ctx.agentTestSessions) {
-      if (expiry.expiresAt <= now || expiry.absoluteExpiresAt <= now) {
-        this.ctx.agentTestSessions.delete(session);
-      }
-    }
   }
 
-  /**
-   * The session that dies soonest. `refreshAgentTestSession` slides `expiresAt`
-   * in place, so Map insertion order no longer tracks the deadline the way it did
-   * when every session had one fixed TTL: evicting the first key would drop the
-   * session a browser is actively using and keep idle ones that lapse seconds
-   * later. Ties keep the earlier-inserted entry, which is the old behaviour.
-   */
-  private nearestAgentTestSession(): string | undefined {
-    let nearest: string | undefined;
-    let deadline = Number.POSITIVE_INFINITY;
-    for (const [session, expiry] of this.ctx.agentTestSessions) {
-      const effective = Math.min(expiry.expiresAt, expiry.absoluteExpiresAt);
-      if (effective < deadline) {
-        deadline = effective;
-        nearest = session;
-      }
-    }
-    return nearest;
-  }
-
-  issueAgentTestSession(now = Date.now()): string {
-    this.pruneAgentTestCredentials(now);
-    while (this.ctx.agentTestSessions.size >= MAX_AGENT_TEST_SESSIONS) {
-      const evicted = this.nearestAgentTestSession();
-      if (!evicted) break;
-      this.ctx.agentTestSessions.delete(evicted);
-    }
-    const session = randomBytes(32).toString("base64url");
-    this.ctx.agentTestSessions.set(session, {
-      expiresAt: now + AGENT_TEST_SESSION_IDLE_TTL_MS,
-      absoluteExpiresAt: now + AGENT_TEST_SESSION_MAX_LIFETIME_MS,
-    });
-    return session;
-  }
-
-  /**
-   * A browser-session cookie, deliberately without Max-Age: the server owns the
-   * sliding idle window and its absolute cap, so a fixed client-side expiry
-   * would only be able to disagree with it.
-   */
-  agentTestSessionCookie(session: string): string {
-    return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`;
+  /** Mints a browser session and the cookie that carries it to this request's browser. */
+  issueSessionCookie(request: IncomingMessage): string {
+    return gatewaySessionCookie(this.ctx.browserSessions.issue(), requestIsHttps(request));
   }
 
   agentTestLoginHint(): string {
@@ -345,6 +294,14 @@ export class GatewayAuth {
       requestMetrics.finish(response, responseBytes);
     });
     const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
+    // Legacy previews serve agent-controlled HTML on the gateway's own origin.
+    // Sandboxing every response keeps such a document opaque-origin even when
+    // it is opened top-level, outside the client's sandboxed iframe, so it can
+    // never call gateway routes as the signed-in user. Error and login pages
+    // under the prefix get it too: nothing there needs the gateway origin.
+    if (isBrowserPreviewRequest) {
+      response.setHeader("content-security-policy", BROWSER_PREVIEW_SANDBOX_CSP);
+    }
 
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
       if (isBrowserPreviewRequest && request.headers.origin === "null") {
@@ -411,9 +368,11 @@ export class GatewayAuth {
     }
 
     if (url.pathname === `${API_PREFIX}/logout`) {
+      const session = getGatewayAuthCookie(request.headers);
+      if (session) this.ctx.browserSessions.revoke(session);
       response.writeHead(303, {
         location: `${API_PREFIX}/login`,
-        "set-cookie": `${AUTH_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
+        "set-cookie": clearedGatewayCookies(requestIsHttps(request)),
         "cache-control": "no-store",
       });
       response.end();
@@ -421,16 +380,7 @@ export class GatewayAuth {
     }
 
     if (!this.authenticated(request)) {
-      if (wantsHtml(request) && request.method === "GET") {
-        textResponse(
-          response,
-          401,
-          loginPage("", this.agentTestLoginHint()),
-          "text/html; charset=utf-8",
-        );
-      } else {
-        jsonResponse(response, 401, { error: "Authentication required" });
-      }
+      this.refuseUnauthenticated(request, response);
       return;
     }
 
@@ -456,8 +406,17 @@ export class GatewayAuth {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/session`) {
+      this.handleBrowserSession(request, response);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/agent-test/session`) {
-      this.handleAgentTestSession(request, response, listenerKind);
+      if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
+        jsonResponse(response, 404, { error: "Not found" });
+        return;
+      }
+      this.handleBrowserSession(request, response);
       return;
     }
 
@@ -557,6 +516,32 @@ export class GatewayAuth {
   }
 
   /**
+   * A browser whose cookie no longer authenticates gets the login page with a
+   * reason, never a blank failure. A cookie holding the durable token (what
+   * gateways before opaque sessions issued) is also expired on the way, so the
+   * token stops travelling to every other port on this host.
+   */
+  private refuseUnauthenticated(request: IncomingMessage, response: ServerResponse): void {
+    const staleCookie = getGatewayAuthCookie(request.headers);
+    if (staleCookie && tokenMatches(this.ctx.token, staleCookie)) {
+      response.setHeader("set-cookie", clearedGatewayCookies(requestIsHttps(request)));
+    }
+    if (wantsHtml(request) && request.method === "GET") {
+      const notice = staleCookie
+        ? "Your browser session has ended. Enter the gateway token to sign in again."
+        : "";
+      textResponse(
+        response,
+        401,
+        loginPage(notice, this.agentTestLoginHint()),
+        "text/html; charset=utf-8",
+      );
+    } else {
+      jsonResponse(response, 401, { error: "Authentication required" });
+    }
+  }
+
+  /**
    * The authenticated client handshake: safe identity, version and
    * capability metadata, plus which kind of listener answered. A managed SSH
    * route verifies `endpointRole` is `client` before it trusts the forward.
@@ -598,10 +583,15 @@ export class GatewayAuth {
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
   ): Promise<void> {
-    // Agent-test sessions intentionally keep the durable gateway token out of
-    // the browser. Do not let that scoped credential read or rotate it here.
-    if (this.authenticatedWithAgentTestSession(request)) {
-      jsonResponse(response, 403, { error: "Gateway settings require the durable credential" });
+    // Browser sessions exist to keep the durable token out of the browser, and
+    // a cookie reaches every port on this host. Revealing or rotating the
+    // token therefore takes the token itself, as a bearer header (Electron,
+    // the hosted client, the CLI), never a cookie, a session or a grant.
+    if (!this.authenticatedWithDurableBearer(request)) {
+      jsonResponse(response, 403, {
+        error:
+          "The gateway token is only shown or changed in the desktop app or a client signed in with the token.",
+      });
       return;
     }
     if (request.method === "GET") {
@@ -636,10 +626,10 @@ export class GatewayAuth {
     }
 
     try {
+      // Rotation revokes every browser session; the caller is a bearer client
+      // and gets no cookie.
       const settings = await this.lifecycle.setToken(body.token);
-      jsonResponse(response, 200, settings, {
-        "set-cookie": gatewayTokenCookieHeader(settings.token),
-      });
+      jsonResponse(response, 200, settings);
     } catch (error) {
       if (error instanceof GatewayTokenValidationError) {
         jsonResponse(response, 400, { error: error.message });
@@ -780,12 +770,9 @@ export class GatewayAuth {
       return;
     }
 
-    const cookie = this.ctx.agentTestMode
-      ? this.agentTestSessionCookie(this.issueAgentTestSession())
-      : gatewayTokenCookieHeader(this.ctx.token);
     response.writeHead(303, {
       location: "/",
-      "set-cookie": cookie,
+      "set-cookie": this.issueSessionCookie(request),
       "cache-control": "no-store",
     });
     response.end();
@@ -814,7 +801,7 @@ export class GatewayAuth {
       return;
     }
     const now = Date.now();
-    this.pruneAgentTestCredentials(now);
+    this.pruneAgentTestBootstraps(now);
     while (this.ctx.agentTestBootstraps.size >= MAX_AGENT_TEST_BOOTSTRAPS) {
       const oldest = this.ctx.agentTestBootstraps.keys().next().value as string | undefined;
       if (!oldest) break;
@@ -827,21 +814,13 @@ export class GatewayAuth {
   }
 
   /**
-   * Detects an agent-test cookie session and renews it only after explicit
-   * browser activity. Ordinary API polling deliberately does not touch the
-   * idle clock.
+   * Detects a cookie session and renews its idle clock, only after explicit
+   * browser activity: ordinary API polling deliberately does not touch it, so
+   * an unattended tab still lapses. A bearer client has no session here.
    */
-  handleAgentTestSession(
-    request: IncomingMessage,
-    response: ServerResponse,
-    listenerKind: ListenerKind,
-  ): void {
-    if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
-      jsonResponse(response, 404, { error: "Not found" });
-      return;
-    }
-    const session = getCookie(request.headers, AUTH_COOKIE);
-    if (!session || !this.ctx.agentTestSessions.has(session)) {
+  handleBrowserSession(request: IncomingMessage, response: ServerResponse): void {
+    const session = getBearerToken(request.headers) ? null : getGatewayAuthCookie(request.headers);
+    if (!session || !this.ctx.browserSessions.has(session)) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
     }
@@ -854,8 +833,8 @@ export class GatewayAuth {
       response.end();
       return;
     }
-    if (!this.refreshAgentTestSession(session)) {
-      jsonResponse(response, 401, { error: "Agent-test session expired" });
+    if (!this.ctx.browserSessions.refresh(session)) {
+      jsonResponse(response, 401, { error: "Browser session expired" });
       return;
     }
     response.writeHead(204, { "cache-control": "no-store" });
@@ -894,14 +873,13 @@ export class GatewayAuth {
       jsonResponse(response, 401, { error: "Bootstrap code is invalid or expired" });
       return;
     }
-    const session = this.issueAgentTestSession();
     jsonResponse(
       response,
       200,
       { ok: true },
       {
         "cache-control": "no-store",
-        "set-cookie": this.agentTestSessionCookie(session),
+        "set-cookie": this.issueSessionCookie(request),
       },
     );
   }
@@ -951,7 +929,7 @@ export class GatewayAuth {
     }
     response.writeHead(303, {
       location: "/",
-      "set-cookie": this.agentTestSessionCookie(this.issueAgentTestSession()),
+      "set-cookie": this.issueSessionCookie(request),
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
     });

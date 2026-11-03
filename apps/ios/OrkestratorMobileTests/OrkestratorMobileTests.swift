@@ -813,6 +813,14 @@ final class RemoteWebViewPolicyTests: XCTestCase {
             "session-value"
         )
 
+        let hostPrefixed = response(303, headers: [
+            "Set-Cookie": "__Host-orkestrator_gateway_auth=host-session; Path=/; Secure; HttpOnly; SameSite=Strict",
+        ])
+        XCTAssertEqual(
+            try RemoteWebView.Coordinator.loginCookie(from: hostPrefixed, loginURL: loginURL).value,
+            "host-session"
+        )
+
         let invalid = URLResponse(
             url: loginURL,
             mimeType: nil,

@@ -47,6 +47,7 @@ async function createLifecycle(
     {
       gatewayCredentialMatches: () => false,
       gatewayCredentialExpiresAt: () => null,
+      requestCredentialMatches: () => false,
       isOriginAllowed: () => false,
     },
   );

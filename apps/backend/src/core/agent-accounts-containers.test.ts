@@ -48,6 +48,7 @@ import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./agent-credential-files.
 import type { Environment } from "./models.js";
 import {
   defaultInputSourceRoots,
+  INPUT_LIMITS,
   portableInputRevisionDirectory,
   replaceStagedInputFile,
   stagePortableInputs,
@@ -487,7 +488,48 @@ describe("refreshStagedAgentAccountLogins", () => {
     ).toContain("claude-host");
   });
 
-  test.each(["missing", "symlink", "oversized", "directory"])(
+  test.each(["symlink", "large"])(
+    "preserves a staged %s Claude config through repeated start refreshes",
+    async (source) => {
+      const host = path.join(root, "host-home", ".claude.json");
+      const safe = {
+        oauthAccount: { emailAddress: "linked@example.com" },
+        hasCompletedOnboarding: true,
+        mcpServers: { docs: { type: "http", url: "https://docs.example.invalid/mcp" } },
+      };
+      const raw = JSON.stringify({
+        ...safe,
+        primaryApiKey: "SENTINEL",
+        projects: { secret: { metadata: "x".repeat(source === "large" ? 2 * 1024 * 1024 : 0) } },
+      });
+      await fs.unlink(host);
+      if (source === "symlink") {
+        await write(`${host}.target`, raw);
+        await fs.symlink(`${host}.target`, host);
+      } else {
+        await write(host, raw);
+      }
+      const revision = await stage();
+      const mount = staged(
+        revision,
+        `files/claude.json/${source === "symlink" ? ".claude.json.target" : ".claude.json"}`,
+      );
+      expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual(safe);
+      const inode = (await fs.stat(mount)).ino;
+      for (let start = 0; start < 2; start++) {
+        await refreshStagedAgentAccountLogins(
+          context,
+          environment,
+          "container-1",
+          fakeRunners(revision).runners,
+        );
+        expect(JSON.parse(await fs.readFile(mount, "utf8"))).toEqual(safe);
+        expect((await fs.stat(mount)).ino).toBe(inode);
+      }
+    },
+  );
+
+  test.each(["missing", "broken-link", "oversized", "directory"])(
     "clears a legacy raw mount in place with a %s host source, including switch-back",
     async (source) => {
       const revision = await stage();
@@ -507,11 +549,10 @@ describe("refreshStagedAgentAccountLogins", () => {
       const inode = (await fs.stat(mount)).ino;
       const host = path.join(root, "host-home", ".claude.json");
       await fs.unlink(host);
-      if (source === "symlink") {
-        await write(`${host}.target`, raw);
+      if (source === "broken-link") {
         await fs.symlink(`${host}.target`, host);
       } else if (source === "oversized") {
-        await write(host, JSON.stringify({ padding: "x".repeat(1024 * 1024) }));
+        await write(host, JSON.stringify({ padding: "x".repeat(INPUT_LIMITS.fileBytes) }));
       } else if (source === "directory") {
         await fs.mkdir(host);
       }

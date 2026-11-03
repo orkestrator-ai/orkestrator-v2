@@ -12,6 +12,9 @@ import { expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "../src/core/agent-credential-files";
+import { refreshStagedAgentAccountLogins } from "../src/core/agent-accounts-containers";
 import { CLAUDE_CONTAINER_CONFIG_KEYS } from "../src/core/claude-container-config";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { stagePortableInputs, stagedInputMountArguments } from "../src/core/portable-inputs";
@@ -42,14 +45,19 @@ test.skipIf(!enabled)(
         { mode: 0o600 },
       );
       await fs.writeFile(
-        path.join(home, ".claude.json"),
+        path.join(home, "claude-config-target.json"),
         JSON.stringify({
           oauthAccount: { emailAddress: "m8@fixture.invalid" },
           hasCompletedOnboarding: true,
           hasSeenAutoDefaultNudge: true,
           primaryApiKey: "SENTINEL-API-KEY",
           userID: "SENTINEL-USER-ID",
-          projects: { [path.join(home, "code", "app")]: { allowedTools: ["Bash"] } },
+          projects: {
+            [path.join(home, "code", "app")]: {
+              allowedTools: ["Bash"],
+              padding: "x".repeat(2 * 1024 * 1024),
+            },
+          },
           githubRepoPaths: { "acme/app": [path.join(home, "code", "app")] },
           mcpServers: {
             docs: { type: "http", url: "https://docs.example.invalid/mcp" },
@@ -63,11 +71,54 @@ test.skipIf(!enabled)(
         }),
         { mode: 0o600 },
       );
+      await fs.symlink(
+        path.join(home, "claude-config-target.json"),
+        path.join(home, ".claude.json"),
+      );
       const staged = await stagePortableInputs(dataDir, "m8-qualification", new Set(["claude"]), {
         home,
         agentTest: false,
       });
       expect(staged.mounts.map((mount) => mount.target)).toContain("/claude-config.json");
+
+      // Exercise the production pre-start refresh, including a linked source
+      // whose dropped project metadata puts it above the credential-file limit.
+      const environment = lifecycleEnvironment({ id: "m8-qualification" });
+      const { context } = memoryLifecycleContext([environment], dataDir);
+      Object.assign(context.storage, {
+        loadConfig: async () => ({ global: { enabledAgentPlatforms: ["claude"] } }),
+      });
+      context.runtimeFlavor = "agent-test";
+      context.credentialSources = new Set(["claude"]);
+      const overrides = {
+        ORKESTRATOR_AGENT_TEST_HOST_HOME: home,
+        [AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]: path.join(home, ".claude"),
+      };
+      const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+      try {
+        Object.assign(process.env, overrides);
+        await refreshStagedAgentAccountLogins(context, environment, "fixture", {
+          label: async () => staged.revision,
+          exec: async () => {
+            throw new Error("refresh must not exec");
+          },
+          pipe: async () => {
+            throw new Error("refresh must not pipe");
+          },
+        });
+      } finally {
+        for (const [key, value] of previous) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        context.runtime.shutdown();
+      }
+      const configMount = staged.mounts.find((mount) => mount.target === "/claude-config.json")!;
+      const refreshed = JSON.parse(await fs.readFile(configMount.source, "utf8"));
+      expect(refreshed.oauthAccount.emailAddress).toBe("m8@fixture.invalid");
+      expect(Object.keys(refreshed.mcpServers)).toEqual(["docs"]);
+      expect(refreshed.hasCompletedOnboarding).toBe(true);
+      expect(refreshed.projects).toBeUndefined();
 
       container = await docker([
         "create",

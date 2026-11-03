@@ -1,7 +1,7 @@
 import { prepareEgressGatewayForStart } from "./egress-gateway.js";
 import { startDockerContainer } from "./container-start.js";
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
@@ -141,6 +141,34 @@ async function readLoginFile(file: string): Promise<string | undefined> {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.size > MAX_LOGIN_FILE_BYTES) return undefined;
     return await fs.readFile(file, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Match filtered staging: resolve dotfile links, then safely read a bounded regular file. */
+async function readClaudeConfigFile(file: string): Promise<string | undefined> {
+  try {
+    const source = await fs.realpath(file);
+    const before = await fs.lstat(source);
+    if (!before.isFile() || before.size > INPUT_LIMITS.fileBytes) return undefined;
+    const handle = await fs.open(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) {
+        return undefined;
+      }
+      const buffer = Buffer.alloc(INPUT_LIMITS.fileBytes + 1);
+      let total = 0;
+      while (total < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+        if (!bytesRead) break;
+        total += bytesRead;
+      }
+      return total > INPUT_LIMITS.fileBytes ? undefined : buffer.toString("utf8", 0, total);
+    } finally {
+      await handle.close();
+    }
   } catch {
     return undefined;
   }
@@ -385,7 +413,7 @@ async function refreshStagedLogin(
   );
   // `.claude.json` is bind-mounted as a single file under whatever name the
   // source had, so it is found by listing and rewritten in place.
-  const hostJson = await readLoginFile(
+  const hostJson = await readClaudeConfigFile(
     active.home ? path.join(active.home, ".claude.json") : host.claudeJson,
   );
 

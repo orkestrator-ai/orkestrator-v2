@@ -7,6 +7,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
     events: {
       "portable-inputs.relay-missing":
         "Docker is rootless and the image predates the staged-input relay, so the container cannot read them until rebuilt.",
+      "project-seed.refused":
+        "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
       "login-keeper.pass-failed": "A Claude login keeper pass failed; the next interval retries.",
       "login-keeper.refresh-failed":

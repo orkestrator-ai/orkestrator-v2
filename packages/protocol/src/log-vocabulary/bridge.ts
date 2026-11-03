@@ -105,6 +105,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "session.created": "A session was created or recovered.",
       "session.delete-failed": "Deleting a session failed.",
       "session.fork-failed": "Forking a session failed.",
+      "session.policy-widening-refused":
+        "A config request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "session.rename-failed": "Renaming a session failed.",
       "session.resolve-failed":
         "A session could not be found or loaded for a request; action names the request.",

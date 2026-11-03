@@ -90,7 +90,7 @@ The material risks are concentrated in four themes:
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
-| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
+| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
@@ -244,7 +244,20 @@ realpath confinement, instead of bind-mounting them.
 
 ### H4. An agent can read its own bridge-control token, then self-approve or widen its execution policy
 
-**Status:** Verified
+**Status:** Partly fixed (2026-11-03). Every bridge now deletes its token from
+`process.env` at startup, so nothing it spawns through `node:child_process` or
+an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Claude's
+`POST /session/:id/config` is narrow-only: a policy that is wider than the
+session's current one on any axis (approvals, sandbox, network, project
+resources, policy id, tool or capability grants and denials, MCP selection) is
+refused with 403 `policy-widening-refused` and nothing is applied
+(`bridges/claude-bridge/src/services/execution-policy-narrowing.ts`). Still
+open, in
+[todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md):
+the token file and `/proc/<bridge pid>/environ` are still readable by the
+agent's uid, so it can still answer its own approvals; the other bridges'
+create, resume and prompt routes still accept a wider policy; and a user's own
+widening reaches a live Claude session only after the bridge restarts.
 **Actor:** A1
 **Severity:** High only for hardened environments (see footnote in §2)
 

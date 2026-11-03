@@ -870,7 +870,7 @@ describe("CoordinatorPanel", () => {
       fireEvent.keyDown(input, { key: "Enter" });
       expect(await screen.findByText("Automatic fast-forward refused")).toBeTruthy();
       await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-      expect(mergeDialog()).toBeNull();
+      expect(mergeDialog() === null).toBe(true);
     });
 
     test.each(["turn-running", "declined", "blocked"] as const)(
@@ -1298,8 +1298,27 @@ describe("CoordinatorPanel", () => {
       await sendFollowUp("Continue after busy refusal");
       await waitFor(() => expect(sentPrompts()).toEqual(["Continue after busy refusal"]));
       expect(
-        screen.queryByText("Stop the active coordinator turn before changing the checkout"),
-      ).toBeNull();
+        screen.queryByText("Stop the active coordinator turn before changing the checkout") ===
+          null,
+      ).toBe(true);
+    });
+
+    test("waits for a background checkout sync before sending", async () => {
+      ensuredGit = behindGit();
+      await renderAssigned();
+      let finish!: () => void;
+      syncGit.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve(behindGit({ behind: 0 }));
+          }),
+      );
+      const sending = sendFollowUp("Continue after background sync");
+      await waitFor(() => expect(syncGit).toHaveBeenCalledTimes(1));
+      expect(sentPrompts()).toEqual([]);
+      finish();
+      await sending;
+      await waitFor(() => expect(sentPrompts()).toEqual(["Continue after background sync"]));
     });
 
     test("merges, then sends, without asking", async () => {

@@ -415,8 +415,18 @@ exit 0
   shimTest(
     "reports a container PR as merged only after verifying the captured PR URL",
     async () => {
-      const { context } = createContext(createEnvironment());
+      const { context } = createContext(
+        createEnvironment({
+          environmentType: "containerized",
+          containerId: "container-1",
+          prUrl: "https://github.com/acme/repo/pull/42",
+        }),
+      );
       const commands = createCommandRegistry();
+      const follow = spyOn(
+        context.runtime.prMonitor,
+        "followMergeIntoProjectCheckout",
+      ).mockImplementation(() => undefined);
 
       await withFakeDocker(
         `#!/bin/sh
@@ -450,6 +460,8 @@ exit 1
               context,
             ),
           ).resolves.toEqual({ outcome: "merged" });
+          expect(follow).toHaveBeenCalledTimes(1);
+          follow.mockRestore();
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain(
@@ -556,8 +568,18 @@ exit 43
   test(
     "reports a queued container PR as pending when the captured PR remains open",
     async () => {
-      const { context } = createContext(createEnvironment());
+      const { context } = createContext(
+        createEnvironment({
+          environmentType: "containerized",
+          containerId: "container-1",
+          prUrl: "https://github.com/acme/repo/pull/42",
+        }),
+      );
       const commands = createCommandRegistry();
+      const follow = spyOn(
+        context.runtime.prMonitor,
+        "followMergeIntoProjectCheckout",
+      ).mockImplementation(() => undefined);
 
       await withFakeDocker(
         `#!/bin/sh
@@ -589,6 +611,8 @@ exit 1
               context,
             ),
           ).resolves.toEqual({ outcome: "pending" });
+          expect(follow).toHaveBeenCalledTimes(0);
+          follow.mockRestore();
         },
       );
     },
@@ -598,8 +622,18 @@ exit 1
   shimTest(
     "reports an unknown container merge outcome when post-submit verification fails",
     async () => {
-      const { context } = createContext(createEnvironment());
+      const { context } = createContext(
+        createEnvironment({
+          environmentType: "containerized",
+          containerId: "container-1",
+          prUrl: "https://github.com/acme/repo/pull/42",
+        }),
+      );
       const commands = createCommandRegistry();
+      const follow = spyOn(
+        context.runtime.prMonitor,
+        "followMergeIntoProjectCheckout",
+      ).mockImplementation(() => undefined);
 
       await withFakeDocker(
         `#!/bin/sh
@@ -631,6 +665,8 @@ exit 1
               context,
             ),
           ).resolves.toEqual({ outcome: "unknown" });
+          expect(follow).toHaveBeenCalledTimes(0);
+          follow.mockRestore();
         },
       );
     },
@@ -1295,6 +1331,12 @@ exit 1
       });
       const { context, updates } = createContext(environment);
       const commands = createCommandRegistry();
+      const follow = spyOn(
+        context.runtime.prMonitor,
+        "followMergeIntoProjectCheckout",
+      ).mockImplementation((merged) => {
+        expect(merged.id).toBe(environment.id);
+      });
       const task: KanbanTask = {
         id: "task-merge-cleanup",
         projectId: environment.projectId,
@@ -1402,6 +1444,8 @@ exit 1
             prState: "merged",
             prMergeCommented: true,
           });
+          expect(follow).toHaveBeenCalledTimes(1);
+          follow.mockRestore();
           await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
 
           const ghLog = await fs.readFile(logPath, "utf8");

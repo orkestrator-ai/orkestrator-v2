@@ -1366,7 +1366,7 @@ export async function runStoredEnvironmentMerge<T>(
   expectedHeadSha?: string,
 ): Promise<T> {
   const release = environment.projectHome
-    ? context.projectGit?.beginCoordinatorTurn(environment.projectId)
+    ? await context.projectGit?.beginTurnAfterMergeSync(environment.projectId)
     : undefined;
   try {
     return await runStoredEnvironmentMergeOnce(

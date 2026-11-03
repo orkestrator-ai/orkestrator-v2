@@ -32,6 +32,7 @@ export interface ProjectCheckoutGit {
   isCheckoutBusy(projectId: string): Promise<boolean>;
   fetch(projectId: string, force?: boolean): Promise<ProjectGitStatus>;
   sync(projectId: string): Promise<ProjectGitStatus>;
+  syncAfterMerge?(projectId: string): Promise<ProjectGitStatus>;
 }
 
 export type ProjectCheckoutFollowOutcome =
@@ -68,14 +69,17 @@ export async function fastForwardProjectCheckout(
   projectId: string,
 ): Promise<ProjectCheckoutFollowOutcome> {
   if (await git.isCheckoutBusy(projectId)) return "busy";
-  const decision = decideUpstreamMergeOffer(await git.fetch(projectId, true).catch(() => null));
+  const status = await git.fetch(projectId, true).catch(() => null);
+  if (!status || status.remoteState === "stale" || status.lastError?.operation === "fetch")
+    return "no-status";
+  const decision = decideUpstreamMergeOffer(status);
   if (!decision.offer) {
     return decision.reason === "blocked" || decision.reason === "no-status"
       ? decision.reason
       : "not-behind";
   }
   try {
-    await git.sync(projectId);
+    await (git.syncAfterMerge?.(projectId) ?? git.sync(projectId));
     return "fast-forwarded";
   } catch (error) {
     if (isBusyRefusal(error)) return "busy";
@@ -96,6 +100,7 @@ export interface ProjectCheckoutMergeFollowerOptions {
 
 interface PendingFollow {
   git: ProjectCheckoutGit;
+  mergeKeys: Set<string>;
   deadline: number;
   running: boolean;
   rerun: boolean;
@@ -148,12 +153,19 @@ export class ProjectCheckoutMergeFollower {
     const existing = this.pending.get(projectId);
     if (existing) {
       existing.git = git;
+      if (mergeKey) existing.mergeKeys.add(mergeKey);
       existing.deadline = deadline;
       // A merge that landed after this attempt's fetch needs another one.
       if (existing.running) existing.rerun = true;
       return;
     }
-    const entry: PendingFollow = { git, deadline, running: false, rerun: false };
+    const entry: PendingFollow = {
+      git,
+      mergeKeys: new Set(mergeKey ? [mergeKey] : []),
+      deadline,
+      running: false,
+      rerun: false,
+    };
     this.pending.set(projectId, entry);
     this.run(projectId, entry);
   }
@@ -198,13 +210,19 @@ export class ProjectCheckoutMergeFollower {
       this.run(projectId, entry);
       return;
     }
-    if (outcome === "busy" && this.now() < entry.deadline) {
+    if (
+      (outcome === "busy" || outcome === "no-status" || outcome === "failed") &&
+      this.now() < entry.deadline
+    ) {
       entry.timer = this.schedule(() => {
         if (!this.closed && this.pending.get(projectId) === entry) this.run(projectId, entry);
       }, this.retryIntervalMs);
       return;
     }
     this.pending.delete(projectId);
+    if (outcome === "failed" || outcome === "no-status" || outcome === "busy") {
+      for (const key of entry.mergeKeys) this.followed.delete(key);
+    }
     if (outcome !== "failed") log.info("checkout.merge-followed", { projectId, outcome });
   }
 }

@@ -247,8 +247,8 @@ export class PrMonitorRuntime {
   ): void {
     if (this.closedService || observation.state !== "merged" || !this.context) return;
     const context = this.context;
-    void context.storage
-      .getEnvironment(environmentId)
+    void Promise.resolve()
+      .then(() => context.storage.getEnvironment(environmentId))
       .then((environment) => {
         if (environment?.prUrl === observation.url) {
           this.followMergeIntoProjectCheckout(environment, context);

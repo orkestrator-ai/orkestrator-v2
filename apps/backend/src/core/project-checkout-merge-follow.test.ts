@@ -210,3 +210,53 @@ describe("ProjectCheckoutMergeFollower", () => {
     expect(git.isCheckoutBusy).toHaveBeenCalledTimes(1);
   });
 });
+
+test("a stale cached fetch retries and recovers without another merge", async () => {
+  const timers = manualTimers();
+  let fresh = false;
+  const git = fakeGit({
+    fetch: mock(async () =>
+      fresh
+        ? behind
+        : ({
+            ...behind,
+            behind: 0,
+            remoteState: "stale",
+            lastError: { operation: "fetch", message: "offline" },
+          } as ProjectGitStatus),
+    ),
+  });
+  const follower = new ProjectCheckoutMergeFollower({ ...timers, retryIntervalMs: 1000 });
+  follower.follow("project-1", git, "pr-recover");
+  await follower.idle();
+  expect(git.sync).not.toHaveBeenCalled();
+  expect(timers.pending()).toBe(1);
+  fresh = true;
+  timers.advance(1000);
+  await follower.idle();
+  expect(git.sync).toHaveBeenCalledTimes(1);
+  follower.shutdown();
+});
+
+test("an expired fetch failure permits a later observation of the same PR", async () => {
+  const timers = manualTimers();
+  const git = fakeGit({
+    fetch: mock(async () => {
+      throw new Error("offline");
+    }),
+  });
+  const follower = new ProjectCheckoutMergeFollower({
+    ...timers,
+    retryIntervalMs: 1000,
+    retryWindowMs: 500,
+  });
+  follower.follow("project-1", git, "pr-retry");
+  await follower.idle();
+  timers.advance(1000);
+  await follower.idle();
+  git.fetch.mockImplementation(async () => behind);
+  follower.follow("project-1", git, "pr-retry");
+  await follower.idle();
+  expect(git.sync).toHaveBeenCalledTimes(1);
+  follower.shutdown();
+});

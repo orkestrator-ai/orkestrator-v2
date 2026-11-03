@@ -127,3 +127,21 @@ test("after shutdown nothing is followed", async () => {
   await settle();
   expect(follow).not.toHaveBeenCalled();
 });
+
+for (const failure of ["throw", "reject", "removed"] as const) {
+  test(`cleanup is scheduled when environment lookup is ${failure}`, async () => {
+    const { runtime, context, follow, scheduleMergeCleanup } = setup({ coordinator: true });
+    await runtime.sync(context);
+    context.storage.getEnvironment = mock(() => {
+      expect(scheduleMergeCleanup).toHaveBeenCalledTimes(1);
+      if (failure === "throw") throw new Error("unreadable");
+      if (failure === "reject") return Promise.reject(new Error("unreadable"));
+      return Promise.resolve(null);
+    });
+    runtime.resumeTerminalEffects("environment", { url: prUrl, state: "merged" });
+    expect(scheduleMergeCleanup).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(follow).not.toHaveBeenCalled();
+    runtime.shutdown();
+  });
+}

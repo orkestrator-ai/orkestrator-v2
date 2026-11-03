@@ -151,7 +151,7 @@ async function withLocalFileMutation<T>(
         "Move recovery is pending. Restart Orkestrator before editing this environment.",
       );
     release = stored?.projectHome
-      ? context.projectGit?.beginCoordinatorTurn(stored.projectId)
+      ? await context.projectGit?.beginTurnAfterMergeSync(stored.projectId)
       : undefined;
     return await action(await requireLocalMutationEnvironment(context.storage, environmentId));
   } finally {

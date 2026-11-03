@@ -12,6 +12,7 @@ import {
 } from "./commands-projects.js";
 import {
   GIT_FSMONITOR_DISABLED_ARGS,
+  HARDENED_GIT_CONFIG,
   removeLegacyWorktreeFsmonitor,
   resetLegacyFsmonitorMigrationsForTests,
   retryGitWithoutFsmonitorOnTimeout,
@@ -232,7 +233,7 @@ describe("git fsmonitor", () => {
     });
   }
 
-  test("local status scans retry all timed-out status/diff reads with fsmonitor disabled", async () => {
+  test("local status scans never consult fsmonitor, so need no retry without it", async () => {
     const { worktree } = await createRepositoryWithWorktree();
     await fs.writeFile(path.join(worktree, "new.txt"), "new\n");
     const original = shell.runCommand;
@@ -250,9 +251,9 @@ describe("git fsmonitor", () => {
       ensureFetched: async () => undefined,
     });
     expect(status.changes).toMatchObject([{ path: "new.txt", status: "?" }]);
-    expect(reads).toHaveLength(6);
-    for (const args of reads.slice(0, 3)) {
-      expect(reads).toContainEqual([...GIT_FSMONITOR_DISABLED_ARGS, ...args]);
+    expect(reads).toHaveLength(3);
+    for (const args of reads) {
+      expect(args.slice(0, HARDENED_GIT_CONFIG.length)).toEqual([...HARDENED_GIT_CONFIG]);
     }
   });
 

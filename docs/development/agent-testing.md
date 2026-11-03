@@ -50,7 +50,11 @@ mise run test:logged -- --name agent-docker -- mise run test:agent:docker:isolat
 ```
 
 It builds the worktree-specific development image, runs the final-image smoke,
-starts a credential-free local/container fixture with Codex, Grok and OpenCode,
+runs the backend live image qualifications in `IMAGE_QUALIFICATION_TESTS`
+(`apps/desktop/scripts/dev/isolated-browser.ts`; today the M8 suite
+`claude-config-filter-docker.test.ts`, which stages a fake `~/.claude.json` and
+starts interactive Claude on it with no network and fake credentials; it fails
+rather than skips when the image is missing), then starts a credential-free local/container fixture with Codex, Grok and OpenCode,
 and runs the same `Docker fixture` selection as `test:agent:docker`. It stops and
 resets the profile afterwards. The worktree's shared development image is kept
 for other profiles; the shared-image-aware prune workflow owns its removal. The scheduler
@@ -245,11 +249,14 @@ mise run dev:reset --profile grok-login-qa
 
 `e2e/agent-testing/container-files-wiring.spec.ts` checks the Files panel on a
 container in a real browser with no provider turns: a change written in the
-container shows through the 5 s poll, across an inactive-environment switch, a
-hidden document, a reload and a second window, and a revert from the panel
-restores the file without starting a container fetch. It also checks that a
-tree revision announced while the document was hidden still shows on a local
-worktree after return.
+container shows across an inactive-environment switch, a hidden document, a
+reload and a second window, and a revert from the panel restores the file
+without starting a container fetch. The Changes tab is the backend's change
+projection, which the page applies even while hidden (the backend scans the
+container on its own clock), so the hidden-document check for polling is on the
+All files tab: while hidden the page sends no Files panel read, and the new
+entry shows on return. It also checks that a tree revision announced while the
+document was hidden still shows on a local worktree after return.
 
 `e2e/agent-testing/container-app-wiring.spec.ts` covers the rest of the
 container UI on the same profile:
@@ -749,28 +756,94 @@ seeded copy.
 canvas Electron journey (`design-canvas-electron-journey.ts`, shared with
 `design-canvas-electron.spec.ts`) against the packaged Linux app: its own
 executable, `app.asar`, the bundled Bun backend and bridges, and the renderer
-loaded from `file://<resources>/web/index.html`. No other spec loads that
-renderer; the rest serve it from Vite. It has its own Playwright config,
+loaded from `file://<resources>/web/index.html`. The shipping security smoke
+also loads that renderer; dev specs serve it from Vite. It has its own Playwright config,
 `playwright.packaged-electron.config.ts`, so `mise run test:agent:electron`
 does not need a packaged build.
 
 ```bash
-# Build release/linux-unpacked/ (bun install, download:bun, build:all,
-# electron-builder --linux --dir). Installs nothing.
+# Build the shipping inspect-off binary for the security smoke (installs nothing).
 mise run package:linux:unpacked
+
+# Build release/packaged-test/linux-unpacked/ (bun install, download:bun,
+# build:all, electron-builder --linux --dir with
+# electron-builder.packaged-test.config.ts). Installs nothing.
+mise run package:linux:unpacked:test
 
 ORKESTRATOR_AGENT_TEST_RUN_ID=design-packaged \
 mise run test:logged -- --name agent-electron-packaged -- \
   mise run test:agent:electron:packaged
 ```
 
-Do not use `mise run package:linux` for this: it runs the same build and then
-installs the app into `~/.local/share/orkestrator-v2` and `~/.local/bin`,
-replacing whatever Orkestrator the signed-in user has installed there. Set
-`ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build (a path
-relative to the repository root, or absolute). Without it the spec is skipped
-outside Linux and fails with the build command when `release/` has no app. It
-tests whatever is in `release/`, so rebuild after changing the code under test.
+The test build is the shipped build with one Electron fuse turned back on:
+`enableNodeCliInspectArguments`. Playwright's `_electron.launch` passes
+`--inspect=0` and drives the main process through Node's inspector, so it
+cannot start a shipped build, whose fuses refuse `--inspect` and `NODE_OPTIONS`
+(security report L3). Every other fuse, asar integrity and
+`onlyLoadAppFromAsar` included, is as shipped. The build goes to its own
+directory so `package:linux` and the release steps never pick it up.
+
+Do not use `mise run package:linux`: it installs the app into
+`~/.local/share/orkestrator-v2` and `~/.local/bin`, replacing the installed app.
+The shipping `package:linux:unpacked` build is for the security smoke, while
+the design journey needs the inspect-enabled test build. Set
+`ORKESTRATOR_PACKAGED_APP_EXECUTABLE` to run another unpacked build with the
+inspect fuse on (a path relative to the repository root, or absolute). Without
+it the spec is skipped outside Linux and fails with the build command when
+`release/packaged-test/` has no app. It tests whatever is there, so rebuild
+after changing the code under test.
+
+`packaged-security-electron.spec.ts` runs in the same config on macOS and Linux.
+It spawns the **shipping inspect-off binary directly**, using Chromium CDP only
+for renderer observation. It first reads the fuse wire from the binary
+(`scripts/packaged-security.ts`) and fails unless `runAsNode`,
+`enableNodeOptionsEnvironmentVariable` and `enableNodeCliInspectArguments` are
+off, `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar` are on,
+the app is an `app.asar` with no `app/` folder beside it and, on macOS,
+Info.plist records `ElectronAsarIntegrity`. Then, with `ELECTRON_DEV=1`, a
+recording dev-server URL, `NODE_OPTIONS=--require=<marker script>` and a Node
+`--inspect` port, it asserts the bundled `file://` renderer, zero dev-server
+requests, no marker execution, the ignored-dev warning and a closed Node
+inspector port. A missing shipping package fails; it never silently skips on
+macOS. It defaults to
+`release/mac-arm64/OrkestratorV2.app/Contents/MacOS/OrkestratorV2` on Apple
+Silicon, `release/mac/...` on Intel, or `release/linux[-<arch>]-unpacked/orkestrator-v2`.
+Override with `ORKESTRATOR_SHIPPED_APP_EXECUTABLE` for another shipping package.
+
+`mise run test:package:security` is the one-shot qualification for security
+report L3 and L4. It builds this host's shipping package unsigned with
+`electron-builder --mac|--linux --dir --publish never` (package.json's own
+config: ad-hoc mac identity, no notarization, nothing installed), runs
+`bun scripts/verify-packaged-security.ts`, which prints one PASS/FAIL line per
+fuse and layout check and writes them to
+`output/package-security/<platform>-<arch>.json`, and then runs this spec.
+
+```bash
+mise run test:logged -- --name package-security -- mise run test:package:security
+```
+
+To check an existing package without rebuilding, run the verifier and the spec
+on their own:
+
+```bash
+mise run test:logged -- --name packaged-fuses -- bun scripts/verify-packaged-security.ts
+mise run test:logged -- --name packaged-security -- bunx playwright test \
+  --config e2e/agent-testing/playwright.packaged-electron.config.ts packaged-security-electron.spec.ts
+```
+
+The hostile environment also sets `ORKESTRATOR_RENDERER_DEV_SERVER_URL`.
+The check authenticates an HTTP request to the disposable backend gateway and
+requires that the hostile server receives no requests. Separate cases copy the
+shipping package into private temporary storage and verify that a changed asar
+header aborts with an integrity error (macOS only) and that replacing
+`app.asar` with an executable `resources/app` directory never runs its marker
+(macOS/Linux). The source package is never modified; copied packages and their
+profiles are removed after their owned process groups stop. Linux skips header
+tampering because Electron does not enforce asar integrity there.
+
+This does not inspect the Node main process and therefore cannot use the
+inspect-enabled package as evidence of shipping security. Each run owns and
+stops its detached process group and removes its disposable profile.
 
 The app runs on a disposable agent-test profile under a private temporary
 directory, removed afterwards. `HOME` and the XDG base directories point inside

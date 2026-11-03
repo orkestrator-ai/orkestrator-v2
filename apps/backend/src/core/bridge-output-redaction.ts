@@ -41,6 +41,21 @@ export function redactBridgeOutput(text: string): string {
   return result;
 }
 
+/** Redact decoded strings, including nested fields and escaped credential syntax. */
+function redactBridgeLogRecord(record: LogRecord): LogRecord {
+  return JSON.parse(
+    JSON.stringify(record, (_key, value: unknown) =>
+      typeof value === "string" ? redactBridgeOutput(value) : value,
+    ),
+  ) as LogRecord;
+}
+
+/** Same decoded-record protection as the local relay, with raw fallback. */
+export function redactBridgeLogLine(line: string): string {
+  const record = parseLogRecordLine(line);
+  return record ? JSON.stringify(redactBridgeLogRecord(record)) : redactBridgeOutput(line);
+}
+
 /**
  * Turn a byte stream into redacted whole lines for `write`. Call `flush` when
  * the stream ends so a final line without a newline is not lost.
@@ -88,11 +103,7 @@ export function relayBridgeOutput(stream: "stdout" | "stderr", source: string, t
     if (!line) continue;
     const record = parseLogRecordLine(line);
     if (record) {
-      const redacted = JSON.parse(
-        JSON.stringify(record, (_key, value: unknown) =>
-          typeof value === "string" ? redactBridgeOutput(value) : value,
-        ),
-      ) as LogRecord;
+      const redacted = redactBridgeLogRecord(record);
       // First, so a record already at the field limit keeps it through the next relay.
       const { source: _claimed, ...fields } = redacted.fields ?? {};
       emitLogRecord({ ...redacted, fields: { source, ...fields } });

@@ -17,6 +17,16 @@ export function beginClientMethodExercise(promptId: number, path: string): void 
 }
 
 export function handleFinalMessage(message: JsonObject): boolean {
+  // Each client-method answer, so a test can see what was refused and how.
+  if (
+    clientMethodPromptId !== null &&
+    typeof message.id === "number" &&
+    message.id >= 910 &&
+    message.id <= 915 &&
+    !("method" in message)
+  ) {
+    appendFileSync(`${clientMethodPath}.responses.jsonl`, `${JSON.stringify(message)}\n`);
+  }
   if (message.id === 910 && clientMethodPromptId !== null) {
     write({
       jsonrpc: "2.0",

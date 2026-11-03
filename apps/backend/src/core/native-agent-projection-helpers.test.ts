@@ -29,6 +29,28 @@ describe("native agent projection helpers", () => {
     ).toBe(false);
   });
 
+  test("a title never comes from a row a provider bound may have cut the head off", () => {
+    // What a bridge's bound leaves of an oversized first prompt: the tail of
+    // its annotation envelope, without the opening fence.
+    const trimmed = {
+      id: "user-1",
+      role: "user",
+      content: '"userComment":null}]\n</orkestrator_transcript_annotations>',
+    };
+    expect(helpers.firstUserMessageOf([trimmed], undefined).firstUserMessage).toBe(trimmed.content);
+    expect(helpers.firstUserMessageOf([trimmed], undefined, "user-1")).toEqual({
+      reachesStart: true,
+    });
+    // A later user message still names the session.
+    expect(
+      helpers.firstUserMessageOf(
+        [trimmed, { id: "user-2", role: "user", content: "Fix the login bug" }],
+        undefined,
+        "user-1",
+      ).firstUserMessage,
+    ).toBe("Fix the login bug");
+  });
+
   test("a title never comes from a goal carrier", () => {
     const carrier = '<orkestrator-goal version="1">\n<orkestrator-goal-payload-json>\n{}';
     expect(

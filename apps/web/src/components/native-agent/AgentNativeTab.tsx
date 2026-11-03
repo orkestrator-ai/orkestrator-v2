@@ -6,7 +6,11 @@ import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-setting
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { Button } from "@/components/ui/button";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
-import { dispatchNativeAgentIntent, writeCoordinatorAttachment } from "@/lib/backend";
+import {
+  dispatchNativeAgentIntent,
+  writeCoordinatorAttachment,
+  writeBugReportAttachment,
+} from "@/lib/backend";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import {
   awaitComposeDraftWrites,
@@ -351,10 +355,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
 
   // Stable across renders: the paste handler re-registers its document
   // listener whenever this identity changes.
-  const writeCoordinatorImage = useCallback(
+  const reportId = bugReportIdFromRuntimeId(props.data.environmentId);
+  const writeSpecialImage = useCallback(
     (filename: string, base64Data: string) =>
-      writeCoordinatorAttachment(props.data.environmentId, filename, base64Data),
-    [props.data.environmentId],
+      reportId
+        ? writeBugReportAttachment(reportId, filename, base64Data)
+        : writeCoordinatorAttachment(props.data.environmentId, filename, base64Data),
+    [props.data.environmentId, reportId],
   );
 
   // A tab whose platform has no adapter is a data problem, not a crash. Render
@@ -408,12 +415,10 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             {...(props.coordinatorWorkspacePath
               ? { workspacePath: props.coordinatorWorkspacePath }
               : {})}
-            {...(props.executionPolicy === "coordinator-read-only"
+            {...(props.executionPolicy === "coordinator-read-only" || reportId
               ? {
-                  // The checkout this conversation reads is the user's own, so a
-                  // pasted image is staged under application data instead — the
-                  // same place the assigned composer writes one.
-                  writeImage: writeCoordinatorImage,
+                  // Synthetic runtimes resolve their attachment root on the backend.
+                  writeImage: writeSpecialImage,
                 }
               : {})}
             {...(props.availablePlatforms ? { platformFilter: props.availablePlatforms } : {})}

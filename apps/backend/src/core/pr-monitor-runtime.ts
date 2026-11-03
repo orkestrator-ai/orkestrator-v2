@@ -26,6 +26,10 @@ import {
   prViewerRepository,
 } from "./pr-viewer-permission.js";
 import { PrRequiredChecksCache } from "./pr-required-checks.js";
+import { PR_BATCH_TIMEOUT_MS, PrMonitorBatchReader } from "./commands-pr-monitor-batch.js";
+import { gitHubCli } from "./github-cli-binary.js";
+import { gitHubCliEnv } from "./github-credentials.js";
+import { runCommand } from "./shell.js";
 import { ProjectCheckoutMergeFollower } from "./project-checkout-merge-follow.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -79,6 +83,12 @@ export class PrMonitorRuntime {
   private context: CommandContext | undefined;
   private syncGeneration = 0;
   private syncQueue: Promise<void> = Promise.resolve();
+  /**
+   * A sync queued behind the running one that has not read storage yet. A
+   * caller arriving now joins it: it will read storage after this call, so it
+   * answers this caller too (BG-13: every `get_environments` asked for one).
+   */
+  private queuedSync: { generation: number; promise: Promise<void> } | null = null;
   private warnedMissingMergeCleanup = false;
   private closedService: Pick<PrMonitorService, keyof PrMonitorService> | undefined;
   private readonly listeners = new Set<(event: PrMonitorEvent) => void>();
@@ -86,6 +96,21 @@ export class PrMonitorRuntime {
   readonly viewerPermissions = new PrViewerPermissionCache();
   /** How many failing checks GitHub requires, per PR head and failing set. */
   readonly requiredChecks = new PrRequiredChecksCache();
+  /**
+   * One query for the local open PRs of a host and credential
+   * (`commands-pr-monitor-batch.ts`). A change it sees for a quiet PR wakes
+   * that PR's entry, which then reads the shared answer.
+   */
+  readonly prBatches = new PrMonitorBatchReader({
+    run: async (_group, args) =>
+      (
+        await runCommand(gitHubCli(), args, {
+          timeoutMs: PR_BATCH_TIMEOUT_MS,
+          env: await gitHubCliEnv(this.storage),
+        })
+      ).stdout,
+    onChanged: (prUrls) => this.noteSharedActivity(prUrls),
+  });
   /**
    * The monitor-side inputs of each environment's relayed health, as last
    * announced. A change announces `environment-pr-health` so command nodes
@@ -98,6 +123,7 @@ export class PrMonitorRuntime {
   constructor(private readonly options: PrMonitorRuntimeOptions = {}) {
     this.scheduleMergeCleanup = options.scheduleMergeCleanup;
     this.checkoutFollower = options.checkoutFollower ?? new ProjectCheckoutMergeFollower();
+    this.viewerPermissions.onScopeInvalidated = (scope) => this.prBatches.invalidate(scope);
   }
 
   /** The polling service; callers reach it at call time, never hold it. */
@@ -115,9 +141,12 @@ export class PrMonitorRuntime {
     if (this.closedService) return;
     this.bind(context);
     const generation = this.syncGeneration;
-    const operation = this.syncQueue
+    const queued = this.queuedSync;
+    if (queued && queued.generation === generation) return queued.promise;
+    const operation: Promise<void> = this.syncQueue
       .catch(() => undefined)
       .then(async () => {
+        if (this.queuedSync?.promise === operation) this.queuedSync = null;
         if (this.closedService) return;
         const environments = await context.storage.loadEnvironments();
         // A stop, delete, shutdown, or newer reconciliation may have happened
@@ -141,6 +170,7 @@ export class PrMonitorRuntime {
         if (generation !== this.syncGeneration) return;
         this.service.sync(targets);
       });
+    this.queuedSync = { generation, promise: operation };
     this.syncQueue = operation;
     await operation;
   }
@@ -317,6 +347,15 @@ export class PrMonitorRuntime {
     return () => this.listeners.delete(listener);
   }
 
+  private noteSharedActivity(prUrls: readonly string[]): void {
+    const service = this.monitor?.service;
+    if (!service || this.closedService) return;
+    const urls = new Set(prUrls);
+    for (const state of service.snapshot()) {
+      if (state.prUrl && urls.has(state.prUrl)) service.noteSharedActivity(state.environmentId);
+    }
+  }
+
   private announce(event: string, payload: unknown): void {
     this.emit?.(event, payload);
     if (event !== PR_MONITOR_CHANGED_EVENT) return;
@@ -359,6 +398,7 @@ export class PrMonitorRuntime {
     this.invalidatePendingSync();
     this.viewerPermissions.clear();
     this.requiredChecks.clear();
+    this.prBatches.clear();
     this.relayedInputs.clear();
     this.checkoutFollower.shutdown();
     const monitor = this.monitor;
@@ -374,6 +414,7 @@ export class PrMonitorRuntime {
       sync: noop,
       requestMode: noop,
       requestCheck: noop,
+      noteSharedActivity: noop,
       reconcileTerminal: async () => undefined,
       wakeForCompletion: noop,
       probe: noop,
@@ -418,6 +459,7 @@ export class PrMonitorRuntime {
             storage: this.storage,
             viewerPermissions: this.viewerPermissions,
             requiredChecks: this.requiredChecks,
+            batch: this.prBatches,
           }),
         persistPr: async (environmentId, detection) => {
           await this.requireStorage().updateEnvironment(environmentId, {

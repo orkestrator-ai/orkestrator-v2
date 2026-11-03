@@ -294,6 +294,38 @@ function ticketSummary(task: JsonRecord): JsonRecord {
     environmentId: task.environmentId,
     prUrl: task.prUrl,
     prState: task.prState,
+    ...ticketSyncSummary(task),
+  };
+}
+
+/** Whether a ticket is a copy of a command node's, and which machine its work runs on. */
+function ticketSyncSummary(task: JsonRecord): JsonRecord {
+  const sync = isRecord(task.sync) ? task.sync : null;
+  const work = sync && isRecord(sync.work) ? sync.work : null;
+  return {
+    ...(sync && isRecord(sync.replica) ? { syncedFromCommandNode: true } : {}),
+    ...(work
+      ? {
+          runsOn: {
+            nodeId: work.nodeId,
+            node: work.nodeName,
+            ...(work.buildPipelineId ? { pipelineId: work.buildPipelineId } : {}),
+            ...(work.environmentId ? { environmentId: work.environmentId } : {}),
+            ...(work.prUrl ? { prUrl: work.prUrl } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** A node-qualified ticket answer: the node, whether the ticket syncs, and its sync state. */
+function nodeTicketTag(result: JsonRecord): JsonRecord {
+  return {
+    nodeId: result.nodeId,
+    node: result.node,
+    ...(typeof result.synced === "boolean" ? { synced: result.synced } : {}),
+    ...(isRecord(result.sync) ? { sync: result.sync } : {}),
+    ...(typeof result.note === "string" ? { note: result.note } : {}),
   };
 }
 
@@ -498,11 +530,11 @@ export type CoordinatorPollGuard = (key: string, fingerprint: string) => JsonRec
  * their capability; operator tools by the public actions they use and the
  * credential's profile.
  */
-/** Tickets, mailboxes and projects of a coordinator are its own node's. */
+/** Mailbox listings and projects of a coordinator are its own node's. */
 function coordinatorNodeRefused(nodeId: string | undefined): void {
   if (nodeId) {
     throw new Error(
-      "This tool acts on the coordinator's own node; other nodes take mail and launches.",
+      "This tool acts on the coordinator's own node; other nodes take mail, tickets and launches.",
     );
   }
 }
@@ -664,6 +696,31 @@ export async function createControlMcp(
   };
   const onNodeResult = (target: NodeTarget | null): JsonRecord =>
     target ? { nodeId: target.nodeId, node: target.nodeName } : {};
+  /**
+   * A coordinator's ticket tool with a `nodeId`: the backend acts on this
+   * board, which that node syncs, or on the node's own board for tickets made
+   * only there (`coordinator-node-tickets.ts`). `null` for this node.
+   */
+  const nodeTickets = async (
+    nodeId: string | undefined,
+    projectId: string,
+    action: "create" | "get" | "list" | "update" | "comment",
+    input: JsonRecord,
+  ): Promise<JsonRecord | null> => {
+    if (!nodeId) return null;
+    if (!coordinatorScope) coordinatorNodeRefused(nodeId);
+    if (projectId !== coordinatorScope!.projectId) {
+      throw new Error("A coordinator's tickets with nodeId are its own project's.");
+    }
+    const result = await invoke<unknown>("coordinator_node_ticket", {
+      scope: coordinatorScope,
+      nodeId,
+      action,
+      input,
+    });
+    if (!isRecord(result)) throw new Error("That node returned no ticket answer");
+    return result.self === true ? null : result;
+  };
   /** The invoker for one environment's node, after checking it is this project's worker there. */
   const environmentInvoker = async (
     nodeId: string | undefined,
@@ -1202,7 +1259,8 @@ export async function createControlMcp(
     "list_tickets",
     {
       title: "List Kanban tickets",
-      description: "List Kanban tickets for one configured project.",
+      description:
+        "List Kanban tickets for one configured project. With nodeId, list that machine's board: this board's tickets synced there plus any made only there (syncedFromCommandNode marks synced copies). runsOn names the machine a ticket's build or environment runs on.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         status: z.enum(["backlog", "in-progress", "review", "done"]).optional(),
@@ -1216,11 +1274,17 @@ export async function createControlMcp(
           projectId,
           ...(status ? { status } : {}),
         });
-      coordinatorNodeRefused(nodeId);
-      const tasks = asArray(await invoke("get_kanban_tasks", { projectId }))
+      const remote = await nodeTickets(nodeId, projectId, "list", {});
+      const tasks = asArray(
+        remote ? remote.tickets : await invoke("get_kanban_tasks", { projectId }),
+      )
         .filter((task) => !status || task.status === status)
         .map(ticketSummary);
-      return toolResult({ tickets: tasks, total: tasks.length });
+      return toolResult({
+        tickets: tasks,
+        total: tasks.length,
+        ...(remote ? nodeTicketTag(remote) : {}),
+      });
     },
   );
 
@@ -1228,7 +1292,8 @@ export async function createControlMcp(
     "get_ticket",
     {
       title: "Read a Kanban ticket",
-      description: "Read one ticket after verifying it belongs to the selected project.",
+      description:
+        "Read one ticket after verifying it belongs to the selected project. Ticket ids are the same on every machine that syncs this board; with nodeId, read that machine's copy.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         ticketId: z.string().trim().min(1).max(200),
@@ -1239,12 +1304,12 @@ export async function createControlMcp(
     async ({ projectId, ticketId, nodeId }) => {
       if (operator)
         return operatorGetTicket(callerOnNode(operator, nodeId), { projectId, ticketId });
-      coordinatorNodeRefused(nodeId);
-      const task = asArray(await invoke("get_kanban_tasks", { projectId })).find(
-        (candidate) => candidate.id === ticketId,
-      );
+      const remote = await nodeTickets(nodeId, projectId, "get", {});
+      const task = asArray(
+        remote ? remote.tickets : await invoke("get_kanban_tasks", { projectId }),
+      ).find((candidate) => candidate.id === ticketId);
       if (!task) throw new Error(`Kanban ticket not found in project: ${ticketId}`);
-      return toolResult({ ticket: ticketDetail(task) });
+      return toolResult({ ticket: ticketDetail(task), ...(remote ? nodeTicketTag(remote) : {}) });
     },
   );
 
@@ -1253,7 +1318,8 @@ export async function createControlMcp(
     {
       title: "Create a Kanban ticket",
       description:
-        "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step.",
+        "Create a ticket in one configured project. Give either sections (structured) or description and acceptanceCriteria (plain text); both forms are kept in step. " +
+        "With nodeId, the ticket is created on this board and synced to that machine (now, or when it reconnects: sync.state says which), so start_build_pipeline with the same nodeId can build it by this id. A machine too old to sync gets a ticket of its own instead (sync.state update-required).",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
@@ -1295,7 +1361,18 @@ export async function createControlMcp(
           ...structured,
         });
       }
-      coordinatorNodeRefused(nodeId);
+      const remote = await nodeTickets(nodeId, projectId, "create", {
+        requestId,
+        title,
+        description,
+        acceptanceCriteria,
+        status,
+        ...structured,
+      });
+      if (remote) {
+        if (!isRecord(remote.ticket)) throw new Error("Kanban ticket creation returned no ticket");
+        return toolResult({ ticket: ticketDetail(remote.ticket), ...nodeTicketTag(remote) });
+      }
       const project = await invoke<unknown>("get_project", { projectId });
       if (!isRecord(project)) throw new Error(`Project not found: ${projectId}`);
       const task = await invoke<unknown>("add_kanban_task", {
@@ -1317,7 +1394,7 @@ export async function createControlMcp(
     {
       title: "Update a Kanban ticket",
       description:
-        "Update specified editable fields of a ticket in one project; sections replaces only the sections it names.",
+        "Update specified editable fields of a ticket in one project; sections replaces only the sections it names. Changes to a synced ticket reach every machine with this project; with nodeId the answer also says whether that machine has it yet.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256).optional(),
@@ -1357,7 +1434,15 @@ export async function createControlMcp(
           requestId,
           ...updates,
         });
-      coordinatorNodeRefused(nodeId);
+      const remote = await nodeTickets(nodeId, projectId, "update", {
+        ticketId,
+        ...(requestId ? { requestId } : {}),
+        ...updates,
+      });
+      if (remote) {
+        if (!isRecord(remote.ticket)) throw new Error("Kanban ticket update returned no ticket");
+        return toolResult({ ticket: ticketDetail(remote.ticket), ...nodeTicketTag(remote) });
+      }
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );
@@ -1372,7 +1457,8 @@ export async function createControlMcp(
     "add_ticket_comment",
     {
       title: "Add a Kanban ticket comment",
-      description: "Append a durable comment to a ticket in one project.",
+      description:
+        "Append a durable comment to a ticket in one project. Comments sync with the ticket to every machine with this project.",
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         projectId: z.string().trim().min(1).max(200),
@@ -1395,7 +1481,11 @@ export async function createControlMcp(
           ticketId,
           text,
         });
-      coordinatorNodeRefused(nodeId);
+      const remote = await nodeTickets(nodeId, projectId, "comment", { ticketId, text, requestId });
+      if (remote) {
+        if (!isRecord(remote.ticket)) throw new Error("Kanban comment creation returned no ticket");
+        return toolResult({ ticket: ticketDetail(remote.ticket), ...nodeTicketTag(remote) });
+      }
       const existing = asArray(await invoke("get_kanban_tasks", { projectId })).find(
         (candidate) => candidate.id === ticketId,
       );

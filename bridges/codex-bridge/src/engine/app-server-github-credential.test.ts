@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { codexAppServerConfigOverrides } from "../codex-config.js";
+import { CODEX_SESSION_SHELL_EXCLUDE, codexAppServerConfigOverrides } from "../codex-config.js";
 import {
   codexGitHubCredentialThreadConfig,
   codexProcessShellExclude,
@@ -94,9 +94,23 @@ describe("codexGitHubCredentialThreadConfig", () => {
     ]);
   });
 
+  // Every session now has a process exclude list (M13), so a worker thread
+  // that withholds the GitHub credential must keep the bridge-control
+  // exclusions too: the thread value replaces the process value.
+  test("an ordinary process's bridge-control excludes are repeated too", () => {
+    const processExclude = codexProcessShellExclude(codexAppServerConfigOverrides({}));
+    const exclude = codexGitHubCredentialThreadConfig(GRAPH, {
+      ghConfigDir: "/tmp/empty-gh",
+      processExclude,
+    })["shell_environment_policy.exclude"] as string[];
+    expect(exclude).toEqual(expect.arrayContaining([...CODEX_SESSION_SHELL_EXCLUDE, "GH_TOKEN"]));
+  });
+
   test("reads the process exclude list defensively", () => {
     expect(codexProcessShellExclude(undefined)).toEqual([]);
-    expect(codexProcessShellExclude(codexAppServerConfigOverrides({}))).toEqual([]);
+    expect(codexProcessShellExclude(codexAppServerConfigOverrides({}))).toEqual([
+      ...CODEX_SESSION_SHELL_EXCLUDE,
+    ]);
     expect(
       codexProcessShellExclude({ "shell_environment_policy.exclude": '["A", 1, "B"]' }),
     ).toEqual(["A", "B"]);

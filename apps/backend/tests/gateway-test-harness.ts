@@ -298,6 +298,9 @@ export async function startGateway(
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
     allowNonTailscaleBind: true,
+    // Fixture upstreams listen on ephemeral ports no preview registry knows.
+    // A test with a real preview runtime gets that runtime's decision.
+    ...(options.previews ? {} : { legacyPreviewPortAccess: async () => "allowed" as const }),
     ...options,
   });
   gateways.push(gateway);

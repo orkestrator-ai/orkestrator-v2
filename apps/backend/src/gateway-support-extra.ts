@@ -1,4 +1,5 @@
 import * as support from "./gateway-support-core.js";
+import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
 import {
   API_PREFIX,
   DYNAMIC_GZIP_LEVEL,
@@ -335,6 +336,8 @@ export function sanitizeTargetRequestHeaders(
   delete sanitized.authorization;
   delete sanitized.connection;
   delete sanitized["proxy-authorization"];
+  // Gateway routing metadata, not the application's business.
+  delete sanitized[BROWSER_PREVIEW_ENVIRONMENT_HEADER];
   const openCodePasswordHeader = sanitized["x-orkestrator-opencode-token"];
   delete sanitized["x-orkestrator-opencode-token"];
   const openCodePassword = Array.isArray(openCodePasswordHeader)

@@ -21,26 +21,26 @@ import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { getLocalServerStatus } from "./commands-servers.js";
 import { runCommandBuffer } from "./shell.js";
-import type { ApplyEnvironment, ApplySession, RuntimeProbe } from "./mcp-management/apply.js";
+import {
+  McpManagementService,
+  type ApplyEnvironment,
+  type ApplySession,
+  type ContainerBootReader,
+  type ContainerDirectoryLister,
+  type ContainerFileReader,
+  type ContainerFileWriter,
+  type ContainerNetworkView,
+  type ContainerPathProbe,
+  type McpManagementServiceOptions,
+  type RuntimeProbe,
+  type StagedDefaultsWriter,
+} from "./mcp-management/index.js";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import { DOCKER_LABEL_INPUTS_REVISION, DOCKER_LABEL_NETWORK_POLICY } from "./constants.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
 import { observeContainerBoot } from "./container-readiness.js";
 import { imageCapabilities } from "./docker-image.js";
-import type { ContainerNetworkView } from "./mcp-management/network-hints.js";
-import type { StagedDefaultsWriter } from "./mcp-management/overlay-service.js";
-import type {
-  ContainerBootReader,
-  ContainerFileReader,
-  ContainerDirectoryLister,
-  ContainerFileWriter,
-  ContainerPathProbe,
-} from "./mcp-management/types.js";
-import {
-  McpManagementService,
-  type McpManagementServiceOptions,
-} from "./mcp-management/service.js";
 import { containerLabel } from "./portable-input-status.js";
 import { portableInputRevisionDirectory, replaceStagedInputFile } from "./portable-inputs.js";
 import type { Environment } from "./models.js";

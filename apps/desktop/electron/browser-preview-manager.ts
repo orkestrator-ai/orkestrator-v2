@@ -69,6 +69,12 @@ type WebContentsViewConstructor = new (
 interface ManagedPreview {
   view: WebContentsView;
   requestedUrl: string;
+  /**
+   * Legacy previews: the environment the renderer attached the view for.
+   * Gateway preview requests name it, and the gateway opens only that
+   * environment's preview targets.
+   */
+  environmentId: string | null;
   navigationScope: string;
   loadGeneration: number;
   loading: boolean;
@@ -443,8 +449,15 @@ export class BrowserPreviewManager {
     // an older navigation is stale. Renderers that send no basis keep the old
     // rule: any URL other than the view's is new.
     const basis = input.navigationBasis;
+    // Set before any load below, so the first request already names it.
+    const environmentId = input.environmentId ?? null;
     if (!preview) {
-      preview = this.createPreview(input.tabId, url, navigationScope);
+      preview = this.createPreview(input.tabId, url, navigationScope, undefined, environmentId);
+    } else if (preview.environmentId !== environmentId) {
+      // A tab never changes environment; a different one is a different
+      // tab's identity, so its documents must not keep the old one's access.
+      this.removePreview(input.tabId);
+      preview = this.createPreview(input.tabId, url, navigationScope, undefined, environmentId);
     } else if (
       preview.requestedUrl !== url &&
       (basis === undefined || basis >= preview.navigation)
@@ -752,6 +765,25 @@ export class BrowserPreviewManager {
     return [...this.previews.values()].some((preview) => preview.view.webContents.id === id);
   }
 
+  /**
+   * The URL the app last asked this view to load, kept current only by
+   * in-scope navigation. Gateway auth for the view is scoped to its namespace.
+   */
+  requestedUrlForWebContents(id: number): string | undefined {
+    for (const preview of this.previews.values()) {
+      if (preview.view.webContents.id === id) return preview.requestedUrl;
+    }
+    return undefined;
+  }
+
+  /** The environment a legacy preview view was attached for, if any. */
+  environmentForWebContents(id: number): string | null {
+    for (const preview of this.previews.values()) {
+      if (preview.view.webContents.id === id) return preview.environmentId;
+    }
+    return null;
+  }
+
   webContentsIdForTab(tabId: string): number | undefined {
     return this.previews.get(tabId)?.view.webContents.id;
   }
@@ -966,6 +998,7 @@ export class BrowserPreviewManager {
     url: string,
     navigationScope: string,
     service?: { session: Session; service: NonNullable<ManagedPreview["service"]> },
+    environmentId: string | null = null,
   ): ManagedPreview {
     const window = this.options.getWindow();
     if (!window || window.isDestroyed()) throw new Error("The main window is not available");
@@ -993,6 +1026,7 @@ export class BrowserPreviewManager {
     const preview: ManagedPreview = {
       view,
       requestedUrl: url,
+      environmentId,
       navigationScope,
       loadGeneration: 0,
       loading: true,

@@ -13,7 +13,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1, 3 and 9 updated
 1. **Confirm the remote route**: decide which supported route the matrix targets, and whether Tailscale Serve buffers or re-encodes SSE. Status: done (route decided; the live run on 2026-11-01 found no buffering or re-encoding, see "Live probe" under Measurements).
 2. **Baseline matrix**: Phase 2 of `plans/stream-efficience.md` through that route: `body`, `on` and the opt-in terminal WebSocket, at normal and constrained bandwidth, including encoded transcript-patch and multi-client bytes. Status: open (no longer blocks the compression default, see D14; it still decides the terminal transport and the wider-matrix questions).
 3. **`on`-mode streaming check**: prove that SSE gzip streams incrementally, directly and through the proxy, across reconnect, keepalives, idle, disconnect, non-gzip clients, and `Vary` and `Content-Encoding`. Status: done (proved directly, through test proxies, in real browsers and through real Serve; two proxied-stream bugs fixed).
-4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: partly done (most cases have tests; not mapped to the criteria).
+4. **Phase 1 exit-criteria audit**: confirm that the owning suites prove no leaked leases, sockets, channels, timers or queued bytes after close, failure, gateway stop and credential rotation. Status: done (2026-11-03: every criterion mapped to its owning test, and the missing gauges-to-zero test after rotation and stop added; one gap found and filed as [3900](3900-terminal-operations-after-credential-rotation.md)).
 5. **One default change**: compression mode or terminal transport. Status: done for compression (`on` since 2026-11-01, D14); terminal transport unchanged.
 6. **Data-saving preference**: a client-local preference feeding `read-coordinator.ts`, a trial active cadence, wider quiet backoff and the approval budget. Status: built, and left as it is (see task 6's recommendation); its real-browser byte measurement is owed with task 2.
 7. **Hidden terminal subscriptions**: reduce or detach hidden terminal presentation subscriptions where exact recovery exists. Status: deferred (waits on task 2).
@@ -125,13 +125,40 @@ Direct streams were already right. The checks found two bugs in proxied streams,
 
 **Problem.** The file lists this as needing verification, so it is not yet established that the wire paths leak nothing under failure.
 
-**Context.** Phase 1's exit criteria (`plans/stream-efficience.md:54`): no lost or duplicated terminal bytes, no leaked leases, sockets, channels, timers or queued bytes, and `body` and HTTP/SSE unchanged.
+**Context.** Phase 1's exit criteria (`plans/stream-efficience.md:65`): no lost or duplicated terminal bytes across reconnect and desync recovery; no leaked compressor leases, sockets, channels, timers or queued bytes; and `body` mode and the HTTP/SSE fallback unchanged. Its checklist (`:59`, `:62`) also asks for compressor failure, disconnect, pool, socket and channel saturation to be exercised, and for every gauge to return to zero after close, failure, gateway stop and credential rotation.
 
-**Investigation.** Most cases already have owners in `apps/backend/tests/gateway-events.test.ts`: socket and subscription bounds (`:189`, `:251`), telemetry (`:271`), desync (`:466`), credential rotation and shutdown closing sockets (`:770`), connecting-gauge release (`:2033`, `:3096`). Compressor-pool bounds are in `gateway-support-extra.test.ts:577` and `:674`. Not found: a test asserting the streaming compressor count and queued bytes return to zero after credential rotation or gateway stop.
+**Investigation.** Checked 2026-11-03 against `main` at `7b48c23f`. The mapping below names each owning test by its title, because line numbers in these suites move with every change. Paths are under `apps/backend/tests/` unless given in full.
+
+Before this work, compressor release after rotation and stop was asserted (`gateway-streaming-compression.test.ts`, "credential rotation and gateway stop release every compressor lease"), and so were sockets closing on both ("closes active sockets on credential rotation and gateway shutdown"). No test showed that queued bytes, channels, the operation queue, per-socket timers or the keepalive interval were released at the same points. `gateway-events.test.ts` now has "returns compressor count and queued bytes to zero after credential rotation and gateway stop". Before each revocation, that test puts real bytes on every queue the gateway owns:
+
+- a gzip SSE writer whose compressor is corked, so its input stays pending;
+- terminal output in a channel queue (held by the scheduler latch across asynchronous token persistence and stop; an event-loop turn confirms it stays queued);
+- a terminal write the backend has accepted but not finished;
+- a second socket still waiting to authenticate, with its timer armed.
+
+Each revocation must then leave every gauge at zero: compressor leases, event clients and their queued bytes, open and connecting streams, proxy requests, terminal sockets, upgrades and channels (state and metrics), queued terminal bytes, and the operation count, bytes and sessions. The per-socket authentication, credential-expiry and close timers must be cleared on the socket states the test held, and after stop the keepalive interval must be cleared too. The original test passed 25 consecutive runs. Review found that token persistence could yield to a normal terminal flush before rotation. The corrected test holds the flush scheduler latch, confirms real bytes remain after an event-loop turn, and passes the full gateway-events owner file. A rotation-specific negative control that removed the disposal byte reset failed with 8,208 retained bytes. Two original deliberate breaks made it fail: keeping a terminal socket's queued bytes on dispose, and not destroying event clients on rotation.
+
+The operation queue is the exception, and the test pins it. A terminal write the backend has already accepted is not cancelled by revocation: its bytes are released when the backend settles the write, not when the socket goes. That is bounded (`TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES`). While checking it, I found that a write queued *behind* that accepted write is also delivered to the backend after the rotation, because revocation does not clear the socket's `authenticated` flag. Filed as [3900](3900-terminal-operations-after-credential-rotation.md).
+
+| Exit criterion | Owning tests |
+| --- | --- |
+| No lost or duplicated terminal bytes across reconnect | `gateway-events.test.ts`: "multiplexes isolated terminal channels, raw input, resize, and retained replay"; "preserves accepted input order across a socket reconnect"; "answers a stale generation or sequence per channel without closing the socket". `apps/web/src/lib/native/terminal-websocket-client.test.ts`: "owns one socket, multiplexes channels, acknowledges operations, and reconnects cursors"; "ignores a snapshot that predates already-applied output"; "keeps a reconnecting channel unavailable when its snapshot lands before resubscribing"; "clears a delayed acknowledgement on reconnect instead of sending it later" |
+| No lost or duplicated terminal bytes across desync recovery | `gateway-events.test.ts`: "escalates repeated unknown channels and reports generation and oversized-output desync"; "reports current, duplicate, unavailable, failed, unsubscribe, and desync subscription paths"; "drops projected soft-limit terminal frames and flushes a desync notice on drain"; "flushes a desync notice to a quiet stream once its socket drains"; "buffers terminal output emitted during an authoritative replay handshake"; "preserves compressed SSE soft-limit recovery and keepalives". `terminal-websocket-client.test.ts`: "bounds output while awaiting a snapshot and resubscribes from the snapshot cursor"; "retries after snapshot failure and recovers a desynchronized channel"; "resubscribes for snapshot recovery when the renderer rejects output" |
+| No leaked compressor leases | `gateway-events.test.ts`: "sync-flushes compressed SSE immediately and cleans up its compressor" (close); "destroys a compressed SSE response and clears pending bytes on codec failure" (failure); "falls back to identity when the streaming compression pool is full" (saturation); "returns compressor count and queued bytes to zero after credential rotation and gateway stop" (rotation, stop). `gateway-streaming-compression.test.ts`: "a disconnect in the middle of a burst releases the compressor without a failure"; "credential rotation and gateway stop release every compressor lease". `gateway-sse-gzip-routes.test.ts`: "a client that hangs up on an idle stream gives back its compressor", "a client that hangs up mid-burst gives back its compressor without a failure", and, for proxied streams, "a client that hangs up closes the upstream and gives back the compressor". `gateway-support-extra.test.ts`: "bounds concurrent on-the-fly compression admission without failing requests"; "bounds streaming compression contexts and records byte outcomes" |
+| No leaked sockets | `gateway-events.test.ts`: "bounds terminal WebSocket sockets and subscriptions" (socket saturation, gauges back to zero after close); "bounds unauthenticated sockets and accepts a same-origin session cookie"; "releases a socket that never answers the close handshake"; "rejects an upgrade whose request the WebSocket server refuses"; "closes active sockets on credential rotation and gateway shutdown"; the new rotation-and-stop test (terminal sockets, upgrades, event clients, open and connecting stream gauges, proxy requests); "counts a desync recovery frame and keeps the connecting gauge released"; "releases the connecting gauge and unregisters a client that throws mid-handshake" |
+| No leaked channels | `gateway-events.test.ts`: "bounds terminal WebSocket sockets and subscriptions" (per-socket and process-wide saturation with `maxChannelsPerSocket: 1`, `maxChannels: 1`); "enforces the exported terminal WebSocket admission defaults without overrides"; "reports terminal WebSocket payload, ACK, queue, and transport telemetry" (`channelsOpen: 0` after close); the new rotation-and-stop test (channel count and `channelsOpen`). `apps/backend/src/remote-bandwidth-baseline.test.ts`: "real gateway supports the 256-channel boundary and rejects overcapacity before allocation" |
+| No leaked timers | The new rotation-and-stop test (authentication, credential-expiry and close timers cleared on rotation and stop; the keepalive interval cleared on stop). `gateway-events.test.ts`: "releases a socket that never answers the close handshake" (close timer); "closes a cookie-authenticated terminal socket when its agent-test session expires" (credential-expiry timer); "stops retaining replay payloads once the gateway stops". `terminal-websocket-client.test.ts`: "discards a pending acknowledgement when the socket is no longer open" |
+| No leaked queued bytes | The new rotation-and-stop test (SSE writer bytes, terminal channel bytes, operation bytes once the backend settles). `gateway-events.test.ts`: "destroys a compressed SSE response and clears pending bytes on codec failure"; "disconnects a non-reading socket when its aggregate queue reaches the hard limit"; "acknowledges rejected operations and bounds a blocked per-session queue"; "bounds aggregate operation bytes across independently blocked sessions"; "drops a real non-reading incompressible compressed stream at the hard limit"; "disconnects instead of growing the replay-handshake buffer without bound". `gateway-support-extra.test.ts`: "sums pending input, compressor backlog, and response buffer for gzip SSE writers". `remote-bandwidth-baseline.test.ts`: "blocked downstream stays bounded and backpressures the producer" |
+| `body` mode unchanged | `gateway-events.test.ts`: "keeps SSE identity in off and body modes"; "compresses eligible invoke bodies above the threshold with Brotli then gzip". `gateway-sse-gzip-routes.test.ts`: "modes that never gzip an event stream" (`off`, `body`) and "the control listener stays identity while the browser listener gzips". `gateway-support-extra.test.ts`: "keeps small dynamic bodies identity while allowing static compression on browser listeners"; "parses gateway compression modes and rejects unknown values" |
+| HTTP/SSE fallback unchanged | `gateway-events.test.ts`: "does no per-event work when no terminal socket is attached"; "delivers backend events to authenticated event streams". `terminal-websocket-client.test.ts`: "falls back and retries when socket construction or subscription fails"; "times out missing operation acknowledgements and reconnects through fallback"; "drops a socket on a silent link, falling back and keeping the ladder". `apps/web/src/lib/native/web-gateway.test.ts`: "keeps fallback per channel until its WebSocket snapshot succeeds"; "retains fallback and retries a channel when its snapshot fails"; "does not re-arm a terminal fallback that a ready WebSocket channel retired" |
+
+The checklist's own cases map to the same tests: compressor failure ("destroys a compressed SSE response…"), disconnect ("a disconnect in the middle of a burst…"), pool saturation ("falls back to identity when the streaming compression pool is full"), and socket, per-socket channel and process-wide channel saturation ("bounds terminal WebSocket sockets and subscriptions").
+
+None of this is live evidence. Whether terminal output matches the exact snapshot after backpressure and reconnect on a real remote link is still the acceptance criterion under Outstanding work, and it is owed with 0051.
 
 **Decisions.**
 
-- **How to close it?**
+- **How to close it?** Decided 2026-11-03: as recommended.
   - **Map each criterion to its owning test in this file, and add the one missing gauges-to-zero assertion (recommended).**
     - Pros: cheap; turns "needs verification" into evidence; no live run.
     - Cons: a small new test in a large suite.
@@ -797,17 +824,58 @@ Decisions made on 2026-11-01 for tasks 1, 3 and 9.
     fifth browser; CPU and bytes through Serve under real load are unmeasured
     (task 2).
 
+### Task 4: exit-criteria audit (2026-11-03)
+
+- **Name owning tests by title, not line number.** The suites move by tens of
+  lines with each change; the line numbers task 4's investigation cited on
+  2026-10-27 had already drifted by about 80 lines. Titles survive that and are
+  what `bun test -t` takes.
+- **Hold real bytes instead of pinning `writableLength`.** The new test corks
+  the gzip writer's compressor and holds terminal output with the scheduler
+  latch before rotation and `stop()`. The harness's `pinBufferedBytes` overrides
+  the getter, so a release
+  could not change what it reports, and an assertion of zero would prove
+  nothing.
+- **Pin, rather than fix, the in-flight operation exception.** A write the
+  backend has already accepted keeps its operation bytes until the backend
+  settles it. The test asserts exactly that, then that the bytes drain. The
+  related bug (a write queued behind it still runs after rotation) is outside
+  this task's files, so it is filed as
+  [3900](3900-terminal-operations-after-credential-rotation.md) instead of
+  being changed here.
+- **Keep the new test in `gateway-events.test.ts`.** It covers terminal
+  sockets as well as SSE, and the ticket names that file.
+  `gateway-streaming-compression.test.ts` keeps its compressor-only rotation
+  test (D13).
+
+### Task 4: hold channel bytes across token persistence (2026-11-03 review fix)
+
+The test now drains earlier scheduled flushes, sets the socket's `flushScheduled`
+latch before queuing real terminal output, and checks that bytes remain after
+another event-loop turn. This prevents token persistence from draining the queue
+before revocation. The same hold applies to rotation and stop. The private state
+belongs to the disposable test socket; production code is unchanged.
+
+- **Hold the scheduler latch (recommended, chosen).** Pros: retains real channel
+  bytes through asynchronous persistence and makes a missing disposal reset fail
+  during rotation. Cons: depends on private scheduler state.
+- **Narrow the claim to stop only.** Pros: avoids another test-internal field.
+  Cons: leaves rotation cleanup coverage incomplete.
+
+Validation: the full gateway-events file passes. Removing only the disposal byte
+reset makes the rotation assertion fail with 8,208 bytes; the production source
+was restored immediately after this negative control. Backend test-project
+checking reports an unrelated TS2339 at `commands-registry-pr.test.ts:1338`.
+
 ## Needs verification
 
 - A browser through a real proxy. The browser check ran over loopback HTTP/1.1,
   and the HTTP/2 hop was checked with the probe's client. Task 2's matrix should
   include a browser through Serve.
-- Phase 1 exit criteria. Now covered: compressor leases released on close,
-  codec failure, mid-burst disconnect, gateway stop and credential rotation
-  (`gateway-streaming-compression.test.ts`, `gateway-events.test.ts`);
-  terminal sockets closed on rotation and stop and channel gauges back to zero
-  after close (`gateway-events.test.ts`). Not asserted anywhere: that no
-  keepalive or WebSocket timer and no queued bytes survive gateway stop.
+- Phase 1 exit criteria: every criterion is now mapped to its owning tests
+  (task 4), including timers and queued bytes after credential rotation and
+  gateway stop. What is still owed is live: terminal output matching the exact
+  snapshot after backpressure and reconnect on a real remote link (0051).
 - Data saving in a real browser: bytes per minute with the mode off and on,
   approval and completion p50/p95, and two clients with different
   preferences.

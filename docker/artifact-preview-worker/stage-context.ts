@@ -17,8 +17,8 @@ const target = path.resolve(argument);
 const here = import.meta.dir;
 // Bun writes each module's path, relative to the working directory, as a
 // comment in the bundle. Staging from the repository root keeps the bundle,
-// and so the context digest a published image is bound to, the same
-// wherever this runs (the backend build, publish.sh, CI, a source checkout).
+// and so the context digest a built image is labelled with, the same
+// wherever this runs (the backend build, build.sh, CI, a source checkout).
 process.chdir(path.resolve(here, "../.."));
 const backend = path.resolve(here, "../../apps/backend");
 const moduleDir = path.join(backend, "src/core/transcript-artifacts");

@@ -1363,7 +1363,7 @@ test("an acknowledged native turn with persisted idle prevents move before quies
   }
 });
 
-test("a raw-path write admitted first blocks copying until its acknowledged edit is present", async () => {
+test("a file write admitted first blocks copying until its acknowledged edit is present", async () => {
   const { root, context, commands, startLocal } = await setup();
   const environment = await startLocal();
   const write = shell.writeFileBase64;
@@ -1380,13 +1380,11 @@ test("a raw-path write admitted first blocks copying until its acknowledged edit
     await gate;
     return write(...args);
   });
-  // The raw API also serves coordinator paths and does not always name an
-  // environment root. Its containing root must participate in admission too.
   const saving = Promise.resolve(
     commands.get("write_local_file")!(
       {
-        worktreePath: path.dirname(environment.worktreePath!),
-        filePath: path.join(path.basename(environment.worktreePath!), "README.md"),
+        worktreePath: environment.worktreePath,
+        filePath: "README.md",
         base64Data: Buffer.from("acknowledged edit").toString("base64"),
       },
       context,
@@ -1399,7 +1397,7 @@ test("a raw-path write admitted first blocks copying until its acknowledged edit
         forceCopy: true,
         sessionHomes: isolatedHomes(root),
       }),
-    ).rejects.toThrow("file mutation is in progress");
+    ).rejects.toThrow("file mutation or worker start is in progress");
   } finally {
     finish();
     await saving;

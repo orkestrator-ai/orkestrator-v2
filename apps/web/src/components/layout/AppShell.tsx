@@ -59,9 +59,20 @@ import {
   useRemoteWorkspaceStore,
   type RemoteWorkspaceSelection,
 } from "@/stores/remoteWorkspaceStore";
+import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 
 interface AppShellProps {
   children?: React.ReactNode;
+}
+
+/** The active tab of an environment's active pane, as the store holds it. */
+function selectActivePaneTab(environment: EnvironmentPaneState | undefined) {
+  if (!environment) return null;
+  const activePane = getAllLeaves(environment.root).find(
+    (leaf) => leaf.id === environment.activePaneId,
+  );
+  if (!activePane?.activeTabId) return null;
+  return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
 }
 
 /** Wide enough for a pull request opened in the panel; files views stay narrow by choice. */
@@ -157,7 +168,14 @@ export function AppShell({ children }: AppShellProps) {
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
-  const paneEnvironments = usePaneLayoutStore((state) => state.environments);
+  // Only the selected environment's active tab: a pane-layout change in any
+  // other environment returns the same tab object and does not re-render the
+  // shell (WEB-7).
+  const paneActiveTab = usePaneLayoutStore((state) =>
+    selectedEnvironmentId
+      ? selectActivePaneTab(state.environments.get(selectedEnvironmentId))
+      : null,
+  );
   const activeProjectName = useProjectStore((state) =>
     selectedProjectId
       ? (state.projects.find((project) => project.id === selectedProjectId)?.name ?? null)
@@ -208,17 +226,8 @@ export function AppShell({ children }: AppShellProps) {
     () => coordinatorConversationTab(coordinatorConversation, selectedProjectId, projectBoardTab),
     [coordinatorConversation, selectedProjectId, projectBoardTab],
   );
-  const activeTab = useMemo(() => {
-    // Keep the coordinator descriptor stable when unrelated pane layouts change.
-    if (coordinatorTab) return coordinatorTab;
-    if (!selectedEnvironmentId) return null;
-    const environment = paneEnvironments.get(selectedEnvironmentId);
-    if (!environment) return null;
-    const leaves = getAllLeaves(environment.root);
-    const activePane = leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
-    if (!activePane?.activeTabId) return null;
-    return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
-  }, [coordinatorTab, paneEnvironments, selectedEnvironmentId]);
+  // Keep the coordinator descriptor stable when unrelated pane layouts change.
+  const activeTab = coordinatorTab ?? paneActiveTab;
 
   // App shortcuts work wherever focus is in this document (`app-shortcuts.ts`).
   useEffect(() => retainAppShortcutRouter(), []);

@@ -13,7 +13,9 @@ import {
 } from "@orkestrator/protocol/coordinator-web-research";
 import {
   BRIDGE_ATTACHMENT_ROOT_ENV,
+  CODEX_COORDINATOR_SHELL_EXCLUDE,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
+  CODEX_SESSION_SHELL_EXCLUDE,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
   MAX_CODEX_DISABLED_SKILLS,
@@ -75,6 +77,8 @@ describe("Codex app-server configuration", () => {
       "features.incremental_tools": "false",
       // No goal tools: Orkestrator has no goal surface (codex 0.166).
       "features.goals": "false",
+      // Every session's commands lose the bridge-control credentials (M13).
+      "shell_environment_policy.exclude": JSON.stringify(CODEX_SESSION_SHELL_EXCLUDE),
     });
     // Native sessions must inherit Codex's default (flag off) so 2025-era
     // HTTP MCP servers such as Paper.design can complete initialize.
@@ -91,6 +95,7 @@ describe("Codex app-server configuration", () => {
       "features.multi_agent_v2.max_concurrent_threads_per_session": "9",
       "features.incremental_tools": "false",
       "features.goals": "false",
+      "shell_environment_policy.exclude": JSON.stringify(CODEX_SESSION_SHELL_EXCLUDE),
     });
   });
 
@@ -135,6 +140,50 @@ describe("Codex app-server configuration", () => {
     // enforcement that makes the checkout itself read-only.
     expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
     expect(overrides["permissions.coordinator-conversation-1.filesystem"]).not.toContain('"write"');
+  });
+
+  // Security report M13: before this, only a coordinator scrubbed its
+  // commands' environment, so an ordinary worker's shell inherited the bridge
+  // token and the environment-wide agent MCP credential.
+  test("keeps bridge-control credentials out of every session's commands", () => {
+    const overrides = codexAppServerConfigOverrides({
+      [ORKESTRATOR_AGENT_MCP_URL_ENV]: "http://127.0.0.1:4567/mcp",
+      [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
+      CODEX_BRIDGE_TOKEN: "bridge-secret",
+    });
+    const exclude = JSON.parse(overrides["shell_environment_policy.exclude"]!) as string[];
+
+    expect(exclude).toEqual(
+      expect.arrayContaining([
+        "CODEX_BRIDGE_TOKEN",
+        "*_BRIDGE_TOKEN",
+        ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+        ORKESTRATOR_AGENT_MCP_URL_ENV,
+        "CODEX_API_KEY",
+      ]),
+    );
+    // A worker keeps Codex's default inheritance, so the managed GitHub
+    // credential and the project's own variables still reach its commands.
+    expect(overrides["shell_environment_policy.inherit"]).toBeUndefined();
+    expect(overrides["shell_environment_policy.ignore_default_excludes"]).toBeUndefined();
+    for (const family of ["*_TOKEN", "*_KEY", "*_SECRET", "GH_TOKEN", "GITHUB_TOKEN"]) {
+      expect(exclude).not.toContain(family);
+    }
+    // The MCP server still authenticates from app-server's own environment.
+    expect(overrides["mcp_servers.orkestrator.bearer_token_env_var"]).toBe(
+      `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
+    );
+    expect(JSON.stringify(overrides)).not.toContain("project-secret");
+    expect(JSON.stringify(overrides)).not.toContain("bridge-secret");
+  });
+
+  test("a coordinator's exclusions include every session's", () => {
+    const exclude = JSON.parse(
+      codexAppServerConfigOverrides(COORDINATOR_ENV)["shell_environment_policy.exclude"]!,
+    ) as string[];
+    expect(exclude).toEqual([...CODEX_COORDINATOR_SHELL_EXCLUDE]);
+    expect(exclude).toEqual(expect.arrayContaining([...CODEX_SESSION_SHELL_EXCLUDE]));
+    expect(new Set(exclude).size).toBe(exclude.length);
   });
 
   test("keeps coordinator credentials out of model-created execution environments", () => {
@@ -474,7 +523,12 @@ describe("Codex app-server configuration", () => {
     // permission profile, and must not inherit a half-applied coordinator
     // boundary that would read as enforcement without being it.
     expect(overrides.default_permissions).toBeUndefined();
-    expect(overrides["shell_environment_policy.exclude"]).toBeUndefined();
+    // Only the bridge-control exclusions every session gets (M13); the
+    // coordinator's `core` inheritance and broad secret families stay off.
+    expect(JSON.parse(overrides["shell_environment_policy.exclude"]!)).toEqual([
+      ...CODEX_SESSION_SHELL_EXCLUDE,
+    ]);
+    expect(overrides["shell_environment_policy.inherit"]).toBeUndefined();
     expect(overrides['projects."/projects/example".trust_level']).toBeUndefined();
     expect(Object.keys(overrides).filter((key) => key.startsWith("permissions."))).toEqual([]);
   });
@@ -812,5 +866,48 @@ describe("coordinator skills", () => {
     expect(filesystem).not.toContain('"write"');
     expect(filesystem).toContain('":root" = "deny"');
     expect(overrides["features.skill_env_var_dependency_prompt"]).toBe("false");
+  });
+});
+
+describe("configured shell exclusion preservation", () => {
+  test("unions user, profile and project exclusions with the mandatory list", async () => {
+    const home = await mkdtemp(join(tmpdir(), "codex-exclude-"));
+    try {
+      await mkdir(join(home, ".codex"));
+      await writeFile(
+        join(home, "config.toml"),
+        '[shell_environment_policy]\nexclude = ["CUSTOMER_CREDENTIAL", "AWS_*"]\n[profiles.private.shell_environment_policy]\nexclude = ["PROFILE_CREDENTIAL"]\n',
+      );
+      await writeFile(
+        join(home, ".codex", "config.toml"),
+        '[shell_environment_policy]\nexclude = ["PROJECT_CREDENTIAL"]\n',
+      );
+      for (const env of [
+        { CODEX_HOME: home, CWD: home },
+        { ...COORDINATOR_ENV, CODEX_HOME: home },
+      ]) {
+        const exclude = JSON.parse(
+          codexAppServerConfigOverrides(env)["shell_environment_policy.exclude"]!,
+        );
+        for (const name of [
+          ...CODEX_SESSION_SHELL_EXCLUDE,
+          "CUSTOMER_CREDENTIAL",
+          "AWS_*",
+          "PROFILE_CREDENTIAL",
+        ])
+          expect(exclude).toContain(name);
+        if (env.CWD === home) expect(exclude).toContain("PROJECT_CREDENTIAL");
+      }
+      await writeFile(join(home, "config.toml"), "[shell_environment_policy]\nexclude = 5");
+      expect(() => codexAppServerConfigOverrides({ CODEX_HOME: home })).toThrow(
+        "Cannot load Codex shell exclusions",
+      );
+      await writeFile(join(home, "config.toml"), "#".repeat(1024 * 1024 + 1));
+      expect(() => codexAppServerConfigOverrides({ CODEX_HOME: home })).toThrow(
+        "Cannot load Codex shell exclusions",
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

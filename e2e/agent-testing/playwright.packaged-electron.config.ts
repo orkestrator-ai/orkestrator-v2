@@ -10,13 +10,13 @@ const runId = process.env.ORKESTRATOR_AGENT_TEST_RUN_ID ?? "electron-packaged";
 const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "electron-packaged");
 
 /**
- * Electron specs that launch the packaged app (`mise run
- * package:linux:unpacked`) rather than the dev bundle and Vite. Kept apart
- * from playwright.electron.config.ts because they need that build first.
+ * Electron specs for the shipping binary security smoke and inspect-enabled
+ * packaged-test design journey, rather than the dev bundle and Vite. Kept
+ * apart from playwright.electron.config.ts because they need that build first.
  */
 export default defineConfig({
   testDir: import.meta.dirname,
-  testMatch: ["design-canvas-packaged-electron.spec.ts"],
+  testMatch: ["design-canvas-packaged-electron.spec.ts", "packaged-security-electron.spec.ts"],
   workers: 1,
   timeout: 120_000,
   reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],

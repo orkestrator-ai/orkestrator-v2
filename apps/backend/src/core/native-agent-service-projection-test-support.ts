@@ -231,6 +231,7 @@ export async function withService(
     interactionMonitorRetryBaseMs?: number;
     interactionMonitorMaxRetries?: number;
     onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
+    onObservationInvalidation?: NativeAgentServiceOptions["onObservationInvalidation"];
     onAsyncQuestionAttention?: NativeAgentServiceOptions["onAsyncQuestionAttention"];
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
     toolDetailCacheMaxEntries?: number;
@@ -275,6 +276,9 @@ export async function withService(
       ? {}
       : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
     ...(setup.onActivityTransition ? { onActivityTransition: setup.onActivityTransition } : {}),
+    ...(setup.onObservationInvalidation
+      ? { onObservationInvalidation: setup.onObservationInvalidation }
+      : {}),
     ...(setup.onAsyncQuestionAttention
       ? { onAsyncQuestionAttention: setup.onAsyncQuestionAttention }
       : {}),

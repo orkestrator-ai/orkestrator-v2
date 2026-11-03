@@ -659,14 +659,91 @@ exit 1
     expect(calls).not.toContain("off");
   });
 
-  test("rejects Tailscale Serve with a non-IPv4-loopback listener", async () => {
+  test("serves an IPv6 loopback listener through Tailscale Serve without the allow flag", async () => {
+    const testDir = await createTemporaryDirectory("orkestrator-tailscale-test-");
+    const executable = path.join(testDir, "tailscale");
+    const logFile = path.join(testDir, "calls.log");
+    // Reports back whatever root proxy target it was last given, so shutdown
+    // only recognises the root as its own if startup proxied to [::1].
+    await writeFile(
+      executable,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
+case " $* " in
+  *" off "*) rm -f "$TAILSCALE_TEST_LOG.root"; exit 0 ;;
+esac
+if [ "$*" = "serve status --json" ]; then
+  if [ -f "$TAILSCALE_TEST_LOG.root" ]; then
+    printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"workstation.example.ts.net:443":{"Handlers":{"/":{"Proxy":"%s"}}}}}\\n' "$(cat "$TAILSCALE_TEST_LOG.root")"
+  else
+    printf '{}\\n'
+  fi
+  exit 0
+fi
+for arg in "$@"; do last_arg="$arg"; done
+printf '%s' "$last_arg" > "$TAILSCALE_TEST_LOG.root"
+printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
+`,
+    );
+    await chmod(executable, 0o755);
+    const dataDir = await createTemporaryDirectory("orkestrator-standalone-test-");
+    const rendererRoot = path.join(dataDir, "renderer");
+    await mkdir(rendererRoot);
+    await writeFile(
+      path.join(rendererRoot, "index.html"),
+      "<!doctype html><title>Orkestrator</title>",
+    );
+
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        path.join(root, "apps/backend/dist/main.js"),
+        "--tailscale-serve",
+        "--tailscale-bin",
+        executable,
+        "--host",
+        "::1",
+        "--port",
+        "0",
+        "--data-dir",
+        dataDir,
+        "--app-root",
+        root,
+        "--resource-root",
+        root,
+        "--renderer-root",
+        rendererRoot,
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, TAILSCALE_TEST_LOG: logFile },
+      },
+    );
+    processes.push(child);
+
+    const { readyMessage } = await waitForStandaloneBackendReady(child);
+    expect(readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
+    expect(readyMessage.bindAddress).toBe("::1");
+    child.kill("SIGTERM");
+    await expect(child.exited).resolves.toBe(0);
+
+    const calls = await readFile(logFile, "utf8");
+    expect(calls).toMatch(/serve --bg --yes --https=443 http:\/\/\[::1\]:\d+\n/);
+    expect(calls).toContain("serve --yes --https=443 --set-path=/ off");
+  }, 60_000);
+
+  test("refuses Tailscale Serve on a non-loopback, non-Tailscale host", async () => {
+    const dataDir = await createTemporaryDirectory("orkestrator-standalone-test-");
     const child = Bun.spawn(
       [
         process.execPath,
         path.join(root, "apps/backend/dist/main.js"),
         "--tailscale-serve",
         "--host",
-        "::1",
+        "0.0.0.0",
+        "--data-dir",
+        dataDir,
       ],
       { stdout: "pipe", stderr: "pipe", env: process.env },
     );
@@ -674,7 +751,7 @@ exit 1
 
     await expect(child.exited).resolves.not.toBe(0);
     expect(await new Response(child.stderr).text()).toContain(
-      "--tailscale-serve requires --host 127.0.0.1",
+      "Refusing to bind gateway to non-Tailscale address: 0.0.0.0",
     );
   });
 });

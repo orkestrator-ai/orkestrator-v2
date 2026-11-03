@@ -5,7 +5,13 @@ import {
   type BackendInstanceDescriptor,
 } from "@orkestrator/protocol/backend-instance";
 import { CliError } from "./errors.js";
-import { isLoopbackHost, processIsAlive, readDescriptor, readTokenFile } from "./targets.js";
+import {
+  isDescriptorRefusal,
+  isLoopbackHost,
+  processIsAlive,
+  readDescriptor,
+  readTokenFile,
+} from "./targets.js";
 import { observe, ObservationStopped, throwIfInterrupted, type ObserveOptions } from "./wait.js";
 
 /**
@@ -27,7 +33,8 @@ export interface ServiceConnection {
 export async function currentDescriptorGeneration(dataDir: string): Promise<string | null> {
   try {
     return (await readDescriptor(path.join(dataDir, BACKEND_INSTANCE_DESCRIPTOR_FILE))).generation;
-  } catch {
+  } catch (error) {
+    if (isDescriptorRefusal(error)) throw error;
     return null;
   }
 }
@@ -106,7 +113,8 @@ export async function awaitServiceConnection(
           (options.expectedVersion === undefined || value.appVersion === options.expectedVersion) &&
           processIsAlive(value.pid);
         if (fresh) return { done: true as const, value };
-      } catch {
+      } catch (error) {
+        if (isDescriptorRefusal(error)) throw error;
         // Not published yet, or mid-replacement.
       }
       await options.assertStarting?.();

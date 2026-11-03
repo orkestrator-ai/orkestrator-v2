@@ -5,7 +5,8 @@ Checked against `main` at `2459b05c` (2026-10-15); real-Electron runs against
 fault tests and single-machine runs against `b83ae534` (2026-10-22); node
 retention, tunnel liveness, compatibility cases and UI items against
 `00a0cb82` (2026-10-25); the preview flakes (task 11) against `93b99bfba`
-(2026-11-01); the Next.js fixture (task 5) against `7b48c23fb` (2026-11-03).
+(2026-11-01); the Next.js fixture (task 5) and task 6's metric additions
+against `7b48c23fb` (2026-11-03).
 
 ## Task analysis
 
@@ -30,7 +31,9 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    not run on beelink, 2680). Real-provider OAuth is still deferred (D13).
 6. **Performance thresholds and missing metrics**: set thresholds from task
    1's baseline; add HMR, reconnect and desktop-ingress measurements. Status:
-   blocked (thresholds on task 1); metric additions open.
+   blocked (thresholds on task 1); metric additions done (2026-11-03:
+   desktop reconnect counts and ingress connect and first-byte series; HMR
+   delivery stays with the latency script).
 7. **Flip defaults and cohort sign-off**: tunnel and relay defaults, the
    observation window and who signs off. Status: blocked (on tasks 1, 4 and
    6).
@@ -213,12 +216,20 @@ thresholds name are not measured.
 **Context.** The Qualification bullet lists first byte, connect, HMR delivery,
 peak queue and decode bytes, socket counts.
 
-**Investigation.** `PreviewHistogramName` is still only `http.connect_ms`,
-`http.first_byte_ms` and `tunnel.open_ms`
-(`apps/backend/src/preview-metrics.ts:20`). The desktop ingress
+**Investigation.** Before 2026-11-03 `PreviewHistogramName` was only
+`http.connect_ms`, `http.first_byte_ms` and `tunnel.open_ms`
+(`apps/backend/src/preview-metrics.ts`), the desktop ingress
 (`apps/desktop/electron/preview-transport-manager.ts`,
-`preview-tunnel-client.ts`) records no metrics; there is no HMR-delivery or
-reconnect series anywhere.
+`preview-tunnel-client.ts`) recorded no metrics, and there was no
+HMR-delivery or reconnect series anywhere. Re-checked against `main` at
+`7b48c23fb`: still true. The metric additions are now in (D15): desktop
+windows report `desktop.connect_ms`, `desktop.first_byte_ms`,
+`desktop.reconnect{category}` and `desktop.reconnect_failed{category}` to
+their backend, where they appear in `get_preview_diagnostics`. HMR delivery
+is measured by `scripts/preview-latency-baseline.ts`, not the product.
+Thresholds remain blocked on task 1's two-machine baseline. Adding the
+counters exposed a reattach race, filed as
+[3270](3270-desktop-tunnel-double-reattach.md).
 
 **Decisions.**
 
@@ -727,9 +738,12 @@ log below.
   exists. `PreviewMetrics` (`apps/backend/src/preview-metrics.ts`) has
   `http.connect_ms`, `http.first_byte_ms` (declared but never recorded until
   2026-10-22; now recorded per private-origin request) and `tunnel.open_ms`
-  histograms, but nothing for HMR delivery or reconnects, and nothing for the
-  desktop ingress, which lives in Electron. `scripts/preview-latency-baseline.ts`
-  measures connect and first byte per route from the client side.
+  histograms. Since 2026-11-03 desktop windows also report their ingress
+  `desktop.connect_ms` and `desktop.first_byte_ms` series and
+  `desktop.reconnect{category}` / `desktop.reconnect_failed{category}`
+  counts into the same diagnostics (task 6, D15). HMR delivery stays a
+  client-side measurement: `scripts/preview-latency-baseline.ts` measures
+  it, with connect and first byte per route.
 
 ### Enabling defaults
 
@@ -1872,6 +1886,48 @@ Recorded 2026-11-01 for task 11 (flakes 0620 and 0622), on branch
     Cons: no upstream connection counts for Next.js.
   - Browsers: Chromium and Firefox; WebKit is blocked on beelink by 2680 and
     the spec has no engine-specific skip, so it runs wherever WebKit launches.
+
+Recorded 2026-11-03 for task 6's metric additions, on branch
+`preview-reconnect-metrics-ca90ec0df07b-r1`.
+
+- **D15. How desktop ingress metrics reach the existing preview metrics
+  (task 6).** Options: (a) Electron keeps its own `PreviewMetrics` and exposes
+  it to the renderer over IPC; (b) Electron buffers the series and reports
+  them to the window's own backend with a new command,
+  `record_preview_client_metrics`, which folds them into `PreviewMetrics`;
+  (c) measure everything from the latency script only. Chose (b). Pros: the
+  series appear in `get_preview_diagnostics`, which the runbook's `watch`, the
+  baseline JSON and task 7's observation window already read, with no new
+  reader; each window reports to the backend whose tunnel it measured. Cons:
+  a new command; samples lag by up to the 30-second report interval; a report
+  that fails (an older backend without the command, a dropped connection) is
+  dropped rather than retried. The command accepts only the four fixed names,
+  safe failure categories, integer counts up to 100,000 and at most 512
+  samples per series, each 0–600,000 ms, and rejects the whole report
+  otherwise, so nothing free-form can reach diagnostics. (a) would leave the
+  numbers invisible to the CLI and scripts; (c) gives no production telemetry
+  for task 7.
+- **D16. What counts as a reconnect (task 6).** Options: (a) every connection
+  refused with `access-expired` or `generation-changed`; (b) every reattach
+  actually started, from a refused connection or a refused renewal
+  (`access-expired`, `generation-changed`, `not-found`). Chose (b), labelled
+  by the category that forced it, with `desktop.reconnect_failed{category}`
+  when the reattach fails. Pros: matches backend work (one
+  `create_preview_attachment` each); connections that join an attach in
+  flight do not inflate it. Cons: the race in
+  [3270](3270-desktop-tunnel-double-reattach.md) can still start two
+  reattaches for one revocation, and both are counted.
+- **D17. Where connect and first byte are measured (task 6).** Connect is
+  `openPreviewTunnel` from the WebSocket connect to `OPEN_OK`
+  (`PreviewTunnelStream.openMs`), for new upstream connections only (pooled
+  reuse is not a connect), excluding any attach. First byte is the shared
+  forwarder's `firstByteMs` (from the forwarder starting the request, tunnel
+  connect included unless a pooled connection is reused, to the upstream
+  response head) for the loopback ingress and the external-browser forward.
+  Pros: first byte is the same field the backend's `http.first_byte_ms`
+  records, and connect is the client-side view of what the backend's
+  `tunnel.open_ms` measures from accept. Cons: an upgrade (WebSocket)
+  contributes a connect sample but no first-byte sample.
 
 ## Needs verification
 

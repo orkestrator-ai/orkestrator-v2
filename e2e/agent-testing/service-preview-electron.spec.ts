@@ -30,12 +30,10 @@
  * directory the next start removes.
  */
 import type { Page, TestInfo } from "@playwright/test";
-import { closeElectronWithin } from "./design-electron-cleanup";
 import { expect, test } from "./electron-fixtures";
 import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
-import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -57,25 +55,24 @@ import {
   browserPreviewPartitionForWindow,
 } from "../../apps/desktop/electron/desktop-window-lifecycle";
 import {
-  AGENT_TEST_PREVIEW_RETENTION_ENV,
   resolveRuntimeProfile,
   type RuntimeProfile,
 } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { startPreviewFixture, type PreviewFixture } from "../../test-fixtures/preview-app/server";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import { recordProcessOutput, withElectronDiagnostics } from "./electron-diagnostics";
 import {
-  recordElectronDiagnostics,
-  recordProcessOutput,
-  withElectronDiagnostics,
-} from "./electron-diagnostics";
-import { dismissStartupDialogs } from "./electron-startup-dialogs";
+  bundleElectron,
+  closeElectron as quitElectron,
+  electronPreviewOutput,
+  launchElectron,
+  repositoryRoot,
+  waitForApi,
+  waitForUrl,
+  webRoot,
+} from "./service-preview-electron-launch";
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const packageRoot = path.join(repositoryRoot, "apps", "desktop");
-const webRoot = path.join(repositoryRoot, "apps", "web");
-const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
 const templateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
 const BOUNDS = { x: 0, y: 0, width: 960, height: 640 };
 
@@ -141,8 +138,6 @@ interface ViewInfo {
 }
 
 let stack: Stack | null = null;
-const outputTails = new WeakMap<ElectronApplication, () => string>();
-const previewOutput = new WeakMap<ElectronApplication, () => string[]>();
 
 function s(): Stack {
   if (!stack) throw new Error("Service preview stack is not running");
@@ -171,165 +166,8 @@ function record(testInfo: TestInfo, type: string, description: string): void {
   testInfo.annotations.push({ type, description });
 }
 
-async function waitForUrl(url: string): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        fetch(url)
-          .then((response) => response.ok)
-          .catch(() => false),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-}
-
-async function waitForApi(window: Page): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        window
-          .evaluate(async () => {
-            const api = (globalThis as any).orkestrator;
-            if (!api?.invoke) return false;
-            await api.invoke("greet", { name: "service-previews" });
-            return true;
-          })
-          .catch(() => false),
-      { timeout: 60_000 },
-    )
-    .toBe(true);
-}
-
-async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "rendererUrl">) {
-  const app = await electron.launch({
-    executablePath: electronExecutable,
-    // The shared switches include turning off background throttling (flake 0620).
-    args: [...ELECTRON_TEST_SWITCHES, path.join(packageRoot, "dist", "electron", "main.js")],
-    cwd: repositoryRoot,
-    env: {
-      ...process.env,
-      ELECTRON_DEV: "1",
-      VITE_DEV_SERVER_URL: current.rendererUrl,
-      ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
-      // The rollout gate under test: the desktop tunnel, off by default.
-      ORKESTRATOR_PREVIEW_TRANSPORT: "1",
-      // Never contend for the fixed control-MCP port an installed app may own.
-      ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      // No startup container-to-host probe: on a host whose firewall drops
-      // Docker traffic its result dialog opens when the probe ends and takes
-      // keyboard focus mid-test (flake 0620), and each run's probe network
-      // would outlive this disposable profile.
-      ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
-      // Partition retention passes every 2 s instead of after a minute
-      // (agent-test runtimes only), so the retention test sees one run.
-      [AGENT_TEST_PREVIEW_RETENTION_ENV]: "2000",
-    },
-  });
-  recordElectronDiagnostics(app);
-  dismissStartupDialogs(app);
-  // A bounded tail of main-process output, for startup diagnostics only.
-  let tail = "";
-  // Main's preview transport warnings (static text, e.g. a failed release), so
-  // a release check can say whether one was reported (flake 0622).
-  let previewLines: string[] = [];
-  const keep = () => {
-    let partial = "";
-    return (chunk: Buffer) => {
-      const text = chunk.toString("utf8");
-      tail = (tail + text).slice(-4_000);
-      const lines = (partial + text).split("\n");
-      partial = lines.pop()!.slice(-1_000);
-      const matched = lines.filter((line) => line.includes("[preview]"));
-      if (matched.length > 0) previewLines = [...previewLines, ...matched].slice(-20);
-    };
-  };
-  app.process().stdout?.on("data", keep());
-  app.process().stderr?.on("data", keep());
-  outputTails.set(app, () => tail);
-  previewOutput.set(app, () => previewLines.map((line) => line.slice(0, 300)));
-  const window = await app.firstWindow({ timeout: 90_000 }).catch((error: Error) => {
-    throw new Error(`${error.message}\nElectron output tail:\n${tail}`);
-  });
-  await expect(window).toHaveTitle(current.profile.electronTitle, { timeout: 60_000 });
-  await waitForApi(window);
-  const windowId = await (
-    await app.browserWindow(window)
-  ).evaluate((host) => {
-    host.setSize(1440, 960);
-    return host.id;
-  });
-  return { app, window, windowId };
-}
-
-function childPids(parent: number): number[] {
-  const processes = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
-  if (processes.status !== 0) return [];
-  return processes.stdout
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/).map(Number))
-    .filter(([pid, ppid]) => ppid === parent && Number.isInteger(pid))
-    .map(([pid]) => pid!);
-}
-
-/** Every descendant of `root`: the `.bin/electron` wrapper spawns the real binary. */
-function descendantPids(root: number): number[] {
-  const out: number[] = [];
-  const queue = [root];
-  while (queue.length > 0 && out.length < 512) {
-    for (const pid of childPids(queue.shift()!)) {
-      out.push(pid);
-      queue.push(pid);
-    }
-  }
-  return out;
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Quit Electron normally and wait until its supervised children (backend) are gone. */
-async function closeElectron(): Promise<void> {
-  const app = s().app;
-  const child = app.process();
-  const children = child.pid ? descendantPids(child.pid) : [];
-  const exited =
-    child.exitCode !== null || child.signalCode !== null
-      ? Promise.resolve(true)
-      : new Promise<boolean>((resolve) => child.once("exit", () => resolve(true)));
-  await Promise.race([
-    app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
-  const graceful = await Promise.race([
-    exited,
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30_000)),
-  ]);
-  if (!graceful) {
-    test.info().annotations.push({
-      type: "electron-quit",
-      description:
-        `app.quit() did not exit within 30s; output tail: ${outputTails.get(app)?.() ?? ""}`.slice(
-          0,
-          2_000,
-        ),
-    });
-    child.kill("SIGTERM");
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))]);
-    for (const pid of children.filter(alive)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-    }
-  }
-  await closeElectronWithin(app, 10_000);
-  await expect.poll(() => children.filter(alive).length, { timeout: 20_000 }).toBe(0);
-}
+const closeElectron = () => quitElectron(s().app);
 
 const invokeIn = <T>(page: Page, command: string, args: Record<string, unknown> = {}) =>
   page.evaluate(({ command, args }) => (globalThis as any).orkestrator.invoke(command, args), {
@@ -755,12 +593,7 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   test.info().setTimeout(300_000);
-  // Bundle exactly as production and the dev launcher do.
-  const build = spawnSync("bun", ["scripts/electron-bundle.ts"], {
-    cwd: packageRoot,
-    encoding: "utf8",
-  });
-  expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+  bundleElectron();
 
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-service-preview-"));
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
@@ -2954,7 +2787,7 @@ test("windows on different backends never share previews, and switches release o
     .toBe(0)
     .catch(async (error: Error) => {
       throw new Error(
-        `${error.message}\n${JSON.stringify({ closedAfterMs: closedAfter, sinceCloseMs: Date.now() - closeStarted, local: await accessStats(), previews: previewOutput.get(s().app)?.() ?? [] })}`,
+        `${error.message}\n${JSON.stringify({ closedAfterMs: closedAfter, sinceCloseMs: Date.now() - closeStarted, local: await accessStats(), previews: electronPreviewOutput(s().app) })}`,
       );
     });
   record(testInfo, "window-close", JSON.stringify({ closedAfterMs: closedAfter }));

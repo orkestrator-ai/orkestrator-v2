@@ -63,7 +63,11 @@ for (const activation of ["click", "Enter"] as const) {
       }
       if (fallback) {
         await expect(page.getByTestId("opened")).toHaveText('{"nodeId":"bk_remote"}');
-        await expect(page.getByTestId("intent")).toHaveText('{"projectId":"p"}');
+        // With no copy on the command node, the heading opens the leaf's
+        // coordinator (#1624).
+        await expect(page.getByTestId("intent")).toHaveText(
+          '{"projectId":"p","boardTab":"coordinator"}',
+        );
       } else {
         await expect(page.getByTestId("selected")).toHaveText("local");
       }

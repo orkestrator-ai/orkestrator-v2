@@ -501,7 +501,12 @@ describe("design service startup", () => {
     const service = new DesignService(dataDir, () => undefined);
     try {
       await service.initialize();
-      expect(await until(() => !existsSync(profile))).toBe(true);
+      // The background sweep removes the profile, then its artifacts, then
+      // the record, so the profile vanishing does not mean the sweep is done.
+      expect(await until(() => !existsSync(profile) && readdirSync(ledgerDir).length === 0)).toBe(
+        true,
+      );
+      expect(existsSync(profile)).toBe(false);
       expect(readdirSync(ledgerDir)).toEqual([]);
     } finally {
       await service.close();

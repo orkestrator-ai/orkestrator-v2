@@ -62,6 +62,11 @@ export const COMPATIBILITY_PATH_IDS = [
    * on a leaf that does not advertise `ticket-sync`.
    */
   "ticket-sync.older-node",
+  /**
+   * `/compact` sent instructions and the bridge compacted without confirming
+   * them: it predates compaction instructions and ignored the body.
+   */
+  "compact.instructions-ignored",
 ] as const;
 
 export type CompatibilityPathId = (typeof COMPATIBILITY_PATH_IDS)[number];

@@ -6,6 +6,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
     events: {
       "catalogue.outdated-bridge":
         "A bridge predates the command catalogue, so its commands stay unavailable.",
+      "compact.instructions-ignored":
+        "A bridge compacted without confirming the instructions sent with /compact: it predates them.",
       "handoff.summary-read-failed":
         "Change summaries could not be read for a handoff, so the carrier says they are unmeasured.",
       "handoff.consume-failed": "A delivered handoff could not be marked consumed.",

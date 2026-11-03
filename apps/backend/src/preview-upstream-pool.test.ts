@@ -61,6 +61,9 @@ describe("PreviewUpstreamPool", () => {
   let fake: FakeAccess;
   const accepted: Socket[] = [];
   const opened: Socket[] = [];
+  /** Accepted peers no `socket()` call has claimed yet, keyed by the client's local port. */
+  const unclaimed = new Map<number, Socket>();
+  const claimants = new Map<number, (peer: Socket) => void>();
 
   const limits = (
     overrides: Partial<PreviewUpstreamPoolLimits> = {},
@@ -71,13 +74,23 @@ describe("PreviewUpstreamPool", () => {
     ...overrides,
   });
 
-  async function socket(): Promise<Socket> {
+  /**
+   * Opens a client and waits for the server to accept it, returning both ends.
+   * The client's `connect` can fire before the server's connection callback, so
+   * the peer is matched by port rather than taken as the latest accepted socket.
+   */
+  async function socket(): Promise<{ client: Socket; peer: Socket }> {
     const client = connect(port, "127.0.0.1");
     opened.push(client);
     await new Promise((resolve) => client.once("connect", resolve));
+    const localPort = client.localPort!;
+    const peer =
+      unclaimed.get(localPort) ??
+      (await new Promise<Socket>((resolve) => claimants.set(localPort, resolve)));
+    unclaimed.delete(localPort);
     // Handed back paused, the way the HTTP client returns a reusable connection.
     client.pause();
-    return client;
+    return { client, peer };
   }
 
   async function closed(client: Socket): Promise<void> {
@@ -89,9 +102,18 @@ describe("PreviewUpstreamPool", () => {
     fake = new FakeAccess();
     accepted.length = 0;
     opened.length = 0;
+    unclaimed.clear();
+    claimants.clear();
     server = createServer((peer) => {
       accepted.push(peer);
       peer.on("error", () => undefined);
+      const claim = claimants.get(peer.remotePort!);
+      if (claim) {
+        claimants.delete(peer.remotePort!);
+        claim(peer);
+      } else {
+        unclaimed.set(peer.remotePort!, peer);
+      }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     port = (server.address() as AddressInfo).port;
@@ -105,7 +127,7 @@ describe("PreviewUpstreamPool", () => {
 
   test("hands a returned connection back to the same access, generation and target", async () => {
     const pool = new PreviewUpstreamPool(fake, limits());
-    const first = await socket();
+    const { client: first } = await socket();
     pool.put(access("a"), target(port), first);
     expect(pool.stats().idle).toBe(1);
     expect(fake.tracked("a")).toBe(1);
@@ -122,12 +144,12 @@ describe("PreviewUpstreamPool", () => {
 
   test("a different generation or target drops the access's idle connections", async () => {
     const pool = new PreviewUpstreamPool(fake, limits());
-    const first = await socket();
+    const { client: first } = await socket();
     pool.put(access("a", 1), target(port), first);
     expect(pool.take(access("a", 2), target(port))).toBeNull();
     await closed(first);
 
-    const second = await socket();
+    const { client: second } = await socket();
     pool.put(access("a", 1), target(port, "binding-1"), second);
     expect(pool.take(access("a", 1), target(port, "binding-2"))).toBeNull();
     await closed(second);
@@ -136,8 +158,8 @@ describe("PreviewUpstreamPool", () => {
 
   test("revoking the access closes its idle connections at once", async () => {
     const pool = new PreviewUpstreamPool(fake, limits());
-    const mine = [await socket(), await socket()];
-    const other = await socket();
+    const mine = [(await socket()).client, (await socket()).client];
+    const { client: other } = await socket();
     for (const client of mine) pool.put(access("a"), target(port), client);
     pool.put(access("b"), target(port), other);
     fake.revoke("a");
@@ -149,7 +171,7 @@ describe("PreviewUpstreamPool", () => {
   test("an access that can no longer be tracked keeps nothing", async () => {
     const pool = new PreviewUpstreamPool(fake, limits());
     fake.refuse = true;
-    const client = await socket();
+    const { client } = await socket();
     pool.put(access("a"), target(port), client);
     await closed(client);
     expect(pool.stats().idle).toBe(0);
@@ -157,8 +179,8 @@ describe("PreviewUpstreamPool", () => {
 
   test("dropping a service closes every access's idle connections for it", async () => {
     const pool = new PreviewUpstreamPool(fake, limits());
-    const mine = await socket();
-    const other = await socket();
+    const { client: mine } = await socket();
+    const { client: other } = await socket();
     pool.put(access("a", 1, "svc"), target(port), mine);
     pool.put(access("b", 1, "other"), target(port), other);
     pool.dropService("svc");
@@ -167,19 +189,21 @@ describe("PreviewUpstreamPool", () => {
     pool.dispose();
     await closed(other);
     // After disposal nothing is kept.
-    const late = await socket();
+    const { client: late } = await socket();
     pool.put(access("c"), target(port), late);
     await closed(late);
   });
 
   test("per-access and total bounds close the surplus", async () => {
     const pool = new PreviewUpstreamPool(fake, limits({ perAccess: 2, total: 3 }));
-    const clients = await Promise.all(Array.from({ length: 4 }, () => socket()));
+    const clients = (await Promise.all(Array.from({ length: 4 }, () => socket()))).map(
+      ({ client }) => client,
+    );
     for (const client of clients.slice(0, 3)) pool.put(access("a"), target(port), client);
     await closed(clients[2]!);
     pool.put(access("b"), target(port), clients[3]!);
     expect(pool.stats().idle).toBe(3);
-    const overflow = await socket();
+    const { client: overflow } = await socket();
     pool.put(access("c"), target(port), overflow);
     await closed(overflow);
     expect(pool.stats().idle).toBe(3);
@@ -187,22 +211,22 @@ describe("PreviewUpstreamPool", () => {
 
   test("idle connections expire, and one the application closes is never handed out", async () => {
     const pool = new PreviewUpstreamPool(fake, limits({ idleMs: 30 }));
-    const expiring = await socket();
+    const { client: expiring } = await socket();
     pool.put(access("a"), target(port), expiring);
     await closed(expiring);
     expect(fake.tracked("a")).toBe(0);
 
     const long = new PreviewUpstreamPool(fake, limits());
-    const client = await socket();
+    const { client, peer } = await socket();
     long.put(access("a"), target(port), client);
-    accepted.at(-1)!.end();
+    peer.end();
     await closed(client);
     expect(long.take(access("a"), target(port))).toBeNull();
 
     // Unexpected bytes on an idle connection mean broken framing: closed too.
-    const chatty = await socket();
+    const { client: chatty, peer: chattyPeer } = await socket();
     long.put(access("a"), target(port), chatty);
-    accepted.at(-1)!.write("HTTP/1.1 200 OK\r\n\r\n");
+    chattyPeer.write("HTTP/1.1 200 OK\r\n\r\n");
     await closed(chatty);
   });
 });

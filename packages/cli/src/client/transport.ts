@@ -19,6 +19,23 @@ export interface InvokeOptions {
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * A response whose body was read once, bounded, inside the request deadline.
+ * Decoding works on these bytes directly; the body is never wrapped in a
+ * second `Response` and read again.
+ */
+interface ReceivedResponse {
+  status: number;
+  bytes: Uint8Array;
+}
+
+const NO_BYTES = new Uint8Array();
+
+/** Answers the client refuses without reading a body (see `decode`). */
+function refusedUnread(status: number): boolean {
+  return (status >= 300 && status < 400) || status === 401 || status === 403;
+}
+
 function connectionRefused(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   const cause = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
@@ -69,14 +86,17 @@ export class GatewayTransport {
     let response = await sendWithBudget(token);
     if (response.status === 401 && !options.mutation) {
       // The token may have been rotated; a safe read gets one fresh attempt.
-      await response.body?.cancel().catch(() => undefined);
       token = await this.target.readToken();
       response = await sendWithBudget(token);
     }
     return this.decode(response, options);
   }
 
-  private async send(body: string, token: string, options: InvokeOptions): Promise<Response> {
+  private async send(
+    body: string,
+    token: string,
+    options: InvokeOptions,
+  ): Promise<ReceivedResponse> {
     const controller = new AbortController();
     const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
     let sent = false;
@@ -98,7 +118,11 @@ export class GatewayTransport {
         redirect: "manual",
         signal: controller.signal,
       });
-      if (!response.body) return response;
+      if (!response.body) return { status: response.status, bytes: NO_BYTES };
+      if (refusedUnread(response.status)) {
+        await response.body.cancel().catch(() => undefined);
+        return { status: response.status, bytes: NO_BYTES };
+      }
       const abort = new Promise<never>((_, reject) => {
         if (controller.signal.aborted) reject(controller.signal.reason);
         else
@@ -115,10 +139,7 @@ export class GatewayTransport {
         ),
         abort,
       ]);
-      return new Response(Buffer.from(bytes), {
-        status: response.status,
-        statusText: response.statusText,
-      });
+      return { status: response.status, bytes };
     } catch (error) {
       if (error instanceof CliError) throw error;
       if (!sent || !options.mutation || connectionRefused(error)) {
@@ -140,16 +161,14 @@ export class GatewayTransport {
     }
   }
 
-  private async decode(response: Response, options: InvokeOptions): Promise<unknown> {
+  private decode(response: ReceivedResponse, options: InvokeOptions): unknown {
     if (response.status >= 300 && response.status < 400) {
-      await response.body?.cancel().catch(() => undefined);
       throw new CliError(
         "connection-failed",
         "The backend answered with a redirect; redirects are never followed with credentials",
       );
     }
     if (response.status === 401 || response.status === 403) {
-      await response.body?.cancel().catch(() => undefined);
       throw new CliError(
         "auth-failed",
         response.status === 401
@@ -157,26 +176,9 @@ export class GatewayTransport {
           : "The backend refused this client (origin or permission)",
       );
     }
-    let bytes: Uint8Array;
-    try {
-      bytes = response.body
-        ? await readStreamBounded(
-            response.body,
-            PUBLIC_API_LIMITS.responseMaxBytes,
-            () =>
-              new CliError("response-invalid", "The backend response exceeded the client limit"),
-          )
-        : new Uint8Array();
-    } catch (error) {
-      if (error instanceof CliError) throw error;
-      throw new CliError(
-        options.mutation ? "transport-uncertain" : "connection-failed",
-        "The backend response was interrupted",
-      );
-    }
     let payload: unknown;
     try {
-      payload = JSON.parse(new TextDecoder().decode(bytes));
+      payload = JSON.parse(new TextDecoder().decode(response.bytes));
     } catch {
       throw new CliError(
         options.mutation ? "transport-uncertain" : "response-invalid",
@@ -187,7 +189,7 @@ export class GatewayTransport {
       throw new CliError("response-invalid", "The backend response is not a JSON object");
     }
     const record = payload as { result?: unknown; error?: unknown };
-    if (response.ok) return record.result;
+    if (response.status >= 200 && response.status < 300) return record.result;
     const message = typeof record.error === "string" ? record.error : "";
     // The one message the gateway itself defines for a missing command: an
     // older backend without the public contract. Nothing ran.

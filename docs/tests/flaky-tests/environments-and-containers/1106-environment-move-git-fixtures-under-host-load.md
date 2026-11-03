@@ -181,3 +181,10 @@ family. The full owner remains non-green. No timeout, assertion, skip or
 move implementation was changed. The diff-stats assertion has its own
 [1110 evidence record](../coordinator-and-multi-review/1110-diff-stats-reset-baseline-deadline.md).
 
+
+**Rename (2026-11-03, security L8).** `write_local_file` now refuses any root
+that is not a registered environment's worktree, so the raw parent-root write
+this case named no longer exists. The test became `a file write admitted first
+blocks copying until its acknowledged edit is present` and writes through the
+environment's own root; its deadline behaviour is unchanged. It passed in an
+owner-alone run of `environment-move.test.ts` on that branch.

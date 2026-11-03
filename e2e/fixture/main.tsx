@@ -1,4 +1,5 @@
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
+import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
 import { NativeResumeSessionFixture } from "./NativeResumeSessionFixture";
 import { PiLaunchDefaultsFixture } from "./PiLaunchDefaultsFixture";
@@ -1920,6 +1921,8 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/project-home-message-approval")
     return <ProjectHomeMessageApprovalFixture />;
+  if (window.location.pathname === "/worker-question-approval")
+    return <WorkerQuestionApprovalFixture />;
   if (window.location.pathname === "/agents-md-approval") return <AgentsMdApprovalFixture />;
   if (window.location.pathname === "/design-canvas") {
     installDesignCanvasFixture();

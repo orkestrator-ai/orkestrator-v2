@@ -1,7 +1,7 @@
 # Disk report checkout fixture times out in the aggregate
 
 - **ID:** 0259
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts`
 - **Owning file:** `tests/unit/disk-report.test.ts`
@@ -492,3 +492,24 @@ implementation, timeout, assertion or skip changed.
 - **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
 - **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-disk -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` → failed, exit 1, 6.6 s; 18 pass, one fail, one error; timeout at 5092.70 ms.
 - **Disposition:** The unchanged owner also failed alone. This occurrence is unresolved and is not newly classified as flaky or environmental. Failure evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.hz0Qdn/descriptor-triage-disk.log.gz`. No assertion, timeout, skip or implementation in this area was changed.
+
+## Root cause and fix — 2026-11-03 (CLI descriptor repair)
+
+- **Root cause:** the test ran `scripts/disk-report.ts --json` against the
+  host's real Docker daemon. `collectReport` calls `docker system df`, which
+  computes image, volume and build-cache sizes; on this shared host, with five
+  builds running containers, `docker system df` alone took 6.3 s. That exceeds
+  the test's 5 s deadline, and when the deadline expires Bun kills the child, so
+  the status is null. The same script took 12.6 s run by hand, and 2.8 s with a
+  failing `docker` first on PATH (the scan of `/private/tmp` took 65 ms). This
+  explains why the test failed when the host was loaded, including in the
+  isolated owner, and passed when the daemon answered quickly. The test asserts
+  no Docker rows.
+- **Fix:** the test now puts a `docker` stub that exits 1 first on the child's
+  `PATH`. The script reads that as "Docker cannot be asked" and leaves out its
+  Docker rows, as it already does on a host without Docker. No assertion,
+  timeout or skip changed, and the script itself is unchanged.
+- **Verification:** `mise run test:logged -- --name l12-disk-owner -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --rerun-each=5 --only-failures`
+  passed with exit 0 in 13.5 s, on the same host where the unchanged owner had
+  just failed alone.
+- **Status:** resolved.

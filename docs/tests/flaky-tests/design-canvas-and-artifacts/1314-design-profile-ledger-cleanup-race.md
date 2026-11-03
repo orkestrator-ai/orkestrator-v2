@@ -1,7 +1,7 @@
 # Design startup profile removal precedes ledger cleanup
 
 - **ID:** 1314
-- **Status:** open
+- **Status:** resolved
 - **Test:** `design service startup > removes the recorded profile of a backend that was killed`
 - **File:** `apps/backend/src/core/design/browser-profiles.test.ts:348`
 
@@ -399,3 +399,19 @@ timeout, skip, or unrelated implementation changed.
 - **Original evidence:** `.orkestrator/review-artifacts/review-validation-bca4dff9-573c-45e5-bc25-4af3941061cd/validation-04.stdout.txt`.
 - **Isolated rerun:** `mise run test:logged -- --name descriptor-triage-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --only-failures` → passed, exit 0, 1.7 s.
 - **Disposition:** The unchanged complete owner passed alone. This confirms intermittent behavior, not a root-cause fix. No assertion, timeout, skip or implementation in this area was changed.
+
+## Root cause and fix — 2026-11-03 (CLI descriptor repair)
+
+- **Root cause (confirmed in code):** `DesignProfileLedger.sweep`
+  (`apps/backend/src/core/design/browser-profiles.ts`) removes a dead backend's
+  profile, then its artifacts, then the ledger record, awaiting each step in
+  turn. `DesignService.initialize()` starts this sweep in the background. The
+  test waited only for the profile to disappear and then read the ledger
+  directory straight away, so it could run between the profile `rm` and the
+  record `rm`. The implementation is correct; the test read too early.
+- **Fix:** the test now waits until the profile is gone and the ledger
+  directory is empty, then asserts both. No implementation, timeout or skip
+  changed; the deadline is the existing 5 s `until`.
+- **Verification:** `mise run test:logged -- --name l12-design-profiles -- bun test --cwd apps/backend ./src/core/design/browser-profiles.test.ts --parallel=1 --rerun-each=10 --only-failures`
+  passed with exit 0 in 5.5 s.
+- **Status:** resolved.

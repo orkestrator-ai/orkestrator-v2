@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { requestAppShortcut } from "@/lib/app-shortcuts";
 import { openBugReport } from "@/lib/bug-report/open-bug-report";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import {
   frameEnvelope,
@@ -306,6 +307,15 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
           panel: message.panel,
           requestSeq: message.requestSeq,
         });
+      } else if (message.workTarget && message.environmentId) {
+        openCoordinatorWorkTarget({
+          type: "remote",
+          nodeId: message.nodeId,
+          projectId: message.projectId,
+          environmentId: message.environmentId,
+          title: message.title,
+          workTarget: message.workTarget,
+        });
       } else {
         openMachineWorkspace({
           connectionId: message.nodeId,
@@ -313,6 +323,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
           ...(message.environmentId ? { environmentId: message.environmentId } : {}),
           ...(message.boardTab ? { boardTab: message.boardTab } : {}),
           title: message.title,
+          workTarget: message.workTarget,
         });
       }
     },

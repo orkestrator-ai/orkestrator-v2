@@ -986,14 +986,91 @@ and `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
 knows it hides its toggle. A browser's own copy of the declines is deleted on
 the first check.
 
-A chip in the same toolbar shows **Waiting on N workers** when the selected
-conversation has open delegations. It is a projection from the snapshot, not
-from anything this page observed, so it is correct after a reload. A worker
-whose delegation has a waiting episode (`delegation.waiting`, written by status
-wakes from the worker tab's own turn activity, never the environment aggregate)
-is marked as needing a person ("1 needs you", and named in the tooltip). The
-episode starting or ending announces a `coordinator` change, so the chip
-refreshes without a reload; the notice's own bookkeeping is not announced.
+## Work panel
+
+The **Work** panel on the right of the Coordinator panel lists everything this
+coordinator started, what stage each piece is at, and what needs the user,
+without opening environments. It replaced the toolbar's "Waiting on N workers"
+chip, which counted only the selected conversation's open delegations and kept
+its detail in a tooltip.
+
+**Scope.** Every `snapshot.workflows` association whose `coordinatorId` is this
+workspace's, from every conversation in the project and every node, except
+reservations (`pending`) and kinds the panel does not show (`feature-plan`, and
+any kind this client does not know). One row per worker environment (however
+many delegations name it), build pipeline, Multi Review, graph run and followed
+pull request.
+
+**Rows.** Each row shows its name, the machine when it is on another node
+("on Studio"), its stage in words ("Build · Verify", "Review · 3 reviewers",
+"PR open · checks pending", "Failed: API error") and an **Open** button. Build
+rows add the acceptance criteria passed out of the total ("9/12 criteria"),
+read from the linked ticket's criteria checks (`source: { type: "kanban" }`,
+which Verify records); when the project's tickets are not loaded the
+pipeline's own newest Verify results (`pipelineCriteriaView`) give the same
+count. Open goes to the worker's delegated tab, the build tab
+(`scheduleBuildPipelineTabActivation`), the review's own Multi Review tab, the
+graph run (`requestGraphRunView`) or the pull request (`openPullRequestUrl`);
+work on another node carries the delegated tab, pipeline, review or run identity
+through `openMachineWorkspace` and the validated realm selection message. The
+node activates that surface after its layout hydrates. A row with nothing to
+open (a deleted worker, a PR not yet opened) has a disabled button whose title
+and accessible name say why.
+
+**Order.** Sections in this order, each headed in words so status never
+depends on colour: **Needs you** (a worker whose delegation has a waiting
+episode, a worker, build or review environment with a question, approval or input
+waiting in `HumanPromptBanner`'s data, a paused or failed build, a paused or
+failed review, a graph run waiting on a person, paused or failed), **Running**,
+then **Finished**; newest first within each. Remote build and review waiting
+summaries count as Needs you without consulting local environment IDs. A ready
+review with findings needs a decision; a clean report is finished, unless its
+automatic PR launch is pending (Running) or failed (Needs you).
+
+**Finished work** stays listed for 24 hours after it finishes, or while its
+pull request is open, whichever is later; then it drops off. A build's finish
+time is its last session's completion (or the delivery decision or authoritative
+`cancelledAt` transition), a review's
+its last update, a graph run's `finishedAt`, a worker's last delegation
+completion or outcome, a PR's merge or close as last recorded. A failed build,
+review or run is listed under Needs you but expires by the same rule. The panel
+re-evaluates expiry every minute.
+
+**Freshness.** Nothing here is persisted and nothing reads the coordinator's
+conversation, so rows move while the coordinator is idle. The sources are the
+stores the app already keeps current from backend snapshots and resource
+events: the coordinator snapshot (whose delegation waiting episodes announce a
+`coordinator` change), environments, build pipelines and Multi Reviews
+(hydrated app-wide; missing records are retried on resource changes, resync and safety checks), the PR monitor, the
+project's tickets, and the command node's summaries of other machines. Graph
+runs are read on demand (`graph_run_get`) when the panel mounts, when a
+`graph-run` change names one, and on resync and safety checks. A build,
+Multi Review or graph run on another node is read through that node's link
+(`invokeOnNode`) with the same reads its own views use (`get_build_pipeline`,
+`get_multi_review_workflow`, `graph_run_get`), again whenever the node's
+summaries refresh and on resync and safety checks, including after a failure
+that can be retried. A failed read keeps the last reading. A successful null build or review read
+clears the cached snapshot and marks it unavailable under Finished, with bounded
+retention even after a remount. Followed PR rows are keyed by their URL once
+known; live status and checks are used only when the reading names that URL.
+Remote summaries omit PR URLs, so historical follows use their own final record
+rather than an unverified environment reading. `graph_run_get` is
+listed by name in `isNodeReadCommand` (`packages/protocol/src/command-nodes.ts`)
+because its verb comes last: a routed read is never recorded as an
+outcome-unknown write and does not refresh the node's summaries. A remote graph
+row therefore has the same stage words, buckets and expiry (from the run's
+`finishedAt`) as a local one, names its machine, and opens the run's
+environment on that node. A remote run its node reports `not-found` is
+unavailable under Finished, like a deleted local record. Successful empty local reads mark deleted builds, reviews and graph runs as unavailable under Finished, using association creation for bounded retention; failed reads never prove deletion. Review and graph rows also retain finished work while the environment PR is open. Review Open restores a closed main tab after authoritative layout hydration.
+
+**Layout.** At 1280px and wider the panel is open by default beside the
+conversation. Narrower, it is a strip with the running and needs-you counts;
+clicking it opens the list over the conversation, and Escape or the hide
+button returns to the strip with focus on it. The user's choice holds until the
+window crosses the threshold. The strip, hide button and every Open button are
+ordinary buttons with accessible names, so the panel works by keyboard. The
+panel root carries `data-open-delegations` (every open delegation of this
+coordinator) for end-to-end checks.
 
 ## User `!` commands
 
@@ -2490,6 +2567,15 @@ guarantee, not by one end-to-end scenario replayed per platform:
   environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
   tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
   worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)
+- the Work panel: row kinds, scope, stages, ordering, the criteria count and
+  finished-work expiry (`apps/web/src/lib/coordinator-work-items.test.ts`);
+  Open navigation (`coordinator-work-navigation.test.ts`); the wide panel,
+  narrow strip and keyboard use (`CoordinatorWorkPanel.test.tsx`); every
+  conversation's work and a waiting episode moving a row to Needs you without
+  a coordinator turn (`CoordinatorPanel.test.tsx`); remote build and graph run
+  reads, retries, missing records and the expiry clock
+  (`useCoordinatorWorkItems.test.tsx`); `graph_run_get` as a routed read
+  (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator-surface-actions.test.ts`
 - saved graphs: the four tools and no authoring tool, admission before

@@ -1011,7 +1011,10 @@ describe("BuildPipelineService", () => {
       expect(resumed.phase).toBe("building");
       expect(resumed.sessions[0]!.completedAt).toBeUndefined();
       expect(resumed.sessions[0]!.usageFinalizationPolls).toBeUndefined();
+      const cancellationStarted = Date.now();
       const cancelled = await service.cancel(started.id);
+      expect(Date.parse(cancelled.cancelledAt!)).toBeGreaterThanOrEqual(cancellationStarted);
+      expect((await pipeline(storage, started.id)).cancelledAt).toBe(cancelled.cancelledAt);
       expect(cancelled).toMatchObject({
         phase: "failed",
         error: "Build cancelled",

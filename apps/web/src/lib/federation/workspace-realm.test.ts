@@ -257,3 +257,37 @@ test("a realm can be asked for its Report a bug sheet, and can hand one to its w
   });
   expect(parseRealmMessage({ type: "bugReport", nodeId: 7 })).toBeNull();
 });
+
+test.each(["worker-tab", "build", "review", "graph-run"])(
+  "work selection %s crosses both realm messages with bounded identity",
+  (type) => {
+    const workTarget = {
+      type,
+      projectId: "p",
+      environmentId: "e",
+      tabId: "tab",
+      pipelineId: "pipe",
+      workflowId: "review",
+      runId: "run",
+    };
+    const selected = parseShellMessage({
+      type: "select",
+      projectId: "p",
+      environmentId: "e",
+      workTarget,
+    });
+    expect(selected).toHaveProperty("workTarget.type", type);
+    expect(
+      parseRealmMessage({
+        type: "open",
+        nodeId: "n",
+        projectId: "p",
+        environmentId: "e",
+        workTarget,
+      }),
+    ).toHaveProperty("workTarget.type", type);
+    expect(
+      parseShellMessage({ type: "select", projectId: "other", environmentId: "e", workTarget }),
+    ).not.toHaveProperty("workTarget");
+  },
+);

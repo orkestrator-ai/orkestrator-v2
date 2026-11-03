@@ -41,3 +41,28 @@ ORKESTRATOR_E2E_PORT=50454 mise run test:logged -- --name review-fix-keyboard-ow
 That rerun shared the fixture server and host with the broad browser run; it
 was a one-file, one-worker check, not a claim of host isolation. No keyboard
 implementation, assertion, timeout or skip changed.
+
+
+## Coordinator merge validation — 2026-11-03
+
+The broad browser run repeated the missing editable textbox at line 318 with
+nine workers while other worktrees were validating on the shared host:
+
+```sh
+ORKESTRATOR_E2E_PORT=61879 mise run test:logged -- --name merge-browser-retry -- mise run test:browser
+```
+
+The broad run was intentionally interrupted to scope validation to the original
+coordinator conflict: 174 passed, one failed, nine interrupted, 58 skipped,
+1,064 not run (261.1 s). Evidence: host temporary artifact directory
+`orkestrator-test-run.JB6VPy`, `merge-browser-retry.log.gz`.
+
+The unchanged failing case passed alone with one worker (22.2 s, exit 0):
+
+```sh
+ORKESTRATOR_E2E_PORT=61880 mise run test:logged -- --name keyboard-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/KeyboardShortcuts.spec.ts --project=mobile-chromium --workers=1 --grep 'Meta\+I focuses the assigned agent composer'
+```
+
+This rerun selected the failing case, not the complete owner file. No keyboard
+implementation, assertion, timeout or skip changed. The startup-delay hypothesis
+remains unproven.

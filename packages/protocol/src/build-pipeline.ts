@@ -1339,6 +1339,8 @@ export interface PipelinePromptAttempt {
 }
 
 export interface BuildPipeline {
+  /** Authoritative cancellation transition, independent of earlier session completion. */
+  cancelledAt?: string;
   id: string;
   taskId: string;
   projectId: string;
@@ -2263,6 +2265,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     (value.maxIterations as number) > MAX_BUILD_PIPELINE_ITERATIONS ||
     !isNonNegativeInteger(value.backendRevision) ||
     !isIsoDate(value.createdAt) ||
+    (value.cancelledAt !== undefined && !isIsoDate(value.cancelledAt)) ||
     typeof value.taskTitle !== "string" ||
     !isTaskSnapshot(value.taskSnapshot) ||
     (value.verificationResult !== undefined &&

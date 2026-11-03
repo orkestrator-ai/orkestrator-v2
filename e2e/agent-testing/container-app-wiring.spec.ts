@@ -487,6 +487,15 @@ test("Docker fixture coordinator view follows delegations and context across swi
     ).length;
   const baselineContainer = openOn(container.id);
   const baseline = baselineContainer + openOn(local.id);
+  // The Work panel counts every open delegation of this coordinator, from any
+  // conversation and to any worker; those this test does not drive stay put.
+  const elsewhere =
+    snapshot.workflows.filter(
+      (association) =>
+        association.coordinatorId === snapshot.workspace.id &&
+        association.kind === "environment" &&
+        association.delegation?.state === "running",
+    ).length - baseline;
   const delegate = (environmentId: string, label: string) =>
     invoke<{ opened: boolean }>("open_coordinator_delegation", {
       scope: {
@@ -526,15 +535,11 @@ test("Docker fixture coordinator view follows delegations and context across swi
     return panel;
   };
   const awaiting = (panel: ReturnType<Page["locator"]>, count: number) =>
-    count === 0
-      ? expect(panel.locator("[data-awaiting-workers]")).toHaveCount(0, {
-          timeout: DELEGATION_SWEEP_BUDGET_MS,
-        })
-      : expect(panel.locator("[data-awaiting-workers]")).toHaveAttribute(
-          "data-awaiting-workers",
-          String(count),
-          { timeout: DELEGATION_SWEEP_BUDGET_MS },
-        );
+    expect(panel.locator("[data-coordinator-work]")).toHaveAttribute(
+      "data-open-delegations",
+      String(count + elsewhere),
+      { timeout: DELEGATION_SWEEP_BUDGET_MS },
+    );
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await login(page, testInfo);
@@ -549,10 +554,12 @@ test("Docker fixture coordinator view follows delegations and context across swi
       await page.waitForTimeout(3_000);
       panel = await openCoordinator(page);
       await awaiting(panel, baseline + 1);
-      await expect(panel.locator("[data-awaiting-workers]")).toHaveAttribute(
-        "title",
-        new RegExp(containerName),
-      );
+      // A 1400px window shows the Work panel open, with the worker named.
+      await expect(
+        panel.locator('[data-coordinator-work] [data-work-kind="worker"]', {
+          hasText: containerName,
+        }),
+      ).toBeVisible();
     });
 
     await test.step("a delegation opened while the document is hidden appears after return", async () => {
@@ -560,9 +567,9 @@ test("Docker fixture coordinator view follows delegations and context across swi
       expect((await delegate(local.id, "local")).opened).toBe(true);
       await page.waitForTimeout(6_000);
       // Event-driven reads wait while hidden.
-      await expect(panel.locator("[data-awaiting-workers]")).toHaveAttribute(
-        "data-awaiting-workers",
-        String(baseline + 1),
+      await expect(panel.locator("[data-coordinator-work]")).toHaveAttribute(
+        "data-open-delegations",
+        String(baseline + 1 + elsewhere),
       );
       const returned = Date.now();
       await setDocumentHidden(page, false);

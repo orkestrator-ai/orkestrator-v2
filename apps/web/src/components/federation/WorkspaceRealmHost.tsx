@@ -8,6 +8,7 @@ import { useEnvironments } from "@/hooks";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useProjects } from "@/hooks/useProjects";
 import { startsOnSelection } from "@/lib/environment-auto-start";
+import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import {
@@ -231,6 +232,7 @@ export function WorkspaceRealmHost() {
     ui.selectProjectAndEnvironment(environment.projectId, environment.id);
     // A project home opens on its Home tab, as its own sidebar opens it.
     if (request.boardTab) ui.setProjectBoardTab(request.boardTab);
+    if (request.workTarget) openCoordinatorWorkTarget(request.workTarget);
     if (request.dialog) {
       // Opening its settings is not a request to start it.
       openDialog(request.dialog, environment.projectId, environment.id);

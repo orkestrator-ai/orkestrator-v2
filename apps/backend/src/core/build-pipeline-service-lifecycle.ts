@@ -1888,6 +1888,7 @@ export class BuildPipelineLifecycle {
         }
       }
       pipeline.phase = "failed";
+      pipeline.cancelledAt = new Date().toISOString();
       pipeline.error =
         abortErrors.length > 0
           ? `${BUILD_CANCELLED_ERROR}, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`

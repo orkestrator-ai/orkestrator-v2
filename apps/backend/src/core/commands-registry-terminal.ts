@@ -43,6 +43,7 @@ import {
   pathExists,
   readFileBase64,
   readTextFile,
+  inferLanguage,
   assertEditorTextFileSize,
   decodeEditorTextFile,
   spawnCommand,
@@ -1210,7 +1211,7 @@ export function registerTerminalCommands(
       `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(workspaceFilePath(target))} ${MAX_TEXT_FILE_BYTES} editor ${quoteShell(MAX_TEXT_FILE_SIZE_LABEL)}`,
     );
     const content = decodeEditorTextFile(Buffer.from(encoded.trim(), "base64"));
-    return { path: target, content, language: path.extname(target).slice(1) };
+    return { path: target, content, language: inferLanguage(target) };
   });
   register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
@@ -1226,7 +1227,7 @@ export function registerTerminalCommands(
       `set -o pipefail; git show ${quoteShell(object)} | base64`,
     );
     const content = decodeEditorTextFile(Buffer.from(encoded, "base64"));
-    return { path: target, content, language: path.extname(target).slice(1) };
+    return { path: target, content, language: inferLanguage(target) };
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {
     const fullPath = workspaceFilePath(asString(filePath, "filePath"));

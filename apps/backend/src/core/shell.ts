@@ -538,6 +538,12 @@ export async function writeFileBase64(
 
 export function inferLanguage(filePath: string): string {
   const extension = path.extname(filePath).slice(1).toLowerCase();
+  const basename = path.basename(filePath).toLowerCase();
+  // `.env`, `.env.local`, `.env.production` and `production.env`. A bare
+  // `.env` has no extension as far as `extname` is concerned.
+  if (basename === ".env" || basename.startsWith(".env.") || extension === "env") {
+    return "dotenv";
+  }
   const aliases: Record<string, string> = {
     js: "javascript",
     jsx: "javascript",

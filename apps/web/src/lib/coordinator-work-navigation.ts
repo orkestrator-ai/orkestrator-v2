@@ -5,6 +5,8 @@
  * opener, and the machine-qualified workspace opener for another node's work.
  */
 import { scheduleBuildPipelineTabActivation } from "@/lib/feature-build-activation";
+import { portalStore } from "@/lib/portal/portal-store";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { requestGraphRunView } from "@/lib/graph-run-navigation";
 import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
@@ -22,14 +24,20 @@ export interface CoordinatorWorkNavigation {
 
 const defaultNavigation: CoordinatorWorkNavigation = {
   openPullRequest: (url) => void openPullRequestUrl(url).catch(() => undefined),
-  openRemote: (target) =>
+  openRemote: (target) => {
+    if (target.workTarget && target.nodeId === portalStore.getState().selfId) {
+      useRemoteWorkspaceStore.getState().showLocal();
+      openCoordinatorWorkTarget(target.workTarget);
+      return;
+    }
     openMachineWorkspace({
       connectionId: target.nodeId,
       projectId: target.projectId,
       environmentId: target.environmentId,
       title: target.title,
       workTarget: target.workTarget,
-    }),
+    });
+  },
   openBuild: scheduleBuildPipelineTabActivation,
 };
 

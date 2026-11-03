@@ -241,3 +241,29 @@ test.each(["worker-tab", "build", "review", "graph-run"] as const)(
     }
   },
 );
+
+test("a realm's work selection back to the command node activates its surface locally", async () => {
+  const { portalStore } = await import("@/lib/portal/portal-store");
+  const original = portalStore.getState();
+  try {
+    seedLayout();
+    portalStore.store.setState({ selfId: "command" as never });
+    openCoordinatorWorkTarget({
+      type: "remote",
+      nodeId: "command",
+      projectId: "project-1",
+      environmentId: "env-1",
+      title: "Worker",
+      workTarget: {
+        type: "worker-tab",
+        projectId: "project-1",
+        environmentId: "env-1",
+        tabId: "worker-tab",
+      },
+    });
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-2");
+  } finally {
+    portalStore.store.setState(original, true);
+  }
+});

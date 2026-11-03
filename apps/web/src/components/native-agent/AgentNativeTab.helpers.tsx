@@ -350,6 +350,7 @@ export function UnassignedNativeAgentComposer({
   platformNotes,
   placeholder,
   emptyPlatformsMessage,
+  starterPrompts,
   workspacePath,
   writeImage,
   initialAgentPlatform,
@@ -404,6 +405,12 @@ export function UnassignedNativeAgentComposer({
   platformNotes?: Partial<Record<AgentPlatform, string>>;
   placeholder?: string;
   emptyPlatformsMessage?: string;
+  /**
+   * Example requests offered beneath an empty composer. Choosing one fills the
+   * message box with its text for the user to edit; it is never sent. They are
+   * hidden while the box has text, so a click cannot replace a typed draft.
+   */
+  starterPrompts?: readonly string[];
   /**
    * The workspace to search and attach files from when no Environment record
    * exists. A coordinator runtime has none, and without this its opening
@@ -1137,6 +1144,30 @@ export function UnassignedNativeAgentComposer({
           sendTitle="Start agent"
           onSend={send}
         />
+        {starterPrompts && starterPrompts.length > 0 && !draft.text.trim() ? (
+          <div
+            role="group"
+            aria-label="Starter prompts"
+            className="pointer-events-auto mx-auto flex w-full max-w-[56rem] flex-wrap justify-center gap-2 sm:w-[min(calc(100%_-_2rem),56rem)]"
+          >
+            {starterPrompts.map((starter) => (
+              <Button
+                key={starter}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                className="h-auto max-w-full rounded-full px-3 py-1.5 text-left text-xs font-normal whitespace-normal text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  updateDraft(sessionKey, { text: starter, mentions: [] });
+                  inputRef.current?.focusAtEnd(starter);
+                }}
+              >
+                {starter}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </NativeComposeDock>
       {onResume ? (
         <NativeAgentResumePlatformDialog

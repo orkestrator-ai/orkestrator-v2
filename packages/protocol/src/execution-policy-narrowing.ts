@@ -13,6 +13,9 @@
  * cannot be shown to be no wider (an unknown shape, a changed policy id), the
  * change counts as widening: refusing a legitimate edge case is recoverable,
  * accepting a widening is not.
+ *
+ * This module is the one definition of "narrower" for every bridge, and
+ * `policyWideningRefusal` the one answer they give.
  */
 import {
   nativeAgentUserMcpGrant,
@@ -131,4 +134,44 @@ export function executionPolicyWidenings(
     widened.push("capabilityPolicy.userMcpServers");
   }
   return widened;
+}
+
+/** The `code` of a 403 refusing a wider policy. The backend and the logs read it. */
+export const POLICY_WIDENING_REFUSED_CODE = "policy-widening-refused";
+
+/** The 403 body every bridge answers. Content-free: fixed text and axis names. */
+export interface PolicyWideningRefusal {
+  error: string;
+  code: typeof POLICY_WIDENING_REFUSED_CODE;
+  widened: ExecutionPolicyAxis[];
+}
+
+export function policyWideningRefusal(widened: ExecutionPolicyAxis[]): PolicyWideningRefusal {
+  return {
+    error:
+      "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
+    code: POLICY_WIDENING_REFUSED_CODE,
+    widened,
+  };
+}
+
+/** Thrown below the routes, which answer it with 403 and `refusal()`. */
+export class PolicyWideningRefusedError extends Error {
+  constructor(readonly widened: ExecutionPolicyAxis[]) {
+    super(policyWideningRefusal(widened).error);
+    this.name = "PolicyWideningRefusedError";
+  }
+
+  refusal(): PolicyWideningRefusal {
+    return policyWideningRefusal(this.widened);
+  }
+}
+
+/** Throw when `next` grants more than the session's live policy on any axis. */
+export function assertExecutionPolicyNotWidened(
+  current: NativeAgentExecutionPolicy | undefined,
+  next: NativeAgentExecutionPolicy,
+): void {
+  const widened = executionPolicyWidenings(current, next);
+  if (widened.length > 0) throw new PolicyWideningRefusedError(widened);
 }

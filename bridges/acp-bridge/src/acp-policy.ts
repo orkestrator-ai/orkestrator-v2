@@ -51,6 +51,14 @@ export function effectiveExecutionPolicy(
   return coordinatorProcessPolicy();
 }
 
+/** What a request's policy is compared against: nothing until the session has a live one. */
+export function liveExecutionPolicy(state: {
+  policy?: NativeAgentExecutionPolicy;
+  policyPending?: boolean;
+}): NativeAgentExecutionPolicy | undefined {
+  return state.policyPending ? undefined : state.policy;
+}
+
 export function effectiveTurnExecutionPolicy(input: {
   policy?: NativeAgentExecutionPolicy;
   readOnly?: boolean;

@@ -246,18 +246,22 @@ realpath confinement, instead of bind-mounting them.
 
 **Status:** Partly fixed (2026-11-03). Every bridge now deletes its token from
 `process.env` at startup, so nothing it spawns through `node:child_process` or
-an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Claude's
-`POST /session/:id/config` is narrow-only: a policy that is wider than the
-session's current one on any axis (approvals, sandbox, network, project
-resources, policy id, tool or capability grants and denials, MCP selection) is
-refused with 403 `policy-widening-refused` and nothing is applied
-(`bridges/claude-bridge/src/services/execution-policy-narrowing.ts`). Still
-open, in
+an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Every
+bridge route that can change a live session's policy is narrow-only: a policy
+that is wider than the session's current one on any axis (approvals, sandbox,
+network, project resources, policy id, tool or capability grants and denials,
+MCP selection) is refused with 403 `policy-widening-refused` and nothing is
+applied (`packages/protocol/src/execution-policy-narrowing.ts`). That covers
+Claude's `/config` and `/session/create` recovery; Codex config, resume and
+prompt; and Pi, Cursor and ACP create, resume and prompt. Still open, in
 [todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md):
 the token file and `/proc/<bridge pid>/environ` are still readable by the
-agent's uid, so it can still answer its own approvals; the other bridges'
-create, resume and prompt routes still accept a wider policy; and a user's own
-widening reaches a live Claude session only after the bridge restarts.
+agent's uid, so it can still answer its own approvals, and can kill the bridge
+and race the backend to set a restored session's policy; and a user's own
+widening reaches a live session only after the bridge restarts. A token holder
+can also still clear a session's read-only review boundary, which is not part of
+the policy
+([todo 4210](../todo/containers-and-environments/4210-read-only-boundary-from-a-token-holder.md)).
 **Actor:** A1
 **Severity:** High only for hardened environments (see footnote in §2)
 

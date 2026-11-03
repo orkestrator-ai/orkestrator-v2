@@ -93,7 +93,11 @@ import {
   type NativeAgentReadiness,
 } from "@orkestrator/protocol/native-agent";
 import { claudeReadiness } from "../services/claude-sign-in.js";
-import { executionPolicyWidenings } from "../services/execution-policy-narrowing.js";
+import {
+  executionPolicyWidenings,
+  policyWideningRefusal,
+  PolicyWideningRefusedError,
+} from "@orkestrator/protocol/execution-policy-narrowing";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
@@ -258,6 +262,10 @@ session.post("/create", async (c) => {
 
     return c.json(response, 201);
   } catch (error) {
+    if (error instanceof PolicyWideningRefusedError) {
+      log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+      return c.json(error.refusal(), 403);
+    }
     log.error("session.create-failed", { error: formatLogError(error) });
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to create session" },
@@ -508,15 +516,7 @@ session.post("/:id/config", async (c) => {
         sessionId: sessionData.id,
         widened: widened.join(","),
       });
-      return c.json(
-        {
-          error:
-            "Execution policy can only be narrowed on a live session; a wider policy applies after the agent bridge restarts.",
-          code: "policy-widening-refused",
-          widened,
-        },
-        403,
-      );
+      return c.json(policyWideningRefusal(widened), 403);
     }
   };
   const refusal = refusePolicyWidening();

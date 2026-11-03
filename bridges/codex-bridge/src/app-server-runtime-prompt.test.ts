@@ -4365,6 +4365,9 @@ describe("project resource reconfiguration", () => {
         attachments: [],
       });
       await complete(h);
+      // Turning project resources on is a widening, which only reaches a session
+      // whose policy is not live yet: one restored after a bridge restart.
+      if (!initial) h.runtime.getRegistry().getSession(sessionId)!.policyPending = true;
       expect(
         await h.runtime.updateConfig(sessionId, { mode: "build", policy: policy(!initial) }),
       ).toBe("updated");

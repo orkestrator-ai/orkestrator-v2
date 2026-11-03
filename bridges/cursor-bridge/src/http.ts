@@ -118,6 +118,8 @@ import {
   CredentialError,
   SessionConflictError,
   detachAgent,
+  liveExecutionPolicy,
+  resolveCursorExecutionPolicy,
   ensureAgent,
   listResumableSessions,
   setResumableAgentArchived,
@@ -142,6 +144,10 @@ import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
+import {
+  assertExecutionPolicyNotWidened,
+  PolicyWideningRefusedError,
+} from "@orkestrator/protocol/execution-policy-narrowing";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.cursor");
@@ -206,6 +212,10 @@ export async function route(
     return await routeSession(request, response, url, clientSignal);
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
+    if (error instanceof PolicyWideningRefusedError) {
+      log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+      return json(response, 403, error.refusal());
+    }
     if (error instanceof CredentialError) {
       return json(response, 401, {
         error: error.message,
@@ -1025,6 +1035,14 @@ async function handlePrompt(
   clientSignal: AbortSignal,
 ): Promise<void> {
   const body = await readJson(request);
+  // A prompt never changes a session's policy. One naming a wider policy is
+  // refused rather than run under less than its caller asked for (H4).
+  if (isNativeAgentExecutionPolicy(body.policy)) {
+    assertExecutionPolicyNotWidened(
+      liveExecutionPolicy(state),
+      resolveCursorExecutionPolicy(body.policy),
+    );
+  }
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = readBoundedString(body.requestId, MAX_PROMPT_REQUEST_ID_BYTES, "requestId");
   const schema = isObject(body.outputSchema) ? body.outputSchema : undefined;
@@ -1093,6 +1111,8 @@ async function handlePrompt(
       kind: "prompt-journal-saturated",
     });
   }
+  // This turn runs under the policy held now, which makes it live.
+  state.policyPending = false;
   // `/steer` answered locally is this bridge's own resolver, which literal
   // intent (`allowProviderCommands: false`) skips: the text goes to the agent
   // unchanged. The SDK has no command grammar of its own to suppress.

@@ -312,6 +312,14 @@ export interface SessionState {
   workflowResultTurn?: import("@orkestrator/protocol/workflow-results").WorkflowResultTurn;
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  /**
+   * `policy` is not live yet: a copy restored from disk, or the fallback for a
+   * session no request gave a policy. It stays in force, but the next policy a
+   * request sends replaces it whatever it is, which is how a wider policy
+   * reaches a session after a bridge restart (H4). Set false once a request
+   * sets a policy or a prompt starts under this one. Never persisted.
+   */
+  policyPending?: boolean;
   clientSessionKey?: string;
   /**
    * Pi's own session file. Stable across bridge restarts; what re-attach and

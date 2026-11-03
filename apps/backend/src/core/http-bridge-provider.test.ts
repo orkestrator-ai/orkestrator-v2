@@ -360,6 +360,39 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(requests[1]!.init.body))).toEqual({ policy });
   });
 
+  test("a refused wider policy fails a resume on every bridge, saying why", async () => {
+    const refusal = {
+      error: "Execution policy can only be narrowed on a live session.",
+      code: "policy-widening-refused",
+      widened: ["approvals"],
+    };
+    const policy = {
+      id: "interactive-host" as const,
+      sandbox: "provider" as const,
+      approvals: "auto-approve" as const,
+      projectResources: false,
+      networkAccess: "full" as const,
+    };
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      cursorConnection,
+      piConnection,
+      grokConnection,
+    ]) {
+      const { provider } = httpProvider(
+        (url: string) =>
+          url.endsWith("/session/session-1")
+            ? Response.json({ id: "session-1" })
+            : Response.json(refusal, { status: 403 }),
+        connection,
+      );
+      await expect(provider.resumeSession!("session-1", undefined, policy)).rejects.toThrow(
+        /HTTP 403\): Execution policy can only be narrowed/,
+      );
+    }
+  });
+
   test("normalizes hostile authentication payloads", async () => {
     const { provider } = httpProvider(() =>
       Response.json({

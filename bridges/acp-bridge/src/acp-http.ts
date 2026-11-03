@@ -1,3 +1,4 @@
+import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import { applyBridgeLogPolicy } from "@orkestrator/protocol/node/bridge-log-policy";
 import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
@@ -24,7 +25,7 @@ import {
   compactCommandSelection,
   resolveSelectedCommand,
 } from "./acp-commands.js";
-import { effectiveExecutionPolicy } from "./acp-policy.js";
+import { effectiveExecutionPolicy, liveExecutionPolicy } from "./acp-policy.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -620,6 +621,14 @@ export async function route(
   }
   if ((action === "prompt" || action === "compact") && request.method === "POST") {
     let body = await readJson(request);
+    // A prompt never changes a session's policy. One naming a wider policy is
+    // refused rather than run under less than its caller asked for (H4).
+    if (isNativeAgentExecutionPolicy(body.policy)) {
+      assertExecutionPolicyNotWidened(
+        liveExecutionPolicy(state),
+        effectiveExecutionPolicy(body.policy) ?? body.policy,
+      );
+    }
     if (action === "compact") {
       // The shared `compact` session action. ACP has no compaction request, so
       // it runs the agent's own `/compact` as a selected command: everything
@@ -705,6 +714,8 @@ export async function route(
     if (state.status === "running" || state.dispatching) {
       return json(response, 409, { error: "Session is already running" });
     }
+    // This turn runs under the policy held now, which makes it live.
+    state.policyPending = false;
     // After the duplicate check — a retry of an accepted command must still
     // read as a duplicate even if the inventory changed since — and before
     // anything is journaled. A command the live agent no longer offers, or a

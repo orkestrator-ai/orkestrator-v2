@@ -82,10 +82,23 @@ H4; the rest is [todo 3930](../docs/todo/containers-and-environments/3930-bridge
   as every bridge does. Spawn children through `node:child_process` or with an
   explicit `env`: `Bun.spawn` with no `env` option passes the startup
   environment, deleted token included.
-- **A token holder may only narrow a live session's policy.** Claude's
-  `POST /session/:id/config` refuses any wider policy with 403
-  `policy-widening-refused` (`executionPolicyWidenings`). Do not add a route
-  that widens a live session's policy.
+- **A token holder may only narrow a live session's policy.** Every route that
+  takes a policy refuses a wider one with 403 `policy-widening-refused`, leaving
+  the session as it was: compare with `executionPolicyWidenings` or
+  `assertExecutionPolicyNotWidened`, and answer with `policyWideningRefusal`
+  (`@orkestrator/protocol/execution-policy-narrowing`, the one definition of
+  "narrower"). Do not add a route that widens a live session's policy. Compare
+  the policy the bridge would run under, after its own process authority and
+  normalisation, against the one the session holds. Check again after any
+  await before committing, because another request may have narrowed it.
+- **A session with no live policy takes the one it is given.** That is a new
+  session, or one loaded from disk after a restart, which is how a wider policy
+  reaches a conversation at all. A bridge that restores a policy from disk keeps
+  it in force but marks it `policyPending`, in memory only, until a request sets
+  one or a prompt starts under it. That window is the known remainder of H4
+  until the bridge credential moves. A request with no policy, or an unusable
+  one, never clears a live policy: no policy means the host default, the widest
+  there is.
 
 ## Logging settings route
 

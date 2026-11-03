@@ -17,6 +17,8 @@ import type {
   WriteTextFileRequest,
   WriteTextFileResponse,
 } from "@agentclientprotocol/sdk";
+import { FULL_ACP_CLIENT_METHOD_GRANT, type AcpClientMethodGrant } from "./acp-policy.js";
+import { withoutBridgeControlEnvironment } from "./acp-provider-config.js";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_READ_LINES = 100_000;
@@ -116,9 +118,20 @@ export class AcpClientMethods {
   constructor(
     private readonly workspaceRoot: string,
     private readonly spawnTerminalImpl = spawnTerminal,
+    /** What the child's policy permits (`acpClientMethodGrant`); refused calls never run. */
+    private readonly grant: AcpClientMethodGrant = FULL_ACP_CLIENT_METHOD_GRANT,
   ) {}
 
   async handle(method: string, params: unknown): Promise<unknown> {
+    // Checked before the request is parsed, so a refused call touches nothing.
+    // The child was not advertised these methods either; an agent that calls
+    // one anyway is refused rather than served.
+    if (
+      (method === "fs/write_text_file" && !this.grant.writeTextFile) ||
+      (method.startsWith("terminal/") && !this.grant.terminal)
+    ) {
+      throw new ClientMethodRefusedError(method);
+    }
     switch (method) {
       case "fs/read_text_file":
         return this.readTextFile(assertReadRequest(params));
@@ -201,7 +214,7 @@ export class AcpClientMethods {
     const child = this.spawnTerminalImpl(request.command, request.args ?? [], {
       cwd,
       env: {
-        ...process.env,
+        ...withoutBridgeControlEnvironment(process.env),
         ...Object.fromEntries((request.env ?? []).map((entry) => [entry.name, entry.value])),
       },
     });
@@ -274,6 +287,13 @@ export class AcpClientMethods {
 }
 
 export class UnsupportedClientMethodError extends Error {}
+
+/** A client method this session's execution policy does not permit. */
+export class ClientMethodRefusedError extends Error {
+  constructor(method: string) {
+    super(`ACP ${method} is refused by this session's execution policy`);
+  }
+}
 
 async function secureExistingFile(
   requestedPath: string,

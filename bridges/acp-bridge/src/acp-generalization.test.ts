@@ -85,4 +85,71 @@ describe("ACP protocol generalization", () => {
       expect.objectContaining({ toolOutput: "terminal-inline" }),
     );
   });
+
+  // Security report M13: a session whose policy denies writes and commands is
+  // neither offered nor served them, whatever the agent then asks for.
+  test("neither advertises nor serves writes and terminals a session's policy denies", async () => {
+    const directory = await temporaryDirectory();
+    const target = resolve(directory, "agent-written.txt");
+    const initializeFile = resolve(directory, "initialize.jsonl");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        CWD: directory,
+        FAKE_ACP_CLIENT_FILE: target,
+        FAKE_ACP_INITIALIZE_REQUEST_FILE: initializeFile,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        policy: {
+          id: "pipeline",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources: false,
+          networkAccess: "full",
+          capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate"] },
+        },
+      }),
+    }).then((response) => response.json())) as { id: string };
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "ACP_CLIENT_METHODS" }),
+      }).then((response) => response.status),
+    ).toBe(202);
+    await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string }>,
+      (value) => value.status === "idle",
+    );
+    const initialize = JSON.parse(
+      (await fs.readFile(initializeFile, "utf8")).trim().split("\n").at(-1)!,
+    ) as { params: { clientCapabilities: unknown } };
+    expect(initialize.params.clientCapabilities).toMatchObject({
+      fs: { readTextFile: true, writeTextFile: false },
+      terminal: false,
+    });
+    await expect(fs.readFile(target, "utf8")).rejects.toThrow();
+    const responses = new Map(
+      (await fs.readFile(`${target}.responses.jsonl`, "utf8"))
+        .trim()
+        .split("\n")
+        .map(
+          (line) => JSON.parse(line) as { id: number; error?: { code: number; message: string } },
+        )
+        .map((response) => [response.id, response]),
+    );
+    for (const id of [910, 912]) {
+      expect(responses.get(id)?.error).toMatchObject({
+        code: -32601,
+        message: expect.stringContaining("refused by this session's execution policy"),
+      });
+    }
+  });
 });

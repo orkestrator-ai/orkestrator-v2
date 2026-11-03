@@ -234,13 +234,35 @@ export function emptyGhConfigDir(): string {
  * alone: token variables, `gh`'s stored login (`ghConfigDir` is an empty
  * directory) and Git's credential helpers.
  */
+/**
+ * The bridge's own control credentials: its HTTP token and the
+ * environment-wide agent MCP credential. The bridge hands the agent its MCP
+ * connection in `session/new` (`configuredAcpMcpServers`), so neither the
+ * agent process nor a command it runs needs them (security report M13).
+ */
+export const BRIDGE_CONTROL_ENV_VARS: readonly string[] = Object.freeze([
+  "ACP_BRIDGE_TOKEN",
+  "ORKESTRATOR_AGENT_MCP_TOKEN",
+  "ORKESTRATOR_AGENT_MCP_URL",
+]);
+
+export function withoutBridgeControlEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const scrubbed = { ...env };
+  for (const name of Object.keys(scrubbed)) {
+    if (BRIDGE_CONTROL_ENV_VARS.includes(name) || name.endsWith("_BRIDGE_TOKEN")) {
+      delete scrubbed[name];
+    }
+  }
+  return scrubbed;
+}
+
 export function providerEnv(
   config: AcpProviderConfig,
   options: { trustProject?: boolean; withholdGitHub?: { ghConfigDir: string } },
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...base,
+    ...withoutBridgeControlEnvironment(base),
     ...config.env,
     ...(Object.hasOwn(POLICY_ENV, config.id) ? POLICY_ENV[config.id] : {}),
     ...projectTrust(config, options.trustProject)?.env,

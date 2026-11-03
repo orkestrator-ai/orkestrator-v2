@@ -93,7 +93,7 @@ The material risks are concentrated in four themes:
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Verified |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
-| M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Verified code / Potential |
+| M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
 | M5 | Medium | Host exec | Repo-provided `setupLocal` runs automatically on the host with no trust gate | Fixed (see §4) |
@@ -320,8 +320,46 @@ isolated preview transport by default and retire the legacy route.
 
 ### M2. The legacy loopback route reaches any host loopback port, with credentialed CORS for `Origin: null`
 
-**Status:** Verified code / Potential (depends on whether browsers send the
-`Strict` cookie from opaque-origin frames)
+**Status:** Fixed (2026-11-03). All three parts of the fix below are in:
+
+- The gateway proxies `browser/loopback/<port>/` only to a port that is the
+  verified binding of an enabled preview service of the requesting
+  environment: a loopback publication of that environment's own container, or
+  a backend-host or worktree listener the resolver accepted for it
+  (`PreviewRuntime.legacyLoopbackPortAccess`,
+  `PreviewServiceRegistry.isHostLoopbackTargetOf`). The requesting environment
+  is the `x-orkestrator-preview-environment` header, which Electron main sets
+  on the preview requests it authenticates, from the environment the renderer
+  attached the view for; it drops any copy a page sent, and the gateway strips
+  it before proxying. Docker's daemon ports and the reserved set (gateway,
+  control MCP, agent tools, local bridge ports) are refused first, even when a
+  service is bound there. Another environment's service, an unregistered port
+  and a request naming no environment all answer 403 before a connection is
+  made. A gateway without a preview registry refuses every port.
+- `Origin: null` gets `access-control-allow-origin: *` and never
+  `access-control-allow-credentials`, on preflights, proxied responses and the
+  Referer redirect.
+- In Electron's dedicated preview session a request is authorized only inside
+  the gateway namespace of the URL the app last asked that view to load
+  (`previewViewUrl` in `remote-gateway-request-auth.ts`), main-frame
+  navigations included. A view without a known URL authorizes nothing. A view
+  attached for another environment is a fresh view.
+
+Covered by `apps/backend/tests/gateway-preview.test.ts` (own, other-environment,
+unscoped, unknown, disabled and reserved ports through a real gateway and
+registry), `apps/backend/src/core/preview-legacy-loopback-access.test.ts`
+(container publications per environment), `apps/backend/tests/gateway-proxy.test.ts`
+(no credentialed CORS), `apps/desktop/tests/remote-gateway-request-auth.test.ts`
+(view port scope, environment header), `browser-preview-manager.test.ts`,
+`browser-preview-startup.test.ts` and `main-ipc.test.ts`.
+
+What remains: a desktop app older than this fix names no environment, so its
+legacy previews are refused with a message asking for an update. A user who
+previewed an arbitrary backend-host port through a legacy URL tab must now
+register it as a service of that environment. The authenticated `proxy/loopback/<port>/` route used by the main
+renderer (ACP bridges, the local entry port) still reaches any port; it is not
+reachable with credentials from a preview. Dynamic browser testing remains as
+listed in §8. The original finding follows.
 
 **Where**
 - `apps/backend/src/gateway-handlers.ts:395-419`: only checks the port is between 1 and 65535.

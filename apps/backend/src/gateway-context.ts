@@ -3,7 +3,7 @@ import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
 import { GatewayEventReplay } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
-import type { PreviewRuntime } from "./core/preview-runtime.js";
+import type { LegacyLoopbackPortAccess, PreviewRuntime } from "./core/preview-runtime.js";
 import { PreviewAdmission } from "./preview-admission.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
@@ -86,6 +86,10 @@ export class GatewayContext {
     perBackend: 128,
   });
   readonly browserPreviewHeadersTimeoutMs: number;
+  readonly legacyPreviewPortAccess: (
+    port: number,
+    environmentId: string | null,
+  ) => Promise<LegacyLoopbackPortAccess>;
   servers = new Set<Server>();
   /** Set once the loopback client listener is serving. */
   loopbackClientUrl: string | null = null;
@@ -142,6 +146,12 @@ export class GatewayContext {
       options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
     this.browserPreviewHeadersTimeoutMs = options.browserPreviewHeadersTimeoutMs ?? 30_000;
     this.previews = options.previews;
+    const previews = this.previews;
+    this.legacyPreviewPortAccess =
+      options.legacyPreviewPortAccess ??
+      (previews
+        ? (port, environmentId) => previews.legacyLoopbackPortAccess(port, environmentId)
+        : async () => "unknown" as const);
     this.previewMetrics = this.previews?.metrics ?? new PreviewMetrics();
     if (this.previews) {
       this.previewTunnel = new PreviewTunnelServer({

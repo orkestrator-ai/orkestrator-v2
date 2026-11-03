@@ -449,6 +449,7 @@ function ServicePreview({
             : attachBrowserPreview({
                 tabId,
                 url: compatibilityUrl!.iframeUrl,
+                environmentId,
                 ...(route.basis === undefined ? {} : { navigationBasis: route.basis }),
                 bounds,
                 visible,
@@ -496,6 +497,7 @@ function ServicePreview({
     attachTarget?.path,
     compatibilityUrl,
     dialog,
+    environmentId,
     hasBlockingOverlay,
     isActive,
     mode,

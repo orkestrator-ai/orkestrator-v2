@@ -276,8 +276,10 @@ describe("the model catalogue without a running CLI", () => {
 
   test("the answer expires, as a backstop for a change nothing reported", async () => {
     probesAnswerFor(SIGNED_IN);
-    await modelIds();
+    // Read the clock before the answer is kept, so its expiry is at or after
+    // `now + TTL` however long the read took.
     const now = Date.now();
+    await modelIds();
     const clock = jest.spyOn(Date, "now").mockReturnValue(now + CLAUDE_MODEL_CACHE_TTL_MS - 1);
     try {
       await modelIds();

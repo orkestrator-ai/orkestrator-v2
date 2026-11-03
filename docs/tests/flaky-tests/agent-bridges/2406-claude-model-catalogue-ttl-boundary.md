@@ -1,7 +1,7 @@
 # Claude model catalogue cache expires before its boundary assertion
 
 - **ID:** 2406
-- **Status:** open
+- **Status:** resolved (2026-11-03)
 - **Date observed:** 2026-11-01
 - **Test:** `the model catalogue without a running CLI > the answer expires, as a backstop for a change nothing reported`
 - **File:** `bridges/claude-bridge/src/services/claude-model-catalog.test.ts:284`
@@ -41,3 +41,34 @@ No catalogue implementation or assertion was changed by H3.
 worktree's aggregate run, so the workspace group took 1,019 s against about
 245 s for the previous run that day) repeated this failure (6.27 ms). The unchanged
 owner then passed alone: `bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`.
+
+## Resolution, 2026-11-03
+
+**Root cause.** The test read `now = Date.now()` *after* the first catalogue
+read had already stored its answer with `expiresAt = Date.now() + TTL`. It then
+pinned the clock at `now + TTL - 1` and expected the answer to still be live.
+That holds only if the store and the `now` read happen in the same
+millisecond. Under a loaded aggregate run any millisecond between them puts
+`expiresAt <= now + TTL - 1`, so the cache had already expired, a second probe
+ran, and the line expecting one probe saw two. The catalogue implementation is
+correct; the test's boundary was off by the time the first read took.
+
+**Fix.** Branch `oversized-test-file-45a00165c5f3-r1`: the test reads `now`
+before the first catalogue read, so the stored expiry is at or after
+`now + TTL` however long the read takes. The assertions, the TTL and the
+implementation are unchanged.
+
+**Verification.** A 5 ms `Bun.sleep` placed temporarily (not committed)
+between the first read and the clock read makes the old order fail with the
+recorded assertion (expected 1, received 2) every time and the new order pass.
+The owning file passes alone
+(`mise run test:logged -- --name claude-catalog-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/claude-model-catalog.test.ts --parallel=1`,
+exit 0), with `--parallel=2` (23 pass, 0 fail), and in 30 back-to-back runs
+(0 failures).
+
+The 498/500 `--rerun-each=500` figure in the H3 section does not measure this
+race. `--rerun-each` re-evaluates the test file but not the cached
+`session-manager-test-harness.ts`, so that module's suite-wide `afterEach`
+(which clears `mockQuery` and resets the catalogue) does not run between
+repetitions. Probe counts therefore pile up across repetitions, and the
+repetitions fail with or without the fix.

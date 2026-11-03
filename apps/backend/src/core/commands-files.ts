@@ -3,7 +3,8 @@ import {
   getHostClaudeCredentials as readHostClaudeCredentials,
 } from "./claude-host-credentials.js";
 export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
-import { removeLegacyWorktreeFsmonitor, runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
+import { neutralizeGitFilters } from "./git-filter-config.js";
+import { HARDENED_GIT_CONFIG, removeLegacyWorktreeFsmonitor } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -982,23 +983,56 @@ export async function getLocalGitStatusDetailed(
 
   const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
-  const git = ["--no-optional-locks", "-c", "diff.autoRefreshIndex=false", "-C", worktreePath];
-  // A hung fsmonitor daemon (the user's own, or one an older version started)
-  // would block these reads forever; each is bounded and retried without it.
+  // The worktree's own config is not trusted: it must not name a program
+  // (filter driver, fsmonitor hook, git hook) that this scan would run. With
+  // fsmonitor off, a hung daemon cannot block these reads either, so they need
+  // no retry without it.
+  const git = [
+    ...HARDENED_GIT_CONFIG,
+    "--no-optional-locks",
+    "-c",
+    "diff.autoRefreshIndex=false",
+    "-C",
+    worktreePath,
+  ];
+  // Read effective configuration (including includes and worktree config)
+  // before any command that can hash worktree bytes. Fail closed on read errors.
+  git.push(
+    ...(await neutralizeGitFilters(
+      async (args) => (await runCommand("git", [...git, ...args], { timeoutMs: 10_000 })).stdout,
+    )),
+  );
   const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
-    runGitWithFsmonitorFallback([...git, "diff", "--name-status", "-z", "-M", base, ...endRef], {
-      timeoutMs: 60_000,
-    }),
-    runGitWithFsmonitorFallback([...git, "diff", "--numstat", "-z", "-M", base, ...endRef], {
-      timeoutMs: 60_000,
-    }),
+    runCommand(
+      "git",
+      [
+        ...git,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-status",
+        "-z",
+        "-M",
+        base,
+        ...endRef,
+      ],
+      {
+        timeoutMs: 60_000,
+      },
+    ),
+    runCommand(
+      "git",
+      [...git, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "-M", base, ...endRef],
+      {
+        timeoutMs: 60_000,
+      },
+    ),
     includeUncommitted
-      ? runGitWithFsmonitorFallback(
-          [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-          { timeoutMs: 60_000 },
-        )
+      ? runCommand("git", [...git, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+          timeoutMs: 60_000,
+        })
       : Promise.resolve({ stdout: "" }),
-    runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
+    runCommand("git", [...git, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
       timeoutMs: 10_000,
     }).then(
       (result) => result.stdout.trim() || undefined,

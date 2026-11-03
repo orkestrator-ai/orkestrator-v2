@@ -128,6 +128,7 @@ function installBackend(backend: Backend, native = true) {
       async (input: {
         tabId: string;
         url?: string;
+        environmentId?: string;
         navigationBasis?: number;
         service?: {
           backendInstanceId?: string;
@@ -876,6 +877,8 @@ describe("service browser tabs", () => {
     renderTab();
     await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
     expect(browserPreview.attach.mock.calls.at(-1)![0].url).toBe("http://localhost:49999/a");
+    // The legacy gateway route opens only this environment's targets (M2).
+    expect(browserPreview.attach.mock.calls.at(-1)![0].environmentId).toBe(FIXTURE_ENVIRONMENT_ID);
     expect(screen.getByText("Compatibility mode")).toBeTruthy();
   });
 

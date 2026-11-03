@@ -12,6 +12,7 @@ import {
 import { resolveGitHubRepository } from "./github.js";
 import { gitHubCredentialSource, resolveGitHubToken } from "./github-credentials.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
+import { COMPACT_INSTRUCTIONS_MAX_LENGTH } from "@orkestrator/protocol/native-agent";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
 import type {
   AgentInteractionOrigin,
@@ -513,13 +514,25 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
   const raw = asRecord(value, "action");
   const kind = asNonBlankString(raw.kind, "action.kind");
   switch (kind) {
-    case "compact":
+    case "compact": {
+      // Blank instructions are the same as none: `/compact ` compacts plainly.
+      const instructions =
+        raw.instructions === undefined
+          ? ""
+          : asString(raw.instructions, "action.instructions").trim();
+      if (instructions.length > COMPACT_INSTRUCTIONS_MAX_LENGTH) {
+        throw new Error(
+          `Expected action.instructions to be at most ${COMPACT_INSTRUCTIONS_MAX_LENGTH} characters`,
+        );
+      }
       return {
         kind,
         ...(raw.modelId === undefined
           ? {}
           : { modelId: asNonBlankString(raw.modelId, "action.modelId") }),
+        ...(instructions ? { instructions } : {}),
       };
+    }
     case "rewind-files":
       return {
         kind,

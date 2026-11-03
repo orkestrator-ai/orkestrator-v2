@@ -321,3 +321,91 @@ test("a merge permission error clears the cached answer for that PR's repository
     runtime.shutdown();
   }
 });
+
+test("syncs queued behind a running one share one storage read (BG-13)", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let started!: () => void;
+  const firstLoad = new Promise<void>((resolve) => (started = resolve));
+  let loads = 0;
+  const loadEnvironments = mock(async () => {
+    loads += 1;
+    if (loads === 1) {
+      started();
+      await gate;
+    }
+    return [];
+  });
+  const context: CommandContext = {
+    runtime,
+    storage: { loadEnvironments } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  };
+  try {
+    const running = runtime.prMonitor.sync(context);
+    await firstLoad;
+    // Every `get_environments` asks for a sync; the queued ones are one.
+    const queued = [1, 2, 3].map(() => runtime.prMonitor.sync(context));
+    // A sync after an invalidation must not join a sync that will be discarded.
+    runtime.prMonitor.invalidatePendingSync();
+    const afterInvalidation = runtime.prMonitor.sync(context);
+    release();
+    await Promise.all([running, ...queued, afterInvalidation]);
+    expect(loads).toBe(3);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("a credential rotation also drops the PR batch readings of that scope", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const invalidate = spyOn(runtime.prMonitor.prBatches, "invalidate");
+  try {
+    await runtime.prMonitor.viewerPermissions.rotateScope("local-gh", async () => undefined);
+    expect(invalidate.mock.calls).toEqual([["local-gh"], ["local-gh"]]);
+  } finally {
+    runtime.shutdown();
+  }
+});
+
+test("batch changes wake every matching snapshot entry and leave other PRs alone", async () => {
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const context = {
+    runtime,
+    storage: { loadEnvironments: async () => [] } as unknown as StorageService,
+    emit: () => undefined,
+    appRoot: "",
+    resourceRoot: "",
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+  } as CommandContext;
+  try {
+    await runtime.prMonitor.sync(context);
+    const service = runtime.prMonitor.service;
+    const snapshot = spyOn(service, "snapshot").mockReturnValue([
+      monitorState(),
+      monitorState({ environmentId: "env-2" }),
+      monitorState({ environmentId: "env-other", prUrl: "https://github.com/o/r/pull/2" }),
+      monitorState({ environmentId: "env-none", prUrl: null }),
+    ]);
+    const wake = spyOn(service, "noteSharedActivity").mockImplementation(() => undefined);
+    // Invoke the reader's real composition-root callback without a network call.
+    const reader = runtime.prMonitor.prBatches as unknown as {
+      onChanged: (urls: string[]) => void;
+    };
+    reader.onChanged([
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/pull/1",
+      "https://github.com/o/r/pull/99",
+    ]);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(wake.mock.calls).toEqual([["env-1"], ["env-2"]]);
+    snapshot.mockRestore();
+    wake.mockRestore();
+  } finally {
+    runtime.shutdown();
+  }
+});

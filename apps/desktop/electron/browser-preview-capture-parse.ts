@@ -59,6 +59,8 @@ export interface Probe extends Viewport {
   connected: boolean;
   rect: WebAnnotationRect | null;
   sensitive: WebAnnotationRect[];
+  /** False when the page could not rule out an unlisted sensitive field: keep no pixels. */
+  sensitiveComplete: boolean;
 }
 
 export function parseViewport(value: Record<string, unknown>): Viewport | null {
@@ -338,6 +340,7 @@ export function parseCaptureProbe(
     connected: parsed.connected,
     rect: rect as WebAnnotationRect | null,
     sensitive: sensitive as WebAnnotationRect[],
+    sensitiveComplete: parsed.sensitiveComplete === true,
   };
 }
 

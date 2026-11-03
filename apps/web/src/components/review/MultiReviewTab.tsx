@@ -47,6 +47,13 @@ import { formatElapsedWithHours } from "@/lib/format-elapsed";
 import { formatTokenCount } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
 import { formatRuntimeParts, runtimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
+import {
+  createRuntimeClock,
+  RuntimeClockContext,
+  useLiveRuntimeParts,
+  useRuntimeClockNow,
+  type RuntimeClock,
+} from "@/lib/review/runtime-clock";
 import { MultiReviewFlowGraph, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { FlowInspectorPanel } from "@/components/flow-graph/FlowInspector";
 import {
@@ -434,15 +441,46 @@ function OverviewScroll({ children }: { children: ReactNode }) {
   );
 }
 
+/** A reviewer's runtime after its model line, live under the tab's clock. */
+function LiveRuntimeSuffix({ runtime: givenRuntime }: { runtime: RuntimeParts }) {
+  const runtime = useLiveRuntimeParts(givenRuntime);
+  return <>{` · ${formatRuntimeParts(runtime)}`}</>;
+}
+
+/**
+ * The header's wall time since the review was created. It reads the tab's
+ * clock itself, so a tick re-renders this span and not the tab.
+ */
+function MultiReviewElapsed({
+  workflow,
+  running,
+  clock,
+}: {
+  workflow: MultiReviewWorkflow;
+  running: boolean;
+  clock: RuntimeClock;
+}) {
+  const now = useRuntimeClockNow(clock);
+  const elapsedSeconds = multiReviewElapsedSeconds(workflow, running, now);
+  if (elapsedSeconds === null) return null;
+  return (
+    <span data-testid="multi-review-elapsed">
+      {" · "}
+      <span className="font-mono tabular-nums">{formatElapsedWithHours(elapsedSeconds)}</span>
+    </span>
+  );
+}
+
 function StepFacts({
   model,
-  runtime,
+  runtime: givenRuntime,
   status,
 }: {
   model: MultiReviewWorkflow["fixModel"];
   runtime: RuntimeParts | null;
   status: MultiReviewStepStatus;
 }) {
+  const runtime = useLiveRuntimeParts(givenRuntime);
   return (
     <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
       <dt className="text-muted-foreground">Model</dt>
@@ -520,7 +558,10 @@ function MultiReviewOverviewTab({
     workflow?.projectId ?? "",
     customFixPromptOpen || restartDialogStep !== null,
   );
-  const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
+  // The tab owns the clock but never reads it to render: the header clock,
+  // node runtimes, step facts and validation rows subscribe to it, so a tick
+  // re-renders only them, not the whole tab (WEB-17).
+  const [runtimeClock] = useState(() => createRuntimeClock());
   /** The node the user picked; null follows the running node. */
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   // Each node remembers whether its transcript or its report was last shown.
@@ -552,14 +593,10 @@ function MultiReviewOverviewTab({
 
   useEffect(() => {
     if (!isActive || !hasLiveClock) return;
-    // The clock is the external system this effect subscribes to. Resuming it
-    // reads the time at once, so the header never shows the time it paused at
-    // for a second; reading it while rendering would be impure.
-    // oxlint-disable-next-line react/set-state-in-effect
-    setReviewPanelNow(Date.now());
-    const interval = window.setInterval(() => setReviewPanelNow(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [hasLiveClock, isActive]);
+    // Starting reads the time at once, so the header never shows the time it
+    // paused at for a second.
+    return runtimeClock.start();
+  }, [hasLiveClock, isActive, runtimeClock]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1019,7 +1056,7 @@ function MultiReviewOverviewTab({
       workflow,
       key,
       status.state === "running",
-      reviewPanelNow,
+      runtimeClock.getNow(),
     );
     const canRestart = status.state !== "not-started" && Boolean(commands.restartStep);
     const restarting = restartingStep === kind;
@@ -1220,7 +1257,6 @@ function MultiReviewOverviewTab({
       <ReviewValidationStatus
         environmentId={data.environmentId}
         run={workflow.validationRun}
-        now={reviewPanelNow}
         onStop={
           commands.stopValidation &&
           workflow.phase === "preparing" &&
@@ -1443,7 +1479,7 @@ function MultiReviewOverviewTab({
     const name = `Reviewer ${index + 1}`;
     const note = reviewerStatusNote(reviewer);
     const stalled = reviewer.status === "running" && Boolean(reviewer.stalledSince);
-    const runtime = runtimeParts(reviewer, reviewer.status === "running", reviewPanelNow);
+    const runtime = runtimeParts(reviewer, reviewer.status === "running", runtimeClock.getNow());
     const stoppable =
       workflow.engine !== "graph" &&
       workflow.phase === "reviewing" &&
@@ -1593,7 +1629,7 @@ function MultiReviewOverviewTab({
         <div className="flex flex-1 flex-col space-y-3">
           <p className="truncate text-xs text-muted-foreground">
             {modelDetail(reviewer, true)} · Read only
-            {runtime ? ` · ${formatRuntimeParts(runtime)}` : ""}
+            {runtime ? <LiveRuntimeSuffix runtime={runtime} /> : null}
           </p>
           {reviewer.resultSubmission && reviewer.resultSubmission !== "preparing" ? (
             <WorkflowResultStatus state={reviewer.resultSubmission} kind="review-report" />
@@ -1677,7 +1713,6 @@ function MultiReviewOverviewTab({
     prFromConsolidation: cleanReviewPr,
   });
   const { findings, reviewerCount, provisionalCount } = mergeReviewerFindings(workflow.reviewers);
-  const elapsedSeconds = multiReviewElapsedSeconds(workflow, hasLiveClock, reviewPanelNow);
   const totalTokens = multiReviewTotalTokens(workflow);
   const headerStalled = reviewSessionStalled || fixSessionStalled;
 
@@ -1811,199 +1846,200 @@ function MultiReviewOverviewTab({
   }
 
   return (
-    <div ref={setTabRoot} className="relative flex h-full min-h-0 flex-col bg-background">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-divider px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-            <StackedEyes className="size-5" />
-          </span>
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold">Multi Review</h1>
-            <p
-              className={`truncate text-xs ${headerStalled ? "text-amber-500" : "text-muted-foreground"}`}
-            >
-              <span>
-                {reviewSessionStalled
-                  ? "No activity from the review preparation model"
-                  : fixSessionStalled
-                    ? "No activity from the fix model"
-                    : phaseCopy(workflow)}
-              </span>
-              {elapsedSeconds !== null ? (
-                <span data-testid="multi-review-elapsed">
-                  {" · "}
-                  <span className="font-mono tabular-nums">
-                    {formatElapsedWithHours(elapsedSeconds)}
+    <RuntimeClockContext.Provider value={runtimeClock}>
+      <div ref={setTabRoot} className="relative flex h-full min-h-0 flex-col bg-background">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b border-divider px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
+              <StackedEyes className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold">Multi Review</h1>
+              <p
+                className={`truncate text-xs ${headerStalled ? "text-amber-500" : "text-muted-foreground"}`}
+              >
+                <span>
+                  {reviewSessionStalled
+                    ? "No activity from the review preparation model"
+                    : fixSessionStalled
+                      ? "No activity from the fix model"
+                      : phaseCopy(workflow)}
+                </span>
+                <MultiReviewElapsed
+                  workflow={workflow}
+                  running={hasLiveClock}
+                  clock={runtimeClock}
+                />
+                {totalTokens !== null ? (
+                  <span data-testid="multi-review-total-tokens">
+                    {" · "}
+                    <span className="font-mono tabular-nums">
+                      {formatTokenCount(totalTokens)}
+                    </span>{" "}
+                    tokens
                   </span>
-                </span>
-              ) : null}
-              {totalTokens !== null ? (
-                <span data-testid="multi-review-total-tokens">
-                  {" · "}
-                  <span className="font-mono tabular-nums">
-                    {formatTokenCount(totalTokens)}
-                  </span>{" "}
-                  tokens
-                </span>
-              ) : null}
-            </p>
-            {workflow.activeRequest?.resultSubmission && (
-              <WorkflowResultStatus
-                state={workflow.activeRequest.resultSubmission}
-                kind={
-                  workflow.activeRequest.kind === "prepare"
-                    ? "validation-plan"
-                    : workflow.activeRequest.kind === "consolidate"
-                      ? "consolidated-review"
-                      : "fix-result"
-                }
-                className="mt-0.5"
-              />
-            )}
+                ) : null}
+              </p>
+              {workflow.activeRequest?.resultSubmission && (
+                <WorkflowResultStatus
+                  state={workflow.activeRequest.resultSubmission}
+                  kind={
+                    workflow.activeRequest.kind === "prepare"
+                      ? "validation-plan"
+                      : workflow.activeRequest.kind === "consolidate"
+                        ? "consolidated-review"
+                        : "fix-result"
+                  }
+                  className="mt-0.5"
+                />
+              )}
+            </div>
           </div>
-        </div>
-        {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
-      </header>
+          {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
+        </header>
 
-      <OverviewScroll>
-        <div className="@container flex min-h-full flex-col">
-          {notices.length > 0 ? (
-            <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
-          ) : null}
-          <MultiReviewFlowGraph
-            packageNode={packageView.node}
-            reviewerNodes={reviewerViews.map((view) => view.node)}
-            consolidationNode={consolidationView.node}
-            fixNode={fixView.node}
-            prNode={prView.node}
-            edges={edges}
-            reviewLabel={reviewerColumnLabel(workflow.reviewers)}
-            reviewTitle={reviewerProgressSummary(workflow.reviewers)}
-            selectedId={selected.node.id}
-            onSelect={setSelectedNodeId}
-            panelId={panelId}
-            viewKey={workflow.id}
-            fullscreenContainer={tabRoot}
-            isActive={isActive}
-          />
-          {/* The body's row takes the rest of the window, so a transcript can
-              fill it down to the footer. */}
-          <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
-            {/* Sits beside the inspector header, and stays in view while the
-                inspector scrolls. */}
-            <MultiReviewFindingsBadge
-              isActive={isActive}
-              findings={findings}
-              reviewerCount={reviewerCount}
-              provisionalCount={provisionalCount}
-              className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
-            />
-            <FlowInspectorPanel
-              panelId={panelId}
+        <OverviewScroll>
+          <div className="@container flex min-h-full flex-col">
+            {notices.length > 0 ? (
+              <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
+            ) : null}
+            <MultiReviewFlowGraph
+              packageNode={packageView.node}
+              reviewerNodes={reviewerViews.map((view) => view.node)}
+              consolidationNode={consolidationView.node}
+              fixNode={fixView.node}
+              prNode={prView.node}
+              edges={edges}
+              reviewLabel={reviewerColumnLabel(workflow.reviewers)}
+              reviewTitle={reviewerProgressSummary(workflow.reviewers)}
               selectedId={selected.node.id}
-              testId="multi-review-inspector"
-              className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
-            >
-              <div className="col-start-1 row-start-1 min-w-0">
-                <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
-              </div>
-              {/* Full width: the badge only overlaps it once stuck. */}
-              <div className="col-span-full row-start-2 flex min-w-0 flex-col">{selected.body}</div>
-            </FlowInspectorPanel>
+              onSelect={setSelectedNodeId}
+              panelId={panelId}
+              viewKey={workflow.id}
+              fullscreenContainer={tabRoot}
+              isActive={isActive}
+            />
+            {/* The body's row takes the rest of the window, so a transcript can
+              fill it down to the footer. */}
+            <div className="grid min-h-80 flex-1 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_1fr] px-4 py-4 sm:px-6">
+              {/* Sits beside the inspector header, and stays in view while the
+                inspector scrolls. */}
+              <MultiReviewFindingsBadge
+                isActive={isActive}
+                findings={findings}
+                reviewerCount={reviewerCount}
+                provisionalCount={provisionalCount}
+                className="sticky top-3 z-20 col-start-2 row-span-2 row-start-1 ml-3 self-start"
+              />
+              <FlowInspectorPanel
+                panelId={panelId}
+                selectedId={selected.node.id}
+                testId="multi-review-inspector"
+                className="col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-subgrid grid-rows-subgrid"
+              >
+                <div className="col-start-1 row-start-1 min-w-0">
+                  <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
+                </div>
+                {/* Full width: the badge only overlaps it once stuck. */}
+                <div className="col-span-full row-start-2 flex min-w-0 flex-col">
+                  {selected.body}
+                </div>
+              </FlowInspectorPanel>
+            </div>
           </div>
-        </div>
-      </OverviewScroll>
+        </OverviewScroll>
 
-      <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
-        {workflow.phase === "failed" && workflow.engine !== "graph" && (
-          <Button
-            variant="outline"
-            disabled={pending}
-            onClick={() => void run(() => commands.retry(workflow.id))}
-          >
-            <RefreshCw className="mr-2 size-4" />
-            Retry failed stage
-          </Button>
-        )}
-        {canCancel && (
-          <Button
-            variant="outline"
-            disabled={pending}
-            onClick={() => void run(() => commands.cancel(workflow.id))}
-          >
-            <Square className="mr-2 size-4" />
-            {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
-          </Button>
-        )}
-        {workflow.phase === "interactive" &&
-          workflow.addressPromptPending !== true &&
-          workflow.fixSession?.providerSessionId && (
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
+          {workflow.phase === "failed" && workflow.engine !== "graph" && (
             <Button
               variant="outline"
-              disabled={pending || !createTab}
-              onClick={() => {
-                void openInteractiveFixSession();
-              }}
+              disabled={pending}
+              onClick={() => void run(() => commands.retry(workflow.id))}
             >
-              Open fix session
+              <RefreshCw className="mr-2 size-4" />
+              Retry failed stage
             </Button>
           )}
-        {workflow.phase === "ready" && (
-          <>
-            <Button disabled={pending} onClick={() => void addressAll()}>
-              <Wrench className="mr-2 size-4" />
-              Fix
-            </Button>
+          {canCancel && (
             <Button
+              variant="outline"
               disabled={pending}
-              onClick={() => {
-                setCustomFixError(null);
-                setCustomFixPromptOpen(true);
-              }}
-              aria-label="Custom fix prompt"
-              title="Custom fix prompt"
+              onClick={() => void run(() => commands.cancel(workflow.id))}
             >
-              ...
+              <Square className="mr-2 size-4" />
+              {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
             </Button>
-          </>
-        )}
-      </footer>
-      <MultiReviewFixPromptDialog
-        open={customFixPromptOpen}
-        onOpenChange={(open) => {
-          setCustomFixPromptOpen(open);
-          if (!open) setCustomFixError(null);
-        }}
-        catalog={modelCatalog}
-        defaultSelection={workflow.fixModel}
-        error={customFixError}
-        busy={customFixPending}
-        onSubmit={startCustomFix}
-      />
-      {restartDialogStep ? (
-        <MultiReviewRestartDialog
-          open
+          )}
+          {workflow.phase === "interactive" &&
+            workflow.addressPromptPending !== true &&
+            workflow.fixSession?.providerSessionId && (
+              <Button
+                variant="outline"
+                disabled={pending || !createTab}
+                onClick={() => {
+                  void openInteractiveFixSession();
+                }}
+              >
+                Open fix session
+              </Button>
+            )}
+          {workflow.phase === "ready" && (
+            <>
+              <Button disabled={pending} onClick={() => void addressAll()}>
+                <Wrench className="mr-2 size-4" />
+                Fix
+              </Button>
+              <Button
+                disabled={pending}
+                onClick={() => {
+                  setCustomFixError(null);
+                  setCustomFixPromptOpen(true);
+                }}
+                aria-label="Custom fix prompt"
+                title="Custom fix prompt"
+              >
+                ...
+              </Button>
+            </>
+          )}
+        </footer>
+        <MultiReviewFixPromptDialog
+          open={customFixPromptOpen}
           onOpenChange={(open) => {
-            if (!open) {
-              setRestartDialogStep(null);
-              setRestartDialogError(null);
-            }
+            setCustomFixPromptOpen(open);
+            if (!open) setCustomFixError(null);
           }}
-          kind={restartDialogStep}
           catalog={modelCatalog}
-          defaultSelection={
-            restartDialogStep === "fix"
-              ? workflow.fixModel
-              : restartDialogStep === "consolidate"
-                ? consolidationSelection
-                : reviewSelection
-          }
-          error={restartDialogError}
-          busy={restartingStep === restartDialogStep}
-          onSubmit={(selection) => void restartStep(restartDialogStep, selection)}
+          defaultSelection={workflow.fixModel}
+          error={customFixError}
+          busy={customFixPending}
+          onSubmit={startCustomFix}
         />
-      ) : null}
-    </div>
+        {restartDialogStep ? (
+          <MultiReviewRestartDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) {
+                setRestartDialogStep(null);
+                setRestartDialogError(null);
+              }
+            }}
+            kind={restartDialogStep}
+            catalog={modelCatalog}
+            defaultSelection={
+              restartDialogStep === "fix"
+                ? workflow.fixModel
+                : restartDialogStep === "consolidate"
+                  ? consolidationSelection
+                  : reviewSelection
+            }
+            error={restartDialogError}
+            busy={restartingStep === restartDialogStep}
+            onSubmit={(selection) => void restartStep(restartDialogStep, selection)}
+          />
+        ) : null}
+      </div>
+    </RuntimeClockContext.Provider>
   );
 }
 

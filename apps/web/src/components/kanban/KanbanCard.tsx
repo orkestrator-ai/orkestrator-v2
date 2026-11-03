@@ -6,6 +6,7 @@ import {
   MoreHorizontal,
   Network,
   RotateCcw,
+  Server,
   SquareArrowOutUpRight,
 } from "lucide-react";
 import { acceptanceCriteriaTally } from "@orkestrator/protocol/ticket-sections";
@@ -177,7 +178,9 @@ export function KanbanCard({
   const criteria = sections.acceptanceCriteria ?? [];
   const tally = acceptanceCriteriaTally(criteria);
   const showTally = criteria.length > 0 && tally.unchecked < criteria.length;
-  const hasFooter = commentCount > 0 || !!environmentName || showTally;
+  // Work for this ticket on another machine (docs/architecture/tickets.md, "Sync across machines").
+  const remoteWork = task.sync?.work;
+  const hasFooter = commentCount > 0 || !!environmentName || showTally || !!remoteWork;
 
   // While the card is being dragged the overlay copy follows the pointer, so
   // the original stays put and renders as a dashed drop target. It deliberately
@@ -300,6 +303,16 @@ export function KanbanCard({
               <span className="flex shrink-0 items-center gap-1">
                 <MessageSquare className="h-3 w-3" />
                 <span>{commentCount}</span>
+              </span>
+            )}
+            {remoteWork && (
+              <span
+                data-testid="kanban-card-runs-on"
+                className="flex min-w-0 shrink items-center gap-1 text-sky-400"
+                title={`Its ${remoteWork.buildPipelineId ? "build" : "environment"} runs on ${remoteWork.nodeName ?? remoteWork.nodeId}`}
+              >
+                <Server className="h-3 w-3 shrink-0" />
+                <span className="truncate">{remoteWork.nodeName ?? remoteWork.nodeId}</span>
               </span>
             )}
             {environmentName && (

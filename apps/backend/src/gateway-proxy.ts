@@ -229,13 +229,11 @@ export class GatewayProxy {
             // frame-ancestors would block the client's iframe, and the
             // sandbox keeps the document off the gateway origin (M1).
             responseHeaders["content-security-policy"] = BROWSER_PREVIEW_SANDBOX_CSP;
-            if (request.headers.origin === "null") {
-              responseHeaders["access-control-allow-origin"] = "null";
-              responseHeaders["access-control-allow-credentials"] = "true";
-              appendHeadersVary(responseHeaders, "Origin");
-            } else {
-              responseHeaders["access-control-allow-origin"] = "*";
-            }
+            // Never credentialed: a sandboxed document's `null` origin is
+            // shared by every preview (M2).
+            delete responseHeaders["access-control-allow-credentials"];
+            responseHeaders["access-control-allow-origin"] = "*";
+            if (request.headers.origin === "null") appendHeadersVary(responseHeaders, "Origin");
           }
 
           // `Cache-Control: no-transform` forbids the body rewrite; such

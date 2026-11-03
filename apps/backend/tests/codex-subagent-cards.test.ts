@@ -166,7 +166,13 @@ describe("Codex sub-agent cards through the bridge and backend projection", () =
       // the child rollouts' session_meta headers alone.
       await stack.restart();
       expect(stack.bridgeGeneration).toBe(2);
-      const cold = await stack.projection();
+      // A fresh bridge reports `starting` (projected as `recovering`) until its
+      // new app-server child is up, so wait for the turn to settle instead of
+      // reading the first snapshot. Nothing else runs it: idle must still come.
+      const cold = await stack.waitForProjection(
+        (projection) => projection.turn.phase !== "recovering",
+        "the cold restart to finish recovering",
+      );
       expect(cold.turn.phase).toBe("idle");
       expect(cards(cold)).toEqual(allCards(finishedChildren(ids)));
       // The rollout contains spawn_agent calls, so recovery can identify the

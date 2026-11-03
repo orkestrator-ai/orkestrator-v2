@@ -96,9 +96,12 @@ function createContext(
       getEnvironment: mock(async () => environment),
       // Every command names a container this registry created, which is what
       // the ownership wrapper accepts without a label probe.
-      loadEnvironments: mock(async () =>
-        ["container-1", "container-tree-cap"].map((containerId) => ({ containerId })),
-      ),
+      // A local environment is listed too: local file commands accept only
+      // a registered environment's worktree as their root.
+      loadEnvironments: mock(async () => [
+        ...["container-1", "container-tree-cap"].map((containerId) => ({ containerId })),
+        ...(environment?.environmentType === "local" ? [environment] : []),
+      ]),
       getDataDir: () => historyDataDir,
     },
   } as unknown as CommandContext;
@@ -338,8 +341,16 @@ describe("backend command I/O coverage", () => {
       unchanged: true,
       digest: changedTree.digest,
     });
+    const fileContext = createContext({
+      id: "env-local",
+      environmentType: "local",
+      worktreePath: root,
+    });
     await expect(
-      commands.get("read_local_file")?.({ worktreePath: root, filePath: "src/app.ts" }, context),
+      commands.get("read_local_file")?.(
+        { worktreePath: root, filePath: "src/app.ts" },
+        fileContext,
+      ),
     ).resolves.toEqual({
       path: "src/app.ts",
       content: "export const value = 1;\n",
@@ -350,7 +361,7 @@ describe("backend command I/O coverage", () => {
     await expect(
       commands.get("read_local_file")?.(
         { worktreePath: root, filePath: "src/binary.dat" },
-        context,
+        fileContext,
       ),
     ).rejects.toThrow("Binary files cannot be opened in the text editor");
 
@@ -358,7 +369,7 @@ describe("backend command I/O coverage", () => {
     await expect(
       commands.get("read_local_file")?.(
         { worktreePath: root, filePath: "src/invalid.txt" },
-        context,
+        fileContext,
       ),
     ).rejects.toThrow("File is not valid UTF-8 text");
 
@@ -369,7 +380,7 @@ describe("backend command I/O coverage", () => {
     await expect(
       commands.get("read_local_file")?.(
         { worktreePath: root, filePath: "src/oversized.txt" },
-        context,
+        fileContext,
       ),
     ).rejects.toThrow(
       `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
@@ -378,7 +389,7 @@ describe("backend command I/O coverage", () => {
     const data = Buffer.from([0, 1, 2, 255]).toString("base64");
     const writtenPath = await commands.get("write_local_file")?.(
       { worktreePath: root, filePath: "generated/data.bin", base64Data: data },
-      context,
+      fileContext,
     );
     expect(writtenPath).toBe(path.join(root, "generated", "data.bin"));
     expect(await fs.readFile(writtenPath as string)).toEqual(Buffer.from([0, 1, 2, 255]));
@@ -386,15 +397,30 @@ describe("backend command I/O coverage", () => {
     await expect(
       commands.get("write_local_file")?.(
         { worktreePath: root, filePath: "../escape.bin", base64Data: data },
-        context,
+        fileContext,
       ),
     ).rejects.toThrow("parent directory traversal is not allowed");
     await expect(
       commands.get("write_local_file")?.(
         { worktreePath: root, filePath: "bad.bin", base64Data: "%%%" },
-        context,
+        fileContext,
       ),
     ).rejects.toThrow("File payload is not valid base64");
+
+    // A root no environment is registered at is refused before any I/O, even
+    // when the relative path stays inside it.
+    for (const worktreePath of [path.dirname(root), path.join(root, "src")]) {
+      await expect(
+        commands.get("read_local_file")?.({ worktreePath, filePath: "README.md" }, fileContext),
+      ).rejects.toThrow("not the worktree of a registered local environment");
+      await expect(
+        commands.get("write_local_file")?.(
+          { worktreePath, filePath: "planted.bin", base64Data: data },
+          fileContext,
+        ),
+      ).rejects.toThrow("not the worktree of a registered local environment");
+      await expect(fs.access(path.join(worktreePath, "planted.bin"))).rejects.toThrow();
+    }
   });
 
   test("caps a local file tree at exactly 5000 nodes", async () => {

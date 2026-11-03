@@ -319,11 +319,27 @@ export function handlePromptStart(message: JsonObject): boolean {
           },
         },
       });
-      // A test-configured hold must also cover direct replies; otherwise the
-      // turn can finish between prompt acceptance and a busy-state assertion.
-      whenReleased(() => {
-        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      return true;
+    }
+    if (prompt.startsWith("HELD:")) {
+      // `DIRECT:` ends its turn at once, whatever FAKE_ACP_HOLD_TURN_FILE says,
+      // so a test that needs the turn still running after the 202 cannot use
+      // it. This answer ends the turn only once the hold file exists.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: prompt.slice("HELD:".length) },
+          },
+        },
       });
+      whenReleased(() =>
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } }),
+      );
       return true;
     }
     if (prompt.startsWith("STOP:")) {

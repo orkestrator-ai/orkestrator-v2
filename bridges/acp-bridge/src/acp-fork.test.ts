@@ -311,13 +311,16 @@ describe("POST /session/:id/fork", () => {
         await nativeFetch(`${bridge.base}/session/${bridge.id}/prompt`, {
           method: "POST",
           headers: bridge.headers,
-          body: JSON.stringify({ prompt: "DIRECT:one" }),
+          // `HELD:` keeps the turn running until the release file exists;
+          // `DIRECT:` ends it at once and races the fork request.
+          body: JSON.stringify({ prompt: "HELD:one" }),
         })
       ).status,
     ).toBe(202);
     await waitFor(bridge.session, (session) => session.status === "running");
     expect((await bridge.fork()).status).toBe(409);
     expect(await bridge.forkRequests()).toEqual([]);
+    expect((await bridge.session()).status).toBe("running");
     await fs.writeFile(release, "release");
   });
 

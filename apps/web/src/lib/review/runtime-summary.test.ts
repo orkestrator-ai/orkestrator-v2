@@ -36,12 +36,19 @@ describe("runtimeSummary", () => {
   test("splits the line into parts for views that lay them out side by side", () => {
     expect(
       runtimeParts({ startedAt: "2026-08-14T00:01:28.000Z", tokenCount: 1_200 }, true, now),
-    ).toEqual({ elapsed: "7s", tokens: "1.2k", tokensPending: false, live: true });
+    ).toEqual({
+      elapsed: "7s",
+      tokens: "1.2k",
+      tokensPending: false,
+      live: true,
+      liveStartedAt: Date.parse("2026-08-14T00:01:28.000Z"),
+    });
     expect(runtimeParts({ startedAt: "2026-08-14T00:01:28.000Z" }, true, now)).toEqual({
       elapsed: "7s",
       tokens: null,
       tokensPending: true,
       live: true,
+      liveStartedAt: Date.parse("2026-08-14T00:01:28.000Z"),
     });
     // A recorded end wins over a stale running flag.
     expect(

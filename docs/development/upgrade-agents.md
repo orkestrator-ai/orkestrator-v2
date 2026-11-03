@@ -137,6 +137,14 @@ At application startup:
    a complete version set through a generated `bin` directory.
 4. The cache lives under the application's data directory in `toolchains/`.
    Old versions are pruned only when they have no live lease.
+   `toolchains/.verified-stamps.json` records, per installed file, the device,
+   inode, size, nanosecond mtime and ctime it had when its SHA-256 was last
+   computed (`packages/toolchain/src/file-stamps.ts`). A launch hashes only
+   files whose metadata no longer matches, plus every file on a full check:
+   once a week, when the stamp file is missing or unreadable, and on an
+   explicit toolchain repair. Downloads go to `toolchains/.downloads/` and
+   resume with `Range:` after an interruption (`download.ts`); they fail only
+   after 60 seconds without data, not after a total deadline.
 5. `apps/desktop/electron/backend-process.ts` passes the activation directory to
    the backend as `--toolchain-bin-dir`.
 6. `apps/backend/src/core/commands.ts` prefers those executables for local

@@ -15,6 +15,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import { createEnvironment, StorageService } from "./storage.js";
 import { interactionInternals } from "./native-agent-service-test-collaborators.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 function fakeAgentTools(
   overrides: {
@@ -79,6 +80,7 @@ test("activity transition events name their session and carry the observer stamp
           environment_id: "env-1",
           previous_state: "idle",
           state: "working",
+          cause: "transition",
           agent: "cursor",
           logical_session_key: "env-env-1:tab-1",
           generation: "observer-1",
@@ -86,6 +88,67 @@ test("activity transition events name their session and carry the observer stamp
         },
       },
     ]);
+  } finally {
+    try {
+      await backend.shutdown();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("content announcements name their cause and are counted by it", async () => {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-content-cause-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: (event, payload) => events.push({ event, payload }),
+    agentTools: fakeAgentTools(),
+  });
+  try {
+    const invalidate = (
+      backend as unknown as {
+        nativeAgents: {
+          options: { onObservationInvalidation?: (event: Record<string, unknown>) => void };
+        };
+      }
+    ).nativeAgents.options.onObservationInvalidation;
+    const before = nativeSessionInvalidationMetrics.snapshot().byScope.codex?.["content-revision"];
+
+    invalidate?.({
+      environmentId: "env-1",
+      sessionKey: "private-storage-key",
+      providerSessionId: "private-provider-id",
+      state: "idle",
+      owner: "environment",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:tab-1",
+      observation: { generation: "observer-1", revision: 8 },
+      cause: "content-revision",
+    });
+
+    expect(events).toEqual([
+      {
+        event: "native-agent-session-activity",
+        payload: {
+          environment_id: "env-1",
+          previous_state: "idle",
+          state: "idle",
+          reason: "content",
+          cause: "content-revision",
+          agent: "codex",
+          logical_session_key: "env-env-1:tab-1",
+          generation: "observer-1",
+          revision: 8,
+        },
+      },
+    ]);
+    expect(nativeSessionInvalidationMetrics.snapshot().byScope.codex?.["content-revision"]).toBe(
+      (before ?? 0) + 1,
+    );
   } finally {
     try {
       await backend.shutdown();
@@ -132,6 +195,7 @@ test("activity transition events omit backend-only provider session identifiers"
           environment_id: "env-1",
           previous_state: "working",
           state: "idle",
+          cause: "transition",
         },
       },
     ]);

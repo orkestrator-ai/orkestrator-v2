@@ -559,9 +559,16 @@ provider the environment has revoked is never handed a login.
 - **Every start.** Before `docker start`, `refreshStagedAgentAccountLogins`
   rewrites the login files in the container's current staged revision, so the
   entrypoint imports the active account. The staged `.claude.json` is a
-  single-file bind mount and is rewritten in place to keep its inode. After
+  single-file bind mount and is rewritten in place to keep its inode, through
+  the same allowlist staging uses (`claudeContainerConfig`). After
   start, `syncContainerAgentAccountsOnStart` pipes Claude's credential in for
   the active account and writes the marker.
+- **Upgrading the Claude config filter (M8).** Containers already running
+  during the upgrade need an explicit stop and start through the environment
+  controls. Opening a running container or restarting the backend does not run
+  the staged-file migration. Stop/start sanitizes the staged file and rebuilds
+  both the relay and imported copies; until then the old raw content remains
+  readable. Images without staged inputs remain outside this fix (M9).
 - **Bridge start.** Each container records the login it holds in
   `/tmp/orkestrator-<platform>-account` as `<accountId>[:<loginGeneration>]`;
   a missing marker means the host login. When it differs from the active

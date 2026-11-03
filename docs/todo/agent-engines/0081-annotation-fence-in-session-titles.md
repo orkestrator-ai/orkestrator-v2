@@ -1,17 +1,19 @@
 # Session titles show the transcript-annotation fence
 
 Checked against `main` at `8454d18b8` (2026-10-24). Both outstanding items
-done on `ce205ad34` (2026-10-26); what is left is a live look at a real tab.
+done on `ce205ad34` (2026-10-26); the truncated-message question (task 3)
+was settled on 2026-11-03. What is left is a live look at a real tab.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`.
+Analysed 2026-10-27 against `main` at `863b5782`; task 3 rechecked and done
+2026-11-03 against `main` at `7b48c23fb`.
 
 ### Tasks
 
 1. **Shared strip and the backend fallback title**: items 1 and 2, the parser moved to the protocol package and the fallback title stripped, with tests. Status: done (merged as `9791a425`, #1318).
 2. **Live tab label check**: the first "Needs verification" item, a real tab opened with annotations on its first prompt shows a label made from the request text alone. Status: open.
-3. **Truncated first message**: the second "Needs verification" item, whether any provider stores a long first user message truncated so the closing fence is lost. Status: open.
+3. **Truncated first message**: the second "Needs verification" item, whether any provider stores a long first user message truncated so the closing fence is lost. Status: done (2026-11-03, a cut head rather than a lost closing fence; fixed, see task 3).
 
 ### 1. Shared strip and the backend fallback title
 
@@ -49,11 +51,21 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 ### 3. Truncated first message
 
-**Problem.** If a provider or the transcript window trims a long first user message, the closing fence is lost. The strict strip (decision 2) then leaves the envelope in the title.
+**Problem.** If a provider or the transcript window trims a long first user message, the closing fence is lost. The strict strip (decision 2) then leaves the envelope in the title. Settled 2026-11-03: no bound cuts the closing fence, but one does cut the *head*, with the same result; fixed.
 
 **Context.** Decision 2 chose the parser's strict `cleanPrompt` on purpose, so a malformed tag cannot hide the user's words.
 
 **Investigation.** An envelope can be large: up to 20 annotations (`MAX_TRANSCRIPT_ANNOTATIONS`, `packages/protocol/src/transcript-annotations.ts:7`) of up to 12,000 characters of text and 2,000 of comment each (`:8-9`), about 280,000 characters. `fallbackTitle` reads `transcript.messages`, the displayed window, so it would see any per-message display trim. This analysis did not confirm whether a trim can apply to a user message's `content`. A short request with a large excerpt is the case to check.
+
+Rechecked 2026-11-03 against `main` at `7b48c23fb`:
+- The title no longer reads `transcript.messages`. Both projection paths call `firstUserMessageOf` (`apps/backend/src/core/native-agent-projection-helpers.ts`), and the fallback is `firstMessageSessionTitle` in `apps/backend/src/core/session-title-text.ts`.
+- The backend's own bounds never trim `content`: `projectionMessages` and `boundedProjectedMessages` call `boundTranscriptResponse` with `contentFallbackBytes: null`, so an oversized row is kept whole or the read fails.
+- The bridges' bounds do. `boundTranscriptResponse` (`packages/protocol/src/node/transcript-window.ts`) sheds the oldest row's parts and then, if that row alone is still over budget, keeps only the **tail** of its `content`. Every HTTP bridge's live window goes through `bridgeTranscriptUpdate` (`packages/protocol/src/node/progressive-transcript.ts`: 512 KiB target, 64 KiB tail), and the v2 summary does the same (`bridge-transcript-summary.ts`). The legacy `/messages` routes bound at 16 MiB with a 1 MiB tail, which an envelope at the limits does not reach.
+- So the closing fence always survives; it is the head (the user's request and the opening fence) that goes. The strip then finds no envelope, and the 80-character fallback is taken from the middle of the JSON.
+- An envelope at the limits does exceed the live window. In UTF-16 units it is about 280,000 characters, but `<` is written as six characters and a CJK character is three UTF-8 bytes, so 20 excerpts of `<界` text measure well over 512 KiB.
+- The new projection test reproduced it: through the real `bridgeTranscriptUpdate`, the tab title of a Codex session whose only message was the request plus 20 full excerpts read `界界界…`, the last comment's text. The backend shows a fallback title even when it does not persist it (`reachesStart` false), so the tab showed it until hydration replaced the row.
+- Fix: the progressive projection passes the id of the provider window's head row to `firstUserMessageOf` whenever the snapshot reports `omittedParts` (the provider bound only ever trims its window's oldest row), and that row is skipped as a title source. The tab keeps the provider's placeholder (or a later user message) until hydration reads the whole row, which `holdsPreview` already schedules; then the title is the request.
+- Tests: `apps/backend/src/core/native-agent-session-title-annotation-limits.test.ts` (snapshot and live-window paths at the limits) and a helper case in `native-agent-projection-helpers.test.ts`.
 
 **Decisions.**
 
@@ -67,6 +79,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
   - **Leave it until a case is reported.**
     - Pros: no work.
     - Cons: the question stays open with no evidence either way.
+
+  Taken: the projection test (recommended). It failed on the live-window path, so the projection was fixed; see decision 6 below.
 
 Found while qualifying design conversation links live
 ([0038-design-agent-conversation-links.md](../design-canvas/0038-design-agent-conversation-links.md)).
@@ -99,6 +113,10 @@ design context. <orke`.
   first message followed by a user request (including provider title updates),
   and all-annotation transcripts that retain the provider placeholder rather
   than deriving a title from annotation text.
+  Since 2026-11-03 (task 3) a live-window row the provider's bound cut the
+  head off is not a title source either, so a first message at the
+  annotation limits cannot title the tab from the tail of its envelope
+  (`native-agent-session-title-annotation-limits.test.ts`).
 - Other title fallbacks checked:
   - Codex bridge `buildFallbackSessionTitle`
     (now `bridges/codex-bridge/src/session-title-index.ts`, only the resume
@@ -142,10 +160,12 @@ design context. <orke`.
   transcript excerpt on its first prompt, shows a tab label made from the
   request text alone. Only unit tests prove this so far; no live app or
   provider was run for this change.
-- Whether any provider stores a long first user message truncated, so the
-  closing fence is lost. The strip only removes envelopes the parser accepts
-  (decision 2), so such a message would still show the fence in its title,
-  as it already would in the transcript. No case is known.
+- ~~Whether any provider stores a long first user message truncated, so the
+  closing fence is lost.~~ Settled 2026-11-03 (task 3): the bridges' live
+  window cuts the head of an oversized lone row, not its closing fence. The
+  projection no longer titles from such a row. Whether a real provider's own
+  stored copy is ever cut was not checked live; the bridge bound is what the
+  test exercises.
 
 ## Assumptions and decisions
 
@@ -191,6 +211,27 @@ Decisions made on 2026-10-26 while doing the items.
    quality in a way only live runs can judge. Pros: no unproven change to
    generation. Cons: a generated title can still draw on quoted material; if
    that shows up, strip it in the backend-owned title service 0006 plans.
+
+6. **Task 3: what to do about a head-trimmed first message.** Found
+   2026-11-03 by the task 3 test. Options: (a) skip, as a title source, the
+   row the provider's bound shed parts from, by its id, until hydration reads
+   it whole; (b) relax the strip to remove a dangling envelope tail (a closing
+   fence with no opening one) for titles; (c) make the bridges' content
+   fallback keep a user row's head rather than its tail; (d) only return a
+   fallback title for display when the read reaches the start. Chose (a).
+   Pros: the smallest change; no display or wire contract moves; decision 2's
+   strict strip stands; it reuses the signal the projection already holds the
+   preview on (`snapshot.omittedParts`), and the same "trimmed head by id"
+   idea the artifact overlay uses. Cons: until hydration finishes the tab shows
+   the provider placeholder, or a later user message, rather than the request.
+   (b) would guess at text the parser cannot read; (c) changes what every
+   bridge shows for every oversized row, a display decision outside this file;
+   (d) would hide titles for every count-truncated window too.
+7. **Task 3: where the test lives.** Options: add to
+   `native-agent-service-projection.test.ts` beside the earlier title tests,
+   or a new file. Chose a new file,
+   `native-agent-session-title-annotation-limits.test.ts`: the existing file
+   is already over 4,400 lines, well past the repository's 2,000-line guide.
 
 ## Related
 

@@ -446,6 +446,7 @@ export class NativeAgentLaunchActivityReconciler {
       owner: session.owner?.kind === "coordinator" ? "coordinator" : "environment",
       agent: session.agent as BuildPipelineAgent,
       logicalSessionKey: session.logicalSessionKey,
+      cause: "session-content",
     });
   }
 
@@ -527,6 +528,7 @@ export class NativeAgentLaunchActivityReconciler {
         owner: "environment",
         agent: session.agent,
         logicalSessionKey: session.logicalSessionKey,
+        cause: "runtime-stopped",
       });
     }
     await Promise.all(interruptions);
@@ -1489,6 +1491,7 @@ export class NativeAgentLaunchActivityReconciler {
         owner,
         agent: session.agent,
         logicalSessionKey: session.logicalSessionKey,
+        cause: "content-revision",
       });
     }
     if (previous !== state) {

@@ -24,10 +24,33 @@ export interface BrowserPreviewServiceTarget {
   path: string;
 }
 
+/**
+ * Request header naming the environment a legacy gateway preview
+ * (`/__orkestrator/browser/loopback/<port>/`) belongs to. Electron main sets
+ * it on the preview requests it authenticates, from the environment the
+ * renderer attached the view for, and drops any copy a page sent. The gateway
+ * opens the port only when it is a verified preview target of that
+ * environment (security report M2).
+ */
+export const BROWSER_PREVIEW_ENVIRONMENT_HEADER = "x-orkestrator-preview-environment";
+
+const BROWSER_PREVIEW_ENVIRONMENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+/** The value as an environment id fit for that header, or null. */
+export function browserPreviewEnvironmentId(value: unknown): string | null {
+  return typeof value === "string" && BROWSER_PREVIEW_ENVIRONMENT_ID.test(value) ? value : null;
+}
+
 export interface BrowserPreviewAttachInput {
   tabId: string;
   /** Legacy/manual previews: a loopback or gateway-preview URL. */
   url?: string;
+  /**
+   * Legacy/manual previews: the environment whose tab shows the view. Its
+   * gateway preview requests may open only that environment's preview
+   * targets. Absent from older renderers, whose legacy previews are refused.
+   */
+  environmentId?: string;
   /** Service previews: resolved and authorized in the main process. */
   service?: BrowserPreviewServiceTarget;
   /**

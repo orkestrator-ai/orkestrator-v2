@@ -195,6 +195,7 @@ import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logge
 import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
 import { createLiveLogPolicy } from "./live-log-policy.js";
 import { createUpdaterLibraryLogger } from "./updater-log.js";
+import { desktopDevMode } from "./dev-mode.js";
 
 configureLoggerFromEnvironment(process.env);
 const desktopLog = createLogger("desktop");
@@ -204,7 +205,10 @@ const toolchainLog = createLogger("toolchain");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const isDev = process.env.ELECTRON_DEV === "1";
+const devMode = desktopDevMode(app);
+const isDev = devMode.isDev;
+const devServerUrl = devMode.devServerUrl;
+if (devMode.ignoredDevRequest) desktopLog.warn("dev-mode.ignored-packaged");
 // Electron 45's bundled undici can throw EINVAL from a reset socket on macOS.
 installSocketTypeOfServiceGuard();
 // Menu items copy synchronously; Electron 44's writeText returns a Promise whose
@@ -905,7 +909,7 @@ async function createWindow(connectionId?: string): Promise<void> {
       isDev,
       appPath: app.getAppPath(),
       rendererRoot: isDev ? undefined : path.join(process.resourcesPath, "web"),
-      devServerUrl: process.env.VITE_DEV_SERVER_URL,
+      devServerUrl,
       title: `${productName} — ${activeConnection?.name ?? "Local"}`,
       partition: rendererPartitionForWindow(slot, activeConnectionId, useLegacyDefaultSession),
       beforeLoad: (createdWindow) => {
@@ -1279,7 +1283,7 @@ function registerIpc(): void {
     openConnectionWindow: async (connectionId) => createWindow(connectionId),
     getBrowserPreviews: (event) => ipcContextForEvent(event).browserPreviewManager,
     trustedRendererUrl: isDev
-      ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420")
+      ? (devServerUrl ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
     getWebClientStatus: (event) => manager().getWebClientStatus(machineAdminScope(event)),
     setWebClientEnabled: (enabled, event) =>
@@ -1373,7 +1377,7 @@ function registerIpc(): void {
 function rendererUrl(): string {
   return trustedRendererUrlFor({
     isDev,
-    devServerUrl: process.env.VITE_DEV_SERVER_URL,
+    devServerUrl,
     rendererIndexPath: path.join(process.resourcesPath, "web", "index.html"),
   });
 }
@@ -1413,6 +1417,9 @@ async function startApplication(): Promise<void> {
   if (remoteRelaunch) {
     updaterLog.info("remote.relaunched", { version: remoteRelaunch.version });
   }
+  // Startup blocks on this step, so its duration is the toolchain's share of
+  // launch-to-ready (to-do 1202 task 13 compares it before and after stamps).
+  const toolchainStartedAt = performance.now();
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
@@ -1433,6 +1440,9 @@ async function startApplication(): Promise<void> {
     ...(remoteRelaunch ? { unattendedRetries: { attempts: 10, delayMs: 30_000 } } : {}),
   });
   if (!toolchainBinDir) return;
+  toolchainLog.info("prepare.ready", {
+    durationMs: Math.round(performance.now() - toolchainStartedAt),
+  });
   // Raise Files and Folders prompts before restored pipelines or agents can
   // walk the home directory. Show an in-app explanation first so the system
   // dialogs have context; skip the walk for agent-test and remote-only launches.
@@ -1463,7 +1473,7 @@ async function startApplication(): Promise<void> {
       appRoot,
       resourceRoot,
       toolchainBinDir,
-      rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
+      rendererDevServerUrl: devServerUrl,
       gatewayHost: runtimeProfile?.gatewayHost,
       gatewayPort: runtimeProfile?.gatewayPort,
       allowNonTailscaleBind: runtimeFlavor === "agent-test",

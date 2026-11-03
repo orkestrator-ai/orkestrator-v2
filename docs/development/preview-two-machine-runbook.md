@@ -241,6 +241,14 @@ Then observe:
 | `legacy.http_active` | Gauge | Legacy route requests in flight |
 | `relay.processes`, `relay.channels` | Gauges | Container relay |
 | `tunnel.open`, `tunnel.failed{…}`, `http.failed{…}`, … | Counters | Totals since the backend started, labelled by failure category |
+| `desktop.connect_ms` | Histogram | Reported by desktop windows using this backend: tunnel WebSocket connect through `OPEN_OK`, per new upstream connection |
+| `desktop.first_byte_ms` | Histogram | Reported by desktop windows: from a loopback-ingress request reaching the forwarder (tunnel connect included, unless a pooled connection was reused) to the upstream response head |
+| `desktop.reconnect{…}`, `desktop.reconnect_failed{…}` | Counters | Desktop reattaches, labelled by the category that forced them (`access-expired`, `generation-changed`, `not-found`) or by why the reattach failed |
+
+The `desktop.*` series are measured in Electron and reported to the backend
+every 30 seconds (and when the window's previews close) through
+`record_preview_client_metrics`, so a sample can lag by up to that long.
+HMR delivery is not a product series: measure it with the latency script.
 
 Histograms keep the last 512 samples in whole milliseconds and report p50,
 p95 and max (nearest rank). Diagnostics never contain URLs, paths, headers or

@@ -42,6 +42,9 @@ describe("PreviewTunnelStream slow browser reader", () => {
           attachmentId: "att_test",
           credential: "test-credential",
         });
+        // Connect through OPEN_OK, for the desktop.connect_ms series.
+        expect(stream.openMs).toBeGreaterThan(0);
+        expect(stream.openMs).toBeLessThan(10_000);
         const errors: Error[] = [];
         stream.on("error", (error) => errors.push(error));
         const closed = new Promise<void>((resolve) => stream!.once("close", resolve));

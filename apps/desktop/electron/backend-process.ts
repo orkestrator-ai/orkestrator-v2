@@ -286,6 +286,9 @@ export function createBackendProcessEnvironment(
     // whatever the shell had set.
     delete env.ORKESTRATOR_VERSION;
   }
+  // The desktop supplies an approved dev URL explicitly on the command line.
+  // Never let the backend fallback select a renderer from the launching shell.
+  delete env.ORKESTRATOR_RENDERER_DEV_SERVER_URL;
   delete env.ORKESTRATOR_GATEWAY_HOST;
   delete env.ORKESTRATOR_GATEWAY_PORT;
   delete env.ORKESTRATOR_GATEWAY_TOKEN;
@@ -408,6 +411,8 @@ export type BackendListenOptions = {
   /** Test overrides for how long a silent stream or attempt is given. */
   streamSilenceLimitMs?: number;
   streamConnectTimeoutMs?: number;
+  /** Test override for the clock those limits and reconnect health are measured on. */
+  streamNow?: () => number;
 };
 
 export class BackendHttpClient {
@@ -627,11 +632,15 @@ export class BackendHttpClient {
     options: BackendListenOptions = {},
   ): Promise<void> {
     const stream = this.eventStream;
-    const backoff = new ReconnectBackoff({
-      initialDelayMs: this.eventReconnectDelayMs,
-      maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
-      healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
-    });
+    const now = options.streamNow ?? Date.now;
+    const backoff = new ReconnectBackoff(
+      {
+        initialDelayMs: this.eventReconnectDelayMs,
+        maxDelayMs: Math.max(this.eventReconnectDelayMs, EVENT_RECONNECT_MAX_DELAY_MS),
+        healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
+      },
+      { now },
+    );
     const silenceLimitMs = options.streamSilenceLimitMs ?? GATEWAY_STREAM_SILENCE_LIMIT_MS;
     const connectTimeoutMs = options.streamConnectTimeoutMs ?? GATEWAY_STREAM_CONNECT_TIMEOUT_MS;
     while (!signal.aborted) {
@@ -640,10 +649,10 @@ export class BackendHttpClient {
       const attempt = new AbortController();
       const abortAttempt = () => attempt.abort();
       signal.addEventListener("abort", abortAttempt, { once: true });
-      let deadline = Date.now() + connectTimeoutMs;
+      let deadline = now() + connectTimeoutMs;
       const watchdog = setInterval(
         () => {
-          if (Date.now() >= deadline) attempt.abort();
+          if (now() >= deadline) attempt.abort();
         },
         Math.min(silenceLimitMs, connectTimeoutMs) / 4,
       );
@@ -663,7 +672,7 @@ export class BackendHttpClient {
           await response.body.cancel().catch(() => undefined);
           return;
         }
-        deadline = Date.now() + silenceLimitMs;
+        deadline = now() + silenceLimitMs;
         backoff.connected();
         options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
@@ -684,7 +693,7 @@ export class BackendHttpClient {
           },
           undefined,
           () => {
-            deadline = Date.now() + silenceLimitMs;
+            deadline = now() + silenceLimitMs;
           },
         );
       } catch (error) {

@@ -1,7 +1,7 @@
 # Codex command catalogue stale/ready race
 
 - **ID:** 0791
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-24, selected-machine settings validation
 - **Test:** `a cold app-server child > two pre-plugin answers stay stale until late plugins are observed and confirmed`
 - **File:** `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts:273`
@@ -533,3 +533,99 @@ and 12 failures in 55.33 s; other settling cases also failed during repeats.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.N5MP6P/baseline-catalogue-stress.log.gz`.
 The real 20 ms settle timer remains a hypothesis; no catalogue assertion or
 implementation was changed.
+
+
+## CLI descriptor coverage review — 2026-11-03
+
+`mise run test:logged -- --name review-default-tests -- mise run test`
+ran after the descriptor-size coverage and scheduler-policy repair based on
+`1d85a718a`. Worker reservations were workspace/root/bridges/protocol 6/1/2/1;
+Codex used one test worker. The Codex package failed
+`a cold app-server child > an explicit refresh cannot replace the baseline for an already armed delay`
+at line 293 (125.89 ms): expected `stale`, received `ready`. Package totals:
+2,335 pass, 63 skip, one fail across 106 files (53.93 s).
+
+The complete unchanged owner passed alone (exit 0, 1.5 s):
+`mise run test:logged -- --name descriptor-review-catalogue-owner -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/commands/codex-command-catalogue.test.ts --parallel=1 --only-failures`.
+Passing case counts were not retained by the logged runner. Evidence is
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.GsDDP5/bridges.log.gz`.
+No catalogue implementation, assertion, timeout or skip changed. The real
+settle-timer race remained a hypothesis and the case was open at that review;
+the subsequent feature-plan repair below establishes the root cause and fix.
+
+## Feature-plan wake review repair — 2026-11-03
+
+- **Original command:** `mise run test` at `409c2ec81`; Bun 1.4.4, 1
+  isolated parallel worker(s) for this package in the saved output.
+- **Failure:** waitFor timed out in a read already in flight when the settle timer fires does not settle the list (2038.58 ms).
+- **Suite counts:** partial observed totals: 34,621 passed, 9 distinct failures,
+  186 skipped; some closing summaries were absent.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-c93bd96c-443b-41fa-a4a1-00fe777fe19a/validation-04.stdout.txt`.
+- **Isolated rerun:** `mise run test:logged -- --name fix-recorded-catalogue -- bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0
+  in 1.3 seconds. No assertion, deadline, skip or implementation changed.
+- **Assessment:** recurrence matches the existing open case; the isolated pass
+  establishes intermittency, not a root cause. The original aggregate remains
+  failed. Triage marked it related through a shared protocol import; this
+  observation does not override that verdict.
+
+## Root cause and fix — 2026-11-03
+
+- **Root cause:** every `a cold app-server child` case created the inventory
+  with a real 20 ms `skillColdSettleMs` timer, armed when a fake `skills/list`
+  answer was processed. Each case then did more work before the step it meant
+  to happen before that timer: `commands.list()` also awaits a real
+  filesystem template scan (`scanPromptTemplates`), and `waitFor` polls on
+  5 ms `setTimeout` ticks. Whenever that work took more than 20 ms (host load,
+  a parallel worker, a slow FS call), the settling re-read went out early.
+  The implementation behaved as designed; the tests raced their own timer.
+  - *In-flight case (the 2026-11-03 failure):* the timer fired before the test
+    sent its forced "racing" read, so the timer's own settling read became call
+    2 and the forced read call 3. `waitFor(() => calls.length === 2)` (line 241)
+    could then never become true and threw `timed out` after about 2 s.
+  - *Two-pre-plugin and armed-delay cases:* round 2 fired before the test
+    switched the fake to the plugin list, so both reads agreed, the list
+    settled, and the later `list()` returned `ready` instead of `stale` (lines
+    273 and 293).
+  - *First-answer and failed-settling-read cases:* timers fired before the
+    response or `fail` flag changed, overshooting an exact call count (timeout)
+    or settling early. *Disposal case:* the timer fired during the first
+    `list()`'s template scan, before `dispose()`, giving two calls instead of
+    one (line 426).
+- **Evidence (2026-11-03, this worktree, Bun 1.4.4):**
+  - *Before the fix:* 16 concurrent runs of the unchanged owner
+    (`bun test --cwd bridges/codex-bridge ./src/commands/codex-command-catalogue.test.ts --preload ../../tests/setup-node.ts`)
+    failed 3 times: the first-answer timeout twice (2086.39 ms and 2143.12 ms)
+    and the two-pre-plugin stale/ready mismatch once (52.61 ms).
+  - *Exact signatures on demand:* a scratch copy of the unchanged tests that
+    paused 30 ms (`Bun.sleep(30)`) after `await firstRead`, and before the
+    plugin response in the two-pre-plugin case, failed both cases every time.
+    The in-flight case timed out in `waitFor` called from the
+    `calls.length === 2` line (2044 ms). The two-pre-plugin case expected
+    `stale` and received `ready`. A probe in the same copy recorded
+    `calls=3 settlingReads=1` just after the racing read was sent. The
+    scratch file was deleted.
+- **Fix:** `SkillInventoryDeps.setSettleTimer` (an injectable
+  `(fire, delayMs) => cancel` that defaults to the old unref'd `setTimeout`) is
+  threaded through `CodexCommandCatalogue` as `skillSettleTimer`
+  (`bridges/codex-bridge/src/commands/skill-inventory.ts`,
+  `codex-command-catalogue.ts`). Production behaviour is unchanged.
+  - Every cold-child case now uses a manual settle timer. The test fires each
+    armed delay explicitly (`settle.fire()` throws unless exactly one delay is
+    armed), then drains microtasks with one `setImmediate`, because the fakes
+    answer only on microtasks.
+  - Polling `waitFor` and the fixed 40/60 ms sleeps are gone. Assertions are
+    the same or stricter: exact call counts after each fire, `settle.armed === 0`
+    when rounds are spent or the inventory is disposed, and disposal checked as
+    a cancelled delay. No timeout was widened, nothing was skipped, and no
+    retry was added.
+- **Verification (2026-11-03):**
+  - Adding 60 ms stalls at the old race points: the 13 cold-child cases passed.
+  - Mutation checks: removing the `serial < settling.serial` guard fails the
+    in-flight case; removing the settle cancel from `dispose()` fails the
+    disposal case.
+  - Stress: 16 concurrent runs of the owner with `--rerun-each=10`, alongside
+    18 `yes` CPU burners (load average about 42 on 18 cores): 16 × 300 pass,
+    0 fail.
+  - `bun run --cwd bridges/codex-bridge test:bridge`: 2336 pass, 63 skip,
+    0 fail. `bun run --cwd bridges/codex-bridge typecheck`, `bun fmt --check`
+    and `bunx oxlint` on the three touched files: clean.

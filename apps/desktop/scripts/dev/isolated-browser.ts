@@ -112,6 +112,26 @@ export function isolatedProfileArguments(extra: readonly string[] = []): string[
   return args;
 }
 
+/**
+ * Backend live tests run against the freshly built image before the fixture
+ * starts. Each needs no network and only fake credentials. The M8 suite stages
+ * a fake host `~/.claude.json` and proves interactive Claude still starts on
+ * its allowlist, so an image change cannot pass review without that evidence.
+ */
+export const IMAGE_QUALIFICATION_TESTS = ["./tests/claude-config-filter-docker.test.ts"] as const;
+
+function imageQualificationArguments(): string[] {
+  return [
+    "test",
+    "--cwd",
+    "apps/backend",
+    "--preload",
+    "../../tests/setup-node.ts",
+    ...IMAGE_QUALIFICATION_TESTS,
+    "--parallel=1",
+  ];
+}
+
 /** A Playwright suite other than the browser agent suite, run in the same disposable profile. */
 export interface IsolatedSuite {
   /** Names the suite in progress lines. */
@@ -221,6 +241,19 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         },
       ).done;
       if (smoke.code !== 0) throw new Error("Docker qualification image smoke failed");
+      const qualified = await launch("bun", imageQualificationArguments(), {
+        root,
+        env: {
+          ...env,
+          RUN_LIVE_DOCKER_TESTS: "1",
+          ORKESTRATOR_QUALIFICATION_IMAGE: runtimeProfile.dockerImage,
+          ORKESTRATOR_QUALIFICATION_REQUIRED: "1",
+        },
+        timeoutMs: 420_000,
+        signal: options.signal,
+      }).done;
+      if (qualified.code !== 0) throw new Error("Docker qualification image tests failed");
+      console.log(`Image qualification passed: ${IMAGE_QUALIFICATION_TESTS.join(", ")}`);
     }
     console.log(`Starting isolated browser profile ${profile}`);
     launcher = launchTask(

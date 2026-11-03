@@ -54,6 +54,7 @@ coverage/
 /output/benchmarks/
 /output/efficiency/
 /output/multi-review-evaluation/
+/output/package-security/
 
 # TypeScript
 *.tsbuildinfo

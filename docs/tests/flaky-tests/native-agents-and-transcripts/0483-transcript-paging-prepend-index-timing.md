@@ -70,3 +70,34 @@ On detached `origin/main` at `38d55ee14`, with separately installed frozen depen
 Commands used `ORKESTRATOR_E2E_PORT=1437 mise run test:logged -- --name baseline-browser-failures -- bunx playwright test CloseRetention.spec.ts TranscriptPaging.spec.ts VirtuosoFollow.spec.ts --config=e2e/playwright.config.ts --project=desktop-chromium --workers=2`, then `ORKESTRATOR_E2E_PORT=1437 mise run test:logged -- --name baseline-paging-repeat -- bunx playwright test TranscriptPaging.spec.ts --config=e2e/playwright.config.ts --project=desktop-chromium --workers=2 --repeat-each=3`.
 
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BoEPrl/baseline-browser-failures.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ULKrgc/baseline-paging-repeat.log.gz`. Root cause remains unconfirmed.
+
+## API request inspector validation — 2026-11-03
+
+`mise run test:logged -- --name renderer-browser -- mise run test:browser`
+reported mobile `native: a same-minute page growing row zero holds the original
+tool position` at `TranscriptPaging.spec.ts:22`, failing the offset poll at
+line 92: 6 px, expected less than 3 px within 5,000 ms. The nine-worker
+component stage reported 1,184 passed, 122 skipped and two failed (610.3 s
+logged); the other failure was streaming find convergence (0767).
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.PZSyfC/renderer-browser.log.gz`.
+
+The complete mobile owner with the default nine workers reproduced the same
+case at 4 px (18 passed, one failed, 34.9 s logged):
+
+```sh
+mise run test:logged -- --name transcript-paging-isolated -- bunx playwright test --config e2e/playwright.config.ts TranscriptPaging.spec.ts --project mobile-chromium
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5HSvsg/transcript-paging-isolated.log.gz`.
+The unchanged complete mobile owner then passed all 19 cases with one worker
+(exit 0, 87.5 s logged):
+
+```sh
+mise run test:logged -- --name transcript-paging-one-worker -- bunx playwright test --config e2e/playwright.config.ts TranscriptPaging.spec.ts --project mobile-chromium --workers 1
+```
+
+No paging implementation, fixture, assertion, timeout or skip changed. This
+branch adds a capture control above the native transcript, which changes its
+available height; whether that affects the intermittent offset failure is
+unconfirmed. The earlier baseline observations above already include this
+same-minute variant. Status remains open; the aggregate failure is retained.

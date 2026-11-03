@@ -218,3 +218,25 @@ timeout, skip or implementation changed.
 - **Failure:** mobile `scrollbar departure after find stays put when streaming reapplies highlights` failed its first attempt (`toBe`) and passed on retry. It failed again on mobile in a five-owner subset run (GlobalSettings, MergedProjectList, CloseRetention, StreamingTranscript, ToolGroupFold) on the branch, and passed in the same subset on detached `origin/main` `fd679c0e2`.
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s, as did three earlier runs of the same command.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z0tt7k/`. Cause remains unconfirmed.
+
+## API request inspector validation — 2026-11-03
+
+`mise run test:logged -- --name renderer-browser -- mise run test:browser`
+repeated the mobile failure at `StreamingTranscript.spec.ts:371`: expected
+`converged`, received `unresolved` after 5,000 ms. The nine-worker component
+stage reported 1,184 passed, 122 skipped and two failed (610.3 s logged).
+The other failure was the native same-minute paging offset case (0483).
+Failure evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.PZSyfC/renderer-browser.log.gz`.
+
+The unchanged complete mobile owner passed alone (13 cases, exit 0, 9.5 s
+logged), with the same default nine-worker configuration:
+
+```sh
+mise run test:logged -- --name streaming-transcript-isolated -- bunx playwright test --config e2e/playwright.config.ts StreamingTranscript.spec.ts --project mobile-chromium
+```
+
+No streaming implementation, assertion, timeout or skip changed. Its fixture
+uses `VirtualizedMessageList` directly, rather than the native-tab inspector
+wrapper. Contention remains a hypothesis; the underlying cause is not
+established and this case remains open. The separately run public-site stage,
+which the chained component-stage failure prevented, passed (10.2 s logged).

@@ -12,6 +12,7 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "wake.observe-remote-workflow-failed":
         "A remote workflow could not be observed for status wakes.",
       "wake.observe-pull-request-failed": "A pull request could not be observed for status wakes.",
+      "wake.observe-feature-plan-failed": "A feature plan could not be observed for status wakes.",
       "wake.observe-workflow-failed": "A workflow could not be observed for status wakes.",
       "wake.deliver-failed":
         "A workflow status wake could not be delivered; the next pass retries.",

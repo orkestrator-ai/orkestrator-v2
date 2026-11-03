@@ -103,20 +103,26 @@ describe("disk report", () => {
     });
     expect(initialized.status).toBe(0);
     const script = path.resolve(import.meta.dir, "../../scripts/disk-report.ts");
-    // The host's Docker daemon is not under test: `docker system df` alone
-    // took over six seconds on a shared host, past this test's deadline. A
-    // stub that fails is "Docker cannot be asked", which drops the Docker rows.
+    // The report scans its temporary directory and asks Docker for disk use.
+    // Isolate both from the shared host: use a private TMPDIR and a Docker
+    // stub that fails so the report omits Docker rows, which are not under test.
+    const tmpDir = path.join(root, "tmp");
+    await mkdir(tmpDir);
     const fakeBin = path.join(root, "bin");
     await mkdir(fakeBin);
     await writeFile(path.join(fakeBin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    const hostEnv = { ...process.env };
+    delete hostEnv.DOCKER_CONTEXT;
     const invoke = (...args: string[]) =>
       spawnSync(process.execPath, [script, ...args], {
         cwd: checkout,
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...hostEnv,
           PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
           HOME: root,
+          TMPDIR: tmpDir,
+          DOCKER_HOST: `unix://${path.join(root, "no-docker.sock")}`,
           XDG_CONFIG_HOME: path.join(root, ".config"),
           ORKESTRATOR_WORKTREE_DIR: path.join(root, "workspaces"),
         },
@@ -139,14 +145,14 @@ describe("disk report", () => {
     const rows = JSON.parse(report.stdout) as Array<{ location: string; orphaned: string }>;
     // Exercise collectReport's macOS root branch, including its prefix filter
     // and the same-root case: no private row is duplicated or mislabelled.
-    const privateRoot = privateTmpdirRoot(os.tmpdir());
+    const privateRoot = privateTmpdirRoot(tmpDir);
     expect(rows.filter((row) => row.location === `${privateRoot}/ork-test-tmp-*`)).toHaveLength(1);
-    if (privateRoot !== os.tmpdir()) {
+    if (privateRoot !== tmpDir) {
       expect(
         rows.filter((row) => path.dirname(row.location) === privateRoot).map((row) => row.location),
       ).toEqual([`${privateRoot}/ork-test-tmp-*`]);
       expect(
-        rows.some((row) => row.location === `${os.tmpdir()}/playwright_chromiumdev_profile-*`),
+        rows.some((row) => row.location === `${tmpDir}/playwright_chromiumdev_profile-*`),
       ).toBe(true);
     }
     expect(rows.find((row) => row.location === `${turbo} legacy artifacts`)?.orphaned).toBe(

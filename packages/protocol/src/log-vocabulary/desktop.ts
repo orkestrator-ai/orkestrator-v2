@@ -13,6 +13,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
         "An agent-test profile kept a legacy link to the host keychain.",
       "backend.start-failed": "The Local backend did not start; continuing with remote machines.",
       "clipboard.write-failed": "Writing text to the system clipboard failed.",
+      "dev-mode.ignored-packaged":
+        "A packaged app was launched with ELECTRON_DEV=1 and ignored it; it loads its bundled renderer.",
       "instance.already-running": "Another instance holds this data directory; this one will quit.",
       "main-thread.stalled": "A timer fired late, so windows, IPC and the stdout reader waited.",
       "quit.stopping-backend": "The app is quitting and has asked the Local backend to stop.",

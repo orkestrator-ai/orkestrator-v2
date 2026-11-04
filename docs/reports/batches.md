@@ -18,7 +18,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
 | S2 | [security/0040-s2-bridge-credential.md](security/0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` |
-| S5 | [security/0140-s5-release-chain.md](security/0140-s5-release-chain.md) | `0140`, `0240` |
 | C1 | [coordinator/0010-c1-wake-reliability.md](coordinator/0010-c1-wake-reliability.md) | `0010`, `0050`, `0090`, `0290`, `0300`, `0270` |
 | C5 | [coordinator/0030-c5-prompt-and-context.md](coordinator/0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` |
 | C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
@@ -76,7 +75,6 @@ These batches don't share a protected area. They only have to respect the confli
 
 - **C-0410 (Leaf-mode gate):** coordinator `0410`
 - **E1 (Baseline run):** the baseline task in `0150`, `0160`, `0180`, `0190`, `0400` and E8, in efficiency-logging-database
-- **S5 (Release chain):** security `0140`, `0240`
 - **S-0230 (Preview publication domain):** security `0230`
 - **S-0270 (iOS app review):** security `0270`
 - **S-0260 (Live checks on other platforms):** security `0260`

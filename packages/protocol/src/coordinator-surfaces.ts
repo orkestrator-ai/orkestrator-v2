@@ -49,6 +49,7 @@ export const COORDINATOR_SURFACE_ACTIONS = Object.freeze([
   "stop-worker-turn",
   "run-worker-command",
   "set-worker-goal",
+  "restart-pipeline-step",
 ] as const);
 export type CoordinatorSurfaceAction = (typeof COORDINATOR_SURFACE_ACTIONS)[number];
 

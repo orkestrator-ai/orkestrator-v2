@@ -1642,6 +1642,8 @@ variables. Command, once per run:
 | Run | Backend | Passed | Failed | Skipped |
 | --- | --- | --- | --- | --- |
 | 1 to 4 | with the fix | 6 | 0 | 0 |
+| 5, on commit `b666f15fc` | with the fix | 1 | 1 (check 2, before any restart: flake [4470](../../tests/flaky-tests/previews-annotations-and-gateway/4470-seeded-preview-moved-port-link-not-printed.md)) | 4 (serial, after the failure) |
+| 6 to 10, on commit `b666f15fc` | with the fix | 6 | 0 | 0 |
 | Control | in-window recheck temporarily disabled | 3 | 1 (check 6: generation unchanged) | 2 (serial, after the failure) |
 
 No dev server process was left running after the runs. The spec removes its

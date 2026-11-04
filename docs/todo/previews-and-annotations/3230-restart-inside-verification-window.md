@@ -163,7 +163,11 @@ the gap to the connect. Both are recorded in `browser-previews.md`.
 
 Check 3 has no wait and keeps every assertion; check 6 has no expected-failure
 annotation. `service-preview-seeded-electron.spec.ts` passed all six checks in
-four consecutive runs on macOS. With the recheck temporarily disabled, check 6
+nine of ten runs on macOS, including five in a row on the committed fix. The
+other run timed out in check 2, before any restart, on a step this change does
+not touch; it is recorded as flake
+[4470](../../tests/flaky-tests/previews-annotations-and-gateway/4470-seeded-preview-moved-port-link-not-printed.md),
+cause not established. With the recheck temporarily disabled, check 6
 failed on the generation (`Expected: > 4, Received: 4`), so the spec detects the
 defect. Check 3 still passed in that run, in 4.4 s rather than about 0.6 s, so
 check 6 is the regression guard and check 3 covers the visible reconnect.

@@ -447,6 +447,151 @@ describe("noted rows", () => {
   });
 });
 
+describe("publishing running tool cards", () => {
+  function outputDelta(h: Harness, itemId: string, delta: string): void {
+    h.child().notify("item/commandExecution/outputDelta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId,
+      delta,
+    });
+  }
+
+  async function twoRunningCommands(): Promise<{
+    h: Harness;
+    sessionId: string;
+    row: NormalizedMessage;
+  }> {
+    const { h, sessionId } = await startTurn();
+    notifyItem(h, "item/started", command("c1", "inProgress"));
+    notifyItem(h, "item/started", command("c2", "inProgress"));
+    await h.drain();
+    const row = (await assistantRows(h, sessionId)).at(-1)!;
+    return { h, sessionId, row };
+  }
+
+  test("a patch lists only the card that moved and omits an unchanged body", async () => {
+    const { h, row } = await twoRunningCommands();
+    const before = h.events.length;
+
+    outputDelta(h, "c2", "partial");
+    await h.drain();
+
+    const patches = patchesFor(h, row.id, before);
+    expect(patches).toHaveLength(1);
+    const patch = patches[0]!.data as {
+      partCount: number;
+      changedParts: { index: number; part: NormalizedMessage["parts"][number] }[];
+    };
+    expect(patch.changedParts.map(({ part }) => part.toolUseId)).toEqual(["c2"]);
+    expect(patch.partCount).toBe(2);
+    expect(patch).not.toHaveProperty("content");
+  });
+
+  test("a client applying the frames holds exactly the transcript's row", async () => {
+    const { h, sessionId } = await startTurn();
+    const agentDelta = (delta: string) =>
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "m1",
+        delta,
+      });
+    notifyItem(h, "item/started", { id: "m1", type: "agentMessage", text: "" });
+    agentDelta("Hello");
+    notifyItem(h, "item/started", command("c1", "inProgress"));
+    notifyItem(h, "item/started", command("c2", "inProgress"));
+    await h.drain();
+    const row = (await assistantRows(h, sessionId)).at(-1)!;
+    // What a client holds once it has seen the row whole.
+    const held = structuredClone(row);
+    let revision = held.revision!;
+    const before = h.events.length;
+
+    outputDelta(h, "c1", "one ");
+    await h.drain();
+    agentDelta(" world");
+    await h.drain();
+    outputDelta(h, "c2", "two ");
+    await h.drain();
+    agentDelta(" again");
+    await h.drain();
+    outputDelta(h, "c1", "three");
+    await h.drain();
+
+    const frames = patchesFor(h, row.id, before).map(
+      (event) =>
+        event.data as {
+          partCount: number;
+          changedParts: { index: number; part: NormalizedMessage["parts"][number] }[];
+          content?: string;
+          revision: number;
+        },
+    );
+    // The body travels exactly when it changed.
+    expect(frames.map((frame) => frame.content)).toEqual([
+      undefined,
+      "Hello world",
+      undefined,
+      "Hello world again",
+      undefined,
+    ]);
+    for (const frame of frames) {
+      expect(frame.revision).toBe(revision + 1);
+      revision = frame.revision;
+      for (const { index, part } of frame.changedParts) held.parts[index] = part;
+      held.parts.length = frame.partCount;
+      if (frame.content !== undefined) held.content = frame.content;
+      held.revision = frame.revision;
+    }
+    const current = (await assistantRows(h, sessionId)).at(-1)!;
+    expect(held.content).toBe(current.content);
+    expect(held.parts).toEqual(current.parts);
+    expect(held.revision).toBe(current.revision!);
+  });
+
+  test("a publish with nothing new sends nothing and moves no revision", async () => {
+    const { h, row } = await twoRunningCommands();
+    const before = h.events.length;
+    const revision = row.revision;
+
+    // Schedules a publish without touching an item.
+    h.child().notify("turn/diff/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      diff: "",
+    });
+    await h.drain();
+
+    expect(patchesFor(h, row.id, before)).toEqual([]);
+    expect(row.revision).toBe(revision);
+  });
+
+  test("a new row's first patch carries the body", async () => {
+    const { h, sessionId } = await startTurn();
+    notifyItem(h, "item/started", { id: "m1", type: "agentMessage", text: "" });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "m1",
+      delta: "First",
+    });
+    await h.drain();
+    const row = (await assistantRows(h, sessionId)).at(-1)!;
+    const before = h.events.length;
+
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "m1",
+      delta: " more",
+    });
+    await h.drain();
+
+    expect(patchesFor(h, row.id, before).at(-1)?.data).toMatchObject({ content: "First more" });
+  });
+});
+
 describe("recovered context", () => {
   test("joins a turn's assistant rows into one reply", () => {
     const row = (id: string, text: string, turnId?: string): NormalizedMessage => ({

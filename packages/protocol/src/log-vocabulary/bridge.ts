@@ -158,6 +158,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "app-server.invariant-violation": "app-server asked for something its configuration forbids.",
       "app-server.protocol-violation":
         "app-server wrote a line that is not valid protocol; it was ignored.",
+      "app-server.overflow-restart-failed":
+        "Replacing the child after a notification queue overflow failed; the next request tries again.",
       "app-server.recording": "Notification recording is on; recordings hold content.",
       "app-server.stale-reaped": "A stale app-server left by an earlier bridge was stopped.",
       "app-server.stderr": "Metadata of an app-server stderr line, never its content.",
@@ -196,6 +198,7 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "ordered-events.reconcile-failed": "Reconciling ordered events failed.",
       "parent.gone":
         "The backend that launched this bridge has gone; stopping turns and shutting down.",
+      "queue.overflow": "The notification queue passed a bound and dropped its backlog.",
       "queue.task-failed": "A task on a per-thread queue failed.",
       "raw-log.write-failed": "Appending to the raw Codex log failed.",
       "recorder.notice":
@@ -277,6 +280,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "An HTTP route failed unexpectedly; its error is not logged because it can hold content.",
       "session.policy-widening-refused":
         "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
+      "session-list.failed":
+        "Reading the resumable sessions failed, so none were offered; its error message is not logged because it can hold content.",
       "state.over-budget":
         "The state file stayed over budget after shedding transcripts, so the write was skipped.",
       "state.transcripts-shed":

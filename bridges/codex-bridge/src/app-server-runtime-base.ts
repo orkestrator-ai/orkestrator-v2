@@ -134,9 +134,19 @@ export interface SteerOrdering {
   followingItemIds?: readonly string[];
 }
 
+/**
+ * The body last sent for a row. Named by message, so a path that swaps the row
+ * without resetting this sends the body again rather than wrongly omitting it.
+ */
+export interface PublishedRowContent {
+  messageId: string;
+  content: string;
+}
+
 export interface HistoricalAssistantSegmentState {
   render: TurnRenderState;
   publishedParts: NormalizedPart[];
+  publishedContent?: PublishedRowContent;
   publishedModelId?: string;
   /** False until the client has been sent a whole snapshot of this row. */
   announced: boolean;
@@ -220,6 +230,7 @@ export interface ThreadRuntimeState {
   /** Last parts successfully published for the active assistant message. */
   publishedMessageId?: string;
   publishedParts: NormalizedPart[];
+  publishedContent?: PublishedRowContent;
   publishedModelId?: string;
   /** Serializes transcript-dependent events without blocking app-server stdout. */
   orderedEventTail: Promise<void>;
@@ -289,9 +300,10 @@ export function messageSnapshotIntervalMs(snapshotChars: number): number {
 }
 
 /**
- * Completed tool parts are retained by `TurnRenderState`, so identity is an
- * exact and allocation-free equality check for the expensive case. Streaming
- * text/reasoning is rebuilt from deltas and only carries its content.
+ * Completed tool parts and unchanged running ones are retained by
+ * `TurnRenderState`, so identity is an exact and allocation-free equality check
+ * for the expensive case. Streaming text/reasoning is rebuilt from deltas and
+ * only carries its content.
  */
 export function isSamePublishedPart(
   published: NormalizedPart | undefined,

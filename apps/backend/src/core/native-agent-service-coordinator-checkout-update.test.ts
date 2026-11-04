@@ -177,15 +177,15 @@ describe("coordinator checkout-update notice", () => {
     );
   });
 
-  test.each([false, true])("mail waits for sync beyond timeout (failure=%s)", async (fails) => {
+  test.each([false, true])("mail waits for busy sync (failure=%s)", async (fails) => {
     let finish!: () => void;
     let started!: () => void;
-    let timedOut!: () => void;
+    let hookReturned!: () => void;
     const syncStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
     const hookFinished = new Promise<void>((resolve) => {
-      timedOut = resolve;
+      hookReturned = resolve;
     });
     await withCoordinator(
       {
@@ -224,8 +224,8 @@ describe("coordinator checkout-update notice", () => {
             beforeMailInject: async (runtimeId) => {
               expect(
                 await fastForwardBeforeCoordinatorMail({ storage, git, timeoutMs: 5 }, runtimeId),
-              ).toBe("timed-out");
-              timedOut();
+              ).toBe("busy");
+              hookReturned();
             },
             waitForMergeSync: (id) => git.waitForMergeSync(id),
             beginCoordinatorTurn: (id) => git.beginTurnAfterMergeSync(id),

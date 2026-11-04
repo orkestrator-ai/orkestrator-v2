@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { getPriority, tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -14,6 +14,7 @@ import {
   type ReviewValidationPlan,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
+import { WORKLOAD_NICE } from "./process-priority.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./review-validation-worker.js";
 import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
 import type { Environment } from "./models.js";
@@ -242,6 +243,25 @@ test("independent commands overlap, output stays in artifacts, and reconnect doe
   expect(restored).toEqual(result);
   expect(result.results[0]!.stdoutSha256).toHaveLength(64);
 });
+
+test.if(process.platform !== "win32")(
+  "commands run at the workload priority; the supervisor does not",
+  async () => {
+    const { root, run } = await fixture([
+      command(
+        "priority",
+        'ps -o ni= -p $$ > .orkestrator/nice; ps -o ni= -p "$PPID" > .orkestrator/worker-nice',
+      ),
+    ]);
+    const result = await completed(root, run);
+    expect(result.results[0]!.status).toBe("passed");
+    const baseline = getPriority();
+    const nice = Number(await readFile(path.join(root, ".orkestrator/nice"), "utf8"));
+    const workerNice = Number(await readFile(path.join(root, ".orkestrator/worker-nice"), "utf8"));
+    expect(nice).toBeGreaterThanOrEqual(Math.max(baseline, WORKLOAD_NICE));
+    expect(workerNice).toBe(baseline);
+  },
+);
 
 test("shared resources serialize; failed dependencies skip while independent checks finish", async () => {
   const { root, run } = await fixture([

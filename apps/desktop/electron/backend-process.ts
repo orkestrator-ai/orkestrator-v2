@@ -402,6 +402,12 @@ type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 const EVENT_RECONNECT_DELAY_MS = 500;
 const EVENT_RECONNECT_MAX_DELAY_MS = 8_000;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
+const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
+/** The only routes a local window's direct transport uses. */
+const DIRECT_TRANSPORT_PATHS: ReadonlySet<string> = new Set([
+  "/__orkestrator/invoke",
+  "/__orkestrator/events",
+]);
 
 export type BackendStreamState = "open" | "closed" | "unauthorized";
 
@@ -432,6 +438,8 @@ export class BackendHttpClient {
    */
   private readonly terminalInput: TerminalInputSequencer;
   private suspended = false;
+  /** Whether the event stream asks for terminal output; see `setTerminalOutputRelay`. */
+  private relayTerminalOutput: boolean;
 
   get isSuspended(): boolean {
     return this.suspended;
@@ -450,7 +458,11 @@ export class BackendHttpClient {
   constructor(
     private baseUrl: string,
     private token: string,
-    options: { terminalSendTimeoutMs?: number; eventReconnectDelayMs?: number } = {},
+    options: {
+      terminalSendTimeoutMs?: number;
+      eventReconnectDelayMs?: number;
+      relayTerminalOutput?: boolean;
+    } = {},
   ) {
     const terminalSendTimeoutMs =
       options.terminalSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS;
@@ -458,6 +470,7 @@ export class BackendHttpClient {
       throw new RangeError("Terminal send timeout must be positive");
     }
     this.eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
+    this.relayTerminalOutput = options.relayTerminalOutput ?? true;
     this.terminalInput = new TerminalInputSequencer({
       batchDelayMs: 0,
       sendTimeoutMs: terminalSendTimeoutMs,
@@ -470,6 +483,33 @@ export class BackendHttpClient {
   /** Origin this client currently reaches. Ephemeral for a tunnelled route. */
   get origin(): string {
     return new URL(this.baseUrl).origin;
+  }
+
+  /**
+   * Bearer for a local window's direct transport: this exact origin and only
+   * its command and event routes. The credential stays in main; the window
+   * never reads it, and gets no other route through it.
+   */
+  directTransportAuthorization(urlValue: string): string | null {
+    try {
+      const url = new URL(urlValue);
+      if (url.origin !== this.origin || !DIRECT_TRANSPORT_PATHS.has(url.pathname)) return null;
+      return `Bearer ${this.token}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Whether this client's stream carries terminal output, which only a window
+   * on the relay consumes. A change restarts the stream from its cursor. The
+   * reopened stream announces itself, so a relay window gaining the output
+   * reads its exact terminal snapshot first.
+   */
+  setTerminalOutputRelay(relay: boolean): void {
+    if (this.relayTerminalOutput === relay) return;
+    this.relayTerminalOutput = relay;
+    if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
   }
 
   /**
@@ -661,6 +701,9 @@ export class BackendHttpClient {
       try {
         const url = this.endpoint("/__orkestrator/events");
         if (stream.cursor) url.searchParams.set(GATEWAY_EVENT_CURSOR_PARAM, stream.cursor);
+        if (!this.relayTerminalOutput) {
+          url.searchParams.set("excludeEvents", TERMINAL_OUTPUT_EVENT_PREFIX);
+        }
         const response = await fetch(url, {
           headers: { authorization: `Bearer ${this.token}` },
           signal: attempt.signal,
@@ -802,6 +845,8 @@ export class BackendProcess {
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
     credentialSources?: AgentPlatform[];
+    /** False when no window will need terminal output from this client's stream. */
+    relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
@@ -837,6 +882,8 @@ export class BackendProcess {
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
     credentialSources?: AgentPlatform[];
+    /** False when no window will need terminal output from this client's stream. */
+    relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
@@ -994,7 +1041,9 @@ export class BackendProcess {
         throw new Error("Backend service exited during startup");
       }
       this.info = ready;
-      this.client = new BackendHttpClient(ready.url, auth.token);
+      this.client = new BackendHttpClient(ready.url, auth.token, {
+        relayTerminalOutput: options.relayTerminalOutput,
+      });
       this.client.listen(options.onEvent);
       startupComplete = true;
       return this.client;

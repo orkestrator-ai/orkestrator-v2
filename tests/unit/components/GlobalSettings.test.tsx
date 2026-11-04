@@ -2971,6 +2971,40 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("offers the direct transport only in a local desktop window, off by default", async () => {
+    const name = "Use the direct transport for new windows";
+    const original = window.orkestrator;
+    const originalGateway = window.orkestratorGateway;
+    try {
+      window.orkestrator = undefined;
+      const browser = render(<GlobalSettings activeSection="experimental" />);
+      expect(screen.queryByRole("switch", { name })).toBeNull();
+      browser.unmount();
+
+      window.orkestrator = { ...original, isolatedViewState: true } as typeof window.orkestrator;
+      window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.example" };
+      const remote = render(<GlobalSettings activeSection="experimental" />);
+      expect(screen.queryByRole("switch", { name })).toBeNull();
+      remote.unmount();
+
+      window.orkestratorGateway = undefined;
+      render(<GlobalSettings activeSection="experimental" />);
+      const toggle = screen.getByRole("switch", { name });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(toggle);
+      await flushAutoSave();
+      await waitFor(() => {
+        expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ localWindowGatewayTransport: true }),
+          SAVE_OPTIONS,
+        );
+      });
+    } finally {
+      window.orkestrator = original;
+      window.orkestratorGateway = originalGateway;
+    }
+  });
+
   test("saves the experimental graphs switch, off by default", async () => {
     render(<GlobalSettings activeSection="experimental" />);
 

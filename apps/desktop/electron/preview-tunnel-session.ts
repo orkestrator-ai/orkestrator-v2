@@ -408,10 +408,13 @@ export class PreviewTunnelSession {
       return;
     }
     if (frame.type === "error" && frame.stream === undefined) {
-      // The session is ending; its close frame follows with the code.
+      // The session is ending; its close frame follows with the code. That code
+      // fails every stream anyway, so fail them now: until then a pooled stream
+      // would look reusable while any write to it can only fail.
       this.failure = previewFailure(frame.error.category, { message: frame.error.message });
       this.onReady?.(this.failure);
       for (const pending of Array.from(this.opening.values())) pending.reject(this.failure);
+      for (const stream of Array.from(this.streams.values())) stream.destroy(this.failure);
       return;
     }
     if (!this.authenticated) return this.violation();

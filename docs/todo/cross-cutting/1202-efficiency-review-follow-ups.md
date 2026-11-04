@@ -1709,3 +1709,11 @@ it settles replaces nothing, so hiding alone never cuts background work.
 **Coverage.** Added a real stalled TCP peer integration test, a paused send-callback failure test, and scoped/unscoped removal during replay. The real-peer test is explicitly slow-tier by its integration filename.
 
 **Measurement.** Removed the healthy-peer sleep and replaced the old timing row above; retain the stall delay only to build stalled-peer backpressure. The corrected figures support successful ordered delivery, not a claim of zero latency overhead.
+
+### Task 11 verification repairs (2026-11-04)
+
+Verification named four desktop failures. None of them came from a gateway change on this branch, and they were repaired rather than excused.
+
+**Revoked-access recovery (three cases in `preview-transport-manager.test.ts`).** A real bug in tunnel v2: a pooled stream stayed reusable between the session `error` frame and the close frame, so a request after a revocation got a 502. Fixed in `PreviewTunnelSession`; the choice is recorded in [4500](4500-preview-tunnel-one-socket-per-connection.md).
+
+**Node pull-mode receive window (`preview-tunnel-session.test.ts`).** On Node 26.7.0 `read()` with no size returned one 64 KiB chunk of the four buffered, where the test expected all of them. The credit logic was correct, so the test now drains the stream until `read()` returns null. Only Node 26.7.0 is installed on the host, so the test was not run on an older Node.

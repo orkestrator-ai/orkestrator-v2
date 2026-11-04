@@ -39,7 +39,7 @@ export function shouldAutoSteer(input: {
  * steerable row without a refusal needs no note.
  *
  * A refusal is historical context, not a claim that another steer cannot run.
- * Current recovery requirements always take priority over that history.
+ * Current recovery, provider and item requirements take priority over that history.
  */
 export function queuedSteerNote(input: {
   /** A turn is running: the queue's rows would otherwise be steerable. */
@@ -60,11 +60,10 @@ export function queuedSteerNote(input: {
     return "Waiting for the earlier message to be resolved. If prompted, use the recovery controls to retry or discard it.";
   }
   if (!input.running) return undefined;
-  if (input.refusal) return input.refusal;
   if (!input.providerSteers) {
     return `${input.label} cannot be steered here, so this is sent when the turn ends.`;
   }
-  if (input.steerable) return undefined;
+  if (input.steerable) return input.refusal;
   if (input.attachmentCount > 0) {
     return "Steering carries text only, so this is sent with its attachments when the turn ends.";
   }
@@ -102,7 +101,7 @@ function queuedSteerRejectionReason(
 ): string {
   switch (reason) {
     case "steer-capacity-exceeded":
-      return "The last steer attempt was refused because steering is full for this turn.";
+      return "The last steer attempt was refused because steering was full at the time.";
     case "steer-history-unavailable":
       return "The last steer attempt was refused because steering history is unavailable.";
     case "steer-not-recorded":
@@ -150,4 +149,18 @@ export function autoSteerNotice(
         message: `${label} finished the turn before it could be steered, so your message is queued.`,
       };
   }
+}
+
+/** Keep the most recent 32 refusals; a confirmed transfer clears its old note. */
+export function updateSteerRefusals(
+  current: ReadonlyMap<string, string>,
+  messageId: string,
+  note: string | undefined,
+): ReadonlyMap<string, string> {
+  if (!note && !current.has(messageId)) return current;
+  const next = new Map(current);
+  next.delete(messageId);
+  if (note) next.set(messageId, note);
+  while (next.size > 32) next.delete(next.keys().next().value!);
+  return next;
 }

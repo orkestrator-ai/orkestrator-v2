@@ -31,7 +31,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Problem.** Whatever made the row unsteerable is still unknown.
 
-**Context.** Since this change, a row that cannot be steered while the turn runs says why under its text: the provider cannot steer, an earlier message is still being confirmed, attachments, a command, or the steer refusal itself (`queuedSteerNote` in `auto-steer.ts`). The next occurrence will therefore show which gate closed.
+**Context.** Since this change, a row that cannot be steered while the turn runs says why under its text: the provider cannot steer, an earlier message is still being confirmed, attachments, a command, or the steer refusal itself (`queuedSteerNote` in `auto-steer.ts`). These notes expose only the listed blockers. If the renderer does not see the turn as running, an unparked row has no note and no Steer; a bare row therefore does not identify the cause. Qualification logging remains proposed work in task 1, not an implemented diagnostic.
 
 **Investigation.** Not started; it depends on task 1.
 
@@ -44,6 +44,16 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
   - **Cache a positive qualification per bridge connection now.**
     - Pros: a transient failed qualification read could no longer hide Steer.
     - Cons: there is no evidence yet that the read failed; it would also hide a bridge that has genuinely lost the route.
+
+## Assumptions and decisions
+
+### Task 1: diagnostic limits
+
+Clarified the existing notes' limits instead of adding speculative logging in this UI fix. Notes explain known renderer blockers but cannot reconstruct a missed running state or a bridge qualification failure. Live capture of the long-lived, mail-started production scenario remains open; the mocked controller tests do not qualify it.
+
+### Task 2: current blockers precede refusal history
+
+Current provider and item blockers now take priority over historical refusals, alongside recovery. Retaining bounded history preserves context when a row can be retried; wording describes capacity at the time of the attempt rather than the current turn. Clearing all history on idle would lose context before a queued row drains.
 
 ## Needs verification
 

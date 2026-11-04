@@ -8,7 +8,7 @@
  * when steering is refused or the provider cannot steer, the row stays queued
  * and says why.
  */
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   NativeAgentSessionActionOutcome,
@@ -322,7 +322,7 @@ describe("Coordinator chat steering", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("compose-queue-item-note").textContent).toBe(
-        "The last steer attempt was refused because steering is full for this turn. This message remains queued.",
+        "The last steer attempt was refused because steering was full at the time. This message remains queued.",
       ),
     );
     expect(queuedRows()).toHaveLength(1);
@@ -476,4 +476,91 @@ test("a transport error retains the durable queued copy", async () => {
   expect(queuedItems).toHaveLength(1);
   expect(queuedRows()).toHaveLength(1);
   expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+});
+
+test("a retained refusal yields to the new turn's provider gate after an earlier row drains", async () => {
+  setAutoSteer(true);
+  steerOutcome = { outcome: "rejected", reason: "steer-capacity-exceeded", requestId: "r" };
+  await sendToWorkingCoordinator("retained message");
+  await waitFor(() =>
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+      "last steer attempt",
+    ),
+  );
+  const retained = queuedItems[0]!;
+  running = false;
+  queuedItems = [{ id: "earlier", text: "earlier message" }, retained];
+  await publishProjection();
+  expect(screen.queryAllByTestId("compose-queue-item-note")).toHaveLength(0);
+  // The backend sends the earlier row as the next turn; this row still waits.
+  queuedItems = [retained];
+  running = true;
+  providerSteers = false;
+  await publishProjection();
+  await waitFor(() =>
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+      "cannot be steered",
+    ),
+  );
+  expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+  expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);
+  expect(queuedItems).toEqual([retained]);
+});
+
+test("a successful retry clears the prior refusal for the same queue id", async () => {
+  setAutoSteer(true);
+  steerOutcome = { outcome: "mismatch" };
+  await sendToWorkingCoordinator("retry this message");
+  await waitFor(() =>
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+      "missed the active turn",
+    ),
+  );
+  const retained = queuedItems[0]!;
+  steerOutcome = { outcome: "applied" };
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /^Steer queued prompt/ }));
+  });
+  await waitFor(() => expect(queuedRows()).toHaveLength(0));
+  // Re-publish that id to expose any stale client history after success.
+  queuedItems = [retained];
+  await publishProjection();
+  await waitFor(() => expect(queuedRows()).toHaveLength(1));
+  expect(screen.queryByTestId("compose-queue-item-note")).toBeNull();
+});
+
+test("a later applied auto-steer clears history for the same id", async () => {
+  setAutoSteer(true);
+  steerOutcome = { outcome: "mismatch" };
+  await sendToWorkingCoordinator("first attempt");
+  await waitFor(() =>
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+      "missed the active turn",
+    ),
+  );
+  const retained = queuedItems[0]!;
+  queuedItems = [];
+  await publishProjection();
+  const uuid = spyOn(crypto, "randomUUID").mockReturnValue(
+    retained.id as ReturnType<typeof crypto.randomUUID>,
+  );
+  try {
+    steerOutcome = { outcome: "applied" };
+    await act(async () => {
+      useNativeComposeStore
+        .getState()
+        .updateDraft(createSessionKey(ENV_ID, TAB_ID), { text: "retry" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    });
+    await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(queuedRows()).toHaveLength(0));
+    queuedItems = [retained];
+    await publishProjection();
+    await waitFor(() => expect(queuedRows()).toHaveLength(1));
+    expect(screen.queryByTestId("compose-queue-item-note")).toBeNull();
+  } finally {
+    uuid.mockRestore();
+  }
 });

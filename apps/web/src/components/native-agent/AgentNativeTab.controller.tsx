@@ -170,7 +170,13 @@ import {
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
-import { autoSteerNotice, queuedSteerNote, shouldAutoSteer, steerRefusalNote } from "./auto-steer";
+import {
+  autoSteerNotice,
+  queuedSteerNote,
+  shouldAutoSteer,
+  steerRefusalNote,
+  updateSteerRefusals,
+} from "./auto-steer";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -1573,14 +1579,7 @@ export function SharedNativeAgentController({
   );
   // Bounded: an entry outlives its row only until newer refusals push it out.
   const rememberSteerRefusal = useCallback((messageId: string, note: string | undefined) => {
-    setSteerRefusals((current) => {
-      if (!note && !current.has(messageId)) return current;
-      const next = new Map(current);
-      next.delete(messageId);
-      if (note) next.set(messageId, note);
-      while (next.size > 32) next.delete(next.keys().next().value!);
-      return next;
-    });
+    setSteerRefusals((current) => updateSteerRefusals(current, messageId, note));
   }, []);
   const stopBackgroundTaskFromCard = useCallback(
     async (taskId: string) => {
@@ -3481,6 +3480,7 @@ export function SharedNativeAgentController({
             );
           }
           if (outcome.outcome === "applied") {
+            rememberSteerRefusal(message.id, undefined);
             toast.success(`Sent to the active ${label} turn`);
             return;
           }

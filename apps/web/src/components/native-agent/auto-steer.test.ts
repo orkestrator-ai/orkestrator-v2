@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { autoSteerNotice, queuedSteerNote, shouldAutoSteer, steerRefusalNote } from "./auto-steer";
+import {
+  autoSteerNotice,
+  queuedSteerNote,
+  shouldAutoSteer,
+  steerRefusalNote,
+  updateSteerRefusals,
+} from "./auto-steer";
 
 const eligible = {
   enabled: true,
@@ -54,7 +60,7 @@ describe("autoSteerNotice", () => {
     expect(rejected).toEqual({
       tone: "info",
       message:
-        "The last steer attempt was refused because steering is full for this turn. Your message remains queued.",
+        "The last steer attempt was refused because steering was full at the time. Your message remains queued.",
     });
   });
 
@@ -103,9 +109,9 @@ describe("queuedSteerNote", () => {
   });
 
   test("a refusal is historical context even when another steer is available", () => {
-    expect(
-      queuedSteerNote({ ...steerable, providerSteers: false, refusal: "Steering is full." }),
-    ).toBe("Steering is full.");
+    expect(queuedSteerNote({ ...steerable, refusal: "Steering is full." })).toBe(
+      "Steering is full.",
+    );
   });
 });
 
@@ -135,3 +141,38 @@ for (const reason of [
     expect(autoSteerNotice(outcome, "Claude")?.message).not.toMatch(/send.*again/i);
   });
 }
+
+test("current provider and item blockers override historical refusals", () => {
+  const input = {
+    running: true,
+    providerSteers: false,
+    parked: false,
+    steerable: true,
+    attachmentCount: 0,
+    command: false,
+    label: "Claude",
+    refusal: "Old refusal",
+  };
+  expect(queuedSteerNote(input)).toContain("cannot be steered");
+  expect(
+    queuedSteerNote({ ...input, providerSteers: true, steerable: false, attachmentCount: 1 }),
+  ).toContain("attachments");
+  expect(
+    queuedSteerNote({ ...input, providerSteers: true, steerable: false, command: true }),
+  ).toContain("Commands");
+});
+
+test("refusal history evicts the oldest and clears a successful retry without mutating snapshots", () => {
+  let history: ReadonlyMap<string, string> = new Map();
+  for (let i = 0; i < 32; i++) history = updateSteerRefusals(history, String(i), "refused");
+  const snapshot = history;
+  history = updateSteerRefusals(history, "0", "retried");
+  history = updateSteerRefusals(history, "32", "refused");
+  expect(history.size).toBe(32);
+  expect(history.has("1")).toBe(false);
+  expect(history.get("0")).toBe("retried");
+  expect(snapshot.has("1")).toBe(true);
+  history = updateSteerRefusals(history, "0", steerRefusalNote({ outcome: "applied" }, "Claude"));
+  expect(history.has("0")).toBe(false);
+  expect(updateSteerRefusals(history, "absent", undefined)).toBe(history);
+});

@@ -581,12 +581,18 @@ describe("command node coordinator ↔ leaf coordinator", () => {
   test("budgets stop two coordinators from waking each other endlessly", async () => {
     const world = await link({ budget: 3 });
     // Each coordinator answers whatever woke it with a new question, forever.
+    let leafWakes = world.leaf.wakes(world.leafMain);
     let question = (await world.ask("Q0")).messageId as string;
+    // A storage event can deliver the question before the send's caller resumes.
+    // Drive that ordering explicitly rather than relying on scheduler timing.
+    await world.leaf.deliver();
     let rounds = 0;
     for (; rounds < 12; rounds += 1) {
-      const leafWakes = world.leaf.wakes(world.leafMain);
       await world.leaf.deliver();
       if (world.leaf.wakes(world.leafMain) === leafWakes) break;
+      // Compare with the count before sending, since event-driven delivery can
+      // already have happened by the time ask() resolves.
+      leafWakes = world.leaf.wakes(world.leafMain);
       await world.tell(`A${rounds}`, question);
       await world.leaf.finishTurn(world.leafMain, { deliver: false });
       const answers = world.fromLeaf().length;

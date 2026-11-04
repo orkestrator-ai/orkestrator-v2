@@ -16,6 +16,22 @@ export function boundedTailCommand(file: string): string {
   return `tail -c ${DIAGNOSTIC_TAIL_MAX_BYTES} ${file} 2>/dev/null | tail -n ${DIAGNOSTIC_TAIL_MAX_LINES} || true`;
 }
 
+/** Where a relaunch keeps the log of the run before it. */
+export function previousContainerLogFile(file: string): string {
+  return file.replace(/\.log$/, ".prev.log");
+}
+
+/**
+ * Shell run before a relaunch, in place of deleting the log: the log that
+ * explains a crash is needed exactly then. A rename keeps the file's 0600 mode.
+ * An empty log has nothing to keep and must not displace one that does, and
+ * every outcome leaves the new run a clean log and exit status 0 where `rm -f`
+ * would have, because keeping old output must never stop a bridge starting.
+ */
+export function keepPreviousLogCommand(file: string): string {
+  return `if [ -s ${file} ]; then mv -f ${file} ${previousContainerLogFile(file)} 2>/dev/null || rm -f ${file}; fi`;
+}
+
 /**
  * Host-side second bound. Keeps the end of the text (the most recent output),
  * and says so when anything was dropped.

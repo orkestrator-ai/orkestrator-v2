@@ -1,4 +1,4 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const STORAGE_LOG_AREAS = defineLogAreas({
   storage: {
@@ -33,6 +33,11 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",
+      "lease.heartbeat-failed":
+        "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
+      "scrub.checkpoint-failed":
+        "Deleted content could not be scrubbed from the WAL because the truncating checkpoint failed or was blocked; the next checkpoint retries.",
+      ...THROTTLE_LOG_EVENTS,
     },
   },
 });

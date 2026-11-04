@@ -153,7 +153,7 @@ import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   assertExecutionPolicyNotWidened,
   PolicyWideningRefusedError,
@@ -1635,6 +1635,12 @@ async function handleAdmittedPrompt(
         outcome: "startup-timeout",
         error: error.message,
         ...(requestId ? { requestId } : {}),
+      });
+    }
+    if (error instanceof PromptRefusedError && !cancelRequestedFor(state, claim)) {
+      log.warn("turn.refused", {
+        sessionId: state.id,
+        error: formatLogError(error, { message: false }),
       });
     }
     // Pi refused the prompt before the run started, so nothing ran. Roll the

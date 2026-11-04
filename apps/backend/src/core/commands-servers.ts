@@ -1298,7 +1298,8 @@ async function startLocalServerAttempt(
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
   forwardBridgeOutput(child, `${kind}:${environmentId}`);
-  child.once("exit", () => {
+  child.once("exit", (code, signal) => {
+    localServers.reportBridgeExit(key, child, code, signal);
     // An unhealthy child may exit after its replacement has already claimed the
     // key. Only the process that still owns the entry may remove it.
     if (!localServers.releaseOwnership(key, child)) return;

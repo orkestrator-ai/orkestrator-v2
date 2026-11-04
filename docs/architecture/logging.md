@@ -253,6 +253,32 @@ Only stack frames are rewritten. An error's *message* keeps any path it holds, s
 as `ENOENT: no such file or directory, open '/Users/...'`. A frame relayed from
 another process goes through the same rewrite.
 
+## Failures that would otherwise leave no trace
+
+These fail without any visible error at the point they happen, so each has a line of
+its own. All carry scalars and formatted errors only. Where an error can quote a
+provider, a path or a prompt it goes through `formatLogError(error, { message: false })`,
+and no site logs a stderr tail.
+
+| Area | Event | Level | Written when |
+| --- | --- | --- | --- |
+| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process, so there is no regained line. |
+| `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
+| `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
+| `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
+| `bridge.pi`, `bridge.cursor` | `turn.failed` | `warn` | A turn ended in failure. A turn someone stopped stays out, even if stopping it made the run reject. |
+| `bridge.pi` | `turn.startup-timed-out`, `turn.refused` | `warn` | Pi did not start a turn in time, or refused it before any run. |
+| `bridge.cursor` | `turn.timed-out`, `turn.send-failed`, `turn.recovery-failed` | `warn` | A turn outlived its budget; `send` rejected, so the outcome is unknown; a run recovered after a restart failed. |
+| `bridge.acp` | `agent.exited` | `warn` | An agent process exited, with `code`, `signal` and `requested` (true when the bridge closed it normally). |
+| `bridge.acp` | `http.route-failed` | `warn` | A route answered 500. A deliberate `HttpError` of another status and a client that hung up stay out. |
+| `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
+| `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
+
+These lines reach disk only while **Save Logs to Disk** is on. A normal agent close
+also writes `agent.exited` at `warn`, on every session close, so filter on
+`requested=false` to find the exits nothing asked for. Stopping a turn sends
+`session/cancel` and keeps the process, so it writes no such line.
+
 ## Command failures
 
 `formatLogError` leaves a failed command with an exit code, which is rarely enough
@@ -683,6 +709,10 @@ time or level. So the launch scripts set `ORKESTRATOR_LOG_FORMAT=json` and pass 
 backend's `ORKESTRATOR_LOG_LEVEL`, and each line of that file is a record holding
 its own level and time. Unstructured output sits between them as plain text. An
 older image's bridge ignores both variables and keeps its plain lines.
+
+A relaunch keeps the run before it in `/tmp/<provider>-bridge.prev.log`, read with
+`previous: true` on the `get_*_server_log` commands
+([container-lifecycle.md](container-lifecycle.md#the-previous-run)).
 
 ### A level replaced at runtime
 

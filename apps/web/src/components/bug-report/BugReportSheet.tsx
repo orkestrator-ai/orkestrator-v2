@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bug,
@@ -181,10 +182,14 @@ export function BugReportSheet() {
         reading = false;
       }
     };
-    const timer = setInterval(() => void poll(), DRAFT_POLL_MS);
+    const stopPolling = startCoordinatedPoll({
+      resource: "bug-report-draft",
+      intervalMs: DRAFT_POLL_MS,
+      read: poll,
+    });
     return () => {
       current = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [apply, open, report]);
 

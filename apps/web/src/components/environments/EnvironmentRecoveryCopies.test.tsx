@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { RecoveryCopyList } from "@orkestrator/protocol/container-recovery";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -10,6 +10,9 @@ import {
   mockToastWarning,
   resetSonnerMocks,
 } from "../../../../../tests/mocks/sonner";
+
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 
@@ -65,6 +68,7 @@ const list: RecoveryCopyList = {
 describe("environment recovery copies", () => {
   afterEach(() => {
     cleanup();
+    resetReadCoordinatorForTests();
     invokeMock.mockImplementation(() => Promise.resolve());
   });
 
@@ -161,10 +165,12 @@ describe("environment recovery copies", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
       await waitFor(() => expect(expected).toHaveBeenCalledTimes(1));
       cleanup();
+      resetReadCoordinatorForTests();
     }
   });
 
   test("a copy produced while the list is open appears when the record changes", async () => {
+    const { clock, document: visibility, coordinator } = installFakeReadCoordinator();
     let revision = 12;
     let copies: RecoveryCopyList = { ...list, copies: [] };
     install({
@@ -187,10 +193,28 @@ describe("environment recovery copies", () => {
     );
     expect(screen.queryAllByText("Recovery copies")).toHaveLength(0);
     // A rebuild elsewhere commits: a new revision and a new copy.
+    const count = () =>
+      invokeMock.mock.calls.filter(([command]) => command === "get_container_lifecycle_snapshot")
+        .length;
+    const initial = count();
+    visibility.setVisibility("hidden");
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(count()).toBe(initial);
     copies = list;
     revision = 13;
+    visibility.setVisibility("visible");
+    await act(async () => {
+      await clock.advance(500);
+    });
     await screen.findByText("Container before moving to persistent storage", undefined, {
       timeout: 5_000,
     });
+    expect(count()).toBe(initial + 1);
+    cleanup();
+    await clock.advance(30_000);
+    expect(count()).toBe(initial + 1);
+    expect(coordinator.getDiagnostics().entries).toEqual([]);
   });
 });

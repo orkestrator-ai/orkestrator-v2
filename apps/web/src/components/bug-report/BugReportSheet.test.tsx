@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BugReportSnapshot, BugReportSummary } from "@orkestrator/protocol/bug-report";
 import * as backend from "@/lib/backend";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realNativeAgent from "@/components/native-agent";
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { createSessionKey } from "@/lib/utils";
@@ -207,16 +208,11 @@ describe("BugReportSheet", () => {
 
   for (const mutation of ["discard", "assign"] as const) {
     test(`ignores a poll that completes after ${mutation}`, async () => {
-      let tick!: () => void;
-      const interval = globalThis.setInterval;
-      spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, ms: number) => {
-        if (ms === 3000) {
-          tick = callback;
-          return 123456;
-        }
-        return interval(callback, ms);
-      }) as typeof setInterval);
-      spyOn(globalThis, "clearInterval").mockImplementation(() => undefined);
+      let tick!: () => unknown;
+      spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read }) => {
+        tick = read;
+        return () => undefined;
+      });
       const get = spyOn(backend, "getBugReport").mockResolvedValue(snapshot({}));
       spyOn(backend, "discardBugReport").mockResolvedValue(snapshot(null));
       spyOn(backend, "assignBugReportAgent").mockResolvedValue(snapshot({ agent: "claude" }));
@@ -229,7 +225,9 @@ describe("BugReportSheet", () => {
             release = resolve;
           }),
       );
-      act(() => tick());
+      act(() => {
+        void tick();
+      });
       if (mutation === "discard") {
         fireEvent.click(screen.getByRole("button", { name: "Discard" }));
         fireEvent.click(screen.getByRole("button", { name: "Discard report?" }));

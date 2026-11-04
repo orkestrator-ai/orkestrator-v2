@@ -630,17 +630,21 @@ export function useFilesPanel() {
 
   const loadFolder = useCallback(
     (directory: string, reload: boolean): Promise<void> =>
-      loadFileSubtree(environmentSnapshotKey, directory, reload, async () => {
+      loadFileSubtree(environmentSnapshotKey, directory, reload, async (knownDigest) => {
         if (isLocalEnvironment && worktreePath) {
-          return backend.getLocalFileSubtree(worktreePath, directory);
+          return backend.getLocalFileSubtreeSnapshot(worktreePath, directory, knownDigest);
         }
-        return containerId ? backend.getFileSubtree(containerId, directory) : null;
+        return containerId
+          ? backend.getFileSubtreeSnapshot(containerId, directory, knownDigest)
+          : null;
       }),
     [isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey],
   );
 
   // Subtrees are outside the bounded snapshot's digest. Refresh every visible
   // loaded, failed or pending directory, even when that digest is unchanged.
+  // Each read carries its own directory's digest, so an unchanged one returns
+  // no contents and leaves the merged tree alone.
   const reloadFolders = useCallback(async () => {
     const state = useFilesPanelStore.getState();
     if (state.fileSubtreeKey !== environmentSnapshotKey) return;

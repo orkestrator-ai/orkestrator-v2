@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
@@ -127,13 +128,11 @@ describe("Docker settings section", () => {
   test("Docker stopping unmounts the panel and stops its polling until it returns", async () => {
     const callbacks = new Map<number, () => void>();
     let nextId = 0;
-    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
-      callbacks.set(++nextId, callback);
-      return nextId;
-    }) as typeof setInterval);
-    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
-      callbacks.delete(id);
-    }) as typeof clearInterval);
+    spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read }) => {
+      const id = ++nextId;
+      callbacks.set(id, read);
+      return () => callbacks.delete(id);
+    });
     try {
       const calls = install(unknownStats, []);
       const view = render(
@@ -172,13 +171,11 @@ describe("Docker settings section", () => {
   test("remote availability ignores the window status and stops reads when remote Docker stops", async () => {
     const callbacks = new Map<number, { callback: () => void; delay: number | undefined }>();
     let nextId = 0;
-    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
-      callbacks.set(++nextId, { callback, delay });
-      return nextId;
-    }) as typeof setInterval);
-    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
-      callbacks.delete(id);
-    }) as typeof clearInterval);
+    spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read, intervalMs }) => {
+      const id = ++nextId;
+      callbacks.set(id, { callback: read, delay: intervalMs });
+      return () => callbacks.delete(id);
+    });
     let available = true;
     const calls: string[] = [];
     const remote = mock(async (_command: string, args: Record<string, unknown> = {}) => {
@@ -230,14 +227,12 @@ describe("Docker settings section", () => {
     const callbacks = new Map<number, () => void>();
     const panelTimers: Array<() => void> = [];
     let nextId = 0;
-    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
-      if (delay === 5_000) panelTimers.push(callback);
-      callbacks.set(++nextId, callback);
-      return nextId;
-    }) as typeof setInterval);
-    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
-      callbacks.delete(id);
-    }) as typeof clearInterval);
+    spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read, intervalMs }) => {
+      if (intervalMs === 5_000) panelTimers.push(read);
+      const id = ++nextId;
+      callbacks.set(id, read);
+      return () => callbacks.delete(id);
+    });
     let probeState: "available" | "error" | "stopped" = "available";
     let statsReads = 0;
     window.orkestratorPortal = {
@@ -308,14 +303,12 @@ describe("Docker settings section", () => {
     const callbacks = new Map<number, () => void>();
     const panelTimers: Array<() => void> = [];
     let nextId = 0;
-    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delay?: number) => {
-      if (delay === 5_000) panelTimers.push(callback);
-      callbacks.set(++nextId, callback);
-      return nextId;
-    }) as typeof setInterval);
-    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
-      callbacks.delete(id);
-    }) as typeof clearInterval);
+    spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read, intervalMs }) => {
+      if (intervalMs === 5_000) panelTimers.push(read);
+      const id = ++nextId;
+      callbacks.set(id, read);
+      return () => callbacks.delete(id);
+    });
     let failing = true;
     const reads: string[] = [];
     window.orkestratorPortal = {

@@ -14,6 +14,9 @@ import {
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 
 import { invoke as nativeInvoke } from "@/lib/native/backend";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import * as events from "@/lib/native/events";
 import type { Environment } from "@/types";
 import {
@@ -78,11 +81,11 @@ function emitLifecycle(environmentId: string, next: ContainerLifecycleSnapshot) 
   } satisfies ContainerLifecycleEvent);
 }
 
-const POLL_DELAYS = new Set<unknown>([REBUILD_POLL_MS, REBUILD_BACKSTOP_POLL_MS]);
-
-/** The section's own poll intervals, leaving out the test library's timers. */
-function pollDelays(intervals: { mock: { calls: unknown[][] } }): unknown[] {
-  return intervals.mock.calls.map(([, delay]) => delay).filter((delay) => POLL_DELAYS.has(delay));
+/** The intervals the section has polled at, oldest first. */
+function pollDelays(polls: {
+  mock: { calls: Array<[coordinatedPoll.CoordinatedPollOptions]> };
+}): unknown[] {
+  return polls.mock.calls.map(([{ intervalMs }]) => intervalMs);
 }
 
 function section(nextEnvironment = environment) {
@@ -224,7 +227,7 @@ describe("environment rebuild section lifecycle events", () => {
   });
 
   test("polls only as a slow backstop while a rebuild runs with events live", async () => {
-    const intervals = spyOn(globalThis, "setInterval");
+    const intervals = spyOn(coordinatedPoll, "startCoordinatedPoll");
     current = snapshot(1, "copying");
     renderSection();
     await screen.findByText(/Copying and verifying files/);
@@ -237,29 +240,33 @@ describe("environment rebuild section lifecycle events", () => {
   });
 
   test("the slow backstop installs a newer snapshot when its event is missed", async () => {
-    const intervals = spyOn(globalThis, "setInterval");
+    const intervals = spyOn(coordinatedPoll, "startCoordinatedPoll");
     current = snapshot(1, "preflight");
     renderSection();
     await screen.findByText(/Checking image and free space/);
     await waitFor(() => expect(pollDelays(intervals).at(-1)).toBe(REBUILD_BACKSTOP_POLL_MS));
     const tick = intervals.mock.calls.findLast(
-      ([, delay]) => delay === REBUILD_BACKSTOP_POLL_MS,
-    )?.[0] as () => void;
+      ([{ intervalMs }]) => intervalMs === REBUILD_BACKSTOP_POLL_MS,
+    )![0].read;
 
     // The backend advances without delivering a lifecycle event or resync.
     current = snapshot(2, "copying");
-    await act(async () => tick());
+    await act(async () => {
+      await tick();
+    });
     await screen.findByText(/Copying and verifying files/);
     expect(reads).toBe(2);
 
     current = snapshot(3, null);
-    await act(async () => tick());
+    await act(async () => {
+      await tick();
+    });
     await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
     expect(reads).toBe(3);
   });
 
   test("keeps the quick poll when the event subscription fails", async () => {
-    const intervals = spyOn(globalThis, "setInterval");
+    const intervals = spyOn(coordinatedPoll, "startCoordinatedPoll");
     spyOn(events, "listen").mockImplementation(async () => {
       throw new Error("transport closed");
     });
@@ -270,5 +277,27 @@ describe("environment rebuild section lifecycle events", () => {
     const delays = pollDelays(intervals);
     expect(delays).toContain(REBUILD_POLL_MS);
     expect(delays).not.toContain(REBUILD_BACKSTOP_POLL_MS);
+  });
+
+  test("a rebuild's poll stops while the window is hidden and reads on return", async () => {
+    const { clock, document } = installFakeReadCoordinator();
+    current = snapshot(1, "copying");
+    renderSection();
+    await screen.findByText(/Copying and verifying files/);
+    await act(async () => clock.advance(REBUILD_BACKSTOP_POLL_MS));
+    const before = reads;
+    expect(before).toBeGreaterThan(1);
+
+    act(() => document.setVisibility("hidden"));
+    await act(async () => clock.advance(REBUILD_BACKSTOP_POLL_MS * 10));
+    expect(reads).toBe(before);
+
+    current = snapshot(2, "preflight");
+    act(() => document.setVisibility("visible"));
+    await act(async () => clock.advance(1_000));
+    expect(reads).toBe(before + 1);
+    await screen.findByText(/Checking image and free space/);
+    cleanup();
+    resetReadCoordinatorForTests();
   });
 });

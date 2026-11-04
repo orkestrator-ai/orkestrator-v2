@@ -32,14 +32,19 @@ lists are the reason these engines are built the way they are. In short:
 2. **One process set per environment.** Environments differ in filesystem,
    container, `PATH`, credentials, and installed toolchains, so they never share
    an agent process.
-3. **Every child is authenticated.** The backend generates a 32-byte token per
-   environment and passes it in as `CLAUDE_BRIDGE_TOKEN`, `CODEX_BRIDGE_TOKEN`,
-   `CURSOR_BRIDGE_TOKEN`, `ACP_BRIDGE_TOKEN`, `PI_BRIDGE_TOKEN`, or
-   `OPENCODE_SERVER_PASSWORD`. A missing or blank token
-   makes a bridge fall back to a random value nobody holds, so it fails closed
-   rather than open. The Claude and Codex bridges delete the variable from
-   `process.env` after reading it, so a spawned agent child cannot inherit the
-   bridge's own credential.
+3. **Every child is authenticated.** The backend generates a 32-byte `okb_` token
+   per environment and gives a bridge only its SHA-256, as `CLAUDE_BRIDGE_TOKEN_SHA256`,
+   `CODEX_BRIDGE_TOKEN_SHA256`, `CURSOR_BRIDGE_TOKEN_SHA256`, `ACP_BRIDGE_TOKEN_SHA256`
+   or `PI_BRIDGE_TOKEN_SHA256`. (OpenCode takes `OPENCODE_SERVER_PASSWORD`, which it
+   compares itself, so it is readable by its agent: to-do
+   [4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md).)
+   The agent shares the bridge's uid, so the bridge holds no token for it to read,
+   and marks itself non-dumpable so it cannot read one from a request in flight. On
+   an image with `bridge-credential=1` the token is in root-only
+   `/run/orkestrator-bridge`; an older image's bridge keeps its token in `/tmp` and in
+   its environment until the container is rebuilt. `bridges/AGENTS.md` has the rules.
+   A missing or blank credential makes a bridge fall back to a random value nobody
+   holds, so it fails closed rather than open.
 4. **Live events are incremental updates over authoritative snapshots.** Each
    engine exposes both a stream and a way to re-read current state, because a
    tab that was inactive must be able to catch up from the snapshot instead of

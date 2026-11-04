@@ -90,7 +90,7 @@ The material risks are concentrated in four themes:
 | H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Partly fixed: the token is out of the cookie; a leaked session is accepted, and the `__Host-` name waits on iOS (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
-| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
+| H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Fixed, with a stated limit (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
 | M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flipped on the branch, route retirement open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
@@ -250,7 +250,19 @@ realpath confinement, instead of bind-mounting them.
 
 ### H4. An agent can read its own bridge-control token, then self-approve or widen its execution policy
 
-**Status:** Partly fixed (2026-11-03). Every bridge now deletes its token from
+**Status:** Fixed, with a stated limit (2026-11-04). A bridge now holds only a
+SHA-256 of its token and is non-dumpable, on an image with `bridge-credential=1`
+the token is in a root-only file, and a user's wider policy restarts an idle
+bridge and resumes
+([todo 3930](../todo/containers-and-environments/3930-bridge-credential-out-of-agent-uid.md)).
+The agent's uid can no longer read a token, answer an approval or clear
+`readOnly`. It can still kill the bridge and catch a token on its port, or plant
+code for the next start
+([todo 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md));
+OpenCode has no bridge
+([todo 4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md));
+and containers on older images keep the old behaviour until rebuilt.
+The rest of this status is the earlier state (2026-11-03). Every bridge now deletes its token from
 `process.env` at startup, so nothing it spawns through `node:child_process` or
 an explicit `env` inherits it (Codex, Pi, Cursor and ACP join Claude). Every
 bridge route that can change a live session's policy is narrow-only: a policy
@@ -671,7 +683,7 @@ write and terminal calls when the policy denies them.
 | ID | Title | Where | Notes / fix | Status |
 | --- | --- | --- | --- | --- |
 | L1 | `.env` seeding and `filesToCopy` write through symlinks in a fresh local worktree | `commands-environment.ts:2214-2221`, `commands-project-files.ts:80-82` | A branch-committed `.env` symlink to a non-existent path makes the backend copy the user's real `.env` there. `filesToCopy` can overwrite existing host files. Use `writeConfinedFile(..., {exclusive:true})` or `O_NOFOLLOW\|O_EXCL`. | Fixed: seeding checks with `lstat`, and `filesToCopy` refuses a destination with a link at or above it (`unlinkedDestination`) |
-| L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Reported |
+| L2 | Bridge and agent-MCP tokens passed in `docker exec` argv | `commands-containers.ts:921-947`, `commands-registry-servers.ts:407-699` | Visible to local users via `ps`/`/proc` while the CLI runs. Use stdin, as `syncContainerCursorApiKey` already does. | Fixed (2026-11-04): `launchContainerScript` (`container-bridge-credential.ts`) delivers them on stdin |
 | L3 | Only the `runAsNode` Electron fuse is set | `package.json:52-54` | `--inspect` works in packaged builds, which lets a local process inherit the app's macOS TCC grants. Disable `enableNodeCliInspectArguments` and `enableNodeOptionsEnvironmentVariable`, and enable asar integrity and `onlyLoadAppFromAsar`. | Fixed (2026-11-03): `build.electronFuses` turns off `runAsNode`, `enableNodeOptionsEnvironmentVariable` and `enableNodeCliInspectArguments`, and turns on `enableEmbeddedAsarIntegrityValidation` and `onlyLoadAppFromAsar`; the release configs inherit them. Checked on a local ad-hoc `--mac --dir` build: `@electron/fuses read` shows those values, Info.plist carries `ElectronAsarIntegrity`, `--inspect=0` opens no inspector (stock Electron does), a tampered `app.asar` header aborts with "Integrity check failed", and an `app/` folder in place of `app.asar` is not loaded. Asar integrity has no effect on Linux (Electron supports it on macOS and Windows). Only `package:linux:unpacked:test`, the Playwright packaged spec's own uninstalled build, turns the inspect fuse back on. Repeatable check: `mise run test:package:security` builds the unsigned shipping `--dir` package, reads its fuse wire (`scripts/verify-packaged-security.ts`, report in `output/package-security/`) and runs `packaged-security-electron.spec.ts`. |
 | L4 | `ELECTRON_DEV=1` is honoured in packaged builds | `apps/desktop/electron/main.ts:177` | With `VITE_DEV_SERVER_URL`, a packaged app can load a remote page as the trusted renderer. Gate on `!app.isPackaged`. | Fixed (2026-11-03): `desktopDevMode` (`apps/desktop/electron/dev-mode.ts`) enables development mode, and returns the dev-server URL, only when `!app.isPackaged`; a packaged app logs `desktop dev-mode.ignored-packaged`. Checked on a local ad-hoc build: with `ELECTRON_DEV=1` and `VITE_DEV_SERVER_URL` pointed at a recording server, the packaged app loaded `Resources/web/index.html` and made no request to it, while the unpacked dev bundle still loaded the dev server. `mise run test:package:security` repeats the packaged half (`packaged-security-electron.spec.ts`). |
 | L5 | Renderer and realm sessions keep Electron's default permission handler, which grants every request | `browser-preview-startup.ts`, `artifact-host-session.ts` only | Default-deny on renderer partitions. | Reported |
@@ -722,8 +734,9 @@ write and terminal calls when the policy denies them.
   covers the five `get_*_server_log` commands and the bridge startup-failure
   error in `commands-containers.ts`. The byte and line caps are unchanged. A
   token that the source's `tail -c` cut through has lost its prefix and is not
-  caught. Still open: the `okb_` prefix for internal tokens. Without it,
-  redaction cannot recognise a bridge, gateway or MCP token by its shape.
+  caught. The rest was fixed on 2026-11-04: bridge and agent-tools tokens carry
+  `okb_` and `oka_` prefixes and `secret-redaction.ts` catches them. The gateway
+  token keeps its format, which is part of the client contract.
 
 ## 7. Controls reviewed that look correct
 

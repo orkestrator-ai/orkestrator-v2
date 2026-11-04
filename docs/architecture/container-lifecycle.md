@@ -1609,6 +1609,43 @@ Events for one container coalesce, so a `die`/`stop`/`destroy` burst
 reconciles at most twice. A replayed event after a follower restart is a
 second reconciliation and nothing more.
 
+## Bridge credential (`bridge-credential=1`)
+
+A bridge shares the agent's uid, so it holds no secret: the backend gives it the
+SHA-256 of its token and keeps the token where only root in the container can
+read it (`container-bridge-credential.ts`). The rules for bridges are in
+[`bridges/AGENTS.md`](../../bridges/AGENTS.md).
+
+| Where | What it holds | Who reads it |
+| --- | --- | --- |
+| `/run/orkestrator-bridge/<kind>-token`, 0600 in a 0700 root directory | The token | The backend, with a root exec |
+| The bridge's environment | `<TOKEN_ENV>_SHA256`, removed from `process.env` at start | Anything, harmlessly |
+| The bridge's memory | The token, briefly, on each request | Nobody: the bridge is non-dumpable, so `/proc/<pid>/{environ,mem,fd}` belong to root and a same-uid ptrace is refused |
+
+- **Nothing reaches `docker exec` argv.** The root file is written on stdin. What
+  a start script still needs as a secret (the agent-tools token, and a plain token
+  on an older image) goes on stdin to a mode 600 file that the script sources and
+  deletes first (`launchContainerScript`). `docker exec -d` has no stdin of its
+  own, hence the separate exec.
+- **Nothing the agent can plant runs through the checkout or `/opt`.** The bridge
+  runs from root-owned `/opt` with `bun --config=/dev/null`. Its working directory
+  stays `/workspace`.
+- **Root never reads a `node`-writable path.** `readContainerBridgeToken` reads the
+  root file as root, and only then the old `/tmp` file as `node`, because `node` can
+  make that a symlink to anything.
+- **An older image keeps what it had.** A container whose image lacks the capability
+  (or whose manifest cannot be read) keeps a `node`-readable token in `/tmp` and in
+  the bridge's environment until it is rebuilt. Tokens still reach it on stdin, and
+  a bridge an older backend started keeps working unprefixed
+  ([version-compatibility.md](version-compatibility.md#register)).
+
+What the agent's uid can still do is in
+[to-do 4980](../todo/containers-and-environments/4980-agent-uid-process-control.md):
+kill the bridge and listen on its port, or plant code for the next start through
+its login shell or runtime environment. OpenCode has no bridge, so its password
+stays readable ([4981](../todo/containers-and-environments/4981-opencode-password-readable-by-agent.md)).
+Qualified by `apps/backend/tests/bridge-credential-docker.test.ts`.
+
 ## Container worktree signal (`container-worktree-signal=1`)
 
 A container's Files panel and diff counts have no host-side watcher. Without

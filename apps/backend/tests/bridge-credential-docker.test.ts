@@ -96,22 +96,14 @@ async function statusFromAgent(port: number, route: string, bearer: string): Pro
   );
 }
 
-beforeAll(async () => {
-  if (!ENABLED) return;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-bridge-credential-"));
-  dataDir = path.join(root, "data");
-  home = path.join(root, "home");
-  await fs.mkdir(dataDir);
-  await fs.mkdir(home);
-  // No host login can reach the container, whatever this machine holds.
-  process.env.HOME = home;
-  homeDirectory = spyOn(os, "homedir").mockReturnValue(home);
+/** A labelled container on `image`'s real entrypoint, with its bridge commands. */
+async function startFixture(image: string, name: string) {
   const owner = dockerOwnerNamespace(dataDir);
-  containerId = await docker([
+  const id = await docker([
     "run",
     "-d",
     "--name",
-    `ork-${RUN}`,
+    `ork-${RUN}-${name}`,
     "--label",
     RUN_LABEL,
     "--label",
@@ -125,21 +117,21 @@ beforeAll(async () => {
     "-e",
     "GIT_URL=https://example.invalid/none.git",
     ...BRIDGES.flatMap((bridge) => ["-p", `127.0.0.1::${bridge.port}`]),
-    IMAGE,
+    image,
   ]);
-  await waitForContainerBoot(containerId, { timeoutMs: 120_000 });
-  const imageId = await docker(["inspect", "--format", "{{.Image}}", containerId]);
+  await waitForContainerBoot(id, { timeoutMs: 120_000 });
+  const imageId = await docker(["inspect", "--format", "{{.Image}}", id]);
   const { createCommandRegistry, createContext, createEnvironment } = await createCommandFixtures();
   const environment = createEnvironment({
-    id: `env-${RUN}`,
+    id: `env-${RUN}-${name}`,
     environmentType: "containerized",
-    containerId,
+    containerId: id,
     status: "running",
     containerLifecycle: {
       schemaVersion: 1,
       revision: 1,
       lastRuntimeGeneration: 1,
-      runtime: { containerId, runtimeGeneration: 1, owner, imageId },
+      runtime: { containerId: id, runtimeGeneration: 1, owner, imageId },
       storage: { format: "legacy-layer", workspaceGeneration: 1 },
       outcomes: [],
     },
@@ -148,7 +140,26 @@ beforeAll(async () => {
   context.runtimeFlavor = "agent-test";
   context.credentialSources = new Set();
   const commands = createCommandRegistry();
-  invoke = async (name, args) => commands.get(name)?.(args, context);
+  return {
+    id,
+    invoke: async (command: string, args: Record<string, unknown>) =>
+      commands.get(command)?.(args, context),
+  };
+}
+
+beforeAll(async () => {
+  if (!ENABLED) return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-bridge-credential-"));
+  dataDir = path.join(root, "data");
+  home = path.join(root, "home");
+  await fs.mkdir(dataDir);
+  await fs.mkdir(home);
+  // No host login can reach the container, whatever this machine holds.
+  process.env.HOME = home;
+  homeDirectory = spyOn(os, "homedir").mockReturnValue(home);
+  const fixture = await startFixture(IMAGE, "capable");
+  containerId = fixture.id;
+  invoke = fixture.invoke;
 }, LIVE_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -281,6 +292,49 @@ describe("bridge credential on a real container", () => {
   );
 
   live(
+    "a user's wider policy is refused on a live session, and taken after a backend restart",
+    async () => {
+      const ask = {
+        id: "interactive-container",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "restricted",
+      };
+      const wider = { ...ask, approvals: "auto-approve", sandbox: "none" };
+      const create = (bridge: { hostPort: number; authToken: string }, policy: unknown) =>
+        fetch(`http://127.0.0.1:${bridge.hostPort}/session/create`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${bridge.authToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ clientSessionKey: "widening", policy }),
+        });
+      const before = (await invoke("start_pi_server", { containerId })) as {
+        hostPort: number;
+        authToken: string;
+      };
+      expect((await create(before, ask)).status).toBe(201);
+
+      const refused = await create(before, wider);
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ code: "policy-widening-refused" });
+
+      // What the backend does on that refusal, on the real bridge and token store.
+      await invoke("stop_pi_server", { containerId });
+      const after = (await invoke("start_pi_server", { containerId })) as {
+        hostPort: number;
+        authToken: string;
+      };
+      expect(after.authToken).not.toBe(before.authToken);
+      expect((await create(after, wider)).status).toBe(201);
+      await invoke("stop_pi_server", { containerId });
+    },
+    LIVE_TIMEOUT_MS,
+  );
+
+  live(
     "a bridge an older backend started, with an unprefixed token, keeps working",
     async () => {
       await invoke("stop_pi_server", { containerId });
@@ -315,3 +369,37 @@ describe("bridge credential on a real container", () => {
     LIVE_TIMEOUT_MS,
   );
 });
+
+/**
+ * The image a container is already on may predate all of this. Opt in with
+ * ORKESTRATOR_QUALIFICATION_OLDER_IMAGE naming one without `bridge-credential`.
+ */
+const OLDER_IMAGE = process.env.ORKESTRATOR_QUALIFICATION_OLDER_IMAGE?.trim() ?? "";
+const liveOnOlderImage = ENABLED && OLDER_IMAGE ? test : test.skip;
+
+liveOnOlderImage(
+  "an older image's bridge still starts, authenticates and is found again",
+  async () => {
+    const { id, invoke: invokeOlder } = await startFixture(OLDER_IMAGE, "older");
+    const result = (await invokeOlder("start_pi_server", { containerId: id })) as {
+      hostPort: number;
+      wasRunning: boolean;
+      authToken: string;
+    };
+    expect(result.wasRunning).toBe(false);
+    // Its bridge takes any token, so a prefixed one works; the file holds it.
+    expect(result.authToken).toMatch(/^okb_/);
+    const auth = await fetch(`http://127.0.0.1:${result.hostPort}/global/auth-check`, {
+      headers: { authorization: `Bearer ${result.authToken}` },
+    });
+    expect(auth.status).toBe(200);
+    expect(await readContainerBridgeToken(id, "pi")).toBe(result.authToken);
+    const again = (await invokeOlder("start_pi_server", { containerId: id })) as {
+      wasRunning: boolean;
+      authToken: string;
+    };
+    expect(again).toMatchObject({ wasRunning: true, authToken: result.authToken });
+    await invokeOlder("stop_pi_server", { containerId: id });
+  },
+  LIVE_TIMEOUT_MS,
+);

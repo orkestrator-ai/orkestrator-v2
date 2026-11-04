@@ -26,6 +26,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
   excerpt: string | undefined;
   requestPending = false;
   backgroundWorkPending = false;
+  goalRunning = false;
   collected: string[] = [];
 
   async workerState(): Promise<RemoteWorkerState> {
@@ -36,6 +37,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
       name: "remote-worker",
       requestPending: this.requestPending,
       backgroundWorkPending: this.backgroundWorkPending,
+      goalRunning: this.goalRunning,
     };
   }
 
@@ -159,6 +161,22 @@ describe("remote delegations", () => {
     expect(notice).toContain('"nodeId": "bk_leaf"');
     expect(notice).toContain("Last message: All green.");
     expect(world.wakes(main)).toBe(1);
+  });
+
+  test("an idle turn between a goal's iterations is not the worker's answer", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+
+    remote.tab = "idle";
+    remote.goalRunning = true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    expect(world.wakes(main)).toBe(0);
+
+    // The goal stopped: nothing will start another turn.
+    remote.goalRunning = false;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
   });
 
   test("idle remote turns hold while background work runs, then close when it ends", async () => {

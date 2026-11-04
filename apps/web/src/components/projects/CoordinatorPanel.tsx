@@ -19,24 +19,18 @@ import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
 import { useCoordinatorSelection } from "./useCoordinatorSelection";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
+import { CoordinatorConversationPane } from "./CoordinatorConversationPane";
 import { CoordinatorToolbar } from "./CoordinatorToolbar";
 import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
-import {
-  COORDINATOR_COMPOSER_PLACEHOLDER,
-  COORDINATOR_STARTER_PROMPTS,
-  CoordinatorBanner,
-} from "./CoordinatorPanelNotices";
+import { CoordinatorBanner } from "./CoordinatorPanelNotices";
 import {
   AGENT_PLATFORM_LABELS,
   AGENT_PLATFORMS,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
-import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
-import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
 import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
 import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
 import {
@@ -498,125 +492,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       )
       .finally(() => setOperation(null));
   };
-  // One group's front conversation. Only the front tab of each group is
-  // mounted; the backend owns the session, so a tab brought forward rehydrates.
-  const renderConversation = (conversationId: string | null, paneFocused: boolean) => {
-    const conversation = conversationId ? conversationById.get(conversationId) : undefined;
-    if (!conversation) {
-      return (
-        <div className="grid h-full place-items-center text-center">
-          <div>
-            <p className="text-sm text-muted-foreground">
-              No coordinator is open. Mail for the coordinator will start one with the default
-              agent.
-            </p>
-            <Button
-              className="mt-3"
-              variant="outline"
-              disabled={operation !== null}
-              onClick={createConversation}
-            >
-              <Plus className="size-4" />
-              {newConversationLabel}
-            </Button>
-          </div>
-        </div>
-      );
-    }
-    const providerState = conversation.agent
-      ? snapshot.providerAvailability[conversation.agent]
-      : undefined;
-    // A banner over the transcript rather than a replacement for it: the
-    // conversation stays readable while its platform is unavailable.
-    const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
-    // Scoped to the conversation that produced it, so another group cannot
-    // replay one conversation's first prompt into its own.
-    const launch = pendingLaunches.get(conversation.id);
-    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
-    return (
-      <div key={conversation.id} className="flex h-full min-h-0 flex-col">
-        {providerUnavailable && conversation.agent ? (
-          <CoordinatorBanner
-            tone="warning"
-            action={
-              <Button size="sm" variant="outline" onClick={() => void load()}>
-                <RotateCcw className="size-3.5" />
-                Retry
-              </Button>
-            }
-          >
-            <span className="font-medium">
-              {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
-            </span>{" "}
-            <span className="text-muted-foreground">
-              {providerState?.reason ?? snapshot.workspace.lastStartupError}
-            </span>
-          </CoordinatorBanner>
-        ) : null}
-        <AgentMailBanner
-          environmentId={environmentId}
-          tabId={conversation.tabId}
-          agentAvailable={availablePlatforms.length > 0}
-        />
-        <div className="relative min-h-0 flex-1">
-          <LazyLoadBoundary
-            loadingFallback={
-              <div className="grid h-full place-items-center">
-                <Loader2 className="size-6 animate-spin text-muted-foreground" />
-              </div>
-            }
-            renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
-          >
-            <LazyAgentNativeTab
-              tabId={conversation.tabId}
-              data={{
-                platform: conversation.agent,
-                environmentId,
-                isLocal: true,
-                sessionId: conversation.providerSessionId,
-              }}
-              isActive
-              ownsGlobalShortcuts={paneFocused}
-              executionPolicy="coordinator-read-only"
-              coordinatorProjectId={projectId}
-              coordinatorWorkspacePath={snapshot.projectPath}
-              availablePlatforms={availablePlatforms}
-              platformNotes={platformNotes}
-              composerPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
-              connectionEnabled={
-                snapshot.workspace.lifecycleState === "ready" && providerState?.available !== false
-              }
-              // Only the main coordinator delegates, so only it is offered work
-              // that has to run in a pipeline or environment.
-              {...(conversation.role === "main"
-                ? { unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS }
-                : {})}
-              emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
-              onAssignPlatform={
-                conversation.agent
-                  ? undefined
-                  : (platform, prompt, options) =>
-                      startConversation(conversation, platform, options, prompt)
-              }
-              beforeSend={
-                conversation.role === "side" ? undefined : () => confirmUpstreamMerge(conversation)
-              }
-              {...(launch
-                ? {
-                    initialPrompt: launch.prompt,
-                    initialAgentModel: launch.modelId,
-                    initialReasoningEffort: launch.reasoningId,
-                    initialConversationMode: launch.mode,
-                    initialFastMode: launch.fastMode,
-                    initialExecutionProfileId: launch.executionProfileId,
-                  }
-                : {})}
-            />
-          </LazyLoadBoundary>
-        </div>
-      </div>
-    );
-  };
   const paused = snapshot.workspace.lifecycleState === "paused";
   const setPaused = (pause: boolean) => {
     setOperation("conversation");
@@ -809,9 +684,28 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                     {newConversationLabel}
                   </Button>
                 )}
-                renderContent={(pane, paneFocused) =>
-                  renderConversation(pane.activeConversationId, paneFocused)
-                }
+                renderContent={(pane, paneFocused) => {
+                  const conversationId = pane.activeConversationId;
+                  return (
+                    <CoordinatorConversationPane
+                      conversation={
+                        conversationId ? conversationById.get(conversationId) : undefined
+                      }
+                      paneFocused={paneFocused}
+                      projectId={projectId}
+                      snapshot={snapshot}
+                      availablePlatforms={availablePlatforms}
+                      platformNotes={platformNotes}
+                      launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
+                      startConversation={startConversation}
+                      confirmUpstreamMerge={confirmUpstreamMerge}
+                      conversationBusy={operation !== null}
+                      newConversationLabel={newConversationLabel}
+                      onCreateConversation={createConversation}
+                      onRetry={() => void load()}
+                    />
+                  );
+                }}
               />
             ) : null}
           </div>

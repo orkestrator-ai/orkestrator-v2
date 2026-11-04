@@ -274,6 +274,11 @@ export class PrAutoMergeController {
           ? await this.merge(environment)
           : await this.launchResolve(environment);
       if (!attempted || this.closed) return;
+      // Merge cleanup can remove the environment before the command returns.
+      if (!(await this.options.storage.getEnvironment(environmentId))) {
+        this.clearRetry(environmentId);
+        return;
+      }
       await this.recordError(environment, null);
       this.holdAttempt(environmentId, key, false);
     } catch (error) {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 function failure(page: Page) {
@@ -54,8 +55,27 @@ test("a failure too long for the bar reads in full in a scrollable tooltip", asy
 test("the tooltip opens from the keyboard", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "this asserts the desktop toolbar");
   await page.goto("/auto-merge-error?message=long");
-  await failure(page).focus();
-  await expect(page.locator("p").filter({ hasText: "Auto-merge:" })).toBeVisible();
+  const label = failure(page);
+  await label.focus();
+  const tooltip = page.locator("p").filter({ hasText: "Auto-merge:" });
+  await expect(tooltip).toBeVisible();
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/auto-merge-keyboard-before.png"),
+  });
+  for (const key of ["ArrowDown", "PageDown", "End"]) {
+    await label.press(key);
+    await expect.poll(() => tooltip.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await expect(tooltip).toBeVisible();
+    await expect(label).toBeFocused();
+  }
+  await expect
+    .poll(() => tooltip.evaluate((el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 1))
+    .toBe(true);
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/auto-merge-keyboard-end.png"),
+  });
+  await label.press("Home");
+  await expect.poll(() => tooltip.evaluate((el) => el.scrollTop)).toBe(0);
 });
 
 test("the phone toolbar shows a long failure whole, with no tooltip to rely on", async ({

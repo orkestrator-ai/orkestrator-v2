@@ -454,7 +454,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     },
     [projectId, refreshView, setGit],
   );
-  const { pendingLaunch, startConversation } = useCoordinatorLaunches({
+  const { pendingLaunches, startConversation } = useCoordinatorLaunches({
     projectId,
     snapshot,
     setSnapshot,
@@ -632,7 +632,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     const closeUnused = unusedCoordinatorConversationIds(
       snapshot.workspace,
       useNativeComposeStore.getState().drafts,
-      pendingLaunch?.conversationId,
+      pendingLaunches,
     );
     void backend
       .createCoordinatorConversation(projectId, undefined, closeUnused)
@@ -679,7 +679,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
     // Scoped to the conversation that produced it, so another group cannot
     // replay one conversation's first prompt into its own.
-    const launch = pendingLaunch?.conversationId === conversation.id ? pendingLaunch : null;
+    const launch = pendingLaunches.get(conversation.id);
     const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
     return (
       <div key={conversation.id} className="flex h-full min-h-0 flex-col">

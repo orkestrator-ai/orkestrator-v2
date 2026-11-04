@@ -1,5 +1,27 @@
 # UI performance probe Chromium startup timeout
 
+## R6a review repair recurrence — 2026-11-04
+
+Preparation at `720ef1bed740706a65bd311e9e74f8bf78e77b2b` ran
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+`in-page deadlines > (unnamed)` failed in a lifecycle hook at 5004.94 ms;
+root/support totals were 3,529 passed and one failed. The scheduler selected
+the worker configuration. Original output is preserved at
+`.orkestrator/review-artifacts/review-validation-6f788315-ee40-4537-8a7a-e80b8b9652b4/validation-04.stderr.txt`
+(lines 610–612). The package marked this `undetermined`, with reasons
+`known-flaky` and `test-file-unknown`; the output identifies the owner above.
+
+The complete unchanged owner passed alone, exit 0 in 5.3 s:
+
+```sh
+mise run test:logged -- --name fix-ui-deadlines-owner -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+No browser hook, timeout, assertion or performance probe was changed. This
+remains an intermittent failure without a demonstrated cause; the historical
+target-branch reproductions below do not establish this occurrence's cause.
+The aggregate rerun result is recorded separately in this round's fix result.
+
 - **ID:** 2711
 - **Status:** open
 - **Observed:** 2026-11-02, merging `d7054dace` into logger branch `8f174e4db`.

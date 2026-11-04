@@ -536,6 +536,7 @@ async function followRun(
     }
     finishTurn(state, session, input);
   } catch (error) {
+    const abortedBeforeCleanup = state.turnAborted === true;
     state.diagnostics?.terminalSettled("rejected");
     state.diagnostics?.streamSettled("rejected");
     state.diagnostics?.checkpoint("cancelling");
@@ -559,7 +560,7 @@ async function followRun(
       commandRun.error ??= errorText(error);
       settleCommandRun(state, commandRun, input.requestId);
     }
-    failTurn(state, session, error, input);
+    failTurn(state, session, error, input, abortedBeforeCleanup);
   } finally {
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
     // By value, like the claim: a superseded turn must not clear its successor's.
@@ -667,9 +668,11 @@ function failTurn(
   session: AgentSession,
   error: unknown,
   input: DispatchInput,
+  abortedBeforeCleanup = state.turnAborted === true,
 ): void {
-  // Aborting can reject the run; a turn someone stopped has not failed.
-  if (state.turnAborted !== true && state.turnCancelRequested !== true) {
+  // Cleanup can itself produce an aborted verdict; keep the original failure
+  // visible while suppressing failures caused by a user or provider abort.
+  if (!abortedBeforeCleanup && state.turnCancelRequested !== true) {
     log.warn("turn.failed", {
       sessionId: state.id,
       error: formatLogError(error, { message: false }),

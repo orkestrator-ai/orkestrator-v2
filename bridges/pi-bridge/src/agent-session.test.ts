@@ -838,6 +838,32 @@ describe("Pi SDK lifecycle", () => {
     }
   });
 
+  test.each(["missing", "empty"])("a %s resume file warns with the real SDK", async (kind) => {
+    const sessionFile = join(sessionDirectory, `SENTINEL-${kind}.jsonl`);
+    if (kind === "empty") await writeFile(sessionFile, "");
+    const state = newSessionState();
+    state.sessionFile = sessionFile;
+    const logs = captureLogs();
+    try {
+      const fresh = sessionManagerFor(state);
+      expect(fresh.getSessionId()).toBeTruthy();
+      expect(fresh.getSessionFile()).toBe(sessionFile);
+      expect(state.sessionFile).toBe(sessionFile);
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.pi",
+          event: "session.resume-fell-back",
+          fields: { sessionId: state.id },
+        },
+      ]);
+      expect(JSON.stringify(logs.records())).not.toContain(sessionDirectory);
+      expect(JSON.stringify(logs.records())).not.toContain("SENTINEL");
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("a session that reopens writes nothing", async () => {
     const validFile = join(sessionDirectory, "reopens.jsonl");
     await writeFile(

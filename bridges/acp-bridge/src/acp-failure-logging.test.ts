@@ -4,10 +4,19 @@
  * container's log file ever receives.
  */
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
-import { LOG_FORMAT_ENV } from "@orkestrator/protocol/node/logger-environment";
+import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
 
-import { nativeFetch, spawnBridge, waitFor } from "./acp-test-harness.js";
+import {
+  NativeAbortController,
+  nativeFetch,
+  spawnBridge,
+  stopChild,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 /** Starts a bridge writing JSON lines, as a container bridge does, so a line carries its level. */
 async function spawnLoggingBridge(env: NodeJS.ProcessEnv = {}) {
@@ -15,9 +24,14 @@ async function spawnLoggingBridge(env: NodeJS.ProcessEnv = {}) {
   let output = "";
   bridge.child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
   bridge.child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  const drained = new Promise<void>((resolve) => bridge.child.once("close", () => resolve()));
   return {
     ...bridge,
     output: () => output,
+    stopAndDrain: async () => {
+      await stopChild(bridge.child);
+      await drained;
+    },
     record: async (event: string) =>
       JSON.parse(
         await waitFor(
@@ -51,15 +65,52 @@ describe("ACP failure logging", () => {
   });
 
   test("an agent the bridge closes normally is no failure", async () => {
-    const { base, headers, output } = await spawnLoggingBridge();
+    const { base, headers, output, record, stopAndDrain } = await spawnLoggingBridge({
+      [LOG_LEVEL_ENV]: "debug",
+    });
     const { id } = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
     const closed = await nativeFetch(`${base}/session/${id}/close`, { method: "POST", headers });
     expect(closed.status).toBe(200);
+    expect(await record("agent.exited")).toMatchObject({ level: "debug" });
+    await stopAndDrain();
+    const exits = output()
+      .split("\n")
+      .filter((line) => line.includes('"event":"agent.exited"'))
+      .map((line) => JSON.parse(line));
+    expect(exits).toHaveLength(1);
+    expect(exits[0].level).toBe("debug");
+  });
 
-    expect(output()).not.toContain("agent.exited");
+  test("a client hang-up during create does not warn about the route", async () => {
+    const lifecycleFile = join(await temporaryDirectory(), "lifecycle.log");
+    const { base, headers, output, record, stopAndDrain } = await spawnLoggingBridge({
+      FAKE_ACP_HANG_INITIALIZE: "1",
+      FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
+    });
+    const controller = new NativeAbortController();
+    const request = nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: "{}",
+      signal: controller.signal,
+    }).catch(() => undefined);
+    try {
+      await waitFor(
+        () => readFile(lifecycleFile, "utf8").catch(() => ""),
+        (text) => text.includes("start:"),
+      );
+      controller.abort();
+      await request;
+      await record("agent.exited");
+      await stopAndDrain();
+      expect(output()).not.toContain('"event":"http.route-failed"');
+    } finally {
+      controller.abort();
+      await request;
+    }
   });
 
   test("a route that answers 500 warns without the error's message", async () => {

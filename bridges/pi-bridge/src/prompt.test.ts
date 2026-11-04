@@ -474,7 +474,9 @@ describe("dispatchPrompt", () => {
     test("a turn past its time budget warns", async () => {
       jest.useFakeTimers();
       const state = runningState();
-      const stub = stubSession();
+      const stub = stubSession({
+        onAbort: () => applySessionEvent(state, { type: "agent_settled", aborted: true }),
+      });
       let completion: Promise<void> | undefined;
       try {
         const handle = await dispatchPrompt(
@@ -486,6 +488,7 @@ describe("dispatchPrompt", () => {
         completion = handle.completion;
         jest.advanceTimersByTime(60_001);
         await completion;
+        expect(stub.aborted()).toBe(1);
         expect(turnLines()).toMatchObject([
           { level: "warn", event: "turn.failed", fields: { error: { name: "TimeoutError" } } },
         ]);

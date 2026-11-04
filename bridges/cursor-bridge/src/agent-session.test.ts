@@ -2106,6 +2106,56 @@ describe("resumeSession", () => {
     }
   });
 
+  test.each(["error", "throw"])(
+    "a cancelled recovered run settling with %s stays silent",
+    async (ending) => {
+      let release!: () => void;
+      const hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let cancellations = 0;
+      const run = {
+        id: `run-cancel-${ending}`,
+        status: "running",
+        error: undefined as { message: string } | undefined,
+        createdAt: Date.now(),
+        supports: () => false,
+        async *stream() {
+          await hold;
+          yield* [];
+        },
+        wait: async () => {
+          if (ending === "throw") throw new Error("SENTINEL-CANCELLED-RUN");
+          run.status = "error";
+          run.error = { message: "SENTINEL-CANCELLED-RUN" };
+          return { status: "error" };
+        },
+        cancel: async () => {
+          cancellations += 1;
+        },
+        onDidChangeStatus: () => () => undefined,
+      };
+      runs = { items: [run] };
+      const logs = captureLogs();
+      try {
+        const state = await resumeSession(`agent-cancel-${ending}`, undefined);
+        expect(state.status).toBe("running");
+        await state.cancelTurn?.();
+        expect(cancellations).toBe(1);
+        expect(state.turnCancelRequested).toBe(true);
+        release();
+        await state.recoveringRun;
+        expect(logs.records().filter((record) => record.event === "turn.recovery-failed")).toEqual(
+          [],
+        );
+        expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-CANCELLED-RUN");
+      } finally {
+        release();
+        logs.restore();
+      }
+    },
+  );
+
   test("applies live stream updates while recovering a still-running run", async () => {
     let release!: () => void;
     const hold = new Promise<void>((resolve) => {

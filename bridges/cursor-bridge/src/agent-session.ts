@@ -1223,7 +1223,9 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       await hydrateHistory(state);
       state.status = active.status === "error" ? "error" : "idle";
       state.error = active.error?.message;
-      if (active.status === "error") log.warn("turn.recovery-failed", { sessionId: state.id });
+      if (active.status === "error" && state.turnCancelRequested !== true) {
+        log.warn("turn.recovery-failed", { sessionId: state.id });
+      }
     } catch (error) {
       if (state.turnCancelRequested !== true) {
         log.warn("turn.recovery-failed", {

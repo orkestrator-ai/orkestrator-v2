@@ -13,7 +13,7 @@
  * state costs a rendered transcript; it never costs the conversation.
  */
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
@@ -1085,7 +1085,14 @@ export function sessionManagerFor(state: SessionState): SessionManager {
   const directory = sessionDirectory();
   if (state.sessionFile) {
     try {
-      return SessionManager.open(state.sessionFile, directory, workingDirectory);
+      // Pi opens a missing or empty file as a fresh session without throwing.
+      // Retain that behavior, but report the lost context just as on open errors.
+      const hasHistory = (statSync(state.sessionFile, { throwIfNoEntry: false })?.size ?? 0) > 0;
+      const manager = SessionManager.open(state.sessionFile, directory, workingDirectory);
+      if (!hasHistory) {
+        log.warn("session.resume-fell-back", { sessionId: state.id });
+      }
+      return manager;
     } catch (error) {
       log.warn("session.resume-fell-back", {
         sessionId: state.id,

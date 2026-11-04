@@ -2559,6 +2559,36 @@ describe("steering", () => {
   });
 });
 
+test("a preflight refusal after cancellation does not warn", async () => {
+  const state = seedSession();
+  let rejectRun!: (error: Error) => void;
+  const run = new Promise<void>((_resolve, reject) => {
+    rejectRun = reject;
+  });
+  state.session = fakeAgentSession({ prompt: () => run, abort: async () => undefined });
+  const logs = captureLogs();
+  const prompt = call(`/session/${state.id}/prompt`, {
+    method: "POST",
+    body: JSON.stringify({ prompt: "cancel in preflight", requestId: "cancel-refused" }),
+  });
+  try {
+    await waitFor(() => state.dispatching && state.status === "running");
+    const cancel = await call(`/session/${state.id}/cancel`, { method: "POST" });
+    expect(cancel.status).toBe(202);
+    expect(await cancel.json()).toMatchObject({ cancelled: false, pending: true });
+    rejectRun(new Error("SENTINEL-PREFLIGHT-REFUSAL"));
+    const response = await prompt;
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toEqual([]);
+    expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-PREFLIGHT-REFUSAL");
+  } finally {
+    rejectRun(new Error("test cleanup"));
+    await prompt;
+    logs.restore();
+  }
+});
+
 describe("provider-owned follow-ups", () => {
   test("close during prepared-journal publication prevents a follow-up enqueue", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "pi-follow-up-close-"));

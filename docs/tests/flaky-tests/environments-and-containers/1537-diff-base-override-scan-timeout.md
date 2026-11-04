@@ -1,8 +1,7 @@
 # Diff-base override integration scan timeout
 
 - **ID:** 1537
-- **Status:** resolved
-- **Resolution date:** 2026-11-04; needs a run of green CI passes to confirm, see [Fix](#fix-and-what-it-does-not-cover)
+- **Status:** open
 - **Observed:** 2026-10-31
 - **Test:** `saved/reset overrides retarget real scans and reverts; replacement drops an unpushed base`
 - **File:** `apps/backend/src/core/diff-base-override.integration.test.ts`
@@ -95,7 +94,7 @@ never reproduced it, so there is no reduced case.
 children traced at a 10 s timeout on Linux were in a scan of the previous target
 (`repos/comparison`), while step 24 reads `replacement`. The dump taken at a miss
 did not record a path, so the same is inferred for the 60 s children there, and
-removing the wait is what ended the misses. The retarget at step 23 aborted the
+removing the wait is what ended the misses in the runs below. The retarget at step 23 aborted the
 scan and it could no longer publish, but `entry.inFlight` stayed set. So `track()`
 only coalesced into it, and the read at step 24 joined it. Step 24 then waited
 for a result that would be thrown away.
@@ -118,9 +117,9 @@ The owning file ran alone, `--parallel=1`, on a host with other work running.
 | Probe, watcher `persistent: true` | none | 40 | 1 | 6 |
 | Probe, watcher `recursive: false` | none | 40 | 3 | 7 |
 | Trace, worktree watcher disabled | none | 40 | 0 | none in the trace |
-| **Fixed**, helper only | none | 300 | **0** | not measured |
-| **Fixed**, probe | none | 150 | **0** | not observable: the test ends before the probe fires |
-| **Fixed**, probe, process held 1.3 s after the test | none | 150 | **0** | **50**: 47 on the previous target, 3 on `replacement` |
+| **Partial fix**, helper only | none | 300 | **0** | not measured |
+| **Partial fix**, probe | none | 150 | **0** | not observable: the test ends before the probe fires |
+| **Partial fix**, probe, process held 1.3 s after the test | none | 150 | **0** | **50**: 47 on the previous target, 3 on `replacement` |
 
 macOS (18 cores, a scratch copy that always prints its timings):
 
@@ -129,7 +128,7 @@ macOS (18 cores, a scratch copy that always prints its timings):
 | Unmodified | none | 15 | 0 | 531 / 555 | |
 | Unmodified | 36 CPU hogs | 175 | 0 | 1,017 / 11,288 | 4 runs had a 10.2 s `#24 readFileList`: a stuck 10 s `git rev-parse` plus the 100 ms kill grace |
 | Unmodified | 72 CPU hogs, 8 `dd` fsync | 12 | 0 | 5,548 / 11,347 | Time spread across steps, up to 5.8 s in `createRepository`: real contention, and no single stuck step |
-| **Fixed** | 36 CPU hogs | 175 | **0** | 917 / 1,473 | `#24` at most 290 ms |
+| **Partial fix** | 36 CPU hogs | 175 | **0** | 917 / 1,473 | `#24` at most 290 ms |
 
 Not reproduced, about 700,000 children in total, on Linux and macOS with
 `node:child_process` and the same spawn options: plain spawn loops, same-tick
@@ -140,7 +139,10 @@ miss, so tracing hides it. The `persistent` and `recursive` rows above show thos
 two options are not the trigger. The watcher-off row has too few runs, and too
 different a scan pattern, to blame the watcher.
 
-## Fix and what it does not cover
+## Partial fix and what remains
+
+This case stays open: the cause is not removed, and the test can still miss its
+deadline.
 
 Removed for replacement-worktree retargets: the second link. `beginLineage` clears `entry.inFlight`, and a superseded
 attempt no longer requests a rerun when it settles (`diff-stats-service.ts`, with
@@ -150,22 +152,29 @@ assertions and test tier are unchanged.
 The guarantee is limited to detaching the old promise. The production admission
 pool keeps one physical scan per worktree: a same-path comparison-ref retarget
 still queues behind a stalled superseded scan, so its read can still miss the
-deadline. A reader already awaiting the old promise also keeps waiting until
+deadline. This test takes that path: `set_environment_diff_base` retargets through
+`diffStats.sync`, and both `read(projectPath, ...)` steps follow one. No miss has
+named those steps. A reader already awaiting the old promise also keeps waiting until
 it settles, then reads its original identity ad hoc. Service tests using a real
 `WorkAdmissionPool` cover both limits and a path-changing retarget. Releasing a
 lease on abort without proof that the physical work stopped would break the
 pool's resource bound; changing that is outside this replacement-worktree fix.
 
-Stress verification: 0 misses in 600 Linux runs against 10 in 300 before, and at
+Stress result for this partial fix: 0 misses in 600 Linux runs against 10 in 300 before, and at
 that rate the chance of no miss in the 300 runs without a probe alone is about
 0.004%.
 
 Not removed: the first link, tracked in
 [todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
-Stalled children still occur, and a stuck child this test does wait on would
-still miss the deadline. None did in those 600 runs.
+Stalled children still occur, 3 of the 50 counted on the current target, and a stuck
+child this test does wait on would still miss the deadline. None did in those 600
+runs.
 
-**Reopen this case** on a new deadline miss of this test. Its report names the
-step: `#24 readFileList` means the fix did not hold, and any other step means the
-root reached the test by another path. CI has not yet confirmed the fix; local
-evidence is on aarch64 and CI is x86-64.
+**Resolve this case** only once the root is gone, through a Bun fix or a bound in
+`runCommand` (todo 4260), with a stress run showing no deadline miss. Green CI runs
+alone do not close it.
+
+**On a new deadline miss**, read the step its report names: `#24 readFileList`
+means the partial fix did not hold, and any other step means the root reached the
+test by another path. CI has not reported a step yet; local evidence is on aarch64
+and CI is x86-64.

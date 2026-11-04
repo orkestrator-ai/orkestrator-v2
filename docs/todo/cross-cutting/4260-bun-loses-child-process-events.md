@@ -70,7 +70,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 ### 4. Unblock readers parked on a superseded scan
 
-**Problem.** Case 1537's fix detaches new work from the superseded promise, subject to the same-worktree admission limit in task 3. A `readFileList` already awaiting that scan's promise when the retarget arrives keeps waiting for it, then falls back to an ad hoc read.
+**Problem.** Case 1537's partial fix detaches new work from the superseded promise, subject to the same-worktree admission limit in task 3. A `readFileList` already awaiting that scan's promise when the retarget arrives keeps waiting for it, then falls back to an ad hoc read.
 
 **Context.** `readTrackedFileList` in `apps/backend/src/core/diff-stats-service.ts`. This was not seen in the original stress runs; a deterministic real-pool service test now confirms the wait and the subsequent ad hoc read of the original identity.
 
@@ -96,6 +96,7 @@ Chose to document and test the same-worktree admission wait and the already-park
 
 - Never raise a test deadline, skip or retry to hide this; see the [flake rules](../../tests/flaky-tests/0000-index.md).
 - Never settle a command as successful when its output may be missing.
+- Flake case 1537 and task 2 of [CI shard report 0010](../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md) stay open until this defect or a bound for it is in place, and a stress run shows no deadline miss.
 
 ## Needs verification
 

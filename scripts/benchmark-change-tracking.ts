@@ -12,22 +12,35 @@
  * with 200 changed files compared against the turn start on every
  * provisional pass (the line-count cost).
  *
+ * Three fixtures for the store's write and read paths (ST-5, ST-6), which fsync
+ * for real: `large-blob` measures the longest event-loop stall while a capture
+ * stores a changed `--blob-mib` file, `durable-cold` a cold capture's fsync cost
+ * over `--durable-files` files, and `manifest` repeat manifest reads and a diff
+ * page's row lookups over `--manifest-entries` entries. A tmpfs temporary
+ * directory hides the fsync cost, so point TMPDIR at a real disk for these.
+ *
  * Fixture files are left to age `--settle-ms` before the first capture, so a
  * warm capture sees them as settled (see `STAT_SETTLE_WINDOW_MS` in capture.ts).
  *
  *   bun scripts/benchmark-change-tracking.ts [--sizes=100,1000,10000] [--runs=5]
  *     [--assets=20] [--asset-mib=8] [--changed=200] [--settle-ms=2500]
- *     [--only=capture,assets,long-turn,sharing,counting] [--json]
+ *     [--blob-mib=16] [--durable-files=1000] [--manifest-entries=100000]
+ *     [--only=capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest]
+ *     [--json]
  */
 
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { countRawLineChanges } from "../packages/protocol/src/node/change-tracking/raw-line-diff";
 import {
   captureWorktree,
+  encodePath,
+  findManifestEntry,
   HostCaptureExecutor,
+  readManifest,
 } from "../apps/backend/src/core/change-tracking/capture";
 import { ObjectStore } from "../apps/backend/src/core/change-tracking/object-store";
 import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-tracking/policy-registry";
@@ -46,13 +59,40 @@ const assetCount = Number(arg("assets", "20"));
 const assetMiB = Number(arg("asset-mib", "8"));
 const changedCount = Number(arg("changed", "200"));
 const settleMs = Number(arg("settle-ms", "2500"));
-const only = new Set(arg("only", "capture,assets,long-turn,sharing,counting").split(","));
+const blobMiB = Number(arg("blob-mib", "16"));
+const durableFiles = Number(arg("durable-files", "1000"));
+const manifestEntries = Number(arg("manifest-entries", "100000"));
+const only = new Set(
+  arg("only", "capture,assets,long-turn,sharing,counting,large-blob,durable-cold,manifest").split(
+    ",",
+  ),
+);
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, settleMs));
 
 function percentile(values: number[], quantile: number): number {
   const sorted = values.toSorted((left, right) => left - right);
   return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * quantile))] ?? 0;
+}
+
+/** `work`'s duration and the longest stretch it left a 1 ms timer waiting. */
+async function measureLoop<T>(work: () => Promise<T>) {
+  let last = performance.now();
+  let stallMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    stallMs = Math.max(stallMs, now - last);
+    last = now;
+  }, 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  stallMs = 0;
+  last = performance.now();
+  const started = performance.now();
+  const result = await work();
+  const durationMs = performance.now() - started;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  clearInterval(timer);
+  return { result, durationMs, stallMs };
 }
 
 function git(cwd: string, ...args: string[]) {
@@ -85,10 +125,10 @@ function makeRepo(files: number): string {
 }
 
 /** The store as the service opens it, so a reuse sees the real orphan grace. */
-function openStore(root: string): ObjectStore {
+function openStore(root: string, durable = false): ObjectStore {
   return new ObjectStore({
     root,
-    durable: false,
+    durable,
     orphanGraceMs: () => CHANGE_TRACKING_POLICY_V1.orphanGraceMs,
   });
 }
@@ -257,6 +297,147 @@ async function benchLongTurn() {
   }
 }
 
+/** Half random and half repetitive, so zlib does real work on it. */
+function largeBlob(mib: number): Buffer {
+  const bytes = Buffer.alloc(mib * 1024 * 1024);
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    randomBytes(4096).copy(bytes, offset);
+    bytes.fill(offset % 251, offset + 4096, Math.min(offset + 8192, bytes.length));
+  }
+  return bytes;
+}
+
+/** A changed large file captured durably, as a real capture stores it. */
+async function benchLargeBlob() {
+  const repo = makeRepo(100);
+  const blob = largeBlob(blobMiB);
+  await settle();
+  const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
+  try {
+    const store = openStore(storeRoot, true);
+    const executor = new HostCaptureExecutor(repo);
+    let previous = await captureWorktree({ executor, store });
+    if (previous.kind !== "captured") throw new Error(`capture failed: ${previous.reason}`);
+    const stalls: number[] = [];
+    const durations: number[] = [];
+    for (let run = 0; run < runs; run++) {
+      blob.writeUInt32LE(run + 1, 0);
+      writeFileSync(path.join(repo, "large.bin"), blob);
+      const { result, durationMs, stallMs } = await measureLoop(() =>
+        captureWorktree({
+          executor,
+          store,
+          previous: previous.kind === "captured" ? previous.manifest : null,
+          statCache: previous.kind === "captured" ? previous.statCache : undefined,
+        }),
+      );
+      if (result.kind !== "captured") throw new Error(`capture failed: ${result.reason}`);
+      stalls.push(stallMs);
+      durations.push(durationMs);
+      previous = result;
+    }
+    rows.push({
+      workload: `${blobMiB} MiB changed file captured durably`,
+      longestStallP50Ms: Math.round(percentile(stalls, 0.5) * 10) / 10,
+      longestStallMaxMs: Math.round(Math.max(...stalls) * 10) / 10,
+      captureP50Ms: Math.round(percentile(durations, 0.5)),
+    });
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(storeRoot, { recursive: true, force: true });
+  }
+}
+
+/** Every file is a new object: the most fsyncs one capture can make. */
+async function benchDurableCold() {
+  const repo = makeRepo(durableFiles);
+  await settle();
+  const stalls: number[] = [];
+  const durations: number[] = [];
+  try {
+    for (let run = 0; run < runs; run++) {
+      const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
+      try {
+        const store = openStore(storeRoot, true);
+        const executor = new HostCaptureExecutor(repo);
+        const { result, durationMs, stallMs } = await measureLoop(() =>
+          captureWorktree({ executor, store }),
+        );
+        if (result.kind !== "captured") throw new Error(`capture failed: ${result.reason}`);
+        stalls.push(stallMs);
+        durations.push(durationMs);
+      } finally {
+        rmSync(storeRoot, { recursive: true, force: true });
+      }
+    }
+    rows.push({
+      workload: `${durableFiles} files, cold durable capture`,
+      captureP50Ms: Math.round(percentile(durations, 0.5)),
+      longestStallP50Ms: Math.round(percentile(stalls, 0.5) * 10) / 10,
+    });
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+/** Repeat reads of one manifest, and the lookups of one 20-row diff page. */
+async function benchManifest() {
+  const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
+  try {
+    const store = openStore(storeRoot);
+    const paths = Array.from({ length: manifestEntries }, (_, index) =>
+      encodePath(
+        new TextEncoder().encode(
+          `packages/area-${index % 50}/src/d${index % 500}/file-${index}.ts`,
+        ),
+      ),
+    ).toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+    const manifest = {
+      v: 1,
+      root: "bench",
+      entries: paths.map((p, index) => ({
+        p,
+        m: "100644",
+        o: index.toString(16).padStart(40, "0"),
+        s: index,
+        t: 1,
+      })),
+      omitted: [],
+      unstable: [],
+    };
+    const { id } = await store.put("manifest", new TextEncoder().encode(JSON.stringify(manifest)));
+    const firstStarted = performance.now();
+    const first = await readManifest(store, id);
+    const firstMs = performance.now() - firstStarted;
+    if (!first) throw new Error("manifest unreadable");
+    const reads: number[] = [];
+    for (let run = 0; run < Math.max(runs, 10); run++) {
+      const started = performance.now();
+      await readManifest(store, id);
+      reads.push(performance.now() - started);
+    }
+    const page = Array.from(
+      { length: 20 },
+      (_, index) => paths[Math.floor(((index + 0.5) / 20) * paths.length)]!,
+    );
+    const lookups: number[] = [];
+    for (let run = 0; run < Math.max(runs, 10); run++) {
+      const started = performance.now();
+      for (const pathId of page)
+        if (!findManifestEntry(first.entries, pathId)) throw new Error("?");
+      lookups.push(performance.now() - started);
+    }
+    rows.push({
+      workload: `manifest of ${manifestEntries} entries`,
+      firstReadMs: Math.round(firstMs * 10) / 10,
+      repeatReadP50Ms: Math.round(percentile(reads, 0.5) * 100) / 100,
+      pageLookupsP50Ms: Math.round(percentile(lookups, 0.5) * 100) / 100,
+    });
+  } finally {
+    rmSync(storeRoot, { recursive: true, force: true });
+  }
+}
+
 async function benchSharing() {
   const queue = new SharedScanQueue<number>();
   let physical = 0;
@@ -336,6 +517,9 @@ if (only.has("assets")) await benchAssets();
 if (only.has("long-turn")) await benchLongTurn();
 if (only.has("sharing")) await benchSharing();
 if (only.has("counting")) benchCounting();
+if (only.has("large-blob")) await benchLargeBlob();
+if (only.has("durable-cold")) await benchDurableCold();
+if (only.has("manifest")) await benchManifest();
 const peakRssDeltaMiB = Math.round((process.memoryUsage().rss - startedRss) / 1024 / 1024);
 
 if (asJson) {

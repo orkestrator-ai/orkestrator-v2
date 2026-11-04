@@ -363,6 +363,47 @@ test.each(["generation-changed", "access-expired"] as const)(
   },
 );
 
+test("a session-level error fails open streams before the socket finishes closing", async () => {
+  const ws = new EventEmitter() as EventEmitter & {
+    isOpen: boolean;
+    send: () => boolean;
+    start: () => void;
+    ping: () => void;
+    close: (code: number) => void;
+  };
+  ws.isOpen = true;
+  ws.send = () => true;
+  ws.start = () => {};
+  ws.ping = () => {};
+  ws.close = () => {};
+  const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
+    attachmentId: "att_test",
+    credential: "credential",
+    idleMs: 30_000,
+    onClosed: () => {},
+  });
+  const receive = (frame: unknown) => ws.emit("message", Buffer.from(JSON.stringify(frame)), false);
+  receive({
+    type: "ready",
+    serviceId: "service",
+    endpointGeneration: 1,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  await session.ready;
+  const opening = session.openStream(undefined, performance.now());
+  receive({ type: "open-ok", stream: 1 });
+  const stream = await opening;
+  const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
+
+  // No `close` event yet: the socket is still finishing when this frame arrives.
+  receive({ type: "error", error: previewError("access-expired") });
+
+  expect(stream.destroyed).toBe(true);
+  expect(previewErrorFromUnknown(await failed)?.category).toBe("access-expired");
+  expect(session.canOpen).toBe(false);
+  expect(session.size).toBe(0);
+});
+
 test("Node pull-mode reads replenish a fully buffered receive window", async () => {
   // Bun's stream implementation does not reproduce Node/Electron's _read timing.
   const build = await Bun.build({

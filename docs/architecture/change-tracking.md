@@ -126,7 +126,7 @@ Backend services (one composition root, `service.ts`):
 | Service | File | Role |
 | --- | --- | --- |
 | `ChangeLedger` | `change-ledger.ts`, schema `ledger-schema.ts` (storage migration 4) | Indexed rows, fences, selections, outbox |
-| `ObjectStore` | `object-store.ts` | Content-addressed Git-format objects under `<dataDir>/change-tracking/objects` |
+| `ObjectStore` | `object-store.ts`, `manifest-cache.ts` | Content-addressed Git-format objects under `<dataDir>/change-tracking/objects`, staged writes, parsed-manifest cache |
 | capture | `capture.ts` | Raw-byte capture with stability rechecks (host and container executors) |
 | DiffEngine | `snapshot-diff.ts` | Manifest comparison and body rendering |
 | `WorktreeRegistry` / `WorktreeChangeOwner` | `worktree-owner.ts` | Physical identity, incarnation, durable fence, serialized captures, tool windows |
@@ -169,6 +169,81 @@ Each owner claims a durable fence (`change_worktrees.fencing_epoch`) on first
 use. Publication transactions call `assertCurrent()`; a stale owner may finish
 private work and leave unreferenced objects, but cannot publish, advance a
 selection or authorize a restore.
+
+## Object writes and durability
+
+Two rules hold on every path:
+
+- **A name under `objects/` means complete, synced content.** `has` and `reuse`
+  only look at the name, so a name over a partial file would be adopted for
+  good. A crash can lose a name; it cannot leave a wrong one.
+- **A ledger row names an object only after a flush has resolved.** A capture
+  flushes before it returns; `resolveLiveDetail` uses `put`, which flushes
+  before it returns.
+
+`ObjectStore.batch()` is the write path, and a capture uses one batch per pass:
+
+1. `put` hashes the bytes on the event loop and, under the store lock, checks the
+   budget and renews the fence of an object already stored.
+2. Outside the lock it compresses (inputs from 16 KiB through the thread pool, at
+   most four calls per store, smaller ones synchronously) and writes a
+   temporary file under `tmp/`. Nothing is synced yet and the object has no final
+   name, so `has`, `reuse` and `get` do not see it. Its bytes count against
+   the hard budget, and a sweep leaves a live batch's temporaries alone.
+3. `flush` fsyncs the temporaries, 16 at a time off the event loop, then renames
+   them under the lock, 256 per hold so a sweep or a renewal can interleave.
+4. It then fsyncs every directory with an unsynced name, store-wide, after any
+   directory sync already running. So an object another writer has renamed but
+   not yet synced is covered too when a capture adopts it. A new fan-out directory
+   also syncs `objects/`.
+
+A batch flushes itself at 512 objects or 64 MiB, which bounds its temporaries
+and how long `close` can run. `close` publishes what is left even when a capture
+was abandoned, because a capture over its deadline must leave its progress for the
+retry, as it did when every object was written straight away. What cannot be
+published is removed.
+
+A failed fsync (EIO, ENOSPC) fails the capture with `capture-failed`, and a failed
+directory stays listed for the next flush. Only a platform or filesystem
+that does not support the sync is ignored, as before.
+
+After a crash, unflushed temporaries are removed by the retention sweep once
+older than `orphanGraceMs`, and every surviving name is intact. A new store
+process queues all its fan-out directories for its first flush, because the
+previous process may have stopped before syncing them.
+
+New objects take their orphan fence from the temporary's write time, at most a
+capture's deadline before the rename, so the half-grace reasoning in
+[Retention and backup](#retention-and-backup) is unchanged. An object another
+writer placed first has its fence renewed at the rename.
+
+Still on the event loop: `confinedRead` and two SHA-1 passes over a large file
+(about 5 to 7 ms each at 16 MiB), and the JSON work on a large manifest.
+
+## Manifest cache
+
+`readManifest` reads through `ObjectStore.manifests`: one LRU per store of parsed
+manifests by object id, bounded at 32 entries and 128 MiB estimated (twice the
+serialized size, against 1.4 measured on the heap at 100,000 entries, which is
+about 28 MiB for one such manifest). A manifest over the byte bound alone is
+parsed on every read. A capture leaves its own manifest there.
+
+- **Immutable.** Every reader shares one copy, so it is deep-frozen and the
+  `Manifest` type is `readonly` throughout. Copy before changing anything.
+- **Never an answer for a removed object.** A hit costs one `stat`, and a missing
+  object answers null, so an expired snapshot still reads as `body-expired`. A
+  file corrupted on disk after it was cached is not noticed on a hit; the cached
+  copy was verified when it was read.
+- **Retention does not fill it.** `readManifest(store, id, { scan: true })` uses a
+  hit but keeps nothing, so one pass over every snapshot cannot evict what live
+  views are using.
+
+Entries are sorted by path bytes, as every stored manifest has been since the
+first capture. `findManifestEntry` binary-searches on that order for diff pages
+and restore; UTF-16 string order differs for astral paths. The whitespace-ignore
+view renders each file once, with `ignoreWhitespace` passed to
+`renderSnapshotBodies`, so when a diff limit is reached the file names the limit
+of the diff it actually shows.
 
 ## Evidence pipeline
 
@@ -411,6 +486,29 @@ The long turn's first pass still computes all 200 pairs (its p95). What
 remains of a warm capture over many small files is the object store's
 per-entry `reuse` (`utimes`) and the closure check (`has`), about 230 ms each
 per 10,000 files in one profiling run (ST-3 in the efficiency report).
+
+The store's write and read paths (`--only=large-blob,durable-cold,manifest`,
+`--runs=7`), measured on 2026-11-04 on the shared Linux build host, btrfs, load
+average 3 to 18, three interleaved runs each of the code before and after ST-5
+and ST-6, p50 range unless stated. These fixtures fsync for real, so `TMPDIR` has
+to point at a real disk:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 16 MiB changed file captured durably: longest event-loop stall, p50 of runs | 107–143 ms | 12–13 ms |
+| Same: longest stall in any run | 109–188 ms | 13–21 ms |
+| Same: capture duration, p50 | 148–234 ms | 276–321 ms |
+| 1,000 files, cold durable capture: duration, p50 | 3,338–4,108 ms | 632–1,130 ms |
+| Same: longest event-loop stall, p50 of runs | 560–661 ms | 2.8–5.2 ms |
+| Manifest of 100,000 entries: repeat read, p50 | 26.9–34.9 ms | 0.02–0.10 ms |
+| Same: first read, which now freezes it | 39–46 ms | 93–140 ms |
+| Same: lookups for one 20-row diff page, p50 | 6.4–11.1 ms | 0.04–0.09 ms |
+| 10,000 files, one changed, not durable: warm capture, p50 | 113–200 ms | 129–177 ms |
+| Long turn, 200 changed files, not durable: compare, p50 | 8.3–11.1 ms | 5.7–13 ms |
+
+A capture of a large file takes longer in total because compression runs through
+the thread pool; it no longer holds up every other client while it does. The
+first read of a large manifest pays for freezing it, once.
 
 ## Known limitations
 

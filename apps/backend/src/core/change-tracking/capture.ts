@@ -32,30 +32,35 @@ export type ManifestMode = "100644" | "100755" | "120000" | "160000";
 
 export interface ManifestEntry {
   /** Encoded path id (see {@link encodePath}). */
-  p: string;
-  m: ManifestMode;
+  readonly p: string;
+  readonly m: ManifestMode;
   /** Blob id, or the gitlink commit for mode 160000. */
-  o: string;
-  s: number;
+  readonly o: string;
+  readonly s: number;
   /** Tracked in the index at capture time. */
-  t: 0 | 1;
+  readonly t: 0 | 1;
 }
 
 export interface ManifestOmission {
-  p: string;
-  reason:
+  readonly p: string;
+  readonly reason:
     "too-large" | "unreadable" | "capture-byte-budget" | "inventory-limit" | "unsupported-kind";
-  size: number | null;
+  readonly size: number | null;
   /** size:mtime:ctime:ino, to notice changes between omitted endpoints. */
-  stamp: string | null;
+  readonly stamp: string | null;
 }
 
+/**
+ * Immutable: readers share one parsed copy through the manifest cache, which
+ * also deep-freezes it. `entries` and `omitted` are in {@link comparePathIds}
+ * order, as every stored manifest has been.
+ */
 export interface Manifest {
-  v: 1;
-  root: string;
-  entries: ManifestEntry[];
-  omitted: ManifestOmission[];
-  unstable: string[];
+  readonly v: 1;
+  readonly root: string;
+  readonly entries: readonly ManifestEntry[];
+  readonly omitted: readonly ManifestOmission[];
+  readonly unstable: readonly string[];
 }
 
 export interface CaptureLimits {
@@ -96,6 +101,7 @@ export const OBJECT_FORMAT = "git-loose-sha1+manifest-json-v1";
 
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 const lossy = new TextDecoder("utf-8", { fatal: false });
+const encoder = new TextEncoder();
 
 /** Reversible path id: `u:` + UTF-8 text, or `b:` + base64 for other bytes. */
 export function encodePath(bytes: Uint8Array): string {
@@ -109,9 +115,9 @@ export function encodePath(bytes: Uint8Array): string {
 }
 
 export function decodePath(id: string): Uint8Array {
-  if (id.startsWith("u:")) return new TextEncoder().encode(id.slice(2));
+  if (id.startsWith("u:")) return encoder.encode(id.slice(2));
   if (id.startsWith("b:")) return new Uint8Array(Buffer.from(id.slice(2), "base64"));
-  return new TextEncoder().encode(id);
+  return encoder.encode(id);
 }
 
 /** Display spelling; non-UTF-8 bytes become replacement characters. */
@@ -120,14 +126,42 @@ export function displayPath(id: string): string {
   return lossy.decode(decodePath(id));
 }
 
-function comparePathIds(left: string, right: string): number {
-  const a = decodePath(left);
-  const b = decodePath(right);
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
   const length = Math.min(a.length, b.length);
   for (let index = 0; index < length; index++) {
     if (a[index] !== b[index]) return a[index]! - b[index]!;
   }
   return a.length - b.length;
+}
+
+function comparePathIds(left: string, right: string): number {
+  return compareBytes(decodePath(left), decodePath(right));
+}
+
+/**
+ * The manifest entry for a path, by binary search over the path's bytes, which
+ * is the order entries are stored in (UTF-16 order differs for astral paths).
+ * With `blob`, only an entry holding that object matches.
+ */
+export function findManifestEntry(
+  entries: readonly ManifestEntry[],
+  pathId: string,
+  blob?: string | null,
+): ManifestEntry | null {
+  const target = decodePath(pathId);
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (compareBytes(decodePath(entries[middle]!.p), target) < 0) low = middle + 1;
+    else high = middle;
+  }
+  for (let index = low; index < entries.length; index++) {
+    const entry = entries[index]!;
+    if (entry.p === pathId && (!blob || entry.o === blob)) return entry;
+    if (compareBytes(decodePath(entry.p), target) !== 0) return null;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +736,8 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     startedAt,
     finishedAt: new Date().toISOString(),
   });
+  // Blobs and the manifest become durable together, before this returns.
+  const batch = request.store.batch();
   try {
     await request.store.init();
     const inventory = await request.executor.inventory(limits, signal);
@@ -750,7 +786,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
           });
           return;
         }
-        const written = await request.store.put("blob", record.bytes);
+        const written = await batch.put("blob", record.bytes);
         proven.add(written.id);
         if (written.id !== record.oid) unstable.push(record.pathId);
         retainedBytes += record.bytes.length;
@@ -928,8 +964,11 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     };
     if (signal.aborted) return unavailable("capture-timeout");
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
-    const written = await request.store.put("manifest", manifestBytes);
+    const written = await batch.put("manifest", manifestBytes);
     if (written.created) newObjectIds.push(written.id);
+    // A ledger row may name these objects only once this resolves. It also
+    // covers objects this pass adopted from another writer that has yet to sync.
+    await batch.flush();
 
     // Closure: every referenced blob is readable from this store alone. An
     // object proven present in this pass needs no second look unless a sweep
@@ -940,7 +979,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       if (nothingRemoved && proven.has(entry.o)) continue;
       if (!(await request.store.has(entry.o))) return unavailable("closure-incomplete");
     }
-    request.store.syncDirectories(newObjectIds);
+    request.store.manifests.remember(written.id, manifest, manifestBytes.length);
 
     const partial = inventory.truncated || omitted.length > 0;
     return {
@@ -976,15 +1015,37 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
       return unavailable("capture-executor-unavailable");
     if (error instanceof CommandFailedError) return unavailable("not-a-git-worktree");
     return unavailable("capture-failed");
+  } finally {
+    await batch.close();
   }
 }
 
-export async function readManifest(store: ObjectStore, id: string): Promise<Manifest | null> {
+/**
+ * A manifest by id, shared and deep-frozen. A hit is still answered only while
+ * the store holds the object, so an expired snapshot reads as expired; it costs
+ * one `stat` instead of an inflate, a hash and a parse.
+ *
+ * `scan: true` is for a walk over many snapshots: it uses a hit but does not
+ * fill the cache, so one retention pass cannot evict what live views are using.
+ */
+export async function readManifest(
+  store: ObjectStore,
+  id: string,
+  options: { scan?: boolean } = {},
+): Promise<Manifest | null> {
+  const cached = store.manifests.get(id);
+  if (cached) {
+    if (await store.has(id)) return cached;
+    store.manifests.forget(id);
+    return null;
+  }
   const bytes = await store.get(id);
   if (!bytes) return null;
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Manifest;
-    return parsed.v === 1 && Array.isArray(parsed.entries) ? parsed : null;
+    store.manifests.noteParse();
+    const parsed = JSON.parse(lossy.decode(bytes)) as Manifest;
+    if (parsed.v !== 1 || !Array.isArray(parsed.entries)) return null;
+    return options.scan ? parsed : store.manifests.remember(id, parsed, bytes.length);
   } catch {
     return null;
   }

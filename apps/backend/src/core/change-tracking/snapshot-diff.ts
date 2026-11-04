@@ -442,11 +442,14 @@ export async function compareManifests(
   };
 }
 
-/** Backend-rendered hunks for selected files of a comparison. */
+/**
+ * Backend-rendered hunks for selected files of a comparison. `ignoreWhitespace`
+ * changes the view of a text file with both sides, never an added or deleted one.
+ */
 export async function renderSnapshotBodies(
   store: ObjectStore,
   files: readonly SnapshotFileChange[],
-  budget: Partial<RawLineDiffBudget> & { maxBatchBytes?: number } = {},
+  budget: Partial<RawLineDiffBudget> & { maxBatchBytes?: number; ignoreWhitespace?: boolean } = {},
 ): Promise<ChangeDiffFileBody[]> {
   const bodies: ChangeDiffFileBody[] = [];
   let spent = 0;
@@ -497,7 +500,10 @@ export async function renderSnapshotBodies(
       });
       continue;
     }
-    const diff = diffRawLines(oldBytes, newBytes, budget);
+    const diff = diffRawLines(oldBytes, newBytes, budget, undefined, {
+      ignoreWhitespace:
+        !!budget.ignoreWhitespace && file.fileKind === "text" && !!file.oldEntry && !!file.newEntry,
+    });
     spent += oldBytes.length + newBytes.length;
     if (diff.kind === "diff") {
       bodies.push({

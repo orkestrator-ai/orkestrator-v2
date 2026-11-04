@@ -12,13 +12,31 @@
  * Writes are atomic (temporary sibling + rename) and objects are immutable,
  * so a stale owner that finishes late can only add unreferenced objects; the
  * ledger decides what is referenced.
+ *
+ * ## Write path
+ *
+ * A name under `objects/` always means complete, synced content: a crash can
+ * lose a name but never leave one naming a partial file, which `has` and
+ * `reuse` would adopt for good. So {@link ObjectBatch} stages each object as a
+ * temporary file outside the store lock, and a flush fsyncs the temporaries in
+ * parallel (the filesystem coalesces concurrent commits), renames them under
+ * the lock, and then fsyncs the directories that gained names. Only a resolved
+ * flush makes an object safe for a ledger row to name.
+ *
+ * Directory syncs are store-wide. A flush drains every directory with an
+ * unsynced name and waits for syncs already running, so a capture that adopts
+ * an object another writer has just renamed still waits for that name.
+ *
+ * Compression and fsync run off the event loop. Hashing and the small
+ * synchronous deflates below {@link OFF_LOOP_ZLIB_BYTES} stay on it.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, openSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import {
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   rename,
@@ -28,11 +46,31 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { deflateSync, inflateSync } from "node:zlib";
+import { promisify } from "node:util";
+import { deflate, deflateSync, inflate, inflateSync } from "node:zlib";
+import { ManifestCache, type ManifestCacheLimits } from "./manifest-cache.js";
 
 export type ObjectType = "blob" | "manifest";
 
 const OBJECT_ID = /^[0-9a-f]{40}$/;
+
+/**
+ * Inputs from this size go through the thread pool. Smaller ones stay on the
+ * loop: 16 KiB costs a few hundred microseconds, and at source-file sizes the
+ * thread hop costs about three times the call.
+ */
+export const OFF_LOOP_ZLIB_BYTES = 16 * 1024;
+/** Off-loop zlib calls per store; each holds at most one object's buffers. */
+const MAX_OFF_LOOP_ZLIB_CALLS = 4;
+/** A batch flushes itself at either bound, so its temporaries stay bounded. */
+export const BATCH_MAX_OBJECTS = 512;
+export const BATCH_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_CONCURRENT_SYNCS = 16;
+/** Renames per hold of the store lock, so a sweep or a renewal can interleave. */
+const RENAMES_PER_LOCK_HOLD = 256;
+
+const deflateOffLoop = promisify(deflate);
+const inflateOffLoop = promisify(inflate);
 
 export function isObjectId(value: string): boolean {
   return OBJECT_ID.test(value);
@@ -59,6 +97,43 @@ export interface ObjectStoreOptions {
    * know its fence is safe to keep, so every reuse renews it.
    */
   orphanGraceMs?: () => number;
+  /** Bounds of the parsed-manifest cache; the defaults suit production. */
+  manifestCache?: Partial<ManifestCacheLimits>;
+  /** Replaces the fsync itself, for tests that observe order or inject failure. */
+  fsync?: SyncPath;
+}
+
+export type SyncPath = (path: string, kind: "file" | "directory") => Promise<void>;
+
+/**
+ * A group of writes that become durable together. Nothing put here is readable
+ * or safe to name until {@link ObjectBatch.flush} resolves. Puts run one at a
+ * time per batch; every batch ends with {@link ObjectBatch.close}.
+ */
+export interface ObjectBatch {
+  /** Stage one object. `created` is false when it is already stored or staged. */
+  put(type: ObjectType, bytes: Uint8Array): Promise<{ id: string; created: boolean }>;
+  /**
+   * Publish what is staged and sync every unsynced name in the store. Rejects
+   * when anything could not be made durable; nothing may then name these objects.
+   */
+  flush(): Promise<void>;
+  /**
+   * Publish what is left, so an abandoned capture's retry need not write it
+   * again, and remove what cannot be published. Never rejects.
+   */
+  close(): Promise<void>;
+}
+
+interface StagedObject {
+  temp: string;
+  name: string;
+  size: number;
+}
+
+interface StagedBatch {
+  objects: Map<string, StagedObject>;
+  bytes: number;
 }
 
 export class ObjectStore {
@@ -70,6 +145,17 @@ export class ObjectStore {
   private mutation: Promise<unknown> = Promise.resolve();
   private usedBytes: number | null = null;
   private removedCount = 0;
+  /** Bytes reserved by staged temporaries, charged against the hard budget. */
+  private stagedBytes = 0;
+  /** Temporaries a live batch owns; a sweep must not take them as abandoned. */
+  private readonly stagedTemps = new Set<string>();
+  /** Directories with a name not yet synced: at most the fan-out and its two parents. */
+  private readonly unsyncedDirectories = new Set<string>();
+  private directorySync: Promise<unknown> = Promise.resolve();
+  private readonly sync: SyncPath;
+  private readonly zlibSlots = new CallSlots(MAX_OFF_LOOP_ZLIB_CALLS);
+  /** Parsed manifests by id; {@link readManifest} in capture.ts reads through it. */
+  readonly manifests: ManifestCache;
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.mutation.then(work);
@@ -85,6 +171,8 @@ export class ObjectStore {
     this.root = options.root;
     this.objects = join(options.root, "objects");
     this.durable = options.durable ?? true;
+    this.sync = options.fsync ?? fsyncPath;
+    this.manifests = new ManifestCache(options.manifestCache);
   }
 
   /** Lay out a minimal bare repository so `git fsck` can read the store. */
@@ -98,6 +186,13 @@ export class ObjectStore {
         "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
       );
       await mkdir(join(this.root, "tmp"), { recursive: true, mode: 0o700 });
+      if (!this.durable) return;
+      // An earlier process may have stopped before syncing these. The first
+      // flush covers them, so nothing here relies on a name it cannot vouch for.
+      this.unsyncedDirectories.add(this.root);
+      this.unsyncedDirectories.add(this.objects);
+      for (const prefix of await readdir(this.objects).catch(() => [] as string[]))
+        if (/^[0-9a-f]{2}$/.test(prefix)) this.unsyncedDirectories.add(join(this.objects, prefix));
     })();
     return this.initialized;
   }
@@ -167,33 +262,172 @@ export class ObjectStore {
   }
 
   /**
-   * Write one immutable object. Returns its id and whether it was new. The
-   * write is atomic; concurrent writers of the same content converge.
+   * Write one immutable object, durable on return. Returns its id and whether
+   * it was new; concurrent writers of the same content converge. Code writing
+   * several objects uses {@link batch}, which syncs them together.
    */
   async put(type: ObjectType, bytes: Uint8Array): Promise<{ id: string; created: boolean }> {
-    return this.exclusive(async () => {
+    const batch = this.batch();
+    try {
+      const written = await batch.put(type, bytes);
+      await batch.flush();
+      return written;
+    } finally {
+      await batch.close();
+    }
+  }
+
+  batch(): ObjectBatch {
+    const staged: StagedBatch = { objects: new Map(), bytes: 0 };
+    return {
+      put: (type, bytes) => this.stage(staged, type, bytes),
+      flush: () => this.publish(staged),
+      close: () => this.publish(staged).catch(() => this.discard(staged)),
+    };
+  }
+
+  private async stage(
+    batch: StagedBatch,
+    type: ObjectType,
+    bytes: Uint8Array,
+  ): Promise<{ id: string; created: boolean }> {
+    const id = objectId(type, bytes);
+    // The lock is queued before the first await, so a renewal stays ordered
+    // against a sweep called after this put.
+    const known = await this.exclusive(async () => {
       await this.init();
-      const id = objectId(type, bytes);
-      const target = this.path(id);
       this.usedBytes ??= await this.storedBytes();
-      if (this.usedBytes >= this.hardBudgetBytes()) throw new Error("capture-storage-quota");
-      if (await this.has(id)) {
-        const now = new Date();
-        await utimes(target, now, now);
-        return { id, created: false };
-      }
-      await mkdir(join(this.objects, id.slice(0, 2)), { recursive: true, mode: 0o700 });
-      const header = Buffer.from(`${gitType(type)} ${bytes.length}\0`);
-      const compressed = deflateSync(Buffer.concat([header, bytes]));
-      if (this.usedBytes + compressed.length > this.hardBudgetBytes())
+      if (this.usedBytes + this.stagedBytes >= this.hardBudgetBytes())
         throw new Error("capture-storage-quota");
-      const temp = join(this.root, "tmp", `${id}.${randomUUID()}`);
-      await writeFile(temp, compressed, { mode: 0o400 });
-      if (this.durable) fsyncPath(temp);
-      await rename(temp, target);
-      this.usedBytes += compressed.length;
-      return { id, created: true };
+      if (batch.objects.has(id)) return true;
+      if (!(await this.has(id))) return false;
+      const now = new Date();
+      await utimes(this.path(id), now, now);
+      return true;
     });
+    if (known) return { id, created: false };
+
+    const header = Buffer.from(`${gitType(type)} ${bytes.length}\0`);
+    const raw = Buffer.concat([header, bytes]);
+    const compressed =
+      raw.length < OFF_LOOP_ZLIB_BYTES
+        ? deflateSync(raw)
+        : await this.zlibSlots.run(() => deflateOffLoop(raw));
+
+    await this.exclusive(async () => {
+      this.usedBytes ??= await this.storedBytes();
+      if (this.usedBytes + this.stagedBytes + compressed.length > this.hardBudgetBytes())
+        throw new Error("capture-storage-quota");
+      this.stagedBytes += compressed.length;
+    });
+    const name = `${id}.${randomUUID()}`;
+    const temp = join(this.root, "tmp", name);
+    const object: StagedObject = { temp, name, size: compressed.length };
+    this.stagedTemps.add(name);
+    try {
+      await writeFile(temp, compressed, { mode: 0o400 });
+    } catch (error) {
+      await this.removeStaged(object);
+      throw error;
+    }
+    batch.objects.set(id, object);
+    batch.bytes += object.size;
+    if (batch.objects.size >= BATCH_MAX_OBJECTS || batch.bytes >= BATCH_MAX_BYTES)
+      await this.publish(batch);
+    return { id, created: true };
+  }
+
+  private async publish(batch: StagedBatch): Promise<void> {
+    const objects = Array.from(batch.objects);
+    if (this.durable) {
+      const failures: unknown[] = [];
+      await forEachBounded(objects, MAX_CONCURRENT_SYNCS, async ([id, object]) => {
+        try {
+          await this.sync(object.temp, "file");
+        } catch (error) {
+          // A later fsync can succeed after a writeback error without proving
+          // these bytes durable. Never let close publish this temporary again.
+          batch.objects.delete(id);
+          batch.bytes -= object.size;
+          await this.removeStaged(object);
+          failures.push(error);
+        }
+      });
+      // All syncs must settle before close can retry the healthy objects.
+      if (failures.length) throw failures[0];
+    }
+    for (let index = 0; index < objects.length; index += RENAMES_PER_LOCK_HOLD) {
+      const chunk = objects.slice(index, index + RENAMES_PER_LOCK_HOLD);
+      await this.exclusive(async () => {
+        for (const [id, object] of chunk) {
+          await this.place(id, object);
+          batch.objects.delete(id);
+          batch.bytes -= object.size;
+        }
+      });
+    }
+    await this.syncDirectories();
+  }
+
+  /** Move one synced temporary to its final name. Runs under the store lock. */
+  private async place(id: string, object: StagedObject): Promise<void> {
+    const target = this.path(id);
+    const directory = join(this.objects, id.slice(0, 2));
+    if (await this.has(id)) {
+      const now = new Date();
+      await utimes(target, now, now);
+      await this.removeStaged(object);
+    } else {
+      try {
+        await rename(object.temp, target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        if (this.durable) this.unsyncedDirectories.add(this.objects);
+        await rename(object.temp, target);
+      }
+      this.stagedBytes -= object.size;
+      this.stagedTemps.delete(object.name);
+      if (this.usedBytes !== null) this.usedBytes += object.size;
+    }
+    // Also when another writer placed it: that writer's sync may not have run.
+    if (this.durable) this.unsyncedDirectories.add(directory);
+  }
+
+  private async removeStaged(object: StagedObject): Promise<void> {
+    await rm(object.temp, { force: true }).catch(() => undefined);
+    this.stagedBytes -= object.size;
+    this.stagedTemps.delete(object.name);
+  }
+
+  private async discard(batch: StagedBatch): Promise<void> {
+    const objects = Array.from(batch.objects.values());
+    batch.objects.clear();
+    batch.bytes = 0;
+    for (const object of objects) await this.removeStaged(object);
+  }
+
+  /**
+   * Sync every directory with an unsynced name. Runs after any sync already
+   * under way, so on success each name placed before this call is durable. A
+   * failed directory stays listed: the next flush tries it again.
+   */
+  private syncDirectories(): Promise<void> {
+    if (!this.durable) return Promise.resolve();
+    const run = this.directorySync.then(async () => {
+      const directories = Array.from(this.unsyncedDirectories);
+      this.unsyncedDirectories.clear();
+      try {
+        await forEachBounded(directories, MAX_CONCURRENT_SYNCS, (directory) =>
+          this.sync(directory, "directory"),
+        );
+      } catch (error) {
+        for (const directory of directories) this.unsyncedDirectories.add(directory);
+        throw error;
+      }
+    });
+    this.directorySync = run.catch(() => undefined);
+    return run;
   }
 
   /** Read an object's payload, verifying its id. Null when absent or corrupt. */
@@ -207,7 +441,10 @@ export class ObjectStore {
     }
     let raw: Buffer;
     try {
-      raw = inflateSync(compressed);
+      raw =
+        compressed.length < OFF_LOOP_ZLIB_BYTES
+          ? inflateSync(compressed)
+          : await this.zlibSlots.run(() => inflateOffLoop(compressed));
     } catch {
       return null;
     }
@@ -216,14 +453,6 @@ export class ObjectStore {
     const payload = raw.subarray(nul + 1);
     if (createHash("sha1").update(raw).digest("hex") !== id) return null;
     return new Uint8Array(payload);
-  }
-
-  /** Make published objects durable: fsync each new object's directory entry. */
-  syncDirectories(ids: Iterable<string>): void {
-    if (!this.durable) return;
-    const directories = new Set<string>();
-    for (const id of ids) directories.add(join(this.objects, id.slice(0, 2)));
-    for (const directory of directories) fsyncPath(directory);
   }
 
   /**
@@ -265,6 +494,7 @@ export class ObjectStore {
       }
       // Abandoned temporaries from crashed writers.
       for (const name of await readdir(join(this.root, "tmp")).catch(() => [] as string[])) {
+        if (this.stagedTemps.has(name)) continue;
         const file = join(this.root, "tmp", name);
         const info = await lstat(file).catch(() => null);
         if (info && nowMs - info.mtimeMs >= graceMs) await rm(file, { force: true });
@@ -296,15 +526,60 @@ async function writeIfMissing(file: string, content: string): Promise<void> {
   }
 }
 
-function fsyncPath(path: string): void {
-  let fd: number | undefined;
+/**
+ * A platform or filesystem that cannot fsync this kind of path keeps the old
+ * atomic-rename guarantee. A real failure (EIO, ENOSPC) must reach the caller,
+ * because the object would otherwise be named while not durable.
+ */
+function syncUnsupported(error: unknown, kind: "file" | "directory"): boolean {
+  const code = (error as NodeJS.ErrnoException).code ?? "";
+  if (code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP") return true;
+  return kind === "directory" && ["EISDIR", "EPERM", "EACCES", "ENOENT"].includes(code);
+}
+
+async function fsyncPath(path: string, kind: "file" | "directory"): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    fd = openSync(path, "r");
-    fsyncSync(fd);
-  } catch {
-    // Directory fsync is unsupported on some platforms; object writes are
-    // still atomic.
+    handle = await open(path, "r");
+    await handle.sync();
+  } catch (error) {
+    if (!syncUnsupported(error, kind)) throw error;
   } finally {
-    if (fd !== undefined) closeSync(fd);
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function forEachBounded<T>(
+  items: readonly T[],
+  concurrency: number,
+  work: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (next < items.length) await work(items[next++]!);
+    }),
+  );
+}
+
+/** First-come slots for calls that hold a thread-pool thread and a large buffer. */
+class CallSlots {
+  private free: number;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(count: number) {
+    this.free = count;
+  }
+
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.free > 0) this.free--;
+    else await new Promise<void>((resolve) => this.waiting.push(resolve));
+    try {
+      return await work();
+    } finally {
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.free++;
+    }
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AUTO_SWITCH_RESET_TOLERANCE_MS,
   MAX_USAGE_LIMIT_RESENDS,
   decideAutoSwitch,
   generalWeeklyWindow,
@@ -51,6 +52,24 @@ function account(
 }
 
 const at = (hours: number) => NOW + hours * 3_600_000;
+
+function login(
+  id: string,
+  email: string | undefined,
+  reading: Partial<WeeklyLimitReading>,
+  overrides: { included?: boolean; signedIn?: boolean } = {},
+): AutoSwitchAccount {
+  return account(id, reading, {
+    account: {
+      id,
+      signedIn: overrides.signedIn ?? true,
+      identity: email === undefined ? {} : { email },
+    },
+    included: overrides.included ?? true,
+  });
+}
+
+const STAY = { action: "stay" } as const;
 
 describe("the general weekly limit", () => {
   test("is Claude's seven_day window, never a model, apps or session limit", () => {
@@ -286,6 +305,409 @@ describe("the decision", () => {
         "active",
       ),
     ).toEqual({ action: "switch", accountId: "next", reason: "not-included" });
+  });
+});
+
+describe("the reset tolerance", () => {
+  const decide = (soonerBy: number) =>
+    decideAutoSwitch(
+      [
+        login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+        login("other", "b@example.com", { usedPercent: 50, resetsAt: at(100) - soonerBy }),
+      ],
+      "active",
+    );
+
+  test("is one hour", () => {
+    expect(AUTO_SWITCH_RESET_TOLERANCE_MS).toBe(3_600_000);
+  });
+
+  test("a different login resetting within it stays put, whichever way the gap runs", () => {
+    expect(decide(1)).toEqual(STAY);
+    expect(decide(30 * 60_000)).toEqual(STAY);
+    expect(decide(-30 * 60_000)).toEqual(STAY);
+  });
+
+  test("exactly the tolerance stays, and anything past it moves", () => {
+    expect(decide(AUTO_SWITCH_RESET_TOLERANCE_MS)).toEqual(STAY);
+    expect(decide(AUTO_SWITCH_RESET_TOLERANCE_MS + 1)).toEqual({
+      action: "switch",
+      accountId: "other",
+      reason: "soonest-reset",
+    });
+  });
+
+  test("it does not change the ranking, which stays strict to the millisecond", () => {
+    const ranked = rankAutoSwitchAccounts(
+      [
+        login("active", "a@example.com", { resetsAt: at(10) + 2 }),
+        login("middle", "b@example.com", { resetsAt: at(10) + 1 }),
+        login("first", "c@example.com", { resetsAt: at(10) }),
+      ],
+      "active",
+    );
+    expect(ranked.map(({ account: entry }) => entry.id)).toEqual(["first", "middle", "active"]);
+  });
+
+  test("an active account with no known reset still gives way to one with a reset", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("active", "a@example.com", { usedPercent: 20 }),
+          login("other", "b@example.com", { usedPercent: 50, resetsAt: at(100) }),
+        ],
+        "active",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "soonest-reset" });
+  });
+
+  test("a paying account is no destination however much sooner it resets", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+          login("paying", "b@example.com", { usedPercent: 5, resetsAt: at(1), wouldPay: true }),
+        ],
+        "active",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test.each([
+    ["threshold", { usedPercent: 98, resetsAt: at(10) }, {}],
+    ["not-included", { usedPercent: 20, resetsAt: at(10) }, { included: false }],
+    ["signed-out", { usedPercent: 20, resetsAt: at(10) }, { signedIn: false }],
+  ] as const)("does not hold back a %s move", (reason, reading, overrides) => {
+    for (const reset of [at(10) + 1, at(10) - 1, at(200)]) {
+      expect(
+        decideAutoSwitch(
+          [
+            login("active", "a@example.com", reading, overrides),
+            login("other", "b@example.com", { usedPercent: 50, resetsAt: reset }),
+          ],
+          "active",
+        ),
+      ).toEqual({ action: "switch", accountId: "other", reason });
+    }
+  });
+});
+
+describe("the same login", () => {
+  test("is one account, so resets milliseconds apart stay put in either order", () => {
+    for (const [first, second] of [
+      [at(10), at(10) + 60],
+      [at(10) + 60, at(10)],
+    ]) {
+      const host = login("host", "same@example.com", { usedPercent: 35, resetsAt: first });
+      const added = login("added", "same@example.com", { usedPercent: 35, resetsAt: second });
+      for (const active of ["host", "added"]) {
+        expect(decideAutoSwitch([host, added], active)).toEqual(STAY);
+        expect(decideAutoSwitch([added, host], active)).toEqual(STAY);
+      }
+    }
+  });
+
+  test("never moves onto a twin that resets far sooner, as no allowance is gained", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 35, resetsAt: at(100) }),
+          login("added", "same@example.com", { usedPercent: 35, resetsAt: at(1) }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("matches email ignoring case and surrounding space", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "Same@Example.com", { usedPercent: 98, resetsAt: at(10) }),
+          login("added", "  same@example.COM ", { usedPercent: 35, resetsAt: at(11) }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("a move into a login picks its soonest entry and then stays there", () => {
+    const entries = [
+      login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+      login("later-twin", "same@example.com", { usedPercent: 35, resetsAt: at(10) + 60 }),
+      login("soon-twin", "same@example.com", { usedPercent: 35, resetsAt: at(10) }),
+    ];
+    expect(decideAutoSwitch(entries, "active")).toEqual({
+      action: "switch",
+      accountId: "soon-twin",
+      reason: "soonest-reset",
+    });
+    expect(decideAutoSwitch(entries, "soon-twin")).toEqual(STAY);
+    expect(decideAutoSwitch(entries, "later-twin")).toEqual(STAY);
+  });
+
+  test("at the threshold it moves to a different login with room, never the twin", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 98, resetsAt: at(3) }),
+          login("added", "same@example.com", { usedPercent: 35, resetsAt: at(3) }),
+          login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) }),
+        ],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "threshold" });
+  });
+
+  test("at the threshold with only a twin left, it stays", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 100, resetsAt: at(3) }),
+          login("added", "same@example.com", { usedPercent: 35, resetsAt: at(3) }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("a twin's fresh reading at the threshold speaks for the active entry", () => {
+    const out = login("added", "same@example.com", { usedPercent: 98, resetsAt: at(3) });
+    const other = login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) });
+    const moved = { action: "switch", accountId: "other", reason: "threshold" } as const;
+    for (const reading of [
+      { usedPercent: 35, resetsAt: at(3) },
+      { freshness: "stale" as const, usedPercent: 35, resetsAt: at(3) },
+      { freshness: "none" as const },
+    ]) {
+      expect(
+        decideAutoSwitch([login("host", "same@example.com", reading), out, other], "host"),
+      ).toEqual(moved);
+    }
+  });
+
+  test("a twin's stale reading never moves the active entry, but rules out an idle one", () => {
+    const stale = login("old", "same@example.com", {
+      freshness: "stale",
+      usedPercent: 100,
+      resetsAt: at(5),
+    });
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 35, resetsAt: at(90) }),
+          stale,
+          login("other", "b@example.com", { usedPercent: 5, resetsAt: at(1) }),
+        ],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "soonest-reset" });
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { usedPercent: 35, resetsAt: at(5) }),
+          stale,
+          login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+    expect(
+      decideAutoSwitch(
+        [
+          login("active", "a@example.com", { usedPercent: 20, resetsAt: at(100) }),
+          login("idle", "same@example.com", { usedPercent: 35, resetsAt: at(1) }),
+          stale,
+        ],
+        "active",
+      ),
+    ).toEqual(STAY);
+  });
+
+  test("a confirmed-out entry takes its twins out of the order for a limit stop", () => {
+    const ranked = rankAutoSwitchAccounts(
+      [
+        login("host", "same@example.com", { usedPercent: 100 }),
+        login("added", "same@example.com", { usedPercent: 35, resetsAt: at(1) }),
+        login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) }),
+      ],
+      "host",
+    );
+    expect(ranked.map(({ account: entry }) => entry.id)).toEqual(["other"]);
+  });
+
+  test("the order never offers a twin of a usable active entry", () => {
+    const ranked = rankAutoSwitchAccounts(
+      [
+        login("host", "same@example.com", { usedPercent: 35, resetsAt: at(10) + 60 }),
+        login("added", "same@example.com", { usedPercent: 35, resetsAt: at(10) }),
+      ],
+      "host",
+    );
+    expect(ranked.map(({ account: entry }) => entry.id)).toEqual(["host"]);
+  });
+
+  test("signed out, it can still move to a twin, without any tolerance", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { freshness: "none" }, { signedIn: false }),
+          login("added", "same@example.com", { usedPercent: 35, resetsAt: at(10) }),
+        ],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "added", reason: "signed-out" });
+  });
+
+  test("with its tick off, it can still move to a twin, without any tolerance", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login(
+            "host",
+            "same@example.com",
+            { usedPercent: 35, resetsAt: at(10) },
+            { included: false },
+          ),
+          login("added", "same@example.com", { usedPercent: 35, resetsAt: at(10) + 60 }),
+        ],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "added", reason: "not-included" });
+  });
+
+  test("a used-up entry with its tick off still counts its twin as used up", () => {
+    const host = login("host", "same@example.com", { usedPercent: 100 }, { included: false });
+    const added = login("added", "same@example.com", { usedPercent: 35, resetsAt: at(10) });
+    expect(decideAutoSwitch([host, added], "host")).toEqual(STAY);
+    expect(
+      decideAutoSwitch(
+        [host, added, login("other", "b@example.com", { usedPercent: 5, resetsAt: at(90) })],
+        "host",
+      ),
+    ).toEqual({ action: "switch", accountId: "other", reason: "not-included" });
+  });
+
+  test("a signed-out or unticked twin is still no destination", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("host", "same@example.com", { freshness: "none" }, { signedIn: false }),
+          login("added", "same@example.com", { usedPercent: 35 }, { signedIn: false }),
+          login("unticked", "same@example.com", { usedPercent: 35 }, { included: false }),
+        ],
+        "host",
+      ),
+    ).toEqual(STAY);
+  });
+});
+
+describe("entries with no email", () => {
+  test("are distinct, for the tolerance and for the threshold", () => {
+    const keys = [undefined, "   "] as const;
+    for (const first of keys) {
+      for (const second of keys) {
+        expect(
+          decideAutoSwitch(
+            [
+              login("left", first, { usedPercent: 20, resetsAt: at(100) }),
+              login("right", second, { usedPercent: 50, resetsAt: at(1) }),
+            ],
+            "left",
+          ),
+        ).toEqual({ action: "switch", accountId: "right", reason: "soonest-reset" });
+        expect(
+          decideAutoSwitch(
+            [
+              login("left", first, { usedPercent: 98, resetsAt: at(1) }),
+              login("right", second, { usedPercent: 50, resetsAt: at(1) }),
+            ],
+            "left",
+          ),
+        ).toEqual({ action: "switch", accountId: "right", reason: "threshold" });
+      }
+    }
+  });
+
+  test("one used up says nothing about another", () => {
+    const ranked = rankAutoSwitchAccounts(
+      [
+        account("left", { usedPercent: 100 }),
+        account("right", { usedPercent: 50, resetsAt: at(1) }),
+      ],
+      "left",
+    );
+    expect(ranked.map(({ account: entry }) => entry.id)).toEqual(["right"]);
+  });
+
+  test("still fall under the tolerance like any other login", () => {
+    expect(
+      decideAutoSwitch(
+        [
+          login("left", undefined, { usedPercent: 20, resetsAt: at(10) + 60 }),
+          login("right", undefined, { usedPercent: 50, resetsAt: at(10) }),
+        ],
+        "left",
+      ),
+    ).toEqual(STAY);
+  });
+});
+
+describe("the rkmbp readings of 2026-11-04", () => {
+  // Host login and an added entry for one login, plus a different login. The
+  // moves on rkmbp happened at these times, all for `soonest-reset`.
+  const CYCLES = [
+    "2026-11-04T01:29:49Z",
+    "2026-11-04T02:07:23Z",
+    "2026-11-04T02:27:23Z",
+    "2026-11-04T02:27:36Z",
+    "2026-11-04T02:37:23Z",
+    "2026-11-04T02:46:42Z",
+  ].map((time) => Date.parse(time));
+  const FIRST_RESET = "2026-11-07T17:00:00.404Z";
+  const SECOND_RESET = "2026-11-07T17:00:00.464Z";
+
+  const entries = (host: string, added: string, now: number): AutoSwitchAccount[] => {
+    const read = (usedPercent: number, resetsAt: string) =>
+      weeklyLimitReading(
+        "claude",
+        snapshot({ windows: [{ window: "seven_day", usedPercent, resetsAt }] }),
+        now,
+      );
+    return [
+      login("host", "same@example.com", read(35, host)),
+      login("added", "same@example.com", read(35, added)),
+      login("other", "other@example.com", read(0, "2026-11-09T21:00:00.485Z")),
+    ];
+  };
+
+  test("a reading keeps the sub-second part of a reset, so the two entries can trade places", () => {
+    const first = entries(FIRST_RESET, SECOND_RESET, CYCLES[0]!);
+    const second = entries(SECOND_RESET, FIRST_RESET, CYCLES[0]!);
+    expect(first[0]!.reading.resetsAt).toBeLessThan(first[1]!.reading.resetsAt!);
+    expect(second[0]!.reading.resetsAt).toBeGreaterThan(second[1]!.reading.resetsAt!);
+  });
+
+  test("replaying them with the sub-second values swapping moves nothing", () => {
+    for (const start of ["host", "added"]) {
+      let active = start;
+      for (let round = 0; round < 10; round += 1) {
+        CYCLES.forEach((now, cycle) => {
+          const swapped = (round + cycle) % 2 === 1;
+          const decision = decideAutoSwitch(
+            entries(
+              swapped ? SECOND_RESET : FIRST_RESET,
+              swapped ? FIRST_RESET : SECOND_RESET,
+              now,
+            ),
+            active,
+          );
+          if (decision.action === "switch") active = decision.accountId;
+          expect(decision).toEqual(STAY);
+        });
+      }
+      expect(active).toBe(start);
+    }
   });
 });
 

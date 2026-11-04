@@ -441,6 +441,8 @@ export interface NativeMessage {
   goalTurn?: GoalTurnPresentation;
   /** A client-only goal status row, derived from the session snapshot. */
   goalStatus?: GoalStatusPresentation;
+  /** A client-only `ask_agents` call, derived from the session snapshot. */
+  suborkGroup?: import("@orkestrator/protocol/suborks").NativeAgentSuborkBatchView;
 }
 
 /**

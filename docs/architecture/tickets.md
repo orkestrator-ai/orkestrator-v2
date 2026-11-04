@@ -131,6 +131,13 @@ established itself and requires `not-checked`, never `passed`, for a criterion
 it cannot establish here. A verdict in the old two-field shape (a verify turn
 started before the upgrade) is still accepted and records no criteria.
 
+A `not-checked` criterion does not by itself fail a run. No later stage can
+supply a real device, a live provider or a person, so failing would only loop
+until the iterations ran out. The prompt tells Verify to answer `complete: true`
+when the change does everything it could establish, and the criterion is flagged
+in the pull request and the pipeline's
+[Notes step](build-pipeline-view.md#notes) for a person to check.
+
 The backend stores the results on the verify session
 (`acceptanceCriteriaResults`, one per snapshot criterion; a skipped criterion is
 `not-checked`, an unknown id is dropped), appends the failed criteria to the

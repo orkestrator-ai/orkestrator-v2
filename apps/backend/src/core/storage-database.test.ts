@@ -335,6 +335,55 @@ describe("StorageDatabase", () => {
     expect(db.db.query("SELECT name FROM sqlite_master WHERE name = 'half'").get()).toBeNull();
   });
 
+  test("a failed migration logs one line with no error text, and fails the open as before", async () => {
+    const directory = await dataDir();
+    const logs = captureLogs();
+    try {
+      database(directory).close();
+      expect(() =>
+        database(directory, {
+          migrations: [
+            {
+              version: 2,
+              name: "broken",
+              up: () => {
+                throw new Error("/Users/someone/private path");
+              },
+            },
+          ],
+        }),
+      ).toThrow("/Users/someone/private path");
+      const failed = logs.records().filter((record) => record.event === "migration.failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0]?.level).toBe("error");
+      expect(failed[0]?.fields).toMatchObject({ fromVersion: 1, toVersion: 2, step: "migrate" });
+      expect(failed[0]?.fields?.error).not.toHaveProperty("message");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a failed safety copy before a migration is told apart from the migration", async () => {
+    const directory = await dataDir();
+    const logs = captureLogs();
+    try {
+      database(directory).close();
+      expect(() =>
+        database(directory, {
+          migrations: [{ version: 2, name: "fine", up: () => undefined }],
+          beforeMigrate: () => {
+            throw new Error("no snapshot");
+          },
+        }),
+      ).toThrow("no snapshot");
+      expect(
+        logs.records().find((record) => record.event === "migration.failed")?.fields?.step,
+      ).toBe("snapshot");
+    } finally {
+      logs.restore();
+    }
+  });
+
   describe("leases", () => {
     test("excludes a second holder until release", async () => {
       const directory = await dataDir();

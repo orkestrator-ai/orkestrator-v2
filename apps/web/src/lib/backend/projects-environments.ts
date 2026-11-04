@@ -194,6 +194,14 @@ export async function getEnvironmentSnapshots(projectId: string): Promise<Enviro
   return invoke<Environment[]>("get_environment_snapshots", { projectId });
 }
 
+/**
+ * Read one persisted environment, as `getEnvironmentSnapshots` lists it; `null`
+ * when it no longer exists. Backends before this command reject it as unknown.
+ */
+export async function getEnvironmentSnapshot(environmentId: string): Promise<Environment | null> {
+  return invoke<Environment | null>("get_environment_snapshot", { environmentId });
+}
+
 export async function reorderEnvironments(
   projectId: string,
   environmentIds: string[],

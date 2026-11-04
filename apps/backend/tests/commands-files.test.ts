@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 
+import { parseContainerGitStatusEnvelope } from "../src/core/commands-files.js";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -209,6 +210,61 @@ describe("Electron backend command registry", () => {
     }
   });
 
+  test(
+    "the container script runs one combined diff against the commit it resolved",
+    async () => {
+      const repo = await createTempDir("ork-container-script-one-pass-");
+      await runGit(repo, ["init", "-b", "main", "."]);
+      await fs.writeFile(path.join(repo, "old name.txt"), "x\ny\nz\nw\n");
+      await fs.writeFile(path.join(repo, "stat only.txt"), "same\n");
+      const latin1 = Buffer.concat([
+        Buffer.from(`${repo}/caf`),
+        Buffer.from([0xe9]),
+        Buffer.from(".txt"),
+      ]);
+      await fs.writeFile(latin1, "a\n");
+      await runGit(repo, ["add", "-A"]);
+      await runGit(repo, ["commit", "-m", "base"]);
+      const oid = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: repo,
+        encoding: "utf8",
+      }).stdout.trim();
+      await runGit(repo, ["mv", "old name.txt", "new name.txt"]);
+      await fs.appendFile(latin1, "b\n");
+      await fs.utimes(
+        path.join(repo, "stat only.txt"),
+        new Date("2001-01-01"),
+        new Date("2001-01-01"),
+      );
+
+      const script = commandTesting.buildContainerGitStatusScript("main", true);
+      expect(script.match(/\bdiff --/g)).toHaveLength(1);
+      expect(script).toContain("--raw --numstat -z -M");
+      expect(script).toContain("maintain_git_exclude");
+
+      await withGnuBase64Shim(async (env) => {
+        const result = spawnSync("bash", ["-c", script], { cwd: repo, encoding: "utf8", env });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+        const envelope = parseContainerGitStatusEnvelope(result.stdout, true);
+        expect(envelope).toMatchObject({ kind: "ok", baseline: "local", baseOid: oid });
+        const changes = commandTesting.parseContainerGitStatusResponse(result.stdout, true);
+        expect(
+          changes.map(({ path: file, originalPath, status, additions }) => ({
+            file,
+            originalPath,
+            status,
+            additions,
+          })),
+        ).toEqual([
+          { file: "caf\ufffd.txt", originalPath: undefined, status: "M", additions: 1 },
+          { file: "new name.txt", originalPath: "old name.txt", status: "R100", additions: 0 },
+        ]);
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
   test("rejects untracked scanner input that is not NUL-terminated", async () => {
     const workspace = await createTempDir("ork-container-untracked-truncated-");
     const result = spawnSync("node", ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"], {
@@ -373,8 +429,7 @@ exit 0
   });
 
   test("decodes sections whatever whitespace the container's base64 emits", () => {
-    const nameStatus = "M\0keep.txt\0";
-    const numstat = "1\t0\tkeep.txt\0";
+    const summary = ":100644 100644 1111111 2222222 M\0keep.txt\0" + "1\t0\tkeep.txt\0";
     // GNU coreutils with -w0 emits no whitespace, macOS appends a trailing newline,
     // and an implementation that ignores -w0 wraps at 76 columns. All three decode.
     const variants = [
@@ -384,10 +439,8 @@ exit 0
     ];
     for (const wrap of variants) {
       const response = [
-        "ORKESTRATOR_NAME_STATUS",
-        wrap(Buffer.from(nameStatus).toString("base64")),
-        "ORKESTRATOR_NUMSTAT",
-        wrap(Buffer.from(numstat).toString("base64")),
+        "ORKESTRATOR_DIFF",
+        wrap(Buffer.from(summary).toString("base64")),
         "ORKESTRATOR_UNTRACKED",
         "",
         "ORKESTRATOR_END",
@@ -399,7 +452,7 @@ exit 0
     // Stripping whitespace must not make genuinely invalid payloads decodable.
     expect(() =>
       commandTesting.parseContainerGitStatusResponse(
-        framedContainerGitStatus().replace("ORKESTRATOR_NUMSTAT", "%%%ORKESTRATOR_NUMSTAT"),
+        framedContainerGitStatus().replace("ORKESTRATOR_UNTRACKED", "%%%ORKESTRATOR_UNTRACKED"),
         true,
       ),
     ).toThrow("invalid base64");

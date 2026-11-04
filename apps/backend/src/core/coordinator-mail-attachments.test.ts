@@ -440,11 +440,11 @@ describe("send_message with attachments, between a coordinator and its side agen
         }),
       ),
     );
-    expect(messages[0]!.attachments[0].path).toBe(messages[1]!.attachments[0].path);
-    expect((await fs.readFile(messages[0]!.attachments[0].path)).equals(PNG)).toBe(true);
-    expect(await fs.readdir(path.dirname(messages[0]!.attachments[0].path))).toEqual([
-      path.basename(source),
-    ]);
+    const [first, second] = messages.map((message) => message.attachments[0]?.path);
+    if (!first) throw new Error("expected the first send to carry an attachment");
+    expect(first).toBe(second);
+    expect((await fs.readFile(first)).equals(PNG)).toBe(true);
+    expect(await fs.readdir(path.dirname(first))).toEqual([path.basename(source)]);
     expect(await inbox(side)).toHaveLength(2);
   });
 

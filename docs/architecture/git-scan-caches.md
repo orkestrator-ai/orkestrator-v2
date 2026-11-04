@@ -8,7 +8,9 @@ are relative to `apps/backend/src/core/`.
 
 | File | Purpose |
 | --- | --- |
-| `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats) |
+| `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
+| `git-diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
+| `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
 | `git-fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
 | `review-validation-worker.ts`, `review-worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
 
@@ -35,8 +37,84 @@ workspace mutation, a new target, a periodic tick and a failure retry all scan
 straight away, and any scan that starts cancels the timer. Containers are not
 gapped here because their signal already spaces hints by the same 2 s
 (`CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS`). The gap limits how often git runs
-while a burst lasts; it does not make a single scan cheaper, and hints under
+while a burst lasts, and hints under
 ignored directories still count, because a build directory can hold tracked files.
+
+## What one scan costs
+
+A warm local scan runs four git processes: the base's commit (`rev-parse`, one
+more when `origin/<ref>` does not exist), the filter configuration, one combined
+diff and `status`. It used to run seven or eight.
+
+- **One diff.** `git diff --raw --numstat -z -M` replaces separate `--name-status`
+  and `--numstat` runs, so rename detection runs once. The raw records and the
+  numstat records arrive in one stream with no separator. `parseGitDiffSummary`
+  reads them in sequence, so a path that starts with `:` or looks like a count
+  stays a path. Output is unchanged, including renames, paths with spaces, tabs
+  and newlines, and non-UTF-8 names, which decode lossily exactly as before.
+  `git-diff-summary.test.ts` compares both forms against real Git. Stat-only
+  modifications still appear in the raw records and are still dropped by checking
+  numstat (`withoutStatOnlyModifications`). Git scopes use the same run.
+- **One base resolution.** The check that finds the base already reads its commit,
+  and the diff compares against that commit, so the reported `baseOid` is exactly
+  what was compared. A base that resolves to nothing passes the ref to Git, which
+  fails with the same error as ever.
+- **The exclude file once per worktree.** `ensureLocalGitExcludeOnce` remembers the
+  file and its stamp. Later scans compare one `stat`, without a process or a read,
+  so a file something else rewrote or removed is still repaired on the next scan.
+  The stamp is taken before the read that found every pattern, so a rewrite after
+  that read still counts as a change.
+
+A container scan is one `docker exec` running one script, with the same changes
+inside it: one combined diff against the commit it resolved, and the resolution
+reused. Exclude housekeeping runs inside that script on every scan. This repairs
+patterns after repository replacement or exclude deletion/rewrites in the same
+running container, and retries best-effort failures on the next scan. Container
+excludes deliberately have no memo until a repairable validity check is available.
+
+### Untracked line counts
+
+Each scan used to open and read every untracked file. `countUntrackedFileLines`
+keeps the count of a file against its stat stamp (ino, size, mtime, ctime), and a
+later scan that sees the same stamp only `lstat`s it. It follows the rule captures
+use (`STAT_SETTLE_WINDOW_MS`, 2 s, in `stat-stamp.ts`): a count is kept only when
+the file's mtime and ctime were at least that old when it was read, so a same-size
+rewrite within one timestamp tick cannot publish a stale count. A file being
+written is read on every scan until it ages. The stamp comes from the descriptor
+that was read, before the read, so a write during the read misses next time.
+Failures are not cached.
+
+The cache is process-wide and keyed by worktree path, because diff stats and Git
+scopes read the same files and every entry is checked against the file's own stat.
+It holds at most 64 worktrees (least recently scanned goes first) and, per worktree,
+2,000 entries and an estimated 512 KiB. A scan's list prunes paths no longer
+untracked, and `DiffStatsTracking.sync` drops worktrees with no environment left.
+Container scans still read untracked files inside the container: there is no state
+there to hold a cache, and only the counts cross the boundary.
+
+Git scopes count untracked files through the same cache with
+`UNTRACKED_SCAN_CONCURRENCY` at a time, rather than one by one. When a scope is
+recomputed at all is in
+[change-tracking.md](change-tracking.md#scopes).
+
+### Measured
+
+`bun scripts/benchmark-local-diff-scan.ts`, workload `scan-1k`: 1,000 tracked files,
+20 modified, 5 renamed with an edit, 5 deleted, 200 untracked (2,000 in the last
+row), files settled, three interleaved rounds of `a8bdce444` and this change, 30
+warm scans each (two rounds of 15 for the last row), load average 10 to 18 on the
+shared Linux host. Scan time is the p50 range.
+
+| Workload | Git processes, before | After | Untracked files read, before | After | Scan time, before | After |
+| --- | --- | --- | --- | --- | --- | --- |
+| `scan-1k`, commit base | 7 | 4 | 200 | 0 | 17.0–25.4 ms | 14.8–16.5 ms |
+| `scan-1k`, tracking base | 7 | 4 | 200 | 0 | 19.6–26.5 ms | 15.0–16.2 ms |
+| `scan-1k`, commit base, 2,000 untracked | 7 | 4 | 2,000 | 0 | 42.5–48.6 ms | 17.9–30.4 ms |
+
+A worktree's first scan costs one process more for the exclude file. The time saved
+per scan is small on this host. The process count is the larger change: it applies to
+every scan an install or an agent's edits drive, up to one every 2 s. Other hosts
+were not measured.
 
 ## Why fsmonitor is off
 
@@ -71,7 +149,7 @@ Diff stats also read the effective filter configuration before scanning, then
 blank each configured driver's clean, smudge and process commands and set
 `required=false` for that invocation (`git-filter-config.ts`). A configuration
 read error stops the scan; only Git's no-matching-key exit is accepted as an
-empty driver list. Both diff reads pass `--no-ext-diff --no-textconv`. These
+empty driver list. The diff passes `--no-ext-diff --no-textconv`. These
 counts describe the raw worktree bytes rather than an external filter's output.
 
 The daemon is not macOS-only. Git 2.56.0 on Linux reports
@@ -183,7 +261,7 @@ inventory, bounded at 30 s), and the fingerprint probe's streaming `diff`
 after a status timeout). The host and container change-tracking inventory
 and scope readers already disable fsmonitor through `SAFE_GIT_CONFIG` or
 their embedded equivalent, and diff stats (`getLocalGitStatusDetailed`:
-name-status, numstat, status; 60 s each) through `HARDENED_GIT_CONFIG`, so
+the combined diff and status; 60 s each) through `HARDENED_GIT_CONFIG`, so
 they need no retry.
 
 ## Tests

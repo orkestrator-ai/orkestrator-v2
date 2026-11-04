@@ -10,7 +10,7 @@
  *    Claude's "Session 1a2b3c");
  * 3. a backend title the provider already holds;
  * 4. the first user message, cut short;
- * 5. the provider's placeholder, when there is nothing else.
+ * 5. nothing: a placeholder names nothing, and the reader keeps what it shows.
  *
  * The backend chooses a title once per provider session, when the provider has
  * none of its own and the read reaches the start of the conversation: a model
@@ -137,8 +137,10 @@ export class NativeAgentSessionTitles {
       ? firstMessageSessionTitle(read.firstUserMessage)
       : undefined;
     if (fallback && read.reachesStart && !read.transient) this.choose(read, stateKey, fallback);
-    // A placeholder is still better than no title at all.
-    return fallback ?? (reported || undefined);
+    // No title rather than a placeholder: a body-free state read has no first
+    // message to offer, and answering with the placeholder overwrote the title
+    // the last transcript read had just shown.
+    return fallback;
   }
 
   /** Title choices still in flight, for shutdown to settle. */

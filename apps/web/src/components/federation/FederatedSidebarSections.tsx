@@ -39,6 +39,7 @@ import {
   repositoryLabel,
   repositoryMemberLabel,
   repositoryOpenTarget,
+  repositoryTileColor,
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
@@ -589,7 +590,7 @@ export function MergedProjectList({
           ? {
               icon: (
                 <CommandNodeHomeIcon
-                  colorToken={commandNode?.colorToken}
+                  colorToken={repositoryTileColor(commandNode, entry.name, opens)}
                   projectIcon={
                     commandNode?.projects.find(
                       (project) => project.repositoryHint === entry.name && project.icon,

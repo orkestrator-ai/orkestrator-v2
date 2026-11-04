@@ -24,6 +24,23 @@ profile `fix-remote-settings`, Chromium, one worker:
 - No terminal read or assertion was changed. Snapshot/history timing remains an unconfirmed hypothesis.
 - Exact combined-command rerun passed all five cases in 27.7 s, including desktop/narrow gateway settings and desktop/narrow container settings.
 
+## Recurrence: subork review fixes, 2026-11-04
+
+Worktree `subork-agent-command-19d44fc3d0c3-r1`, isolated profile
+`agent-subork-review-fixes`, one Chromium worker. The unchanged owning case
+failed at line 624 twice: the snapshot poll saw `background-done`, but the
+following history page did not. Runs took 8.2 s and 9.0 s, each 0 passed / 1
+failed. This recurrence was unresolved during the subork review; neither terminal
+read path was changed by those repairs. The upstream root cause and spec fix
+are recorded below.
+
+Command: `ORKESTRATOR_AGENT_TEST_PROFILE=agent-subork-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=subork-review-fixes-smoke mise run test:logged -- --name repair-browser-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'real browser gateway exercises an authoritative local environment' --workers=1`.
+
+Evidence: `/tmp/orkestrator-test-run.70AlOh/repair-browser-smoke.log.gz` and
+`/tmp/orkestrator-test-run.bbtANS/repair-browser-smoke.log.gz`. The spec, assertion
+and terminal implementation were left unchanged. This is an observation of the
+existing case, not a claim that an isolated rerun passed this time.
+
 ## Root cause and fix, 2026-11-04
 
 Not a read-path difference: the archive dropped the line. The spec prints 1,100 lines, and `enqueueHistoryRecord` admits 256 queued records per session (`TERMINAL_HISTORY_PENDING_RECORDS`), draining on a 250 ms timer. When the burst outruns that, the later lines are dropped and the session reports `historyGap`. The state snapshot is unaffected, which is why it held the marker. So the case passed only when the burst happened to be slow enough.

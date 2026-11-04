@@ -79,6 +79,35 @@ describe("the notice of an automatic switch", () => {
   });
 });
 
+describe("who the notice skips", () => {
+  test("the coordinator a move was made for, whose own notice says so", async () => {
+    const send = mock(async () => ({}));
+    await mailAutoSwitchNotice(storageWith(send), NOTICE, "this machine", {
+      quietProjectId: "project-1",
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(send.mock.calls)).not.toContain('"main-tab"');
+  });
+
+  test("coordinators whose repository the command node hears about instead", async () => {
+    const send = mock(async () => ({}));
+    await mailAutoSwitchNotice(storageWith(send), NOTICE, "this machine", {
+      hearsHere: async (projectId) => projectId === "project-2",
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(send.mock.calls)).toContain('"main-tab-2"');
+  });
+
+  test("a sender that must retry is told a delivery failed", async () => {
+    const send = mock(async () => {
+      throw new Error("mail is off");
+    });
+    await expect(
+      mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true }),
+    ).rejects.toThrow("mail is off");
+  });
+});
+
 describe("a switch on a machine this one controls", () => {
   function bridge() {
     let listener: ((event: string, payload: unknown, nodeId: string) => void) | undefined;
@@ -98,6 +127,28 @@ describe("a switch on a machine this one controls", () => {
     });
     return { emit: listener!, mailed };
   }
+
+  test("a machine that sends through its outbox is not told about twice", async () => {
+    let listener: ((event: string, payload: unknown, nodeId: string) => void) | undefined;
+    const mailed: unknown[] = [];
+    bridgeRemoteAutoSwitchNotices({
+      onNodeEvent: (next) => {
+        listener = next;
+        return () => undefined;
+      },
+      nodeName: async () => "Leaf one",
+      mail: async (event) => {
+        mailed.push(event);
+      },
+      sendsThroughOutbox: (nodeId) => nodeId === "new-leaf",
+    });
+    listener!(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "new-leaf");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mailed).toHaveLength(0);
+    listener!(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, NOTICE, "older-leaf");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mailed).toHaveLength(1);
+  });
 
   test("reaches this node's coordinators, naming the machine", async () => {
     const { emit, mailed } = bridge();

@@ -518,6 +518,7 @@ describe("reconcilePersistedLayout", () => {
     ].map((tab) => ({
       ...tab,
       backendManagedTerminal: tab.id.endsWith("-terminal"),
+      setupHandoffConsumed: true,
       backendTerminalSessionId: tab.id.endsWith("-terminal") ? `${tab.id}-session` : undefined,
       initialAgentPlatform: "codex",
       initialAgentModel: `${tab.id}-model`,
@@ -539,6 +540,7 @@ describe("reconcilePersistedLayout", () => {
     const tabs = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tabs).toHaveLength(agentTabs.length);
     for (const tab of tabs) {
+      expect(tab.setupHandoffConsumed).toBe(true);
       expect(tab.initialAgentPlatform).toBe("codex");
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
       expect(tab.initialReasoningEffort).toBe("xhigh");

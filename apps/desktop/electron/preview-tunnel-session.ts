@@ -408,9 +408,9 @@ export class PreviewTunnelSession {
       return;
     }
     if (frame.type === "error" && frame.stream === undefined) {
-      // The session is ending; its close frame follows with the code. `close`
-      // waits for the socket to finish, so fail the streams now: until then a
-      // pooled one still looks usable, but nothing written to it can be sent.
+      // The session is ending; its close frame follows with the code. That code
+      // fails every stream anyway, so fail them now: until then a pooled stream
+      // would look reusable while any write to it can only fail.
       this.failure = previewFailure(frame.error.category, { message: frame.error.message });
       this.onReady?.(this.failure);
       for (const pending of Array.from(this.opening.values())) pending.reject(this.failure);

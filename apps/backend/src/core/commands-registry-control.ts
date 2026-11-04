@@ -123,6 +123,13 @@ async function launchNativeAgentJobInternal(
             throw new Error("attachments must be an array");
           })();
 
+  const requestedTabId = options.allowCompletionAction
+    ? asOptionalString(args.tabId)?.trim() || undefined
+    : undefined;
+  if (requestedTabId && requestedTabId.length > 256) {
+    throw new Error("tabId must be at most 256 characters");
+  }
+
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
@@ -300,7 +307,9 @@ async function launchNativeAgentJobInternal(
         return { jobId, environmentId, ...resent, ...completionActionResult };
       }
     }
-    const tabId = `agent-job-${jobId}`;
+    // A renderer chooses the id up front so the tab it shows at once is this
+    // tab. Control MCP callers keep the id derived from their retry key.
+    const tabId = requestedTabId ?? `agent-job-${jobId}`;
     const logicalSessionKey = `env-${environmentId}:${tabId}`;
     await context.storage.ensureNativeAgentJobTab({
       environmentId,

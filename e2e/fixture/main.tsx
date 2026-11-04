@@ -1,5 +1,6 @@
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
+import { SuborkGroupFixture } from "./SuborkGroupFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
@@ -188,6 +189,9 @@ const SetupRecoveryFixture = lazy(async () => ({
   default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
+const AutoMergeErrorFixture = lazy(async () => ({
+  default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
+}));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
 }));
@@ -1991,6 +1995,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/auto-merge-error") {
+    return (
+      <Suspense fallback={null}>
+        <AutoMergeErrorFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/environment-settings-drawer") {
     return (
       <Suspense fallback={null}>
@@ -2083,6 +2094,7 @@ function fixtureForPath() {
     );
   if (window.location.pathname === "/virtuoso-follow") return <VirtuosoFollowFixture />;
   if (window.location.pathname === "/agent-usage") return <AgentUsageFixture />;
+  if (window.location.pathname === "/subork-group") return <SuborkGroupFixture />;
   if (window.location.pathname === "/background-task-outcome")
     return <BackgroundTaskOutcomeFixture />;
   if (window.location.pathname === "/codex-subagent-cards") return <CodexSubagentCardsFixture />;

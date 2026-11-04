@@ -242,12 +242,26 @@ describe("rewinding to an earlier step", () => {
       const started = await service.start(
         startInput({ source: { type: "kanban", taskId: "task-default" } }),
       );
+      await mutateStored(storage, started.id, (snapshot) => {
+        applyAgentKeyInformationUpdate(snapshot, {
+          notDone: ["Check the cold-cache startup on a device"],
+          tests: [{ name: "Device smoke", result: "not-run", details: "Needs a device." }],
+        });
+      });
       const completed = await advanceUntil(
         service,
         storage,
         started.id,
         (snapshot) => snapshot.phase === "complete",
       );
+      const firstShip = provider.sent.find(
+        (sent) =>
+          sent.sessionId === completed.sessions.find((entry) => entry.phase === "pr")!.sdkSessionId,
+      )!;
+      expect(firstShip.prompt).toContain("`## Needs a look`");
+      expect(firstShip.prompt).toContain("Check the cold-cache startup on a device");
+      expect(firstShip.prompt).toContain("Device smoke");
+      expect(firstShip.prompt).toContain("Needs a device.");
       expect(controls.kanbanTasks.get("task-default")?.status).toBe("review");
       const verify = completed.sessions.find((session) => session.phase === "verify")!;
       const ship = completed.sessions.find((session) => session.phase === "pr")!;
@@ -260,6 +274,15 @@ describe("rewinding to an earlier step", () => {
         restarted.sessions.find((session) => session.sessionKey === ship.sessionKey)?.supersededBy,
       ).toBe(restarted.rewinds?.[0]?.id);
 
+      // A restart rebuilds the brief. Ship must use the newly recorded follow-ups.
+      await mutateStored(storage, started.id, (snapshot) => {
+        applyAgentKeyInformationUpdate(snapshot, {
+          notDone: ["Recheck the cold-cache startup after the restart"],
+          tests: [
+            { name: "Restarted device smoke", result: "not-run", details: "Needs a device." },
+          ],
+        });
+      });
       const recompleted = await advanceUntil(
         service,
         storage,
@@ -270,8 +293,13 @@ describe("rewinding to an earlier step", () => {
       expect(ships).toHaveLength(2);
       const reship = provider.sent.find((sent) => sent.sessionId === ships[1]!.sdkSessionId);
       expect(reship?.prompt).toContain("https://github.com/acme/repo/pull/1");
+      expect(reship?.prompt).toContain("`## Needs a look`");
+      expect(reship?.prompt).toContain("Recheck the cold-cache startup after the restart");
+      expect(reship?.prompt).toContain("Restarted device smoke");
+      expect(reship?.prompt).toContain("Needs a device.");
       expect(reship?.prompt).toContain("Do not create another one");
       expect(reship?.prompt).not.toContain("gh pr create");
+      expect(reship?.prompt).not.toContain("Check the cold-cache startup on a device");
       const task = controls.kanbanTasks.get("task-default")!;
       expect(task.status).toBe("review");
       expect(task.prUrl).toBe("https://github.com/acme/repo/pull/1");

@@ -5,7 +5,7 @@ application and work wherever focus is in the window: the sidebar, the main
 area, the composer, a terminal, Monaco, a leaf node's workspace realm, a design
 frame or an interactive artifact. **Local** shortcuts belong to the surface
 that owns them (the composer's Enter, a terminal's copy, the design canvas's
-keys, ⌘T and the other environment keys) and work only while it has focus.
+keys, ⌘R and the other environment keys) and work only while it has focus.
 
 The app-level shortcuts are:
 
@@ -14,9 +14,13 @@ The app-level shortcuts are:
 | ⌘K / Ctrl+K | Search projects and environments (sidebar) | the window's shell |
 | ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (shell or realm) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
+| ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the focused workspace (shell or realm) |
 | ⌘⇧D / Ctrl+Shift+D | Rotate the sidebar's group-by mode ([order](federation.md#compact-sidebar)) | the window's shell |
 
 Either modifier is accepted on every platform, but not both, and not with Alt.
+Plain Ctrl+T stays with a shell or a macOS text field, where it transposes
+characters; ⌘T is always the app's. A browser-served client cannot have ⌘T: the
+browser opens its own tab before the page sees the key.
 
 | Piece | File |
 | --- | --- |

@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -116,10 +117,15 @@ export function EnvironmentRecoveryCopies({
       }
     };
     void check();
-    const timer = setInterval(() => void check(), RECORD_CHECK_MS);
+    const stopPolling = startCoordinatedPoll({
+      resource: "environment-recovery-copies",
+      target: environment.id,
+      intervalMs: RECORD_CHECK_MS,
+      read: check,
+    });
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [environment.id, load]);
 

@@ -117,18 +117,46 @@ interface NativeAgentProjectionState {
   reset: () => void;
 }
 
+/**
+ * A Map copied the first time a store write has to change it. `current` keeps
+ * the original's identity until then, so one write publishes a new object only
+ * for the Maps it actually changed.
+ */
+interface CopyOnWriteMap<V> {
+  readonly current: ReadonlyMap<string, V>;
+  write(): Map<string, V>;
+}
+
+function copyOnWrite<V>(source: ReadonlyMap<string, V>): CopyOnWriteMap<V> {
+  let copy: Map<string, V> | null = null;
+  return {
+    get current() {
+      return copy ?? source;
+    },
+    write() {
+      return (copy ??= new Map(source));
+    },
+  };
+}
+
+function isMostRecent(map: ReadonlyMap<string, unknown>, key: string): boolean {
+  let last: string | undefined;
+  for (const candidate of map.keys()) last = candidate;
+  return last === key;
+}
+
 function dropProgressiveTranscriptToken(
-  caches: Map<string, NativeAgentProgressiveCacheEntry>,
+  caches: CopyOnWriteMap<NativeAgentProgressiveCacheEntry>,
   sessionKey: string,
 ): void {
-  const entry = caches.get(sessionKey);
+  const entry = caches.current.get(sessionKey);
   if (
     !entry ||
     (entry.transcriptToken === undefined && entry.transcriptHistoryEpoch === undefined)
   ) {
     return;
   }
-  caches.set(sessionKey, {
+  caches.write().set(sessionKey, {
     ...entry,
     transcriptToken: undefined,
     transcriptHistoryEpoch: undefined,
@@ -172,36 +200,53 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
   turnStopMarkers: new Map(),
   setProjection: (sessionKey, projection, syncCache) =>
     set((state) => {
-      const next = new Map(state.projections);
-      const nextBytes = new Map(state.projectionBytes);
-      const nextSync = new Map(state.syncCaches);
-      const nextProgressive = new Map(state.progressiveCaches);
+      // Rewriting what is already held, at the most-recent end of the LRU,
+      // changes nothing a subscriber could observe.
+      if (
+        projection &&
+        state.projections.get(sessionKey) === projection &&
+        (syncCache === undefined ||
+          (syncCache && state.syncCaches.get(sessionKey) === syncCache)) &&
+        isMostRecent(state.projections, sessionKey)
+      ) {
+        return state;
+      }
+      const next = copyOnWrite(state.projections);
+      const nextBytes = copyOnWrite(state.projectionBytes);
+      const nextSync = copyOnWrite(state.syncCaches);
+      const nextProgressive = copyOnWrite(state.progressiveCaches);
       let liveBytes = state.projectionBytesTotal;
       let historyBytes = state.historyBytesTotal;
       const dropProjection = (key: string) => {
-        liveBytes -= nextBytes.get(key) ?? 0;
-        next.delete(key);
-        nextBytes.delete(key);
+        if (next.current.has(key)) next.write().delete(key);
+        const bytes = nextBytes.current.get(key);
+        if (bytes === undefined) return;
+        liveBytes -= bytes;
+        nextBytes.write().delete(key);
       };
       const dropSync = (key: string) => {
-        historyBytes -= nextSync.get(key)?.historyBytes ?? 0;
-        nextSync.delete(key);
+        const entry = nextSync.current.get(key);
+        if (!entry) return;
+        historyBytes -= entry.historyBytes;
+        nextSync.write().delete(key);
       };
       let nextEvictions: Map<string, number> | undefined;
       if (projection) {
-        const previousBytes = state.projectionBytes.get(sessionKey) ?? 0;
+        const previousBytes = state.projectionBytes.get(sessionKey);
         const bytes =
+          previousBytes !== undefined &&
           state.projections.get(sessionKey)?.messages === projection.messages
             ? previousBytes
             : // Summed from per-message sizes: only messages this renderer has
               // not measured before are serialized, never the whole joined
               // array — the retained history in it is unchanged.
               encodedArrayBytes(projection.messages);
-        liveBytes += bytes - previousBytes;
+        liveBytes += bytes - (previousBytes ?? 0);
         // Re-inserting moves the session to the most-recent end of the LRU.
-        next.delete(sessionKey);
-        next.set(sessionKey, projection);
-        nextBytes.set(sessionKey, bytes);
+        const projections = next.write();
+        projections.delete(sessionKey);
+        projections.set(sessionKey, projection);
+        if (bytes !== previousBytes) nextBytes.write().set(sessionKey, bytes);
       } else {
         dropProjection(sessionKey);
         dropSync(sessionKey);
@@ -215,59 +260,63 @@ export const useNativeAgentProjectionStore = create<NativeAgentProjectionState>(
         }
       }
       if (syncCache === null) dropSync(sessionKey);
-      else if (syncCache !== undefined) {
-        historyBytes += syncCache.historyBytes - (nextSync.get(sessionKey)?.historyBytes ?? 0);
-        nextSync.set(sessionKey, syncCache);
+      else if (syncCache !== undefined && nextSync.current.get(sessionKey) !== syncCache) {
+        historyBytes +=
+          syncCache.historyBytes - (nextSync.current.get(sessionKey)?.historyBytes ?? 0);
+        nextSync.write().set(sessionKey, syncCache);
       }
       // Display caches are shared by identity, never by mounted tab lifetime.
       // Keep both a count and a byte ceiling so tab churn converges.
-      while (next.size > 128 || liveBytes > 32 * 1024 * 1024) {
-        const oldest = next.keys().next().value as string | undefined;
+      while (next.current.size > 128 || liveBytes > 32 * 1024 * 1024) {
+        const oldest = next.current.keys().next().value as string | undefined;
         if (!oldest || oldest === sessionKey) break;
         dropProjection(oldest);
         dropSync(oldest);
         dropProgressiveTranscriptToken(nextProgressive, oldest);
       }
       return {
-        projections: next,
-        projectionBytes: nextBytes,
+        projections: next.current,
+        projectionBytes: nextBytes.current,
         projectionBytesTotal: liveBytes,
-        syncCaches: nextSync,
+        syncCaches: nextSync.current,
         historyBytesTotal: historyBytes,
-        progressiveCaches: nextProgressive,
+        progressiveCaches: nextProgressive.current,
         ...(nextEvictions ? { historyEvictions: nextEvictions } : {}),
       };
     }),
   setProgressiveCache: (sessionKey, cache) =>
     set((state) => {
       const previous = state.progressiveCaches.get(sessionKey);
+      if (!cache && !previous) return state;
       // No recency requirement: two visible sessions take turns being the last
       // key written, so requiring it would republish every unchanged poll.
       if (cache && previous && sameProgressiveEntry(previous, cache)) return state;
       const next = new Map(state.progressiveCaches);
-      const nextBytes = new Map(state.progressiveCacheBytes);
-      let retainedBytes = state.progressiveCacheBytesTotal - (nextBytes.get(sessionKey) ?? 0);
+      const nextBytes = copyOnWrite(state.progressiveCacheBytes);
+      const previousBytes = nextBytes.current.get(sessionKey);
+      let retainedBytes = state.progressiveCacheBytesTotal - (previousBytes ?? 0);
       next.delete(sessionKey);
-      nextBytes.delete(sessionKey);
       if (cache) {
         // Measured once per discovery object: a patch that only flips
         // availability or a refresh flag carries the same discovery forward
         // and must not serialize it again.
         const bytes = encodedValueBytes(cache.discovery ?? null) + PROGRESSIVE_ENTRY_OVERHEAD_BYTES;
         next.set(sessionKey, cache);
-        nextBytes.set(sessionKey, bytes);
+        if (bytes !== previousBytes) nextBytes.write().set(sessionKey, bytes);
         retainedBytes += bytes;
+      } else if (previousBytes !== undefined) {
+        nextBytes.write().delete(sessionKey);
       }
       while (next.size > 128 || retainedBytes > 16 * 1024 * 1024) {
         const oldest = next.keys().next().value as string | undefined;
         if (!oldest || oldest === sessionKey) break;
-        retainedBytes -= nextBytes.get(oldest) ?? 0;
+        retainedBytes -= nextBytes.current.get(oldest) ?? 0;
         next.delete(oldest);
-        nextBytes.delete(oldest);
+        nextBytes.write().delete(oldest);
       }
       return {
         progressiveCaches: next,
-        progressiveCacheBytes: nextBytes,
+        progressiveCacheBytes: nextBytes.current,
         progressiveCacheBytesTotal: retainedBytes,
       };
     }),
@@ -317,32 +366,34 @@ export function evictNativeAgentHistoryCaches(
   const state = useNativeAgentProjectionStore.getState();
   let retainedBytes = state.historyBytesTotal;
   if (retainedBytes + requiredBytes <= maximumBytes) return;
-  const projections = new Map(state.projections);
-  const projectionBytes = new Map(state.projectionBytes);
+  const projections = copyOnWrite(state.projections);
+  const projectionBytes = copyOnWrite(state.projectionBytes);
   let projectionBytesTotal = state.projectionBytesTotal;
-  const syncCaches = new Map(state.syncCaches);
-  const historyEvictions = new Map(state.historyEvictions);
+  const syncCaches = copyOnWrite(state.syncCaches);
+  const historyEvictions = copyOnWrite(state.historyEvictions);
   for (const [sessionKey, cache] of state.syncCaches) {
     if (sessionKey === exceptSessionKey || cache.historyBytes === 0) continue;
     retainedBytes -= cache.historyBytes;
-    syncCaches.delete(sessionKey);
+    syncCaches.write().delete(sessionKey);
     // The display entry falls back to the bounded live tail, so its byte
     // accounting falls back with it. Keeping the materialized size would go on
     // charging the released history against the display budget.
     const liveBytes = encodedArrayBytes(cache.liveProjection.messages);
-    projectionBytesTotal += liveBytes - (projectionBytes.get(sessionKey) ?? 0);
-    projections.set(sessionKey, cache.liveProjection);
-    projectionBytes.set(sessionKey, liveBytes);
-    historyEvictions.set(sessionKey, (historyEvictions.get(sessionKey) ?? 0) + 1);
+    projectionBytesTotal += liveBytes - (projectionBytes.current.get(sessionKey) ?? 0);
+    projections.write().set(sessionKey, cache.liveProjection);
+    projectionBytes.write().set(sessionKey, liveBytes);
+    historyEvictions.write().set(sessionKey, (historyEvictions.current.get(sessionKey) ?? 0) + 1);
     if (retainedBytes + requiredBytes <= maximumBytes) break;
   }
+  // Only this session's history is held: nothing to release, nothing to publish.
+  if (syncCaches.current === state.syncCaches) return;
   useNativeAgentProjectionStore.setState({
-    projections,
-    projectionBytes,
+    projections: projections.current,
+    projectionBytes: projectionBytes.current,
     projectionBytesTotal,
-    syncCaches,
+    syncCaches: syncCaches.current,
     historyBytesTotal: retainedBytes,
-    historyEvictions,
+    historyEvictions: historyEvictions.current,
   });
 }
 

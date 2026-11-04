@@ -1,4 +1,13 @@
-import { lazy, memo, useCallback, useRef, useLayoutEffect, useState, type ReactNode } from "react";
+import {
+  lazy,
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore } from "@/stores";
@@ -10,7 +19,9 @@ import { cn } from "@/lib/utils";
 import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-target";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
+import { cancelTabLaunchFocus } from "@/lib/tab-launch";
 import { DraggableTabBar } from "./DraggableTabBar";
+import { TabLaunchShimmer, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import {
@@ -26,6 +37,7 @@ const LazyDesignCanvasTab = lazy(async () => ({
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
+const loadAgentNativeTab = () => import("@/components/native-agent");
 const LazyClaudeTmuxChatTab = lazy(async () => ({
   default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,
 }));
@@ -51,6 +63,12 @@ const LazyGraphRunTab = lazy(async () => ({
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
+
+/** Fetch the agent tab's chunk while idle, so its first open waits for nothing. */
+function preloadAgentNativeTab(): void {
+  if (typeof requestIdleCallback !== "function") return;
+  requestIdleCallback(() => void loadAgentNativeTab().catch(() => undefined));
+}
 
 /**
  * Owns the Multi Review workflow subscription for exactly one tab.
@@ -128,7 +146,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   pane,
   containerId: _containerId,
   environmentId,
-  isActive,
+  isActive: paneIsActive,
   hiddenByLayout = false,
   activeDragId,
   dragOverPaneId,
@@ -146,6 +164,18 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Derive activePaneId from current environment state
   const currentEnvState = environments.get(environmentId);
   const activePaneId = currentEnvState?.activePaneId ?? "default";
+  const launches = useEnvironmentTabLaunches(environmentId);
+  // A launched tab has focus before it exists, so the tab it replaces stands
+  // down: a native preview view would otherwise stay on top of the outlines.
+  const launchHasPaneFocus =
+    activePaneId === pane.id && launches.some((entry) => entry.focused && !entry.arrived);
+  const isActive = paneIsActive && !launchHasPaneFocus;
+  // Once the tab is here it shows, but the backend may still be starting it.
+  const shimmeringLaunch =
+    (activePaneId === pane.id
+      ? launches.find((entry) => entry.focused && !entry.arrived)
+      : undefined) ?? launches.find((entry) => entry.tabId === pane.activeTabId && !entry.settled);
+  useEffect(() => preloadAgentNativeTab(), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(() => new Map<string, number>());
 
@@ -178,6 +208,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {
     if (activePaneId !== pane.id) {
+      cancelTabLaunchFocus(environmentId);
       setActivePane(pane.id, environmentId);
     }
   }, [activePaneId, environmentId, pane.id, setActivePane]);
@@ -185,6 +216,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Handle tab selection
   const handleTabSelect = useCallback(
     (tabId: string) => {
+      cancelTabLaunchFocus(environmentId);
       setActiveTab(pane.id, tabId, environmentId);
     },
     [environmentId, pane.id, setActiveTab],
@@ -202,13 +234,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   const isPaneFocused = activePaneId === pane.id;
   const renderTabFallback = useCallback(
     (isVisible: boolean) => (
-      <div
-        className={cn(
-          "absolute inset-0 flex items-center justify-center bg-background/80 text-muted-foreground",
-          isVisible ? "z-10 pointer-events-auto" : "hidden",
-        )}
-      >
-        Loading tab...
+      <div className={cn("absolute inset-0", isVisible ? "z-10 pointer-events-auto" : "hidden")}>
+        <TabLaunchShimmer />
       </div>
     ),
     [],
@@ -250,6 +277,9 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {/* Portal target for terminal rendering - terminals render here via TerminalPortalHost */}
         <div ref={portalHostRef} className="absolute inset-0 pointer-events-none" />
+        {shimmeringLaunch && paneIsActive && (
+          <TabLaunchShimmer surface={shimmeringLaunch.surface} />
+        )}
 
         {/* File and OpenCode native tabs render directly (no portal needed) */}
         {pane.tabs.map((tab) => {

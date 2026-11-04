@@ -113,10 +113,13 @@ export class KeyboardShortcutsRouting {
         )
       )
         return;
-      const shell = this.windowShell(target.renderer.id);
-      if (!shell) return;
+      const receiver =
+        appShortcut(shortcut).owner === "workspace"
+          ? target.renderer
+          : this.windowShell(target.renderer.id);
+      if (!receiver) return;
       event.preventDefault();
-      if (!input.isAutoRepeat) requestAppShortcut(shell, shortcut);
+      if (!input.isAutoRepeat) requestAppShortcut(receiver, shortcut);
     });
   }
 }

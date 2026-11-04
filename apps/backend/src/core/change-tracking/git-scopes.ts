@@ -13,7 +13,15 @@
  * commit and its first parent, the pull request's merge base), and an unborn
  * HEAD compares against the empty tree. Results are computed on demand,
  * through the shared admission pool, and recomputed when the environment's
- * scan settles while someone has asked for them.
+ * scan settles while someone has read them recently.
+ *
+ * Views read a resource once and then follow its events, so a read says nothing
+ * about how long a view stays open. Demand therefore lasts
+ * `gitScopeDemandTtlMs` from the last read. The first scan after that does not
+ * recompute: it marks the resource stale and sends a `reset` event. A view still
+ * open reads again, which recomputes it and renews the demand; with no view open
+ * nothing answers, so no later scan pays for the scope. Every read recomputes,
+ * so a view opened after expiry never shows the old answer as current.
  */
 
 import {
@@ -34,12 +42,10 @@ import {
   GIT_REPRESENTATION_ID,
   gitNumstatAlgorithmId,
 } from "@orkestrator/protocol/node/change-tracking/count-policy";
-import {
-  countLocalFileLinesDetailed,
-  parseGitFileChanges,
-  type GitFileChange,
-} from "../commands-files.js";
+import { mapWithConcurrency, parseGitDiffSummary, type GitFileChange } from "../commands-files.js";
+import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
 import { gitDockerScanPool } from "../git-docker-scan-pool.js";
+import { countUntrackedFileLines } from "../local-git-scan-caches.js";
 import { runCommandBuffer } from "../shell.js";
 import { encodePath, SAFE_GIT_CONFIG } from "./capture.js";
 import type { MeasurementFileRecord } from "./change-ledger.js";
@@ -164,9 +170,15 @@ function statusOf(code: string): string {
 }
 
 export class GitScopeService {
-  /** Resources somebody asked for; refreshed when their environment's scan settles. */
-  private readonly demanded = new Map<string, Set<string>>();
+  /**
+   * Live resources somebody read, by environment, with when they last did;
+   * refreshed when their environment's scan settles until the demand expires.
+   */
+  private readonly demanded = new Map<string, Map<string, number>>();
   private readonly running = new Map<string, Promise<void>>();
+  /** Asked for while running, so the answer may predate the request: run once more. */
+  private readonly rerun = new Set<string>();
+  private stopped = false;
 
   constructor(
     private readonly deps: {
@@ -176,25 +188,43 @@ export class GitScopeService {
       environmentTarget: (environmentId: string) => Promise<WorktreeTarget | null>;
       prBaseBranch?: (environmentId: string) => Promise<string | null>;
       announce: (resourceKey: string) => void;
+      /** Tell whoever shows the resource to read it again. */
+      resetView: (resourceKey: string) => void;
+      demandTtlMs: () => number;
     },
   ) {}
 
-  /** Compute (or recompute) a Git scope resource. Never throws. */
+  /** A read of a Git scope resource: compute it now and renew its demand. Never throws. */
   ensure(resourceKey: string): Promise<void> {
     const parts = parseChangeResourceKey(resourceKey);
     if (!parts || !isGitScope(parts.scope) || parts.ownerKind !== "environment")
       return Promise.resolve();
     const [environmentId, commit] = parts.ownerId.split("@");
     if (!environmentId) return Promise.resolve();
-    let keys = this.demanded.get(environmentId);
-    if (!keys) {
-      keys = new Set();
-      this.demanded.set(environmentId, keys);
+    // A pinned resource never changes, so a scan has nothing to refresh.
+    if (parts.selector === "live") {
+      let keys = this.demanded.get(environmentId);
+      if (!keys) {
+        keys = new Map();
+        this.demanded.set(environmentId, keys);
+      }
+      keys.set(resourceKey, Date.now());
     }
-    keys.add(resourceKey);
+    return this.recompute(resourceKey, parts.scope, environmentId, commit);
+  }
+
+  private recompute(
+    resourceKey: string,
+    scope: GitScope,
+    environmentId: string,
+    commit: string | undefined,
+  ): Promise<void> {
     const pending = this.running.get(resourceKey);
-    if (pending) return pending;
-    const run = this.compute(parts.scope, environmentId, commit)
+    if (pending) {
+      this.rerun.add(resourceKey);
+      return pending;
+    }
+    const run = this.compute(scope, environmentId, commit)
       .catch((error) => {
         this.deps.projections.setFreshness(resourceKey, {
           observationState: "degraded",
@@ -216,20 +246,55 @@ export class GitScopeService {
         this.deps.projections.bump(resourceKey);
         this.deps.announce(resourceKey);
       })
-      .finally(() => this.running.delete(resourceKey));
+      .finally(() => {
+        this.running.delete(resourceKey);
+        if (!this.rerun.delete(resourceKey) || this.stopped) return;
+        // Whoever joined this run waits for the one that covers their request.
+        if (this.demanded.get(environmentId)?.has(resourceKey)) {
+          return this.recompute(resourceKey, scope, environmentId, commit);
+        }
+      });
     this.running.set(resourceKey, run);
     return run;
   }
 
-  /** The environment's state moved: recompute every live Git scope someone asked for. */
+  /**
+   * The environment's state moved: recompute every live Git scope read within
+   * its demand window, and retire the rest (see the file comment).
+   */
   invalidate(environmentId: string): void {
-    for (const key of this.demanded.get(environmentId) ?? []) {
-      if (parseChangeResourceKey(key)?.selector === "live") void this.ensure(key);
+    const keys = this.demanded.get(environmentId);
+    if (!keys) return;
+    const ttlMs = this.deps.demandTtlMs();
+    const now = Date.now();
+    for (const [key, lastReadAt] of Array.from(keys)) {
+      if (now - lastReadAt < ttlMs) {
+        const parts = parseChangeResourceKey(key);
+        if (parts && isGitScope(parts.scope)) {
+          void this.recompute(key, parts.scope, environmentId, undefined);
+        }
+        continue;
+      }
+      keys.delete(key);
+      const freshness = this.deps.projections.getFreshness(key);
+      if (freshness) this.deps.projections.setFreshness(key, { ...freshness, stale: true });
+      this.deps.resetView(key);
     }
+    if (keys.size === 0) this.demanded.delete(environmentId);
   }
 
   forget(environmentId: string): void {
     this.demanded.delete(environmentId);
+  }
+
+  /** No further recompute starts on its own after this. */
+  stop(): void {
+    this.stopped = true;
+  }
+
+  /** Settles when no recompute is running. */
+  async idle(): Promise<void> {
+    while (this.running.size > 0) await Promise.all(this.running.values());
   }
 
   private async runner(target: WorktreeTarget): Promise<GitRunner> {
@@ -367,34 +432,38 @@ export class GitScopeService {
         // A clean/smudge/process filter is an external program: it never runs,
         // and worktree bytes it would transform are reported, not miscounted.
         const filters = await configuredFilterDrivers(git);
-        const diff = (format: string) =>
-          git(
+        const changes: GitFileChange[] = parseGitDiffSummary(
+          await git(
             [
               ...filters.neutralize,
               "diff",
               "--no-ext-diff",
               "--no-textconv",
-              format,
+              "--raw",
+              "--numstat",
               "-z",
               "-M",
             ].concat(range),
-          );
-        const [nameStatus, numstat] = await Promise.all([diff("--name-status"), diff("--numstat")]);
-        const changes: GitFileChange[] = parseGitFileChanges(nameStatus, numstat);
+          ),
+        ).changes;
         if (scope === "unstaged" || scope === "uncommitted-net") {
           const untracked = (await git(["ls-files", "-z", "--others", "--exclude-standard"]))
             .split("\0")
             .filter(Boolean);
           const listed = new Set(changes.map((change) => change.path));
-          for (const path of untracked.slice(0, 2_000)) {
-            if (listed.has(path)) {
-              reasons.push("ambiguous-index-membership");
-              continue;
-            }
-            const counted =
+          const scanned = untracked.slice(0, 2_000);
+          if (scanned.some((path) => listed.has(path))) reasons.push("ambiguous-index-membership");
+          const unlisted = scanned.filter((path) => !listed.has(path));
+          const counts = await mapWithConcurrency(
+            unlisted,
+            UNTRACKED_SCAN_CONCURRENCY,
+            async (path) =>
               target.kind === "local"
-                ? await countLocalFileLinesDetailed(target.worktreePath, path).catch(() => null)
-                : null;
+                ? await countUntrackedFileLines(target.worktreePath, path).catch(() => null)
+                : null,
+          );
+          unlisted.forEach((path, index) => {
+            const counted = counts[index];
             changes.push({
               path,
               filename: path,
@@ -407,7 +476,7 @@ export class GitScopeService {
                 ? { countOmitted: true as const }
                 : {}),
             });
-          }
+          });
           if (untracked.length > 2_000) reasons.push("untracked-scan-capped");
         }
         const filtered =

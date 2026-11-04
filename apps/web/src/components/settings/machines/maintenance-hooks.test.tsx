@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   HOST_MAINTENANCE_EVENT,
@@ -59,6 +60,11 @@ function pollingClock() {
   spyOn(globalThis, "clearInterval").mockImplementation(((timer: number) => {
     if (!timers.delete(timer)) realClearInterval(timer);
   }) as typeof clearInterval);
+  spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read, intervalMs }) => {
+    const timer = ++id;
+    timers.set(timer, { callback: () => void read(), delay: intervalMs });
+    return () => timers.delete(timer);
+  });
   return {
     timers,
     tick: async (delay: number) => {

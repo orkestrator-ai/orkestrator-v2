@@ -73,6 +73,21 @@ describe("the list", () => {
     expect(repository!.icon).toBe("command-icon");
   });
 
+  test("a repository not on the command node takes the colour of the machine it opens on", () => {
+    const [repository] = compactRepositories(
+      [
+        machine("command", [{ id: "c", name: "other", hint: "github.com/acme/other" }]),
+        machine("first", [{ id: "f", name: "app", hint: HINT }], { colorToken: "rose" }),
+        machine("second", [{ id: "s", name: "app", hint: HINT }]),
+      ],
+      LAYOUT,
+      "command",
+    ).filter((entry) => entry.repository === HINT);
+    expect(repository!.opens).toMatchObject({ machine: { backendId: "first" } });
+    expect(repository!.colorToken).toBe("rose");
+    expect(repository!.icon).toBeUndefined();
+  });
+
   test("a repository with no icon on the command node shows the house tile", () => {
     const [repository] = compactRepositories(
       [

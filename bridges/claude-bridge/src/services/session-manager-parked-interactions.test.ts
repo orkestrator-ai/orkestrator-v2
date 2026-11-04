@@ -984,3 +984,32 @@ test("injected artifact tools auto-allow under deny approvals without parking", 
   call.finish();
   await prompt;
 });
+
+test("native and result-only subork tool names bypass SDK approval", async () => {
+  for (const resultOnly of [false, true]) {
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+    mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+      orkestrator: { type: "http", url: "http://localhost/mcp" },
+    }));
+    const session = createSession(`subork-policy-${resultOnly}`);
+    track(session.id);
+    session.executionPolicy = ASK_POLICY;
+    const prompt = sendPrompt(
+      session.id,
+      "look",
+      resultOnly
+        ? { workflowResultTurn: { tool: "submit_subork_answer", resultKey: "answer-key" } }
+        : {},
+    );
+    const call = await nextQueryCall();
+    const tool = "mcp__orkestrator__ask_agents";
+    // Both credentials expose the name. The result-only MCP endpoint returns
+    // the nesting refusal (covered by the backend's real MCP depth test).
+    // The SDK uses this list before canUseTool, so no human approval is parked.
+    expect(call.options.allowedTools).toContain(tool);
+    expect(getPendingInteractions(session.id)).toHaveLength(0);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  }
+});

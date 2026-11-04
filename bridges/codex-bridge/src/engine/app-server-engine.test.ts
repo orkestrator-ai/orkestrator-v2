@@ -1,4 +1,5 @@
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   BUILD,
@@ -856,6 +857,7 @@ describe("thread lifecycle", () => {
               ...AGENT_MAIL_TOOL_NAMES,
               ...ARTIFACT_TOOL_NAMES,
               ...AGENT_GOAL_TOOL_NAMES,
+              ...AGENT_SUBORK_TOOL_NAMES,
               ...KEY_INFORMATION_TOOL_NAMES,
             ].map((name) => [name, { approval_mode: "approve" }]),
           ),

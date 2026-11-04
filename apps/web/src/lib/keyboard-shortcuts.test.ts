@@ -89,7 +89,8 @@ describe("keyboard shortcut catalog", () => {
   test("macOS-only shortcuts are hidden on other platforms", () => {
     const other = ids(filterKeyboardShortcuts("", "other"));
     expect(other).toContain("search-projects");
-    expect(other).not.toContain("new-agent-tab");
+    expect(other).toContain("new-agent-tab");
+    expect(other).not.toContain("new-terminal-tab");
   });
 
   test("matches descriptions, group titles and keywords", () => {

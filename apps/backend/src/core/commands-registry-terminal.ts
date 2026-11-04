@@ -123,6 +123,7 @@ import {
   MAX_FILE_TREE_NODES,
   parseContainerFileSubtree,
 } from "./commands-helpers.js";
+import { conditionalSnapshot } from "./commands-terminal.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
@@ -291,7 +292,7 @@ export function registerTerminalCommands(
       tabId,
       type: tabType,
       title,
-      activate: args.activateTab === true,
+      activate: args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
     });
 
     const invoke = async <T>(command: string, commandArgs: Record<string, unknown>): Promise<T> => {
@@ -917,9 +918,16 @@ export function registerTerminalCommands(
     return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
   });
   // One truncated tree directory, read when the files panel expands it. Not
-  // cached: each expansion or refresh reads the directory as it is now.
-  register("get_local_file_subtree", ({ worktreePath, directory }) =>
-    buildFileSubtree(asString(worktreePath, "worktreePath"), asString(directory, "directory")),
+  // cached: each expansion or refresh reads the directory as it is now. With a
+  // `knownDigest` an unchanged directory answers with no contents.
+  register("get_local_file_subtree", async ({ worktreePath, directory, knownDigest }) =>
+    conditionalSnapshot(
+      await buildFileSubtree(
+        asString(worktreePath, "worktreePath"),
+        asString(directory, "directory"),
+      ),
+      knownDigest,
+    ),
   );
   register("read_local_file", async ({ worktreePath, filePath }, context) => {
     const relativePath = asString(filePath, "filePath");
@@ -1218,14 +1226,17 @@ export function registerTerminalCommands(
     });
     return snapshotResponse("file-tree-read", read.tree, read.digest, knownDigest, read.view);
   });
-  register("get_file_subtree", async ({ containerId, directory }) => {
+  register("get_file_subtree", async ({ containerId, directory, knownDigest }) => {
     const target = validateFileTreeDirectory(asString(directory, "directory"));
-    return parseContainerFileSubtree(
-      await dockerExec(
-        asString(containerId, "containerId"),
-        `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES} ${quoteShell(target)}`,
+    return conditionalSnapshot(
+      parseContainerFileSubtree(
+        await dockerExec(
+          asString(containerId, "containerId"),
+          `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES} ${quoteShell(target)}`,
+        ),
+        target,
       ),
-      target,
+      knownDigest,
     );
   });
   register("read_container_file", async ({ containerId, filePath }) => {

@@ -17,6 +17,7 @@ import {
   GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
+  SUBORK_COMMAND_ID,
 } from "@orkestrator/protocol/agent-slash-commands";
 import { parseGoalCommandArguments } from "@orkestrator/protocol/native-agent-goal";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -223,7 +224,10 @@ export function classifyNativeCommandSubmission(
       opensPanel: parseGoalCommandArguments(goalArguments).kind === "status",
     };
   }
-  if (input.pendingHandoff && command.executionKind !== "session-action") {
+  if (
+    input.pendingHandoff &&
+    (command.executionKind !== "session-action" || command.id === SUBORK_COMMAND_ID)
+  ) {
     return { kind: "rejected", message: HANDOFF_COMMAND_MESSAGE };
   }
   if (command.inputPolicy?.busy === "running" && !input.busy) {

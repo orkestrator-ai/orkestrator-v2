@@ -688,6 +688,37 @@ describe("controls and interactions", () => {
 });
 
 describe("session discovery", () => {
+  test.each([false, true])(
+    "reads and lists a promised startup session with snapshot=%s",
+    async (hasSnapshot) => {
+      const { harness } = await setup();
+      await harness.storage.updateEnvironment("env-1", {
+        pendingAgentLaunch: true,
+        setupPhase: "running",
+        setupScriptsComplete: false,
+        initialAgentPlatform: "codex",
+        startupAgentSession: hasSnapshot
+          ? {
+              tabId: "startup-agent",
+              agent: "codex",
+              style: "native",
+              status: "starting",
+            }
+          : undefined,
+      });
+      const sessionId = encodePublicSessionId("env-1", "startup-agent");
+      const read = await harness.call("session.get", { sessionId });
+      expect(read.ok).toBe(true);
+      const listed = await harness.call<{ items: Array<{ id: string }> }>("session.list", {
+        environmentId: "env-1",
+      });
+      expect(listed.ok && listed.result.items.some((item) => item.id === sessionId)).toBe(true);
+      await harness.storage.updateEnvironment("env-1", { pendingAgentLaunch: false });
+      const closed = await harness.call("session.get", { sessionId });
+      expect(!closed.ok && closed.error.code).toBe("not-found");
+    },
+  );
+
   test("lists sessions without reading transcripts and resolves exact handles", async () => {
     const { harness, stub } = await setup();
     const started = await startSession(harness, "list-1");

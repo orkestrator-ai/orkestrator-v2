@@ -2,6 +2,7 @@ import { armPullRequestFallback } from "@/lib/pull-request-load-fallback";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   Children,
+  Fragment,
   isValidElement,
   memo,
   useCallback,
@@ -15,6 +16,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { jsxs } from "react/jsx-runtime";
 import { CheckSquare, Square } from "lucide-react";
 import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import type { PluggableList } from "unified";
@@ -49,7 +51,7 @@ import {
 import { copyRichText } from "@/lib/chat/rich-markdown/clipboard";
 import {
   IncrementalMarkdownCache,
-  remarkIncrementalParse,
+  remarkParseRange,
 } from "@/lib/chat/rich-markdown/incremental-parse";
 import { SourceViewerDialog } from "@/components/chat/rich/CodeBlockViewer";
 import { cn } from "@/lib/utils";
@@ -261,7 +263,7 @@ export function MarkdownLink({
   );
 }
 
-const DEFAULT_COMPONENTS: Components = {
+export const DEFAULT_COMPONENTS: Components = {
   a: MarkdownLink,
   input: TaskListCheckbox,
   li: MarkdownListItem,
@@ -338,6 +340,13 @@ export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
  * An inline object literal there would defeat this silently, so keep those
  * maps hoisted out of render.
  */
+/** The children of the fragment `Markdown` returns. */
+function renderedBlocks(fragment: ReactElement): readonly ReactNode[] {
+  const { children } = fragment.props as { children?: ReactNode };
+  if (children === undefined) return [];
+  return Array.isArray(children) ? (children as ReactNode[]) : [children];
+}
+
 export const MessageMarkdown = memo(function MessageMarkdown({
   content,
   components,
@@ -357,22 +366,20 @@ export const MessageMarkdown = memo(function MessageMarkdown({
     () => pluginOverride ?? blockMarkdownPlugins({ rich, enableBreaks, clipped }),
     [pluginOverride, rich, enableBreaks, clipped],
   );
-  // While the part streams, the completed prefix's syntax tree is parsed once
-  // and reused; only the tail is parsed per update. The final (non-live)
-  // render always parses in full. A new configuration gets a fresh cache.
-  const incremental = useMemo(() => new IncrementalMarkdownCache(plugins), [plugins]);
-  useEffect(() => {
-    if (!live) incremental.reset();
-  }, [incremental, live]);
-  const remarkPlugins = useMemo(
-    () =>
-      live ? ([[remarkIncrementalParse, incremental], ...plugins] as typeof plugins) : plugins,
-    [incremental, live, plugins],
-  );
   const mergedComponents = useMemo(
     () => (components ? { ...DEFAULT_COMPONENTS, ...components } : DEFAULT_COMPONENTS),
     [components],
   );
+  // While the part streams, the completed prefix's elements are rendered once
+  // and reused; only the tail goes through the pipeline per update. The final
+  // (non-live) render always runs in full. A new configuration gets a fresh cache.
+  const incremental = useMemo(
+    () => new IncrementalMarkdownCache([plugins, mergedComponents]),
+    [plugins, mergedComponents],
+  );
+  useEffect(() => {
+    if (!live) incremental.reset();
+  }, [incremental, live]);
   // The original is kept separately from the bounded slice it renders.
   const richState = useMemo<RichMarkdownRenderState | null>(
     () =>
@@ -389,15 +396,22 @@ export const MessageMarkdown = memo(function MessageMarkdown({
     [rich, richPartId, clipped, renderSource, live, content],
   );
 
-  const markdown = (
-    <Markdown
-      remarkPlugins={remarkPlugins}
-      components={mergedComponents}
-      urlTransform={markdownUrlTransform}
-    >
-      {renderSource.source}
-    </Markdown>
-  );
+  // Called rather than mounted, so a live render and the final one are the same
+  // fragment of the same keyed blocks, and the final one updates them in place.
+  const options = { components: mergedComponents, urlTransform: markdownUrlTransform };
+  const markdown = live
+    ? jsxs(Fragment, {
+        children: incremental.render(renderSource.source, (range) =>
+          renderedBlocks(
+            Markdown({
+              ...options,
+              children: renderSource.source,
+              remarkPlugins: [[remarkParseRange, range], ...plugins],
+            }),
+          ),
+        ),
+      })
+    : Markdown({ ...options, children: renderSource.source, remarkPlugins: plugins });
 
   return (
     <div className={cn(DEFAULT_MARKDOWN_CLASSNAME, className)}>

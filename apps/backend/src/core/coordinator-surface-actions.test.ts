@@ -207,7 +207,7 @@ describe("launch_coordinator_terminal", () => {
       environmentId: workerId,
       tabType: "plain",
       data: "bun test\n",
-      activateTab: true,
+      activateTab: false,
     });
     expect(String(launch.mock.calls[0]![0].requestId)).toStartWith("coordinator:");
     expect(await call("launch_coordinator_terminal", { input })).toMatchObject({ replayed: true });

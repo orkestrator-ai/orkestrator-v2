@@ -88,7 +88,7 @@ async function edgeEndsMeetNodeCentres(page: Page): Promise<string[]> {
 
 test("draws the pipeline left to right, with definite steps ahead and faded", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=fanout");
-  await expect(graph(page).getByRole("tab")).toHaveCount(12);
+  await expect(graph(page).getByRole("tab")).toHaveCount(13);
   expect(overlapping(await boxes(page))).toBe(0);
   const layout = await page.locator("[data-flow-layout]").getAttribute("data-flow-layout");
   expect(layout).toBe(isWide(page) ? "graph" : "stacked");
@@ -111,8 +111,9 @@ test("draws the pipeline left to right, with definite steps ahead and faded", as
     "Verify",
     "Ship",
     "PR",
+    "Notes",
   ]);
-  for (const title of ["Consolidation", "Verify", "Ship", "PR"]) {
+  for (const title of ["Consolidation", "Verify", "Ship", "PR", "Notes"]) {
     await expect(node(page, title)).toHaveAttribute("data-flow-placeholder", "");
   }
   // Address and Fix only sometimes run, so nothing stands for them ahead.
@@ -188,6 +189,7 @@ test("unrolls repeated passes to the right instead of looping back", async ({ pa
     "Ship",
     "Resolve conflicts",
     "PR",
+    "Notes",
   ]);
   const list = await boxes(page);
   expect(overlapping(list)).toBe(0);
@@ -424,14 +426,14 @@ test("collapses the graph so the inspector takes the room", async ({ page }) => 
   const after = (await page.getByTestId("pipeline-inspector").boundingBox())!;
   expect(after.y).toBeLessThan(before.y);
   await toggle.click();
-  await expect(graph(page).getByRole("tab")).toHaveCount(12);
+  await expect(graph(page).getByRole("tab")).toHaveCount(13);
 });
 
 test("a new pipeline shows its setup running", async ({ page }) => {
   await page.goto("/pipeline-flow?scenario=new");
   await expect(node(page, "Setup")).toHaveAttribute("data-flow-state", "running");
   await expect(node(page, "Setup")).toHaveAttribute("aria-selected", "true");
-  await expect(graph(page).locator("[data-flow-placeholder]")).toHaveCount(5);
+  await expect(graph(page).locator("[data-flow-placeholder]")).toHaveCount(6);
 });
 
 async function openReviewPass(page: Page) {
@@ -855,4 +857,38 @@ test("the overview keeps its scroll position behind another pane", async ({ page
   await page.getByRole("button", { name: "Activate build pane" }).click();
   await expect(overview).toBeVisible();
   await expect.poll(() => overview.evaluate((element) => element.scrollTop)).toBe(offset);
+});
+
+test("Notes shows follow-ups and the full brief after reload", async ({ page }) => {
+  await page.goto("/pipeline-flow?scenario=notes");
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(node(page, "PR")).toHaveAttribute("aria-selected", "true");
+    await node(page, "Notes").click();
+    await expect(node(page, "Notes")).toHaveAttribute("aria-selected", "true");
+    const notes = page.getByTestId("pipeline-notes");
+    const followUps = notes.getByRole("region", { name: "Needs a look" });
+    await expect(followUps).toContainText("Works on a real phone");
+    await expect(followUps).toContainText("Needs a device.");
+    await expect(followUps).toContainText("Rich text formatting");
+    await expect(followUps).toContainText("mise run test:browser");
+    for (const title of [
+      "Objective",
+      "Context",
+      "Solution",
+      "What was done",
+      "Decisions",
+      "Not done or needs further work",
+      "Tests",
+      "Review issues",
+      "Verification",
+      "Update history",
+    ]) {
+      await expect(notes.getByRole("heading", { name: title, exact: true, level: 2 })).toHaveCount(
+        1,
+      );
+    }
+    await expect(notes).toContainText("Show the pipeline's status at a glance.");
+    await expect(notes).toContainText("On the pipeline record");
+  }
 });

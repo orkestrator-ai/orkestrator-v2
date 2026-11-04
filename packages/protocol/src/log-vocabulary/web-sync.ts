@@ -34,6 +34,7 @@ export const WEB_SYNC_LOG_AREAS = defineLogAreas({
   "web.read-coordinator": {
     description: "The renderer's coalesced, bounded backend reads.",
     events: {
+      "poll.read-failed": "A coordinated poll's read failed; it stays on its interval.",
       "listener.threw": "A read state listener threw.",
       "read.settle-failed": "Applying a finished read's result threw.",
     },

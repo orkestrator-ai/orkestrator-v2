@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Environment } from "@/types";
 
 // These hydrators have their own test files. Snapshot and restore per the Bun
@@ -26,7 +26,8 @@ mock.module("@/lib/multi-review-persistence", () => ({ hydrateMultiReviewWorkflo
 const {
   armBuildPipelineTabActivation,
   armStartupAgentTabActivation,
-  beginPaneTabActivationRequest,
+  cancelPaneTabActivation,
+  flushPaneTabActivation,
   clearBuildPipelineTabActivation,
   collectPaneDependencyIds,
   commitBuildPipelineSetupHandoff,
@@ -1090,40 +1091,34 @@ describe("reconcileAuthoritativePaneLayout", () => {
     }
   });
 
-  test("activates a backend-created tab requested by this Electron window", () => {
-    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
-    Object.defineProperty(window, "orkestrator", {
-      configurable: true,
-      value: { isolatedViewState: true },
+  test("focuses a requested tab when the layout carrying it is installed", () => {
+    const currentRoot = leaf("default", [{ id: "tab-1", type: "plain" }]);
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-1", paneState(currentRoot)]]),
     });
-    try {
-      const currentRoot = leaf("default", [{ id: "tab-1", type: "plain" }]);
-      requestPaneTabActivation("env-1", "agent-job-pr");
+    requestPaneTabActivation("env-1", "agent-job-pr");
 
-      const backendRoot = leaf("default", [
-        { id: "tab-1", type: "plain" },
-        {
-          id: "agent-job-pr",
-          type: "agent-native",
-          displayTitle: "PR",
-          nativeAgentData: { environmentId: "env-1", platform: "codex" },
-        },
-      ]);
-      if (backendRoot.kind !== "leaf") throw new Error("expected leaf");
-      backendRoot.activeTabId = "agent-job-pr";
+    flushPaneTabActivation("env-1");
+    expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).not.toBe(
+      "agent-job-pr",
+    );
 
-      const restored = reconcileAuthoritativePaneLayout(
-        "env-1",
-        persisted(backendRoot),
-        paneState(currentRoot),
-      );
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          paneState(
+            leaf("default", [
+              { id: "tab-1", type: "plain" },
+              { id: "agent-job-pr", type: "plain" },
+            ]),
+          ),
+        ],
+      ]),
+    });
+    flushPaneTabActivation("env-1");
 
-      expect(restored?.activePaneId).toBe("default");
-      expect(restored?.root).toMatchObject({ activeTabId: "agent-job-pr" });
-    } finally {
-      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
-      else delete window.orkestrator;
-    }
+    expect(usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId).toBe("agent-job-pr");
   });
 
   test("hands an isolated Electron window from setup to its provider-bound startup agent", () => {
@@ -1436,41 +1431,101 @@ describe("reconcileAuthoritativePaneLayout", () => {
     }
   });
 
-  test("keeps launch-order focus when backend launches complete out of order", () => {
-    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
-    Object.defineProperty(window, "orkestrator", {
-      configurable: true,
-      value: { isolatedViewState: true },
+  test("the latest request holds, and cancelling it leaves the tab unfocused", () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        [
+          "env-1",
+          paneState(
+            leaf("default", [
+              { id: "tab-1", type: "plain" },
+              { id: "terminal-job-run", type: "plain" },
+              { id: "agent-job-push", type: "plain" },
+            ]),
+          ),
+        ],
+      ]),
     });
-    try {
-      const olderRequest = beginPaneTabActivationRequest("env-1");
-      const newerRequest = beginPaneTabActivationRequest("env-1");
+    const activeTab = () => usePaneLayoutStore.getState().getActivePane("env-1")?.activeTabId;
+    const installed = activeTab();
 
-      // The newer launch completes first. The older completion must not replace
-      // its pending activation merely because its backend promise settles last.
-      requestPaneTabActivation("env-1", "agent-job-push", newerRequest);
-      requestPaneTabActivation("env-1", "terminal-job-run", olderRequest);
+    requestPaneTabActivation("env-1", "missing-older");
+    requestPaneTabActivation("env-1", "agent-job-push");
+    expect(activeTab()).toBe("agent-job-push");
 
-      const backendRoot = leaf("default", [
-        { id: "tab-1", type: "plain" },
-        { id: "terminal-job-run", type: "plain" },
-        {
-          id: "agent-job-push",
-          type: "agent-native",
-          nativeAgentData: { environmentId: "env-1", platform: "codex" },
-        },
-      ]);
-      const restored = reconcileAuthoritativePaneLayout(
-        "env-1",
-        persisted(backendRoot),
-        paneState(leaf("default", [{ id: "tab-1", type: "plain" }])),
-      );
+    requestPaneTabActivation("env-1", "missing-newer");
+    cancelPaneTabActivation("env-1");
+    flushPaneTabActivation("env-1");
+    expect(activeTab()).toBe("agent-job-push");
+    expect(installed).not.toBe("agent-job-push");
+  });
 
-      expect(restored?.root).toMatchObject({ activeTabId: "agent-job-push" });
-    } finally {
+  describe("tabs arriving in a window that owns its selection", () => {
+    let descriptor: PropertyDescriptor | undefined;
+    beforeEach(() => {
+      descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+      Object.defineProperty(window, "orkestrator", {
+        configurable: true,
+        value: { isolatedViewState: true },
+      });
+    });
+    afterEach(() => {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
-    }
+    });
+    const setupTab = { id: "default", type: "plain" as const, isSetupTab: true };
+    const userTab = { id: "user-tab", type: "plain" as const };
+    const jobTab = {
+      id: "startup-agent",
+      type: "agent-native" as const,
+      nativeAgentData: { environmentId: "env-1", isLocal: true },
+    };
+    const selecting = (tabs: Parameters<typeof leaf>[1], activeTabId: string) => {
+      const root = leaf("default", tabs);
+      if (root.kind !== "leaf") throw new Error("expected leaf");
+      root.activeTabId = activeTabId;
+      return root;
+    };
+
+    test("the job tab takes focus from the setup terminal, even unarmed", () => {
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(selecting([setupTab, jobTab], "startup-agent")),
+        paneState(selecting([setupTab], "default")),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "startup-agent" });
+    });
+
+    test("the job tab leaves a tab the user opened during setup focused", () => {
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(selecting([setupTab, userTab, jobTab], "user-tab")),
+        paneState(selecting([setupTab, userTab], "user-tab")),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "user-tab" });
+    });
+
+    test("a setup terminal the backend selected takes focus when it first appears", () => {
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(selecting([setupTab, userTab], "default")),
+        paneState(selecting([userTab], "user-tab")),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "default" });
+    });
+
+    test("a window that went back to another tab is not pulled to a known setup terminal", () => {
+      const restored = reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(selecting([setupTab, userTab], "default")),
+        paneState(selecting([setupTab, userTab], "user-tab")),
+      );
+
+      expect(restored?.root).toMatchObject({ activeTabId: "user-tab" });
+    });
   });
 
   test("does not treat a legacy record's canonical pointers as real focus", () => {

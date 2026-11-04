@@ -23,6 +23,9 @@ import { confinedRead, validCapturePath } from "./confined-read.js";
 import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import { objectId, type ObjectStore } from "./object-store.js";
+import { STAT_SETTLE_WINDOW_MS, statSettled, statStamp } from "../stat-stamp.js";
+
+export { STAT_SETTLE_WINDOW_MS };
 
 /** Git tree kinds supported by manifest v1. */
 export type ManifestMode = "100644" | "100755" | "120000" | "160000";
@@ -88,16 +91,6 @@ export interface StatCacheEntry {
   mode: ManifestMode;
   settled?: boolean;
 }
-
-/**
- * How old a file's timestamps must be, at the moment it is read, before its
- * stat stamp is trusted to identify its content. Filesystem timestamps are
- * coarse (a kernel tick on Linux, two seconds on FAT), so a second write in
- * the same tick with the same size leaves the stamp unchanged; Git calls such
- * an entry "racily clean" and re-hashes it. A file younger than this is read
- * and hashed on every capture until it ages past the window.
- */
-export const STAT_SETTLE_WINDOW_MS = 2_000;
 
 export const MANIFEST_POLICY_ID = "raw-bytes-v1/manifest-v1";
 export const OBJECT_FORMAT = "git-loose-sha1+manifest-json-v1";
@@ -264,10 +257,6 @@ export function parseLsFilesStage(
   return records;
 }
 
-function statStamp(info: { size: number; mtimeMs: number; ctimeMs: number; ino: number }): string {
-  return `${info.size}:${Math.trunc(info.mtimeMs * 1000)}:${Math.trunc(info.ctimeMs * 1000)}:${info.ino}`;
-}
-
 export class HostCaptureExecutor implements CaptureExecutor {
   readonly kind = "host-worker" as const;
   readonly label: string;
@@ -397,10 +386,7 @@ export class HostCaptureExecutor implements CaptureExecutor {
           oid: objectId("blob", bytes),
           ...(cached?.stamp === stamp ? {} : { bytes }),
           stable,
-          settled:
-            !!info &&
-            stable &&
-            readAt - Math.max(info.mtimeMs, info.ctimeMs) >= this.settleWindowMs,
+          settled: !!info && stable && statSettled(info, readAt, this.settleWindowMs),
         };
       } catch (error) {
         if (signal?.aborted) throw new Error("capture-timeout");

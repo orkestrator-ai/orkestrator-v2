@@ -14,6 +14,16 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "wake.observe-pull-request-failed": "A pull request could not be observed for status wakes.",
       "wake.observe-feature-plan-failed": "A feature plan could not be observed for status wakes.",
       "wake.observe-workflow-failed": "A workflow could not be observed for status wakes.",
+      "notice.outbox-refused":
+        "A leaf's outbox refused a coordinator notice, so its own coordinator takes it.",
+      "notice.start-main-failed":
+        "A coordinator notice could not start a main coordinator; it waits for one to open.",
+      "notice.take-back-unread":
+        "A notice handed back from a command node found no open coordinator here.",
+      "limit-stop.own":
+        "A coordinator's own usage-limit stop attempted to move it off the account.",
+      "limit-stop.notice-failed":
+        "A usage-limit notice could not be sent; it stays in the ledger for the next attempt.",
       "wake.deliver-failed":
         "A workflow status wake could not be delivered; the next pass retries.",
       "wake.waiting-check-failed": "A waiting worker could not be checked; the next pass retries.",

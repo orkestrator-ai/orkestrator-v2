@@ -27,6 +27,7 @@ import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions
 import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
 import { registerCoordinatorPipelineStepActions } from "./coordinator-pipeline-step-actions.js";
 import { registerCoordinatorGoalActions } from "./coordinator-goal-actions.js";
+import { registerCoordinatorSuborkActions } from "./coordinator-subork-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
@@ -113,6 +114,7 @@ export function registerCoordinatorCommands(
   registerCoordinatorWorkerTurnActions(register, dependencies);
   registerCoordinatorPipelineStepActions(register);
   registerCoordinatorGoalActions(register, dependencies);
+  registerCoordinatorSuborkActions(register, dependencies);
   registerCoordinatorGraphActions(register);
   registerAgentsMdCommands(register, dependencies);
   registerWorkerQuestionRelayCommands(register, dependencies);
@@ -268,6 +270,9 @@ export function registerCoordinatorCommands(
           item.agent,
           item.logicalSessionKey,
         );
+        // Its suborks stop with it: their answers would otherwise be redirected
+        // to whichever conversation now holds the coordinator's address.
+        await context.suborks?.stopForSession(sessionKey).catch(() => undefined);
         const session = await context.storage.getNativeAgentSession(sessionKey);
         if (session) {
           await context.storage.invalidateNativeAgentSession(sessionKey, session.providerSessionId);

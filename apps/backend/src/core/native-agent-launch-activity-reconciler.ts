@@ -197,6 +197,7 @@ export class NativeAgentLaunchActivityReconciler {
   /** One follow-up scan shared by every consumer demanding a newer read. */
   private activityScanFollowUp: Promise<void> | null = null;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly launchRerunRequests = new Set<string>();
 
   private readonly storage: StorageService;
   private readonly invoke: CommandInvoker;
@@ -1575,12 +1576,24 @@ export class NativeAgentLaunchActivityReconciler {
   async reconcileInitialLaunch(environmentId: string): Promise<void> {
     if (this.host.isStopped()) return;
     const existing = this.launchTasks.get(environmentId);
-    if (existing) return existing;
-    const task = this.reconcileInitialLaunchOnce(environmentId).finally(() => {
-      if (this.launchTasks.get(environmentId) === task) {
-        this.launchTasks.delete(environmentId);
-      }
-    });
+    if (existing) {
+      // That pass may have read the environment before what prompted this call
+      // (setup finishing). Run once more after it, or the launch waits for the
+      // next sweep with nothing on screen.
+      this.launchRerunRequests.add(environmentId);
+      return existing;
+    }
+    const task = this.reconcileInitialLaunchOnce(environmentId)
+      .finally(() => {
+        if (this.launchTasks.get(environmentId) === task) {
+          this.launchTasks.delete(environmentId);
+        }
+      })
+      .then(() =>
+        this.launchRerunRequests.delete(environmentId)
+          ? this.reconcileInitialLaunch(environmentId)
+          : undefined,
+      );
     this.launchTasks.set(environmentId, task);
     return task;
   }
@@ -1766,7 +1779,7 @@ export class NativeAgentLaunchActivityReconciler {
             model,
             reasoningEffort,
             fastMode,
-            activateTab: true,
+            activateTab: "setup-handoff",
           });
         } else {
           const command = buildTerminalAgentLaunchCommand({
@@ -1783,7 +1796,7 @@ export class NativeAgentLaunchActivityReconciler {
             tabId: STARTUP_AGENT_TAB_ID,
             tabType: agent,
             data: `${command}\n`,
-            activateTab: true,
+            activateTab: "setup-handoff",
           });
         }
 
@@ -1836,16 +1849,6 @@ export class NativeAgentLaunchActivityReconciler {
             ...(typeof fastMode === "boolean" ? { initialFastMode: fastMode } : {}),
           };
 
-      // Publish both startup surfaces as soon as backend intent exists,
-      // including while setup is still running. Provider creation remains gated
-      // below, but the durable pane can already rehydrate in an inactive
-      // renderer. A prompt-less launch stays unassigned so the user can still
-      // change the preselected model before the first send.
-      await this.storage.ensureStartupNativeAgentTab({
-        environmentId: environment.id,
-        agent,
-        ...preselectOptions,
-      });
       const startupSession = environment.startupAgentSession;
       if (
         !startupSession ||
@@ -1866,6 +1869,16 @@ export class NativeAgentLaunchActivityReconciler {
       }
 
       if (!isEnvironmentReadyForAgents(environment)) return;
+
+      // The job tab launches when setup has finished, and only then, so the
+      // setup terminal stays first and alone until it has done its work. A
+      // prompt-less launch stays unassigned so the user can still change the
+      // preselected model before the first send.
+      await this.storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent,
+        ...preselectOptions,
+      });
 
       if (!hasInitialWork) {
         // No opening prompt was submitted with the environment. Leave the tab

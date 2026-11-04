@@ -14,6 +14,7 @@ import { GraphTemplatesRepository } from "./storage-graph-templates.js";
 import { GraphRunsRepository } from "./storage-graph-runs.js";
 import { GraphEffectsRepository } from "./storage-graph-effects.js";
 import { GraphDescribeRepository } from "./storage-graph-describe.js";
+import { SuborksRepository } from "./storage-suborks.js";
 import { ClientStateRepository } from "./storage-client-state.js";
 import { SetupApprovalsRepository } from "./storage-setup-approvals.js";
 import { WatchedPullRequestsRepository } from "./storage-watched-pull-requests.js";
@@ -22,6 +23,7 @@ import { KanbanRepository } from "./storage-kanban.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 import { NodesRepository } from "./storage-nodes.js";
+import { CoordinatorNoticesRepository } from "./storage-coordinator-notices.js";
 import { PreviewServicesRepository } from "./storage-preview-services.js";
 import { PromptQueueStore } from "./storage-prompt-queue-store.js";
 import { ProjectsRepository } from "./storage-projects.js";
@@ -66,6 +68,7 @@ export class StorageRepositories {
   readonly kanban: KanbanRepository;
   readonly previewServices: PreviewServicesRepository;
   readonly nodes: NodesRepository;
+  readonly coordinatorNotices: CoordinatorNoticesRepository;
   readonly publicOperations: PublicOperationsRepository;
   readonly coordinators: CoordinatorsRepository;
   readonly agentAccounts: AgentAccountsRepository;
@@ -74,6 +77,7 @@ export class StorageRepositories {
   readonly graphRuns: GraphRunsRepository;
   readonly graphEffects: GraphEffectsRepository;
   readonly graphDescribe: GraphDescribeRepository;
+  readonly suborks: SuborksRepository;
   readonly clientState: ClientStateRepository;
   readonly setupApprovals: SetupApprovalsRepository;
   readonly watchedPullRequests: WatchedPullRequestsRepository;
@@ -101,6 +105,7 @@ export class StorageRepositories {
     this.kanban = new KanbanRepository(context, files);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);
+    this.coordinatorNotices = new CoordinatorNoticesRepository(context);
     this.publicOperations = new PublicOperationsRepository(context, files, this);
     this.coordinators = new CoordinatorsRepository(context, files, this);
     this.agentAccounts = new AgentAccountsRepository(context);
@@ -109,6 +114,7 @@ export class StorageRepositories {
     this.graphRuns = new GraphRunsRepository(context, this);
     this.graphEffects = new GraphEffectsRepository(context, this);
     this.graphDescribe = new GraphDescribeRepository(context);
+    this.suborks = new SuborksRepository(context, this);
     this.clientState = new ClientStateRepository(context);
     this.setupApprovals = new SetupApprovalsRepository(context);
     this.watchedPullRequests = new WatchedPullRequestsRepository(context);

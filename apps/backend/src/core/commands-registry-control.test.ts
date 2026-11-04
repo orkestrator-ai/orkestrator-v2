@@ -112,6 +112,7 @@ describe("launch_control_job command", () => {
       const input = withCoordinatorDelegationPresentation(
         {
           requestId: "external-request-1",
+          tabId: "untrusted-tab",
           environmentId: "env-1",
           agent: "codex",
           title: "Independent job",
@@ -137,6 +138,7 @@ describe("launch_control_job command", () => {
         agent: "codex",
         status: "accepted",
       });
+      expect(first.tabId).not.toBe("untrusted-tab");
       expect(second.tabId).toBe(first.tabId);
       expect(String(first.tabId)).toStartWith("agent-job-");
       expect(ensured[0]).toMatchObject({
@@ -219,6 +221,7 @@ describe("launch_control_job command", () => {
       const result = (await command(
         {
           requestId: "renderer-request-1",
+          tabId: "renderer-chosen-tab",
           environmentId: "env-1",
           agent: "codex",
           title: "Push Changes",
@@ -230,7 +233,19 @@ describe("launch_control_job command", () => {
       // The catalogue can only ever narrow a Fast choice, so losing it must
       // leave the provider as the authority instead of failing the launch.
       expect(catalogReads).toBe(1);
-      expect(result).toMatchObject({ status: "accepted" });
+      expect(result).toMatchObject({ status: "accepted", tabId: "renderer-chosen-tab" });
+      await expect(
+        command(
+          {
+            requestId: "too-long",
+            environmentId: "env-1",
+            agent: "codex",
+            prompt: "task",
+            tabId: "x".repeat(257),
+          },
+          context,
+        ),
+      ).rejects.toThrow("tabId must be at most 256 characters");
       expect(ensured[0]).toMatchObject({ agent: "codex", fastMode: true });
     } finally {
       await rm(dataDir, { recursive: true, force: true });
@@ -1402,11 +1417,6 @@ describe("launch_terminal_job command", () => {
         kind: "leaf",
         activeTabId: first.tabId,
         tabs: [
-          {
-            id: "default",
-            type: "plain",
-            isSetupTab: true,
-          },
           {
             id: first.tabId,
             type: "plain",

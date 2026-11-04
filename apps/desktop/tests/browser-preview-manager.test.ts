@@ -399,6 +399,29 @@ describe("BrowserPreviewManager", () => {
     expect(contents.copyImageAt).toHaveBeenCalledTimes(1);
   });
 
+  test("routes Cmd/Ctrl+T from previews to the owning workspace", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    for (const modifiers of [
+      { meta: true, control: false },
+      { meta: false, control: true },
+    ]) {
+      const event = { preventDefault: mock(() => undefined) };
+      contents.emit("before-input-event", event, {
+        type: "keyDown",
+        key: "t",
+        code: "KeyT",
+        alt: false,
+        shift: false,
+        ...modifiers,
+      });
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    }
+    expect(harness.requestPreviewShortcut).toHaveBeenNthCalledWith(1, input.tabId, "new-agent-tab");
+    expect(harness.requestPreviewShortcut).toHaveBeenNthCalledWith(2, input.tabId, "new-agent-tab");
+  });
+
   test("routes Cmd+L and Ctrl+L from the native preview to the app address bar", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);

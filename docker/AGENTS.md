@@ -66,6 +66,10 @@ Developer tooling:
   helper; root terminals have the CLI but do not load the interactive hook.
 - Playwright CLI plus its pinned Chromium build (see below).
 - ripgrep, fzf, jq, tmux, nano, vim, less, curl, wget, and `en_US.UTF-8`.
+- `workspace-setup.sh` clones from the project's read-only Git mirror when the
+  backend names one in `ORKESTRATOR_GIT_MIRROR` (`git-mirror=1`). It must never
+  stop setup: any problem falls through to the ordinary clone
+  ([container-lifecycle.md](../docs/architecture/container-lifecycle.md#project-git-mirror)).
 - inotify-tools, for `orkestrator-worktree-signal`: the backend starts it per
   tracking lineage to ring when `/workspace` changes
   (`container-worktree-signal=1`, see

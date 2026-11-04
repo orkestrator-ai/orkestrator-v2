@@ -218,3 +218,10 @@ The captured cross-suite totals are lower bounds: 31,617 passes, seven failures
 alone on detached `origin/main` at `9eca79311b06e624e8799feb069052a7009eeeef`.
 This isolated pass confirms intermittency, not a load-related root cause.
 Original failure evidence: `.orkestrator/review-artifacts/review-validation-2b4eea63-cf5c-4639-ad6f-82564be561bf/validation-04.stdout.txt`.
+
+## Observation, 2026-11-04
+
+- **Command:** `mise run test` (default aggregate), tab focus branch; the same run as case 0093's observation of this date.
+- **Failure:** timed out after 5002.36 ms in `bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts`.
+- **Owning-file rerun:** `mise run test:logged -- --name codex-alone -- bun test --cwd bridges/codex-bridge src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed (0.1 s).
+- **Hypothesis:** not established. The change under test touches no bridge code. No assertion, timeout or skip was changed.

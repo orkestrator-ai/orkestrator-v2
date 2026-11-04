@@ -80,6 +80,10 @@ Each stream keeps its own slot of the existing tunnel admission, so `tunnelsPerS
 
 Sessions are per attachment, because HELLO authenticates one attachment and revoking it must close everything. A new attachment retires older sessions rather than closing them, so connections already open run to completion as they did on v1. An idle session closes after 30 s (the backend's liveness interval); the pool's 2 s idle still applies to the upstream connections themselves.
 
+### Task 2: a session error frame fails its streams at once (2026-11-04)
+
+A revocation reaches the client as a session `error` frame, then a close frame about a millisecond later. In that gap the session had failed but its streams still looked open, so `PreviewTransportManager.connect` could take one from the pool and the request got a 502 (`backend-unavailable`) instead of reattaching. `PreviewTunnelSession` now destroys its streams when the error frame arrives. Every close code that follows that frame already destroyed them, so only the timing moves. Not changed: a request already written to a pooled stream when the frame arrives still fails, because the manager keeps its pool inside `connect` rather than offering it through the forwarder's `takeIdle` retry.
+
 ## Constraints and rationale
 
 Any change keeps what `preview-tunnel-client.ts` and `preview-transport-manager.ts` hold today: nothing is buffered before `OPEN_OK`, and a refused connection is retried only before application bytes were sent. The wider contract is [browser-previews.md](../../architecture/browser-previews.md).

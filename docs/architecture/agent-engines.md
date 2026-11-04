@@ -245,6 +245,21 @@ five minutes. Cursor and Grok have no setter, so their backend title is always
 authoritative. No bridge generates a title, and the Codex bridge no longer
 reports a title it read back from the first prompt.
 
+## Sub-agent models
+
+Orkestrator does not choose a sub-agent's model. A parent can name one when it
+spawns a sub-agent where the provider's tool offers that (Claude's `Agent`,
+Codex's `spawn_agent`, Cursor's task call and Grok's `spawn_subagent`), and
+otherwise the provider's own rules decide. OpenCode models are set per agent.
+
+A sub-agent card names the model through `subagentModelId` where something
+reports it. Claude reads the sub-agent's own responses, on the live stream and in
+rehydration, because the launch call only says what was asked for and usually
+asks for nothing. Codex reports the resolved model, and OpenCode reports it on
+its `subtask` record or the `task` tool's metadata. Cursor and Grok report nothing
+for a child, so their cards show only a model the launch call named. A card with
+no reported model shows no row rather than a guess.
+
 ## What survives a restart
 
 "Bridge restart" means the bridge process dies and a successor starts on the

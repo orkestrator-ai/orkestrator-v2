@@ -423,6 +423,9 @@ export async function getLogDirectory(machine?: AccountMachine): Promise<string>
 }
 
 export interface LogStorageStats {
+  /** The always-on essential log. A backend older than it leaves these out. */
+  essentialBytes?: number;
+  essentialFileCount?: number;
   totalBytes: number;
   fileCount: number;
 }

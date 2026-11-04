@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, mock, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
+import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
@@ -167,6 +168,7 @@ describe("PipelineKeyInformationTab", () => {
   test("shows every recorded section with the latest update in the header", () => {
     const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 2 });
 
+    expect(within(section(tab, "Summary")).getByText(keyInformation.summary!)).toBeTruthy();
     expect(within(section(tab, "Objective")).getByText(keyInformation.statement!)).toBeTruthy();
     expect(within(section(tab, "Context")).getByText(keyInformation.context!)).toBeTruthy();
     expect(within(section(tab, "Solution")).getByText(keyInformation.solution!)).toBeTruthy();
@@ -192,9 +194,53 @@ describe("PipelineKeyInformationTab", () => {
     expect(within(tab).getByText(/Key information · Updated .* by Verify · round 1/)).toBeTruthy();
   });
 
+  test.each(["problem", "objective"] as const)(
+    "keeps the legacy %s first and lead styled when summary is absent",
+    (framing) => {
+      const legacy = { ...keyInformation, framing };
+      delete legacy.summary;
+      const tab = renderTab({ ...pipeline, keyInformation: legacy });
+      const title = framing === "objective" ? "Objective" : "Problem";
+      const statement = section(tab, title);
+      expect(within(tab).getAllByRole("region")[0]).toBe(statement);
+      expect(within(tab).queryByRole("region", { name: "Summary" })).toBeNull();
+      const prose = within(statement).getByText(legacy.statement!);
+      expect(prose.classList.contains("text-[15px]")).toBe(true);
+      expect(prose.classList.contains("leading-7")).toBe(true);
+      expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+      const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+      expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
+      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(nav.querySelector('[aria-current="location"]')?.textContent).toBe(title);
+    },
+  );
+
+  test("renders a summary-only brief as the lead section", () => {
+    const summary = "The pipeline now explains its progress in plain language.";
+    const tab = renderTab({
+      ...pipeline,
+      keyInformation: { ...emptyKeyInformation(keyInformation.updatedAt), summary },
+    });
+    const regions = within(tab).getAllByRole("region");
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(section(tab, "Summary"));
+    const prose = within(regions[0]!).getByText(summary);
+    expect(prose.classList.contains("text-[15px]")).toBe(true);
+    expect(prose.classList.contains("leading-7")).toBe(true);
+    expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+    expect(within(tab).queryByText("Nothing has been recorded yet")).toBeNull();
+    const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Summary"]);
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toBe("Summary");
+  });
+
   test("summarises tests, issues and the latest verification", () => {
     const tab = renderTab({ ...pipeline, keyInformation: twoRounds, backendRevision: 3 });
-    const summary = within(tab).getByRole("group", { name: "Summary" });
+    const summary = within(tab).getByRole("group", { name: "At a glance" });
 
     expect(
       within(summary).getByRole("button", { name: /Tests\s*1\/3 passed\s*1 failed/ }),
@@ -265,7 +311,7 @@ describe("PipelineKeyInformationTab", () => {
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
     scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
     Array.from(scroller.querySelectorAll<HTMLElement>("section")).forEach((element, index) => {
-      const top = index === 2 ? 300 : index * 300;
+      const top = index === 3 ? 600 : index * 300;
       element.getBoundingClientRect = () => ({ top: top - scroller.scrollTop }) as DOMRect;
     });
     scroller.scrollTo = ((options: ScrollToOptions) => {
@@ -285,13 +331,13 @@ describe("PipelineKeyInformationTab", () => {
       );
     }
     await act(async () => {
-      scroller.scrollTop = 910;
+      scroller.scrollTop = 1210;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^What was done/);
     await act(async () => {
-      scroller.scrollTop = 310;
+      scroller.scrollTop = 610;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -317,7 +363,7 @@ describe("PipelineKeyInformationTab", () => {
       fireEvent.click(within(nav).getByRole("button", { name: /^Update history/ }));
       expect(scrollTo).toHaveBeenCalledWith({ top: 3600, behavior: "auto" });
       await act(async () => {
-        scroller.scrollTop = 510;
+        scroller.scrollTop = 1010;
         fireEvent.scroll(scroller);
         await new Promise((resolve) => setTimeout(resolve, 50));
       });

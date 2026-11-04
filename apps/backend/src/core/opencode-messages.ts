@@ -443,6 +443,12 @@ export function normalizeOpenCodeInteractiveMessage(
       ? openCodeRecordString(input, "subagent_type", "agent")
       : undefined;
     const subagentPrompt = isSubagent ? openCodeRecordString(input, "prompt") : undefined;
+    // The child's resolved model, which only its task tool's metadata carries.
+    const subagentModel = isSubagent ? asRecord(metadata?.model) : undefined;
+    const subagentModelId =
+      nonEmptyString(subagentModel?.providerID) && nonEmptyString(subagentModel?.modelID)
+        ? `${subagentModel!.providerID}/${subagentModel!.modelID}`
+        : undefined;
     const normalizedToolState =
       taskEnvelope.state === "running"
         ? "pending"
@@ -497,6 +503,7 @@ export function normalizeOpenCodeInteractiveMessage(
             ...(subagentName ? { subagentName } : {}),
             ...(subagentRole ? { subagentRole } : {}),
             ...(subagentPrompt ? { subagentPrompt } : {}),
+            ...(subagentModelId ? { subagentModelId } : {}),
             subagentActions: [],
             subagentActionCount: 0,
           }

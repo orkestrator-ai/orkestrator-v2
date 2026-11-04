@@ -191,6 +191,7 @@ export function pruneKeyInformationAfterRewind(
   // Narrative sections have no per-attempt provenance or restorable snapshots.
   // Clear them conservatively rather than presenting superseded work as current.
   info.framing = "problem";
+  delete info.summary;
   delete info.statement;
   delete info.context;
   delete info.solution;

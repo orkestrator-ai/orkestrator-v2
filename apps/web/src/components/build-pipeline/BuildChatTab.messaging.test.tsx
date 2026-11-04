@@ -1239,7 +1239,16 @@ describe("BuildChatTab graph", () => {
 
     expect(selectedTitle()).toBe("Setup");
     expect(graphNode("Setup").getAttribute("data-flow-state")).toBe("running");
-    expect(nodeTitles()).toEqual(["Ticket", "Setup", "Build", "Review", "Verify", "Ship", "PR"]);
+    expect(nodeTitles()).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Verify",
+      "Ship",
+      "PR",
+      "Notes",
+    ]);
     for (const title of ["Build", "Review", "Verify", "Ship", "PR"]) {
       expect(graphNode(title).hasAttribute("data-flow-placeholder")).toBe(true);
     }
@@ -1269,7 +1278,7 @@ describe("BuildChatTab graph", () => {
     });
 
     expect(selectedTitle()).toBe("Ship");
-    expect(nodeTitles().slice(-2)).toEqual(["Ship", "PR"]);
+    expect(nodeTitles().slice(-3)).toEqual(["Ship", "PR", "Notes"]);
     expect(graphNode("PR").hasAttribute("data-flow-placeholder")).toBe(true);
     expect(queryGraphNode("Resolve conflicts") === null).toBe(true);
   });

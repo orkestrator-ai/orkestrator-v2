@@ -17,6 +17,7 @@ import {
 } from "./ticket-tool-fields.js";
 import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
+import { SUBORK_RESULT_KIND } from "@orkestrator/protocol/suborks";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
 import type { KanbanStatus, KanbanTask, StorageService } from "./storage.js";
 import type { ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
@@ -44,6 +45,11 @@ import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
 import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
 import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import {
+  registerSuborkRefusalTool,
+  registerSuborkTools,
+  type SuborkToolHost,
+} from "./agent-tools-suborks.js";
 import {
   authenticatePipelineWorkerMailCapability,
   pipelineWorkerTabForResultKey,
@@ -632,11 +638,13 @@ async function createAgentToolServer(
     instructions = true,
     graphTools = null,
     goalTools = null,
+    suborkTools = null,
     keyInformation = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
     goalTools?: GoalToolHost | null;
+    suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
   } = {},
 ): Promise<McpServer> {
@@ -742,7 +750,7 @@ async function createAgentToolServer(
     );
     // A Build Pipeline stage turn runs on this server alone, so it carries the
     // key information tools the stage prompts ask for.
-    if (keyInformation && binding.kind !== "graph-output") {
+    if (keyInformation && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
       await registerKeyInformationTools(server, keyInformation, pipelineScope);
     }
     if (workerTabId) {
@@ -753,6 +761,8 @@ async function createAgentToolServer(
         consumeRateLimit,
       );
     }
+    // A subork's turn runs on this server alone: it finds a refusal, not the tool.
+    if (binding.kind === SUBORK_RESULT_KIND) registerSuborkRefusalTool(server);
     if (binding.kind === "graph-output") {
       await registerGraphActivationTools(
         server,
@@ -906,6 +916,8 @@ async function createAgentToolServer(
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
 
+  if (suborkTools) registerSuborkTools(server, storage, scope, suborkTools, consumeRateLimit);
+
   if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
 
   return server;
@@ -965,6 +977,7 @@ export class AgentToolsServer {
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private goalToolHost: GoalToolHost | null = null;
+  private suborkToolHost: SuborkToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
   private transcriptArtifactToolHost: TranscriptArtifactToolHost | null = null;
@@ -1206,6 +1219,11 @@ export class AgentToolsServer {
   /** Where `report_goal` calls go. The tool is listed only while this is set. */
   setGoalToolHost(host: GoalToolHost | null): void {
     this.goalToolHost = host;
+  }
+
+  /** Where `ask_agents` calls go. The tool is listed only while this is set. */
+  setSuborkToolHost(host: SuborkToolHost | null): void {
+    this.suborkToolHost = host;
   }
 
   /** Where Multi Review reviewers' `report_finding` calls go. */
@@ -1532,6 +1550,7 @@ export class AgentToolsServer {
                   instructions: agentMcpAnnounces(body),
                   graphTools: this.graphActivationToolHost,
                   goalTools: this.goalToolHost,
+                  suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
                 },
               ),

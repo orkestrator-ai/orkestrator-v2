@@ -37,6 +37,7 @@ import type {
 } from "./models.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
+import { removeProjectGitMirror } from "./project-git-mirror.js";
 import {
   claudeModelParameters,
   claudeModelReasoningIds,
@@ -1185,8 +1186,8 @@ export function registerProjectCommands(
 
 /**
  * Everything a project registration owns outside projects.json: coordinator
- * credentials and conversation servers, their native sessions, agent mail and
- * the coordinator workspace. Shared by `remove_project` and the public
+ * credentials and conversation servers, their native sessions, agent mail, the
+ * coordinator workspace and the Git mirror. Shared by `remove_project` and the public
  * `project.remove` action so both clean up identically.
  */
 export async function cleanupProjectForRemoval(
@@ -1227,4 +1228,5 @@ export async function cleanupProjectForRemoval(
     await storage.deleteAgentMailByProject(id);
   }
   await context.coordinators?.removeProject(id);
+  await removeProjectGitMirror(context, id);
 }

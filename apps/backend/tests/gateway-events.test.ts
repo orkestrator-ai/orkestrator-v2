@@ -2442,8 +2442,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 0,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return true;
       }),
       destroy: mock(() => undefined),
@@ -2622,8 +2622,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 1024 * 1024 - 20,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return false;
       }),
       destroy: mock(() => undefined),
@@ -3226,8 +3226,8 @@ describe("remote gateway", () => {
     // same thing again.
     const client = {
       writableLength: 8 * 1024 * 1024 - frame.encodedBytes + 1,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return true;
       }),
       destroy: mock(() => undefined),
@@ -3370,8 +3370,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 0,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return true;
       }),
       destroy: mock(() => undefined),
@@ -3424,8 +3424,8 @@ describe("remote gateway", () => {
     const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     const client = {
       writableLength: 0,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         if (message.includes('"event":"gateway.connected"')) clients.delete(client);
         return true;
       }),
@@ -3454,8 +3454,8 @@ describe("remote gateway", () => {
     };
     const retryClient = {
       writableLength: 0,
-      write: mock((message: string) => {
-        retryWrites.push(message);
+      write: mock((message: string | Buffer) => {
+        retryWrites.push(String(message));
         return true;
       }),
       destroy: mock(() => undefined),
@@ -3485,8 +3485,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 0,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         if (message.includes('"event":"gateway.connected"')) {
           gateway.emit("terminal-output-session", { bytesBase64: "dGVybWluYWw=" });
         }
@@ -3535,8 +3535,8 @@ describe("remote gateway", () => {
       const writes: string[] = [];
       const client = {
         writableLength: 0,
-        write: mock((value: string) => {
-          writes.push(value);
+        write: mock((value: string | Buffer) => {
+          writes.push(String(value));
           if (value.includes('"event":"gateway.connected"')) gateway.emit(event, payload);
           return true;
         }),
@@ -3587,8 +3587,8 @@ describe("remote gateway", () => {
       const writes: string[] = [];
       const client = {
         writableLength: 0,
-        write: mock((value: string) => {
-          writes.push(value);
+        write: mock((value: string | Buffer) => {
+          writes.push(String(value));
           // Exactly two events land while the handshake is buffering.
           if (value.includes('"event":"gateway.connected"')) {
             gateway.emit("environment-renamed", { id: "one" });
@@ -3727,13 +3727,13 @@ describe("remote gateway", () => {
       clients.set(client, state);
       const written = (
         gateway as unknown as {
-          writeReplayFrame(
+          writeReplayFrames(
             client: object,
             clientState: typeof state,
-            replayFrame: typeof frame,
+            replayFrames: readonly (typeof frame)[],
           ): boolean;
         }
-      ).writeReplayFrame(client, state, frame);
+      ).writeReplayFrames(client, state, [frame]);
       expect(written).toBe(false);
       expect(client.write).not.toHaveBeenCalled();
       expect(client.destroy).toHaveBeenCalledTimes(1);

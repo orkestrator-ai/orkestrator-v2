@@ -1,6 +1,6 @@
 {
   "name": "pi-bridge",
-  "version": "2.36.1",
+  "version": "2.36.2-beta",
   "private": true,
   "type": "module",
   "main": "dist/index.js",

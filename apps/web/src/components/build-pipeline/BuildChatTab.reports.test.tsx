@@ -593,10 +593,10 @@ describe("BuildChatTab reports and verdicts", () => {
     press("Home");
     await waitFor(() => expect(selectedTitle()).toBe("Ticket"));
     press("End");
-    await waitFor(() => expect(selectedTitle()).toBe("PR"));
+    await waitFor(() => expect(selectedTitle()).toBe("Notes"));
     // The line has ends: it does not wrap.
     press("ArrowRight");
-    expect(selectedTitle()).toBe("PR");
+    expect(selectedTitle()).toBe("Notes");
   });
 
   test("moves onto and past the Prepare node with the arrow keys", async () => {

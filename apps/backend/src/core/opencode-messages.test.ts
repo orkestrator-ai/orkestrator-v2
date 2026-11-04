@@ -249,6 +249,25 @@ describe("normalizeOpenCodeInteractiveMessage tool durations", () => {
     ).toBeUndefined();
   });
 
+  test("a task's metadata names the child's model", () => {
+    expect(
+      tool(
+        {
+          status: "completed",
+          input: { description: "Explore" },
+          metadata: { model: { providerID: "acme", modelID: "small" } },
+        },
+        "task",
+      )?.subagentModelId,
+    ).toBe("acme/small");
+    expect(
+      tool(
+        { status: "completed", input: { description: "Explore" }, metadata: { model: "drifted" } },
+        "task",
+      )?.subagentModelId,
+    ).toBeUndefined();
+  });
+
   test("never times a background task the envelope still reports as running", () => {
     const running = tool(
       {

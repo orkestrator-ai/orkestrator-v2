@@ -43,10 +43,10 @@ import {
   publicationFailedStatus,
   updateResolve,
 } from "./coordinator-pr-attempt.js";
+import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { createHash } from "node:crypto";
 import {
-  AgentMailError,
   agentMailStatusBudgetKey,
   normalizeAgentMessagingSettings,
   type AgentMailNotice,
@@ -55,8 +55,6 @@ import {
   type CoordinatorStatusWakeMode,
 } from "@orkestrator/protocol/agent-mail";
 import {
-  coordinatorMainConversation,
-  coordinatorRuntimeId,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -737,6 +735,8 @@ const SYSTEM_TIMERS: CoordinatorStatusWakeTimers = {
 };
 
 export interface CoordinatorStatusWakeOptions {
+  /** Who hears a notice; without one, this machine's coordinator and no new sessions. */
+  noticeRouter?: CoordinatorNoticeRouter;
   /** Fresh turn activity of a worker tab, for waiting episodes. */
   workerActivity?: (
     environmentId: string,
@@ -842,11 +842,15 @@ export class CoordinatorStatusWakes {
   /** Reads of workflows and workers on other nodes, once the node services exist. */
   private remote: CoordinatorRemoteAccess | null = null;
   private readonly outcomes: CoordinatorWorkerOutcomes;
+  private readonly router: CoordinatorNoticeRouter;
+  /** The running pass is a sweep of stored state, not a new event. */
+  private sweeping = false;
 
   constructor(
     private readonly storage: StorageService,
     private readonly options: CoordinatorStatusWakeOptions = {},
   ) {
+    this.router = options.noticeRouter ?? new CoordinatorNoticeRouter(storage);
     this.timers = options.timers ?? SYSTEM_TIMERS;
     this.coalesceMs = options.coalesceMs ?? COORDINATOR_STATUS_COALESCE_MS;
     this.waitingDebounceMs = options.waitingDebounceMs ?? COORDINATOR_WAITING_DEBOUNCE_MS;
@@ -1090,56 +1094,65 @@ export class CoordinatorStatusWakes {
    */
   reconcile(): Promise<void> {
     return this.serialize(async () => {
-      const since = this.followNotes;
-      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
-      const mode = await this.mode();
-      // Follows noted while the store was being read may be missing from it.
-      const noted = [...this.recentFollows].filter(([, seq]) => seq > since).map(([key]) => key);
-      this.followed = new Set([
-        ...state.workflows
-          .filter(
-            (association) =>
-              association.kind === "pull-request" &&
-              !association.pending &&
-              !association.terminalNotifiedAt,
-          )
-          .map((association) => followKey(association.resourceId, association.nodeId)),
-        ...noted,
-      ]);
-      for (const [key, seq] of Array.from(this.recentFollows))
-        if (seq <= since) this.recentFollows.delete(key);
-      for (const association of state.workflows) {
-        if (
-          (association.kind === "multi-review" ||
-            association.kind === "build-pipeline" ||
-            association.kind === "graph-run" ||
-            association.kind === "pull-request" ||
-            association.kind === "feature-plan") &&
-          (!association.pending || association.kind === "feature-plan") &&
-          !association.terminalNotifiedAt
-        ) {
-          await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(
-            (error: unknown) => {
-              log.warn("wake.deliver-failed", { error: formatLogError(error) });
-            },
-          );
-        }
-      }
-      await this.outcomes
-        .reconcile(state.workspaces, state.workflows, mode)
-        .catch((error: unknown) => {
-          log.warn("wake.worker-outcomes-failed", { error: formatLogError(error) });
-        });
-      if (MODE_ORDER[mode] < MODE_ORDER.settled) return;
-      for (const association of state.workflows) {
-        if (association.kind !== "environment" || association.delegation?.state !== "running") {
-          continue;
-        }
-        await this.reconcileWaiting(state.workspaces, association).catch((error: unknown) => {
-          log.warn("wake.waiting-check-failed", { error: formatLogError(error) });
-        });
+      this.sweeping = true;
+      try {
+        await this.reconcilePass();
+      } finally {
+        this.sweeping = false;
       }
     });
+  }
+
+  private async reconcilePass(): Promise<void> {
+    const since = this.followNotes;
+    const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+    const mode = await this.mode();
+    // Follows noted while the store was being read may be missing from it.
+    const noted = [...this.recentFollows].filter(([, seq]) => seq > since).map(([key]) => key);
+    this.followed = new Set([
+      ...state.workflows
+        .filter(
+          (association) =>
+            association.kind === "pull-request" &&
+            !association.pending &&
+            !association.terminalNotifiedAt,
+        )
+        .map((association) => followKey(association.resourceId, association.nodeId)),
+      ...noted,
+    ]);
+    for (const [key, seq] of Array.from(this.recentFollows))
+      if (seq <= since) this.recentFollows.delete(key);
+    for (const association of state.workflows) {
+      if (
+        (association.kind === "multi-review" ||
+          association.kind === "build-pipeline" ||
+          association.kind === "graph-run" ||
+          association.kind === "pull-request" ||
+          association.kind === "feature-plan") &&
+        (!association.pending || association.kind === "feature-plan") &&
+        !association.terminalNotifiedAt
+      ) {
+        await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(
+          (error: unknown) => {
+            log.warn("wake.deliver-failed", { error: formatLogError(error) });
+          },
+        );
+      }
+    }
+    await this.outcomes
+      .reconcile(state.workspaces, state.workflows, mode)
+      .catch((error: unknown) => {
+        log.warn("wake.worker-outcomes-failed", { error: formatLogError(error) });
+      });
+    if (MODE_ORDER[mode] < MODE_ORDER.settled) return;
+    for (const association of state.workflows) {
+      if (association.kind !== "environment" || association.delegation?.state !== "running") {
+        continue;
+      }
+      await this.reconcileWaiting(state.workspaces, association).catch((error: unknown) => {
+        log.warn("wake.waiting-check-failed", { error: formatLogError(error) });
+      });
+    }
   }
 
   /**
@@ -1939,59 +1952,41 @@ export class CoordinatorStatusWakes {
   }
 
   /**
-   * Put one status notice in the main coordinator's inbox.
-   *
-   * Like the terminal workflow notice it extends, it does not start a main
-   * coordinator: with none open it waits, and the sweep sends the state current
-   * when one opens. The request id is fixed by association, conversation and
-   * state, so a retry after a crash finds the message already placed.
+   * Put one status notice with the coordinator that should hear it; see
+   * `CoordinatorNoticeRouter`. With none running a new event starts one. A sweep
+   * of older state does not: it finds nobody and returns false, and the next
+   * sweep sends the state current when one opens. The request id is fixed by
+   * association, conversation and state, so a retry after a crash finds the
+   * message already placed.
    */
-  private async deliver(
-    workspaces: CoordinatorWorkspace[],
+  private deliver(
+    _workspaces: CoordinatorWorkspace[],
     association: CoordinatorWorkflowAssociation,
     resource: CoordinatorStatusResource,
     status: CoordinatorStatus,
   ): Promise<boolean> {
-    const workspace = workspaces.find(
-      (candidate) =>
-        candidate.id === association.coordinatorId && candidate.projectId === association.projectId,
-    );
-    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
-    if (!workspace || !main) return false;
     const { subject, body, notice } = renderCoordinatorStatusNotice(resource, status);
-    try {
-      await this.storage.sendAgentMail(
-        {
-          kind: "system",
-          projectId: association.projectId,
-          source: "workflow",
-          resourceId: association.resourceId,
-        },
-        {
-          requestId: `status:${association.id}:${main.id}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
-          toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
-          toTabId: main.tabId,
-          subject,
-          body,
-        },
-        {
-          notice,
-          // A tab id is only unique within its environment.
-          statusBudgetKey: agentMailStatusBudgetKey(
-            resource.kind,
-            resource.kind === "agent-tab"
-              ? `${resource.environmentId ?? ""}/${resource.tabId ?? resource.id}`
-              : resource.id,
-          ),
-          coalesceMs: this.coalesceMs,
-        },
-      );
-      return true;
-    } catch (error) {
-      // The same state was already placed under this request id with words
-      // that have since changed (an excerpt, a timestamp): it was delivered.
-      if (error instanceof AgentMailError && error.code === "idempotency-conflict") return true;
-      throw error;
-    }
+    return this.router.deliver({
+      projectId: association.projectId,
+      coordinatorId: association.coordinatorId,
+      // A coordinator waiting on its own worker hears about that worker itself.
+      audience: association.kind === "environment" ? "delegator" : "repository",
+      createSession: !this.sweeping,
+      resourceId: association.resourceId,
+      requestId: (mainId) =>
+        `status:${association.id}:${mainId}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
+      upwardRequestId: `status:${association.id}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
+      subject,
+      body,
+      notice,
+      // A tab id is only unique within its environment.
+      statusBudgetKey: agentMailStatusBudgetKey(
+        resource.kind,
+        resource.kind === "agent-tab"
+          ? `${resource.environmentId ?? ""}/${resource.tabId ?? resource.id}`
+          : resource.id,
+      ),
+      coalesceMs: this.coalesceMs,
+    });
   }
 }

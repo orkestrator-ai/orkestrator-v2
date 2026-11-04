@@ -135,7 +135,8 @@ export async function launchWorkerTerminal(
           ...(reasoningEffort ? { reasoningEffort } : {}),
         }
       : {}),
-    activateTab: true,
+    // An agent opened this surface; it does not move the user off their tab.
+    activateTab: false,
   });
   return { environmentId, tabId: launched.tabId, tabType: type, status: launched.status };
 }

@@ -70,3 +70,19 @@ Evidence: host temporary artifact directory `orkestrator-test-run.Lba259`,
 `bun test --cwd apps/backend` and passed in 30.2 s. No implementation,
 assertion, timeout or skip in the Kanban owner changed; contention remains
 an unproven hypothesis.
+
+## Subagent model review rerun — 2026-11-04
+
+`mise run test:logged -- --name review-default-tests -- mise run test` repeated
+`native shell completion execution > zsh bashcompinit parses option values and offers short flags`
+in `packages/cli/tests/command-surface.test.ts` with two CLI workers:
+`run.status` was null instead of zero, and the test timed out at 5,007.34 ms.
+CLI totals were 464 passed and one failed across 34 files (26.73 seconds).
+Workspace had 11 successful tasks out of 13; the other failure was preview
+ingress metrics (case 3571). Root, bridges and protocol groups passed.
+The aggregate took 974.8 seconds, including about 544 seconds queued.
+
+The complete unchanged owner passed in 1.5 seconds with
+`mise run test:logged -- --name cli-command-surface-isolated -- bun test --cwd packages/cli ./tests/command-surface.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Nq27Lg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No owning code, assertions, timeouts or skips changed; root cause remains open.

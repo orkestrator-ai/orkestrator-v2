@@ -99,7 +99,7 @@ async function extensionsFixture() {
 function entrypointDirectoryLoop(entrypoint: string, mount: string, home: string, label: string) {
   const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
   const pattern = new RegExp(
-    `^    for dir in \\\\\\n((?: {8}[\\w./-]+(?: \\\\)?\\n)+)    do\\n        copy_agent_directory_entries ${escaped(mount)} "\\$HOME/${escaped(home)}" "\\$dir" ${label}\\n    done$`,
+    `^    for dir in \\\\\\n((?: {8}[\\w./-]+(?: \\\\)?\\n)+)    do\\n        import_agent_input copy_agent_directory_entries ${escaped(mount)} "\\$HOME/${escaped(home)}" "\\$dir" ${label}\\n    done$`,
     "m",
   );
   const match = pattern.exec(entrypoint);
@@ -118,6 +118,14 @@ function entrypointHelpers(entrypoint: string): string {
     "report_agent_copy_skips",
     "agent_source_path_has_symlink",
     "agent_destination_path_has_symlink",
+    "agent_input_stamp",
+    "agent_input_source_readable",
+    "agent_input_manifest",
+    "agent_input_home_matches",
+    "agent_input_forget_removed",
+    "import_agent_input",
+    "forget_unchanged_agent_login",
+    "remember_agent_login",
     "copy_agent_file",
     "copy_agent_directory",
     "copy_agent_directory_entries",

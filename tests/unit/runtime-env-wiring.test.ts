@@ -64,6 +64,10 @@ const AGENT_HELPER_SED =
   "/^copy_agent_file() {/,/^}$/p; " +
   "/^copy_agent_directory() {/,/^}$/p; " +
   "/^copy_agent_directory_entries() {/,/^}$/p; " +
+  "/^agent_input_[a-z_]*() {/,/^}$/p; " +
+  "/^import_agent_input() {/,/^}$/p; " +
+  "/^forget_unchanged_agent_login() {/,/^}$/p; " +
+  "/^remember_agent_login() {/,/^}$/p; " +
   "/^restrict_imported_login() {/,/^}$/p; " +
   "/^publish_claude_credentials() {/,/^}$/p";
 
@@ -256,8 +260,9 @@ describe("container runtime environment wiring", () => {
 
     expect(entrypoint).toContain("copy_agent_file /codex-home");
     expect(entrypoint).toContain("copy_agent_directory /codex-home");
+    // The login is imported on its own, on every start.
+    expect(entrypoint).toContain('copy_agent_file /codex-home "$HOME/.codex" auth.json Codex');
     for (const allowlistedFile of [
-      "auth.json",
       "config.toml",
       "AGENTS.md",
       "hooks.json",
@@ -441,12 +446,13 @@ describe("container runtime environment wiring", () => {
   test("container startup copies only bounded Pi configuration state", () => {
     const entrypoint = section(
       read("docker/entrypoint.sh"),
-      'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
+      'if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config" ]; then',
       "report_agent_copy_skips Pi",
     );
 
+    // The login is imported on its own, on every start.
+    expect(entrypoint).toContain('copy_agent_file /pi-config/agent "$HOME/.pi/agent" auth.json Pi');
     for (const allowlisted of [
-      "auth.json",
       "models.json",
       "settings.json",
       // The bridge's MCP client reads user servers from here (mcp-management plan, step 13).
@@ -490,7 +496,7 @@ describe("container runtime environment wiring", () => {
       const entrypoint = read("docker/entrypoint.sh");
       const piSection = section(
         entrypoint,
-        'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
+        'if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config" ]; then',
         "report_agent_copy_skips Pi",
       );
       const guard = piSection.match(
@@ -517,7 +523,7 @@ describe("container runtime environment wiring", () => {
       chmodSync(join(source, "mcp.json"), 0o644);
       const piSection = section(
         read("docker/entrypoint.sh"),
-        'if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then',
+        'if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config" ]; then',
         "report_agent_copy_skips Pi",
       );
       const guard = piSection.match(
@@ -553,10 +559,12 @@ describe("container runtime environment wiring", () => {
     );
     // User MCP servers only: account state, IDE state, hooks, plugins and the
     // SDK's own state stay on the host.
-    const copies = [...cursorSection.matchAll(/^\s*copy_agent_[a-z_]+ .*$/gm)].map((match) =>
-      match[0].trim(),
-    );
-    expect(copies).toEqual(['copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor']);
+    const copies = [
+      ...cursorSection.matchAll(/^\s*(?:import_agent_input )?copy_agent_[a-z_]+ .*$/gm),
+    ].map((match) => match[0].trim());
+    expect(copies).toEqual([
+      'import_agent_input copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor',
+    ]);
     expect(cursorSection).toContain('mkdir -p "$HOME/.cursor"');
     expect(cursorSection).toContain('chmod 600 "$HOME/.cursor/mcp.json"');
     expect(cursorSection).toContain('[ ! -L "$HOME/.cursor/mcp.json" ]');
@@ -2064,7 +2072,7 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^copy_agent_directory_entries() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
+eval "$(sed -n '/^agent_copy_warn() {/,/^}$/p; /^report_agent_copy_skips() {/,/^}$/p; /^agent_source_path_has_symlink() {/,/^}$/p; /^agent_destination_path_has_symlink() {/,/^}$/p; /^agent_input_[a-z_]*() {/,/^}$/p; /^import_agent_input() {/,/^}$/p; /^forget_unchanged_agent_login() {/,/^}$/p; /^remember_agent_login() {/,/^}$/p; /^copy_agent_file() {/,/^}$/p; /^copy_agent_directory() {/,/^}$/p; /^copy_agent_directory_entries() {/,/^}$/p; /^restrict_imported_login() {/,/^}$/p' ${shellQuote(entrypoint)})"
 codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$AGENT_TEST_SOURCE#g; s#/tmp/orkestrator-codex-account#\\$AGENT_TEST_MARKER#g")"
 eval "$codex_setup"
 `,

@@ -40,7 +40,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12, DK-14 and DK-15 done; DK-13 open).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
 
 ### 1. Baseline and before-and-after numbers
@@ -742,7 +742,11 @@ Done 2026-11-02 against `main` at `38d55ee1`:
 
 - DK-12: `move_clone_into_workspace` in `docker/workspace-setup.sh` renames each top-level entry of the staged clone (`/workspace/.orkestrator/.clone-in-progress`) into `/workspace` instead of `cp -a -n` then `rm -rf`. Tests: `tests/unit/workspace-setup-preserve.test.ts` ("workspace setup clone move").
 - DK-15: when git refuses to move a worktree because it has submodules, `renameWorktree` in `environment-move.ts` renames the folder, runs `git worktree repair` and re-links the submodules. It copies only when the rename answers `EXDEV`. Tests: `environment-move.test.ts` ("same-disk move of a worktree git will not move"). `docs/development/disk-usage.md` describes the new behaviour.
-- DK-14 is left open on purpose: another build edits `portable-inputs.ts` at the same time. DK-13 (the mirror) is also still open.
+- DK-14 was left open then on purpose: another build edited `portable-inputs.ts` at the same time. DK-13 (the mirror) is still open.
+
+Done 2026-11-04 against `main` at `96ee1eb3`:
+
+- DK-14: `import_agent_input` in `docker/entrypoint.sh` leaves an input alone when copying it would change nothing, and removes what an earlier boot imported once it leaves the mounts (`staged-inputs=5`). Logins are imported on every start (`forget_unchanged_agent_login`, `remember_agent_login`). Tests: `apps/backend/tests/portable-inputs-stamps.test.ts`, `portable-inputs-stamps-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Input stamps") describes the behaviour. Follow-ups: [4580](../containers-and-environments/4580-input-stamp-follow-ups.md).
 
 **Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
 
@@ -757,6 +761,17 @@ Measurements, beelink (btrfs host, about ten builds running at once, so timings 
 | DK-15 | Same, on btrfs | 260–1,119 ms; one `cp` (reflinked) | 160–232 ms; no `cp` |
 | DK-15 | Same, 20,000 files of 10 KB, btrfs | 1,399–1,947 ms | 120–147 ms |
 
+DK-14, beelink (btrfs host, other builds running, so timings are noisy), rootful Docker with no relay, real containers with `--network none` and fixture homes. Older image (`staged-inputs=4`, `orkestrator-v2:dev-01fd2aa23403`) against this branch's. Each cell is two containers of five starts. The time is from the first line of Claude's setup to the end of the shared skills block, including its `sync` (9–167 ms):
+
+| Fixture | Starts | Before | After |
+| --- | --- | --- | --- |
+| 174 files, 1.1 MB (10 skills per root, 50 plugin files) | First | 1,047–1,098 ms | 594–976 ms |
+| Same | Restarts, unchanged | 554–1,204 ms | 145–293 ms; 11 inputs unchanged, 0 copied |
+| 6,004 files, 40 MB (200 skills per root, 2,000 plugin files) | First | 11,457–17,060 ms | 16,315–17,957 ms |
+| Same | Restarts, unchanged | 8,993–18,139 ms | 502–775 ms; 11 inputs unchanged, 0 copied |
+
+The first start's hashing did not show above the noise. Real homes were not measured: fixture homes only, so the sizes above are chosen rather than typical. The numbers came from a throwaway script that bound the image's own entrypoint with timing lines added, then started and stopped each container.
+
 The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
@@ -769,6 +784,30 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
   - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-14: what makes a skip safe?** (decided 2026-11-04)
+  - **Hash each input's content and compare it with the stamp and with what the home holds; skip only when all three agree (taken).**
+    - Pros: skips exactly when the copy would change nothing, so an edited or deleted import comes back as it does today, and a stale or forged stamp can only cause a copy. It survives the backend rewriting a revision in place and the relay's new inodes and whole-second times.
+    - Cons: reads every input's bytes on each start, twice for a tree. In the table above that costs 0.5–0.8 s at 40 MB.
+  - **A stamp holding the revision, which the report and 0490 recommended.**
+    - Pros: no hashing; one comparison.
+    - Cons: not safe here. `refreshStagedAgentAccountLogins`, `scrubStagedProvider` and the MCP defaults writer all change a revision without renaming it, so a rotated login or a revocation would keep the old revision name. The revision is fixed when the container is created, so it would also skip everything for the container's whole life.
+  - **Compare file sizes and times.**
+    - Pros: no reading of contents.
+    - Cons: the relay's `tar` keeps whole seconds and the login refresh rewrites unchanged files, so it can both miss a change and copy for nothing.
+- **DK-14: which inputs may be skipped?** (decided 2026-11-04)
+  - **Everything but the logins (taken).**
+    - Pros: logins are short-lived, rewritten by the entrypoint's own filter and by backend pushes, so they would rarely match anyway, and skipping one is the failure the ticket forbids.
+    - Cons: five small files are still copied on every start.
+  - **Logins too, through the same stamp.**
+    - Pros: one code path.
+    - Cons: a login's home copy differs from its mount by design, so it would need the filter's output hashed as well, and a skip could keep an old token.
+- **DK-14: how does a removed input leave the home?** (decided 2026-11-04)
+  - **The stamp remembers the paths imported, and only those are removed (taken).**
+    - Pros: state the container made itself is never touched, including a CLI's files beside the imports.
+    - Cons: a workload can edit the list. It is checked for links and `..`, and it only ever names paths the workload could delete itself.
+  - **Mirror the mount, deleting anything else in the destination.**
+    - Pros: simple.
+    - Cons: would delete `~/.claude/plugins` runtime state, OpenCode's `node_modules` and anything else the home legitimately holds.
 - **DK-12: how is the clone moved?** (decided 2026-11-02)
   - **`mv -n` per top-level entry, skipping `.orkestrator` and `lost+found`, then a check that nothing was left behind (taken).**
     - Pros: one rename per entry within the volume. The existing `.clone-copy-in-progress` marker keeps the step resumable. The check catches an entry `mv -n` skipped, which GNU coreutils 9.7 (the image's) does silently with exit status 0. Per-entry `mv` without `-t` also runs on macOS, where the unit test runs.
@@ -1150,6 +1189,22 @@ token afterwards. Dropping the forced read would let the backend answer from
 its cache or with a delta the public page cannot express. It would also make
 `unchanged` depend on cache state rather than on the transcript. The provider
 read on each poll stays, and reducing it belongs with task 4.
+
+### Task 15: an input is what is staged, not the host's file (DK-14)
+
+Made on 2026-11-04. "Changing, adding or removing one input" means the container's staged revision, which is what a start reads. Only logins and MCP defaults are restaged during a container's life; a skill edited on the host still needs a rebuild, as before. Widening that was not part of this work.
+
+### Task 15: a removed input now leaves the home (DK-14)
+
+Made on 2026-11-04. The ticket describes this as today's behaviour, but the old entrypoint never removed anything: `copy_agent_file` returned when its source was missing, and `cp -R` only added. The backend removed some logins on its own paths. The acceptance criteria ask for removal, so this is new behaviour, limited to paths an earlier boot of this entrypoint imported. A revoked provider's staged configuration therefore also leaves the home at the next start, where before it stayed.
+
+### Task 15: an unreadable mount is not a removal (DK-14)
+
+Made on 2026-11-04. A relay that fails leaves a mount `node` cannot open, which looks the same as an empty one. Non-login inputs stay in place in that case and their stamps are kept. A login's copy is still removed if it is unchanged, because the safe failure for a credential is to lose it; a backend push or the next good boot restores a valid one.
+
+### Task 15: no separate capability helper (DK-14)
+
+Made on 2026-11-04. Earlier `staged-inputs` versions each have an `imageCopies…` helper because the backend stages differently for them. This one has no such helper: the backend does nothing differently, and an older image keeps its full copy because its own entrypoint is unchanged. The live test proves that against an older image when `ORKESTRATOR_QUALIFICATION_OLD_IMAGE` is set.
 
 ## Current state
 

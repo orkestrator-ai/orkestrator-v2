@@ -167,6 +167,14 @@ function entrypointHelpers(entrypoint: string): string {
     "report_agent_copy_skips",
     "agent_source_path_has_symlink",
     "agent_destination_path_has_symlink",
+    "agent_input_stamp",
+    "agent_input_source_readable",
+    "agent_input_manifest",
+    "agent_input_home_matches",
+    "agent_input_forget_removed",
+    "import_agent_input",
+    "forget_unchanged_agent_login",
+    "remember_agent_login",
     "copy_agent_file",
     "copy_agent_directory",
     "copy_agent_directory_entries",
@@ -282,7 +290,9 @@ describe("shared skills root (task 1)", () => {
     const staged = await stage(fixture, ["opencode", SHARED_SKILLS_INPUT]);
     const entrypoint = await fs.readFile(ENTRYPOINT, "utf8");
     const block = sharedSkillsBlock(entrypoint);
-    expect(entrypoint).toContain("ORKESTRATOR_CAPABILITY staged-inputs=4");
+    expect(entrypoint).toContain(
+      `ORKESTRATOR_CAPABILITY staged-inputs=${IMAGE_CAPABILITIES["staged-inputs"]}`,
+    );
     const source = staged.mounts.find((entry) => entry.target === "/agents-skills")!.source;
 
     // The block names the absolute mount; a relay directory standing in for
@@ -478,7 +488,7 @@ describe("linked skill entries (task 2)", () => {
     const staged = await stage(fixture, ["claude"]);
     const entrypoint = await fs.readFile(ENTRYPOINT, "utf8");
     const loop = entrypoint.match(
-      /^ {4}for dir in \\\n(?: {8}[\w./-]+(?: \\)?\n)+ {4}do\n {8}copy_agent_directory_entries \/claude-config "\$HOME\/\.claude" "\$dir" Claude\n {4}done$/m,
+      /^ {4}for dir in \\\n(?: {8}[\w./-]+(?: \\)?\n)+ {4}do\n {8}import_agent_input copy_agent_directory_entries \/claude-config "\$HOME\/\.claude" "\$dir" Claude\n {4}done$/m,
     )?.[0];
     if (!loop) throw new Error("Missing Claude directory loop in entrypoint.sh");
     const containerHome = path.join(fixture.root, "container-home");

@@ -393,11 +393,12 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
-| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, brought back in step on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
 
-Provider MCP configuration is never preserved in the container: the
-entrypoint copies it from the staged inputs on every boot. A container
+Provider MCP configuration is never preserved in the container: on every boot
+the entrypoint makes it match the staged inputs again
+([Input stamps](#input-stamps-staged-inputs5)). A container
 environment's own MCP changes live in the backend's environment overlay
 (`mcp-environment-overlays` state root, keyed by environment id), which the
 backend writes back over the fresh copies after every boot, so they survive
@@ -844,6 +845,51 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   credentials or revokes an account-wide key.
 - Unreferenced input revisions are pruned only after 30 minutes, so a staging
   or container creation still in progress keeps its revision.
+
+### Input stamps (`staged-inputs=5`)
+
+The entrypoint used to copy every input into the home on every start. From
+`staged-inputs=5`, `import_agent_input` in `docker/entrypoint.sh` skips an input
+when copying it would change nothing. The result of a start is the same as a
+full copy's, apart from the removal below.
+
+- **What counts as unchanged.** A tree's content digests and listing match its
+  stamp, and the home still holds those bytes at real paths, with no link at any
+  listed file or directory. A single file only has to match the home byte for
+  byte. So an edited or deleted import comes back, and a damaged or forged stamp
+  can only cause a copy. The check reads contents because neither the revision
+  name nor file times say what changed: the backend rewrites a revision in place
+  (the logins before every start, a revocation's scrub, a refreshed MCP default)
+  and the relay's `tar` keeps whole seconds.
+- **Copying.** Anything else runs the same copy helpers as before, with the same
+  bounds and link rules. A copy that warned is not stamped as complete, so it
+  runs again and warns again. If the tools fail, the input is copied.
+- **Removal.** A stamp also lists the paths its input imported, so one that has
+  left the mounts leaves the home: a file, a directory it emptied, or a whole
+  provider's inputs after a revocation. Nothing else is removed, so a CLI's own
+  files beside the imports stay. A path through a link or `..` is refused, and a
+  mount `node` cannot open (a failed relay) removes nothing.
+- **Logins** (`.credentials.json`, Codex's, Grok's, OpenCode's and Pi's
+  `auth.json`) are never skipped, and go through `restrict_imported_login` on every
+  start as before. Their stamp is a digest of the home's copy after the import. If
+  the mount no longer has the login and the copy is still exactly that one, it is
+  removed. A copy that differs was pushed by the backend or made in the container,
+  and stays with the backend's own paths, which race the entrypoint and must keep
+  winning. For Claude a pushed copy is therefore stripped of its refresh tokens
+  but not removed after a host sign-out, as before
+  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+- **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
+  layer, so a new runtime starts with a full copy. It holds names and digests,
+  never contents. The workload can write it, so it is not a security boundary, and
+  it does not need to be: the workload can already rewrite the imports themselves.
+  A link there is replaced, never written through.
+- **Older images** have no stamps and keep their full copy. The backend stages and
+  binds the same either way, so there is no gate to check.
+
+The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
+relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
+applies. Timings are in
+[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
 
 ### Project seed files
 

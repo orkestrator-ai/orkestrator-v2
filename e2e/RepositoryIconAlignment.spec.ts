@@ -36,13 +36,14 @@ async function expectCentred(page: Page, repository: string, rows: RegExp[]) {
   }
 }
 
-test.beforeEach(async ({ page }) => {
+async function openRepositoryGrouping(page: Page) {
   await page.goto(REPOSITORY_URL);
   await expect(group(page, "source")).toBeVisible();
   await expect(group(page, "house")).toBeVisible();
-});
+}
 
 test("a member's project image and home centre under the repository's icon", async ({ page }) => {
+  await openRepositoryGrouping(page);
   // A project image under a large image, from this machine and from another.
   await expect(
     group(page, "source").getByTestId("command-node-home-icon").getByTestId("project-icon"),
@@ -56,6 +57,7 @@ test("a member's project image and home centre under the repository's icon", asy
 test("the activity ring moves neither the icon nor its label, and stays centred", async ({
   page,
 }) => {
+  await openRepositoryGrouping(page);
   const imageRow = member(page, "source", /^Self · p\s*\d*$/);
   const houseRow = member(page, "house", /^Self$/);
   const iconlessRow = member(page, "target", /^Self · q\s*\d*$/);
@@ -92,6 +94,7 @@ test("the activity ring moves neither the icon nor its label, and stays centred"
 });
 
 test("a member's label keeps the 8 px gap after its icon", async ({ page }) => {
+  await openRepositoryGrouping(page);
   for (const [repository, name, label] of [
     ["source", /^Self · p\s*\d*$/, "Self · p"],
     ["house", /^Self$/, "Self"],
@@ -105,6 +108,7 @@ test("a member's label keeps the 8 px gap after its icon", async ({ page }) => {
 });
 
 test("long names and badges truncate without overflow at the minimum width", async ({ page }) => {
+  await openRepositoryGrouping(page);
   await page.addStyleTag({ content: "main { width: 280px; max-width: 280px; }" });
   const main = await box(page.locator("main"));
   const longMember = group(page, "source").locator("[data-project-folder-content]");
@@ -141,6 +145,7 @@ test("long names and badges truncate without overflow at the minimum width", asy
 });
 
 test("a project outside any repository group keeps its leading position", async ({ page }) => {
+  await openRepositoryGrouping(page);
   const row = page.getByRole("button", { name: /^Self · solo|^solo/ }).first();
   await expect(row).toBeVisible();
   const icon = await box(row.getByTestId("project-icon"));

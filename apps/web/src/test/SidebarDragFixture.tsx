@@ -7,7 +7,10 @@ import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
-import type { CoordinatorActivityState } from "@orkestrator/protocol/coordinator-activity";
+import {
+  COORDINATOR_ACTIVITY_COMMAND,
+  type CoordinatorActivityState,
+} from "@orkestrator/protocol/coordinator-activity";
 import { emptyPortalLayout, type PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { CommandNodeHomeIcon, MachineHomeIcon } from "@/components/federation/MachineDot";
@@ -29,6 +32,9 @@ import type { Project, Environment } from "@/types";
 const ALIGNMENT_ICON =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 const LONG_NAME = "a-machine-or-checkout-name-long-enough-that-it-has-to-truncate-in-the-sidebar";
+
+/** What the fake backend reports for the members' coordinators. */
+let alignmentActivity: CoordinatorActivityState | null = null;
 
 function install() {
   const params = new URLSearchParams(location.search);
@@ -244,6 +250,12 @@ function install() {
           return { activeConnectionId: "local", connections: [] } as T;
         case "list_node_outcomes":
           return [] as T;
+        case COORDINATOR_ACTIVITY_COMMAND:
+          return {
+            projects: alignmentActivity
+              ? Object.fromEntries(["p", "p2", "q", "house"].map((id) => [id, alignmentActivity]))
+              : {},
+          } as T;
         default:
           return [] as T;
       }
@@ -343,11 +355,13 @@ function HouseRepositoryGroup() {
   );
 }
 
-/** Starts and stops the members' coordinators without a backend behind them. */
+/**
+ * Starts and stops the members' coordinators through the fake backend. Writing
+ * the store directly would lose to its first read if that landed afterwards.
+ */
 function setAlignmentActivity(state: CoordinatorActivityState | null) {
-  useCoordinatorActivityStore.setState({
-    projects: new Map(state ? ["p", "p2", "q", "house"].map((id) => [id, state]) : []),
-  });
+  alignmentActivity = state;
+  void useCoordinatorActivityStore.getState().refresh();
 }
 
 let instance: ReturnType<typeof install> | undefined;

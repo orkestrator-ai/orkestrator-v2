@@ -30,9 +30,9 @@ governs, marked "Decided".
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
-5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
+5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -40,8 +40,8 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
-16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12, DK-14 and DK-15 done; DK-13 open).
+16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
 
@@ -326,7 +326,7 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
 
 **Context.** The report's TX items in `native-agent-transcript-projection.ts`, `native-agent-service.ts` and `http-bridge-provider.ts`. #1506 (history paging) changed the projection after the report.
 
-**Investigation.** Confirmed 2026-11-01: the transcript view cache holds one entry per key, so a delta is built only from the newest view (TX-1). The projection-sync path already keeps bounded revisions (`state.revisions`), which is the model for the fix. Not re-checked since #1506: TX-2's unlimited `legacy()` reads, TX-3, TX-7, TX-8, TX-9 and TX-11 to TX-18.
+**Investigation.** Confirmed 2026-11-01: the transcript view cache holds one entry per key, so a delta is built only from the newest view (TX-1). The projection-sync path already keeps bounded revisions (`state.revisions`), which is the model for the fix. Re-checked 2026-11-04 against `96ee1eb3e`: TX-2 still applied after #1506, because `interactiveSnapshot` read `legacy()` with no limit and `refreshProjectionOnce` passed none, so it was fixed rather than recorded as no longer applying. Not re-checked since #1506: TX-3, TX-7, TX-8, TX-9 and TX-11 to TX-18.
 
 **Decisions.**
 
@@ -337,6 +337,7 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
   - **Keep one base and send a snapshot to anyone behind.**
     - Pros: no change.
     - Cons: the problem stays.
+  - Done with the recommended option; see "Task 5" under Assumptions and decisions.
 
 ### 6. Bridge hot paths
 
@@ -446,7 +447,31 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 **Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone. Done on 2026-11-02: ST-1 (a host capture reuses a settled stat-cache entry's oid after `fstat`, without reading or hashing), ST-2's first half (libc is `dlopen`ed once per process, and the `readlinkat` probe uses one scratch buffer) and ST-4 (a bounded LRU of line counts by blob pair in `snapshot-diff.ts`). The capture benchmark (`scripts/benchmark-change-tracking.ts`) gained the report's large-asset and 200-changed-file fixtures (`--only=assets,long-turn`). Tests: `capture-stat-reuse.test.ts` and `snapshot-diff-count-cache.test.ts`.
 
-**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
+Done on 2026-11-04: ST-3 (`ObjectStore.reuse` leaves a fence younger than half the orphan grace alone, and the closure check skips objects proven present in the pass; `capture-orphan-fence.test.ts`, [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup") and ST-16's minimum gap (`LOCAL_SCAN_MIN_GAP_MS`; `worktree-snapshots.test.ts` "minimum scan gap", [git-scan-caches.md](../../architecture/git-scan-caches.md)). Container helper captures stay out of scope.
+
+**Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
+
+**Investigation.** Re-checked on 2026-11-04 against `main` at `96ee1eb3`: `reuse` still called `utimes` under the store lock for every unchanged file, the closure still called `has` for every entry, and `DiffStatsService.request` started a scan for every hint with none running. Micro-benchmark over 10,000 objects (median of 7, same host):
+
+| Per-object call | 10,000 objects |
+| --- | --- |
+| `utimes` awaited under a lock (the old `reuse`) | 100 ms |
+| `stat` awaited (the old closure `has`) | 80 ms |
+| `lstatSync` (the new `reuse`) | 7 ms |
+| `Map` lookup | 0.1 ms |
+
+`bun scripts/benchmark-change-tracking.ts --only=capture --sizes=10000,1000 --runs=10`, warm capture p50 range over three runs of the old (`96ee1eb3`) and new store and capture code, on the shared build host:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 10,000 files, one changed, runs interleaved, load average 40–56 | 681–797 ms | 211–319 ms |
+| 1,000 files, one changed, runs interleaved, load average 40–56 | 62–100 ms | 29–51 ms |
+| 10,000 files, one changed, runs one after the other, load average 23–32 before and 16–21 after | 349–482 ms | 107–114 ms |
+| 1,000 files, one changed, runs one after the other, same loads | 37–58 ms | 16–17 ms |
+
+Cold captures write objects rather than reuse them and did not improve (one cold capture per round: 2.5–2.7 s old and 2.8–3.4 s new at the higher load, 1.1–1.6 s old and 1.4–1.5 s new at the lower one). The interleaved rows are the fair comparison, because the load moved between the other two batches. Twenty settled bursts over ten seconds now start four or five scans instead of twenty (`worktree-snapshots.test.ts`, fake watcher and clock; not measured under a real install).
+
+Earlier, re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
 
 | Workload | Before | After |
 | --- | --- | --- |
@@ -497,13 +522,58 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Send cached stamps to the helper so it can skip settled files too.**
     - Pros: the same saving inside the container.
     - Cons: a protocol change to the helper and a larger stdin per batch; needs container qualification.
-- **Next step for this task?**
+- **Next step for this task?** Decided 2026-11-04: both, as separate commits.
   - **ST-3: skip the closure `has` for objects proven present in this pass and the `utimes` inside the grace window (recommended).**
     - Pros: it is now the largest part of a warm capture over many small files.
     - Cons: touches the orphan fence that retention relies on, so the grace-window reasoning needs care.
   - **ST-16's minimum scan gap.**
     - Pros: small and independent.
     - Cons: does not touch capture cost.
+- **How does a reuse learn how old the fence is?** Done as recommended.
+  - **One `lstatSync` per reused object (recommended).**
+    - Pros: reads the same mtime `sweep` decides on, so the two cannot disagree; proves the object present in this pass, so a missing object is still read and rewritten; no state to bound and nothing lost on a restart; 7 ms per 10,000 objects.
+    - Cons: a synchronous call per unchanged file on the event loop, about 1 µs on this host, beside the synchronous `confinedRead` that already runs per file.
+  - **An in-memory map of when each object was last fenced.**
+    - Pros: 0.1 ms per 10,000 objects; no system call.
+    - Cons: needs its own count and byte bounds; proves nothing in this pass, so a missing object would go unnoticed until the entry aged out; empty after a restart.
+  - **An awaited `lstat`.**
+    - Pros: never blocks the event loop.
+    - Cons: 80 ms per 10,000 objects, so it would keep most of the cost it replaces.
+- **How long may a fence go unrenewed?** Done as recommended.
+  - **Half the orphan grace (recommended).**
+    - Pros: leaves 30 min of the 1 h grace for the capture deadline and the sweep's ledger walk; renews each object at most every 30 min under constant captures.
+    - Cons: every object past the window is renewed in one pass, so one warm capture in each half hour pays the old renewal cost.
+  - **Up to the whole grace.**
+    - Pros: fewer renewals.
+    - Cons: an object just inside the grace has no margin left, and a sweep during the capture deletes it. `capture-orphan-fence.test.ts` fails this way.
+- **Does the renewal leave the store lock, as the report suggests?** Not done.
+  - **Keep it under the lock; only the skip runs without one (recommended).**
+    - Pros: a renewal cannot land between a sweep's `lstat` and its `rm`, which would report success for an object about to be deleted.
+    - Cons: a pass that does renew still queues behind other store work.
+  - **Run every renewal outside the lock.**
+    - Pros: no queueing.
+    - Cons: opens exactly that race; the renewal is what retention relies on.
+- **What does the closure check skip?** Done as recommended.
+  - **Objects written or proven present in this pass, unless `removedObjects` shows a sweep removed something since the pass began (recommended).**
+    - Pros: no second system call per entry on a normal pass; a pass that overlapped a removal gets the full check it always had.
+    - Cons: one more counter on the store, and an object deleted by something other than `sweep` during the pass goes unnoticed until it is read.
+  - **Skip it for proven objects unconditionally.**
+    - Pros: simplest.
+    - Cons: a removal during the pass could publish a manifest with a missing blob.
+- **Where does ST-16's gap run from, and what does it hold back?** Done as recommended.
+  - **From the end of the last scan, holding back only hints and the reruns they queue, on local targets (recommended).**
+    - Pros: a slow scan cannot make the gap vanish; a reader, refresh, known mutation or new target still gets a scan straight away; containers are not spaced twice.
+    - Cons: under constant writes the badge can lag by up to 2 s plus a scan.
+  - **From the start of the last scan.**
+    - Pros: a steadier cadence for quick scans.
+    - Cons: a scan longer than the gap would be followed by another at once, which is the cost being removed.
+- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Not done.
+  - **Leave them counting; the gap bounds their cost (recommended).**
+    - Pros: `classifyWorktreeChange` already records why: a build directory can hold tracked or visible untracked files, so a path's location does not prove the file list is unchanged.
+    - Cons: an install still costs a scan every 2 s or so while it runs.
+  - **Filter hints against the worktree's ignore rules.**
+    - Pros: no scans at all for writes that truly are ignored.
+    - Cons: needs an ignore matcher kept current per worktree, and a wrong answer freezes the counts until the two-minute safety scan.
 
 ### 8. tmux and container polling
 
@@ -927,7 +997,11 @@ Done 2026-11-02 against `main` at `38d55ee1`:
 
 - DK-12: `move_clone_into_workspace` in `docker/workspace-setup.sh` renames each top-level entry of the staged clone (`/workspace/.orkestrator/.clone-in-progress`) into `/workspace` instead of `cp -a -n` then `rm -rf`. Tests: `tests/unit/workspace-setup-preserve.test.ts` ("workspace setup clone move").
 - DK-15: when git refuses to move a worktree because it has submodules, `renameWorktree` in `environment-move.ts` renames the folder, runs `git worktree repair` and re-links the submodules. It copies only when the rename answers `EXDEV`. Tests: `environment-move.test.ts` ("same-disk move of a worktree git will not move"). `docs/development/disk-usage.md` describes the new behaviour.
-- DK-14 is left open on purpose: another build edits `portable-inputs.ts` at the same time. DK-13 (the mirror) is also still open.
+- DK-14 was left open then on purpose: another build edited `portable-inputs.ts` at the same time. DK-13 (the mirror) is still open.
+
+Done 2026-11-04 against `main` at `96ee1eb3`:
+
+- DK-14: `import_agent_input` in `docker/entrypoint.sh` leaves an input alone when copying it would change nothing, and removes what an earlier boot imported once it leaves the mounts (`staged-inputs=5`). Logins are imported on every start (`forget_unchanged_agent_login`, `remember_agent_login`). Tests: `apps/backend/tests/portable-inputs-stamps.test.ts`, `portable-inputs-stamps-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Input stamps") describes the behaviour. Follow-ups: [4580](../containers-and-environments/4580-input-stamp-follow-ups.md).
 
 **Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
 
@@ -942,6 +1016,17 @@ Measurements, beelink (btrfs host, about ten builds running at once, so timings 
 | DK-15 | Same, on btrfs | 260–1,119 ms; one `cp` (reflinked) | 160–232 ms; no `cp` |
 | DK-15 | Same, 20,000 files of 10 KB, btrfs | 1,399–1,947 ms | 120–147 ms |
 
+DK-14, beelink (btrfs host, other builds running, so timings are noisy), rootful Docker with no relay, real containers with `--network none` and fixture homes. Older image (`staged-inputs=4`, `orkestrator-v2:dev-01fd2aa23403`) against this branch's. Each cell is two containers of five starts. The time is from the first line of Claude's setup to the end of the shared skills block, including its `sync` (9–167 ms):
+
+| Fixture | Starts | Before | After |
+| --- | --- | --- | --- |
+| 174 files, 1.1 MB (10 skills per root, 50 plugin files) | First | 1,047–1,098 ms | 594–976 ms |
+| Same | Restarts, unchanged | 554–1,204 ms | 145–293 ms; 11 inputs unchanged, 0 copied |
+| 6,004 files, 40 MB (200 skills per root, 2,000 plugin files) | First | 11,457–17,060 ms | 16,315–17,957 ms |
+| Same | Restarts, unchanged | 8,993–18,139 ms | 502–775 ms; 11 inputs unchanged, 0 copied |
+
+The first start's hashing did not show above the noise. Real homes were not measured: fixture homes only, so the sizes above are chosen rather than typical. The numbers came from a throwaway script that bound the image's own entrypoint with timing lines added, then started and stopped each container.
+
 The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
@@ -954,6 +1039,30 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
   - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-14: what makes a skip safe?** (decided 2026-11-04)
+  - **Hash each input's content and compare it with the stamp and with what the home holds; skip only when all three agree (taken).**
+    - Pros: skips exactly when the copy would change nothing, so an edited or deleted import comes back as it does today, and a stale or forged stamp can only cause a copy. It survives the backend rewriting a revision in place and the relay's new inodes and whole-second times.
+    - Cons: reads every input's bytes on each start, twice for a tree. In the table above that costs 0.5–0.8 s at 40 MB.
+  - **A stamp holding the revision, which the report and 0490 recommended.**
+    - Pros: no hashing; one comparison.
+    - Cons: not safe here. `refreshStagedAgentAccountLogins`, `scrubStagedProvider` and the MCP defaults writer all change a revision without renaming it, so a rotated login or a revocation would keep the old revision name. The revision is fixed when the container is created, so it would also skip everything for the container's whole life.
+  - **Compare file sizes and times.**
+    - Pros: no reading of contents.
+    - Cons: the relay's `tar` keeps whole seconds and the login refresh rewrites unchanged files, so it can both miss a change and copy for nothing.
+- **DK-14: which inputs may be skipped?** (decided 2026-11-04)
+  - **Everything but the logins (taken).**
+    - Pros: logins are short-lived, rewritten by the entrypoint's own filter and by backend pushes, so they would rarely match anyway, and skipping one is the failure the ticket forbids.
+    - Cons: five small files are still copied on every start.
+  - **Logins too, through the same stamp.**
+    - Pros: one code path.
+    - Cons: a login's home copy differs from its mount by design, so it would need the filter's output hashed as well, and a skip could keep an old token.
+- **DK-14: how does a removed input leave the home?** (decided 2026-11-04)
+  - **The stamp remembers the paths imported, and only those are removed (taken).**
+    - Pros: state the container made itself is never touched, including a CLI's files beside the imports.
+    - Cons: a workload can edit the list. It is checked for links and `..`, and it only ever names paths the workload could delete itself.
+  - **Mirror the mount, deleting anything else in the destination.**
+    - Pros: simple.
+    - Cons: would delete `~/.claude/plugins` runtime state, OpenCode's `node_modules` and anything else the home legitimately holds.
 - **DK-12: how is the clone moved?** (decided 2026-11-02)
   - **`mv -n` per top-level entry, skipping `.orkestrator` and `lost+found`, then a check that nothing was left behind (taken).**
     - Pros: one rename per entry within the volume. The existing `.clone-copy-in-progress` marker keeps the step resumable. The check catches an entry `mv -n` skipped, which GNU coreutils 9.7 (the image's) does silently with exit status 0. Per-entry `mv` without `-t` also runs on macOS, where the unit test runs.
@@ -980,7 +1089,9 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 **Context.** `packages/cli/src/client/commands/session.ts`, `packages/cli/src/client/transport.ts`, `packages/protocol/src/node/application-logging.ts`. A `knownToken` on the public API is a contract change (`docs/architecture/public-cli.md`).
 
-DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of this change's scope and is still open.
+DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of that change's scope.
+
+DK-18 done on 2026-11-04. The writer (`installProductionApplicationLogging` in `application-logging.ts`) queues lines and each link of its one write chain appends everything queued, on the next event-loop turn, in pieces of at most `maxBatchBytes` (256 KiB). `mkdir` runs before the first write and again only after a failed write. Lines logged during an append share the next one, so `flush` and `stop` still await the chain's tail. The 4 MiB `maxPendingBytes` bound and its drop markers are unchanged, and it now has a count bound beside it, `maxPendingEntries` (65,536 entries), as the invariants require of every queue. `ENOENT` on an append means the folder was removed: the unwritten lines get one retry through a fresh `mkdir`, and the file index is rescanned from what is on disk. Any other failure loses that batch, writes one `write.failed` line to the console with its `entries` and `bytes`, and never rejects the chain. Tests: `apps/desktop/electron/application-logging.test.ts` ("production application log batching": a counted burst, order across batches, the batch bound, the flush bound in event-loop turns, stop and the quit hold, a removed folder, failed `mkdir` and append, a report that throws, the byte and count bounds) and `apps/backend/src/standalone-logging.test.ts` (shutdown keeps every queued line).
 
 **Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here.
 
@@ -1001,6 +1112,30 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
   - **Stream-parse the JSON as it arrives.**
     - Pros: no whole-body buffer at all.
     - Cons: needs a streaming parser; responses are at most 8 MiB, so the saving is small.
+  - Done with the recommended option.
+- **DK-18: when does the log sink write?**
+  - **Coalesce on the next event-loop turn into one append (recommended).**
+    - Pros: no timer; a lone line waits for nothing but an append already in flight, which suits 0880's note that a line logged before a hold reaches the file late; under load the batch grows by itself while the previous append runs.
+    - Cons: a slow trickle still makes one append per line, so the saving is on bursts.
+  - **A timer of about 100 ms, flushing `error` at once.**
+    - Pros: fewer appends under a sustained trickle.
+    - Cons: every line waits, a timer has to be cleared on stop, and a crash loses up to one interval.
+  - Done with the recommended option.
+- **DK-18: keep the file handle open between batches?**
+  - **No: one `appendFile` per batch, with `mkdir` only after a failure (recommended).**
+    - Pros: no descriptor to close on rollover and quit; a removed folder or file recovers on the next write.
+    - Cons: still one open and close per batch.
+  - **Yes, while the day and index are unchanged.**
+    - Pros: no open per batch.
+    - Cons: a deleted file goes on being written unseen, and rollover and quit each have a handle to close.
+  - Done with the recommended option.
+- **DK-18: what happens to a batch whose write fails?**
+  - **Lose it and report it, retrying only `ENOENT` (recommended).**
+    - Pros: as before a batch cannot grow memory or wedge the chain; `ENOENT` is raised at open, so its retry cannot write a line twice.
+    - Cons: a failed batch loses more lines than one failed line did. They are reported on the console but not marked in the file.
+  - **Requeue it and retry every failure.**
+    - Pros: survives a short `ENOSPC`.
+    - Cons: a partial write would be repeated, and old lines would compete with new ones for the queue bound.
   - Done with the recommended option.
 
 ## Assumptions and decisions
@@ -1352,6 +1487,21 @@ rather than sending the token and retrying without it on refusal. The check
 reads capabilities once per follow, through the same routing as the read,
 and never depends on matching the server's error prose.
 
+### Task 16: a count bound beside the log sink's byte bound (DK-18)
+
+Made on 2026-11-04. The queue used to be a promise chain bounded by bytes alone.
+AGENTS.md invariant 11 asks every queue for both bounds, so the array that
+replaced it has `maxPendingEntries` as well. At 65,536 entries it stays out of
+the way at a typical line length, where the 4 MiB byte bound is reached first.
+A line over it is dropped and announced exactly as one over the byte bound is.
+
+### Task 16: test seam for the log sink's file calls (DK-18)
+
+Made on 2026-11-04. `installProductionApplicationLogging` takes an optional
+`files` with `mkdir` and `appendFile`, as it already takes `now` and `bounds`.
+The tests need to count and fail those calls, and `mock.module` on
+`node:fs/promises` would be global across the suite.
+
 ### Task 16: unchanged still reads the window fresh (DK-16)
 
 Made on 2026-11-03. The action keeps `forceSnapshot: true` and compares the
@@ -1359,6 +1509,109 @@ token afterwards. Dropping the forced read would let the backend answer from
 its cache or with a delta the public page cannot express. It would also make
 `unchanged` depend on cache state rather than on the transcript. The provider
 read on each poll stays, and reducing it belongs with task 4.
+
+### Task 5: baseline gate (TX-1, TX-2)
+
+Made on 2026-11-04. Task 1 gates TX-1 and TX-2 on a baseline. Ticket
+`ef867c11` asked for both to be built, so the build went ahead with fake-provider
+tests only. No live snapshot-rate or bytes-per-send figure exists on either side;
+that stays open under task 1.
+
+### Task 5: ring size and bounds (TX-1)
+
+Made on 2026-11-04. Eight views per key, 2 MiB per key and 32 MiB in total
+(`native-agent-transcript-delta-bases.ts`), the top of the recommended 4 to 8.
+The per-key and total bytes match `NATIVE_SYNC_MAX_REVISION_BYTES` and
+`NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES`. A base is charged only for rows its
+successor no longer holds, plus one reference per row, so shared rows count once.
+The sync path's 60-second expiry was not copied: the ticket asks for count and
+bytes, and expiry runs only on a write, so it would release nothing on an idle
+session.
+
+### Task 5: deltas across several revisions (TX-1)
+
+Made on 2026-11-04. Comparing a base with the newest view misses what happened
+between them, so `chainedTranscriptDelta` walks the views in between. It keeps
+deletions the endpoints would read as aging out, and carries in `revisedMessages`
+any held row that changed before leaving the window, skipping part-trimmed head
+rows. It answers with a snapshot when the windows share nothing or the carried
+rows exceed the revised-list bounds. The ring empties on a new epoch, session or
+generation, or a base too large to keep, because a delta across a hole could miss
+something.
+
+### Task 5: the early cached answer (TX-1)
+
+Made on 2026-11-04. The cached answer path tries the ring too (0160's
+recommendation), because that is the path a reader who is behind takes. The delta
+is marked `freshness: "cached"` like the snapshot it replaces and may be one read
+stale; the background read still runs. A forced read skips the ring.
+
+### Task 5: how post-dispatch reads are bounded (TX-2)
+
+Made on 2026-11-04. Reads other than `sync-v1` ask the bridge for the window plus
+one row, the extra row showing that older history exists. `sync-v1` stays whole
+because it fills `projectionHistory`. Refreshes whose result is dropped (dispatch
+outcomes, settled queue dispatches, interaction answers) read a 32-row tail
+through `refreshProjectionState`. They still do everything else a refresh does,
+including the announcement, and do not change the window readers inherit.
+
+A state-only read was not used for these sites. `sessionStateSnapshot` has a
+different shape from the snapshot the refresh builds on, and 0150 lists the side
+effects of a full refresh as unverified. Fork, stop and control changes return a
+projection, so they keep their window and gain only the limit.
+
+Two consequences are handled in code. A tail read reports its own cut as
+truncation, so the "16 MiB transport limit" notice now requires fewer or more rows
+than asked, or shed parts. A paused coordinator compares a cut cached view with
+the saved display tail and shows the longer one, so a short tail cannot hide saved
+history.
+
+One is accepted: a legacy reader whose next read fails sees the cached tail under
+the error state until a read succeeds.
+
+### Task 15: an input is what is staged, not the host's file (DK-14)
+
+Made on 2026-11-04. "Changing, adding or removing one input" means the container's staged revision, which is what a start reads. Only logins and MCP defaults are restaged during a container's life; a skill edited on the host still needs a rebuild, as before. Widening that was not part of this work.
+
+### Task 15: a removed input now leaves the home (DK-14)
+
+Made on 2026-11-04. The ticket describes this as today's behaviour, but the old entrypoint never removed anything: `copy_agent_file` returned when its source was missing, and `cp -R` only added. The backend removed some logins on its own paths. The acceptance criteria ask for removal, so this is new behaviour, limited to paths an earlier boot of this entrypoint imported. A revoked provider's staged configuration therefore also leaves the home at the next start, where before it stayed.
+
+### Task 15: an unreadable mount is not a removal (DK-14)
+
+Made on 2026-11-04. A relay that fails leaves a mount `node` cannot open, which looks the same as an empty one. Non-login inputs stay in place in that case and their stamps are kept. A login's copy is still removed if it is unchanged, because the safe failure for a credential is to lose it; a backend push or the next good boot restores a valid one.
+
+### Task 15: no separate capability helper (DK-14)
+
+Made on 2026-11-04. Earlier `staged-inputs` versions each have an `imageCopies…` helper because the backend stages differently for them. This one has no such helper: the backend does nothing differently, and an older image keeps its full copy because its own entrypoint is unchanged. The live test proves that against an older image when `ORKESTRATOR_QUALIFICATION_OLD_IMAGE` is set.
+
+### Task 7: a store that is not told its grace always renews (ST-3)
+
+Made on 2026-11-04. `ObjectStore` takes `orphanGraceMs` as an option, read fresh
+from the policy on each reuse. Unset, it means 0, so every reuse renews as before.
+A wrong default here would delete objects, and a missing option only costs time.
+The benchmark passes the policy's value, so it measures what the service runs.
+
+### Task 7: `sweep`'s grace argument stays separate (ST-3)
+
+Made on 2026-11-04. `sweep` keeps its explicit `graceMs` rather than reading the
+store's option, because tests and `ChangeRetentionService` already pass it.
+Retention reads the same policy field, so the two agree in production. A caller
+passing a much shorter grace than the store's would narrow the margin.
+
+### Task 7: the gap's value (ST-16)
+
+Made on 2026-11-04. 2 s, the top of the report's 1–2 s and the value containers
+already use, so a local and a container environment refresh at the same rate
+under load. It is a service option (`localScanMinGapMs`), not a setting.
+
+### Task 7: the owner tests turn the gap off by default (ST-16)
+
+Made on 2026-11-04. The harness in `worktree-snapshots.test.ts` and one case in
+`recurring-work-metrics.test.ts` pass `localScanMinGapMs: 0`, because they assert
+what one hint does at once on a clock that does not advance. The "minimum scan
+gap" cases and the real-Git case in `worktree-snapshots-git.test.ts` use the
+real value.
 
 ### Task 12: a renderer-side composition rather than a preload-side stream (DK-1, DK-2)
 
@@ -1404,6 +1657,10 @@ browser and real-stack suites were not run.
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.
 - The compression default under real remote load: tracked in 0052 task 2.
+- Task 7: `lstatSync` and warm-capture numbers come from this Linux host only;
+  macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
+  a real install was not measured.
+
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
 
 ## Related

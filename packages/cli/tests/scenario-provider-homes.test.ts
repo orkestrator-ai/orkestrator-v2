@@ -502,6 +502,9 @@ copy_agent_file() { mkdir -p "$2"; if [ -f "$1/$3" ]; then cp "$1/$3" "$2/$3"; f
 copy_agent_directory_entries() { :; }
 copy_agent_directory() { :; }
 restrict_imported_login() { :; }
+import_agent_input() { "$@"; }
+forget_unchanged_agent_login() { :; }
+remember_agent_login() { :; }
 ${block.replaceAll("/grok-home", mount.source).replaceAll("/grok-config", path.join(root, "missing-config"))}
 ${loadKey}
 exec "$TEST_BUN" -e 'process.stdout.write(process.env.XAI_API_KEY || "missing")'

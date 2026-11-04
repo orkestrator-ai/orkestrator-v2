@@ -29,7 +29,6 @@ import {
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
   type ProviderActivityState,
-  type ProviderInteractiveSnapshot,
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./native-agent-provider.js";
@@ -72,7 +71,7 @@ export function createProviderStub(
     activityBatch?: (sessionIds: readonly string[]) => Promise<Map<string, ProviderActivityState>>;
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
-    interactiveSnapshot?: (sessionId: string) => Promise<ProviderInteractiveSnapshot>;
+    interactiveSnapshot?: NonNullable<NativeAgentRuntimeProvider["interactiveSnapshot"]>;
     transcriptSnapshot?: NativeAgentRuntimeProvider["transcriptSnapshot"];
     transcriptDetail?: NativeAgentRuntimeProvider["transcriptDetail"];
     transcriptPage?: NativeAgentRuntimeProvider["transcriptPage"];

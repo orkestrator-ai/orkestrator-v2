@@ -714,7 +714,7 @@ export class NativeAgentService {
       storage,
       isStopped: () => this.stopped,
       trackScan: (task) => this.trackScan(task),
-      refreshProjection: (input) => this.projections.refreshProjection(input, true),
+      refreshProjection: (input) => this.projections.refreshProjectionState(input),
       queueSessionObservedBusy: (environmentId, agent, logicalSessionKey, head) =>
         this.launches.queueSessionObservedBusy(environmentId, agent, logicalSessionKey, head),
       assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
@@ -2020,7 +2020,7 @@ export class NativeAgentService {
       await this.dispatchPromptInternal(input, undefined, true, false, false, () => {
         instructionsIgnored = true;
       });
-      void this.projections.refreshProjection(input, true).catch(() => undefined);
+      void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "accepted",
         requestId: input.requestId,
@@ -2038,7 +2038,7 @@ export class NativeAgentService {
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending);
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
       }
       if (error instanceof PendingNativeAgentSteerError) {
@@ -2048,7 +2048,7 @@ export class NativeAgentService {
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending);
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
       }
       if (error instanceof AmbiguousPromptDispatchError) {
@@ -2057,20 +2057,20 @@ export class NativeAgentService {
         // provider's own dispatch journal can usually tell the two apart.
         const settled = await this.settleAmbiguousDispatch(input, key, input.requestId);
         if (settled === "confirmed") {
-          void this.projections.refreshProjection(input, true).catch(() => undefined);
+          void this.projections.refreshProjectionState(input).catch(() => undefined);
           return { outcome: "accepted", requestId: input.requestId };
         }
         if (settled === "retired") {
           // The bridge restarted under this very request and will refuse the
           // id for good: the same answer a retry would get, without the card.
-          void this.projections.refreshProjection(input, true).catch(() => undefined);
+          void this.projections.refreshProjectionState(input).catch(() => undefined);
           return {
             outcome: "rejected",
             error: dispatchOutcomeLostMessage(input.agent),
             requestIdRetired: true,
           };
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return {
           outcome: "unknown",
           requestId: input.requestId,
@@ -2083,7 +2083,7 @@ export class NativeAgentService {
       if (!preserveExistingPending || retired) {
         await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
       }
-      if (retired) void this.projections.refreshProjection(input, true).catch(() => undefined);
+      if (retired) void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -2118,7 +2118,7 @@ export class NativeAgentService {
         ? await this.storage.clearPendingNativeAgentSteer(key, input.requestId, true)
         : await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
     if (discarded) {
-      void this.projections.refreshProjection(input, true).catch(() => undefined);
+      void this.projections.refreshProjectionState(input).catch(() => undefined);
     }
     return { discarded };
   }

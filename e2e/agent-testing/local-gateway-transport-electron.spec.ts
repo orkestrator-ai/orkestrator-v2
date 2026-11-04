@@ -1,3 +1,4 @@
+import type { OrkestratorElectronApi } from "../../apps/desktop/electron/preload-api";
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -21,6 +22,13 @@ import { dismissStartupDialogs } from "./electron-startup-dialogs";
  * on (to-do 1202 task 12). Each run writes the counts recorded in that to-do: one
  * terminal printing LINE_COUNT lines with one window open.
  */
+
+type RendererWindow = Window & {
+  orkestrator?: OrkestratorElectronApi & {
+    eventStreamConnection?: { state(): string };
+  };
+  orkestratorDesktopHost?: { api: OrkestratorElectronApi };
+};
 
 type Project = { id: string; name: string };
 type MainTransport = {
@@ -237,7 +245,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       hostKeys: Object.keys(
         (window as unknown as { orkestratorDesktopHost?: object }).orkestratorDesktopHost ?? {},
       ).sort(),
-      connection: Boolean(window.orkestrator?.eventStreamConnection),
+      connection: Boolean((globalThis.window as RendererWindow).orkestrator?.eventStreamConnection),
     }));
     expect(composed.gateway, "a local window is never a remote gateway client").toBe(false);
     expect(composed.host).toBe(mode === "gateway");
@@ -245,10 +253,14 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     if (mode === "gateway") expect(composed.hostKeys).toEqual(["api", "baseUrl"]);
 
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
-      window.evaluate(({ command, args }) => window.orkestrator!.invoke<T>(command, args), {
-        command,
-        args,
-      });
+      window.evaluate(
+        ({ command, args }) =>
+          (globalThis.window as RendererWindow).orkestrator!.invoke<T>(command, args),
+        {
+          command,
+          args,
+        },
+      );
     const project = await invoke<Project>("add_project", {
       gitUrl: path.join(profile.fixtureDir, "origin.git"),
       localPath: projectPath,
@@ -355,7 +367,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       };
       const frames = { count: 0, desynced: 0 };
       state.__frames = frames;
-      window.orkestrator!.listen<{ desynced?: boolean }>(
+      (globalThis.window as RendererWindow).orkestrator!.listen<{ desynced?: boolean }>(
         `terminal-output-${session}`,
         (payload) => {
           frames.count += 1;
@@ -440,9 +452,15 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         )
         .toBe(true);
       await expect
-        .poll(() => window.evaluate(() => window.orkestrator!.eventStreamConnection!.state()), {
-          timeout: 60_000,
-        })
+        .poll(
+          () =>
+            window.evaluate(() =>
+              (globalThis.window as RendererWindow).orkestrator!.eventStreamConnection!.state(),
+            ),
+          {
+            timeout: 60_000,
+          },
+        )
         .toBe("connected");
       expect((await reopened()).some((url) => url.includes("includeEvents=terminal-output-"))).toBe(
         true,
@@ -450,7 +468,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
 
       // A rotated token reaches this window's requests; the page never held it.
       await window.evaluate(() =>
-        window.orkestratorDesktopHost!.api.webClient.setToken(
+        (globalThis.window as RendererWindow).orkestratorDesktopHost!.api.webClient!.setToken(
           "local-transport-spec-rotated-token-0123456789",
         ),
       );
@@ -503,7 +521,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         const state = drafts.createDraftRevisionState();
         await drafts.loadFileDraft(environmentId, "teardown.txt", state);
         void drafts.persistFileDraft(environmentId, "teardown.txt", "earlier", "baseline", state);
-        window.addEventListener(
+        globalThis.window.addEventListener(
           "pagehide",
           () => {
             void drafts.persistFileDraft(
@@ -599,7 +617,11 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       await expect(second).toHaveTitle(/electron-transport-relay/, { timeout: 60_000 });
       expect(await second.evaluate(() => "orkestratorDesktopHost" in window)).toBe(true);
       expect(await window.evaluate(() => "orkestratorDesktopHost" in window)).toBe(false);
-      expect(await second.evaluate(() => window.orkestrator!.invoke("get_config"))).toBeTruthy();
+      expect(
+        await second.evaluate(() =>
+          (globalThis.window as RendererWindow).orkestrator!.invoke("get_config"),
+        ),
+      ).toBeTruthy();
       expect((await mainState()).events.at(-1)).not.toContain("excludeEvents");
 
       await window.close();
@@ -612,7 +634,10 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     for (const environment of created) {
       await client
         .evaluate(
-          (id) => window.orkestrator!.invoke("stop_environment", { environmentId: id }),
+          (id) =>
+            (globalThis.window as RendererWindow).orkestrator!.invoke("stop_environment", {
+              environmentId: id,
+            }),
           environment.id,
         )
         .catch(() => undefined);
@@ -651,15 +676,25 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       const fileWindow = await app.firstWindow();
       await expect.poll(() => fileWindow.url(), { timeout: 60_000 }).toMatch(/^file:/);
       await expect
-        .poll(() => fileWindow.evaluate(() => Boolean(window.orkestrator?.eventStreamConnection)), {
-          timeout: 60_000,
-        })
+        .poll(
+          () =>
+            fileWindow.evaluate(() =>
+              Boolean((globalThis.window as RendererWindow).orkestrator?.eventStreamConnection),
+            ),
+          {
+            timeout: 60_000,
+          },
+        )
         .toBe(true);
       const fileInvoke = <T>(command: string, args: Record<string, unknown> = {}) =>
-        fileWindow.evaluate(({ command, args }) => window.orkestrator!.invoke<T>(command, args), {
-          command,
-          args,
-        });
+        fileWindow.evaluate(
+          ({ command, args }) =>
+            (globalThis.window as RendererWindow).orkestrator!.invoke<T>(command, args),
+          {
+            command,
+            args,
+          },
+        );
       expect(await fileInvoke("get_config")).toBeTruthy();
       await fileInvoke("start_environment", { environmentId: target.id });
       const terminal = await fileInvoke<{ sessionId: string }>("create_local_terminal_session", {
@@ -671,12 +706,16 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       await fileWindow.evaluate((sessionId) => {
         (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal = false;
         let received = "";
-        window.orkestrator!.listen(`terminal-output-${sessionId}`, (payload: unknown) => {
-          if (payload && typeof payload === "object" && "text" in payload)
-            received = (received + String(payload.text)).slice(-8192);
-          if (received.includes("FILE-ORIGIN-42"))
-            (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal = true;
-        });
+        (globalThis.window as RendererWindow).orkestrator!.listen(
+          `terminal-output-${sessionId}`,
+          (payload: unknown) => {
+            if (payload && typeof payload === "object" && "text" in payload)
+              received = (received + String(payload.text)).slice(-8192);
+            if (received.includes("FILE-ORIGIN-42"))
+              (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal =
+                true;
+          },
+        );
       }, terminal.sessionId);
       await fileInvoke("start_local_terminal_session", { sessionId: terminal.sessionId });
       await expect

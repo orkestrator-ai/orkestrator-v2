@@ -98,7 +98,7 @@ The report's [invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-
 
 #### Tasks
 
-1. **Batch file appends**: one write per burst, with `mkdir` only when needed. Status: open.
+1. **Batch file appends**: one write per burst, with `mkdir` only when needed. Status: done (2026-11-04, with the recommended options; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16).
 2. **Bound relay line length**: `readline` buffers a whole line. Status: open.
 3. **Skip the relay when nothing consumes it**: packaged app with saving off. Status: open.
 
@@ -106,7 +106,7 @@ The report's [invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-
 
 **Problem.** Each entry does `mkdir` plus `appendFile` (open, write, close) in a strict chain, so a burst is capped at filesystem latency and the 4 MiB queue starts dropping.
 
-**Context.** This is efficiency finding DK-18, tracked as open in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16. That analysis is not repeated here. The sampled log was 12.5k lines in a day on one machine, which the report calls fine.
+**Context.** This is efficiency finding DK-18, tracked in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16. That analysis is not repeated here. The sampled log was 12.5k lines in a day on one machine, which the report calls fine.
 
 **Investigation.** `packages/protocol/src/node/application-logging.ts:438-447` is the chain, and `MAX_PENDING_LOG_BYTES` is 4 MiB (`:30`). Standalone backends use the same writer. `flush` returns the pending chain (`:545`), which the quit path relies on (`:568-577`). `resolveTarget` chooses the file per entry, rolling on the day, the format and `maxFileBytes` (`:395-425`). The shared logger migration (#1558, #1583, #1619) did not change this.
 

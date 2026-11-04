@@ -74,6 +74,8 @@ function createHarness(
 
   const service = new DiffStatsService({
     admission: options.admission,
+    // These cases exercise immediate scans; worktree-snapshots.test.ts covers the gap.
+    localScanMinGapMs: 0,
     scan: (target) => {
       scans.push(target);
       return scan(target);

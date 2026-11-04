@@ -146,7 +146,7 @@ fi
 umask 022
 printf '%s\n' "$firewall_boot" > "$FIREWALL_RESULT_DIR/firewall-boot"
 
-# Staged inputs (staged-inputs=4, see entrypoint.sh). The backend binds its
+# Staged inputs (staged-inputs=3 and later, see entrypoint.sh). The backend binds its
 # staged revision read-only, owner-only (0700/0600) and owned by its own user,
 # so node (uid 1000) can open them only on a rootful daemon whose host user is
 # uid 1000. Under rootless Docker the backend's user is container root and

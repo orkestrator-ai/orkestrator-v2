@@ -33,7 +33,7 @@ export interface MachineView {
   loadedAt: number | null;
 }
 
-export type SidebarGrouping = "machine" | "project" | "repository" | "activity";
+export type SidebarGrouping = "machine" | "project" | "repository" | "activity" | "compact";
 export const ALL_MACHINES = "all";
 export type MachineFilter = typeof ALL_MACHINES | string;
 

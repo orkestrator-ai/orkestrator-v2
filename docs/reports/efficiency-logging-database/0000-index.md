@@ -176,8 +176,8 @@ When one of these becomes ready, it joins the lane shown.
 | GW-14 | Open | The lookup is still `frames.filter` (`apps/backend/src/gateway-event-replay.ts:162`) and no oversized metric exists; see 0300. |
 | GW-15 | Open | Compression still runs before the 304 check (`apps/backend/src/gateway-proxy.ts:794`, `:860`); see 0310. |
 | GW-16 | Open | Timers, decoders, per-operation results and 50 ms acks all remain (`apps/backend/src/gateway-proxy.ts:301-308`, `apps/backend/src/terminal-websocket-server.ts:400`, `:1040`, `apps/web/src/lib/native/terminal-websocket-client.ts:97`); see 0375. |
-| TX-1 | Open | The view cache holds one entry per key, and a delta needs the newest token (`apps/backend/src/core/native-agent-transcript-projection.ts:468`, `:3012-3017`); see 0160. |
-| TX-2 | Open | `interactiveSnapshot` still reads `legacy` with no limit (`apps/backend/src/core/http-bridge-provider.ts:648`, `:771`) after dispatch (`apps/backend/src/core/native-agent-service.ts:2023`); see 0150. |
+| TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
+| TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
 | TX-3 | Open | The fingerprint is still a whole `JSON.stringify` (`apps/backend/src/core/native-agent-transcript-projection.ts:5465`); see 0210. |
 | TX-4 | Partly done | Reads are keyed (`apps/backend/src/core/storage-native.ts:424`, `apps/backend/src/core/storage-prompt-queue-store.ts:126-127`, #1548 `12289fc56`), but mutations still load the whole store (`apps/backend/src/core/storage-native.ts:1209`); see 0230. |
 | TX-5 | Open | State reads have no condition (`apps/backend/src/core/http-bridge-progressive.ts:217`) and the hash covers the composer (`apps/backend/src/core/native-agent-transcript-projection.ts:3418-3420`); see 0180. |
@@ -278,11 +278,11 @@ When one of these becomes ready, it joins the lane shown.
 | DK-11 | Done | One `apt-get update`, `docker/Dockerfile:82`; `util-linux` in that layer, `:111` (fd679c0e2). |
 | DK-12 | Done | `move_clone_into_workspace`, `docker/workspace-setup.sh:406`, `:500` (2525fc05c). |
 | DK-13 | Open | Direct clone only, `docker/workspace-setup.sh:385-397`; see 0500. |
-| DK-14 | Open | No stamp in the entrypoints or `portable-inputs.ts`; see 0490. |
+| DK-14 | Partly done | Start copy stamped, `import_agent_input` in `docker/entrypoint.sh` (`staged-inputs=5`, 1202 task 15); the per-environment staging copy remains, see 0490. |
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` remains, see 0694. |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
-| DK-18 | Open | `mkdir` and `appendFile` per entry, `packages/protocol/src/node/application-logging.ts:441-442`; see [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
+| DK-18 | Done | One `appendFile` per event-loop turn and `mkdir` only after a failure, in `packages/protocol/src/node/application-logging.ts`; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16 and [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 
 ## Status of every logging and database item
 
@@ -296,7 +296,7 @@ When one of these becomes ready, it joins the lane shown.
 | R4 change-driven heartbeats | Done | `STALL_NO_DELTA_MS` and the keepalive (`packages/protocol/src/node/bridge-diagnostics.ts:18`, `:29`), buffered logger flush (`:684`, `:696`), #1637; report addendum. |
 | R5 safe error formatter | Done | `formatLogError` and `CommandFailedError` print backstop (`apps/backend/src/core/shell.ts:75-80`), #1570; the stderr tail was dropped by the user's decision (`docs/architecture/logging.md:258-260`). |
 | R6 essential tier and silent gaps | Partly done | The silent failures log and the previous Docker bridge log is kept (0720, 0740); the essential tier is built (0750, `docs/architecture/logging.md`); the user-facing notices are open in 0720. |
-| R7 relay and file writer | Partly done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching, line bound and relay skip are open in 0860 (`docs/architecture/logging.md:634-635`). |
+| R7 relay and file writer | Partly done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching landed with DK-18; only the line bound and relay skip remain open in [0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer). See [the file writer](../../architecture/logging.md#the-file-writer). |
 | R8 renderer diagnostics | Partly done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); switch, DevTools and ring are open in 0790. |
 | R9 Codex raw event logging | Open | `ORKESTRATOR_CODEX_RAW_LOG_DIR` is read and never set (`bridges/codex-bridge/src/index.ts:382`), writer reachable only for tests (`:974`), default still on (`app-config-defaults.ts:91`); 0770. |
 | R10 Docker log hygiene | Open | `cat >>` fallback (`docker/orkestrator-log-writer.sh:35-40`), no options without `local` (`container-resources.ts:212`), `...process.env` (`commands-servers.ts:961`); 0830 and 0850. |

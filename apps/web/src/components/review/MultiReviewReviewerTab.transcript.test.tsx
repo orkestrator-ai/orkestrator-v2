@@ -10,6 +10,8 @@ import {
   MultiReviewReviewerTab,
   mergeMultiReviewReviewerTranscript,
   mergeReviewerHistory,
+  toMultiReviewReviewerMessages,
+  toMultiReviewSessionMessages,
 } from "./MultiReviewReviewerTab";
 
 const STARTED_AT = "2026-09-14T22:00:00.000Z";
@@ -227,4 +229,50 @@ test("missed reviewer revisions invalidate earlier rows and adopt a recoverable 
     reconciliationToken: "omitted-revisions",
   });
   expect(mergeReviewerHistory(result.history, tail, next).reset).toBe(false);
+});
+
+test("reviewer and step tails merge tools across hidden JSON drafts before prose", () => {
+  const tool = (id: string) => ({
+    id,
+    role: "assistant",
+    content: "",
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "Read",
+        toolUseId: `${id}-call`,
+        toolArgs: { file_path: `${id}.ts` },
+        toolState: "success",
+      },
+    ],
+  });
+  const text = (id: string, content: string) => ({
+    id,
+    role: "assistant",
+    content,
+    parts: [{ type: "text", content }],
+  });
+  for (const draft of [
+    '{"reviewScope":{"targetBranch":"main"',
+    '{"issues":[],"testCoverageGaps":[]}',
+  ]) {
+    const messages = [
+      tool("a"),
+      text("draft", draft),
+      tool("b"),
+      text("prose", "Review complete."),
+    ];
+    for (const rows of [
+      toMultiReviewReviewerMessages(transcript({ agent: "codex", messages })),
+      toMultiReviewSessionMessages(messages, "codex", STARTED_AT),
+    ]) {
+      expect(rows.map((row) => row.id)).toEqual(["a", "prose"]);
+      expect(rows[0]!.parts[0]!.type).toBe("tool-group");
+      const group = rows[0]!.parts[0]!;
+      if (group.type === "tool-group")
+        expect(group.parts.map((part) => part.toolUseId)).toEqual(["a-call", "b-call"]);
+      expect(rows[1]!.content).toBe("Review complete.");
+    }
+  }
 });

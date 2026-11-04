@@ -1316,7 +1316,8 @@ export class CoordinatorService {
    * worker closing during another's wake reports now rather than on the next
    * sweep. Any number of calls in one pass share one extra pass and one promise,
    * which can outlast the pass the caller joined: never await this while holding
-   * `withAgentMailWorkerAdmission`, since a pass can wait on what that lock guards.
+   * `withAgentMailWorkerAdmission`, which would hold up that worker's mail for as
+   * long as the passes take.
    */
   private async runDelegationWakePasses(): Promise<void> {
     do {

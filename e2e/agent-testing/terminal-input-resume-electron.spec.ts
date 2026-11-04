@@ -274,6 +274,8 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
 
     // Let nvim’s terminal-query replies settle before losing a keystroke response.
     await window.waitForTimeout(1_000);
+    // Run modal handlers and restore focus before raw keyboard input.
+    await focusTerminal();
     await setFault("lose");
     await window.keyboard.type("X");
     const toast = window

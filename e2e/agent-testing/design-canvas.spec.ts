@@ -575,6 +575,9 @@ test("an image brief drains after enqueue acknowledgement and fallback failure w
       );
       const data = new DataTransfer();
       data.items.add(new File([blob], "header.png", { type: "image/png" }));
+      // Encoding yields to startup dialogs. The paste hook accepts only the
+      // focused composer, so restore focus in the same task as this synthetic paste.
+      input.focus();
       input.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: data }));
     });
     await expect(page.getByRole("list", { name: "Attached images" }).locator("img")).toHaveCount(1);

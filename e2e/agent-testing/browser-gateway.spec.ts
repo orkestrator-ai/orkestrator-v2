@@ -1504,7 +1504,8 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
       await entry.click();
     };
     await openHeld();
-    const panel = page.getByTestId("setup-approval-panel").filter({ visible: true });
+    // Recovery overlay and native tab show the same approval; select one explicitly.
+    const panel = page.getByTestId("setup-approval-panel").filter({ visible: true }).first();
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(marker);
     await fs.mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });

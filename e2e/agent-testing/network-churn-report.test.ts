@@ -53,7 +53,7 @@ describe("networkChurnReport", () => {
     expect(networkChurnReport(root)).toBeNull();
   });
 
-  test("is silent with no failed cases, no artifacts or an unreadable archive", async () => {
+  test("is silent with no failed cases, no artifacts or a missing archive", async () => {
     const root = await artifacts();
     expect(networkChurnReport(root)).toBeNull();
     expect(networkChurnReport(path.join(root, "missing"))).toBeNull();
@@ -61,4 +61,19 @@ describe("networkChurnReport", () => {
     await writeFile(path.join(root, ".last-run.json"), "{}");
     expect(networkChurnReport(root)).toBeNull();
   });
+});
+
+test("ignores corrupt archives while reporting readable neighbors", async () => {
+  const root = await artifacts();
+  await mkdir(path.join(root, "corrupt"));
+  await writeFile(path.join(root, "corrupt", "trace.zip"), "not a zip");
+  await failedCase(root, "valid", { "test.trace": aborted });
+  expect(networkChurnReport(root)).toContain("valid: 1");
+  expect(networkChurnReport(root)).not.toContain("corrupt:");
+});
+test("discards partial unzip output when it exceeds the byte bound", async () => {
+  const root = await artifacts();
+  await failedCase(root, "oversized", { "test.trace": aborted.repeat(100_000) });
+  expect(networkChurnReport(root, 1024)).toBeNull();
+  expect(networkChurnReport(root)).toContain("oversized: 100000");
 });

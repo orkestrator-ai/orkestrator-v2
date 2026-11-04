@@ -10,7 +10,10 @@ const NETWORK_CHANGED = "net::ERR_NETWORK_CHANGED";
  * trace for a failed attempt, so every archive here is one. This reports evidence
  * and changes no result; it prints directory names and counts, nothing from the trace.
  */
-export function networkChurnReport(artifactsDirectory: string): string | null {
+export function networkChurnReport(
+  artifactsDirectory: string,
+  maxBuffer = 512 * 1024 * 1024,
+): string | null {
   let cases: string[];
   try {
     cases = readdirSync(artifactsDirectory);
@@ -21,7 +24,7 @@ export function networkChurnReport(artifactsDirectory: string): string | null {
     const traces = spawnSync(
       "unzip",
       ["-p", path.join(artifactsDirectory, name, "trace.zip"), "*.trace"],
-      { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+      { encoding: "utf8", maxBuffer },
     );
     if (traces.status !== 0) return [];
     const count = traces.stdout.split(NETWORK_CHANGED).length - 1;

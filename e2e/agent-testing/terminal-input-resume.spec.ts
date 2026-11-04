@@ -208,6 +208,8 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     // nvim's terminal queries are answered as writes. Let them finish so the
     // write lost below is the keystroke.
     await page.waitForTimeout(1_000);
+    // Run modal handlers and restore focus before raw keyboard input.
+    await focusTerminal();
 
     // The next write reaches the backend, and then its response is lost.
     fault = "lose";

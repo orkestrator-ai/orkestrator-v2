@@ -15,7 +15,7 @@ describe("coordinatorPromptWithAttachmentPaths", () => {
     // What the transcript shows the user is what they typed, plus the file.
     expect(extractMarkedAttachmentReferences(prompt)).toEqual({
       prompt: "Pass this on.",
-      attachments: [{ name: "clipboard.png", path: IMAGE.path }],
+      attachments: [{ name: "1.png", path: IMAGE.path }],
     });
   });
 

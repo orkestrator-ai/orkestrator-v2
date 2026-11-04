@@ -145,7 +145,8 @@ export function coordinatorPromptWithAttachmentPaths(
   return buildInitialPromptWithAttachmentReferences(
     prompt,
     images.map((image) => ({
-      name: image.filename ?? image.path.split(/[\\/]/).at(-1) ?? image.path,
+      // Bare references resolve against the stored basename, not the paste label.
+      name: image.path.split(/[\\/]/).at(-1) ?? image.path,
       path: image.path,
     })),
   );

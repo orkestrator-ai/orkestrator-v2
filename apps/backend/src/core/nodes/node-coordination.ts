@@ -157,6 +157,9 @@ export class NodeCoordination {
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
   readonly copies: NodeProjectCopies;
+  // Keep lookup, staging and enqueue in one admission section. A single tail
+  // avoids retaining a growing registry of request keys after sends settle.
+  private outboxSendTail: Promise<void> = Promise.resolve();
   private recoveryStarted = false;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
@@ -635,68 +638,78 @@ export class NodeCoordination {
       : undefined;
     if (parent && (parent.hopCount ?? 0) >= AGENT_MAIL_MAX_THREAD_HOPS)
       throw new Error("Thread hop limit reached");
-    // A retry finds its request queued, or already delivered, and copies nothing.
-    const spooled =
-      input.attachments && input.own
-        ? !(await this.leafMail.knownRequest(destination.controllerId, {
-            requestId: input.requestId,
-            fromEnvironmentId: input.coordinatorEnvironmentId,
-            fromTabId: input.coordinatorTabId,
-          }))
-        : false;
-    if (spooled) {
-      await stageMailAttachments(
-        this.options.storage.getDataDir(),
-        outboxMailAttachmentBatch(input.attachments!.batch),
-        input.own!,
-      );
+    const previous = this.outboxSendTail;
+    let release!: () => void;
+    this.outboxSendTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      // A retry finds its request queued, or already delivered, and copies nothing.
+      const spooled =
+        input.attachments && input.own
+          ? !(await this.leafMail.knownRequest(destination.controllerId, {
+              requestId: input.requestId,
+              fromEnvironmentId: input.coordinatorEnvironmentId,
+              fromTabId: input.coordinatorTabId,
+            }))
+          : false;
+      if (spooled) {
+        await stageMailAttachments(
+          this.options.storage.getDataDir(),
+          outboxMailAttachmentBatch(input.attachments!.batch),
+          input.own!,
+        );
+      }
+      const item = await this.leafMail
+        .enqueue(destination.controllerId, {
+          requestId: input.requestId,
+          fromEnvironmentId: input.coordinatorEnvironmentId,
+          fromTabId: input.coordinatorTabId,
+          fromEnvironmentName: "Coordinator",
+          ...(tabName ? { fromTabName: tabName } : {}),
+          ...(hint ? { repositoryHint: hint } : {}),
+          ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
+            ? {
+                toCoordinator: {
+                  environmentId: mailbox.coordinatorEnvironmentId,
+                  tabId: mailbox.coordinatorTabId,
+                },
+              }
+            : {}),
+          ...(input.subject ? { subject: input.subject } : {}),
+          body: input.body,
+          fromCoordinator: true,
+          ...(parent
+            ? {
+                nodeParent: {
+                  id: parent.id,
+                  threadId: parent.threadId,
+                  hopCount: parent.hopCount ?? 0,
+                },
+              }
+            : {}),
+          ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+          ...(input.attachments ? { attachments: input.attachments } : {}),
+        })
+        .catch(async (error: unknown) => {
+          // Refused, so nothing will ever collect or acknowledge this copy.
+          if (spooled) {
+            await removeMailAttachmentBatch(
+              this.options.storage.getDataDir(),
+              outboxMailAttachmentBatch(input.attachments!.batch),
+            ).catch(() => undefined);
+          }
+          throw error;
+        });
+      return {
+        item,
+        controllerId: destination.controllerId,
+        ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
+      };
+    } finally {
+      release();
     }
-    const item = await this.leafMail
-      .enqueue(destination.controllerId, {
-        requestId: input.requestId,
-        fromEnvironmentId: input.coordinatorEnvironmentId,
-        fromTabId: input.coordinatorTabId,
-        fromEnvironmentName: "Coordinator",
-        ...(tabName ? { fromTabName: tabName } : {}),
-        ...(hint ? { repositoryHint: hint } : {}),
-        ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
-          ? {
-              toCoordinator: {
-                environmentId: mailbox.coordinatorEnvironmentId,
-                tabId: mailbox.coordinatorTabId,
-              },
-            }
-          : {}),
-        ...(input.subject ? { subject: input.subject } : {}),
-        body: input.body,
-        fromCoordinator: true,
-        ...(parent
-          ? {
-              nodeParent: {
-                id: parent.id,
-                threadId: parent.threadId,
-                hopCount: parent.hopCount ?? 0,
-              },
-            }
-          : {}),
-        ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
-        ...(input.attachments ? { attachments: input.attachments } : {}),
-      })
-      .catch(async (error: unknown) => {
-        // Refused, so nothing will ever collect or acknowledge this copy.
-        if (spooled) {
-          await removeMailAttachmentBatch(
-            this.options.storage.getDataDir(),
-            outboxMailAttachmentBatch(input.attachments!.batch),
-          ).catch(() => undefined);
-        }
-        throw error;
-      });
-    return {
-      item,
-      controllerId: destination.controllerId,
-      ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
-    };
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {

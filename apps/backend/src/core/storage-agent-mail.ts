@@ -206,8 +206,89 @@ export class AgentMailRepository {
     sender: AgentMailSender,
     input: AgentMailSendInput,
   ): Promise<{ environmentId: string; tabId: string }> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.repos.config.loadConfig()).global.agentMessaging,
+    );
+    if (!settings.enabled)
+      throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
     const resolved = await this.resolveCoordinatorAddress(sender, input);
+    await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
+      resolved.toEnvironmentId,
+      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
+    ]);
+    await this.store.enqueue(async () => {
+      this.assertRecipientAllowed(
+        await this.store.load(),
+        sender,
+        resolved,
+        settings.allowCrossProject,
+      );
+    });
     return { environmentId: resolved.toEnvironmentId, tabId: resolved.toTabId };
+  }
+
+  private assertRecipientAllowed(
+    store: PersistedAgentMailStore,
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+    allowCrossProject: boolean,
+  ): void {
+    const { senderMailbox } = this.authenticateMailSender(store, sender);
+    const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
+    const recipient = store.mailboxes[destinationId];
+    // A pipeline worker that has ended is named, with how it ended; its
+    // mail is never passed on to whichever worker runs now.
+    const worker = recipient?.pipelineWorker;
+    if (worker && (recipient.tombstonedAt || pipelineWorkerEnded(worker.status)))
+      throw new AgentMailError(
+        "recipient-not-found",
+        `That build pipeline worker (${worker.label}, round ${worker.round}) has ${
+          pipelineWorkerEnded(worker.status) ? worker.status : "ended"
+        } and takes no more mail. Nothing is re-routed to another worker: pick a running one from list_mailboxes or get_build_pipeline.`,
+      );
+    if (!recipient || recipient.tombstonedAt)
+      throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
+    // A mailbox is a tab, so a subagent or background task inside that tab
+    // shares its address. Mail it sends "to the parent" would land back in
+    // its own inbox and only surface when the whole tab next goes idle —
+    // usually after the subagent that needed an answer has finished.
+    if (senderMailbox?.mailboxId === destinationId)
+      throw new AgentMailError(
+        "policy-denied",
+        "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
+      );
+    // A side agent talks to its main coordinator and nobody else; only the
+    // main (or the user) may talk to it. Everything else in the project
+    // addresses the main, so a side agent is never a second coordinator.
+    if (
+      senderMailbox?.coordinatorRole === "side" &&
+      !(
+        recipient.ownerKind === "coordinator" &&
+        recipient.coordinatorRole === "main" &&
+        recipient.coordinatorId === senderMailbox.coordinatorId
+      )
+    ) {
+      throw new AgentMailError(
+        "policy-denied",
+        'A side agent can only message the main coordinator. Send to "coordinator".',
+      );
+    }
+    if (
+      recipient.coordinatorRole === "side" &&
+      sender.kind !== "user" &&
+      !(
+        senderMailbox?.coordinatorRole === "main" &&
+        senderMailbox.coordinatorId === recipient.coordinatorId
+      )
+    ) {
+      throw new AgentMailError(
+        "policy-denied",
+        'Side agents only receive mail from the main coordinator. Send to "coordinator" instead.',
+      );
+    }
+    const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
+    if (crossProject && !allowCrossProject)
+      throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
   }
 
   /**
@@ -532,61 +613,9 @@ export class AgentMailRepository {
         throw new AgentMailError("store-full", "Agent mail idempotency store is full");
       }
 
+      this.assertRecipientAllowed(store, sender, input, settings.allowCrossProject);
       const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
-      const recipient = store.mailboxes[destinationId];
-      // A pipeline worker that has ended is named, with how it ended; its
-      // mail is never passed on to whichever worker runs now.
-      const worker = recipient?.pipelineWorker;
-      if (worker && (recipient.tombstonedAt || pipelineWorkerEnded(worker.status)))
-        throw new AgentMailError(
-          "recipient-not-found",
-          `That build pipeline worker (${worker.label}, round ${worker.round}) has ${
-            pipelineWorkerEnded(worker.status) ? worker.status : "ended"
-          } and takes no more mail. Nothing is re-routed to another worker: pick a running one from list_mailboxes or get_build_pipeline.`,
-        );
-      if (!recipient || recipient.tombstonedAt)
-        throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
-      // A mailbox is a tab, so a subagent or background task inside that tab
-      // shares its address. Mail it sends "to the parent" would land back in
-      // its own inbox and only surface when the whole tab next goes idle —
-      // usually after the subagent that needed an answer has finished.
-      if (senderMailbox?.mailboxId === destinationId)
-        throw new AgentMailError(
-          "policy-denied",
-          "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
-        );
-      // A side agent talks to its main coordinator and nobody else; only the
-      // main (or the user) may talk to it. Everything else in the project
-      // addresses the main, so a side agent is never a second coordinator.
-      if (
-        senderMailbox?.coordinatorRole === "side" &&
-        !(
-          recipient.ownerKind === "coordinator" &&
-          recipient.coordinatorRole === "main" &&
-          recipient.coordinatorId === senderMailbox.coordinatorId
-        )
-      ) {
-        throw new AgentMailError(
-          "policy-denied",
-          'A side agent can only message the main coordinator. Send to "coordinator".',
-        );
-      }
-      if (
-        recipient.coordinatorRole === "side" &&
-        sender.kind !== "user" &&
-        !(
-          senderMailbox?.coordinatorRole === "main" &&
-          senderMailbox.coordinatorId === recipient.coordinatorId
-        )
-      ) {
-        throw new AgentMailError(
-          "policy-denied",
-          'Side agents only receive mail from the main coordinator. Send to "coordinator" instead.',
-        );
-      }
-      const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
-      if (crossProject && !settings.allowCrossProject)
-        throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
+      const recipient = store.mailboxes[destinationId]!;
 
       let parent: AgentMailMessage | undefined;
       if (input.replyToMessageId) {

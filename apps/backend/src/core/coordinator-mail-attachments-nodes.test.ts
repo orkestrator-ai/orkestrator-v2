@@ -542,6 +542,71 @@ describe("a leaf's coordinator sending to the command node", () => {
     expect(await world.inbox(world.command, world.commandMain)).toHaveLength(1);
   });
 
+  test("a concurrent conflicting send cannot remove the accepted image batch", async () => {
+    const world = await link();
+    const mail = world.leafCoordination.leafMail;
+    const originalKnown = mail.knownRequest.bind(mail);
+    const originalRoute = mail.routeCoordinator.bind(mail);
+    let release!: () => void;
+    let entered!: () => void;
+    let routed!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const firstEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const secondRouted = new Promise<void>((resolve) => {
+      routed = resolve;
+    });
+    let checks = 0;
+    let routes = 0;
+    mail.routeCoordinator = async (...args) => {
+      const result = await originalRoute(...args);
+      if (++routes === 2) routed();
+      return result;
+    };
+    mail.knownRequest = async (...args) => {
+      const result = await originalKnown(...args);
+      if (++checks === 1) {
+        entered();
+        await gate;
+      }
+      return result;
+    };
+    const args = {
+      requestId: "concurrent",
+      attachments: [await world.paste(world.leaf, world.leafMain)],
+    };
+    const accepted = world.sendUp({ ...args, body: "Accepted" });
+    await firstEntered;
+    const conflict = world.sendUp({ ...args, body: "Conflicting" });
+    const rejected = conflict.then(
+      () => null,
+      (error: Error) => error,
+    );
+    try {
+      await secondRouted;
+      // Let the second invocation reach the admission boundary.
+      await Bun.sleep(0);
+      expect(checks).toBe(1);
+    } finally {
+      release();
+    }
+    await accepted;
+    expect((await rejected)?.message).toBe("Conflicting mail request ID.");
+    expect(await world.collect()).toBe(true);
+    const messages = await world.inbox(world.command, world.commandMain);
+    expect(messages).toHaveLength(1);
+    const delivered = await world.command.storage.getAgentMailMessage(
+      world.commandMain.environmentId,
+      world.commandMain.tabId,
+      messages[0]!.id,
+    );
+    expect(delivered.body).toContain("Accepted");
+    expect((await fs.readFile(messages[0]!.attachments![0]!.path)).equals(PNG)).toBe(true);
+  });
+
   test("an older command node leaves it queued rather than dropping the images", async () => {
     const world = await link({
       capabilities: { "node-attachment": 1, "node-mail-steer": 1, "node-coordinator-mail": 1 },

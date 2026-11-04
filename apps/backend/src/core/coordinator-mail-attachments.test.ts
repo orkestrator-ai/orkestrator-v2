@@ -23,6 +23,8 @@ import {
   ScriptedSteerProvider,
   stageSession,
 } from "./pipeline-worker-mail-test-support.js";
+import { coordinatorPromptWithAttachmentPaths } from "./native-agent-handoffs.js";
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { runCommand } from "./shell.js";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7, 7]);
@@ -153,14 +155,20 @@ describe("send_message with attachments, to an environment on this node", () => 
   });
 
   test("a bare file name works as well as the path", async () => {
-    const { world, paste, send, withWorktree } = await harness();
+    const { world, main, paste, send, withWorktree } = await harness();
     const worker = await world.addEnvironment("worker");
     await withWorktree(worker);
+    const source = await paste(main, "clipboard.png");
+    const prompt = coordinatorPromptWithAttachmentPaths("Forward", main.environmentId, [
+      { type: "image", path: source, filename: "clipboard.png" },
+    ]);
+    const advertised = extractMarkedAttachmentReferences(prompt).attachments[0]!.name;
+    expect(advertised).toBe(path.basename(source));
     const sent = await send({
       requestId: "r1",
       toEnvironmentId: worker.environmentId,
       toTabId: worker.tabId,
-      attachments: [path.basename(await paste())],
+      attachments: [advertised],
     });
     expect(sent.attachments).toHaveLength(1);
   });
@@ -431,6 +439,27 @@ describe("send_message with attachments, between a coordinator and its side agen
       side,
     );
     expect(up.attachments[0].name).toBe(down.attachments[0].name);
+  });
+
+  test("a denied sibling send leaves its private directory unchanged", async () => {
+    const { world, paste, send, inbox } = await harness();
+    const sender = await world.addSide();
+    const recipient = await world.addSide();
+    const existing = await paste(recipient);
+    const before = await fs.readdir(path.dirname(existing));
+    await expect(
+      send(
+        {
+          requestId: "sibling-denied",
+          toEnvironmentId: recipient.environmentId,
+          toTabId: recipient.tabId,
+          attachments: [await paste(sender)],
+        },
+        sender,
+      ),
+    ).rejects.toThrow("A side agent can only message the main coordinator");
+    expect(await fs.readdir(path.dirname(existing))).toEqual(before);
+    expect(await inbox(recipient)).toEqual([]);
   });
 
   test("a side agent still cannot reach a worker, with or without an image", async () => {

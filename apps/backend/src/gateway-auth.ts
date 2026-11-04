@@ -178,7 +178,20 @@ export class GatewayAuth {
     if (!candidate) return false;
     if (this.grantExpiresAt(candidate) !== null) return true;
     if (this.ctx.browserSessions.matches(candidate)) return true;
-    return this.ctx.credentialThrottle.check(this.ctx.token, candidate, request) === "match";
+    return this.durableCredentialOutcome(candidate, request) === "match";
+  }
+
+  /**
+   * A lapsed random credential must not spend the durable-token guess budget.
+   * Durable tokens are user chosen, so exempt a credential shape only when the
+   * configured token cannot have that shape. Otherwise it still needs throttling.
+   * Apply this to stale cookies too, including the legacy-token migration check.
+   */
+  private durableCredentialOutcome(candidate: string, request: GuessPeer) {
+    for (const shape of [/^[A-Za-z0-9_-]{43}$/, /^okg_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}$/]) {
+      if (shape.test(candidate) && !shape.test(this.ctx.token)) return "wrong";
+    }
+    return this.ctx.credentialThrottle.check(this.ctx.token, candidate, request);
   }
 
   /**
@@ -540,7 +553,7 @@ export class GatewayAuth {
   private refuseUnauthenticated(request: IncomingMessage, response: ServerResponse): void {
     const throttle = this.ctx.credentialThrottle;
     const bearer = getBearerToken(request.headers);
-    if (bearer && throttle.check(this.ctx.token, bearer, request) === "throttled") {
+    if (bearer && this.durableCredentialOutcome(bearer, request) === "throttled") {
       const retryAfter = throttle.retryAfterSeconds(request);
       jsonResponse(
         response,
@@ -551,7 +564,7 @@ export class GatewayAuth {
       return;
     }
     const staleCookie = getGatewayAuthCookie(request.headers);
-    if (staleCookie && throttle.check(this.ctx.token, staleCookie, request) === "match") {
+    if (staleCookie && this.durableCredentialOutcome(staleCookie, request) === "match") {
       response.setHeader("set-cookie", clearedGatewayCookies(requestIsHttps(request)));
     }
     if (wantsHtml(request) && request.method === "GET") {

@@ -1,16 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { Agent, request as httpRequest } from "node:http";
+import { Agent, createServer, request as httpRequest } from "node:http";
 import {
   FIRST_PAUSE_MS,
   FREE_WRONG_GUESSES,
   GatewayCredentialThrottle,
   GUESS_MEMORY_MS,
   MAX_PAUSE_MS,
-  MAX_PROVEN_PEERS,
   MAX_REMEMBERED_GUESSES,
   type GuessPeer,
 } from "../src/gateway-credential-throttle";
-import { requestUrl, startGateway } from "./gateway-test-harness.js";
+import {
+  nextTerminalControl,
+  openTerminalSocket,
+  openEventStream,
+  waitUntil,
+  requestUrl,
+  startGateway,
+} from "./gateway-test-harness.js";
+
+import { parseBackendId } from "@orkestrator/protocol/federation";
+import { ClientGrantService } from "../src/core/nodes/client-grants";
+import { WebSocket } from "ws";
 
 const TOKEN = "the-real-gateway-token";
 
@@ -86,41 +96,18 @@ describe("GatewayCredentialThrottle", () => {
     expect(throttle.check(TOKEN, "guess-0", attacker)).toBe("wrong");
   });
 
-  test("a connection that has shown the token stays exempt, and a new one does not", () => {
-    const { throttle } = clocked();
-    const open = peer();
-    expect(throttle.check(TOKEN, TOKEN, open)).toBe("match");
-    exhaust(throttle, peer());
-    expect(throttle.check(TOKEN, TOKEN, open)).toBe("match");
-    expect(throttle.check(TOKEN, TOKEN, peer())).toBe("throttled");
-  });
-
-  test("an address that has shown the token stays exempt on a new connection", () => {
-    const { throttle } = clocked();
-    expect(throttle.check(TOKEN, TOKEN, peer("100.64.0.7"))).toBe("match");
-    exhaust(throttle, peer("100.64.0.9"));
-    expect(throttle.check(TOKEN, TOKEN, peer("100.64.0.7"))).toBe("match");
-    expect(throttle.check(TOKEN, TOKEN, peer("100.64.0.9"))).toBe("throttled");
-  });
-
-  test.each(["127.0.0.1", "::1", "::ffff:127.0.0.1"])(
-    "loopback address %s proves nothing about the next connection",
+  test.each(["127.0.0.1", "::1", "::ffff:127.0.0.1", "100.64.0.7"])(
+    "prior success on socket or address %s cannot exempt pooled clients",
     (address) => {
       const { throttle } = clocked();
-      expect(throttle.check(TOKEN, TOKEN, peer(address))).toBe("match");
-      exhaust(throttle, peer(address));
+      const shared = peer(address);
+      expect(throttle.check(TOKEN, TOKEN, shared)).toBe("match");
+      exhaust(throttle, shared);
+      expect(throttle.check(TOKEN, TOKEN, shared)).toBe("throttled");
+      expect(throttle.check(TOKEN, "new-guess", shared)).toBe("throttled");
       expect(throttle.check(TOKEN, TOKEN, peer(address))).toBe("throttled");
     },
   );
-
-  test("a real client's success does not clear a guesser's pause", () => {
-    const { throttle } = clocked();
-    const client = peer("100.64.0.7");
-    expect(throttle.check(TOKEN, TOKEN, client)).toBe("match");
-    exhaust(throttle, peer());
-    expect(throttle.check(TOKEN, TOKEN, client)).toBe("match");
-    expect(throttle.check(TOKEN, "one-more", peer())).toBe("throttled");
-  });
 
   test("listeners count separately", () => {
     const { throttle } = clocked();
@@ -151,7 +138,7 @@ describe("GatewayCredentialThrottle", () => {
     expect(throttle.check(TOKEN, TOKEN, attacker)).toBe("match");
   });
 
-  test("reset forgets the pause, the wrong values and every proof", () => {
+  test("reset forgets the pause and wrong values", () => {
     const { throttle } = clocked();
     const open = peer("100.64.0.7");
     expect(throttle.check(TOKEN, TOKEN, open)).toBe("match");
@@ -180,16 +167,6 @@ describe("GatewayCredentialThrottle", () => {
     expect(throttle.check(TOKEN, TOKEN, peer())).toBe("match");
     expect(throttle.check(TOKEN, "guess-0", attacker)).toBe("wrong");
     expect(throttle.check(TOKEN, TOKEN, peer())).toBe("throttled");
-  });
-
-  test("proven addresses are bounded, oldest forgotten first", () => {
-    const { throttle } = clocked();
-    for (let i = 0; i <= MAX_PROVEN_PEERS; i++) {
-      expect(throttle.check(TOKEN, TOKEN, peer(`100.64.0.${i}`))).toBe("match");
-    }
-    exhaust(throttle, peer());
-    expect(throttle.check(TOKEN, TOKEN, peer("100.64.0.0"))).toBe("throttled");
-    expect(throttle.check(TOKEN, TOKEN, peer(`100.64.0.${MAX_PROVEN_PEERS}`))).toBe("match");
   });
 });
 
@@ -248,7 +225,7 @@ describe("gateway guess throttling", () => {
     expect((await bearer(info, info.token)).status).toBe(200);
   });
 
-  test("a signed-in browser and an open bearer connection keep working through a pause", async () => {
+  test("a signed-in browser stays usable but a pooled bearer connection gets no exemption", async () => {
     const { info } = await startGateway();
     const signedIn = await login(info, info.token);
     const cookie = signedIn.headers["set-cookie"]![0]!.split(";")[0]!;
@@ -256,7 +233,7 @@ describe("gateway guess throttling", () => {
     // The same socket for every request, the way a running client reuses one.
     const agent = new Agent({ keepAlive: true, maxSockets: 1 });
     const url = new URL(info.url);
-    const onOpenConnection = () =>
+    const onOpenConnection = (token = info.token) =>
       new Promise<number>((resolve, reject) => {
         const request = httpRequest(
           {
@@ -264,7 +241,7 @@ describe("gateway guess throttling", () => {
             hostname: url.hostname,
             port: url.port,
             path: "/__orkestrator/status",
-            headers: { authorization: `Bearer ${info.token}` },
+            headers: { authorization: `Bearer ${token}` },
           },
           (response) => {
             response.resume();
@@ -279,7 +256,8 @@ describe("gateway guess throttling", () => {
       await openPause(info);
       expect((await bearer(info, info.token)).status).toBe(429);
 
-      expect(await onOpenConnection()).toBe(200);
+      expect(await onOpenConnection()).toBe(429);
+      expect(await onOpenConnection("pooled-client-new-guess")).toBe(429);
       const browser = await requestUrl(`${info.url}__orkestrator/status`, {
         headers: { cookie },
       });
@@ -288,6 +266,159 @@ describe("gateway guess throttling", () => {
       agent.destroy();
     }
   });
+
+  test("distinct HTTP clients sharing a proxy keep-alive connection cannot inherit proof", async () => {
+    const { info } = await startGateway();
+    const upstream = new URL(info.url);
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const sockets = new Set<object>();
+    const proxy = createServer((request, response) => {
+      const forwarded = httpRequest(
+        {
+          agent,
+          hostname: upstream.hostname,
+          port: upstream.port,
+          path: request.url,
+          headers: { authorization: request.headers.authorization },
+        },
+        (reply) => {
+          const chunks: Buffer[] = [];
+          reply.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          reply.on("end", () => {
+            response.writeHead(reply.statusCode!, { "content-type": "application/json" });
+            response.end(Buffer.concat(chunks));
+          });
+        },
+      );
+      forwarded.on("socket", (socket) => sockets.add(socket));
+      forwarded.on("error", () => {
+        response.writeHead(502);
+        response.end();
+      });
+      forwarded.end();
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    const port = (proxy.address() as { port: number }).port;
+    const proxied = { url: `http://127.0.0.1:${port}/`, token: info.token };
+    try {
+      expect((await bearer(proxied, info.token)).status).toBe(200);
+      await openPause(proxied);
+      expect((await bearer(proxied, info.token)).status).toBe(429);
+      expect((await bearer(proxied, "another-client-guess")).status).toBe(429);
+      expect(sockets.size).toBe(1);
+    } finally {
+      agent.destroy();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
+    }
+  });
+
+  test("terminal authenticate frames share the pause while authenticated terminals stay usable", async () => {
+    const { info } = await startGateway();
+    const established = await openTerminalSocket(info);
+    try {
+      for (let i = 0; i <= FREE_WRONG_GUESSES + 1; i++) {
+        const pending = await openTerminalSocket(info, { authenticate: false });
+        const closed = new Promise<number>((resolve) => pending.socket.once("close", resolve));
+        pending.socket.send(
+          JSON.stringify({
+            type: "authenticate",
+            version: 1,
+            token: i <= FREE_WRONG_GUESSES ? `frame-guess-${i}` : info.token,
+          }),
+        );
+        expect(await closed).toBe(4003);
+      }
+      expect((await bearer(info, info.token)).status).toBe(429);
+      // A control round trip proves the established socket still processes frames.
+      established.socket.send(JSON.stringify({ type: "unsubscribe", channelId: 123 }));
+      expect(await nextTerminalControl(established.inbox, "error")).toMatchObject({
+        type: "error",
+        code: "unknown-channel",
+      });
+      expect(established.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      established.socket.terminate();
+    }
+  });
+
+  test("lapsed sessions and grants as bearers or cookies never spend the guess budget", async () => {
+    let now = Date.now();
+    const grants = new ClientGrantService(() => now);
+    const { gateway, info } = await startGateway({
+      nodeHooks: {
+        authenticateGrant: (token) => grants.authenticate(token)?.expiresAt ?? null,
+        isPortalOriginAllowed: () => false,
+        noteControllerContact: () => {},
+      },
+    });
+    const sessions = (
+      gateway as unknown as {
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).browserSessions;
+    for (let i = 0; i <= FREE_WRONG_GUESSES; i++) {
+      const signedIn = await login(info, info.token);
+      const cookie = signedIn.headers["set-cookie"]![0]!.split(";")[0]!;
+      const session = cookie.slice(cookie.indexOf("=") + 1);
+      if (i % 2) sessions.delete(session);
+      else sessions.get(session)!.expiresAt = Date.now() - 1;
+      const issued = grants.issue({
+        controllerId: parseBackendId("bk_controller"),
+        label: "test",
+        ttlMs: 30_000,
+      });
+      if (i % 2) grants.revoke(issued.grant.grantId);
+      else now += 30_001;
+      for (const credential of [session, issued.token]) {
+        expect((await bearer(info, credential)).status).toBe(401);
+        expect(
+          (
+            await requestUrl(`${info.url}__orkestrator/status`, {
+              headers: { cookie: `orkestrator_gateway_auth=${credential}`, connection: "close" },
+            })
+          ).status,
+        ).toBe(401);
+      }
+    }
+    expect((await bearer(info, info.token)).status).toBe(200);
+  });
+
+  test("session expiry rechecks on open event streams do not spend the guess budget", async () => {
+    const { gateway, info } = await startGateway();
+    const sessions = (
+      gateway as unknown as {
+        browserSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).browserSessions;
+    for (let i = 0; i <= FREE_WRONG_GUESSES; i++) {
+      const signedIn = await login(info, info.token);
+      const cookie = signedIn.headers["set-cookie"]![0]!.split(";")[0]!;
+      const session = cookie.slice(cookie.indexOf("=") + 1);
+      sessions.get(session)!.expiresAt = Date.now() + 100;
+      const stream = await openEventStream(gateway, info, "", {
+        authorization: `Bearer ${session}`,
+      });
+      try {
+        await waitUntil(() => stream.aborted(), "Expired event stream remained open");
+      } finally {
+        stream.close();
+      }
+    }
+    expect((await bearer(info, info.token)).status).toBe(200);
+  });
+
+  test.each(["a".repeat(43), `okg_${"a".repeat(16)}.${"b".repeat(43)}`])(
+    "a durable token with a random-credential shape still has guess protection",
+    async (token) => {
+      const { info } = await startGateway({ env: { ORKESTRATOR_GATEWAY_TOKEN: token } });
+      // Same shape as the durable token: these candidates must still count.
+      for (let i = 0; i <= FREE_WRONG_GUESSES; i++) {
+        const candidate = token.slice(0, -2) + String(i).padStart(2, "0");
+        expect((await bearer(info, candidate)).status).toBe(401);
+      }
+      expect((await bearer(info, token)).status).toBe(429);
+    },
+  );
 
   test("guessing through the browser listener leaves the control listener alone", async () => {
     const { info } = await startGateway({ controlBindAddress: "127.0.0.1", controlPort: 0 });

@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createLogger } from "@orkestrator/protocol/logger";
-import { isLoopbackAddress, tokenMatches } from "./gateway-internals.js";
+import { tokenMatches } from "./gateway-internals.js";
 
 const log = createLogger("gateway");
 
@@ -12,9 +12,8 @@ export const FIRST_PAUSE_MS = 1_000;
 export const MAX_PAUSE_MS = 60_000;
 /** A listener that sees no new wrong value for this long starts again. */
 export const GUESS_MEMORY_MS = 15 * 60_000;
-/** Bounds on what is remembered; both are forgotten oldest first. */
+/** Bound on remembered wrong values; the oldest is forgotten first. */
 export const MAX_REMEMBERED_GUESSES = 256;
-export const MAX_PROVEN_PEERS = 64;
 
 export type GuessOutcome = "match" | "wrong" | "throttled";
 
@@ -36,13 +35,9 @@ interface ListenerGuesses {
  * While paused a new value is not compared at all, and the correct token is
  * refused like any other. It cannot be otherwise: if the right token still
  * passed, a guesser would simply read the answer off the one that succeeds and
- * the pause would slow nothing. That costs a real client something only until
- * it has proven itself, so what stays exempt during a pause is:
- *
- * - A connection that has already presented the token, which is how an open
- *   client keeps working.
- * - A non-loopback address that has presented it. Loopback is everyone behind
- *   Tailscale Serve, and a Docker Desktop container, so it proves nothing.
+ * the pause would slow nothing. Sessions and grants remain usable during a
+ * pause. Neither sockets nor peer addresses prove client identity: reverse
+ * proxies can pool connections and many clients can share an address.
  *
  * Three more choices keep a guesser or a stale client from locking people out:
  *
@@ -57,8 +52,6 @@ interface ListenerGuesses {
 export class GatewayCredentialThrottle {
   private readonly digestKey = randomBytes(32);
   private readonly listeners = new Map<number, ListenerGuesses>();
-  private provenSockets = new WeakSet<object>();
-  private readonly provenPeers = new Set<string>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -68,9 +61,8 @@ export class GatewayCredentialThrottle {
     const guesses = this.guessesFor(key);
     const digest = createHmac("sha256", this.digestKey).update(candidate).digest("base64");
     if (guesses?.remembered.has(digest)) return "wrong";
-    if (guesses && guesses.pausedUntil > this.now() && !this.proven(peer)) return "throttled";
+    if (guesses && guesses.pausedUntil > this.now()) return "throttled";
     if (tokenMatches(token, candidate)) {
-      this.noteProven(peer);
       return "match";
     }
     this.noteWrong(key, guesses, digest);
@@ -83,11 +75,9 @@ export class GatewayCredentialThrottle {
     return Math.max(1, Math.ceil((pausedUntil - this.now()) / 1000));
   }
 
-  /** A rotated token makes every remembered value and every proof meaningless. */
+  /** A rotated token makes every remembered wrong value meaningless. */
   reset(): void {
     this.listeners.clear();
-    this.provenSockets = new WeakSet();
-    this.provenPeers.clear();
   }
 
   private guessesFor(key: number): ListenerGuesses | undefined {
@@ -114,29 +104,4 @@ export class GatewayCredentialThrottle {
     guesses.pausedUntil = this.now() + Math.min(MAX_PAUSE_MS, FIRST_PAUSE_MS * 2 ** (over - 1));
     if (over === 1) log.warn("auth-guess.throttled", { port: key, wrong: guesses.wrong });
   }
-
-  private proven(peer: GuessPeer): boolean {
-    if (this.provenSockets.has(peer.socket)) return true;
-    const address = peerAddress(peer);
-    return address !== null && this.provenPeers.has(address);
-  }
-
-  private noteProven(peer: GuessPeer): void {
-    this.provenSockets.add(peer.socket);
-    const address = peerAddress(peer);
-    if (address === null) return;
-    // Re-adding moves it to the end, so the oldest is the one forgotten.
-    this.provenPeers.delete(address);
-    this.provenPeers.add(address);
-    if (this.provenPeers.size > MAX_PROVEN_PEERS) {
-      const oldest = this.provenPeers.values().next().value as string;
-      this.provenPeers.delete(oldest);
-    }
-  }
-}
-
-/** The peer's address when it can identify a client, which loopback cannot. */
-function peerAddress(peer: GuessPeer): string | null {
-  const address = peer.socket.remoteAddress?.replace(/^::ffff:/, "");
-  return address && !isLoopbackAddress(address) ? address : null;
 }

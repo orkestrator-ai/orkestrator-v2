@@ -336,6 +336,47 @@ test.each(["generation-changed", "access-expired"] as const)(
   },
 );
 
+test("a session-level error fails open streams before the socket finishes closing", async () => {
+  const ws = new EventEmitter() as EventEmitter & {
+    isOpen: boolean;
+    send: () => boolean;
+    start: () => void;
+    ping: () => void;
+    close: (code: number) => void;
+  };
+  ws.isOpen = true;
+  ws.send = () => true;
+  ws.start = () => {};
+  ws.ping = () => {};
+  ws.close = () => {};
+  const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
+    attachmentId: "att_test",
+    credential: "credential",
+    idleMs: 30_000,
+    onClosed: () => {},
+  });
+  const receive = (frame: unknown) => ws.emit("message", Buffer.from(JSON.stringify(frame)), false);
+  receive({
+    type: "ready",
+    serviceId: "service",
+    endpointGeneration: 1,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  await session.ready;
+  const opening = session.openStream(undefined, performance.now());
+  receive({ type: "open-ok", stream: 1 });
+  const stream = await opening;
+  const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
+
+  // No `close` event yet: the socket is still finishing when this frame arrives.
+  receive({ type: "error", error: previewError("access-expired") });
+
+  expect(stream.destroyed).toBe(true);
+  expect(previewErrorFromUnknown(await failed)?.category).toBe("access-expired");
+  expect(session.canOpen).toBe(false);
+  expect(session.size).toBe(0);
+});
+
 test("Node pull-mode reads replenish a fully buffered receive window", async () => {
   // Bun's stream implementation does not reproduce Node/Electron's _read timing.
   const build = await Bun.build({
@@ -358,13 +399,19 @@ test("Node pull-mode reads replenish a fully buffered receive window", async () 
   const session = { sendFrame: frame => credits.push(frame), cancel() {}, violation() { throw new Error("credit overflow"); } };
   const stream = new PreviewTunnelMuxStream(session, 1, 0);
   const windowBytes = 256 * 1024;
+  // One read() returns everything on Electron's Node 24 but one chunk on Node 26.
+  const drain = () => {
+    let bytes = 0;
+    for (let chunk = stream.read(); chunk !== null; chunk = stream.read()) bytes += chunk.length;
+    return bytes;
+  };
   for (let i = 0; i < 4; i++) stream.receive(Buffer.alloc(windowBytes / 4));
   assert.equal(stream.readableLength, windowBytes);
   assert.equal(credits.length, 0);
-  assert.equal(stream.read().length, windowBytes);
+  assert.equal(drain(), windowBytes);
   assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes);
   stream.receive(Buffer.alloc(windowBytes / 4));
-  assert.equal(stream.read().length, windowBytes / 4);
+  assert.equal(drain(), windowBytes / 4);
   assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes * 1.25);
   stream.destroy();
 }

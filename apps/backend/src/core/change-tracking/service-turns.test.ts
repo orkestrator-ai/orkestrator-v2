@@ -67,6 +67,67 @@ describe("turn and thread boundaries", () => {
     expect(h.events.some((e) => e.event === CHANGE_PROJECTION_CHANGED_EVENT)).toBe(true);
   });
 
+  test("a provisional pass whose tree did not move writes no measurement rows", async () => {
+    const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+    const requestId = "no-change";
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId,
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", requestId, "accepted");
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    const owner = h.service.registry.owner(identity!);
+    const counts = () => {
+      const db = h.database().db;
+      const n = (table: string) =>
+        (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+      return {
+        measurements: n("change_measurements"),
+        files: n("change_measurement_files"),
+        identities: n("change_diff_identities"),
+        selections: n("change_selections"),
+        outbox: n("change_outbox"),
+        references: n("change_references"),
+      };
+    };
+    const turnId = turnIdFor("env-1", "env-env-1:tab", requestId);
+    const turnKey = `turn-net/turn/${encodeURIComponent(turnId)}/live`;
+
+    writeFileSync(join(h.repo, "a.txt"), "one\nprovisional\n");
+    expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+    const first = h.service.projections.selectedMeasurement(turnKey)!;
+    const settled = counts();
+    const selection = h.service.ledger.selection(turnKey)!.revision;
+    const segment = h.service.ledger.turn(turnId)!.segment_id;
+    const latest = h.service.ledger.segment(segment)!.latest_live_snapshot_id;
+
+    // A hint fired and the tree came out the same, twice.
+    expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+    expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+    expect(counts()).toEqual(settled);
+    expect(h.service.ledger.selection(turnKey)!.revision).toBe(selection);
+    expect(h.service.ledger.segment(segment)!.latest_live_snapshot_id).toBe(latest);
+    expect(h.service.projections.selectedMeasurement(turnKey)!.measurementId).toBe(
+      first.measurementId,
+    );
+
+    // A real change publishes again, and the turn's end always publishes.
+    writeFileSync(join(h.repo, "a.txt"), "one\nmoved\nagain\n");
+    expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+    const moved = h.service.projections.selectedMeasurement(turnKey)!;
+    expect(moved.measurementId).not.toBe(first.measurementId);
+    await h.service.finalizeTurn({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId,
+    });
+    const final = turnMeasurement(h, requestId);
+    expect(final.finality).toBe("final");
+    expect(final.measurementId).not.toBe(moved.measurementId);
+  });
+
   test("H03: preexisting dirt with no writes is a zero turn delta", async () => {
     const h = harness();
     writeFileSync(join(h.repo, "a.txt"), "dirty\n");

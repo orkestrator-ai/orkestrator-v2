@@ -621,7 +621,11 @@ export class TurnBoundaryService {
    * Dirty-driven provisional net for a running turn: at most one capture per
    * spacing interval per worktree, no capture when nothing changed. One
    * capture serves every running turn on the physical worktree, including
-   * those of other environments aliasing it, each against its own start.
+   * those of other environments aliasing it, each against its own start. A
+   * turn whose tree did not move publishes nothing: every capture has a new
+   * snapshot id, so a publish would store the whole file list again. The
+   * unused snapshot row goes with retention's next sweep, and a turn's end
+   * always publishes.
    */
   async provisional(
     environmentId: string,
@@ -653,6 +657,8 @@ export class TurnBoundaryService {
       if (outcome.kind !== "published") return [];
       const advanced: string[] = [];
       for (const turn of turns) {
+        if (this.sameAsLatestLive(turn.segment_id, outcome.manifestId, outcome.consistency))
+          continue;
         this.deps.ledger.transaction(() => {
           this.deps.ledger.updateSegment(turn.segment_id, {
             latest_live_snapshot_id: outcome.snapshotId,
@@ -677,6 +683,17 @@ export class TurnBoundaryService {
     } finally {
       this.provisionalRunning.delete(key);
     }
+  }
+
+  private sameAsLatestLive(segmentId: string, manifestId: string, consistency: string): boolean {
+    const latest = this.snapshotRow(
+      this.deps.ledger.segment(segmentId)?.latest_live_snapshot_id ?? null,
+    );
+    return (
+      latest !== null &&
+      latest.tree_oid === manifestId &&
+      (JSON.parse(latest.consistency_json) as { state: string }).state === consistency
+    );
   }
 
   /**

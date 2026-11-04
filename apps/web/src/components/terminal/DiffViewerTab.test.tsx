@@ -378,6 +378,30 @@ describe("DiffViewerTab historical targets", () => {
     expect(screen.getByTestId("diff-viewer-counts").textContent).toBe("2 files+12 -3");
   });
 
+  test("a comparison past the row cap says it does not list every file", async () => {
+    const identity = comparisonIdentity("diff-capped");
+    handlers.changes_get_diff = () =>
+      diffBody(identity, [fileBody("a.ts", [line("add", "first")])], {
+        measurement: measurement({
+          scope: "turn-net",
+          completeness: {
+            files: "partial",
+            reasons: ["file-rows-capped"],
+            omittedFileCount: 500,
+          },
+          totals: { additions: exactCount(9), deletions: exactCount(0), changedFiles: 2_500 },
+        }),
+      });
+
+    render(<DiffViewerTab target={{ ...historical, title: "Turn 3" }} isActive />);
+
+    expect(await screen.findByText("+first")).toBeTruthy();
+    expect(screen.getByTestId("diff-viewer-files-capped").textContent).toBe(
+      "Too many changed files to list; the totals count them all",
+    );
+    expect(screen.queryByRole("button", { name: "Load more files" }) === null).toBe(true);
+  });
+
   test("requests the whitespace view without changing the canonical counts", async () => {
     const identity = fileIdentity("diff-h");
     handlers.changes_get_diff = (args) => {

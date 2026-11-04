@@ -44,12 +44,22 @@ function row(path: string, index: number, extra: Partial<ChangeFileRow> = {}): C
 }
 
 /** A fake of the `changes_*` commands: pages of `pageSize` rows per resource. */
-function changes(resources: Record<string, ChangeFileRow[]>, diffLines = 3) {
+function changes(
+  resources: Record<string, ChangeFileRow[]>,
+  diffLines = 3,
+  omittedRows: Record<string, number> = {},
+) {
   const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   const page = (key: string, offset: number, size: number) => {
     const rows = resources[key]!.slice(offset, offset + size);
     const next = offset + size < resources[key]!.length ? String(offset + size) : null;
-    return { rows, nextCursor: next, totalRows: resources[key]!.length, snapshotToken: `t:${key}` };
+    return {
+      rows,
+      nextCursor: next,
+      totalRows: resources[key]!.length,
+      snapshotToken: `t:${key}`,
+      ...(omittedRows[key] ? { omittedRows: omittedRows[key] } : {}),
+    };
   };
   const run = async (command: string, args: Record<string, unknown>) => {
     calls.push({ command, args });
@@ -209,6 +219,23 @@ describe("get_worker_changes reader", () => {
       expect.objectContaining({ path: "dir1/f303.ts" }),
     ]);
     expect(paged.diffs).toBeUndefined();
+  });
+
+  test("past the measurement's row cap a filter gives no match count and names what is unlisted", async () => {
+    const rows = [row("dir0/f0.ts", 0), row("dir1/f1.ts", 1)];
+    const { run } = changes({ [environmentKey]: rows, [uncommittedKey]: [] }, 3, {
+      [environmentKey]: 40,
+    });
+    const result = await readWorkerChanges(
+      run,
+      environment,
+      parseWorkerChangesOptions({ paths: ["dir0"], includeDiff: false }),
+      async () => "",
+    );
+    const sinceBase = result.sinceBase as Record<string, unknown>;
+    expect(sinceBase.matchingFiles).toBeUndefined();
+    expect(sinceBase.unlistedFiles).toBe(40);
+    expect(sinceBase.truncated).toBe(false);
   });
 
   test("single-file mode renders one whole diff and a missing measurement is reported", async () => {

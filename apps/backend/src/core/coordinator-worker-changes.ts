@@ -300,7 +300,8 @@ async function readMeasurement(
   return {
     projection,
     rows,
-    matched: complete ? matched : null,
+    // Rows past the measurement's cap were never read, so a match count would be short.
+    matched: complete && !projection.filePage?.omittedRows ? matched : null,
     scanCapped: !complete && scanned >= L.maxScannedRows,
   };
 }
@@ -337,6 +338,7 @@ function measurementSummary(
     truncated: more,
     ...(more && pageable ? { nextOffset: options.offset + shown.length } : {}),
     ...(measurement.scanCapped ? { scanCapped: true } : {}),
+    ...(projection.filePage?.omittedRows ? { unlistedFiles: projection.filePage.omittedRows } : {}),
   };
 }
 

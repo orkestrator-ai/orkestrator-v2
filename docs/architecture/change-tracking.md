@@ -301,7 +301,11 @@ then captures the end and publishes `turn-net` and `thread-net`. If the
 provider's terminal turn report still says `may-write`, or one of the turn's
 background tasks is still running, writers have not settled: the turn is
 published `interrupted` with a running-observation end, never silently final. While a turn runs, watcher hints drive provisional captures at
-most once per second locally (five remotely).
+most once per second locally (five remotely). A provisional capture whose tree
+and consistency match the segment's latest live snapshot publishes nothing:
+every capture has a new snapshot id, so a publish would store the whole file
+list again. Its snapshot row is unreferenced and goes with the retention sweep
+after `orphanGraceMs`. A turn's end always publishes.
 
 A thread moving to a different worktree lineage opens a new segment; segments
 are never compared to each other as one history.
@@ -341,6 +345,18 @@ Commands (`commands-registry-changes.ts`):
 Events: `change-projection-changed` carries `projection`, `deleted`, `reset`
 or `content-invalidated` (file bytes may have changed with equal counts).
 
+A measurement past the file row cap (see
+[Retention and backup](#retention-and-backup)) is `partial` with reason
+`file-rows-capped`, and its totals and `changedFiles` still count every file.
+`filePage.totalRows` is the rows stored, where paging ends, and
+`filePage.omittedRows` is the files with no row, which no cursor reaches. The
+field is optional, so an older client keeps paging to `totalRows` and reads the
+reason. A diff of a capped comparison ends at the same rows. An explicit
+current-file action on `environment-net` still opens a path with no row, with
+its unknown side marked. A Git scope refuses one with `not-found` and the
+`file-rows-capped` reason, because it cannot tell whether the path is in the
+scope.
+
 Clients format numbers and localize label keys (`apps/web/src/lib/changes/labels.ts`).
 They never count lines, choose evidence, sum pages or treat a missing count as
 zero. `tests/unit/change-tracking-boundaries.test.ts` enforces this for the
@@ -374,7 +390,7 @@ version `change-tracking-policy-v1`. Starting values: shared admission is the
 existing `git-docker-scan` pool (4 jobs, 1 per target) with at most 2 remote
 captures; 10 s foreground boundary; 100,000 candidates; 16 MiB/file and
 256 MiB/capture retained; 1 s/5 s provisional spacing; 250 ms live-body
-coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 1 GiB soft / 4 GiB hard snapshot
+coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 2,000 file rows per measurement; 1 GiB soft / 4 GiB hard snapshot
 storage; 90-day archived retention (a maximum subject to quota, not a
 guarantee). Changing a policy affects future work only.
 
@@ -386,6 +402,9 @@ after-state (content and mode) and issues a fenced, expiring token.
 re-checks each file at the executor immediately before writing (temporary
 sibling + rename), skips anything the user changed since, and records a
 partial outcome honestly. There is no blind reset and no all-or-nothing claim.
+A measurement past the file row cap takes its plan from the same two manifests
+(`compareManifests` with `pathsOnly`, which reads no blob), so a restore stays
+complete whatever the list shows, and an expired manifest refuses as before.
 
 ## Retention and backup
 
@@ -406,9 +425,19 @@ check skips objects it wrote or proved present in the same pass, unless
 `capture-orphan-fence.test.ts` races retention against a capture on both sides
 of the half-grace boundary.
 
-Measurements are pruned too. Every re-measurement stores its whole file list
-(an environment's net diff against its base can be thousands of files), so
-superseded ones would otherwise grow `change_measurement_files` without bound.
+File rows are bounded per measurement. `measurementFileRowCap` (2,000) applies
+when a snapshot pair, an environment scan or a Git scope is measured, never
+afterwards, because a sealed measurement is immutable. Past it the rows with
+text changes are kept first, then the rest, each by path. `status: unknown` rows
+count against the cap, and each dropped file adds to `omittedFileCount` unless
+the comparison already counted it there. The measurement id still digests the
+full list, so a change past the cap makes a new measurement. Rows an earlier
+build stored stay readable as complete and go when they are superseded, so no
+migration exists. Provider-reported lists (payloads, observations, legacy
+summaries) carry their own bound and are not capped here.
+
+Measurements are pruned too. Every re-measurement stores its file list again,
+so superseded ones would otherwise grow `change_measurement_files` without bound.
 `ChangeLedger.pruneSupersededMeasurements` deletes a measurement, its file
 rows and diff identities once two newer ones of the same owner and scope
 exist, unless a selection, an unexpired restore token or a running restore
@@ -416,10 +445,13 @@ still holds it. In-flight diff requests pin their measurement until the read
 finishes, including errors. Retired identities are removed before file rows
 are drained, so new requests cannot start reading a partially deleted measurement
 (a handoff naming a pruned one says "not retained"). Each publication prunes
-up to two of its owner's; the retention pass (two minutes after start, then hourly) prunes any backlog in batches of
-at most 256 file rows, including partial deletion of a large measurement,
-yielding between transactions. It then releases free pages in 128-page steps.
-The publication path has the same 256-row ceiling. Existing databases created
+up to two of its owner's, at most 256 file rows, inside its own transaction. When
+that does not finish, `ChangeRetentionService.drainOwner` drains the rest right
+after the commit: one drain per owner and scope, in batches of at most 256 file
+rows, yielding between transactions, and it stops at shutdown. Its failure is
+logged and left to the retention pass. The retention pass (two minutes after
+start, then hourly) prunes any other backlog the same way, then releases free
+pages in 128-page steps, whoever freed them. Existing databases created
 without incremental auto-vacuum reuse freed pages but do not physically shrink;
 backup headroom is calculated from live pages rather than allocated file size.
 
@@ -457,6 +489,29 @@ measurements for tuning, not guarantees:
 
 Warm captures reuse stat-identical blobs (`metadataReused` in coverage) and
 store only the changed blob and the new manifest.
+
+`--only=measurement-rows` runs one environment through the whole service on a
+temporary database: a turn adds `--bulk-files` files under one directory, runs 6
+provisional passes that move the tree and 6 that do not, and ends, and the
+environment scan then reports the bulk list 12 times with one path changing.
+One run each, on 2026-11-04 on a shared Linux host, against an export of the
+base commit `e198fd4a7` and the code with the row cap. Peak and "before the
+retention pass" include the backlog the hourly pass would clear.
+
+| Measure | 20,000 files, before | 20,000 files, after | 58,051 files, before | 58,051 files, after |
+| --- | --- | --- | --- | --- |
+| Measurements written | 38 | 26 | 36 | 24 |
+| File rows written | 760,026 | 52,000 | 2,089,860 | 48,000 |
+| Peak file rows kept | 751,834 | 12,000 | 2,082,180 | 12,000 |
+| Peak database file | 173.5 MiB | 3.5 MiB | 479.1 MiB | 3.5 MiB |
+| File rows after the retention pass | 120,004 | 12,000 | 348,310 | 12,000 |
+| Database file after the retention pass | 27.8 MiB | 3.1 MiB | 80.3 MiB | 3.1 MiB |
+
+The 12,000 is the bound: three owners (turn, segment, environment), two kept
+measurements each, 2,000 rows each. It does not grow with the bulk size. At
+58,051 files two provisional passes published nothing on either side; why was
+not investigated. Proof on a real busy profile is
+[todo 4960](../todo/cross-cutting/4960-measurement-rows-live-soak.md).
 
 A host capture does not read or hash a file whose stat stamp
 (size, mtime, ctime, inode) matches a *settled* stat-cache entry: one whose

@@ -71,13 +71,13 @@ function failNoticesFor(world: MailWorld, workers: MailActor[]) {
 }
 
 /**
- * What reached the coordinator's inbox. A drain can dispatch mid-assertion and
+ * The subjects in the coordinator's inbox. A drain can dispatch mid-assertion and
  * leave the main busy, so tests with more than one message read this rather
  * than what has been delivered so far.
  */
-async function inboxBodies(world: MailWorld, main: MailActor): Promise<string> {
+async function inboxSubjects(world: MailWorld, main: MailActor): Promise<string> {
   const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
-  return inbox.messages.map((message) => message.body).join("\n");
+  return inbox.messages.map((message) => message.subject).join("\n");
 }
 
 async function runPasses(world: MailWorld, passes: number): Promise<void> {
@@ -106,7 +106,7 @@ describe("one failing delegation", () => {
     spy.mockRestore();
     await world.coordinator.deliverDelegationWakes();
     expect((await delegation(world, failing)).wokenAt).toBeString();
-    expect(await inboxBodies(world, main)).toContain(failing.environmentId);
+    expect(await inboxSubjects(world, main)).toContain("Worker failing finished");
   });
 
   test("in one project does not stop another project's wakes", async () => {
@@ -194,7 +194,7 @@ describe("one failing delegation", () => {
     expect((await delegation(world, good)).state).toBe("completed");
     expect(release).toHaveBeenCalledTimes(1);
     release.mockRestore();
-    expect(await inboxBodies(world, main)).toContain(good.environmentId);
+    expect(await inboxSubjects(world, main)).toContain("Worker good finished");
   });
 
   test("does not stop a turn-end edge settling the worker's other tabs", async () => {
@@ -384,7 +384,8 @@ describe("a delegation that keeps failing", () => {
     const world = await create({ delegations: { wakeRetireMinMs: 0 } });
     const main = await world.main();
     const worker = await world.addEnvironment("worker", { launched: true });
-    await world.send(worker, main, "My report.");
+    const sent = await world.send(worker, main, "My report.");
+    expect(sent.placement).toBe("inject-held");
     await closeDelegation(world, worker);
     const spy = spyOn(world.storage, "releaseDelegationHeldAgentMail").mockRejectedValue(
       new Error("mail store fault"),
@@ -396,8 +397,9 @@ describe("a delegation that keeps failing", () => {
 
     await world.coordinator.reconcileWorkerDelegations();
     const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
-    const report = inbox.messages.find((message) => message.body === "My report.");
-    expect(report?.placement).not.toBe("inject-held");
+    const report = inbox.messages.find((message) => message.id === sent.id);
+    expect(report).toBeDefined();
+    expect(report!.placement).not.toBe("inject-held");
   });
 
   test("with messaging off it is held, not retired, and delivered when it returns", async () => {
@@ -493,7 +495,7 @@ describe("a delegation closing during a pass", () => {
 
     expect((await delegation(world, first)).wokenAt).toBeString();
     expect((await delegation(world, second)).wokenAt).toBeString();
-    expect(await inboxBodies(world, main)).toContain(second.environmentId);
+    expect(await inboxSubjects(world, main)).toContain("Worker second finished");
   });
 
   test("any number of calls during a pass run one more pass", async () => {

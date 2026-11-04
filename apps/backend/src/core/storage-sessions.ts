@@ -238,28 +238,29 @@ export class SessionsRepository {
     sessionType: SessionType,
   ): Promise<Session> {
     const session = createSessionObject(environmentId, containerId, tabId, sessionType);
-    const evicted = this.context.updateStore(
-      this.files.sessionsFile(),
-      (): Session[] => [],
-      (sessions) => {
-        const envSessions = sessions.filter(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
-        let oldest: Session | undefined;
-        if (envSessions.length >= MAX_SESSIONS_PER_ENVIRONMENT) {
-          oldest = envSessions
-            .filter((candidate) => candidate.status === "disconnected")
-            .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-          if (oldest) {
-            const index = sessions.findIndex((candidate) => candidate.id === oldest!.id);
-            if (index >= 0) sessions.splice(index, 1);
-          }
+    const file = this.files.sessionsFile();
+    // One transaction, so the order and the cap are decided against the rows
+    // this write commits next to, in this or another backend.
+    const evicted = this.context.database.transaction(() => {
+      const envSessions = this.context
+        .loadStoreRowsByOwner<Session>(file, environmentId)
+        .filter((candidate) => candidate.environmentId === environmentId);
+      session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
+      let oldest: Session | undefined;
+      if (envSessions.length >= MAX_SESSIONS_PER_ENVIRONMENT) {
+        oldest = envSessions
+          .filter((candidate) => candidate.status === "disconnected")
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+        if (oldest) {
+          this.context.updateStoreRow(file, oldest.id, () => ({
+            result: undefined,
+            delete: true,
+          }));
         }
-        sessions.push(session);
-        return oldest;
-      },
-    );
+      }
+      this.context.updateStoreRow(file, session.id, () => ({ result: undefined, value: session }));
+      return oldest;
+    });
     if (evicted) await this.repos.drafts.deleteSessionBuffer(evicted.id);
     this.context.changes.announce("session", environmentId);
     return session;

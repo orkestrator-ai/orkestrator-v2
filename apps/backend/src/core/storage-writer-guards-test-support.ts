@@ -59,7 +59,7 @@ type WriteKind = "whole" | "transactional";
  * each other and against deletion. A row transaction alone would not serialize
  * that read.
  */
-const LEASED_ROW_STORES = new Set(["environmentsFile"]);
+const LEASED_ROW_STORES = new Set(["environmentsFile", "projectsFile"]);
 
 /**
  * What a call of a member of a class the analysis does not read means. These

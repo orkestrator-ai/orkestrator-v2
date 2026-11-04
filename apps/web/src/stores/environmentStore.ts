@@ -6,6 +6,42 @@ import type { Environment, EnvironmentStatus, PrState } from "@/types";
 const sortByOrder = (environments: Environment[]): Environment[] =>
   [...environments].sort((a, b) => a.order - b.order);
 
+/**
+ * A newer reading of `previous` that keeps every value that did not change, and
+ * `previous` itself when nothing did. Snapshots arrive as freshly decoded
+ * objects, so without this one changed field gives every environment in the
+ * project, and every nested object in it, a new identity, and each subscriber
+ * selecting any of them re-renders for a change it does not read.
+ */
+function reuseUnchangedFields(previous: Environment | undefined, next: Environment): Environment {
+  if (!previous || previous === next) return next;
+  const before = previous as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const keys = Object.keys(after);
+  let identical = keys.length === Object.keys(before).length;
+  const reused: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (deepEqualJson(before[key], after[key])) {
+      reused[key] = before[key];
+    } else {
+      reused[key] = after[key];
+      identical = false;
+    }
+  }
+  return identical ? previous : (reused as unknown as Environment);
+}
+
+function reuseUnchangedEnvironments(
+  previous: readonly Environment[],
+  next: readonly Environment[],
+): Environment[] {
+  const byId = new Map(previous.map((environment) => [environment.id, environment]));
+  return next.map((environment) => reuseUnchangedFields(byId.get(environment.id), environment));
+}
+
+const sameEnvironments = (a: readonly Environment[], b: readonly Environment[]): boolean =>
+  a.length === b.length && a.every((environment, index) => environment === b[index]);
+
 interface EnvironmentState {
   environments: Environment[];
   isLoading: boolean;
@@ -40,20 +76,19 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   error: null,
   deletingEnvironments: new Set<string>(),
 
-  setEnvironments: (environments) => set({ environments: sortByOrder(environments) }),
+  setEnvironments: (environments) =>
+    set((state) => {
+      const sorted = sortByOrder(reuseUnchangedEnvironments(state.environments, environments));
+      return sameEnvironments(state.environments, sorted) ? state : { environments: sorted };
+    }),
 
   mergeEnvironmentsForProject: (projectId, newEnvironments) =>
     set((state) => {
       const current = state.environments.filter(
         (environment) => environment.projectId === projectId,
       );
-      const sorted = sortByOrder(newEnvironments);
-      if (
-        current.length === sorted.length &&
-        sorted.every((environment, index) => deepEqualJson(environment, current[index]))
-      ) {
-        return state;
-      }
+      const sorted = sortByOrder(reuseUnchangedEnvironments(current, newEnvironments));
+      if (sameEnvironments(current, sorted)) return state;
       return {
         environments: sortByOrder([
           ...state.environments.filter((environment) => environment.projectId !== projectId),
@@ -88,7 +123,9 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
       );
       if (!changed) return state;
       const environments = state.environments.map((environment) =>
-        environment.id === environmentId ? { ...environment, ...updates } : environment,
+        environment.id === environmentId
+          ? reuseUnchangedFields(environment, { ...environment, ...updates })
+          : environment,
       );
       return {
         environments:

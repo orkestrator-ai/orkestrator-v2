@@ -29,7 +29,7 @@ BOOT_PHASE=""
 BOOT_FAILURE_CODE=""
 
 # Portable input contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY staged-inputs=4
+# ORKESTRATOR_CAPABILITY staged-inputs=5
 #
 # Agent configuration and credentials arrive only at the read-only mount
 # points below (/claude-config, /codex-home, /opencode-*, /grok-*, /pi-config,
@@ -37,7 +37,9 @@ BOOT_FAILURE_CODE=""
 # this script copies a bounded allowlist from each. Version 2 adds
 # /cursor-config (Cursor's mcp.json only). Version 3 reads a mount node cannot
 # open (rootless Docker) from the copy the root entrypoint relayed
-# (staged_input_path). Version 4 adds /agents-skills (~/.agents/skills). A backend
+# (staged_input_path). Version 4 adds /agents-skills (~/.agents/skills). Version 5
+# leaves an input alone when copying it would change nothing, and removes what an
+# earlier boot imported once it leaves the mounts (import_agent_input). A backend
 # that sees this capability stages exactly that allowlist for enabled
 # providers and binds the staged copies instead of whole host agent homes
 # (apps/backend/src/core/portable-inputs.ts); the two lists must stay in step.
@@ -359,6 +361,7 @@ publish_claude_credentials() {
 }
 
 copy_agent_file() {
+    AGENT_FILE_PUBLISHED=false
     local source_root="$1"
     # A relayed copy of a staged mount stands in for it (staged_input_path).
     case "$source_root" in
@@ -434,6 +437,11 @@ copy_agent_file() {
         ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
         rm -f "$temporary_path" 2>/dev/null || true
         agent_copy_warn "$relative_path" "Failed to copy $label file"
+    else
+        AGENT_FILE_PUBLISHED=true
+        if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
+            agent_input_record_copy "$source_root" "$relative_path"
+        fi
     fi
 }
 
@@ -576,6 +584,10 @@ copy_agent_directory() {
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
         agent_copy_warn "$display_path" "Failed to copy $label directory"
+    else
+        if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
+            agent_input_record_copy "$source_root" "$relative_path"
+        fi
     fi
 }
 
@@ -657,6 +669,337 @@ copy_agent_directory_entries() {
     done < <(find -P "$source_path" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
 
+# Copying an unchanged input again costs a dozen processes per skill and rewrites
+# the container's layer on every start, so each non-login input is stamped.
+#
+# The stamp is not what makes skipping safe. The backend rewrites a revision in
+# place (the logins before every start, a revocation's scrub, a refreshed MCP
+# default), so neither the revision label nor a file's time says what changed,
+# and the relay's tar drops sub-second times. An input is left alone only when its
+# current content hashes the same as the stamp AND the home still holds exactly
+# those bytes at real, unlinked paths: the one case where the copy would change
+# nothing. Anything else, including a missing, damaged or forged stamp, runs the
+# unchanged copy helpers with their link and size rules. A copy that warned is
+# not stamped as complete, so it runs again and warns again.
+#
+# What the stamp adds is memory: the paths an earlier boot imported, so that one
+# that has left the mounts leaves the home too. Paths the container made itself
+# are never listed. The home is the workload's to write, so a stamp is not a
+# security boundary, and it holds names and digests rather than contents. It
+# lives in the container layer, so a new runtime starts with a full copy.
+#
+# Logins never come through here (forget_unchanged_agent_login).
+agent_input_stamp() {
+    local destination_root="$1"
+    local relative_path="$2"
+    local directory="$HOME/.orkestrator-inputs"
+    local key="$destination_root/$relative_path"
+
+    if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+        rm -f "$directory" 2>/dev/null || return 1
+    fi
+    if [ ! -d "$directory" ]; then
+        mkdir -m 700 "$directory" 2>/dev/null || return 1
+    fi
+    key="${key//%/%25}"
+    AGENT_INPUT_STAMP="$directory/${key//\//%2F}"
+    if [ -L "$AGENT_INPUT_STAMP" ]; then
+        rm -f "$AGENT_INPUT_STAMP" 2>/dev/null || return 1
+    fi
+}
+
+# An input that cannot be seen because node cannot open its mount (a relay that
+# failed) is not an input that was removed. Walks up to the nearest path that
+# exists; node's own relayed copy of it always counts as readable.
+agent_input_source_readable() {
+    local path="$1"
+    local relayed
+
+    while [ -n "$path" ]; do
+        relayed="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$path"
+        if [ -e "$relayed" ] && [ ! -L "$relayed" ]; then
+            return 0
+        fi
+        if [ -e "$path" ]; then
+            [ -r "$path" ] && [ -x "$path" ]
+            return
+        fi
+        path="${path%/*}"
+    done
+    return 0
+}
+
+# Writes one input's listing to `paths` (NUL-separated, one type letter then the
+# path) and content digests to `sums` (sha256sum's own format, so a name holding
+# a newline survives). Fails on anything it could not read.
+agent_input_manifest() {
+    local source_root="$1"
+    local relative_path="$2"
+    local excluded_entry="$3"
+    local output="$4"
+
+    (
+        set -o pipefail
+        export LC_ALL=C
+        cd "$source_root" || exit 1
+        find -P "$relative_path" -path "$relative_path/$excluded_entry" -prune \
+            -o -printf '%y%p\0' | sort -z > "$output/paths" || exit 1
+        find -P "$relative_path" -path "$relative_path/$excluded_entry" -prune \
+            -o -type f -print0 | sort -z | xargs -0 -r sha256sum -- > "$output/sums"
+    ) 2>/dev/null
+}
+
+# Whether the home holds this listing's bytes at real paths. Every directory on
+# the way is listed, so a linked parent fails here too. Other entries beside
+# them (a CLI's own state, OpenCode's node_modules) are not the input's business.
+agent_input_home_matches() {
+    local destination_root="$1"
+    local relative_path="$2"
+    local manifest="$3"
+    local entry
+    local path
+
+    if agent_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        return 1
+    fi
+    while IFS= read -r -d '' entry; do
+        path="$destination_root/${entry:1}"
+        case "$entry" in
+            d*) { [ -d "$path" ] && [ ! -L "$path" ]; } || return 1 ;;
+            f*) { [ -f "$path" ] && [ ! -L "$path" ]; } || return 1 ;;
+            *) return 1 ;;
+        esac
+    done < "$manifest/paths"
+    [ -s "$manifest/sums" ] || return 0
+    (
+        cd "$destination_root" && LC_ALL=C sha256sum --check --status "$manifest/sums"
+    ) 2>/dev/null
+}
+
+# Copy helpers publish ownership only after a successful copy. The per-entry
+# walker can therefore retain successes without claiming a refused sibling.
+agent_input_record_copy() {
+    [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ] || return 0
+    (cd "$1" && find -P "$2" -printf '%y%p\0') >> "$AGENT_INPUT_COPIED_PATHS" ||
+        agent_copy_warn "$2" "Failed to record copied input; will retry"
+}
+
+# Removes what the previous listing imported and the current one no longer has:
+# files first, then each directory if that left it empty, deepest first. The
+# listing is workload-writable, so a path through a link or `..` is refused.
+agent_input_forget_removed() {
+    local previous="$1"
+    local current="$2"
+    local destination_root="$3"
+    local entry
+    local path
+    local failed=0
+
+    while IFS= read -r -d '' entry; do
+        path="${entry:1}"
+        case "$entry" in
+            f*)
+                if agent_destination_path_has_symlink "$destination_root" "$path"; then
+                    continue
+                fi
+                if [ ! -d "$destination_root/$path" ] || [ -L "$destination_root/$path" ]; then
+                    if ! rm -f -- "$destination_root/$path" 2>/dev/null; then
+                        failed=1
+                        agent_copy_warn "$path" "Failed to remove imported input; will retry"
+                    fi
+                fi
+                ;;
+        esac
+    done < <(LC_ALL=C comm -z -23 --nocheck-order "$previous" "$current" 2>/dev/null || true)
+    while IFS= read -r -d '' entry; do
+        path="${entry:1}"
+        case "$entry" in
+            d*)
+                if ! agent_destination_path_has_symlink "$destination_root" "$path"; then
+                    rmdir -- "$destination_root/$path" 2>/dev/null || true
+                fi
+                ;;
+        esac
+    done < <(LC_ALL=C comm -z -23 --nocheck-order "$previous" "$current" 2>/dev/null | LC_ALL=C sort -rz || true)
+    return "$failed"
+}
+
+# Runs one copy helper for one input, unless that would change nothing:
+#   import_agent_input <copy helper> <mount> <destination root> <relative path> <helper's other arguments>
+import_agent_input() {
+    local helper="$1"
+    local mount="$2"
+    local destination_root="$3"
+    local relative_path="$4"
+    shift 4
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    local source_root="$mount"
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
+    local source_path="$source_root/$relative_path"
+    local destination_path="$destination_root/$relative_path"
+    local excluded_entry=""
+    local skipped_before="${AGENT_COPY_SKIPPED:-}"
+    local fresh
+
+    if ! agent_input_stamp "$destination_root" "$relative_path"; then
+        "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+        return 0
+    fi
+    local stamp="$AGENT_INPUT_STAMP"
+
+    # Gone from the mounts. The helper still runs, for its warning on a link.
+    if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
+        if agent_input_source_readable "$mount" && [ -e "$stamp" ]; then
+            if [ -f "$stamp" ]; then
+                if ! agent_destination_path_has_symlink "$destination_root" "$relative_path" &&
+                    [ ! -d "$destination_path" ]; then
+                    if ! rm -f -- "$destination_path" 2>/dev/null; then
+                        agent_copy_warn "$relative_path" "Failed to remove imported input; will retry"
+                        return 0
+                    fi
+                fi
+            elif [ -f "$stamp/paths" ]; then
+                agent_input_forget_removed "$stamp/paths" /dev/null "$destination_root" || return 0
+            fi
+            rm -rf -- "$stamp" 2>/dev/null || true
+        fi
+        "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+        return 0
+    fi
+
+    # A single file costs less to compare than to list and hash, and its stamp
+    # only needs to say that it was imported.
+    if [ "$helper" = copy_agent_file ]; then
+        if [ -f "$source_path" ] && [ -f "$destination_path" ] && [ ! -L "$destination_path" ] &&
+            ! agent_source_path_has_symlink "$source_root" "$relative_path" &&
+            ! agent_destination_path_has_symlink "$destination_root" "$relative_path" &&
+            cmp -s -- "$source_path" "$destination_path"; then
+            AGENT_INPUTS_UNCHANGED=$((${AGENT_INPUTS_UNCHANGED:-0} + 1))
+        else
+            "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+            AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
+        fi
+        if [ "${AGENT_COPY_SKIPPED:-}" = "$skipped_before" ]; then
+            { : > "$stamp"; } 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    if [ "$helper" = copy_agent_directory_entries ]; then
+        excluded_entry="${2:-}"
+    fi
+    fresh="$stamp.fresh"
+    rm -rf -- "$fresh" 2>/dev/null || true
+    # In doubt: copy, and keep what the old stamp remembers for the next boot.
+    if ! mkdir -m 700 "$fresh" 2>/dev/null ||
+        ! agent_input_manifest "$source_root" "$relative_path" "$excluded_entry" "$fresh"; then
+        rm -rf -- "$fresh" 2>/dev/null || true
+        "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+        AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
+        return 0
+    fi
+    if [ -f "$stamp/sums" ] && [ ! -L "$stamp/sums" ] && [ ! -L "$stamp/paths" ] &&
+        cmp -s -- "$fresh/paths" "$stamp/paths" && cmp -s -- "$fresh/sums" "$stamp/sums" &&
+        agent_input_home_matches "$destination_root" "$relative_path" "$fresh"; then
+        rm -rf -- "$fresh" 2>/dev/null || true
+        AGENT_INPUTS_UNCHANGED=$((${AGENT_INPUTS_UNCHANGED:-0} + 1))
+        return 0
+    fi
+    if [ -d "$stamp" ] && [ -f "$stamp/paths" ] && [ ! -L "$stamp/paths" ]; then
+        if ! agent_input_forget_removed "$stamp/paths" "$fresh/paths" "$destination_root"; then
+            # Keep unresolved removals in the ownership union, and force a retry.
+            if ! cp "$stamp/paths" "$fresh/pending" 2>/dev/null; then
+                rm -rf -- "$fresh" 2>/dev/null || true
+                "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+                return 0
+            fi
+        fi
+    fi
+    local AGENT_INPUT_COPIED_PATHS="$fresh/copied"
+    if ! { : > "$AGENT_INPUT_COPIED_PATHS"; } 2>/dev/null; then
+        rm -rf -- "$fresh" 2>/dev/null || true
+        AGENT_INPUT_COPIED_PATHS=""
+        "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+        return 0
+    fi
+    "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+    AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
+    if ! (
+        # Persistent metadata is optional. Never follow linked stamp leaves.
+        if [ -s "$fresh/copied" ]; then
+            printf 'd%s\0' "$relative_path" >> "$fresh/copied" || exit 1
+        fi
+        if [ -f "$stamp/paths" ] && [ ! -L "$stamp/paths" ]; then
+            LC_ALL=C comm -z -12 --nocheck-order "$stamp/paths" "$fresh/paths" > "$fresh/retained" || exit 1
+        fi
+        : >> "$fresh/retained" &&
+        : >> "$fresh/pending" &&
+        LC_ALL=C sort -zu "$fresh/copied" "$fresh/retained" "$fresh/pending" > "$fresh/owned" &&
+        mv "$fresh/owned" "$fresh/paths" &&
+        rm -f "$fresh/copied" "$fresh/retained" "$fresh/pending" || exit 1
+        if [ "${AGENT_COPY_SKIPPED:-}" != "$skipped_before" ]; then
+            rm -f -- "$fresh/sums" || exit 1
+        fi
+    ) 2>/dev/null; then
+        agent_copy_warn "$relative_path" "Failed to record input ownership; will retry"
+        rm -rf -- "$fresh" 2>/dev/null || true
+        return 0
+    fi
+    rm -rf -- "$stamp" 2>/dev/null || true
+    mv -- "$fresh" "$stamp" 2>/dev/null || rm -rf -- "$fresh" 2>/dev/null || true
+}
+
+# Logins are imported on every start and never skipped: the entrypoint and the
+# backend's pushes both rewrite the home's copy, so it rarely matches the mount,
+# and a login must never outlive its source on a stamp's say-so.
+#
+# A login gone from the mount (a host sign-out, a revocation) must still leave
+# the home, but only the copy this script put there. The digest recorded after
+# the last import tells that copy from one the backend pushed since, or one the
+# user signed in to here, and those stay with their owners: the backend's push,
+# merge and sign-out paths, which race this script and must keep winning.
+forget_unchanged_agent_login() {
+    local destination_root="$1"
+    local relative_path="$2"
+    local destination_path="$destination_root/$relative_path"
+
+    agent_input_stamp "$destination_root" "$relative_path" || return 0
+    local stamp="$AGENT_INPUT_STAMP"
+    [ -f "$stamp" ] || return 0
+    # An empty stamp names no digest: nothing can match it.
+    if [ -s "$stamp" ] && ! agent_destination_path_has_symlink "$destination_root" "$relative_path" &&
+        [ -f "$destination_path" ] && [ ! -L "$destination_path" ] &&
+        [ "$(sha256sum < "$destination_path" 2>/dev/null)" = "$(cat "$stamp" 2>/dev/null)" ]; then
+        rm -f -- "$destination_path" 2>/dev/null || true
+    fi
+    rm -f -- "$stamp" 2>/dev/null || true
+}
+
+# Call once the login is restricted, so the digest is of what the home now holds.
+remember_agent_login() {
+    [ "${4:-false}" = true ] || return 0
+    local source_root="$1"
+    local destination_root="$2"
+    local relative_path="$3"
+    local destination_path="$destination_root/$relative_path"
+    # A relayed copy of a staged mount stands in for it (staged_input_path).
+    case "$source_root" in
+        /*) if [ -e "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ] && [ ! -L "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root" ]; then
+                source_root="${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}$source_root"
+            fi ;;
+    esac
+
+    [ -f "$source_root/$relative_path" ] || return 0
+    [ -f "$destination_path" ] && [ ! -L "$destination_path" ] || return 0
+    agent_destination_path_has_symlink "$destination_root" "$relative_path" && return 0
+    agent_input_stamp "$destination_root" "$relative_path" || return 0
+    { sha256sum < "$destination_path" > "$AGENT_INPUT_STAMP"; } 2>/dev/null || rm -f -- "$AGENT_INPUT_STAMP" 2>/dev/null || true
+}
+
 log_progress "=== Claude Code Environment Initializing ==="
 
 # The root entrypoint (network-policy-entrypoint.sh) ran the firewall step
@@ -730,7 +1073,7 @@ if [ -d /claude-config ]; then
         CLAUDE.md \
         settings.local.json
     do
-        copy_agent_file /claude-config "$HOME/.claude" "$file" Claude
+        import_agent_input copy_agent_file /claude-config "$HOME/.claude" "$file" Claude
     done
 
     # User-authored extensions. Routed through the shared helpers so a symlinked
@@ -745,7 +1088,7 @@ if [ -d /claude-config ]; then
         ide \
         plugins
     do
-        copy_agent_directory_entries /claude-config "$HOME/.claude" "$dir" Claude
+        import_agent_input copy_agent_directory_entries /claude-config "$HOME/.claude" "$dir" Claude
     done
 
     log_progress "  Config files copied"
@@ -762,6 +1105,11 @@ fi
 #
 # This MUST happen AFTER copying host files so a real credential always beats
 # whatever `/claude-config` happened to contain.
+(
+# Shared with backend credential publication. Keep cleanup, import and digest
+# attribution in one transaction; descriptor closes even on an early failure.
+flock -x 9
+forget_unchanged_agent_login "$HOME/.claude" .credentials.json
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]; then
     if publish_claude_credentials "" "$CLAUDE_OAUTH_CREDENTIALS"; then
         log_progress "Injected credentials from CLAUDE_OAUTH_CREDENTIALS"
@@ -776,6 +1124,8 @@ if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]
 # "Not logged in" symptom this whole path exists to fix. Whoever wrote a
 # non-empty regular credential first wins, and the sync re-runs on every start
 # anyway. A destination symlink is not a credential: treat it as absent.
+# forget_unchanged_agent_login above leaves such a credential alone unless it is
+# byte for byte what this script imported on an earlier boot.
 elif [ -f "$HOME/.claude/.credentials.json" ] && [ ! -L "$HOME/.claude/.credentials.json" ] && [ -s "$HOME/.claude/.credentials.json" ]; then
     chmod 600 "$HOME/.claude/.credentials.json"
     echo "Credential already present (backend sync); leaving it in place"
@@ -787,6 +1137,7 @@ else
     fi
     if [ -f "$mounted_credentials" ] && [ ! -L "$mounted_credentials" ]; then
         if publish_claude_credentials "$mounted_credentials"; then
+            remember_agent_login /claude-config "$HOME/.claude" .credentials.json true
             echo "Copied credentials from host"
         else
             echo "No credential on the mount; awaiting the backend credential sync"
@@ -795,6 +1146,8 @@ else
         echo "No credential on the mount; awaiting the backend credential sync"
     fi
 fi
+
+) 9> "$HOME/.claude/.credentials.json.orkestrator-lock"
 
 # Ensure directories Claude Code needs to write to exist
 mkdir -p "$HOME/.claude/debug"
@@ -1017,7 +1370,7 @@ if [ -d /opencode-config ]; then
     # built for the host platform. Mach-O binaries from a macOS host cannot run
     # in this Linux container, exactly as with Codex's plugins/.plugin-appserver.
     # OpenCode reinstalls what it needs for Linux on first use.
-    copy_agent_directory_entries \
+    import_agent_input copy_agent_directory_entries \
         /opencode-config "$HOME/.config/opencode" "." OpenCode node_modules
     report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
@@ -1036,10 +1389,13 @@ if [ -d /opencode-data ]; then
     # Snapshots are keyed by the worktree path; of storage/ only the legacy
     # migration index is needed, and an empty storage/ recreates it. Copying
     # the host seed cost bytes on every start and offered nothing a container uses.
+    forget_unchanged_agent_login "$HOME/.local/share/opencode" auth.json
     copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode
+    login_published="$AGENT_FILE_PUBLISHED"
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.local/share/opencode/auth.json" opencode OpenCode /opencode-data auth.json
+    remember_agent_login /opencode-data "$HOME/.local/share/opencode" auth.json "$login_published"
     report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
@@ -1050,7 +1406,7 @@ fi
 # Explicitly inject model.json if available
 # Prompt history, frecency, locks, and arbitrary state are not portable inputs.
 # model.json is the one preference file a fresh container needs.
-copy_agent_file /opencode-state "$HOME/.local/state/opencode" "model.json" OpenCode
+import_agent_input copy_agent_file /opencode-state "$HOME/.local/state/opencode" "model.json" OpenCode
 chmod 600 "$HOME/.local/state/opencode/model.json" 2>/dev/null || true
 report_agent_copy_skips OpenCode
 
@@ -1072,8 +1428,11 @@ if [ -d /codex-home ]; then
     # recursive copy made every container startup wait on all of that state and
     # could outlive workspace-setup.sh's initialization timeout. Copy only the
     # portable inputs a fresh Codex environment needs.
+    forget_unchanged_agent_login "$HOME/.codex" auth.json
+    copy_agent_file /codex-home "$HOME/.codex" auth.json Codex
+    login_published="$AGENT_FILE_PUBLISHED"
+
     for file in \
-        auth.json \
         config.toml \
         AGENTS.md \
         hooks.json \
@@ -1082,7 +1441,7 @@ if [ -d /codex-home ]; then
         cloud-config-bundle-cache.json \
         cloud-requirements-cache.json
     do
-        copy_agent_file /codex-home "$HOME/.codex" "$file" Codex
+        import_agent_input copy_agent_file /codex-home "$HOME/.codex" "$file" Codex
     done
 
     # Preserve user-authored extensions and the platform-neutral plugin cache.
@@ -1094,13 +1453,14 @@ if [ -d /codex-home ]; then
         vendor_imports \
         plugins/cache
     do
-        copy_agent_directory /codex-home "$HOME/.codex" "$dir" Codex
+        import_agent_input copy_agent_directory /codex-home "$HOME/.codex" "$dir" Codex
     done
 
-    copy_agent_directory_entries /codex-home "$HOME/.codex" skills Codex
+    import_agent_input copy_agent_directory_entries /codex-home "$HOME/.codex" skills Codex
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.codex/auth.json" codex Codex
+    remember_agent_login /codex-home "$HOME/.codex" auth.json "$login_published"
     report_agent_copy_skips Codex
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
@@ -1116,15 +1476,18 @@ log_progress "Setting up Grok configuration..."
 mkdir -p "$HOME/.grok" "$HOME/.config/grok"
 
 if [ -d /grok-home ]; then
+    forget_unchanged_agent_login "$HOME/.grok" auth.json
+    copy_agent_file /grok-home "$HOME/.grok" auth.json Grok
+    login_published="$AGENT_FILE_PUBLISHED"
+
     for file in \
         xai-api-key \
-        auth.json \
         config.toml \
         trusted_folders.toml \
         agent_id \
         models_cache.json
     do
-        copy_agent_file /grok-home "$HOME/.grok" "$file" Grok
+        import_agent_input copy_agent_file /grok-home "$HOME/.grok" "$file" Grok
     done
 
     for dir in \
@@ -1132,12 +1495,13 @@ if [ -d /grok-home ]; then
         skills \
         commands
     do
-        copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
+        import_agent_input copy_agent_directory_entries /grok-home "$HOME/.grok" "$dir" Grok
     done
 
     chmod 600 "$HOME/.grok/xai-api-key" 2>/dev/null || true
     chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.grok/auth.json" grok Grok
+    remember_agent_login /grok-home "$HOME/.grok" auth.json "$login_published"
 fi
 
 if [ -d /grok-config ]; then
@@ -1146,7 +1510,7 @@ if [ -d /grok-config ]; then
     # same limits applied to the primary agent homes. The mount is copied whole,
     # so pass the agent-relative name explicitly: a skip reported as "." would
     # tell the user nothing about what their container is missing.
-    copy_agent_directory /grok-config "$HOME/.config/grok" "." Grok ".config/grok"
+    import_agent_input copy_agent_directory /grok-config "$HOME/.config/grok" "." Grok ".config/grok"
 fi
 
 report_agent_copy_skips Grok
@@ -1159,17 +1523,22 @@ log_progress "Setting up Pi configuration..."
 mkdir -p "$HOME/.pi/agent"
 
 # Under rootless Docker node cannot traverse the /pi-config mount itself, so
-# its relayed copy is checked too; the copy helpers read from that copy.
-if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config/agent" ]; then
+# its relayed copy is checked too; the copy helpers read from that copy. The
+# test is on the mount, not its `agent` directory: a revocation empties the
+# mount, and what was imported from it still has to leave the home.
+if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config" ]; then
+    forget_unchanged_agent_login "$HOME/.pi/agent" auth.json
+    copy_agent_file /pi-config/agent "$HOME/.pi/agent" auth.json Pi
+    login_published="$AGENT_FILE_PUBLISHED"
+
     for file in \
-        auth.json \
         models.json \
         settings.json \
         mcp.json \
         SYSTEM.md \
         APPEND_SYSTEM.md
     do
-        copy_agent_file /pi-config/agent "$HOME/.pi/agent" "$file" Pi
+        import_agent_input copy_agent_file /pi-config/agent "$HOME/.pi/agent" "$file" Pi
     done
 
     # User-authored resources only. Sessions are deliberately not imported: they
@@ -1181,11 +1550,12 @@ if [ -d /pi-config/agent ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-i
         extensions \
         themes
     do
-        copy_agent_directory_entries /pi-config/agent "$HOME/.pi/agent" "$dir" Pi
+        import_agent_input copy_agent_directory_entries /pi-config/agent "$HOME/.pi/agent" "$dir" Pi
     done
 
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.pi/agent/auth.json" pi Pi /pi-config/agent auth.json
+    remember_agent_login /pi-config/agent "$HOME/.pi/agent" auth.json "$login_published"
     # The bridge's MCP client reads user servers from here; definitions can
     # carry literal header or environment values, so keep it owner-only.
     if [ -f "$HOME/.pi/agent/mcp.json" ] && [ ! -L "$HOME/.pi/agent/mcp.json" ]; then
@@ -1204,7 +1574,7 @@ log_progress "Setting up Cursor configuration..."
 mkdir -p "$HOME/.cursor"
 
 if [ -d /cursor-config ]; then
-    copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor
+    import_agent_input copy_agent_file /cursor-config "$HOME/.cursor" mcp.json Cursor
     # Definitions can carry literal header or environment values, so keep the
     # copy owner-only.
     if [ -f "$HOME/.cursor/mcp.json" ] && [ ! -L "$HOME/.cursor/mcp.json" ]; then
@@ -1223,10 +1593,13 @@ log_progress "Cursor configuration ready"
 if [ -d /agents-skills ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/agents-skills" ]; then
     log_progress "Setting up shared skills..."
     mkdir -p "$HOME/.agents/skills"
-    copy_agent_directory_entries /agents-skills "$HOME/.agents/skills" "." "Shared skills"
+    import_agent_input copy_agent_directory_entries /agents-skills "$HOME/.agents/skills" "." "Shared skills"
     report_agent_copy_skips "Shared skills"
     log_progress "Shared skills ready"
 fi
+
+# Counts only: input names are the user's and stay out of the logs.
+log_progress "Agent inputs: ${AGENT_INPUTS_UNCHANGED:-0} unchanged, ${AGENT_INPUTS_COPIED:-0} copied"
 
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then

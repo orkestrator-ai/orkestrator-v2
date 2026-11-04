@@ -81,10 +81,10 @@ test.each([false, true])(
           };
         const internal = service as unknown as {
           interactions: { forgetPendingInteractions(key: string): void };
-          projections: { refreshProjection(input: unknown, force: boolean): Promise<unknown> };
+          projections: { refreshProjectionState(input: unknown): Promise<unknown> };
         };
         const forget = spyOn(internal.interactions, "forgetPendingInteractions");
-        const refresh = spyOn(internal.projections, "refreshProjection");
+        const refresh = spyOn(internal.projections, "refreshProjectionState");
         const result = await service.approveProjectionInteractionAndRemember({
           ...identity,
           interactionId: "approval",
@@ -92,7 +92,7 @@ test.each([false, true])(
         });
         expect(result.outcome.result).toBe("applied");
         expect(forget).toHaveBeenCalledTimes(1);
-        expect(refresh).toHaveBeenCalledWith(expect.objectContaining(identity), true);
+        expect(refresh).toHaveBeenCalledWith(expect.objectContaining(identity));
         expect(Boolean(result.ruleSaveWarning)).toBe(saveFailure);
         expect(resolve).toHaveBeenCalledTimes(1);
         expect((await service.getProjection(identity))?.interactions).toEqual([]);

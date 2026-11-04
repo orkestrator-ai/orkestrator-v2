@@ -1,3 +1,4 @@
+import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
@@ -170,6 +171,9 @@ const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
 
+const PipelineWorkerMailFixture = lazy(async () => ({
+  default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -1857,6 +1861,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/pipeline-worker-mail") {
+    return (
+      <Suspense fallback={null}>
+        <PipelineWorkerMailFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/coordinator-activity") {
     return (
       <Suspense fallback={null}>
@@ -1900,6 +1911,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/sidebar-motion") return <SidebarMotionFixture />;
   if (window.location.pathname === "/sidebar-drag") {
     return (
       <Suspense fallback={null}>

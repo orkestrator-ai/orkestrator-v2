@@ -1,7 +1,7 @@
 # Incoming node mail placement races automatic injection
 
 - **ID:** 1780
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-02
 - **Test:** `CO-05/UP-02 coordinator mail to and from a leaf agent > delivers as ordinary incoming mail and routes the agent's answer to that command node's outbox`
 - **Owning file:** `apps/backend/src/core/nodes/node-coordination.test.ts:119`
@@ -55,5 +55,44 @@ subsequently corrected). Evidence: `/tmp/orkestrator-test-run.POBTE6/image-mail-
 The owning file passed alone through `test:logged --name node-coordination-alone`
 with the same Bun command and only `./src/core/nodes/node-coordination.test.ts`
 (5.0 s). The corrected five-file suite then passed (8.0 s, 97 tests).
-The new lifecycle regression does not change injection timing; automatic
-injection racing the admission assertion remains an open hypothesis.
+The new lifecycle regression does not change injection timing. At the time of
+this run, automatic injection racing the admission assertion remained an open
+hypothesis; the root cause and fix below subsequently confirmed the race.
+
+## Recurrence, 2026-11-04 (input stamps review)
+
+Preparation at `6ceb37b3422f1eec61d2b7b0808080dc5c229619` recorded the same
+assertion at line 120 in `mise run test`: expected `pending-inject`, received
+`injected` (29 ms). The package triage marks it related through the shared
+`image-manifest.ts` import and known-flaky; this is not an aggregate pass.
+The unchanged owner passed alone during repair:
+`mise run test:logged -- --name mail-failure-triage -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures`
+(exit 0, 1.0 s). Preparation evidence remains in
+`.orkestrator/review-artifacts/review-validation-51211246-bf75-4cea-b58b-3053677ba760/validation-04.stdout.txt`.
+The aggregate remains unresolved for verification; no mail behavior was changed.
+
+## Root cause and fix, 2026-11-04
+
+`AgentMailService.init()` subscribes to `agent-mail` storage changes and starts
+`drainInjects()` in the background whenever mail is stored. `deliverIncoming`
+stores the mail and returns, and the test then read the message back from
+storage, so the stored placement depended on whether that background drain
+had already dispatched to the idle simulated worker. Loaded aggregate runs let
+the drain win. The production behavior is correct (the mail is admitted as
+`pending-inject` and then wakes the agent); the assertion raced it.
+
+Reproduction: the unchanged test with a 100 ms pause between `deliverIncoming`
+and the read-back failed with the recorded message (expected
+`pending-inject`, received `injected`).
+
+Fix: the test asserts the admission placement from `deliverIncoming`'s own
+result (`pending-inject`), settles the drain with `MailWorld.deliver()`
+(`drainInjects` coalesces with an in-flight pass and awaits it), then asserts
+the stored message is `injected` and that the worker received exactly that
+body. The collected-leaf-mail test at the end of the file read the coordinator
+inbox back in the same way and received the same treatment.
+
+Verification: `bun test ./src/core/nodes/node-coordination.test.ts` from
+`apps/backend` passed (24 pass); six concurrent
+`bun test --rerun-each 15` runs of the file passed 2,160 tests with 0 failures.
+No mail implementation code was changed.

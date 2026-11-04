@@ -89,6 +89,10 @@ have their own, stricter handlers.
   React's `innerHTML` setter, Radix and ProseMirror style injection, Mermaid's
   SVG and Monaco's worker construction. Enforcing it would need a default policy
   that passes those through, which adds little to `script-src 'self'`.
+- **A local window's gateway credential stays in main.** On the direct transport
+  ([remote-gateway.md](remote-gateway.md)) main adds the bearer at the network
+  layer, for that backend's origin and its `invoke` and `events` routes only. This
+  grants nothing `orkestrator:invoke` did not, and the page cannot read the token.
 - **No allowlist on `orkestrator:invoke`.** The renderer is the application's main
   client and legitimately uses most of the registry, terminals included, so a
   second list per command would remove little of what injected script could do.

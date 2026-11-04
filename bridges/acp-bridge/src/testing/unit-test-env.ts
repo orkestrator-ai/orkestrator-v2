@@ -13,10 +13,10 @@
  * Existing values are left alone: a run that deliberately selects a provider
  * keeps it.
  */
-process.env.ACP_PROVIDER ??= "cursor";
+process.env.ACP_PROVIDER ??= "acp-fixture";
 process.env.ACP_PROVIDER_CONFIG ??= JSON.stringify({
-  id: "cursor",
-  name: "Cursor test fixture",
+  id: "acp-fixture",
+  name: "ACP test fixture",
   executable: process.execPath,
   argv: [],
   env: {},

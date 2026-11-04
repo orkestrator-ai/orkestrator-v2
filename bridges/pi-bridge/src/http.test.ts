@@ -7,7 +7,11 @@ import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type AgentSession,
+  type ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import {
@@ -35,8 +39,13 @@ const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // froze a different token and every request here would 401 — a failure that
 // looks like broken routing rather than a test that was never self-sufficient.
 const { authToken: TOKEN } = await import("./config.js");
-const { isSessionClosed, newSessionState, setAgentSessionTestHooks } =
-  await import("./agent-session.js");
+const {
+  isSessionClosed,
+  newSessionState,
+  SESSION_LIST_TIMEOUT_MESSAGE,
+  setAgentSessionTestHooks,
+  setSessionListTimeoutForTests,
+} = await import("./agent-session.js");
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
@@ -187,6 +196,21 @@ describe("authentication", () => {
   test("refuses every other route without a token", async () => {
     expect((await call("/global/auth-check", { authorize: false })).status).toBe(401);
     expect((await call("/session/list", { authorize: false })).status).toBe(401);
+  });
+
+  test("a session list that timed out answers 504 with its reason", async () => {
+    const list = spyOn(SessionManager, "list").mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    setSessionListTimeoutForTests(5);
+    try {
+      const response = await call("/session/list");
+      expect(response.status).toBe(504);
+      expect(await response.json()).toEqual({ error: SESSION_LIST_TIMEOUT_MESSAGE });
+    } finally {
+      setSessionListTimeoutForTests();
+      list.mockRestore();
+    }
   });
 
   test("refuses a token of the wrong length without leaking which", async () => {

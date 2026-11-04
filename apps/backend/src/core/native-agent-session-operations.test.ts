@@ -70,6 +70,10 @@ function harness(
     ? ({ ...projection, composer: input.composer } as unknown as NativeAgentSessionProjection)
     : null;
   const projections = {
+    refreshProjectionState: async () => {
+      events.push("refresh-state");
+      return withComposer ?? projection;
+    },
     refreshProjection: async () => {
       events.push("refresh");
       return withComposer ?? projection;
@@ -473,7 +477,7 @@ describe("NativeAgentSessionOperations", () => {
           resolution: { kind: "dismiss" } as never,
         }),
       ).toEqual({ result: "applied" } as never);
-      expect(events).toEqual([`forget:${sessionKey}`, "refresh"]);
+      expect(events).toEqual([`forget:${sessionKey}`, "refresh-state"]);
     });
 
     test("a hold the provider cannot apply is rejected", async () => {

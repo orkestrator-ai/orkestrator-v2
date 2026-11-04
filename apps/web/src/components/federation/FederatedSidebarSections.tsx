@@ -41,7 +41,7 @@ import {
   repositoryOpenTarget,
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
 import { updatePortalLayout, usePortalLayout } from "@/lib/portal/portal-layout";
 import {
   normalizeProjectFolderName,
@@ -606,22 +606,15 @@ export function MergedProjectList({
         selected={opens !== null && openedRepository?.name === entry.name}
         onOpen={
           opens
-            ? () => {
-                // The repository's coordinator: the command node's copy, else
-                // (none here) a leaf's, whose realm then opens its own
-                // coordinator directly. A window whose own node is in leaf
-                // mode lands on its home, since its coordinator is gated.
-                const gated = opens.machine.bound && portalState.status?.mode === "leaf";
-                openMachineWorkspace({
+            ? () =>
+                openRepository({
+                  repository: entry.name,
+                  projectKey: opens.id,
                   connectionId: opens.machine.connectionId,
                   projectId: opens.project.ref.projectId,
-                  ...(gated ? {} : { boardTab: "coordinator" as const }),
+                  coordinatorGated: opens.machine.bound && portalState.status?.mode === "leaf",
                   title: opens.name,
-                });
-                useMachineViewStore
-                  .getState()
-                  .noteRepositoryOpened({ name: entry.name, projectKey: opens.id });
-              }
+                })
             : undefined
         }
         openMachineName={opens?.machine.name}

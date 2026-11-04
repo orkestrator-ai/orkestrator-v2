@@ -3,6 +3,7 @@
 // The storage layer imports node-store-format.js directly: routing it through
 // here would close a runtime import cycle with storage.
 export { parseNodeActionApproval } from "./node-action-requests.js";
+export { accountSwitchGrantState, runGrantedAccountSwitch } from "./node-account-switch-grant.js";
 export { coordinatorNodeContext } from "./node-context.js";
 export { NodeCoordination } from "./node-coordination.js";
 export { bridgeRemoteCoordinatorEvents, NodeCoordinatorRemote } from "./node-coordinator-remote.js";

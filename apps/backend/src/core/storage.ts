@@ -727,6 +727,13 @@ export class StorageService {
     return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
   }
 
+  setCoordinatorAccountSwitchGrant(
+    platform: import("@orkestrator/protocol/agent-accounts").AgentAccountPlatform,
+    enabled: boolean,
+  ): Promise<AppConfig> {
+    return this.repos.config.setCoordinatorAccountSwitchGrant(platform, enabled);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }

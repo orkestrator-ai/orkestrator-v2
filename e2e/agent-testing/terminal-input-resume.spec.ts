@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -19,6 +20,10 @@ type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const TERMINAL_WRITE = "local_terminal_write";
+// Some hosts ship only nvim, which accepts the same flags used below.
+const editor = ["vim", "nvim"].find(
+  (name) => spawnSync("sh", ["-c", `command -v ${name}`]).status === 0,
+);
 
 function profileStatus(): Status {
   const command = spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], {
@@ -69,9 +74,12 @@ function commandOf(request: Request): { command?: string; args?: Record<string, 
   }
 }
 
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
+
 test("a lost terminal write stays fenced until the user resumes, and the shell survives", async ({
   page,
 }) => {
+  test.skip(!editor, "needs vim or nvim on PATH to type into a full-screen editor");
   test.setTimeout(240_000);
   page.setDefaultTimeout(20_000);
   const status = profileStatus();
@@ -158,7 +166,10 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     const focusTerminal = async () => {
       const terminal = page.locator(".xterm:visible").first();
       await expect(terminal).toBeVisible({ timeout: 60_000 });
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
     };
     await openEnvironment(target.name);
     await focusTerminal();
@@ -170,6 +181,13 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     const output = async () =>
       visibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
+      );
+    // What the terminal shows now. An editor may position each cell, so its raw
+    // output need not hold a line of text as one run.
+    const screen = async () =>
+      visibleText(
+        (await invoke<{ output: string } | null>("get_terminal_state_snapshot", { sessionId }))
+          ?.output ?? "",
       );
     const shellPid = async () => {
       let pid: string | undefined;
@@ -185,11 +203,19 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
 
     // vim is the case the fence exists for: what reached the shell is not
     // simply what the prompt would echo.
-    await page.keyboard.type("vim -u NONE -N -n resume.txt");
+    await page.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
     await page.keyboard.press("Enter");
-    await expect.poll(output).toContain("resume.txt");
-    await page.keyboard.type("ibefore-");
-    await expect.poll(output).toContain("before-");
+    // The shell echoes the filename before the editor is ready. Wait for
+    // the empty editor's ruler so startup cannot discard the first input.
+    await expect.poll(screen).toMatch(/resume\.txt[^\n]*0,0-1/);
+    await focusTerminal();
+    await page.keyboard.insertText("ibefore-");
+    await expect.poll(screen).toContain("before-");
+    // nvim's terminal queries are answered as writes. Let them finish so the
+    // write lost below is the keystroke.
+    await page.waitForTimeout(1_000);
+    // Run modal handlers and restore focus before raw keyboard input.
+    await focusTerminal();
 
     // The next write reaches the backend, and then its response is lost.
     fault = "lose";
@@ -201,8 +227,10 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     );
     await expect(toast.getByRole("button", { name: "Resume input" })).toBeVisible();
     await expect(toast.getByRole("button", { name: "Reconnect" })).toBeVisible();
-    // The keystroke did land, which is exactly why the client may not guess.
-    await expect.poll(output).toContain("before-X");
+    // The keystroke did land, which is exactly why the client may not guess. An
+    // editor can draw it as its own cell, so it need not touch the earlier text;
+    // the saved buffer below is the precise check.
+    await expect.poll(screen).toMatch(/before-[^]*X/);
 
     // Restore the backend, then change the layout: the resize goes through but
     // does not re-arm input.
@@ -219,7 +247,7 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     await expect(toast).toBeVisible();
     await page.waitForTimeout(1_000);
     expect(writes().length).toBe(writesWhileFenced);
-    expect(await output()).not.toContain("before-XY");
+    expect(await screen()).not.toMatch(/before-[^]*X[^]*Y/);
 
     // Resume is answered by the client: nothing new reaches the backend.
     const sentBeforeResume = sent.length;
@@ -232,7 +260,10 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     await page.keyboard.type("Z");
     // The resize made vim redraw, so the echo is no longer one run of text;
     // the saved buffer below is the precise check.
-    await expect.poll(() => writes().some((entry) => entry.args.data === "Z")).toBe(true);
+    // nvim tracks the mouse, so a click's report can share the write.
+    await expect
+      .poll(() => writes().some((entry) => String(entry.args.data).endsWith("Z")))
+      .toBe(true);
     await page.keyboard.press("Escape");
     await page.keyboard.type(":wq");
     await page.keyboard.press("Enter");

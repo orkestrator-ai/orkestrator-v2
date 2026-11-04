@@ -60,6 +60,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "sync_node_tickets",
   "create_node_action_request",
   "list_node_action_requests",
+  // Each machine's standing permission is for its own coordinators only.
+  "run_granted_agent_account_switch",
   "resolve_node_action_request",
   // Transfers and comparisons are run by the command node, not through it.
   "transfer_node_files",
@@ -105,6 +107,7 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   // Sends a coordinator's project-home message only the user approved here.
   "send_approved_project_home_message",
   "stop_coordinator_worker_turn",
+  "restart_coordinator_build_pipeline_step",
   "list_coordinator_worker_commands",
   "run_coordinator_worker_command",
   // A coordinator's goals on its own workers: this node holds the ownership.
@@ -166,6 +169,7 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "open_controller_browser",
       "edit_controller_worker_tab",
       "stop_controller_worker_turn",
+      "restart_controller_build_pipeline_step",
       "list_controller_worker_commands",
       "run_controller_worker_command",
       "launch_controller_multi_review",

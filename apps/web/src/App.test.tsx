@@ -38,6 +38,7 @@ import * as realTooltip from "@/components/ui/tooltip";
 import * as realTerminal from "@/components/terminal";
 import * as realKanban from "@/components/kanban";
 import * as realProjects from "@/components/projects";
+import * as realProjectWorkspace from "@/components/projects/ProjectWorkspace";
 import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
@@ -58,6 +59,7 @@ const realTooltipSnapshot = { ...realTooltip };
 const realTerminalSnapshot = { ...realTerminal };
 const realKanbanSnapshot = { ...realKanban };
 const realProjectsSnapshot = { ...realProjects };
+const realProjectWorkspaceSnapshot = { ...realProjectWorkspace };
 const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
@@ -194,6 +196,9 @@ mock.module("@/components/projects", () => ({
     projectLauncherProps = props;
     return <div data-testid="project-launcher" />;
   },
+}));
+
+mock.module("@/components/projects/ProjectWorkspace", () => ({
   ProjectWorkspace: ({ projectId }: { projectId: string }) => (
     <div data-testid="project-workspace">{projectId}</div>
   ),
@@ -637,6 +642,7 @@ afterAll(() => {
   mock.module("@/components/terminal", () => realTerminalSnapshot);
   mock.module("@/components/kanban", () => realKanbanSnapshot);
   mock.module("@/components/projects", () => realProjectsSnapshot);
+  mock.module("@/components/projects/ProjectWorkspace", () => realProjectWorkspaceSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
@@ -974,7 +980,7 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
+    expect((await screen.findByTestId("project-workspace")).textContent).toBe("project-1");
     expect(screen.queryByTestId("project-launcher") === null).toBe(true);
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
@@ -995,7 +1001,7 @@ describe("App background processing mounts", () => {
     });
 
     render(<App />);
-    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
+    expect((await screen.findByTestId("project-workspace")).textContent).toBe("project-1");
 
     act(() => {
       activateFeatureBuildEnvironment("project-1", {

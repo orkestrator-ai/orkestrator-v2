@@ -12,6 +12,7 @@ import {
   type MailActor,
 } from "@orkestrator/protocol/agent-mail";
 import { NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX } from "@orkestrator/protocol/native-agent";
+import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 
 /**
  * Prefix for error messages rendered inline in a transcript: client-only rows
@@ -154,9 +155,24 @@ const PEER_MAIL_CARRIER_CLOSE = "</orkestrator-peer-message>";
 const PEER_MAIL_PAYLOAD_OPEN = "<orkestrator-peer-payload-json>";
 const PEER_MAIL_PAYLOAD_CLOSE = "</orkestrator-peer-payload-json>";
 
+/** A carrier's open tag at any version; only {@link PEER_MAIL_CARRIER_OPEN} is parsed. */
+const PEER_MAIL_ANY_CARRIER_OPEN = /<orkestrator-peer-message(?:\s[^>]*)?>/y;
+
+/**
+ * How `renderAgentMailCarrier` starts every carrier: the open tag, the payload
+ * frame straight after it, then a JSON object or at least a closed frame.
+ * Someone typing the tag's name, even as the first thing in a message, does not
+ * write that. Any version counts, so a newer envelope is not taken for a person's words.
+ */
+const PEER_MAIL_ENVELOPE_START =
+  /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|$|[^]*?<\/orkestrator-peer-payload-json>)/;
+
 /** Whether a provider row is an injected mail prompt rather than something a person typed. */
 export function isPeerMailCarrierContent(content: string): boolean {
-  return content.trimStart().startsWith(PEER_MAIL_CARRIER_OPEN);
+  return (
+    PEER_MAIL_ENVELOPE_START.test(content) ||
+    /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content)
+  );
 }
 
 /**
@@ -374,6 +390,76 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
   });
 }
 
+/** Find transport delimiters outside JSON strings, including escaped quotes. */
+function peerMailDelimiter(content: string, delimiter: string, start: number): number {
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (content.startsWith(delimiter, index)) return index;
+    else if (character === '"') quoted = true;
+  }
+  return -1;
+}
+
+/** One carrier's slice, as a mail row, or null when it cannot be read. */
+function peerMailFromCarrier(carrier: string, createdAt: string): NativeMessage | null {
+  if (!carrier.startsWith(PEER_MAIL_CARRIER_OPEN)) return null;
+  const payloadStart = carrier.indexOf(PEER_MAIL_PAYLOAD_OPEN);
+  const payloadEnd = peerMailDelimiter(
+    carrier,
+    PEER_MAIL_PAYLOAD_CLOSE,
+    payloadStart + PEER_MAIL_PAYLOAD_OPEN.length,
+  );
+  if (payloadStart < 0 || payloadEnd < 0) return null;
+  try {
+    const payload: unknown = JSON.parse(
+      carrier.slice(payloadStart + PEER_MAIL_PAYLOAD_OPEN.length, payloadEnd),
+    );
+    return peerMailFromPayload(payload, createdAt);
+  } catch {
+    // Malformed JSON, or an address the mailbox helpers refuse (empty or holding
+    // NUL). Rows are built while rendering, so this must not reach React.
+    return null;
+  }
+}
+
+/**
+ * Read a provider row as carriers back to back, one entry per carrier (null for
+ * one that cannot be read, including one cut off before its close tag), and
+ * whatever text follows the last of them.
+ */
+function readPeerMailCarriers(message: Pick<NativeMessage, "content" | "createdAt">): {
+  entries: Array<NativeMessage | null>;
+  rest: string;
+} {
+  const content = message.content.trim();
+  const entries: Array<NativeMessage | null> = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    PEER_MAIL_ANY_CARRIER_OPEN.lastIndex = cursor;
+    if (!PEER_MAIL_ANY_CARRIER_OPEN.test(content)) return { entries, rest: content.slice(cursor) };
+    // Stored input can be noncanonical: literal tags inside JSON are body text.
+    const carrierEnd = peerMailDelimiter(
+      content,
+      PEER_MAIL_CARRIER_CLOSE,
+      PEER_MAIL_ANY_CARRIER_OPEN.lastIndex,
+    );
+    if (carrierEnd < 0) {
+      entries.push(null);
+      break;
+    }
+    entries.push(peerMailFromCarrier(content.slice(cursor, carrierEnd), message.createdAt));
+    cursor = carrierEnd + PEER_MAIL_CARRIER_CLOSE.length;
+    while (/\s/.test(content.charAt(cursor))) cursor += 1;
+  }
+  return { entries, rest: "" };
+}
+
 /**
  * Replace the provider's raw transport envelope with readable transcript rows,
  * one per carrier.
@@ -389,33 +475,62 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
 export function createPeerMailNativeMessagesFromCarrier(
   message: Pick<NativeMessage, "content" | "createdAt">,
 ): NativeMessage[] {
-  const content = message.content.trimStart();
-  if (!content.startsWith(PEER_MAIL_CARRIER_OPEN)) return [];
-  const rows: NativeMessage[] = [];
+  const { entries } = readPeerMailCarriers(message);
   const seen = new Set<string>();
-  let cursor = 0;
-  while (cursor < content.length) {
-    const carrierStart = content.indexOf(PEER_MAIL_CARRIER_OPEN, cursor);
-    if (carrierStart < 0) break;
-    // Bodies are JSON-escaped, so `<` never appears inside a payload and the
-    // first close tag after an open tag is that carrier's own.
-    const carrierEnd = content.indexOf(PEER_MAIL_CARRIER_CLOSE, carrierStart);
-    if (carrierEnd < 0) break;
-    const carrier = content.slice(carrierStart, carrierEnd);
-    cursor = carrierEnd + PEER_MAIL_CARRIER_CLOSE.length;
-    const payloadStart = carrier.indexOf(PEER_MAIL_PAYLOAD_OPEN);
-    const payloadEnd = carrier.indexOf(PEER_MAIL_PAYLOAD_CLOSE, payloadStart + 1);
-    if (payloadStart < 0 || payloadEnd < 0) continue;
-    let payload: unknown;
-    try {
-      payload = JSON.parse(carrier.slice(payloadStart + PEER_MAIL_PAYLOAD_OPEN.length, payloadEnd));
-    } catch {
-      continue;
-    }
-    const row = peerMailFromPayload(payload, message.createdAt);
-    if (!row || seen.has(row.id)) continue;
+  return entries.filter((row): row is NativeMessage => {
+    if (!row || seen.has(row.id)) return false;
     seen.add(row.id);
-    rows.push(row);
+    return true;
+  });
+}
+
+/** What a transcript shows in place of a carrier it cannot read; never its raw text. */
+export const PEER_MAIL_UNREADABLE_TEXT =
+  "A message was delivered to this agent, but it could not be read for display here. The agent still received it.";
+
+/**
+ * How the Cursor, Pi and ACP bridges start the schema instruction they append to
+ * a prompt (`STRUCTURED_PROMPT_INSTRUCTION_PREFIX`). A reloaded row can carry it
+ * after the carrier; it is transport, like the carrier's own instructions.
+ */
+export const STRUCTURED_PROMPT_SUFFIX_PREFIX = "End your turn with exactly one JSON value";
+
+/**
+ * A stored user row as a transcript presents it, or null when it is not mail.
+ *
+ * For transcripts read from stored provider rows, where the row is all there is:
+ * one mail row per readable carrier and one plain notice in place of each
+ * unreadable one, in delivery order, so a malformed envelope is neither shown
+ * raw nor lost without a trace.
+ *
+ * Transport the backend or a bridge adds after a carrier is left out. Anything
+ * else after it is kept as an ordinary row under the row's own id: only a person
+ * pasting an envelope writes that, and their words must not vanish with it.
+ */
+export function presentPeerMailCarrierRow(
+  message: Pick<NativeMessage, "id" | "content" | "createdAt">,
+): NativeMessage[] | null {
+  const content = stripSystemInstructions(message.content);
+  if (!isPeerMailCarrierContent(content)) return null;
+  const { entries, rest } = readPeerMailCarriers({ content, createdAt: message.createdAt });
+  const rows = entries.map(
+    (entry, ordinal): NativeMessage =>
+      entry ?? {
+        id: `${SYSTEM_MESSAGE_PREFIX}peer-mail-unreadable:${message.id}:${ordinal}`,
+        role: "system",
+        content: PEER_MAIL_UNREADABLE_TEXT,
+        parts: [{ type: "text", content: PEER_MAIL_UNREADABLE_TEXT }],
+        createdAt: message.createdAt,
+      },
+  );
+  if (rest && !rest.startsWith(STRUCTURED_PROMPT_SUFFIX_PREFIX)) {
+    rows.push({
+      id: message.id,
+      role: "user",
+      content: rest,
+      parts: [{ type: "text", content: rest }],
+      createdAt: message.createdAt,
+    });
   }
   return rows;
 }

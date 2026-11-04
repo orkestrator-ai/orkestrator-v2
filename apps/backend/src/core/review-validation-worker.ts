@@ -7,6 +7,7 @@ import {
   REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
 } from "@orkestrator/protocol/review-workflow";
+import { LOW_PRIORITY_SHELL_PREFIX } from "./process-priority.js";
 
 /**
  * Environment-side worker, launched with the application's Bun runtime from a
@@ -266,7 +267,8 @@ async function execute(cmd, index, readyAt) {
   const started = performance.now();
   persist();
   await new Promise(resolve => {
-    const shell = "( while kill -0 \"$2\" 2>/dev/null; do sleep 1; done; kill -KILL -- -$$ ) </dev/null >/dev/null 2>&1 & __orkestrator_validation_watchdog=$!; trap 'kill \"$__orkestrator_validation_watchdog\" 2>/dev/null || true; times >\"$3\" 2>/dev/null || true' EXIT; eval \"$1\"";
+    // Only the command is lowered: this supervisor's heartbeat must stay prompt.
+    const shell = "${LOW_PRIORITY_SHELL_PREFIX}( while kill -0 \"$2\" 2>/dev/null; do sleep 1; done; kill -KILL -- -$$ ) </dev/null >/dev/null 2>&1 & __orkestrator_validation_watchdog=$!; trap 'kill \"$__orkestrator_validation_watchdog\" 2>/dev/null || true; times >\"$3\" 2>/dev/null || true' EXIT; eval \"$1\"";
     // Do not leak an outer command's cooperative channel into unrelated nested
     // runners. A declared cooperative command owns this private channel only.
     const env = { ...process.env };

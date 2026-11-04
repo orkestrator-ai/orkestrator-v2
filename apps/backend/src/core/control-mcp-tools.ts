@@ -152,6 +152,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["pause_build_pipeline", "build-pipelines"],
   ["resume_build_pipeline", "build-pipelines"],
   ["cancel_build_pipeline", "build-pipelines"],
+  ["restart_build_pipeline_step", "build-pipelines"],
   ["start_multi_review", "multi-review"],
   ["launch_multi_review", "multi-review"],
   ["open_multi_review", "multi-review"],

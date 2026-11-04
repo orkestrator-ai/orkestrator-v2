@@ -956,6 +956,8 @@ export class NodeCoordination {
         "platform",
         "accountId",
         "accountLabel",
+        "previousAccountId",
+        "previousAccountLabel",
       ] as const) {
         if (typeof target[key] === "string") clean[key] = (target[key] as string).slice(0, 1024);
       }
@@ -989,6 +991,7 @@ export class NodeCoordination {
         projectId: by.projectId,
       },
       ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+      ...(typeof args.askedBecause === "string" ? { askedBecause: args.askedBecause } : {}),
       ...(kind === "update-agents-md"
         ? { agentsMd: { changes: parseAgentsMdChanges(agentsMdPayload(args.agentsMd)) } }
         : {}),

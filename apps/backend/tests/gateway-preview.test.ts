@@ -371,8 +371,9 @@ describe("gateway preview integration", () => {
         listenerOwnership: {
           attribute: async () =>
             owner === "this-environment"
-              ? { attribution: owner, processKey: "original-listener" }
+              ? { attribution: owner, processKey: "original-listener", listenerPids: [1] }
               : { attribution: owner },
+          listenerPids: async () => [1],
           stats: () => ({ listenerChecks: 0, listenerUnchecked: 0 }),
         },
       });

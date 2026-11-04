@@ -16,7 +16,9 @@ const browserTimer: StartupTimer = {
 
 /** One bounded startup attempt; never overlap or retry a hung IPC request. */
 export function waitForDesktopConnection({
-  getApi = () => window.orkestrator,
+  // A window on the direct gateway transport composes `orkestrator` only once
+  // the application modules load; its preload proves the same round trip.
+  getApi = () => window.orkestrator ?? window.orkestratorDesktopHost?.api,
   timeoutMs = 10_000,
   retryDelayMs = 250,
   timer = browserTimer,

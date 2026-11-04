@@ -6,6 +6,7 @@ import {
   type RealmDialog,
 } from "@/lib/federation/workspace-realm";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useUIStore } from "@/stores/uiStore";
 
@@ -102,6 +103,33 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             ...(spec.dialog ? { dialog: spec.dialog } : {}),
           },
   );
+}
+
+/**
+ * Opens a repository from its heading: its coordinator, on the command node's
+ * copy of the project, else (none here) a leaf's, whose realm then opens its
+ * own coordinator directly. A window whose own node is in leaf mode lands on
+ * its home, since its coordinator is gated.
+ */
+export function openRepository(spec: {
+  /** The repository's identity, which also names its group. */
+  repository: string;
+  /** The node-qualified key of the member project it opens. */
+  projectKey: string;
+  connectionId: string;
+  projectId: string;
+  coordinatorGated: boolean;
+  title: string;
+}): void {
+  openMachineWorkspace({
+    connectionId: spec.connectionId,
+    projectId: spec.projectId,
+    ...(spec.coordinatorGated ? {} : { boardTab: "coordinator" as const }),
+    title: spec.title,
+  });
+  useMachineViewStore
+    .getState()
+    .noteRepositoryOpened({ name: spec.repository, projectKey: spec.projectKey });
 }
 
 /** Opens one of this window's own node's dialogs, as its sidebar menus do. */

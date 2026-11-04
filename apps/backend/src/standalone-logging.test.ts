@@ -79,6 +79,19 @@ describe("standalone backend logging", () => {
     }
   });
 
+  test("shutdown leaves every queued line in the file", async () => {
+    const dataDir = await dataDirWithDebugLogging(true);
+    const logging = installStandaloneBackendLogging({ dataDir, runtimeFlavor: "production" }, {});
+    for (let index = 0; index < 100; index += 1) console.warn(`queued line ${index}.`);
+    await stopStandaloneBackendLogging(logging, 30_000);
+
+    const files = await readdir(path.join(dataDir, "logs"));
+    const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
+    for (let index = 0; index < 100; index += 1) {
+      expect(contents).toContain(`queued line ${index}.`);
+    }
+  });
+
   test("a stalled flush cannot hold shutdown open", async () => {
     const never = new Promise<void>(() => {});
     const started = Date.now();

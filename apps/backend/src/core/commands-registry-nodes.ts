@@ -18,6 +18,7 @@ import {
   approveSetupCommandsOnNodes,
   parseNodeActionApproval,
   parseNodeFileScope,
+  runGrantedAccountSwitch,
   type NodeCoordination,
   type NodePortal,
   type NodeService,
@@ -379,10 +380,42 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "agentsMd",
         "workerQuestion",
         "projectHomeMessage",
+        "askedBecause",
       ],
       "arguments",
     );
     return coordination(context).createActionRequest(args);
+  });
+
+  // A coordinator's account switch under the user's standing permission
+  // (`control-mcp-account-tools.ts`); this machine's permission, never another's.
+  register("run_granted_agent_account_switch", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      [
+        "requestId",
+        "platform",
+        "nodeId",
+        "nodeName",
+        "accountId",
+        "accountLabel",
+        "previousAccountId",
+        "previousAccountLabel",
+        "requestedBy",
+        "reason",
+      ],
+      "arguments",
+    );
+    return runGrantedAccountSwitch(
+      {
+        actions: coordination(context).actions,
+        loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
+        projectName: async (projectId) =>
+          (await context.storage.getProject(projectId).catch(() => null))?.name,
+        emit: (event, payload) => context.emit(event, payload),
+      },
+      args,
+    );
   });
 
   register("list_node_action_requests", async (args, context) => {

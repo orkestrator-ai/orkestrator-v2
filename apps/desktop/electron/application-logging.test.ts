@@ -497,6 +497,105 @@ describe("production application log batching", () => {
     return { reported, restore: () => void (console.error = original) };
   }
 
+  test("mixed formats retain rollover reservations before any append", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      bounds: { maxFileBytes: 400 },
+    });
+    try {
+      console.log(`line-0 ${"x".repeat(220)}`);
+      console.log(`line-1 ${"x".repeat(220)}`);
+      configureLogger({ format: "json" });
+      console.log("line-2");
+      configureLogger({ format: "text" });
+      console.log(`line-3 ${"x".repeat(220)}`);
+      await logging.flush();
+      const textFiles = (await readdir(path.join(dataDir, "logs"))).filter((file) =>
+        file.endsWith(".log"),
+      );
+      // The base file precedes the numbered files regardless of lexical order.
+      textFiles.sort(
+        (a, b) =>
+          Number(a.match(/\.(\d+)\.log$/)?.[1] ?? 0) - Number(b.match(/\.(\d+)\.log$/)?.[1] ?? 0),
+      );
+      expect(textFiles.length).toBeGreaterThanOrEqual(3);
+      const lines: string[] = [];
+      for (const file of textFiles) {
+        expect((await stat(path.join(dataDir, "logs", file))).size).toBeLessThanOrEqual(400);
+        lines.push(...(await savedLines(dataDir, file)));
+      }
+      expect(numbersIn(lines)).toEqual([0, 1, 3]);
+      expect(numbersIn(await savedLines(dataDir, LOG_FILE.replace(".log", ".jsonl")))).toEqual([2]);
+    } finally {
+      await logging.stop();
+      resetLogger();
+    }
+  });
+
+  for (const code of ["ENOENT", "ENOSPC", "ENOENT-twice"]) {
+    test(`a later run failing with ${code} preserves earlier success and permits later batches`, async () => {
+      const dataDir = await enabledDataDir();
+      const capture = captureConsoleError();
+      const attempts: string[] = [];
+      let remainingFailures = code === "ENOENT-twice" ? 2 : 1;
+      const { calls, files } = countedFiles({
+        async appendFile(target, data, options) {
+          attempts.push(data.toString());
+          if (data.toString().includes("line-1") && remainingFailures > 0) {
+            remainingFailures -= 1;
+            throw failure(code === "ENOSPC" ? "ENOSPC" : "ENOENT");
+          }
+          await appendFile(target, data, options);
+        },
+      });
+      const logging = installProductionApplicationLogging({ dataDir, now, files });
+      try {
+        console.log("line-0");
+        configureLogger({ format: "json" });
+        console.log("line-1");
+        console.log("line-2");
+        configureLogger({ format: "text" });
+        console.log("line-3");
+        await logging.flush();
+        const recovered = code === "ENOENT";
+        expect(attempts.filter((data) => data.includes("line-0"))).toHaveLength(1);
+        expect(attempts.filter((data) => data.includes("line-1"))).toHaveLength(
+          code === "ENOSPC" ? 1 : 2,
+        );
+        expect(calls.appendFile).toBe(recovered ? 4 : code === "ENOSPC" ? 2 : 3);
+        const reports = capture.reported.filter((line) => line.includes("write.failed"));
+        expect(reports).toHaveLength(recovered ? 0 : 1);
+        if (!recovered) {
+          expect(reports[0]).toContain("entries=3");
+          const lostBytes = attempts.find((data) => data.includes("line-1"))!;
+          // The failed JSON run plus the unattempted text run are reported.
+          const textBytes = Buffer.byteLength(`${now().toISOString()} LOG line-3\n`);
+          expect(reports[0]).toContain(`bytes=${Buffer.byteLength(lostBytes) + textBytes}`);
+        }
+        expect(numbersIn(await savedLines(dataDir))).toEqual(recovered ? [0, 3] : [0]);
+        if (recovered) {
+          expect(numbersIn(await savedLines(dataDir, LOG_FILE.replace(".log", ".jsonl")))).toEqual([
+            1, 2,
+          ]);
+        } else {
+          expect(
+            (await readdir(path.join(dataDir, "logs"))).filter((file) => file.endsWith(".jsonl")),
+          ).toEqual([]);
+        }
+        console.log("line-4");
+        await logging.flush();
+        expect(numbersIn(await savedLines(dataDir))).toEqual(recovered ? [0, 3, 4] : [0, 4]);
+        expect(calls.mkdir).toBe(recovered ? 2 : code === "ENOSPC" ? 2 : 3);
+      } finally {
+        await logging.stop();
+        capture.restore();
+        resetLogger();
+      }
+    });
+  }
+
   test("a burst makes one mkdir and far fewer appends than lines", async () => {
     const dataDir = await enabledDataDir();
     const { calls, files } = countedFiles();

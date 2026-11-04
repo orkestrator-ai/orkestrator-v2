@@ -427,7 +427,11 @@ export function installProductionApplicationLogging(options: {
   let stopped = false;
   let droppedEntries = 0;
   let droppedBytes = 0;
-  let active: { base: string; format: LogFormat; index: number; bytes: number } | null = null;
+  // At most one daily target per format; keep reservations across format switches.
+  const activeTargets = new Map<
+    LogFormat,
+    { base: string; format: LogFormat; index: number; bytes: number }
+  >();
 
   const reportWriteFailure = (error: unknown, lost: QueuedLogEntry[]) => {
     // Runs inside the write chain, which nothing else can restart if it rejects.
@@ -448,11 +452,12 @@ export function installProductionApplicationLogging(options: {
   /**
    * Resolves the file this entry belongs in, rolling to the next index when the
    * active one would pass `maxFileBytes`. Runs inside the serialized write
-   * chain, so `active` is never read concurrently.
+   * chain, so target reservations are never read concurrently.
    */
   const resolveTarget = async (entryBytes: number, format: LogFormat): Promise<string> => {
     const base = dailyLogBase(logDirectory, filePrefix, now());
-    if (!active || active.base !== base || active.format !== format) {
+    let active = activeTargets.get(format);
+    if (!active || active.base !== base) {
       let index = 0;
       let bytes = (await fileSize(logPathFor(base, 0, format))) ?? 0;
       while (index < MAX_LOG_FILE_INDEX) {
@@ -474,6 +479,7 @@ export function installProductionApplicationLogging(options: {
       };
     }
     active.bytes += entryBytes;
+    activeTargets.set(format, active);
     return logPathFor(active.base, active.index, active.format);
   };
 
@@ -523,8 +529,8 @@ export function installProductionApplicationLogging(options: {
             written += run.payloads.length;
           }
         } catch (error) {
-          // The failed write may have taken the sizes `active` counted with it.
-          active = null;
+          // The failed write may have taken the sizes the targets counted with it.
+          activeTargets.clear();
           directoryReady = false;
           if (recovered || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           recovered = true;

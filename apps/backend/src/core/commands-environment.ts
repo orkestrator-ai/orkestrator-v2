@@ -1685,7 +1685,7 @@ export async function startEnvironmentOnce(
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
         async () => {
-          const current = await storage.getEnvironment(environment.id);
+          const current = await storage.getEnvironment(environmentId);
           await syncRuntimeGitHubCredential(current, containerId, githubToken, context);
         },
       );

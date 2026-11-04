@@ -6,8 +6,8 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 ### Tasks
 
-1. **Find what makes the output go missing**: open.
-2. **Stop a read waiting on a scan of a retired target**: open.
+1. **Find what makes the output go missing**: open (runtime trigger; repository capture no longer depends on pipe events).
+2. **Stop a read waiting on a scan of a retired target**: done for replacement-worktree retargets; same-worktree admission and already parked readers retain their waits.
 
 ### 1. Find what makes the output go missing
 
@@ -49,3 +49,19 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 - [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
+
+## Merge reconciliation (2026-11-04)
+
+The investigation above describes the incoming branch before this merge. Its
+5 s Git-only mitigation is superseded by file-backed `runCommand` capture and a
+macOS lost-exit watchdog. These cover all commands using `runCommand`; other
+capture sites and the unresolved Bun trigger are tracked in
+[todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
+
+Task 2's replacement-worktree case is implemented: `beginLineage` clears the
+superseded promise and superseded attempts do not request a rerun. Physical
+admission remains keyed by worktree, so a same-worktree retarget still queues,
+and an already parked reader still awaits its original promise. Real-pool tests
+cover those limits. See [0010](0010-backend-shard-diff-base-override-timeout.md)
+and [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
+for evidence and CI limitations.

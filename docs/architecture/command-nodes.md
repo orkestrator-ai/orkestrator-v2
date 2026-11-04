@@ -360,6 +360,24 @@ A command node attached to another command node operates in leaf mode:
   both through the outbox, and its context tells it to hand on anything it
   cannot do itself this way rather than leave it stranded. Every other node
   tool still refuses.
+- Notices for a repository's coordinator (status, pull request, automatic switch,
+  usage-limit stop) go to the command node's main coordinator for that repository, not
+  to its own, through the same outbox. It keeps the ones for repositories the command
+  node lacks, those a command node too old to take them would miss, and those whose
+  command node has been gone for an hour. Fallback claims the notice durably
+  before delivery, excluding concurrent collection. Once collected, the command
+  node owns delivery until it acknowledges or explicitly declines: a lost ack
+  is ambiguous, so timeout or detach cannot safely send a second copy locally.
+  Collected notices remain pending through silence, including outages longer than
+  an hour, while that controller stays attached. A capability downgrade explicitly
+  hands collected, deferred notices back to the leaf. Once the controller
+  detaches, ambiguous collected notices are retired with `notice.collected-retired`
+  rather than silently occupying the outbox or risking duplicate local delivery.
+  A policy-parked notice (no open main and creation disallowed) stays queued but
+  does not block the ordinary mail drain used to close worker delegations.
+  A worker's close notice still reaches the
+  coordinator that delegated to it. See
+  [Who hears a notice](coordinator.md#who-hears-a-notice).
 - Its coordinator conversations are kept, because they may hold important
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the

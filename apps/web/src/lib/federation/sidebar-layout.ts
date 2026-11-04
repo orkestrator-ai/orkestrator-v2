@@ -477,3 +477,19 @@ export function repositoryOpenTarget(
 ): MergedProject | null {
   return group.find((member) => member.machine.backendId === commandNodeId) ?? group[0] ?? null;
 }
+
+/**
+ * The colour of a repository's home tile: the command node's while it has a
+ * copy of the repository, shown or not, else that of the machine the heading
+ * opens the coordinator on.
+ */
+export function repositoryTileColor(
+  commandNode: MachineView | undefined,
+  repository: string,
+  opens: MergedProject | null,
+): string | undefined {
+  const onCommandNode = commandNode?.projects.some(
+    (project) => project.repositoryHint === repository,
+  );
+  return (onCommandNode ? commandNode : opens?.machine)?.colorToken;
+}

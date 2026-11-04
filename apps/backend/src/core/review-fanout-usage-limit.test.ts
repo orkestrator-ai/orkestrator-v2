@@ -82,6 +82,7 @@ describe("a reviewer the weekly limit stopped", () => {
     const { reviewer, runner, usageLimitStop, providerUnavailable } = harness("resend");
     await runner.advanceReviewers([reviewer]);
     expect(usageLimitStop).toHaveBeenCalledWith({
+      session: { label: "Branch agent session" },
       environmentId: "env-1",
       requestId: "review-request",
       error: expect.stringContaining(LIMIT),

@@ -88,3 +88,14 @@ export async function readSessionAgentAccount(
     ...(active ? { pendingActive: active } : {}),
   };
 }
+
+/**
+ * The login a coordinator's next turn runs on. A bridge launched on another
+ * account is replaced on its next use, so an idle one has already moved as far as
+ * that turn goes. Observed live work keeps it where it is until that work ends
+ * (`localBridgeIsOnActiveAccount`).
+ */
+export function coordinatorSessionAccount(session: AgentSessionAccount | null, liveWork: boolean) {
+  if (session?.source !== "account") return undefined;
+  return session.running && liveWork ? session.account : (session.pendingActive ?? session.account);
+}

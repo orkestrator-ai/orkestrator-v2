@@ -309,6 +309,12 @@ shutdown admission and draining. Each fails alone and logs once per process.
 - **Abandoned temp files** (`sweepAbandonedTempFiles`): only
   `<name>.json.<pid>.tmp` in the data directory whose PID is not running.
   Other shapes, such as `.coordinators.json.<uuid>.tmp`, are left alone.
+- **Git mirrors of removed projects** (`sweepOrphanedProjectGitMirrors`):
+  children of `<data dir>/git-mirrors` named like a project id that is not in the
+  project store, over an hour old. A missing or invalid store aborts it
+  (`loadProjectIdsForCleanup`). A mirror belongs to its project, not to an
+  environment, so deleting an environment leaves it. See
+  [Project Git mirror](container-lifecycle.md#project-git-mirror).
 
 Creation cannot collide with these sweeps: it never reuses an existing path or
 branch name, and each environment gets a fresh namespace. The namespace is a

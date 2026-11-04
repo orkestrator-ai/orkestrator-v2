@@ -90,6 +90,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "node-summaries": { kind: "document" },
   "node-outcomes": { kind: "document" },
   "node-mail": { kind: "document" },
+  "coordinator-usage-limit-notices": { kind: "document" },
   "node-action-requests": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },
@@ -109,6 +110,8 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "graph-artifacts": { kind: "record", owner: ownerField("runId") },
   // "Describe a graph" (item 215): one row per environment, its latest job.
   "graph-describe": { kind: "record", owner: ownerField("environmentId") },
+  // One row per `ask_agents` call (`docs/architecture/suborks.md`).
+  "native-agent-suborks": { kind: "record", owner: ownerField("environmentId") },
   // Shared client presentation state (storage-client-state.ts): one row per
   // project, and the notice dismissals document as one row.
   "coordinator-pane-layouts": { kind: "record", owner: ownerField("projectId") },

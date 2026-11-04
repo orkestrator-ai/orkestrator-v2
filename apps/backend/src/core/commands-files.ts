@@ -7,7 +7,7 @@ import { neutralizeGitFilters } from "./git-filter-config.js";
 import { HARDENED_GIT_CONFIG, removeLegacyWorktreeFsmonitor } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -55,14 +55,37 @@ import {
 import type { WorkAdmissionPool } from "./work-admission.js";
 import { worktreeTargetKey } from "./worktree-adhoc-reads.js";
 import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-snapshots";
-import {
-  UNTRACKED_SCAN_CONCURRENCY,
-  UNTRACKED_SCAN_MAX_FILES,
-  FILE_LINE_COUNT_CHUNK_BYTES,
-} from "./commands-validation.js";
+import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { statStamp } from "./stat-stamp.js";
+import {
+  parseGitDiffSummary,
+  parseGitFileChanges,
+  parseGitNumstat,
+  splitNulTerminatedGitFields,
+  withoutStatOnlyModifications,
+  type GitFileChange,
+} from "./git-diff-summary.js";
+import {
+  countUntrackedFileLines,
+  ensureLocalGitExcludeOnce,
+  retainUntrackedCounts,
+} from "./local-git-scan-caches.js";
+
+export {
+  parseGitDiffSummary,
+  parseGitFileChanges,
+  parseGitNumstat,
+  splitNulTerminatedGitFields,
+  type GitFileChange,
+};
+export {
+  countLocalFileLines,
+  countLocalFileLinesDetailed,
+  dropLocalGitScanCaches,
+} from "./local-git-scan-caches.js";
 
 export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
   ".orkestrator",
@@ -414,110 +437,6 @@ async function walkFileTree(
   return { children: sortFileTree(roots), truncated: start.truncated === true };
 }
 
-export type GitFileChange = {
-  path: string;
-  originalPath?: string;
-  filename: string;
-  directory: string;
-  additions: number;
-  deletions: number;
-  status: string;
-  /** Git reported no line counts; `additions`/`deletions` are 0 for old readers. */
-  binary?: true;
-  /** Listed but not counted (scan cap, unreadable, too large); counts are 0 for old readers. */
-  countOmitted?: true;
-};
-
-export function splitNulTerminatedGitFields(output: string, label: string): string[] {
-  if (output.length === 0) return [];
-  if (!output.endsWith("\0")) {
-    throw new Error(`Malformed ${label}: missing NUL terminator`);
-  }
-  return output.slice(0, -1).split("\0");
-}
-
-export function parseGitNumstat(
-  numstatOutput: string,
-): Map<string, { additions: number; deletions: number; binary?: true }> {
-  const stats = new Map<string, { additions: number; deletions: number; binary?: true }>();
-  const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
-  for (let index = 0; index < fields.length;) {
-    const header = fields[index++] ?? "";
-    const firstTab = header.indexOf("\t");
-    const secondTab = firstTab === -1 ? -1 : header.indexOf("\t", firstTab + 1);
-    if (firstTab <= 0 || secondTab === -1) {
-      throw new Error("Malformed git numstat output: invalid record header");
-    }
-    const additions = header.slice(0, firstTab);
-    const deletions = header.slice(firstTab + 1, secondTab);
-    if (
-      (additions !== "-" && !/^\d+$/.test(additions)) ||
-      (deletions !== "-" && !/^\d+$/.test(deletions))
-    ) {
-      throw new Error("Malformed git numstat output: invalid statistics");
-    }
-    const inlinePath = header.slice(secondTab + 1);
-    let filePath = inlinePath;
-    if (inlinePath.length === 0) {
-      if (index + 1 >= fields.length) {
-        throw new Error("Malformed git numstat output: truncated rename/copy record");
-      }
-      index += 1; // The preimage path is not the result path used by name-status.
-      filePath = fields[index++] ?? "";
-    }
-    if (!filePath) {
-      throw new Error("Malformed git numstat output: empty path");
-    }
-    stats.set(filePath, {
-      additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
-      deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
-      ...(additions === "-" || deletions === "-" ? { binary: true as const } : {}),
-    });
-  }
-  return stats;
-}
-
-export function parseGitFileChanges(
-  nameStatusOutput: string,
-  numstatOutput: string,
-): GitFileChange[] {
-  const stats = parseGitNumstat(numstatOutput);
-  const fields = splitNulTerminatedGitFields(nameStatusOutput, "git name-status output");
-  const changes: GitFileChange[] = [];
-
-  for (let index = 0; index < fields.length;) {
-    const status = fields[index++] ?? "";
-    if (!status) throw new Error("Malformed git name-status output: empty status");
-    const isRenameOrCopy = status.startsWith("R") || status.startsWith("C");
-    const pathCount = isRenameOrCopy ? 2 : 1;
-    if (index + pathCount > fields.length) {
-      throw new Error("Malformed git name-status output: truncated record");
-    }
-    const originalPath = isRenameOrCopy ? fields[index++] : undefined;
-    const filePath = fields[index++] ?? "";
-    if (!filePath || (isRenameOrCopy && !originalPath)) {
-      throw new Error("Malformed git name-status output: empty path");
-    }
-    const fileStats: { additions: number; deletions: number; binary?: true } = stats.get(
-      filePath,
-    ) ?? {
-      additions: 0,
-      deletions: 0,
-    };
-    changes.push({
-      path: filePath,
-      originalPath,
-      filename: path.basename(filePath),
-      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-      additions: fileStats.additions,
-      deletions: fileStats.deletions,
-      status,
-      ...(fileStats.binary ? { binary: true as const } : {}),
-    });
-  }
-  return changes;
-}
-
 export function decodeGitStatusSection(payload: string, label: string): string {
   // Whitespace is stripped before validating because it is never part of a base64
   // payload, but base64 implementations disagree about emitting it: GNU coreutils
@@ -572,20 +491,43 @@ export const GIT_STATUS_FRAME_END = String.fromCharCode(0x1f);
 export function gitStatusMarker(name: string): string {
   return `${GIT_STATUS_FRAME_START}${name}${GIT_STATUS_FRAME_END}`;
 }
-export const GIT_STATUS_NAME_STATUS_MARKER = gitStatusMarker("ORKESTRATOR_NAME_STATUS");
-export const GIT_STATUS_NUMSTAT_MARKER = gitStatusMarker("ORKESTRATOR_NUMSTAT");
+export const GIT_STATUS_DIFF_MARKER = gitStatusMarker("ORKESTRATOR_DIFF");
 export const GIT_STATUS_UNTRACKED_MARKER = gitStatusMarker("ORKESTRATOR_UNTRACKED");
 export const GIT_STATUS_END_MARKER = gitStatusMarker("ORKESTRATOR_END");
 export const GIT_STATUS_MISSING_REF_MARKER = gitStatusMarker("ORKESTRATOR_TARGET_REF_NOT_FOUND");
 export const GIT_STATUS_BASELINE_MARKER = gitStatusMarker("ORKESTRATOR_BASELINE");
 export const GIT_STATUS_BASE_OID_MARKER = gitStatusMarker("ORKESTRATOR_BASE_OID");
 
+// Excluding Orkestrator's own artifacts is housekeeping, not part of reading
+// status. Running it inside a function invoked with '|| true' keeps a read-only
+// or unwritable .git from failing the whole request under 'set -e'.
+const CONTAINER_MAINTAIN_GIT_EXCLUDE = `
+      maintain_git_exclude() {
+        exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
+        [ -n "$exclude_path" ] || return 0
+        case "$exclude_path" in
+          /*) exclude_file="$exclude_path" ;;
+          *) exclude_file="$(pwd)/$exclude_path" ;;
+        esac
+        mkdir -p "$(dirname "$exclude_file")" || return 0
+        for pattern in ".orkestrator" ".claude/settings.local.json"; do
+          if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
+            if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" 2>/dev/null)" != "" ]; then
+              printf '\\n' >> "$exclude_file" || return 0
+            fi
+            printf '%s\\n' "$pattern" >> "$exclude_file" || return 0
+          fi
+        done
+      }
+      maintain_git_exclude || true`;
+
 /**
  * Builds the single shell program that collects a container's git status.
  *
  * Everything is framed so a partial or reordered response is detectable, and the
- * three git payloads are base64'd because they are NUL-delimited and may contain
- * any byte a filename can.
+ * two git payloads are base64'd because they are NUL-delimited and may contain
+ * any byte a filename can. One `git diff` reports status and counts, and the
+ * commit the base resolved to is the one it compares against.
  *
  * It reads local Git state only. Fetching is the container fetch policy's job
  * (`container-git-fetch.ts`, script: {@link buildContainerFetchScript}); this
@@ -594,6 +536,9 @@ export const GIT_STATUS_BASE_OID_MARKER = gitStatusMarker("ORKESTRATOR_BASE_OID"
  * (`local`), in exactly the order the combined script used — so the policy can
  * decide whether a fetch is worth running. A baseline that resolves to neither
  * is the framed missing-target marker, never an empty diff.
+ *
+ * Exclude housekeeping runs on every read so replaced clones and edited or
+ * previously unwritable exclude files are repaired without restarting the backend.
  */
 export function buildContainerGitStatusScript(ref: string, includeWorkingTree: boolean): string {
   const branch = quoteShell(ref);
@@ -612,51 +557,26 @@ export function buildContainerGitStatusScript(ref: string, includeWorkingTree: b
         set +e
         exit 0
       fi
-      # Excluding Orkestrator's own artifacts is housekeeping, not part of reading
-      # status. Running it inside a function invoked with '|| true' keeps a
-      # read-only or unwritable .git from failing the whole request under 'set -e'.
-      maintain_git_exclude() {
-        exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
-        [ -n "$exclude_path" ] || return 0
-        case "$exclude_path" in
-          /*) exclude_file="$exclude_path" ;;
-          *) exclude_file="$(pwd)/$exclude_path" ;;
-        esac
-        mkdir -p "$(dirname "$exclude_file")" || return 0
-        for pattern in ".orkestrator" ".claude/settings.local.json"; do
-          if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
-            if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" 2>/dev/null)" != "" ]; then
-              printf '\\n' >> "$exclude_file" || return 0
-            fi
-            printf '%s\\n' "$pattern" >> "$exclude_file" || return 0
-          fi
-        done
-      }
-      maintain_git_exclude || true
+      ${CONTAINER_MAINTAIN_GIT_EXCLUDE}
       ${CONTAINER_REPO_IDENTITY_SNIPPET}
       ref=${branch}
-      if git rev-parse --verify --quiet "origin/$ref^{commit}" >/dev/null; then
-        base="origin/$ref"
+      if base_oid="$(git rev-parse --verify --quiet "origin/$ref^{commit}")"; then
         baseline=tracking
-      else
-        base="$ref"
+      elif base_oid="$(git rev-parse --verify --quiet "$ref^{commit}")"; then
         baseline=local
-      fi
-      # Reported on stdout as a framed marker rather than as a non-zero exit: the
-      # exec error message echoes the command back, so a literal marker in the
-      # script text would match failures that had nothing to do with the ref.
-      if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+      else
+        # Reported on stdout as a framed marker rather than as a non-zero exit: the
+        # exec error message echoes the command back, so a literal marker in the
+        # script text would match failures that had nothing to do with the ref.
         printf '\\036ORKESTRATOR_TARGET_REF_NOT_FOUND\\037'
         set +e
         exit 0
       fi
       printf '\\036ORKESTRATOR_BASELINE\\037%s' "$baseline"
-      printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$(git rev-parse --verify --quiet "$base^{commit}")"
+      printf '\\036ORKESTRATOR_BASE_OID\\037%s' "$base_oid"
       end_ref=${includeWorkingTree ? "" : "HEAD"}
-      printf '\\036ORKESTRATOR_NAME_STATUS\\037'
-      git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref | base64 -w0
-      printf '\\036ORKESTRATOR_NUMSTAT\\037'
-      git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref | base64 -w0
+      printf '\\036ORKESTRATOR_DIFF\\037'
+      git -c diff.autoRefreshIndex=false diff --raw --numstat -z -M "$base_oid" $end_ref | base64 -w0
       printf '\\036ORKESTRATOR_UNTRACKED\\037'
       ${includeWorkingTree ? `git status --porcelain=v1 -z --untracked-files=all | ${untrackedScanner} | base64 -w0` : ""}
       printf '\\036ORKESTRATOR_END\\037'
@@ -811,34 +731,27 @@ function parseContainerGitStatusSections(
 ): { changes: GitFileChange[]; truncated: boolean; ambiguousPaths?: string[] } {
   // A workspace that is not a git repository exits before emitting any frame.
   if (output.length === 0) return { changes: [], truncated: false };
-  const nameStatusStart = output.indexOf(GIT_STATUS_NAME_STATUS_MARKER);
-  const numstatStart = output.indexOf(GIT_STATUS_NUMSTAT_MARKER);
+  const diffStart = output.indexOf(GIT_STATUS_DIFF_MARKER);
   const untrackedStart = output.indexOf(GIT_STATUS_UNTRACKED_MARKER);
   const endStart = output.indexOf(GIT_STATUS_END_MARKER);
   if (
-    nameStatusStart !== 0 ||
-    numstatStart < nameStatusStart ||
-    untrackedStart < numstatStart ||
+    diffStart !== 0 ||
+    untrackedStart < diffStart ||
     endStart < untrackedStart ||
     endStart + GIT_STATUS_END_MARKER.length !== output.length
   ) {
     throw new Error("Malformed container git status response");
   }
 
-  const nameStatusOutput = decodeGitStatusSection(
-    output.slice(nameStatusStart + GIT_STATUS_NAME_STATUS_MARKER.length, numstatStart),
-    "container git name-status section",
-  );
-  const numstatOutput = decodeGitStatusSection(
-    output.slice(numstatStart + GIT_STATUS_NUMSTAT_MARKER.length, untrackedStart),
-    "container git numstat section",
-  );
-  // The script diffs without refreshing the index (it must not write), so
-  // name-status may report stat-only modifications. Numstat checks contents
-  // and omits them, as in the local scan.
-  const changedPaths = parseGitNumstat(numstatOutput);
-  const changes = parseGitFileChanges(nameStatusOutput, numstatOutput).filter(
-    (change) => change.status !== "M" || changedPaths.has(change.path),
+  // The script diffs without refreshing the index (it must not write), so the
+  // raw records may report stat-only modifications, as in the local scan.
+  const changes = withoutStatOnlyModifications(
+    parseGitDiffSummary(
+      decodeGitStatusSection(
+        output.slice(diffStart + GIT_STATUS_DIFF_MARKER.length, untrackedStart),
+        "container git diff section",
+      ),
+    ),
   );
   if (!includeWorkingTree) return { changes, truncated: false };
 
@@ -949,9 +862,11 @@ export async function getContainerGitStatusDetailed(
 /**
  * Reads a worktree's changes, reporting whether the untracked scan was capped.
  *
- * The three git reads are independent of each other, so they run together: the
- * status read used to wait for both diffs to finish before starting, which cost
- * a whole round of process spawn and git startup for nothing.
+ * The two git reads are independent of each other, so they run together: the
+ * status read used to wait for the diff to finish before starting, which cost a
+ * whole round of process spawn and git startup for nothing. One diff reports
+ * status and counts, and the base's commit is the one the resolver verified, so
+ * the scan compares against exactly the commit it reports.
  *
  * The reads are read-only: `--no-optional-locks` stops `git status` from
  * opportunistically refreshing and rewriting the index; `diff.autoRefreshIndex`
@@ -976,12 +891,14 @@ export async function getLocalGitStatusDetailed(
   ambiguousPaths?: string[];
 }> {
   validateGitRefName(targetBranch, "target branch");
-  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+  await ensureLocalGitExcludeOnce(worktreePath, () =>
+    addLocalWorkspaceArtifactsToGitExclude(worktreePath),
+  );
   // Diff tracking establishes ownership from environment records before opting
   // into migration. Unknown paths and project homes keep their own settings.
   await removeLegacyWorktreeFsmonitor(worktreePath, applicationOwnedWorktree);
 
-  const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
+  const base = await resolveLocalGitBaseCommit(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   // The worktree's own config is not trusted: it must not name a program
   // (filter driver, fsmonitor hook, git hook) that this scan would run. With
@@ -1002,7 +919,7 @@ export async function getLocalGitStatusDetailed(
       async (args) => (await runCommand("git", [...git, ...args], { timeoutMs: 10_000 })).stdout,
     )),
   );
-  const [nameStatus, numstat, porcelain, baseOid] = await Promise.all([
+  const [diff, porcelain] = await Promise.all([
     runCommand(
       "git",
       [
@@ -1010,19 +927,13 @@ export async function getLocalGitStatusDetailed(
         "diff",
         "--no-ext-diff",
         "--no-textconv",
-        "--name-status",
+        "--raw",
+        "--numstat",
         "-z",
         "-M",
-        base,
+        base.oid ?? base.ref,
         ...endRef,
       ],
-      {
-        timeoutMs: 60_000,
-      },
-    ),
-    runCommand(
-      "git",
-      [...git, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "-M", base, ...endRef],
       {
         timeoutMs: 60_000,
       },
@@ -1032,22 +943,13 @@ export async function getLocalGitStatusDetailed(
           timeoutMs: 60_000,
         })
       : Promise.resolve({ stdout: "" }),
-    runCommand("git", [...git, "rev-parse", "--verify", "-q", `${base}^{commit}`], {
-      timeoutMs: 10_000,
-    }).then(
-      (result) => result.stdout.trim() || undefined,
-      () => undefined,
-    ),
   ]);
 
-  // Without autoRefreshIndex, name-status may report stat-only modifications.
+  // Without autoRefreshIndex, the raw records may report stat-only modifications.
   // Numstat checks contents and omits them, while retaining real zero-line
   // changes (empty files, mode changes and binary files) as explicit records.
-  const changedPaths = parseGitNumstat(numstat.stdout);
-  const changes = parseGitFileChanges(nameStatus.stdout, numstat.stdout).filter(
-    (change) => change.status !== "M" || changedPaths.has(change.path),
-  );
-  const resolved = baseOid && /^[0-9a-f]{40,64}$/.test(baseOid) ? { baseOid } : {};
+  const changes = withoutStatOnlyModifications(parseGitDiffSummary(diff.stdout));
+  const resolved = base.oid ? { baseOid: base.oid } : {};
   if (!includeUncommitted) return { changes, truncated: false, ...resolved };
 
   const existingPaths = new Set(changes.map((change) => change.path));
@@ -1078,8 +980,9 @@ export async function getLocalGitStatusDetailed(
   const additionsPerPath = await mapWithConcurrency(
     scanned,
     UNTRACKED_SCAN_CONCURRENCY,
-    (filePath) => countLocalFileLinesDetailed(worktreePath, filePath).catch(() => null),
+    (filePath) => countUntrackedFileLines(worktreePath, filePath).catch(() => null),
   );
+  retainUntrackedCounts(worktreePath, scanned);
 
   untrackedPaths.forEach((filePath, index) => {
     const counted = additionsPerPath[index];
@@ -1133,84 +1036,6 @@ export async function mapWithConcurrency<T, R>(
 
   await Promise.all(runners);
   return results;
-}
-
-/**
- * Counts the lines in an untracked file without materialising it.
- *
- * Reading the whole file and splitting it allocated three copies of every
- * untracked file on each poll - the buffer, the decoded string, and an array
- * holding every line - for a number that only needs a running separator count.
- * The chunked walk below is the same algorithm the container scanner uses
- * (CONTAINER_UNTRACKED_STATS_SCANNER), so both environment types report
- * identical counts for identical content.
- */
-export async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
-  const counted = await countLocalFileLinesDetailed(rootPath, relativePath);
-  return counted.kind === "text" ? counted.lines : 0;
-}
-
-/**
- * {@link countLocalFileLines}, keeping why a file has no count: binary (a NUL
- * byte) and oversized files are not "zero lines", and the environment
- * projection must not present them as such.
- */
-export async function countLocalFileLinesDetailed(
-  rootPath: string,
-  relativePath: string,
-): Promise<
-  { kind: "text"; lines: number } | { kind: "binary" } | { kind: "too-large" } | { kind: "other" }
-> {
-  const target = validateRelativeFilePath(relativePath, "git status path");
-  const fullPath = path.join(rootPath, target);
-  recurringWorkMetrics.work("file-read");
-
-  // O_NOFOLLOW, and a stat of the descriptor rather than the path, so an
-  // untracked symlink cannot be followed out of the worktree and the file that
-  // gets measured is provably the one that passed the size check.
-  const handle = await fs.open(
-    fullPath,
-    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0) | (fsConstants.O_NONBLOCK || 0),
-  );
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) return { kind: "other" };
-    if (stat.size === 0) return { kind: "text", lines: 0 };
-    if (stat.size > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
-
-    const buffer = Buffer.allocUnsafe(FILE_LINE_COUNT_CHUNK_BYTES);
-    let total = 0;
-    let separators = 0;
-    let previousWasCarriageReturn = false;
-    let lastByte = -1;
-
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      total += bytesRead;
-      // The file can grow between the stat and the read; stop rather than let an
-      // actively-written log turn one poll into an unbounded scan.
-      if (total > MAX_BINARY_FILE_BYTES) return { kind: "too-large" };
-      for (let index = 0; index < bytesRead; index += 1) {
-        const byte = buffer[index]!;
-        if (byte === 0) return { kind: "binary" };
-        if (byte === 0x0d) {
-          separators += 1;
-          previousWasCarriageReturn = true;
-        } else if (byte === 0x0a) {
-          if (!previousWasCarriageReturn) separators += 1;
-          previousWasCarriageReturn = false;
-        } else {
-          previousWasCarriageReturn = false;
-        }
-        lastByte = byte;
-      }
-    }
-
-    return { kind: "text", lines: separators + (lastByte !== 0x0d && lastByte !== 0x0a ? 1 : 0) };
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
 }
 
 export async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
@@ -1282,10 +1107,45 @@ export async function resolveLocalGitBase(
   targetBranch: string,
   fetches: LocalGitFetches,
 ): Promise<string> {
-  const branch = validateGitRefName(targetBranch, "target branch");
+  return (await resolveLocalGitBaseCommit(worktreePath, targetBranch, fetches)).ref;
+}
 
-  if (isImmutableCommitRef(branch) && (await gitRefExists(worktreePath, branch))) {
-    return branch;
+/**
+ * The ref a local read compares against and, when it resolved, the immutable
+ * commit behind it. The check that finds the ref is the read of its commit, so a
+ * caller never resolves it twice. An unresolved `oid` is the ref's own error to
+ * report: the caller passes `ref` to Git and gets the same failure as ever.
+ */
+async function resolveLocalGitBaseCommit(
+  worktreePath: string,
+  targetBranch: string,
+  fetches: LocalGitFetches,
+): Promise<{ ref: string; oid?: string }> {
+  const branch = validateGitRefName(targetBranch, "target branch");
+  const commitOf = (ref: string) =>
+    runCommand(
+      "git",
+      [
+        ...HARDENED_GIT_CONFIG,
+        "-C",
+        worktreePath,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        `${ref}^{commit}`,
+      ],
+      { timeoutMs: 10_000 },
+    ).then(
+      ({ stdout }) => {
+        const oid = stdout.trim();
+        return { ref, ...(/^[0-9a-f]{40,64}$/.test(oid) ? { oid } : {}) };
+      },
+      () => null,
+    );
+
+  if (isImmutableCommitRef(branch)) {
+    const commit = await commitOf(branch);
+    if (commit) return commit;
   }
 
   // Rate limited and shared across every worktree of this repository, rather
@@ -1293,9 +1153,7 @@ export async function resolveLocalGitBase(
   await fetches.ensureFetched(worktreePath, branch);
 
   const remoteRef = `origin/${branch}`;
-  if (await gitRefExists(worktreePath, remoteRef)) return remoteRef;
-  if (await gitRefExists(worktreePath, branch)) return branch;
-  return remoteRef;
+  return (await commitOf(remoteRef)) ?? (await commitOf(branch)) ?? { ref: remoteRef };
 }
 
 /**
@@ -2629,23 +2487,35 @@ export async function ensureContainerProjectFilesAccess(containerId: string): Pr
   );
 }
 
-export async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: string): Promise<void> {
+/**
+ * Adds the patterns if any is missing. Returns the exclude file, with the stamp
+ * it had just before a read that found every pattern, when there was one.
+ */
+export async function addLocalWorkspaceArtifactsToGitExclude(
+  worktreePath: string,
+): Promise<{ file: string; stamp?: string }> {
   const excludeFile = await resolveLocalGitExcludeFile(worktreePath);
   await fs.mkdir(path.dirname(excludeFile), { recursive: true });
 
-  const existing = await fs.readFile(excludeFile, "utf8").catch(() => "");
-  const existingPatterns = new Set(existing.split(/\r?\n/));
-  let next = existing;
-  if (next.length > 0 && !next.endsWith("\n")) next += "\n";
+  // The second pass only reads back what the first wrote.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const info = await fs.stat(excludeFile).catch(() => null);
+    const existing = await fs.readFile(excludeFile, "utf8").catch(() => "");
+    const existingPatterns = new Set(existing.split(/\r?\n/));
+    let next = existing;
+    if (next.length > 0 && !next.endsWith("\n")) next += "\n";
 
-  for (const pattern of WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS) {
-    if (existingPatterns.has(pattern)) continue;
-    next += `${pattern}\n`;
-  }
+    for (const pattern of WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS) {
+      if (existingPatterns.has(pattern)) continue;
+      next += `${pattern}\n`;
+    }
 
-  if (next !== existing) {
+    if (next === existing) {
+      return { file: excludeFile, ...(info ? { stamp: statStamp(info) } : {}) };
+    }
     await fs.writeFile(excludeFile, next);
   }
+  return { file: excludeFile };
 }
 
 export async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {

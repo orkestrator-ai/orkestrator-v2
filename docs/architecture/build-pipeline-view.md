@@ -7,8 +7,8 @@ node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
 2026-10-28), the shared review routing (2026-10-29), read-only reviewers
 with the Git guard (2026-10-29), per-stage instructions (2026-10-29),
 reviewer lenses (2026-10-29), the CLI's `build launch` (2026-10-29), the
-header's key information panel (2026-11-01), delivery policies (2026-11-02), and
-per-worker mailboxes (2026-11-03).
+header's key information panel (2026-11-01), delivery policies (2026-11-02),
+per-worker mailboxes (2026-11-03), and the Notes step (2026-11-04).
 
 The build pipeline tab shows the pipeline as a left-to-right flow graph across
 the top and an inspector for the selected step below it, like the Multi Review
@@ -361,6 +361,9 @@ it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
 close button or a click outside closes it). Its sections, each shown only once
 written:
 
+- **Summary**: one paragraph on the change as a whole, in plain language for a
+  reader who does not know the code. A brief written before this section
+  existed has none and opens on its Problem or Objective.
 - **Problem** or **Objective**: `framing` is `problem` by default, `objective`
   when the ticket adds or changes something that was not broken.
 - **Context**, **Solution**, **What was done**.
@@ -411,6 +414,12 @@ they have no per-attempt snapshots to restore, so stages rebuild the brief
 instead of showing superseded work as current. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.
+
+`updates[].sections` accepts only `KEY_INFORMATION_SECTIONS`, and a value a
+release does not know fails its whole pipeline snapshot. A new section therefore
+stays off that list until the support window's floor reads it: `summary` is
+stored and shown but not named in update history, so an older renderer or a
+downgraded backend ignores the field and keeps the pipeline.
 
 ## Inspector and actions
 
@@ -671,6 +680,30 @@ notice.
 If an earlier attempt of the run opened a PR and a restart then ends in
 `push-no-pr`, the push updates that PR, which stays open, and the last node's
 inspector links it. Nothing closes a pull request.
+
+## Notes
+
+Notes is the last step on the line, after the PR (or the "No PR" outcome). It
+is not an agent stage: it has no session, costs nothing and cannot fail. The
+node (`kind: "notes"`) is drawn ahead like the PR, is complete when the run is,
+and is not followed automatically, so a finished run still opens on the step it
+last reached. On a failed run it stays readable and its status says "So far".
+Only a cancelled run that never shipped omits it.
+
+Its inspector (`PipelineNotesView`) leads with **Needs a look**, then shows the
+whole key information document (`KeyInformationDocument`, the same one the
+key information tab renders). The list comes from `pipelineFollowUps`
+(`@orkestrator/protocol/build-pipeline-notes`), a pure reading of the record:
+
+- criteria the newest live Verify marked `not-checked`, with what was missing;
+- the brief's `notDone` entries;
+- review issues still `open` or `partially-resolved`;
+- tests whose result is not `passed`.
+
+The Ship stage passes the same list to `prPrompt`, which has the description
+carry a `## Needs a look` section, so the person merging sees it. Only the
+pipeline's Ship stage does this. A graph's `pull-request-description` builder
+does not receive the list yet.
 
 ## Worker mailboxes
 

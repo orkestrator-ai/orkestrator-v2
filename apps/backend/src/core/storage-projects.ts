@@ -589,6 +589,22 @@ export class ProjectsRepository {
     return projects;
   }
 
+  /** Every project id, or a throw: a sweep must not read a lost store as "no projects". */
+  async loadProjectIdsForCleanup(): Promise<Set<string>> {
+    const snapshot = this.context.loadStoreStrict<unknown>(this.files.projectsFile());
+    if (!snapshot || !Array.isArray(snapshot.value)) {
+      throw new Error("Project store is missing or invalid; cleanup refused");
+    }
+    const ids = new Set<string>();
+    for (const project of snapshot.value) {
+      if (!isRecord(project) || !isNonBlankString(project.id)) {
+        throw new Error("Project owner is invalid; cleanup refused");
+      }
+      ids.add(project.id);
+    }
+    return ids;
+  }
+
   /** Destructive reconciliation needs a complete owner set, never a fallback. */
   async loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
     const snapshot = this.context.loadStoreStrict<unknown>(this.files.environmentsFile());

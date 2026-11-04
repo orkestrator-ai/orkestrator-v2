@@ -11,6 +11,7 @@
  * and appends the same parts the live stream would have, under the same
  * per-call bound.
  */
+import { normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import type { NormalizedMessage, NormalizedPart } from "../types/index.js";
 import {
   buildMessageParts,
@@ -73,6 +74,31 @@ function subagentParts(records: readonly SubagentRecord[], createdAt: string): N
 }
 
 /**
+ * Label the call with the model its subagent's responses reported, as the live
+ * stream does. The rollout's copy of the call cannot say: its `model` argument
+ * is only what was asked for, and usually absent.
+ */
+function labelSubagentModel(
+  row: NormalizedMessage,
+  parent: string,
+  records: readonly SubagentRecord[],
+): void {
+  const index = row.parts.findIndex((part) => part.toolUseId === parent);
+  if (index < 0 || row.parts[index]!.subagentModelId) return;
+  for (let at = records.length - 1; at >= 0; at -= 1) {
+    const record = records[at]!;
+    if (record.type !== "assistant") continue;
+    const subagentModelId = normalizeBackendModelId(
+      (record.message as { model?: unknown } | null | undefined)?.model,
+    );
+    if (subagentModelId) {
+      row.parts[index] = { ...row.parts[index]!, subagentModelId };
+      return;
+    }
+  }
+}
+
+/**
  * Appends each subagent's parts to the row holding the call that started it.
  * Never throws: a reload without subagent detail is the old behaviour, not a
  * failed hydration.
@@ -107,6 +133,7 @@ export async function rehydrateSubagentParts(
         unplaced.push(entry);
         continue;
       }
+      labelSubagentModel(row, entry.parent, entry.records);
       // A row that already holds this call's subagent output (a live session)
       // keeps what it has.
       if (row.parts.some((part) => part.parentTaskUseId === entry.parent)) continue;

@@ -1,3 +1,5 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
@@ -79,6 +81,38 @@ export function isCoordinatorSession(session: Pick<ResolvedSession, "environment
   return coordinatorIdFromRuntimeId(session.environment.id) !== null;
 }
 
+async function environmentSessionTabs(
+  context: Pick<PublicActionContext, "command">,
+  environment: Environment | null,
+): Promise<NativeTabInfo[]> {
+  if (!environment) return [];
+  const tabs = nativeTabsOfLayout(await context.command.storage.getPaneLayout(environment.id));
+  const startup =
+    environment.startupAgentSession ??
+    (isAgentPlatform(environment.initialAgentPlatform)
+      ? {
+          tabId: STARTUP_AGENT_TAB_ID,
+          agent: environment.initialAgentPlatform,
+          style: "native",
+          providerSessionId: undefined,
+        }
+      : undefined);
+  if (
+    environment.pendingAgentLaunch &&
+    startup?.style === "native" &&
+    isAgentPlatform(startup.agent) &&
+    !tabs.some((tab) => tab.tabId === startup.tabId)
+  ) {
+    tabs.push({
+      tabId: startup.tabId,
+      agent: startup.agent,
+      title: "Agent",
+      hasProviderSession: Boolean(startup.providerSessionId),
+    });
+  }
+  return tabs;
+}
+
 export async function resolveSession(
   context: Pick<PublicActionContext, "command">,
   target: { sessionId: string; environmentId: string; tabId: string },
@@ -91,9 +125,7 @@ export async function resolveSession(
     coordinator?.environment ?? (await storage.getEnvironment(target.environmentId));
   if (!environment)
     throw new PublicActionError("not-found", "The session's environment no longer exists");
-  const tabs = coordinator
-    ? [coordinator.tab]
-    : nativeTabsOfLayout(await storage.getPaneLayout(target.environmentId));
+  const tabs = coordinator ? [coordinator.tab] : await environmentSessionTabs(context, environment);
   const tab = tabs.find((candidate) => candidate.tabId === target.tabId);
   if (!tab)
     throw new PublicActionError("not-found", "The session no longer exists (its tab was closed)");
@@ -179,7 +211,7 @@ export async function listSessionSummaries(
   const storage = context.command.storage;
   const tabs = coordinatorIdFromRuntimeId(environmentId)
     ? [(await coordinatorSession(context, environmentId)).tab]
-    : nativeTabsOfLayout(await storage.getPaneLayout(environmentId));
+    : await environmentSessionTabs(context, await storage.getEnvironment(environmentId));
   const summaries: PublicSessionSummary[] = [];
   for (const tab of tabs) {
     const logicalSessionKey = nativeTabLogicalSessionKey(environmentId, tab.tabId);

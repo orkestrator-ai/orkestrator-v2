@@ -105,6 +105,29 @@ describe("Electron backend environment lifecycle commands", () => {
     ).toHaveLength(1);
   });
 
+  test("a single environment snapshot reads as the list does, private fields removed", async () => {
+    const environment = createEnvironment({
+      id: "env-one-snapshot",
+      projectId: "project-one-snapshot",
+      opencodePid: 123,
+      pendingRenamePrompt: "secret prompt",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const single = (await commands.get("get_environment_snapshot")?.(
+      { environmentId: environment.id },
+      context,
+    )) as Record<string, unknown>;
+
+    expect(single).toEqual(toClientEnvironment(environment) as unknown as Record<string, unknown>);
+    expect(single).not.toHaveProperty("opencodePid");
+    expect(single).not.toHaveProperty("pendingRenamePrompt");
+    await expect(
+      commands.get("get_environment_snapshot")?.({ environmentId: "missing" }, context),
+    ).resolves.toBeNull();
+  });
+
   test("passes an absent recreate result through without projecting it", async () => {
     const environment = createEnvironment({
       id: "env-recreate-no-container",

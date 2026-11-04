@@ -2,7 +2,9 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFlowGraphViewStore } from "@/stores/flowGraphViewStore";
+import { keyInformation } from "./key-information-test-fixture";
 import { PipelineReviewTab } from "./PipelineReviewTab";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 import { formatObservedAt } from "@/lib/view-freshness";
@@ -31,6 +33,7 @@ import {
 afterAll(restoreBuildChatTabMocks);
 afterEach(() => {
   cleanup();
+  useEnvironmentStore.setState({ environments: [] });
   useFlowGraphViewStore.setState({
     views: new Map(),
     collapsed: new Set(),
@@ -642,11 +645,12 @@ describe("a pipeline a restart rewound", () => {
       "Verify",
       "Ship",
       "PR",
+      "Notes",
     ]);
     // The rerun is followed, not the history.
     expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
     // The step count is the live run's; the previous attempt is history.
-    expect(screen.getByText(/^5 of 7 steps/)).toBeTruthy();
+    expect(screen.getByText(/^5 of 8 steps/)).toBeTruthy();
 
     selectNode("Previous attempt");
     expect(
@@ -934,4 +938,57 @@ describe("node face rows", () => {
     // Finishing does not change the node's height, so the graph does not jump.
     expect(node.style.height).toBe("82px");
   });
+});
+
+describe("Notes node labels and selection", () => {
+  test.each(["building", "complete"] as const)(
+    "labels %s notes with the current follow-up count",
+    (phase) => {
+      renderPipelineTab(build({ phase, keyInformation }));
+      const notes = graphNode("Notes");
+      expect(notes.getAttribute("aria-label")).toContain(phase === "complete" ? "Final" : "So far");
+      expect(notes.querySelector('[data-flow-node-row="detail"]')?.textContent).toBe(
+        "2 items to look at",
+      );
+    },
+  );
+
+  test("labels a single follow-up and an empty list", () => {
+    const pipeline = build({ phase: "building", keyInformation: { ...keyInformation, tests: [] } });
+    renderPipelineTab(pipeline);
+    expect(graphNode("Notes").textContent).toContain("1 item to look at");
+    act(() =>
+      useBuildPipelineStore.setState({
+        pipelines: new Map([[pipeline.id, { ...pipeline, keyInformation: undefined }]]),
+      }),
+    );
+    expect(graphNode("Notes").textContent).toContain("Nothing flagged");
+  });
+
+  test.each(["open-pr", "push-no-pr", "commit-only"] as const)(
+    "completed %s runs follow delivery even with complete Notes",
+    (policy) => {
+      useEnvironmentStore.setState({
+        environments: [
+          { id: "env-1", prUrl: "https://github.com/acme/widget/pull/7", prState: "open" },
+        ],
+      } as never);
+      renderPipelineTab(
+        build({
+          phase: "complete",
+          delivery: { policy },
+          sessions: [
+            session("build", "build", 0),
+            session("verify", "verify", 60),
+            ...(policy === "commit-only" ? [] : [session("pr", "ship", 120)]),
+          ],
+        }),
+      );
+      expect(graphNode("Notes").getAttribute("data-flow-state")).toBe("complete");
+      expect(graphNode("Notes").getAttribute("aria-selected")).toBe("false");
+      expect(graphNode(policy === "open-pr" ? "PR" : "No PR").getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    },
+  );
 });

@@ -14,6 +14,7 @@ import {
   type NativeAgentRetiredDispatch,
 } from "@orkestrator/protocol/native-agent";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
+import { parseSuborkRequestCarrier } from "@orkestrator/protocol/suborks";
 import { AGENT_INTERACTION_KINDS } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { redactArtifactGrantArgs } from "@orkestrator/protocol/transcript-artifacts";
@@ -73,8 +74,10 @@ export function firstUserMessageOf(
     // A goal turn is the loop's text, never the user's words, even when it is
     // the first row of a new tab.
     if (isGoalCarrierContent(message.content)) continue;
-    if (sessionTitleSourceText(message.content)) {
-      return { firstUserMessage: message.content, reachesStart };
+    // `/subork` is a carrier too, but its request is the user's own words.
+    const text = parseSuborkRequestCarrier(message.content)?.request ?? message.content;
+    if (sessionTitleSourceText(text)) {
+      return { firstUserMessage: text, reachesStart };
     }
   }
   return { reachesStart };

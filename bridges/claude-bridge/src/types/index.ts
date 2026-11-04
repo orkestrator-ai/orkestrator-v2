@@ -297,6 +297,8 @@ export interface NormalizedPart {
   toolUseId?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */
   parentTaskUseId?: string;
+  /** On a sub-agent's call: the model its responses reported running on. */
+  subagentModelId?: string;
   /** Internal: Message UUID for tracking thinking parts across streaming updates */
   sourcePartId?: string;
   /** Whether this tool is from an MCP server */

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { KeyInformationBody } from "./PipelineKeyInformation";
 import { keyInformation } from "./key-information-test-fixture";
 
@@ -71,6 +72,7 @@ describe("Key information panel section list", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual([
+      "Summary",
       "Objective",
       "Context",
       "Solution",
@@ -82,7 +84,48 @@ describe("Key information panel section list", () => {
       "Verification",
     ]);
     expect(scroller.contains(nav)).toBe(false);
-    expect(current(nav)).toBe("Objective");
+    expect(current(nav)).toBe("Summary");
+  });
+
+  test.each(["problem", "objective"] as const)(
+    "keeps the legacy %s first when summary is absent",
+    (framing) => {
+      const legacy = { ...keyInformation, framing };
+      delete legacy.summary;
+      render(<KeyInformationBody keyInformation={legacy} />);
+      const title = framing === "objective" ? "Objective" : "Problem";
+      const nav = screen.getByRole("navigation", { name: "Key information sections" });
+      const scroller = screen.getByTestId("pipeline-key-information-scroller");
+      const statement = within(scroller).getByRole("region", { name: title });
+      expect(within(scroller).getAllByRole("region")[0]).toBe(statement);
+      expect(within(statement).getByText(legacy.statement!)).toBeTruthy();
+      expect(within(scroller).queryByRole("region", { name: "Summary" })).toBeNull();
+      expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
+      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(current(nav)).toBe(title);
+    },
+  );
+
+  test("renders a summary-only brief with just its Summary section and navigation entry", () => {
+    const summary = "The pipeline now explains its progress in plain language.";
+    render(
+      <KeyInformationBody
+        keyInformation={{ ...emptyKeyInformation(keyInformation.updatedAt), summary }}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Key information sections" });
+    const scroller = screen.getByTestId("pipeline-key-information-scroller");
+    const regions = within(scroller).getAllByRole("region");
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(within(scroller).getByRole("region", { name: "Summary" }));
+    expect(within(regions[0]!).getByText(summary)).toBeTruthy();
+    expect(screen.queryByText(/Nothing has been recorded yet/)).toBeNull();
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Summary"]);
+    expect(current(nav)).toBe("Summary");
   });
 
   test("a heading scrolls the column smoothly to its section and becomes current", () => {
@@ -91,9 +134,9 @@ describe("Key information panel section list", () => {
     fireEvent.click(within(nav).getByRole("button", { name: "Decisions" }));
 
     expect(scrollTo).toHaveBeenCalledTimes(1);
-    // The fifth section, less the gap left above its heading.
+    // The sixth section, less the gap left above its heading.
     expect(scrollTo.mock.calls[0]![0]).toEqual({
-      top: 4 * SECTION_HEIGHT - 12,
+      top: 5 * SECTION_HEIGHT - 12,
       behavior: "smooth",
     });
     expect(current(nav)).toBe("Decisions");
@@ -113,7 +156,7 @@ describe("Key information panel section list", () => {
 
     fireEvent.click(within(nav).getByRole("button", { name: "Verification" }));
 
-    expect(scrollTo.mock.calls[0]![0]).toMatchObject({ top: 9 * SECTION_HEIGHT - VIEWPORT });
+    expect(scrollTo.mock.calls[0]![0]).toMatchObject({ top: 10 * SECTION_HEIGHT - VIEWPORT });
     expect(current(nav)).toBe("Verification");
   });
 
@@ -121,14 +164,14 @@ describe("Key information panel section list", () => {
     const { nav, scroller } = renderBody();
 
     await act(async () => {
-      scroller.scrollTop = 2 * SECTION_HEIGHT + 10;
+      scroller.scrollTop = 3 * SECTION_HEIGHT + 10;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(current(nav)).toBe("Solution");
 
     await act(async () => {
-      scroller.scrollTop = 9 * SECTION_HEIGHT - VIEWPORT;
+      scroller.scrollTop = 10 * SECTION_HEIGHT - VIEWPORT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -143,7 +186,7 @@ describe("Key information panel section list", () => {
     fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
     await act(async () => {
       // A frame part-way through the animation, over the Decisions section.
-      scroller.scrollTop = 4 * SECTION_HEIGHT;
+      scroller.scrollTop = 5 * SECTION_HEIGHT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -151,7 +194,7 @@ describe("Key information panel section list", () => {
 
     await act(async () => {
       fireEvent(scroller, new Event("scrollend"));
-      scroller.scrollTop = 4 * SECTION_HEIGHT + 10;
+      scroller.scrollTop = 5 * SECTION_HEIGHT + 10;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -162,7 +205,7 @@ describe("Key information panel section list", () => {
     const { nav, scroller } = renderBody();
     fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
     await act(async () => {
-      scroller.scrollTop = 4 * SECTION_HEIGHT;
+      scroller.scrollTop = 5 * SECTION_HEIGHT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });

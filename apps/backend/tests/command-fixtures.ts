@@ -227,12 +227,22 @@ export async function createCommandFixtures() {
     return value as { sessionId: string; created: boolean; bootstrapped?: boolean };
   }
 
+  /** The raw records `git diff --raw -z` writes for these name-status records. */
+  function rawFromNameStatus(nameStatus: string): string {
+    const fields = nameStatus.split("\0").slice(0, -1);
+    let raw = "";
+    for (let index = 0; index < fields.length;) {
+      const status = fields[index++]!;
+      const paths = fields.slice(index, (index += /^[RC]/.test(status) ? 2 : 1));
+      raw += `:100644 100644 1111111 2222222 ${status}\0${paths.join("\0")}\0`;
+    }
+    return raw;
+  }
+
   function framedContainerGitStatus(nameStatus = "", numstat = "", untracked = ""): string {
     return [
-      "\u001eORKESTRATOR_NAME_STATUS\u001f",
-      Buffer.from(nameStatus).toString("base64"),
-      "\u001eORKESTRATOR_NUMSTAT\u001f",
-      Buffer.from(numstat).toString("base64"),
+      "\u001eORKESTRATOR_DIFF\u001f",
+      Buffer.from(rawFromNameStatus(nameStatus) + numstat).toString("base64"),
       "\u001eORKESTRATOR_UNTRACKED\u001f",
       Buffer.from(untracked).toString("base64"),
       "\u001eORKESTRATOR_END\u001f",

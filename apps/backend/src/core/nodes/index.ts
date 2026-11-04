@@ -5,7 +5,8 @@
 export { parseNodeActionApproval } from "./node-action-requests.js";
 export { accountSwitchGrantState, runGrantedAccountSwitch } from "./node-account-switch-grant.js";
 export { coordinatorNodeContext } from "./node-context.js";
-export { NodeCoordination } from "./node-coordination.js";
+export { NodeCoordination, type NodeCoordinatorNotices } from "./node-coordination.js";
+export type { OutboxItem } from "./node-mail.js";
 export { bridgeRemoteCoordinatorEvents, NodeCoordinatorRemote } from "./node-coordinator-remote.js";
 export type { NodeFileTransfer } from "./node-file-transfer.js";
 export { parseNodeFileScope, seedFilesDir } from "./node-files.js";

@@ -658,6 +658,18 @@ export class AgentMailInjects {
         message.placement !== "pending-inject"
       )
         return null;
+      const resource = message.notice?.resource;
+      if (
+        message.from.kind === "system" &&
+        resource?.kind === "subork" &&
+        this.repos.suborks.getSuborkBatch(resource.id)?.delivery === "not-needed"
+      ) {
+        message.placement = "expired";
+        message.discardedAt = new Date().toISOString();
+        store.pendingInject = store.pendingInject.filter((entry) => entry.messageId !== messageId);
+        await this.store.save(store);
+        return null;
+      }
       const pendingEntry = store.pendingInject.find(
         (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === messageId,
       );

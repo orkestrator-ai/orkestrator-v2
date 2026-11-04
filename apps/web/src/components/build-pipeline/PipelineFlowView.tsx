@@ -70,6 +70,7 @@ import {
   type PipelineFlowNode,
 } from "./pipeline-flow";
 import { PipelineFlowGraph, pipelineNodeView } from "./PipelineFlowGraph";
+import { PipelineNotesView } from "./PipelineNotesView";
 import { PipelinePullRequestView, usePipelinePullRequest } from "./PipelinePullRequestView";
 import { PipelineSessionTranscript, pipelineAcceptsMessages } from "./PipelineSessionTranscript";
 import { PipelineTicketView } from "./PipelineTicketView";
@@ -246,7 +247,8 @@ export function PipelineFlowView({
   const now = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
 
   // The running step, else the last step reached; a node the user picked
-  // wins while it exists.
+  // wins while it exists. Notes is opened by hand: it never runs, so there is
+  // nothing in it to follow.
   const columnOf = new Map<string, number>();
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
@@ -259,7 +261,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded && !node.superseded)
+        .filter((node) => !node.session?.superseded && !node.superseded && node.kind !== "notes")
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -904,6 +906,7 @@ function InspectorBody({
   onShowAttemptStep: (attemptId: string, sessionKey: string) => void;
 }) {
   if (node.kind === "ticket") return <PipelineTicketView pipeline={pipeline} />;
+  if (node.kind === "notes") return <PipelineNotesView pipeline={pipeline} />;
   if (node.kind === "attempt") {
     return <PreviousAttempt node={node} pipeline={pipeline} onShowStep={onShowAttemptStep} />;
   }

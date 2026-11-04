@@ -98,6 +98,7 @@ import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./control-mcp-coordinator-
 import { WORKER_TURN_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-turns.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { COORDINATOR_GOAL_TOOL_CAPABILITIES } from "./control-mcp-coordinator-goals.js";
+import { COORDINATOR_SUBORK_TOOL_CAPABILITIES } from "./control-mcp-coordinator-suborks.js";
 import { goalForModel, type NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 import {
@@ -185,6 +186,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...WORKER_TURN_TOOL_CAPABILITIES,
   ...ACCOUNT_TOOL_CAPABILITIES,
   ...COORDINATOR_GOAL_TOOL_CAPABILITIES,
+  ...COORDINATOR_SUBORK_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 
@@ -1830,13 +1832,13 @@ export async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, prompt: delegation.source, activateTab: true },
+            { ...input, prompt: delegation.source, activateTab: false },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : { ...input, activateTab: true };
+        : { ...input, activateTab: false };
       const job = target
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);

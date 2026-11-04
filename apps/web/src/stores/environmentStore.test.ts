@@ -222,3 +222,53 @@ describe("environmentStore", () => {
     expect(useEnvironmentStore.getState().isDeleting("live")).toBe(false);
   });
 });
+
+describe("snapshots keep what did not change", () => {
+  const nested = () => ({ defaultAgent: "codex" as const });
+
+  test("one changed environment leaves the project's others untouched", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([
+      environment("a", { order: 0, agentSettings: nested() }),
+      environment("b", { order: 1, agentSettings: nested() }),
+    ]);
+    const [a, b] = useEnvironmentStore.getState().environments;
+
+    store.mergeEnvironmentsForProject("project-1", [
+      environment("a", { order: 0, agentSettings: nested(), status: "running" }),
+      environment("b", { order: 1, agentSettings: nested() }),
+    ]);
+
+    const [nextA, nextB] = useEnvironmentStore.getState().environments;
+    expect(nextB).toBe(b!);
+    expect(nextA).not.toBe(a!);
+    expect(nextA!.status).toBe("running");
+    // The changed environment's other fields keep their identity too.
+    expect(nextA!.agentSettings).toBe(a!.agentSettings!);
+  });
+
+  test("a resync with nothing new publishes nothing", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([environment("a", { agentSettings: nested() })]);
+    const before = useEnvironmentStore.getState();
+    store.setEnvironments([environment("a", { agentSettings: nested() })]);
+    expect(useEnvironmentStore.getState()).toBe(before);
+  });
+
+  test("a removed field is removed, not carried over", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([environment("a", { agentSettings: nested() })]);
+    store.mergeEnvironmentsForProject("project-1", [environment("a")]);
+    expect(useEnvironmentStore.getState().environments[0]!.agentSettings).toBeUndefined();
+  });
+
+  test("an update with an equal nested value keeps its identity", () => {
+    const store = useEnvironmentStore.getState();
+    store.setEnvironments([environment("a", { agentSettings: nested() })]);
+    const before = useEnvironmentStore.getState().environments[0]!;
+    store.updateEnvironment("a", { agentSettings: nested(), status: "running" });
+    expect(useEnvironmentStore.getState().environments[0]!.agentSettings).toBe(
+      before.agentSettings!,
+    );
+  });
+});

@@ -18,6 +18,7 @@ import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { useKanbanStore } from "../../apps/web/src/stores/kanbanStore";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
+import { keyInformation } from "../../apps/web/src/components/build-pipeline/key-information-test-fixture";
 import { validationRun } from "../../apps/web/src/components/build-pipeline/pipeline-test-fixture";
 import { usePrMonitorStore } from "../../apps/web/src/stores/prMonitorStore";
 import { useFlowGraphViewStore } from "../../apps/web/src/stores/flowGraphViewStore";
@@ -509,6 +510,16 @@ function scenario(): BuildPipeline {
         stage("verify", "verify", 960, 200, { headAtStart: "c".repeat(40) }),
       ],
     });
+  }
+  if (name === "notes") {
+    const pipeline = loops();
+    pipeline.keyInformation = keyInformation;
+    pipeline.taskSnapshot.acceptanceCriteriaItems = [
+      { id: "phone", text: "Works on a real phone" },
+    ];
+    pipeline.sessions.findLast((session) => session.phase === "verify")!.acceptanceCriteriaResults =
+      [{ id: "phone", status: "not-checked", evidence: "Needs a device." }];
+    return pipeline;
   }
   if (name === "loops") return loops();
   if (name === "new") return base({ phase: "waiting-for-setup", sessions: [] });

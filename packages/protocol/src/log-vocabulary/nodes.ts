@@ -8,6 +8,9 @@ export const NODES_LOG_AREAS = defineLogAreas({
       "actions.resume-failed": "Approved actions could not be resumed; a later pass retries.",
       "project-copy.notify-failed": "The coordinator could not be told a project copy finished.",
       "mail.return-deferred": "The leaf refused returned mail; it remains queued for retry.",
+      "notices.take-back-failed": "A notice for this node's coordinator stayed in the outbox.",
+      "notice.collected-retired":
+        "A detached controller owned a notice with ambiguous delivery; retired without redelivery.",
       "mail.delivery-deferred": "Leaf mail could not reach a coordinator yet.",
       "command.post-step-failed": "A step after a routed command failed.",
       "seed-files.incomplete": "Seed files for a leaf environment were not all copied.",

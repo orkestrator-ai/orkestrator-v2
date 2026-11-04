@@ -736,6 +736,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
         ...((branch.turnStartedAt ?? branch.startedAt)
           ? { turnStartedAt: branch.turnStartedAt ?? branch.startedAt }
           : {}),
+        session: { label: "Branch agent session" },
       });
       await host.assertFence();
       if (verdict === "wait") return "continue";

@@ -473,6 +473,8 @@ export const AGENT_MAIL_NOTICE_RESOURCES = [
    * `owner/repo#number` and `label` its title. Drawn as a one-line notice.
    */
   "watched-pull-request",
+  /** One `ask_agents` call's answers; `id` is its batch id. */
+  "subork",
 ] as const;
 export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
 

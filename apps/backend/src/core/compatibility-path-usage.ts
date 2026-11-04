@@ -60,6 +60,16 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-coordinator-mail.older-node",
   /**
+   * A leaf kept a coordinator notice on its own coordinator because the command
+   * node attached to it has not said it takes `coordinator-notices`.
+   */
+  "coordinator-notices.older-command-node",
+  /**
+   * A command node mailed its coordinators about a leaf's automatic switch from
+   * the leaf's event, because the leaf does not advertise `coordinator-notices`.
+   */
+  "coordinator-notices.older-leaf",
+  /**
    * A coordinator's mail with images was refused: the node does not advertise
    * `node-mail-attachments`.
    */

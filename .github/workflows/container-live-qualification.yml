@@ -25,6 +25,7 @@ on:
       - "apps/backend/tests/tmux-hook-signal-docker.test.ts"
       - "apps/backend/tests/container-worktree-signal-docker.test.ts"
       - "apps/backend/tests/container-start-docker.test.ts"
+      - "apps/backend/tests/project-git-mirror-docker.test.ts"
       - "apps/backend/tests/staged-input-relay-docker.test.ts"
       - "apps/backend/tests/portable-inputs-stamps-docker.test.ts"
       - "apps/backend/tests/claude-config-filter-docker.test.ts"
@@ -127,6 +128,10 @@ jobs:
       - name: Live input stamps across a restart
         if: ${{ !cancelled() }}
         run: mise run test:logged -- --name input-stamps -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/portable-inputs-stamps-docker.test.ts --parallel=1
+
+      - name: Live project Git mirror
+        if: ${{ !cancelled() }}
+        run: mise run test:logged -- --name git-mirror -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/project-git-mirror-docker.test.ts --parallel=1
 
       - name: Live Claude config allowlist and Claude start (M8)
         if: ${{ !cancelled() }}

@@ -197,6 +197,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     agentHandoffId: nonEmptyString(value.agentHandoffId) ?? undefined,
     consumedAgentHandoffId: nonEmptyString(value.consumedAgentHandoffId) ?? undefined,
     backendManagedTerminal: optionalBoolean(value.backendManagedTerminal),
+    setupHandoffConsumed: optionalBoolean(value.setupHandoffConsumed),
     backendTerminalSessionId: nonEmptyString(value.backendTerminalSessionId) ?? undefined,
   };
 

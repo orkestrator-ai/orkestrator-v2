@@ -240,3 +240,49 @@ describe("planCommandDispatch", () => {
     ).toBe(true);
   });
 });
+
+describe("/subork", () => {
+  test("plans an instruction to the current agent, idle or busy, with the request trimmed", () => {
+    for (const platform of ["claude", "codex", "cursor", "opencode", "pi", "grok"] as const) {
+      for (const busy of [false, true]) {
+        expect(
+          planCommandDispatch({
+            platform,
+            agentLabel: platform,
+            prompt: "/subork  ask codex to review this index.html \n",
+            intent: { kind: "typed" },
+            commands: withSessionActionSlashCommands([], nativeAgentCapabilities(platform)),
+            catalogue: ready,
+            structuredOutput: false,
+            attachments: [],
+            busy,
+          }),
+        ).toEqual({
+          kind: "subork",
+          commandName: "/subork",
+          request: "ask codex to review this index.html",
+        });
+      }
+    }
+  });
+
+  test("asks for a request, and takes no attachments", () => {
+    const commands = withSessionActionSlashCommands([], nativeAgentCapabilities("codex"));
+    const base = {
+      platform: "codex" as const,
+      agentLabel: "Codex",
+      intent: { kind: "typed" as const },
+      commands,
+      catalogue: ready,
+      structuredOutput: false,
+    };
+    const empty = planCommandDispatch({ ...base, prompt: "/subork", attachments: [] });
+    expect(empty.kind).toBe("rejected");
+    const attached = planCommandDispatch({
+      ...base,
+      prompt: "/subork ask codex",
+      attachments: [{ type: "image" }],
+    });
+    expect(attached.kind).toBe("rejected");
+  });
+});

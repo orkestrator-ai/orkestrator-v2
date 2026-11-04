@@ -3,8 +3,9 @@
  * the pipeline header to see where the ticket stands without reading every
  * transcript.
  *
- * The Build stage writes most of it (the problem or objective, context,
- * solution, what was done, decisions, what was not done and the tests run).
+ * The Build stage writes most of it (a plain-language summary, the problem or
+ * objective, context, solution, what was done, decisions, what was not done
+ * and the tests run).
  * Address adds how each review issue was handled, and Verify records each
  * round's verdict. The stages write through the `get_key_information` and
  * `update_key_information` agent tools; the backend also records each
@@ -47,7 +48,14 @@ export const KEY_INFORMATION_AUTHORS = [
 ] as const;
 export type KeyInformationAuthor = (typeof KEY_INFORMATION_AUTHORS)[number];
 
-/** The sections an update can name, in display order. */
+/**
+ * The sections an update can name, in display order.
+ *
+ * Renderers and backends in the support window reject a value they do not
+ * know, and that fails the whole pipeline snapshot, so a section added to the
+ * record stays off this list until the floor passes the release that adds it.
+ * `summary` is the one such section today: it is not named in update history.
+ */
 export const KEY_INFORMATION_SECTIONS = [
   "framing",
   "statement",
@@ -118,6 +126,8 @@ export interface KeyInformationUpdate {
 
 export interface BuildPipelineKeyInformation {
   framing: KeyInformationFraming;
+  /** One plain-language paragraph on the change, for a non-technical reader. */
+  summary?: string;
   /** The problem being solved, or the objective being completed. */
   statement?: string;
   context?: string;
@@ -169,6 +179,7 @@ export const KEY_INFORMATION_LIMITS = Object.freeze({
  */
 export interface KeyInformationPatch {
   framing?: KeyInformationFraming;
+  summary?: string;
   statement?: string;
   context?: string;
   solution?: string;
@@ -315,7 +326,7 @@ export function applyKeyInformationPatch(
   const round = clampRound(context.round);
   const next = copyOf(current, context.at);
   if (patch.framing !== undefined) next.framing = patch.framing;
-  for (const field of ["statement", "context", "solution"] as const) {
+  for (const field of ["summary", "statement", "context", "solution"] as const) {
     const value = patch[field];
     if (value === undefined) continue;
     const text = boundedOptional(value, limits.proseLength);
@@ -538,6 +549,7 @@ export function isBuildPipelineKeyInformation(
   return (
     isRecord(value) &&
     oneOf(KEY_INFORMATION_FRAMINGS, value.framing) &&
+    isOptionalText(value.summary, limits.proseLength) &&
     isOptionalText(value.statement, limits.proseLength) &&
     isOptionalText(value.context, limits.proseLength) &&
     isOptionalText(value.solution, limits.proseLength) &&
@@ -566,7 +578,8 @@ export function isBuildPipelineKeyInformation(
 export function hasKeyInformation(value: BuildPipelineKeyInformation | undefined): boolean {
   return Boolean(
     value &&
-    (value.statement ||
+    (value.summary ||
+      value.statement ||
       value.context ||
       value.solution ||
       value.workDone.length ||

@@ -22,6 +22,7 @@ afterEach(async () => {
 
 function coordination(world: MailWorld, controllers: Array<{ id: string; name: string }>) {
   const nodes = {
+    mode: () => "leaf",
     listControllers: () =>
       controllers.map((entry) => ({
         controllerId: entry.id,
@@ -163,6 +164,9 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     const worker = await world.addEnvironment("worker");
     const { instance, events } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
 
+    // Hold the recipient's turn so the subscribed drain cannot inject between
+    // publication and the placement assertions below.
+    world.startTurn(worker);
     const delivered = await instance.deliverIncoming({
       controllerId: "bk_cmd",
       coordinatorEnvironmentId: "coordinator:c1:conv-1",
@@ -174,9 +178,8 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     });
     // Admitted as ordinary mail waiting to wake the agent.
     expect(delivered.placement).toBe("pending-inject");
-    // Storing the mail wakes the backend's drain in the background, so the
-    // stored placement races it. Settle the drain before reading it back.
-    await world.deliver();
+    // End the held recipient turn, then drain its pending mail.
+    await world.finishTurn(worker);
     const incoming = await world.storage.getAgentMailMessage(
       worker.environmentId,
       worker.tabId,
@@ -618,6 +621,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     const world = await MailWorld.create();
     worlds.push(world);
     const main = await world.main();
+    // Keep the recipient busy so this admission assertion cannot race the
+    // automatic injection drain; delivery itself has separate coverage.
+    world.startTurn(main);
     const acks: number[] = [];
     const link = {
       connected: true,
@@ -665,9 +671,8 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     });
     await instance.collector.collect("bk_leaf" as never);
     expect(acks).toEqual([7]);
-    // Storing the mail wakes the backend's drain in the background, so the
-    // stored placement races it. Settle the drain before reading it back.
-    await world.deliver();
+    // End the held recipient turn, then drain its pending mail.
+    await world.finishTurn(main);
     const mailbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId, {
       limit: 10,
     });
@@ -1008,4 +1013,44 @@ test("an approved account switch keeps its account fields and runs the Settings 
   });
   notice.mockRestore();
   instance.collector.dispose();
+});
+
+test("production take-back pass retries from the 60-second recovery timer", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const { instance } = coordination(world, []);
+  let minute: (() => void) | undefined;
+  const interval = globalThis.setInterval;
+  const timers = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    ms: number,
+  ) => {
+    if (ms === 60_000) minute = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval);
+  const take = mock(async () => {
+    throw new Error("temporary");
+  });
+  instance.setCoordinatorNotices({ deliverFromLeaf: async () => "delivered", takeBack: take });
+  await instance.leafMail.enqueue("bk_gone" as never, {
+    requestId: "recover",
+    fromEnvironmentId: "machine",
+    fromTabId: "notice",
+    body: "notice",
+    coordinatorNotice: { kind: "repository", createSession: true },
+  });
+  try {
+    instance.start();
+    await instance.takeBackNotices();
+    expect(take).toHaveBeenCalledTimes(1);
+    take.mockImplementation(async () => undefined as never);
+    expect(minute).toBeDefined();
+    minute!();
+    await instance.takeBackNotices();
+    expect(take).toHaveBeenCalledTimes(2);
+    expect(await instance.leafMail.pending("bk_gone" as never)).toBe(0);
+  } finally {
+    timers.mockRestore();
+    instance.dispose();
+  }
 });

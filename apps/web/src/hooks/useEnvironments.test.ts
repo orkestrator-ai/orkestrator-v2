@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { useEnvironments } from "./useEnvironments";
+import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
@@ -6,6 +9,7 @@ import {
   cleanupDeletedEnvironmentSubscriptions,
   cleanupSubscriptionsRemovedByProjectSnapshot,
   reconcileEnvironmentLifecycleErrors,
+  refreshEnvironmentSnapshot,
 } from "./useEnvironments";
 import {
   armWindowBuildPipelineActivation,
@@ -17,6 +21,7 @@ import {
 } from "@/lib/pane-selection-storage";
 
 afterEach(() => {
+  cleanup();
   localStorage.clear();
   useEnvironmentStore.setState({ environments: [] });
 });
@@ -232,5 +237,118 @@ describe("pipeline handoff failure cleanup", () => {
       if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
       else delete window.orkestrator;
     }
+  });
+});
+
+describe("refreshEnvironmentSnapshot", () => {
+  const reads = (result: Environment | null | Error) =>
+    spyOn(backend, "getEnvironmentSnapshot").mockImplementation(async () => {
+      if (result instanceof Error) throw result;
+      return result;
+    });
+
+  test("updates that environment and keeps the others' objects", async () => {
+    const other = environment("env-2", "project-1");
+    useEnvironmentStore.setState({ environments: [environment("env-1", "project-1"), other] });
+    const list = spyOn(backend, "getEnvironmentSnapshots");
+    const read = reads({ ...environment("env-1", "project-1"), status: "running" });
+
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(true);
+
+    const [first, second] = useEnvironmentStore.getState().environments;
+    expect(first!.status).toBe("running");
+    expect(second).toBe(other);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(list).not.toHaveBeenCalled();
+    read.mockRestore();
+    list.mockRestore();
+  });
+
+  test("removes an environment the backend no longer has", async () => {
+    useEnvironmentStore.setState({ environments: [environment("env-1", "project-1")] });
+    const read = reads(null);
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().environments).toEqual([]);
+    read.mockRestore();
+  });
+
+  test("adds one another client created", async () => {
+    const read = reads(environment("env-new", "project-1"));
+    expect(await refreshEnvironmentSnapshot("project-1", "env-new")).toBe(true);
+    expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual(["env-new"]);
+    read.mockRestore();
+  });
+
+  test.each([false, true])(
+    "does not add a creation snapshot when generation changes (settled=%s)",
+    async (settled) => {
+      const pid = `creation-${settled}`;
+      const created = environment("env-created", pid);
+      let finishCreate!: (value: Environment) => void;
+      let finishRead!: (value: Environment) => void;
+      const create = spyOn(backend, "createEnvironment").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishCreate = resolve;
+          }),
+      );
+      const read = spyOn(backend, "getEnvironmentSnapshot").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+      try {
+        const { result } = renderHook(() =>
+          useEnvironments(null, { listenForRenameEvents: false }),
+        );
+        let snapshot = settled ? refreshEnvironmentSnapshot(pid, created.id) : undefined;
+        let creation!: Promise<Environment>;
+        act(() => {
+          creation = result.current.createEnvironment(pid);
+        });
+        if (!settled) snapshot = refreshEnvironmentSnapshot(pid, created.id);
+        const other = environment("env-other", pid);
+        if (settled) {
+          await act(async () => {
+            finishCreate(other);
+            await creation;
+          });
+        }
+        await act(async () => {
+          finishRead(created);
+          expect(await snapshot).toBe(true);
+        });
+        expect(useEnvironmentStore.getState().environments).toEqual(settled ? [other] : []);
+        if (!settled)
+          await act(async () => {
+            finishCreate(created);
+            await creation;
+          });
+        else useEnvironmentStore.getState().addEnvironment(created);
+        expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual([
+          ...(settled ? [other.id] : []),
+          created.id,
+        ]);
+      } finally {
+        create.mockRestore();
+        read.mockRestore();
+      }
+    },
+  );
+
+  test("reports a backend that predates the read, changing nothing", async () => {
+    const held = environment("env-1", "project-1");
+    useEnvironmentStore.setState({ environments: [held] });
+    const read = reads(new Error("Unknown backend command: get_environment_snapshot"));
+    expect(await refreshEnvironmentSnapshot("project-1", "env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().environments[0]).toBe(held);
+    read.mockRestore();
+  });
+
+  test("a failed read is not mistaken for a missing command", async () => {
+    const read = reads(new Error("backend down"));
+    await expect(refreshEnvironmentSnapshot("project-1", "env-1")).rejects.toThrow("backend down");
+    read.mockRestore();
   });
 });

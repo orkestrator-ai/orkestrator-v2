@@ -11,9 +11,8 @@ export function designFrameSource(
   document = import.meta.env.ORKESTRATOR_DESIGN_FRAME_DOCUMENT,
   pageUrl = window.location.href,
 ): { src: string } | { srcDoc: string } {
+  if (!document) return { srcDoc: designBootstrap(createUuid()) };
   // Gateway SPA routes can be nested; packaged documents are siblings of index.html.
   const base = pageUrl.startsWith("file:") ? pageUrl : new URL("/", pageUrl).href;
-  return document
-    ? { src: new URL(document, base).href }
-    : { srcDoc: designBootstrap(createUuid()) };
+  return { src: new URL(document, base).href };
 }

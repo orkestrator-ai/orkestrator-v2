@@ -415,6 +415,58 @@ export class AgentMailboxDirectory {
         | "revision"
       > & { incarnationId?: string }
     >();
+    const observeTab = (
+      environment: (typeof environments)[number],
+      project: (typeof projects)[number],
+      tab: Record<string, unknown>,
+      tabOrdinal: number,
+    ) => {
+      const environmentId = environment.id;
+      const tabId = tab.id as string;
+      const tabType = tab.type as string;
+      const kind = mailboxKind(tabType)!;
+      const { agent, locked } = tabAgent(tab);
+      const mailboxId = agentMailboxId(environmentId, tabId);
+      const logicalSessionKey = `env-${environmentId}:${tabId}`;
+      const runtime = this.agentMailRuntimeProvider?.({
+        mailboxId,
+        environmentId,
+        tabId,
+        agent,
+        logicalSessionKey,
+        kind,
+      });
+      const customSessionName = sessionsByEnvironment
+        .get(environmentId)
+        ?.find((session) => session.tabId === tabId)?.name;
+      const displayName = resolveTabDisplayName({
+        tabType,
+        tabOrdinal,
+        agent,
+        customSessionName,
+        nativeSessionTitle: runtime?.title,
+        displayTitle: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
+      });
+      observed.set(mailboxId, {
+        mailboxId,
+        projectId: project.id,
+        projectName: project.name,
+        environmentId,
+        environmentName: environment.name,
+        environmentStatus: environment.status,
+        tabId,
+        tabType,
+        title: displayName,
+        displayName,
+        tabOrdinal,
+        agent,
+        kind,
+        locked,
+        // Present even when undefined so a closed creator clears it.
+        coordinatorOrigin: coordinatorOrigins.get(environmentId),
+      });
+    };
+    const tabCounts = new Map<string, number>();
     for (const [environmentId, layout] of Object.entries(layoutsResult.layouts)) {
       const environment = environmentById.get(environmentId);
       // Deletion marks the environment before mail is scrubbed. Treat that
@@ -428,52 +480,34 @@ export class AgentMailboxDirectory {
       for (const leaf of paneLayoutLeaves(layout.root)) {
         for (const tab of leaf.tabs) {
           tabOrdinal += 1;
-          if (!isAddressableTab(tab)) continue;
-          const tabId = tab.id as string;
-          const tabType = tab.type as string;
-          const kind = mailboxKind(tabType)!;
-          const { agent, locked } = tabAgent(tab);
-          const mailboxId = agentMailboxId(environmentId, tabId);
-          const logicalSessionKey = `env-${environmentId}:${tabId}`;
-          const runtime = this.agentMailRuntimeProvider?.({
-            mailboxId,
-            environmentId,
-            tabId,
-            agent,
-            logicalSessionKey,
-            kind,
-          });
-          const customSessionName = sessionsByEnvironment
-            .get(environmentId)
-            ?.find((session) => session.tabId === tabId)?.name;
-          const displayName = resolveTabDisplayName({
-            tabType,
-            tabOrdinal,
-            agent,
-            customSessionName,
-            nativeSessionTitle: runtime?.title,
-            displayTitle: typeof tab.displayTitle === "string" ? tab.displayTitle : null,
-          });
-          observed.set(mailboxId, {
-            mailboxId,
-            projectId: project.id,
-            projectName: project.name,
-            environmentId,
-            environmentName: environment.name,
-            environmentStatus: environment.status,
-            tabId,
-            tabType,
-            title: displayName,
-            displayName,
-            tabOrdinal,
-            agent,
-            kind,
-            locked,
-            // Present even when undefined so a closed creator clears it.
-            coordinatorOrigin: coordinatorOrigins.get(environmentId),
-          });
+          if (isAddressableTab(tab)) observeTab(environment, project, tab, tabOrdinal);
         }
       }
+      tabCounts.set(environmentId, tabOrdinal);
+    }
+    // The job tab lands when setup finishes, but its agent is addressable from
+    // the moment it is promised: mail sent during setup waits for it, as it
+    // always has, rather than being refused for a tab that is on its way.
+    for (const environment of environments) {
+      if (!environment.pendingAgentLaunch || environment.deletionRequestedAt) continue;
+      if (observed.has(agentMailboxId(environment.id, STARTUP_AGENT_TAB_ID))) continue;
+      const project = projectById.get(environment.projectId);
+      if (!project) continue;
+      observeTab(
+        environment,
+        project,
+        {
+          id: STARTUP_AGENT_TAB_ID,
+          type: "agent-native",
+          nativeAgentData: {
+            environmentId: environment.id,
+            ...(environment.initialAgentPlatform
+              ? { platform: environment.initialAgentPlatform }
+              : {}),
+          },
+        },
+        (tabCounts.get(environment.id) ?? 0) + 1,
+      );
     }
     // One mailbox per build pipeline worker of a pipeline still running. A
     // worker that has ended keeps its mailbox (with its final status) while

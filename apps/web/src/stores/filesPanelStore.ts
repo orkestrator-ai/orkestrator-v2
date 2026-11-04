@@ -86,6 +86,8 @@ interface FilesPanelState {
   // `fileSubtreeKey` (not persisted). Views graft them onto `fileTree`.
   fileSubtreeKey: string;
   fileSubtrees: Record<string, FileSubtree>;
+  /** What the backend called each held directory, to ask whether it changed. */
+  fileSubtreeDigests: Record<string, string>;
   loadingFolders: string[];
   folderLoadTokens: Map<string, symbol>;
   failedFolders: string[];
@@ -119,12 +121,16 @@ interface FilesPanelState {
    * Null for another target, an active read, or (unless `reload`) loaded/failed.
    */
   beginFolderLoad: (key: string, path: string, reload: boolean) => symbol | null;
-  /** Accepts only the active token; `null` keeps earlier contents and marks failure. */
+  /**
+   * Accepts only the active token. `null` keeps earlier contents and marks
+   * failure; `"unchanged"` keeps them, and their identity, as still current.
+   */
   finishFolderLoad: (
     key: string,
     path: string,
     token: symbol,
-    subtree: FileSubtree | null,
+    subtree: FileSubtree | null | "unchanged",
+    digest?: string,
   ) => boolean;
   retryFolderLoad: (path: string) => void;
   setTargetBranch: (branch: string) => void;
@@ -203,6 +209,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       isLoadingTree: false,
       fileSubtreeKey: "",
       fileSubtrees: {},
+      fileSubtreeDigests: {},
       loadingFolders: [],
       folderLoadTokens: new Map(),
       failedFolders: [],
@@ -233,6 +240,9 @@ export const useFilesPanelStore = create<FilesPanelState>()(
             fileSubtrees: Object.fromEntries(
               Object.entries(state.fileSubtrees).filter(([p]) => !inBranch(p)),
             ),
+            fileSubtreeDigests: Object.fromEntries(
+              Object.entries(state.fileSubtreeDigests).filter(([p]) => !inBranch(p)),
+            ),
             failedFolders: state.failedFolders.filter((p) => !inBranch(p)),
             loadingFolders: state.loadingFolders.filter((p) => !inBranch(p)),
             folderLoadTokens: new Map([...state.folderLoadTokens].filter(([p]) => !inBranch(p))),
@@ -249,6 +259,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
             : {
                 fileSubtreeKey: key,
                 fileSubtrees: {},
+                fileSubtreeDigests: {},
                 loadingFolders: [],
                 folderLoadTokens: new Map(),
                 failedFolders: [],
@@ -270,7 +281,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
         });
         return token;
       },
-      finishFolderLoad: (key, path, token, subtree) => {
+      finishFolderLoad: (key, path, token, subtree, digest) => {
         const state = get();
         if (state.fileSubtreeKey !== key || state.folderLoadTokens.get(path) !== token)
           return false;
@@ -284,11 +295,22 @@ export const useFilesPanelStore = create<FilesPanelState>()(
           set(loading);
           return false;
         }
+        if (subtree === "unchanged") {
+          set({
+            ...loading,
+            failedFolders: state.failedFolders.includes(path)
+              ? state.failedFolders.filter((failed) => failed !== path)
+              : state.failedFolders,
+          });
+          return true;
+        }
+        const { [path]: _previousDigest, ...otherDigests } = state.fileSubtreeDigests;
         set(
           subtree
             ? {
                 ...loading,
                 fileSubtrees: { ...state.fileSubtrees, [path]: subtree },
+                fileSubtreeDigests: digest ? { ...otherDigests, [path]: digest } : otherDigests,
                 failedFolders: state.failedFolders.filter((failed) => failed !== path),
               }
             : {
@@ -303,7 +325,12 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       retryFolderLoad: (path) =>
         set((state) => {
           const { [path]: _dropped, ...fileSubtrees } = state.fileSubtrees;
-          return { fileSubtrees, failedFolders: state.failedFolders.filter((p) => p !== path) };
+          const { [path]: _droppedDigest, ...fileSubtreeDigests } = state.fileSubtreeDigests;
+          return {
+            fileSubtrees,
+            fileSubtreeDigests,
+            failedFolders: state.failedFolders.filter((p) => p !== path),
+          };
         }),
       setTargetBranch: (branch) => set({ targetBranch: branch }),
       requestFileOpen: (request) =>

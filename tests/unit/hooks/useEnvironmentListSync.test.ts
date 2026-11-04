@@ -135,6 +135,116 @@ describe("useEnvironmentListSync", () => {
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual(["project-2"]);
   });
 
+  describe("a lone announced environment", () => {
+    /** Delivers one announcement, naming a project and an environment. */
+    const announce = async (id: string, revision: number) => {
+      await act(async () => {
+        dispatchResourceChange({ resource: "environment", id, revision, projectId: "project-1" });
+        await new Promise((resolve) => originalSetInterval(resolve, 80));
+      });
+    };
+    const setup = (served: () => Promise<boolean> = () => Promise.resolve(true)) => {
+      const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(served);
+      renderHook(() => useEnvironmentListSync(["project-1"], refreshProject, refreshEnvironment));
+      return { refreshProject, refreshEnvironment };
+    };
+
+    test("reads that record and not the project's list", async () => {
+      const { refreshProject, refreshEnvironment } = setup();
+      for (let revision = 1; revision <= 3; revision += 1) await announce("env-1", revision);
+
+      expect(refreshEnvironment.mock.calls).toEqual([
+        ["project-1", "env-1"],
+        ["project-1", "env-1"],
+        ["project-1", "env-1"],
+      ]);
+      expect(refreshProject).not.toHaveBeenCalled();
+    });
+
+    test("falls back to the list, and stays there, on a backend without the read", async () => {
+      const { refreshProject, refreshEnvironment } = setup(() => Promise.resolve(false));
+
+      await announce("env-1", 1);
+      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
+      expect(refreshProject).toHaveBeenCalledTimes(1);
+
+      await announce("env-1", 2);
+      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
+      expect(refreshProject).toHaveBeenCalledTimes(2);
+
+      // A resync may mean a different backend, so the next change asks again.
+      await act(async () => {
+        requestResourceResync();
+        await Promise.resolve();
+      });
+      await announce("env-1", 3);
+      expect(refreshEnvironment).toHaveBeenCalledTimes(2);
+    });
+
+    test("a change landing during its read is read afterwards, not lost", async () => {
+      let finish: ((served: boolean) => void) | undefined;
+      const { refreshProject, refreshEnvironment } = setup(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      await announce("env-1", 1);
+      await announce("env-2", 2);
+      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        finish?.(true);
+        await Promise.resolve();
+      });
+      expect(refreshEnvironment.mock.calls.at(-1)).toEqual(["project-1", "env-2"]);
+      expect(refreshProject).not.toHaveBeenCalled();
+    });
+
+    test("several changes waiting at once read the list once", async () => {
+      let finish: ((served: boolean) => void) | undefined;
+      const { refreshProject, refreshEnvironment } = setup(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      // A reorder announces once per moved environment.
+      await act(async () => {
+        for (const [index, id] of ["env-1", "env-2", "env-3", "env-4"].entries()) {
+          dispatchResourceChange({
+            resource: "environment",
+            id,
+            revision: index + 1,
+            projectId: "project-1",
+          });
+        }
+        await new Promise((resolve) => originalSetInterval(resolve, 80));
+      });
+      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        finish?.(true);
+        await new Promise((resolve) => originalSetInterval(resolve, 0));
+      });
+      expect(refreshEnvironment).toHaveBeenCalledTimes(1);
+      expect(refreshProject).toHaveBeenCalledTimes(1);
+    });
+
+    test("an announcement without a project still reads every list", async () => {
+      const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+      const refreshEnvironment = mock<(projectId: string, id: string) => Promise<boolean>>(() =>
+        Promise.resolve(true),
+      );
+      renderHook(() =>
+        useEnvironmentListSync(["project-1", "project-2"], refreshProject, refreshEnvironment),
+      );
+      await announceEnvironmentChange();
+      expect(refreshEnvironment).not.toHaveBeenCalled();
+      expect(refreshProject).toHaveBeenCalledTimes(2);
+    });
+  });
+
   test("refreshes every current project after reconnect or revision-gap recovery", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
     globalThis.setInterval = (() => 1) as unknown as typeof setInterval;

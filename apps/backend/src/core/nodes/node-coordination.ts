@@ -1,5 +1,6 @@
 import {
   AGENT_MAIL_MAX_THREAD_HOPS,
+  normalizeAgentMessagingSettings,
   type AgentMailAttachment,
 } from "@orkestrator/protocol/agent-mail";
 import { randomUUID } from "node:crypto";
@@ -14,6 +15,7 @@ import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrato
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import type { CoordinatorNoticeRoute } from "@orkestrator/protocol/coordinator-notices";
 import { parseProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import {
   parseWorkerQuestionRelay,
@@ -84,6 +86,9 @@ function parseMailState(value: unknown): NodeMailState {
     ...(root.contacts && typeof root.contacts === "object" ? { contacts: root.contacts } : {}),
     threads: root.threads && typeof root.threads === "object" ? root.threads : {},
     outbox: root.outbox && typeof root.outbox === "object" ? root.outbox : {},
+    ...(root.noticeRoutes && typeof root.noticeRoutes === "object"
+      ? { noticeRoutes: root.noticeRoutes }
+      : {}),
     ...(root.acknowledgedAttachmentMail && typeof root.acknowledgedAttachmentMail === "object"
       ? { acknowledgedAttachmentMail: root.acknowledgedAttachmentMail }
       : {}),
@@ -170,6 +175,17 @@ export async function localCoordinatorContact(
   return at ? { at } : {};
 }
 
+/** What node mail needs from the coordinator notices; set once both exist. */
+export interface NodeCoordinatorNotices {
+  /** A leaf's notice, collected by this command node. */
+  deliverFromLeaf(
+    item: OutboxItem,
+    node: { nodeId: string; name: string },
+  ): Promise<"delivered" | "declined" | "deferred">;
+  /** A notice this node queued that its own coordinator should take after all. */
+  takeBack(item: OutboxItem): Promise<void>;
+}
+
 export class NodeCoordination {
   readonly leafMail: LeafNodeMail;
   readonly collector: NodeMailCollector;
@@ -188,6 +204,64 @@ export class NodeCoordination {
   private unsubscribeNodes: (() => void) | undefined;
   private unsubscribeKanban: (() => void) | undefined;
   private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
+  private coordinatorNotices: NodeCoordinatorNotices | null = null;
+  private takingBack: Promise<void> | null = null;
+
+  setCoordinatorNotices(notices: NodeCoordinatorNotices): void {
+    this.coordinatorNotices = notices;
+  }
+
+  /**
+   * Where a notice for this repository goes from this node, by the one rule.
+   * A null project is a machine-wide notice.
+   */
+  async routeNotice(projectId: string | null): Promise<CoordinatorNoticeRoute> {
+    const project = projectId
+      ? await this.options.storage.getProject(projectId).catch(() => null)
+      : null;
+    return this.leafMail.routeNotice({
+      ...(projectId ? { contactKey: coordinatorContactKey(projectId) } : {}),
+      repositoryHint: repositoryHint(project?.gitUrl) ?? null,
+      machineWide: projectId === null,
+    });
+  }
+
+  /** Queue a notice for a command node's coordinator; refused, not dropped, when full. */
+  async queueNotice(
+    controllerId: BackendId,
+    item: Omit<OutboxItem, "seq" | "createdAt" | "bytes" | "repositoryHint">,
+  ): Promise<void> {
+    const project = item.noticeProjectId
+      ? await this.options.storage.getProject(item.noticeProjectId).catch(() => null)
+      : null;
+    const hint = repositoryHint(project?.gitUrl);
+    await this.leafMail.enqueue(controllerId, {
+      ...item,
+      ...(hint ? { repositoryHint: hint } : {}),
+    });
+  }
+
+  /** Hand this node's coordinator the notices no command node will take. One pass at a time. */
+  takeBackNotices(): Promise<void> {
+    this.takingBack ??= this.takeBackNoticesOnce().finally(() => {
+      this.takingBack = null;
+    });
+    return this.takingBack;
+  }
+
+  private async takeBackNoticesOnce(): Promise<void> {
+    const notices = this.coordinatorNotices;
+    if (!notices) return;
+    for (const { controllerId, item } of await this.leafMail.noticesToTakeBack()) {
+      try {
+        await notices.takeBack(item);
+        await this.leafMail.settleTakenBack(controllerId, item.seq);
+      } catch (error) {
+        // It stays in the outbox, and the next pass tries again.
+        log.warn("notices.take-back-failed", { error: formatLogError(error, { message: false }) });
+      }
+    }
+  }
 
   /** Called after backend recovery, links and portal storage are ready. */
   start(): void {
@@ -199,10 +273,23 @@ export class NodeCoordination {
     // A last resort for anything an event did not trigger; a node with nothing
     // new costs a cursor read and an empty collect.
     this.ticketSyncTimer = setInterval(() => {
-      if (this.options.nodes.mode() === "command")
+      if (this.options.nodes.mode() === "command") {
         void this.ticketSync.syncAll().catch(() => undefined);
+        // A collect also tells each leaf which repositories this node has now.
+        void this.options.nodes
+          .listNodes()
+          .then((list) => {
+            for (const node of list.nodes) {
+              if (node.connection.state === "connected") void this.collector.collect(node.nodeId);
+            }
+          })
+          .catch(() => undefined);
+      }
+      void this.takeBackNotices();
     }, 60_000);
     this.ticketSyncTimer.unref?.();
+    // What a previous run queued or was handed back is still in the outbox.
+    void this.takeBackNotices();
   }
 
   private resumeActions(): void {
@@ -258,10 +345,12 @@ export class NodeCoordination {
           nodes.listControllers().map((entry) => ({
             controllerId: entry.controllerId,
             displayName: entry.displayName,
+            lastContactAt: entry.lastContactAt,
           })),
         mostRecentControllerId: () => nodes.mostRecentControllerId(),
         localCoordinatorContact: (environmentId, tabId) =>
           localCoordinatorContact(storage, environmentId, tabId),
+        noticesHandedBack: () => void this.takeBackNotices(),
       },
       options.emit,
       Date.now,
@@ -308,6 +397,20 @@ export class NodeCoordination {
       nodeName: async (nodeId) =>
         (await nodes.getNode(nodeId).catch(() => null))?.displayName ?? nodeId,
       deliver: (input) => this.deliverToCoordinator(input),
+      notices: {
+        // The repositories whose coordinator here can take a leaf's notice.
+        repositoryHints: async () =>
+          !normalizeAgentMessagingSettings((await storage.loadConfig()).global.agentMessaging)
+            .enabled
+            ? []
+            : (await storage.loadProjects())
+                .map((project) => repositoryHint(project.gitUrl))
+                .filter((hint): hint is string => Boolean(hint)),
+        deliver: (item, node) => {
+          if (!this.coordinatorNotices) throw new Error("Coordinator notices are not ready.");
+          return this.coordinatorNotices.deliverFromLeaf(item, node);
+        },
+      },
     });
     this.ticketSync = new NodeTicketSync({
       selfId: () => nodes.selfIdentity(),

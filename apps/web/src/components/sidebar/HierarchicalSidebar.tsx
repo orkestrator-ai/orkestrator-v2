@@ -355,6 +355,7 @@ export function HierarchicalSidebar() {
   const {
     allEnvironments,
     loadEnvironments,
+    refreshEnvironmentSnapshot,
     createEnvironment,
     forkEnvironment,
     deleteEnvironment,
@@ -368,6 +369,7 @@ export function HierarchicalSidebar() {
   useEnvironmentListSync(
     projects.map((project) => project.id),
     (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
+    refreshEnvironmentSnapshot,
   );
 
   // Data via narrow selectors; actions are stable references on the store.

@@ -203,6 +203,15 @@ export const BACKEND_CAPABILITIES = {
    */
   nodeCoordinatorMail: "node-coordinator-mail",
   /**
+   * The hierarchy of coordinator notices (`@orkestrator/protocol/coordinator-notices`).
+   * `collect_node_outbox` and `ack_node_outbox` take `coordinatorNotices`, and the
+   * leaf queues notices for the command node's coordinator. The command node
+   * sends the key only to a leaf that advertises this, because an older leaf
+   * refuses unknown keys. A leaf that never received the key treats that command
+   * node as older and keeps its notices on its own coordinator.
+   */
+  coordinatorNotices: "coordinator-notices",
+  /**
    * Images on coordinator mail between nodes: `deliver_node_mail` and
    * `collect_node_outbox` take `attachments`/`attachmentMail`, with the node
    * file commands' `mailAttachments` scope and `prepare_node_mail_attachments`.

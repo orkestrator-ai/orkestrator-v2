@@ -78,6 +78,14 @@ function seedSession(key: string, historyBytes: number): void {
     );
 }
 
+function syncCache(
+  liveProjection: NativeAgentSessionProjection,
+  historyMessages: unknown[],
+  historyBytes: number,
+): NativeAgentSyncCacheEntry {
+  return { liveProjection, historyComplete: false, historyMessages, historyBytes };
+}
+
 afterEach(() => useNativeAgentProjectionStore.getState().reset());
 
 describe("native agent projection history cache", () => {
@@ -375,5 +383,115 @@ describe("native agent projection byte accounting", () => {
       slowEncodedBytes(discoveryView()) + 4_096,
     );
     expectExactTotals();
+  });
+});
+
+describe("native agent projection writes copy only what they change", () => {
+  const identities = () => {
+    const state = useNativeAgentProjectionStore.getState();
+    return {
+      projections: state.projections,
+      projectionBytes: state.projectionBytes,
+      syncCaches: state.syncCaches,
+      progressiveCaches: state.progressiveCaches,
+      progressiveCacheBytes: state.progressiveCacheBytes,
+      historyEvictions: state.historyEvictions,
+    };
+  };
+  const changedMaps = (before: ReturnType<typeof identities>) => {
+    const after = identities();
+    return (Object.keys(before) as Array<keyof typeof before>).filter(
+      (name) => before[name] !== after[name],
+    );
+  };
+  const progressive = {
+    transcriptToken: "token",
+    transcriptAvailability: "current",
+    transcriptRefreshing: false,
+    stateAvailability: "current",
+  } as const;
+
+  test("a new projection with the same messages changes only the projections Map", () => {
+    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const messages = [{ id: "m1" }];
+    setProjection("a", projection("a", messages));
+    setProjection("b", projection("b", messages));
+    const before = identities();
+    setProjection("a", projection("a", messages));
+    expect(changedMaps(before)).toEqual(["projections"]);
+    // The LRU still moved: "a" is now the most recent.
+    expect([...useNativeAgentProjectionStore.getState().projections.keys()]).toEqual(["b", "a"]);
+  });
+
+  test("changed messages also change the byte Map, and nothing else", () => {
+    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    setProgressiveCache("a", progressive);
+    setProjection("a", projection("a", [{ id: "m1" }]));
+    const before = identities();
+    setProjection("a", projection("a", [{ id: "m1" }, { id: "m2" }]));
+    expect(changedMaps(before)).toEqual(["projections", "projectionBytes"]);
+  });
+
+  test("a sync cache write adds only the sync Map", () => {
+    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const live = projection("a");
+    setProjection("a", live);
+    const before = identities();
+    setProjection("a", projection("a"), syncCache(live, [], 0));
+    expect(changedMaps(before)).toEqual(["projections", "syncCaches"]);
+    expect(recomputeNativeAgentProjectionTotals().historyBytesTotal).toBe(
+      useNativeAgentProjectionStore.getState().historyBytesTotal,
+    );
+  });
+
+  test("rewriting the newest projection publishes nothing", () => {
+    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const live = projection("a");
+    const cache = syncCache(live, [], 0);
+    setProjection("a", live, cache);
+    const state = useNativeAgentProjectionStore.getState();
+    setProjection("a", live);
+    setProjection("a", live, cache);
+    expect(useNativeAgentProjectionStore.getState()).toBe(state);
+  });
+
+  test("clearing a session touches its progressive entry only when it holds a token", () => {
+    const { setProjection, setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    setProjection("a", projection("a"));
+    setProgressiveCache("other", progressive);
+    const before = identities();
+    setProjection("a", null);
+    expect(changedMaps(before)).toEqual(["projections", "projectionBytes"]);
+
+    setProjection("b", projection("b"));
+    setProgressiveCache("b", progressive);
+    const withToken = identities();
+    setProjection("b", null);
+    expect(changedMaps(withToken)).toEqual(["projections", "projectionBytes", "progressiveCaches"]);
+  });
+
+  test("a progressive patch with the same discovery keeps the byte Map", () => {
+    const { setProgressiveCache } = useNativeAgentProjectionStore.getState();
+    const discovery = discoveryView();
+    setProgressiveCache("a", { ...progressive, discovery });
+    const before = identities();
+    setProgressiveCache("a", { ...progressive, discovery, transcriptRefreshing: true });
+    expect(changedMaps(before)).toEqual(["progressiveCaches"]);
+  });
+
+  test("clearing an absent progressive entry publishes nothing", () => {
+    const state = useNativeAgentProjectionStore.getState();
+    state.setProgressiveCache("absent", null);
+    expect(useNativeAgentProjectionStore.getState()).toBe(state);
+  });
+
+  test("an eviction that finds nothing to release publishes nothing", () => {
+    const { setProjection } = useNativeAgentProjectionStore.getState();
+    const live = projection("a");
+    setProjection("a", live, syncCache(live, [{ id: "m" }], 2_000));
+    const state = useNativeAgentProjectionStore.getState();
+    // Over budget, but the only history belongs to the excepted session.
+    evictNativeAgentHistoryCaches("a", 1_000, 1_000);
+    expect(useNativeAgentProjectionStore.getState()).toBe(state);
   });
 });

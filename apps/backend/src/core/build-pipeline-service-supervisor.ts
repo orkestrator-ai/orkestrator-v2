@@ -471,6 +471,7 @@ export class BuildPipelineSupervisor {
         taskId: pipeline.taskId,
         environmentId: pipeline.environmentId,
         isLocal: pipeline.environmentType === "local",
+        activate: "setup-handoff",
       });
       await this.startStage(pipeline, "build", "building");
       return;
@@ -729,6 +730,7 @@ export class BuildPipelineSupervisor {
         error: statusDetail,
         resends: session.usageLimitResends ?? 0,
         ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
+        session: { label: session.label },
       });
       if (verdict === "wait") return;
       if (verdict === "resend") {

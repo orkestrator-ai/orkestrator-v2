@@ -258,7 +258,16 @@ describe("BuildChatTab backend projection", () => {
     });
     rerender(<BuildChatTab data={{ ...tabData, pipelineId: "empty" }} />);
     // Nothing has run yet, so every step ahead is a placeholder.
-    expect(nodeTitles()).toEqual(["Ticket", "Setup", "Build", "Review", "Verify", "Ship", "PR"]);
+    expect(nodeTitles()).toEqual([
+      "Ticket",
+      "Setup",
+      "Build",
+      "Review",
+      "Verify",
+      "Ship",
+      "PR",
+      "Notes",
+    ]);
     expect(graphNode("Build").hasAttribute("data-flow-placeholder")).toBe(true);
     expect(selectedTitle()).toBe("Setup");
     expect(within(inspector()).getByText("Local worktree")).toBeTruthy();

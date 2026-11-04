@@ -3,17 +3,32 @@ import {
   type ProjectArrangementIntent,
 } from "@orkestrator/protocol/project-arrangement";
 import { useState } from "react";
+import { DndContext } from "@dnd-kit/core";
+import { SortableContext } from "@dnd-kit/sortable";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
+import type { CoordinatorActivityState } from "@orkestrator/protocol/coordinator-activity";
 import { emptyPortalLayout, type PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
+import { CommandNodeHomeIcon, MachineHomeIcon } from "@/components/federation/MachineDot";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
+import { ProjectGroupHeader } from "@/components/sidebar/ProjectGroupHeader";
+import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
+import { Collapsible } from "@/components/ui/collapsible";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { useProjectStore, useEnvironmentStore, useUIStore } from "@/stores";
+import {
+  useCoordinatorActivity,
+  useCoordinatorActivityStore,
+} from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { Project, Environment } from "@/types";
+
+const ALIGNMENT_ICON =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+const LONG_NAME = "a-machine-or-checkout-name-long-enough-that-it-has-to-truncate-in-the-sidebar";
 
 function install() {
   const params = new URLSearchParams(location.search);
@@ -23,6 +38,10 @@ function install() {
   const repository = params.has("repository");
   // A third, empty machine, so an expanded machine has a neighbour on each side.
   const spare = params.has("spare");
+  // `?alignment`: repository members with and without a project icon, long
+  // names, mail badges, another machine's copy of the repository, and a
+  // project with no repository, which stays outside every group.
+  const alignment = params.has("alignment");
   // `?merge-ready`: `p-env-1` and `q-env-1` have a PR ready to merge, while
   // `p-env-2`'s is blocked, so the two can be compared side by side.
   const signal = params.get("signal");
@@ -48,15 +67,21 @@ function install() {
   } | null;
   let projects: Project[] =
     saved?.projects ??
-    (groups ? ["p", "p2", "q", "q2"] : ["p", "q"]).map((id, order) => ({
-      id,
-      name: id,
-      gitUrl: `https://github.com/acme/${id.startsWith("p") ? "source" : "target"}.git`,
-      localPath: null,
-      addedAt: "2026-10-22T00:00:00Z",
-      order,
-      ...(groups ? { folder: id.startsWith("p") ? "Source" : "Target" } : {}),
-    }));
+    (groups ? ["p", "p2", "q", "q2"] : ["p", "q"])
+      .concat(alignment ? ["solo"] : [])
+      .map((id, order) => ({
+        id,
+        name: alignment && id === "p2" ? LONG_NAME : id,
+        gitUrl:
+          id === "solo"
+            ? ""
+            : `https://github.com/acme/${id.startsWith("p") ? "source" : "target"}.git`,
+        localPath: null,
+        addedAt: "2026-10-22T00:00:00Z",
+        order,
+        ...(groups ? { folder: id.startsWith("p") ? "Source" : "Target" } : {}),
+        ...(alignment && (id === "p" || id === "solo") ? { icon: ALIGNMENT_ICON } : {}),
+      }));
   let layout = saved?.layout ?? emptyPortalLayout();
   const environments: Environment[] = projects.flatMap((project) =>
     [1, 2, 3].map((index) => ({
@@ -125,12 +150,40 @@ function install() {
                     loadedAt: 1,
                     truncated: false,
                     lastError: null,
-                    projects: [],
-                    environments: [],
+                    projects: alignment
+                      ? [
+                          {
+                            ref: { backendId: nodeId, projectId: "r" },
+                            key: JSON.stringify([nodeId, "project", "r"]),
+                            name: "r",
+                            order: 0,
+                            repositoryHint: "github.com/acme/source",
+                            icon: ALIGNMENT_ICON,
+                          },
+                        ]
+                      : [],
+                    environments: alignment
+                      ? [
+                          {
+                            ref: { backendId: nodeId, environmentId: "r-env" },
+                            key: JSON.stringify([nodeId, "environment", "r-env"]),
+                            projectId: "r",
+                            name: "r-env",
+                            order: 0,
+                            status: "stopped",
+                            activity: "idle",
+                            hasUnreadWork: false,
+                            deleting: false,
+                            isProjectHome: false,
+                            agentMailUnread: 120,
+                            agentMailFailed: true,
+                          },
+                        ]
+                      : [],
                     view: {
                       nodeId,
                       enabled: true,
-                      displayName: name,
+                      displayName: alignment ? LONG_NAME : name,
                       fallbackName: name,
                       routes: [],
                       routeOrder: [],
@@ -235,17 +288,95 @@ function install() {
   return calls;
 }
 
+const noop = () => {};
+
+/**
+ * A repository member led by the machine's home. The sidebar shows members
+ * their project's icon or none, so this draws the shared header directly to
+ * measure the home in the same column.
+ */
+function HouseRepositoryGroup() {
+  const activity = useCoordinatorActivity("house");
+  return (
+    <DndContext>
+      <SortableContext items={["house-group"]}>
+        <SortableProjectFolder
+          name="github.com/acme/house"
+          sortableId="house-group"
+          label="acme/house"
+          repository
+          icon={<CommandNodeHomeIcon colorToken="teal" />}
+          subtitle="1 machine · 0 environments"
+          projectCount={1}
+          isCollapsed={false}
+          onToggleCollapse={noop}
+        >
+          <div className="px-2">
+            <Collapsible open>
+              <ProjectGroupHeader
+                projectName="house"
+                label="Self"
+                icon={<MachineHomeIcon colorToken="teal" machineName="Self" />}
+                card={{ environmentCount: 0, runningCount: 0, openHint: "" }}
+                unreadMail={0}
+                failedMail={false}
+                highlighted={false}
+                ariaCurrent={undefined}
+                sortable={false}
+                isCollapsed={false}
+                onOpen={noop}
+                menu={{
+                  openBoard: noop,
+                  openSettings: noop,
+                  newEnvironment: noop,
+                  deleteProject: noop,
+                }}
+                writable
+                coordinatorActivity={activity}
+                newEnvironment={{ label: "New environment", title: "New environment" }}
+              />
+            </Collapsible>
+          </div>
+        </SortableProjectFolder>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+/** Starts and stops the members' coordinators without a backend behind them. */
+function setAlignmentActivity(state: CoordinatorActivityState | null) {
+  useCoordinatorActivityStore.setState({
+    projects: new Map(state ? ["p", "p2", "q", "house"].map((id) => [id, state]) : []),
+  });
+}
+
 let instance: ReturnType<typeof install> | undefined;
 export function SidebarDragFixture() {
   const [calls] = useState(() => (instance ??= install()));
   const { writes } = useStore(calls);
+  const alignment = new URLSearchParams(location.search).has("alignment");
   return (
     <DockerAvailabilityProvider available={false}>
       <TerminalProvider>
         <FederationProvider>
           <main className="h-screen max-w-sm bg-background text-foreground">
             <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
+            {alignment ? (
+              <div>
+                {(["working", "waiting", null] as const).map((state) => (
+                  <button
+                    key={state ?? "idle"}
+                    type="button"
+                    className="mr-2 text-xs"
+                    onClick={() => setAlignmentActivity(state)}
+                  >
+                    Coordinators {state ?? "idle"}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <HierarchicalSidebar />
+            {alignment ? <HouseRepositoryGroup /> : null}
           </main>
         </FederationProvider>
       </TerminalProvider>

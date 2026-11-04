@@ -444,6 +444,14 @@ describe("coordinator messages to the project home", () => {
       "shot.png",
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
     );
+    // Approval of text opens the three-hour window, but cannot authorize
+    // a later image writing to the user's checkout.
+    const first = await send(homeMessage({ requestId: "text-before-image" }));
+    await resolveRequest(String(first.approvalRequestId), "approve");
+    expect(await send(homeMessage({ requestId: "text-in-window" }))).toMatchObject({
+      projectHome: true,
+    });
+    const priorMail = await mailTo(homeId);
     const message = homeMessage({ attachments: [source] });
     const copies = async () =>
       readdir(path.join(checkout, ".orkestrator", "mail-attachments")).catch(() => []);
@@ -453,11 +461,11 @@ describe("coordinator messages to the project home", () => {
     const [request] = await pendingRequests();
     expect(request!.projectHomeMessage).toMatchObject({ attachments: [path.basename(source)] });
     expect(await copies()).toEqual([]);
-    expect(await mailTo(homeId)).toEqual([]);
+    expect(await mailTo(homeId)).toEqual(priorMail);
 
     await resolveRequest(String(held.approvalRequestId), "approve");
 
-    const [delivered] = await mailTo(homeId);
+    const delivered = (await mailTo(homeId)).find((mail) => mail.requestId === "home-1");
     const file = delivered!.attachments![0]!.path;
     expect(file.startsWith(path.join(checkout, ".orkestrator", "mail-attachments"))).toBe(true);
     expect((await readFile(file)).length).toBe(9);
@@ -467,7 +475,7 @@ describe("coordinator messages to the project home", () => {
     // A retry finds what the approval sent, with the same image.
     const again = await send(message);
     expect(again).toMatchObject({ id: delivered!.id, projectHome: true });
-    expect(await mailTo(homeId)).toHaveLength(1);
+    expect(await mailTo(homeId)).toHaveLength(priorMail.length + 1);
   });
 
   test("an image gone by the time of approval sends nothing, and says why", async () => {

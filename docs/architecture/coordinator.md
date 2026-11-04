@@ -1308,8 +1308,9 @@ Every other coordinator action refuses the project home (see
   subjects or reply IDs are refused rather than silently dropped.
 - **Within 3 hours of a sent message** to that project home from this
   coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
-  sent at once and the tool result carries a `warning` that this is
-  discouraged.
+  sent at once if it carries text only, and the tool result carries a `warning`
+  that this is discouraged. Messages with images always need their own approval,
+  even within this window, before files are copied into the checkout.
 - **Otherwise the message is held** as a `message-project-home` node action
   request, shown in the same approval dialog as `request_environment_deletion`
   and `answer_worker_question` (`ProjectHomeMessageApprovalDialog`), with the

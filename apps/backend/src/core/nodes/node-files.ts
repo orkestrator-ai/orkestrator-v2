@@ -5,7 +5,7 @@ import path from "node:path";
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
-import { mailAttachmentSpoolDir } from "../mail-attachments.js";
+import { mailAttachmentSpoolDir, sweepStaleMailAttachmentBatches } from "../mail-attachments.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
@@ -73,12 +73,27 @@ export class NodeFiles {
     }
   >();
 
+  private readonly committingMailBatches = new Map<string, string>();
+
   private readonly envWrites = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly storage: StorageService,
     private readonly options: { uploadTtlMs?: number } = {},
   ) {}
+
+  /** Receiving-only nodes must also expire transfers abandoned before delivery. */
+  async sweepMailAttachments(): Promise<void> {
+    await sweepStaleMailAttachmentBatches(
+      this.storage.getDataDir(),
+      Date.now(),
+      (batch) =>
+        Array.from(this.committingMailBatches.values()).includes(batch) ||
+        Array.from(this.uploads.values()).some(
+          (upload) => "mailAttachments" in upload.scope && upload.scope.mailAttachments === batch,
+        ),
+    );
+  }
 
   /** The scope's root directory on this node. */
   async root(scope: NodeFileScope, options: { create?: boolean } = {}): Promise<string> {
@@ -293,6 +308,8 @@ export class NodeFiles {
     const upload = this.uploads.get(uploadId);
     if (!upload) throw new Error("That upload is not open.");
     this.uploads.delete(uploadId);
+    if ("mailAttachments" in upload.scope)
+      this.committingMailBatches.set(uploadId, upload.scope.mailAttachments);
     clearTimeout(upload.expiry);
     try {
       if ((await this.resolve(upload.scope, upload.relativePath, true)) !== upload.target) {
@@ -332,6 +349,7 @@ export class NodeFiles {
       }
       return { bytes: upload.written, sha256: actual };
     } finally {
+      this.committingMailBatches.delete(uploadId);
       await fs.rm(upload.temp, { force: true }).catch(() => undefined);
     }
   }

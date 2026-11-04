@@ -241,7 +241,6 @@ export async function stageMailAttachments(
   batch: string,
   files: readonly OwnAttachment[],
 ): Promise<void> {
-  await sweepStaleMailAttachmentBatches(dataDir).catch(() => undefined);
   const directory = mailAttachmentSpoolDir(dataDir, batch);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   for (const file of files) {
@@ -281,6 +280,7 @@ export async function removeMailAttachmentBatch(dataDir: string, batch: string):
 export async function sweepStaleMailAttachmentBatches(
   dataDir: string,
   now = Date.now(),
+  isActive: (batch: string) => boolean = () => false,
 ): Promise<void> {
   const entries = await fs.readdir(spoolRoot(dataDir)).catch(() => [] as string[]);
   await Promise.all(
@@ -289,7 +289,7 @@ export async function sweepStaleMailAttachmentBatches(
       .map(async (entry) => {
         const directory = path.join(spoolRoot(dataDir), entry);
         const stats = await fs.lstat(directory).catch(() => null);
-        if (stats && now - stats.mtimeMs > STALE_SPOOL_MS) {
+        if (stats && now - stats.mtimeMs > STALE_SPOOL_MS && !isActive(entry)) {
           await fs.rm(directory, { recursive: true, force: true });
         }
       }),

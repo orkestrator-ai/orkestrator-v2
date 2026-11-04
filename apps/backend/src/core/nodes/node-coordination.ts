@@ -161,6 +161,7 @@ export class NodeCoordination {
   // avoids retaining a growing registry of request keys after sends settle.
   private outboxSendTail: Promise<void> = Promise.resolve();
   private recoveryStarted = false;
+  private sweepingAttachments = false;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
   private unsubscribeKanban: (() => void) | undefined;
@@ -184,6 +185,16 @@ export class NodeCoordination {
 
   private resumeActions(): void {
     if (!this.recoveryStarted) return;
+    if (!this.sweepingAttachments) {
+      this.sweepingAttachments = true;
+      void this.files
+        .sweepMailAttachments()
+        // Best-effort maintenance; the next backend pass retries.
+        .catch(() => undefined)
+        .finally(() => {
+          this.sweepingAttachments = false;
+        });
+    }
     void this.actions.resumeInterrupted().catch(() => {
       log.warn("actions.resume-failed");
     });

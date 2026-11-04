@@ -41,3 +41,19 @@ codex protocol lockfile groups passed. The unchanged owner then passed alone thr
 times (`bun test src/core/nodes/node-coordination.test.ts` from `apps/backend`,
 24 pass each). It did not fail in any of the six GitHub Actions CI runs checked
 between `d6040915c` and `b0dcf1660`.
+
+## 2026-11-04 image-mail repair validation
+
+The five-file focused image-mail suite, `mise run test:logged -- --name
+image-mail-fixes -- bun --cwd=apps/backend test
+./src/core/mail-attachments.test.ts ./src/core/coordinator-worker-mail.test.ts
+./src/core/coordinator-mail-attachments.test.ts ./src/core/nodes/node-files.test.ts
+./src/core/nodes/node-coordination.test.ts --parallel=2 --only-failures`,
+observed the same expected `pending-inject`, received `injected` assertion
+at 100.32 ms (95 pass, 2 fail; the other failure was a new test assertion
+subsequently corrected). Evidence: `/tmp/orkestrator-test-run.POBTE6/image-mail-fixes.log.gz`.
+The owning file passed alone through `test:logged --name node-coordination-alone`
+with the same Bun command and only `./src/core/nodes/node-coordination.test.ts`
+(5.0 s). The corrected five-file suite then passed (8.0 s, 97 tests).
+The new lifecycle regression does not change injection timing; automatic
+injection racing the admission assertion remains an open hypothesis.

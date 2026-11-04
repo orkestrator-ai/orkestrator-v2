@@ -312,8 +312,13 @@ export function registerCoordinatorWorkerMailCommands(
       }))
     )
       return { sent: true };
-    // Before the first request exists, a recent sent message lets this one through.
-    if (!existing && (await projectHomeWindowOpen(context, sender.coordinatorId, home.id)))
+    // The recent-message window permits text only. Every new image copy into
+    // the user's checkout needs its own approval.
+    if (
+      !existing &&
+      !mail.own.length &&
+      (await projectHomeWindowOpen(context, sender.coordinatorId, home.id))
+    )
       return { sent: true };
     const projectHomeMessage: ProjectHomeMessage | null = parseProjectHomeMessage({
       mailRequestId: mail.requestId,

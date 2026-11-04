@@ -25,11 +25,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 9 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
 | 10 | [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) | Medium | No | §8: H1, M1 and M2 in shipping Safari, H3 on rootless Docker, and gateway reach on Linux Engine | The checks that could run here passed; what is left qualifies other platforms, and accepting a leaked session rests on the Linux Engine answer. |
 | 11 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
-| 12 | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) | Low | No | H2: retiring in-container firewall enforcement | The root paths are closed, and the one remaining item is blocked on todo 0018's qualification. |
-| 13 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 14 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 15 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
-| 16 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
+| 12 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 13 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
+| 14 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
+| 15 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
 
 ## Parallel running
 
@@ -78,17 +77,16 @@ When one of these becomes ready, it joins the lane shown.
 | File | Why it waits | Lane |
 | --- | --- | --- |
 | [`0020`](0020-m1-isolated-preview-default.md) | Default flipped; retirement blocked on todo 0042 | Gateway |
-| [`0030`](0030-h2-retire-in-container-firewall.md) | Blocked on todo 0018 | Containers |
 | [`0110`](0110-l18-dependency-advisories.md) | Blocked upstream in todo 0032 | No lane |
 
 ## Status of every finding
 
-21 done, 16 partly done, 16 open, 12 no action.
+25 done, 14 partly done, 14 open, 12 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
 | H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); the leaked-session exposure is accepted in `docs/architecture/remote-gateway.md`, Security notes; the `__Host-` name remains in [todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md) |
-| H2 | Partly done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); remainder in [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
+| H2 | Done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); cap removed from `egressEnforcement` (`apps/backend/src/core/egress-gateway.ts`); runtimes without a gateway keep the in-container firewall until rebuilt, and rootless gateway checks stay with [todo 0018](../../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 |
 | H3 | Done | `apps/backend/src/core/container-project-seed-files.ts:66-110`; no project file in `bindIfExists` calls (`apps/backend/src/core/commands-containers.ts:503-559`); commit `1565c7c16` |
 | H4 | Partly done | `packages/protocol/src/execution-policy-narrowing.ts:140`, each bridge's `delete process.env` (commits `2d4528dc5`, `a2bba9d80`); remainder in [S2 part 0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls) |
 | H5 | Done | `packages/protocol/src/app-config-defaults.ts:51`, `apps/backend/src/core/github-credentials.ts:31`; [container credential](../../architecture/github-cli.md#container-credential). New installs share nothing; an upgraded install keeps its current sharing, with a scope warning, until the user changes it. Per-environment repo-scoped credentials were not built. |
@@ -145,7 +143,7 @@ When one of these becomes ready, it joins the lane shown.
 | §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop (`docs/development/container-qualification.md`); remainder in [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) |
 | §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
-| §9 step 3 (H2) | Partly done | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
+| §9 step 3 (H2) | Done | See H2 |
 | §9 step 4 (M3) | Done | See M3 |
 | §9 step 5 (H4 + M13) | Partly done | [S2 part 0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls); M13 is done |
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |

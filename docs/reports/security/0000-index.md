@@ -61,8 +61,8 @@ These still follow the lane and conflict rules above.
 | S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 3 of 6 | None | None |
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 4 of 6 | None | None |
 | S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 3 of 3 | None | None |
-| S-0200 | [Workspace grant allowlist](0200-i1-workspace-grant-allowlist.md) | `0200` | Gateway, 3 of 6 | None | None |
-| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 6 of 6 | None | None |
+| S-0200 | [Workspace grant allowlist](0200-i1-workspace-grant-allowlist.md) | `0200` | Gateway, 2 of 5 | None | None |
+| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 5 of 5 | None | None |
 | S-0230 | [Preview publication domain](0230-i5-preview-publication-domain.md) | `0230` | No lane | None | None |
 | S-0270 | [iOS app review](0270-s8-ios-app-review.md) | `0270` | No lane | None | None |
 | S-0260 | [Live checks on other platforms](0260-live-checks-on-other-platforms.md) | `0260` | No lane | None | None |

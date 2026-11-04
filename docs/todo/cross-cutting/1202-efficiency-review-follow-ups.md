@@ -2269,5 +2269,5 @@ Kept the report's recommended per-flush batching after measuring it, although a 
 
 ### Task 11: leftovers from efficiency report 0100 (2026-11-04)
 
-Report `docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md` was checked item by item and deleted; the last commit holding it is `e198fd4a7`. Its GW-6 and WEB-11 work was confirmed in code and tests. What needs evidence no host here could give went to [5080](5080-terminal-websocket-live-evidence.md).
+Report `docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md` was checked item by item and deleted; `git show e198fd4a7:<that path>` still reads it. Its GW-6 and WEB-11 work was confirmed in code and tests. What needs evidence no host here could give went to [5080](5080-terminal-websocket-live-evidence.md).
 

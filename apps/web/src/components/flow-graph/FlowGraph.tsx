@@ -329,11 +329,11 @@ function FlowNode({
         data-flow-superseded={node.superseded ? "" : undefined}
         style={style}
         className={cn(
-          "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
+          "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline outline-offset-[3px] outline-transparent focus-hairline",
           NODE_STATE_CLASS[node.state],
           node.placeholder && "opacity-55",
           node.superseded && "border-dashed opacity-60 grayscale",
-          selected && "outline-primary/60",
+          selected && "outline-ring",
           className,
         )}
         onClick={() => onSelect(node.id)}

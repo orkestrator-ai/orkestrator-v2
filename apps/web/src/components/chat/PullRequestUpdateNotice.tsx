@@ -89,7 +89,7 @@ export const PullRequestUpdateNotice = memo(function PullRequestUpdateNotice({
                 if (!(event.metaKey || event.ctrlKey) && openPullRequest(ref)) return;
                 void openPullRequestUrl(gitHubPullRequestUrl(ref), { external: true });
               }}
-              className="shrink-0 rounded font-medium text-foreground/75 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="shrink-0 rounded font-medium text-foreground/75 hover:text-foreground hover:underline focus-hairline focus-hairline-outset"
             >
               {label}
             </button>

@@ -46,7 +46,7 @@ export function WebAnnotationRequestChip({
       </span>
       <button
         type="button"
-        className="rounded text-primary underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+        className="rounded text-primary underline-offset-2 outline-none hover:underline focus-hairline focus-hairline-outset disabled:opacity-60"
         disabled={opening}
         onClick={() => {
           const target = environmentId ?? usePaneLayoutStore.getState().activeEnvironmentId;

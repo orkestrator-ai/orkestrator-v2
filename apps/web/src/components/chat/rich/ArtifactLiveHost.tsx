@@ -505,7 +505,7 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
             aria-label="Stop interactive view"
             title="Stop: closes this view only"
             onClick={stop}
-            className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-foreground hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-foreground hover:bg-elevated focus-hairline"
           >
             <Square aria-hidden="true" className="size-3" /> Stop
           </button>
@@ -576,7 +576,7 @@ function PlacementButton({
       aria-pressed={current === value}
       onClick={() => onSelect(value)}
       className={cn(
-        "inline-flex h-6 min-w-6 items-center justify-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
+        "inline-flex h-6 min-w-6 items-center justify-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground focus-hairline",
         current === value && "bg-elevated text-foreground",
       )}
     >

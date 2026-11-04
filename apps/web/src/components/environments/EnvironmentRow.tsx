@@ -618,7 +618,7 @@ export function EnvironmentRow({
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-hairline"
                     // The label stays generic and the row name is attached as a
                     // description: folding the name into the label would make
                     // every "<name>" role+name query in the app ambiguous.

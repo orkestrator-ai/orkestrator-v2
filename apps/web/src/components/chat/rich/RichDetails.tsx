@@ -49,7 +49,7 @@ export function RichDetails({
         aria-expanded={expanded}
         aria-controls={bodyId}
         onClick={toggle}
-        className="flex w-full items-start gap-1.5 rounded-md px-3 py-1.5 text-left text-sm font-medium text-foreground outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="flex w-full items-start gap-1.5 rounded-md px-3 py-1.5 text-left text-sm font-medium text-foreground outline-none hover:bg-muted/40 focus-hairline"
       >
         <ChevronRight
           aria-hidden="true"

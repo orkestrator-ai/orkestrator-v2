@@ -773,7 +773,7 @@ function ServicePreview({
         >
           <div
             className={cn(
-              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-primary/60",
+              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-ring",
               attachError ? "border-destructive/70" : "border-border",
             )}
           >

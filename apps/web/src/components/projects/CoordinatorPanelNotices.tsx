@@ -44,7 +44,7 @@ export function CoordinatorIsolationBadge({
           data-coordinator-isolation-badge={advisory ? "advisory" : "enforced"}
           data-context-revision={contextRevision}
           className={cn(
-            "flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            "flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs focus-hairline",
             advisory
               ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
               : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",

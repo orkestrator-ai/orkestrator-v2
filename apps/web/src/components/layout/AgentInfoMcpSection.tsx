@@ -138,7 +138,7 @@ export function AgentInfoMcpSection({
       ) : null}
       <button
         type="button"
-        className="text-left text-xs text-blue-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="text-left text-xs text-blue-300 underline-offset-2 hover:underline focus-hairline focus-hairline-outset"
         onClick={() => manage()}
       >
         Manage saved MCP servers…

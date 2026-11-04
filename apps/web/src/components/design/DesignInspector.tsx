@@ -635,7 +635,7 @@ function InspectorBody({
             </section>
             {moreNames.length > 0 && (
               <details className="px-3 py-3">
-                <summary className="cursor-pointer rounded-sm font-medium focus-visible:outline-ring">
+                <summary className="cursor-pointer rounded-sm font-medium focus-hairline focus-hairline-outset">
                   More styles
                 </summary>
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -645,7 +645,7 @@ function InspectorBody({
             )}
           </fieldset>
           <details className="border-t border-divider px-3 py-3">
-            <summary className="cursor-pointer rounded-sm font-medium focus-visible:outline-ring">
+            <summary className="cursor-pointer rounded-sm font-medium focus-hairline focus-hairline-outset">
               Details
             </summary>
             <dl className="mt-2 max-h-60 space-y-2 overflow-y-auto break-all">

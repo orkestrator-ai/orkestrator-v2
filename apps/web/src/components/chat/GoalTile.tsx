@@ -57,7 +57,7 @@ export const GoalTurnTile = memo(function GoalTurnTile({
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={() => setOpen(!open)}
-          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-hairline"
         >
           <Goal className="size-3.5 shrink-0 text-sky-300" aria-hidden="true" />
           <span className="shrink-0 text-xs font-medium text-foreground/80">
@@ -223,7 +223,7 @@ export const GoalStatusRow = memo(function GoalStatusRow({
             type="button"
             aria-expanded={open}
             onClick={() => setOpen(!open)}
-            className="mx-auto flex max-w-full min-w-0 items-start gap-1.5 rounded px-1 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="mx-auto flex max-w-full min-w-0 items-start gap-1.5 rounded px-1 text-left transition-colors hover:text-foreground focus-hairline"
           >
             {content}
             <ChevronRight

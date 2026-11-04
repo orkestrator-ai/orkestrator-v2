@@ -379,7 +379,7 @@ function DiagramCanvas({
       tabIndex={0}
       data-rich-search-exclude="true"
       className={cn(
-        "relative cursor-grab touch-none overflow-hidden bg-background/40 outline-none focus-visible:ring-2 focus-visible:ring-ring/60 active:cursor-grabbing",
+        "relative cursor-grab touch-none overflow-hidden bg-background/40 outline-none focus-hairline active:cursor-grabbing",
         className,
       )}
       onPointerDown={onPointerDown}

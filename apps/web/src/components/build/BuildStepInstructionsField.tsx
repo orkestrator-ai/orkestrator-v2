@@ -49,7 +49,7 @@ export function BuildStepInstructionsField({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((current) => !current)}
-        className="flex min-h-8 items-center gap-1.5 rounded-md px-1 text-xs font-medium text-zinc-400 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+        className="flex min-h-8 items-center gap-1.5 rounded-md px-1 text-xs font-medium text-zinc-400 hover:text-zinc-200 focus-hairline"
       >
         <ChevronRight
           aria-hidden="true"

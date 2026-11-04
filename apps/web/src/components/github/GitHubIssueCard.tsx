@@ -82,7 +82,7 @@ export function GitHubIssueCard({
       style={style}
       className={cn(
         "group rounded-lg border border-border/70 bg-card p-3 shadow-sm transition-[border-color,box-shadow,opacity]",
-        "hover:border-border hover:shadow-md focus-within:border-primary/50",
+        "hover:border-border hover:shadow-md",
         isDragging && "opacity-25",
         isOverlay && "w-[304px] rotate-1 border-primary/50 shadow-xl",
       )}
@@ -102,7 +102,7 @@ export function GitHubIssueCard({
         </Button>
         <button
           type="button"
-          className="min-w-0 flex-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="min-w-0 flex-1 text-left outline-none focus-hairline focus-hairline-outset"
           onClick={onOpen}
         >
           <span className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">

@@ -576,7 +576,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         }
       },
       className:
-        "absolute inset-x-0 flex items-center gap-1 rounded-sm pr-1 outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "absolute inset-x-0 flex items-center gap-1 rounded-sm pr-1 outline-none focus-hairline",
       style: {
         top: index * LAYER_ROW_HEIGHT,
         height: LAYER_ROW_HEIGHT,
@@ -816,7 +816,7 @@ export function DesignLayerTree(props: DesignLayerTreeProps) {
         placeholder="Filter loaded layers"
         aria-label="Filter loaded layers"
         aria-describedby={`${canvasId}-layer-filter-scope`}
-        className="mb-1 h-6 w-full rounded-sm border border-input bg-transparent px-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="mb-1 h-6 w-full rounded-sm border border-input bg-transparent px-1.5 text-xs outline-none focus-hairline"
       />
       <p
         id={`${canvasId}-layer-filter-scope`}

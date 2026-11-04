@@ -1,3 +1,4 @@
+import { Glob } from "bun";
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -120,20 +121,42 @@ describe("forced dark mode theming", () => {
     expect(read("apps/web/src/components/chat/NativeComposeBar.tsx")).toContain("bg-input-surface");
   });
 
-  test("form controls use the same visible focus ring even when borders are overridden", () => {
+  test("form controls use the shared focus hairline", () => {
     for (const source of [
       "apps/web/src/components/ui/input.tsx",
       "apps/web/src/components/ui/textarea.tsx",
       "apps/web/src/components/ui/select.tsx",
     ]) {
-      const contents = read(source);
-      expect(contents).toContain("focus-visible:border-ring");
-      expect(contents).toContain("focus-visible:ring-ring/50");
-      expect(contents).toContain("focus-visible:ring-[3px]");
+      expect(read(source)).toContain("focus-hairline");
     }
+  });
 
-    const settings = read("apps/web/src/components/settings/GlobalSettings.sections.tsx");
-    expect(settings).not.toContain("focus-visible:outline-1 focus-visible:outline-ring");
+  test("no component draws its own focus ring instead of the shared hairline", () => {
+    const ownFocusStyle =
+      /(?:^|[\s"'`])(?:focus|focus-visible):(?:ring-(?!0\b)\S+|ring\b|outline-(?!none\b|hidden\b)\S+|border-(?:ring|primary)\S*)/;
+    const offenders = Array.from(new Glob("apps/web/src/**/*.{ts,tsx}").scanSync(repoRoot)).filter(
+      (file) => !/\.test\.tsx?$/.test(file) && ownFocusStyle.test(read(file)),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  test("focus overrides transparent graph outlines and separates selection borders", () => {
+    const css = read("apps/web/src/index.css");
+    expect(css).toMatch(
+      /&:focus-visible\s*\{[^}]*outline-color: var\(--focus-hairline-color, var\(--color-ring\)\)/s,
+    );
+    expect(css).toContain("outline-offset: var(--focus-hairline-offset, -2px)");
+    for (const file of ["agents/AgentRadioGroup.tsx", "build/BuildLaunchDialog.tsx"]) {
+      const source = read(`apps/web/src/components/${file}`);
+      expect(source).toContain("focus-hairline-peer");
+      expect(source).not.toContain("peer-focus-visible:border-ring");
+    }
+    const annotations = read("apps/web/src/components/chat/TranscriptAnnotationLayer.tsx");
+    for (const classes of annotations.matchAll(/className="([^"]*bg-blue-[56]00[^"]*)"/g)) {
+      if (classes[1]?.includes("focus-hairline")) {
+        expect(classes[1]).toContain("focus-hairline-outset");
+      }
+    }
   });
 
   test("native scrollbar tracks inherit the panel surface", () => {

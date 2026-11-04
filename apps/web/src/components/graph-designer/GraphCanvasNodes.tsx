@@ -277,7 +277,7 @@ function GraphNodeFaceImpl({ data, selected }: NodeProps<GraphCanvasTemplateNode
           : warnings > 0
             ? "border-amber-500/60"
             : "border-border",
-        selected && "ring-2 ring-primary ring-offset-2 ring-offset-flow-canvas",
+        selected && "outline outline-offset-2 outline-ring",
       )}
     >
       <div className="px-3 pt-2.5 pb-1.5">
@@ -480,7 +480,7 @@ function GraphLoopFaceImpl({ data, selected }: NodeProps<GraphCanvasLoopNode>) {
       className={cn(
         "h-full w-full rounded-2xl border border-dashed bg-indigo-500/5",
         data.diagnostics.errors > 0 ? "border-failure/70" : "border-indigo-400/50",
-        selected && "border-solid border-primary",
+        selected && "border-solid border-ring",
       )}
     >
       <div className="flex items-center gap-2 px-3 pt-2 text-[11px] text-indigo-200">

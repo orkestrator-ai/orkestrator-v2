@@ -51,7 +51,7 @@ function SystemMetric({
     >
       <button
         type="button"
-        className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-1.5 py-2 text-muted-foreground transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-md border border-border/60 bg-muted/20 px-1.5 py-2 text-muted-foreground transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground focus-hairline"
         aria-label={`${label}: ${formatted}`}
         aria-describedby={labelOpen ? labelId : undefined}
         onClick={() => setLabelOpen(true)}
@@ -347,7 +347,7 @@ function RuntimeNoticeCard({
     severity === "error"
       ? {
           button:
-            "border-destructive/35 bg-destructive/10 text-destructive hover:border-destructive/55 hover:bg-destructive/15 focus-visible:ring-destructive/60",
+            "border-destructive/35 bg-destructive/10 text-destructive hover:border-destructive/55 hover:bg-destructive/15",
           dialog: "border-destructive/30",
           summary: "border-destructive/30 bg-destructive/10",
           title: "text-destructive",
@@ -356,7 +356,7 @@ function RuntimeNoticeCard({
       : severity === "info"
         ? {
             button:
-              "border-border/70 bg-muted/20 text-foreground/80 hover:border-border hover:bg-muted/35 focus-visible:ring-ring/60",
+              "border-border/70 bg-muted/20 text-foreground/80 hover:border-border hover:bg-muted/35",
             dialog: "border-border",
             summary: "border-border/70 bg-muted/20",
             title: "text-foreground",
@@ -364,7 +364,7 @@ function RuntimeNoticeCard({
           }
         : {
             button:
-              "border-amber-500/20 bg-amber-500/5 text-amber-100/80 hover:border-amber-400/35 hover:bg-amber-500/10 focus-visible:ring-amber-400/60",
+              "border-amber-500/20 bg-amber-500/5 text-amber-100/80 hover:border-amber-400/35 hover:bg-amber-500/10",
             dialog: "border-amber-500/20",
             summary: "border-amber-500/20 bg-amber-500/5",
             title: "text-amber-100",
@@ -379,7 +379,7 @@ function RuntimeNoticeCard({
         <button
           type="button"
           className={cn(
-            "group flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2",
+            "group flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors focus-hairline",
             appearance.button,
           )}
           aria-label={`Show details for ${notice.message}`}
@@ -1433,7 +1433,7 @@ function McpServerRow({
             title={title}
             className={cn(
               summaryClassName,
-              "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent",
+              "transition-colors hover:bg-muted/50 focus-hairline disabled:opacity-60 disabled:hover:bg-transparent",
             )}
             onClick={() => onAction(server, primary)}
           >
@@ -1450,7 +1450,7 @@ function McpServerRow({
             type="button"
             disabled={busy}
             aria-label={`${mcpActionLabel(action)} ${server.name}`}
-            className="shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60 disabled:hover:bg-transparent"
+            className="shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-hairline disabled:opacity-60 disabled:hover:bg-transparent"
             onClick={() => onAction(server, action)}
           >
             {mcpActionLabel(action)}
@@ -1465,7 +1465,7 @@ function McpServerRow({
             aria-label="Saved configuration"
             aria-describedby={nameId}
             title="Edit this server's saved configuration"
-            className="shrink-0 rounded px-1.5 py-0.5 text-blue-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="shrink-0 rounded px-1.5 py-0.5 text-blue-300 underline-offset-2 hover:underline focus-hairline"
             onClick={() => onManage(server)}
           >
             Config
@@ -1518,7 +1518,7 @@ export function McpServersPanel({
     >
       <button
         type="button"
-        className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40 focus-hairline"
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >

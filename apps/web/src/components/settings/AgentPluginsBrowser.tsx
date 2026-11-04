@@ -219,7 +219,7 @@ export function AgentPluginsBrowser({
                       className={cn(
                         "flex w-full flex-col items-start gap-0.5 border-l-2 px-3 py-2 text-left transition-colors",
                         isSelected
-                          ? "border-blue-500 bg-zinc-900/80"
+                          ? "border-ring bg-zinc-900/80"
                           : "border-transparent hover:bg-zinc-900/50",
                       )}
                     >

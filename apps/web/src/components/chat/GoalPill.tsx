@@ -73,7 +73,7 @@ export function GoalPill({ goal, onOpen }: { goal: NativeAgentGoalView; onOpen: 
       title={description}
       aria-label={`Goal: ${description}. ${goal.iterations} of ${goal.maxIterations} turns. Open goal details.`}
       className={cn(
-        "flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors hover:bg-foreground/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors hover:bg-foreground/[0.06] focus-hairline",
         style.frame,
       )}
     >

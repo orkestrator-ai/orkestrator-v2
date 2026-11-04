@@ -394,7 +394,7 @@ function SortableMachineRow({ sortableId, ...row }: MachineRowProps & { sortable
           title="Drag to reorder"
           className={cn(
             MACHINE_GRIP_SLOT_CLASS,
-            "flex cursor-grab touch-none items-center justify-center rounded text-zinc-600 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+            "flex cursor-grab touch-none items-center justify-center rounded text-zinc-600 hover:text-zinc-300 focus-hairline focus-hairline-outset active:cursor-grabbing",
           )}
         >
           <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />

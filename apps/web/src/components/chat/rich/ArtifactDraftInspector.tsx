@@ -112,7 +112,7 @@ export function ArtifactDraftInspectorAction({
         aria-label="Inspect draft"
         title="Inspect the artifact draft: source, verification diagnostics and failed-preview captures"
         data-artifact-draft-inspect="true"
-        className="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground outline-none hover:bg-elevated hover:text-foreground focus-hairline"
       >
         <FileSearch aria-hidden="true" className="size-3" />
         Inspect draft
@@ -222,7 +222,7 @@ export function ArtifactDraftInspectorDialog({
                       aria-current={current ? "true" : undefined}
                       onClick={() => setSelectedId(draft.artifactId)}
                       className={cn(
-                        "flex w-full flex-col items-start rounded border border-border px-2 py-1.5 text-left outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60",
+                        "flex w-full flex-col items-start rounded border border-border px-2 py-1.5 text-left outline-none hover:bg-elevated focus-hairline",
                         current && "bg-elevated",
                       )}
                     >
@@ -685,7 +685,7 @@ function DraftSource({
           type="button"
           onClick={copy}
           disabled={result.status !== "ready"}
-          className="inline-flex h-6 items-center gap-1 rounded border border-border px-1.5 outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+          className="inline-flex h-6 items-center gap-1 rounded border border-border px-1.5 outline-none hover:bg-elevated focus-hairline disabled:opacity-50"
         >
           <ClipboardCopy aria-hidden="true" className="size-3" />
           Copy source

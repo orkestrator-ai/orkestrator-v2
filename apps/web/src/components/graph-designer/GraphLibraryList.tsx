@@ -195,7 +195,7 @@ export function GraphLibraryList({
                         type="button"
                         aria-current={isSelected ? "true" : undefined}
                         className={cn(
-                          "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary",
+                          "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left hover:bg-accent focus-hairline",
                           isSelected && "bg-accent",
                         )}
                         onClick={() => onOpen(summary)}

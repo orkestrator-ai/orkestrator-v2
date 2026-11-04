@@ -128,7 +128,7 @@ export function PromptDeadline({
       data-testid="prompt-deadline-toggle"
       className={cn(
         base,
-        "cursor-pointer hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default",
+        "cursor-pointer hover:bg-white/5 hover:text-foreground focus-hairline disabled:cursor-default",
         held && "text-amber-300",
       )}
       aria-pressed={held}

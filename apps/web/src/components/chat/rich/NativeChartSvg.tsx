@@ -265,7 +265,7 @@ export const NativeChartSvg = memo(function NativeChartSvg({
       onMouseLeave={() => onFocusItem(null)}
       onBlur={() => onFocusItem(null)}
       data-chart-kind={scene.kind}
-      className="block h-auto max-h-[70vh] w-full rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="block h-auto max-h-[70vh] w-full rounded outline-none focus-hairline"
       style={{ aspectRatio: `${scene.width} / ${scene.height}` }}
     >
       <PatternDefs uid={uid} theme={theme} />

@@ -944,7 +944,7 @@ export function AgentModelPicker({
               onKeyDown={(event) => {
                 if (event.key !== "Escape") event.stopPropagation();
               }}
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus-hairline"
             />
             {/* Choices apply as they are made, so Done only dismisses the menu.
                 Closing through the controlled state (not a synthetic Escape)

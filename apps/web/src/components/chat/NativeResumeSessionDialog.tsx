@@ -282,7 +282,7 @@ export function NativeResumeSessionDialog({
                       onClick={() => void choose(session)}
                       className={cn(
                         "min-w-0 flex-1 rounded-md px-3 py-2 text-left",
-                        "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+                        "focus-hairline focus-hairline-outset",
                       )}
                     >
                       <div className="flex items-start gap-3">
@@ -334,7 +334,7 @@ export function NativeResumeSessionDialog({
                           "m-1 shrink-0 rounded-md p-1.5 text-muted-foreground",
                           "opacity-0 group-hover:opacity-100 focus:opacity-100",
                           "hover:bg-background hover:text-foreground disabled:opacity-50",
-                          "focus:outline-none focus:ring-2 focus:ring-ring",
+                          "focus-hairline",
                         )}
                       >
                         {archiving.has(session.id) ? (

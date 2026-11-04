@@ -36,7 +36,7 @@ function SheetContent({
         {children}
         <DialogPrimitive.Close
           data-slot="sheet-close"
-          className="absolute right-3 top-3 rounded-xs text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4"
+          className="absolute right-3 top-3 rounded-xs text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus-hairline focus-hairline-outset [&_svg]:size-4"
         >
           <XIcon />
           <span className="sr-only">Close</span>

@@ -174,7 +174,7 @@ function WorkSection({
       <section aria-labelledby={headingId} className="mb-1">
         <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5">
           <h3 id={headingId} className="min-w-0 flex-1">
-            <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded text-left text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+            <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded text-left text-[11px] font-medium text-muted-foreground hover:text-foreground focus-hairline">
               <ChevronRight
                 className={cn("size-3 shrink-0 transition-transform", !collapsed && "rotate-90")}
                 aria-hidden="true"
@@ -273,7 +273,7 @@ export function CoordinatorWorkPanel({
         <button
           ref={stripRef}
           type="button"
-          className="flex w-9 flex-col items-center gap-2 py-2 text-[11px] text-muted-foreground hover:bg-elevated focus-visible:outline-2 focus-visible:outline-ring"
+          className="flex w-9 flex-col items-center gap-2 py-2 text-[11px] text-muted-foreground hover:bg-elevated focus-hairline"
           aria-expanded={false}
           aria-controls={listId}
           aria-label={`Show work: ${countsText(counts)}`}

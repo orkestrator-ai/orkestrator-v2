@@ -136,7 +136,7 @@ export function AnnotatedPreviewArea({
                 role="tab"
                 aria-selected={annotations.surface === value}
                 className={cn(
-                  "rounded px-2 py-0.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "rounded px-2 py-0.5 text-xs outline-none focus-hairline",
                   annotations.surface === value
                     ? "bg-primary/15 text-foreground"
                     : "text-muted-foreground",
@@ -156,7 +156,7 @@ export function AnnotatedPreviewArea({
               {annotations.chosenSurface === "notes" ? "; notes open when you finish" : ""}.
               <button
                 type="button"
-                className="rounded px-1 underline outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="rounded px-1 underline outline-none focus-hairline"
                 onClick={annotations.stopSelection}
               >
                 Cancel selection

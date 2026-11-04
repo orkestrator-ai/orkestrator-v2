@@ -31,7 +31,7 @@ import {
 } from "./compact-repositories";
 
 const ICON_BUTTON_CLASS =
-  "flex size-11 shrink-0 items-center justify-center rounded-lg outline-hidden hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring";
+  "flex size-11 shrink-0 items-center justify-center rounded-lg outline-hidden hover:bg-hover focus-hairline";
 
 /** This window's status for each repository, read from what its project rows read. */
 function useCompactStatuses(

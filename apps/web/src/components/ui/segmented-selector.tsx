@@ -1,6 +1,13 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * The selected segment. A selector row can scroll and clip an outset line, so its
+ * focus hairline stays inset and takes the text colour, clear of the blue fill.
+ */
+export const SEGMENT_SELECTED_CLASS_NAME =
+  "bg-primary font-bold text-primary-foreground shadow-sm [--focus-hairline-color:currentColor]";
+
 export interface SegmentedSelectorOption<T extends string> {
   value: T;
   label: ReactNode;
@@ -86,9 +93,9 @@ export function SegmentedSelector<T extends string>({
             onKeyDown={(event) => moveFocus(event, index)}
             onClick={() => onValueChange(option.value)}
             className={cn(
-              "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50",
+              "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-hairline disabled:cursor-not-allowed disabled:opacity-50",
               selected
-                ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                ? SEGMENT_SELECTED_CLASS_NAME
                 : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
               option.overlay && "relative",
               buttonClassName,

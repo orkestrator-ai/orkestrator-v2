@@ -198,11 +198,11 @@ for (const palette of ["dark", "simulated-light"] as const) {
       await expect(tab).toBeFocused();
       expect(await tab.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
 
-      // A 2px inset ring on the tab that reads against whatever is behind it.
-      const shadow = await tab.evaluate((element) => getComputedStyle(element).boxShadow);
-      const ringColor = /(\w+\([^)]*\)) 0px 0px 0px 2px inset/.exec(shadow)?.[1];
-      expect(ringColor).toBeDefined();
-      const ratio = await contrast(page, ringColor!, await surfaceColor(tab));
+      await expect(tab).toHaveCSS("outline-style", "solid");
+      await expect(tab).toHaveCSS("outline-width", "1px");
+      await expect(tab).toHaveCSS("outline-offset", "-2px");
+      const ringColor = await tab.evaluate((element) => getComputedStyle(element).outlineColor);
+      const ratio = await contrast(page, ringColor, await surfaceColor(tab));
       expect(ratio).toBeGreaterThanOrEqual(3);
 
       // The spinner runs inside the ring with a 1px gap, so they stay two lines.
@@ -253,7 +253,7 @@ for (const selected of [true, false]) {
         color: computed.outlineColor,
       };
     });
-    expect(style).toEqual({ line: "solid", width: "2px", offset: "-2px", color: highlight });
+    expect(style).toEqual({ line: "solid", width: "1px", offset: "-2px", color: highlight });
   });
 }
 

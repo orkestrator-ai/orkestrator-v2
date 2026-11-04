@@ -135,7 +135,7 @@ describe("AgentModelPicker Done button", () => {
     expect(search.nextElementSibling).toBe(done);
     expect(done.getAttribute("type")).toBe("button");
     expect(done.getAttribute("data-slot")).toBe("button");
-    expect(done.className).toContain("focus-visible:ring-2");
+    expect(done.className).toContain("focus-hairline");
     expect(done.className).toContain("shrink-0");
     expect(search.className).toContain("min-w-0");
     expect(search.className).toContain("flex-1");

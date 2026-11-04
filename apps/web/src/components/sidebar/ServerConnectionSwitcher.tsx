@@ -266,7 +266,7 @@ export function ServerConnectionSwitcher() {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-white/[0.045] focus-visible:ring-2 focus-visible:ring-orange-500/60"
+            className="group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-white/[0.045] focus-hairline"
             aria-label={`Connected server: ${active?.name ?? "Loading"}`}
           >
             <span className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 ring-1 ring-white/[0.06]">

@@ -41,6 +41,8 @@ export type ExecBufferResult = {
 export class CommandFailedError extends Error {
   readonly stdout: string;
   readonly timedOut: boolean;
+  /** Git exited but its output transport failed to close with no group remaining. */
+  readonly outputCloseTimedOut: boolean;
   readonly executableMissing: boolean;
   /** The caller's abort signal stopped it. `timedOut` is also set, as callers expect. */
   readonly aborted: boolean;
@@ -54,6 +56,7 @@ export class CommandFailedError extends Error {
     details: {
       stdout?: string;
       timedOut?: boolean;
+      outputCloseTimedOut?: boolean;
       executableMissing?: boolean;
       aborted?: boolean;
       outputLimitExceeded?: boolean;
@@ -65,6 +68,7 @@ export class CommandFailedError extends Error {
     this.name = "CommandFailedError";
     this.stdout = details.stdout ?? "";
     this.timedOut = details.timedOut ?? false;
+    this.outputCloseTimedOut = details.outputCloseTimedOut ?? false;
     this.executableMissing = details.executableMissing ?? false;
     this.aborted = details.aborted ?? false;
     this.outputLimitExceeded = details.outputLimitExceeded ?? false;
@@ -91,7 +95,7 @@ type RunCommandOptions = {
   stdin?: string | Buffer;
   /** Defaults to 60 seconds; 0 disables the deadline. Invalid durations are rejected. */
   timeoutMs?: number;
-  /** How long a `git` command's output may stay open after it exits. Defaults to 5 seconds. */
+  /** POSIX Git output-close probe interval after exit. Defaults to 5 seconds. */
   outputCloseGraceMs?: number;
   /**
    * Values that must never escape this process boundary. Both successful
@@ -122,6 +126,7 @@ const OUTPUT_LIMIT_MESSAGE = "maxBuffer length exceeded";
 /** Classify failures using structured outcomes rather than CLI output. */
 function commandFailureOutcome(error: unknown): {
   timedOut: boolean;
+  outputCloseTimedOut: boolean;
   executableMissing: boolean;
   aborted: boolean;
   outputLimitExceeded: boolean;
@@ -130,6 +135,7 @@ function commandFailureOutcome(error: unknown): {
 } {
   const details = (error ?? {}) as {
     killed?: boolean;
+    outputCloseTimedOut?: boolean;
     code?: number | string | null;
     signal?: NodeJS.Signals | null;
     message?: unknown;
@@ -140,6 +146,7 @@ function commandFailureOutcome(error: unknown): {
   const message = typeof details.message === "string" ? details.message : "";
   return {
     timedOut: details.killed === true,
+    outputCloseTimedOut: details.outputCloseTimedOut === true,
     executableMissing: details.code === "ENOENT",
     aborted: message === COMMAND_ABORTED_MESSAGE,
     outputLimitExceeded: details.outputLimitExceeded === true,
@@ -341,22 +348,37 @@ function executeCommandBytes(
     // either, so this fails rather than resolving: empty output would read as a
     // clean worktree. See docs/tests/flaky-tests/environments-and-containers/
     // 1537-diff-base-override-scan-timeout.md. Other commands keep waiting, since
-    // a surviving descendant may legitimately still be writing.
-    if (command === "git") {
+    // a surviving descendant may legitimately still be writing. Windows has no
+    // process-group probe, so it relies on the overall deadline as well.
+    if (command === "git" && process.platform !== "win32") {
       child.on("exit", () => {
         if (settled || timedOut) return;
         const graceMs = options.outputCloseGraceMs ?? GIT_OUTPUT_CLOSE_GRACE_MS;
-        outputCloseTimer = setTimeout(() => {
+        const checkOutputClosed = () => {
           if (settled || timedOut) return;
+          try {
+            // A hook can leave legitimate writers in our private group. Keep
+            // capturing until they close, subject to the overall deadline.
+            process.kill(-child.pid!, 0);
+            outputCloseTimer = setTimeout(checkOutputClosed, graceMs);
+            return;
+          } catch (error) {
+            // Only ESRCH proves the group is gone; EPERM is not absence.
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              outputCloseTimer = setTimeout(checkOutputClosed, graceMs);
+              return;
+            }
+          }
           timedOut = true;
-          signalCommand(child, "SIGKILL");
           fail(
             Object.assign(new Error(`Command output did not close within ${graceMs} ms of exit`), {
+              outputCloseTimedOut: true,
               code: child.exitCode,
               signal: child.signalCode,
             }),
           );
-        }, graceMs);
+        };
+        outputCloseTimer = setTimeout(checkOutputClosed, graceMs);
       });
     }
     if (timeoutMs > 0) {

@@ -441,7 +441,7 @@ describe("runCommand capture", () => {
     });
   }
 
-  posixOnly("fails a git command whose output stays open after it exits", async () => {
+  posixOnly("applies the overall deadline to a surviving git descendant", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
     try {
       const pidFile = path.join(tempDir, "descendant.pid");
@@ -449,7 +449,7 @@ describe("runCommand capture", () => {
       const failure = await runCommand(
         "git",
         ["-c", `alias.hold=!sleep 30 & echo $! > '${pidFile}'`, "hold"],
-        { timeoutMs: 30_000, outputCloseGraceMs: 100 },
+        { timeoutMs: 300, outputCloseGraceMs: 20 },
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(CommandFailedError);
       expect((failure as CommandFailedError).timedOut).toBe(true);
@@ -465,7 +465,7 @@ describe("runCommand capture", () => {
       "git",
       ["-c", "alias.late=!(sleep 0.2; echo late) & exit 0", "late"],
       {
-        outputCloseGraceMs: 10_000,
+        outputCloseGraceMs: 20,
       },
     );
     expect(stdout).toBe("late\n");
@@ -506,3 +506,39 @@ posixOnly("AbortSignal cancels a command without waiting for its independent tim
     controller.abort();
   }
 });
+
+posixOnly(
+  "worktree add preserves a background post-checkout hook writer beyond grace",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-shell-hook-"));
+    try {
+      const repo = path.join(root, "repo");
+      await runCommand("git", ["init", "-b", "main", repo]);
+      await runCommand("git", [
+        "-C",
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ]);
+      await writeFile(
+        path.join(repo, ".git", "hooks", "post-checkout"),
+        "#!/bin/sh\n(sleep 0.2; echo hook-finished) &\nexit 0\n",
+        { mode: 0o755 },
+      );
+      const result = await runCommand(
+        "git",
+        ["-C", repo, "worktree", "add", "-b", "feature", path.join(root, "tree")],
+        { outputCloseGraceMs: 10, timeoutMs: 5000 },
+      );
+      expect(result.stderr).toContain("hook-finished");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -52,6 +52,32 @@ function startStepTrace(reportAtMs: number, write: (line: string) => void = cons
   };
 }
 
+async function withTraceLifetime<T>(trace: { stop: () => void }, run: () => Promise<T>) {
+  try {
+    return await run();
+  } finally {
+    trace.stop();
+  }
+}
+
+for (const phase of ["setup", "cleanup"]) {
+  test(`the trace is stopped when ${phase} rejects`, async () => {
+    const lines: string[] = [];
+    const trace = startStepTrace(10, (line) => lines.push(line));
+    await expect(
+      withTraceLifetime(trace, async () => {
+        try {
+          if (phase === "setup") throw new Error("setup failed");
+        } finally {
+          if (phase === "cleanup") await Promise.reject(new Error("cleanup failed"));
+        }
+      }),
+    ).rejects.toThrow(`${phase} failed`);
+    await Bun.sleep(20);
+    expect(lines).toEqual([]);
+  });
+}
+
 test("the step trace names the step still running when it reports", async () => {
   const lines: string[] = [];
   const { promise: reported, resolve } = Promise.withResolvers<void>();
@@ -72,144 +98,149 @@ test(
   async () => {
     const trace = startStepTrace(STEP_REPORT_AT_MS);
     const { step } = trace;
-    const h = await step("createPublicApiHarness", () => createPublicApiHarness());
-    try {
-      const { projectPath, originPath } = await step("createRepository", () =>
-        h.createRepository("comparison"),
-      );
-      const initial = await step("headCommit", () => headCommit(projectPath));
-      const file = path.join(projectPath, "README.md");
-      const git = (args: string[]) => shell.runCommand("git", ["-C", projectPath, ...args]);
-      await fs.writeFile(file, "unpushed base\n");
-      await step("git add", () => git(["add", "."]));
-      await step("git commit", () =>
-        git([
-          "-c",
-          "user.name=Test",
-          "-c",
-          "user.email=test@example.invalid",
-          "commit",
-          "-m",
-          "Unpushed base",
-        ]),
-      );
-      const unpushed = await step("headCommit", () => headCommit(projectPath));
-      const environment = await step("addEnvironment", () =>
-        h.storage.addEnvironment({
-          ...createEnvironment("project", { environmentType: "local" }),
-          worktreePath: projectPath,
-          createdFromCommit: initial,
-          status: "running",
-        }),
-      );
-      const command = (name: string, args: Record<string, unknown>) =>
-        step(name, async () => h.commands.get(name)!(args, h.context));
-      const read = (worktreePath: string, comparisonRef: string) =>
-        step("readFileList", () =>
-          h.context.runtime.diffStats.service.readFileList({
-            lookup: { worktreePath },
-            comparisonRef,
-            includeUncommitted: true,
-            refresh: true,
+    return withTraceLifetime(trace, async () => {
+      let harness: Awaited<ReturnType<typeof createPublicApiHarness>> | undefined;
+      try {
+        const h = await step("createPublicApiHarness", () => createPublicApiHarness());
+        harness = h;
+        const { projectPath, originPath } = await step("createRepository", () =>
+          h.createRepository("comparison"),
+        );
+        const initial = await step("headCommit", () => headCommit(projectPath));
+        const file = path.join(projectPath, "README.md");
+        const git = (args: string[]) => shell.runCommand("git", ["-C", projectPath, ...args]);
+        await fs.writeFile(file, "unpushed base\n");
+        await step("git add", () => git(["add", "."]));
+        await step("git commit", () =>
+          git([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "Unpushed base",
+          ]),
+        );
+        const unpushed = await step("headCommit", () => headCommit(projectPath));
+        const environment = await step("addEnvironment", () =>
+          h.storage.addEnvironment({
+            ...createEnvironment("project", { environmentType: "local" }),
+            worktreePath: projectPath,
+            createdFromCommit: initial,
+            status: "running",
           }),
         );
-      await command("set_environment_diff_base", {
-        environmentId: environment.id,
-        ref: "refs/heads/main",
-        commit: unpushed,
-      });
-      expect((await h.storage.getEnvironment(environment.id))?.diffBaseOverride?.commit).toBe(
-        unpushed,
-      );
-      await read(projectPath, unpushed);
-      expect(
-        h.context.runtime.diffStats.service
-          .revisionedWorktreeSnapshot()
-          .entries.find((e) => e.environmentId === environment.id)?.comparisonRef,
-      ).toBe(unpushed);
-      await fs.writeFile(file, "dirty\n");
-      await command("revert_local_file", {
-        environmentId: environment.id,
-        filePath: "README.md",
-        targetBranch: unpushed,
-      });
-      expect(await fs.readFile(file, "utf8")).toBe("unpushed base\n");
-      await command("set_environment_diff_base", {
-        environmentId: environment.id,
-        ref: null,
-        commit: null,
-      });
-      await read(projectPath, initial);
-      expect(
-        h.context.runtime.diffStats.service
-          .revisionedWorktreeSnapshot()
-          .entries.find((e) => e.environmentId === environment.id)?.comparisonRef,
-      ).toBe(initial);
-      await command("revert_local_file", {
-        environmentId: environment.id,
-        filePath: "README.md",
-        targetBranch: initial,
-      });
-      expect(await fs.readFile(file, "utf8")).toBe("# comparison\n");
-      await command("set_environment_diff_base", {
-        environmentId: environment.id,
-        ref: "refs/heads/main",
-        commit: unpushed,
-      });
-      const replacement = path.join(h.root, "replacement");
-      await step("git clone", () => shell.runCommand("git", ["clone", originPath, replacement]));
-      const freshGit = diffBaseGitForEnvironment({
-        environmentType: "local",
-        worktreePath: replacement,
-        containerId: null,
-        status: "running",
-      });
-      await expect(
-        step("git cat-file", () => freshGit(["cat-file", "-e", unpushed])),
-      ).rejects.toThrow();
-      const replaced = await step("updateEnvironment", () =>
-        h.storage.updateEnvironment(environment.id, {
-          ...discardedRuntimeSetupUpdates(),
+        const command = (name: string, args: Record<string, unknown>) =>
+          step(name, async () => h.commands.get(name)!(args, h.context));
+        const read = (worktreePath: string, comparisonRef: string) =>
+          step("readFileList", () =>
+            h.context.runtime.diffStats.service.readFileList({
+              lookup: { worktreePath },
+              comparisonRef,
+              includeUncommitted: true,
+              refresh: true,
+            }),
+          );
+        await command("set_environment_diff_base", {
+          environmentId: environment.id,
+          ref: "refs/heads/main",
+          commit: unpushed,
+        });
+        expect((await h.storage.getEnvironment(environment.id))?.diffBaseOverride?.commit).toBe(
+          unpushed,
+        );
+        await read(projectPath, unpushed);
+        expect(
+          h.context.runtime.diffStats.service
+            .revisionedWorktreeSnapshot()
+            .entries.find((e) => e.environmentId === environment.id)?.comparisonRef,
+        ).toBe(unpushed);
+        await fs.writeFile(file, "dirty\n");
+        await command("revert_local_file", {
+          environmentId: environment.id,
+          filePath: "README.md",
+          targetBranch: unpushed,
+        });
+        expect(await fs.readFile(file, "utf8")).toBe("unpushed base\n");
+        await command("set_environment_diff_base", {
+          environmentId: environment.id,
+          ref: null,
+          commit: null,
+        });
+        await read(projectPath, initial);
+        expect(
+          h.context.runtime.diffStats.service
+            .revisionedWorktreeSnapshot()
+            .entries.find((e) => e.environmentId === environment.id)?.comparisonRef,
+        ).toBe(initial);
+        await command("revert_local_file", {
+          environmentId: environment.id,
+          filePath: "README.md",
+          targetBranch: initial,
+        });
+        expect(await fs.readFile(file, "utf8")).toBe("# comparison\n");
+        await command("set_environment_diff_base", {
+          environmentId: environment.id,
+          ref: "refs/heads/main",
+          commit: unpushed,
+        });
+        const replacement = path.join(h.root, "replacement");
+        await step("git clone", () => shell.runCommand("git", ["clone", originPath, replacement]));
+        const freshGit = diffBaseGitForEnvironment({
+          environmentType: "local",
           worktreePath: replacement,
-        }),
-      );
-      expect(replaced.diffBaseOverride).toBeNull();
-      expect(environmentBaselineCommit(replaced)).toBeUndefined();
-      await step("diffStats.sync", () => h.context.runtime.diffStats.sync(h.context));
-      await read(replacement, "main");
-      await fs.writeFile(path.join(replacement, "README.md"), "dirty again\n");
-      await command("revert_local_file", {
-        environmentId: environment.id,
-        filePath: "README.md",
-        targetBranch: "main",
-      });
-      expect(await fs.readFile(path.join(replacement, "README.md"), "utf8")).toBe("# comparison\n");
-      expect(
-        await step("listDiffBaseBranches", () => listDiffBaseBranches(freshGit)),
-      ).toContainEqual({
-        ref: "refs/heads/main",
-        name: "main",
-        kind: "local",
-      });
-      await expect(
-        step("resolveDiffBaseOverride", () =>
-          resolveDiffBaseOverride(freshGit, { ref: "refs/heads/main", commit: unpushed }),
-        ),
-      ).rejects.toThrow("not in this environment's checkout");
-      const missingGit = diffBaseGitForEnvironment({
-        ...replaced,
-        worktreePath: path.join(h.root, "missing"),
-      });
-      await expect(
-        step("listDiffBaseBranches missing", () => listDiffBaseBranches(missingGit)),
-      ).rejects.toThrow();
-      expect(() => diffBaseGitForEnvironment({ ...replaced, worktreePath: undefined })).toThrow(
-        "no checkout",
-      );
-    } finally {
-      await step("cleanup", () => h.cleanup());
-      trace.stop();
-    }
+          containerId: null,
+          status: "running",
+        });
+        await expect(
+          step("git cat-file", () => freshGit(["cat-file", "-e", unpushed])),
+        ).rejects.toThrow();
+        const replaced = await step("updateEnvironment", () =>
+          h.storage.updateEnvironment(environment.id, {
+            ...discardedRuntimeSetupUpdates(),
+            worktreePath: replacement,
+          }),
+        );
+        expect(replaced.diffBaseOverride).toBeNull();
+        expect(environmentBaselineCommit(replaced)).toBeUndefined();
+        await step("diffStats.sync", () => h.context.runtime.diffStats.sync(h.context));
+        await read(replacement, "main");
+        await fs.writeFile(path.join(replacement, "README.md"), "dirty again\n");
+        await command("revert_local_file", {
+          environmentId: environment.id,
+          filePath: "README.md",
+          targetBranch: "main",
+        });
+        expect(await fs.readFile(path.join(replacement, "README.md"), "utf8")).toBe(
+          "# comparison\n",
+        );
+        expect(
+          await step("listDiffBaseBranches", () => listDiffBaseBranches(freshGit)),
+        ).toContainEqual({
+          ref: "refs/heads/main",
+          name: "main",
+          kind: "local",
+        });
+        await expect(
+          step("resolveDiffBaseOverride", () =>
+            resolveDiffBaseOverride(freshGit, { ref: "refs/heads/main", commit: unpushed }),
+          ),
+        ).rejects.toThrow("not in this environment's checkout");
+        const missingGit = diffBaseGitForEnvironment({
+          ...replaced,
+          worktreePath: path.join(h.root, "missing"),
+        });
+        await expect(
+          step("listDiffBaseBranches missing", () => listDiffBaseBranches(missingGit)),
+        ).rejects.toThrow();
+        expect(() => diffBaseGitForEnvironment({ ...replaced, worktreePath: undefined })).toThrow(
+          "no checkout",
+        );
+      } finally {
+        if (harness) await step("cleanup", () => harness!.cleanup());
+      }
+    });
   },
   OVERRIDE_TEST_DEADLINE_MS,
 );

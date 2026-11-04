@@ -84,6 +84,24 @@ const STORED_ROWS = [
     ].join("\n\n"),
     4,
   ),
+  row(
+    "missing-payload",
+    "user",
+    '<orkestrator-peer-message version="1">missing payload</orkestrator-peer-message>',
+    4,
+  ),
+  row(
+    "truncated-header",
+    "user",
+    '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>',
+    4,
+  ),
+  row(
+    "unknown-version",
+    "user",
+    '<orkestrator-peer-message version="2"><orkestrator-peer-payload-json>{}</orkestrator-peer-payload-json></orkestrator-peer-message>',
+    4,
+  ),
   row("final-update", "assistant", "Done. All parser tests pass.", 5),
   row("person", "user", "Why does <orkestrator-peer-message> appear in the old transcript?", 6),
 ];

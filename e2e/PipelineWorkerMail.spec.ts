@@ -20,7 +20,7 @@ test("a worker's stored transcript draws mail as tiles, with no envelope on scre
   await expect(tiles(page).nth(1)).toContainText("Heads up");
 
   // The malformed envelope is a clean line and the rest of the stage still renders.
-  await expect(transcript.getByText("could not be read for display here")).toBeVisible();
+  await expect(transcript.getByText("could not be read for display here")).toHaveCount(4);
   await expect(transcript.getByText("Done. All parser tests pass.")).toBeVisible();
   await expect(transcript).not.toContainText("orkestrator-peer-payload-json");
   await expect(transcript).not.toContainText("messageId");
@@ -51,4 +51,15 @@ test("find reaches a tile by its body and never by the envelope's markup", async
     await search.fill(markup);
     await expect(page.getByText("No results")).toBeVisible();
   }
+});
+
+test("mail and unreadable notices survive reload", async ({ page }, testInfo) => {
+  await page.goto("/pipeline-worker-mail");
+  await page.reload();
+  await expect(tiles(page)).toHaveCount(2);
+  await expect(page.getByText("could not be read for display here")).toHaveCount(4);
+  await page.screenshot({
+    path: `output/visual-previews/mail-repaired-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
 });

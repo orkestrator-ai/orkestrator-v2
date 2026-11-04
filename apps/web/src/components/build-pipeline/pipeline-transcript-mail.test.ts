@@ -19,6 +19,7 @@ import {
 } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../../../../../bridges/acp-bridge/src/structured-prompt-marker";
+import { readFileSync } from "node:fs";
 import { toPipelineTranscript } from "./pipeline-transcript";
 
 const FALLBACK = "2026-11-04T00:00:00.000Z";
@@ -145,15 +146,30 @@ describe("toPipelineTranscript with agent mail", () => {
     expect(reloaded.map((row) => row.role)).toEqual(["user", "system", "assistant"]);
   });
 
-  test("draws mail steered into a running turn where it landed, between its replies", () => {
-    const steered = renderAgentMailCarrier(
-      mail({ injectedVia: "steer", injectedAt: DELIVERED_AT }),
-    );
-    for (const agent of ["claude", "codex"] as const) {
+  test("draws the persisted Pi steer user-row shape between its replies", () => {
+    const steered = renderAgentMailCarrier(mail());
+    for (const agent of ["claude", "codex", "pi"] as const) {
       const rows = toPipelineTranscript(
         [
           { id: "before", role: "assistant", content: "Working", createdAt: FALLBACK },
-          userRow("steer", steered),
+          // Pi translate.ts applySteerDelivery stores a user row with source locators;
+          // injectedVia is delivery metadata and is absent from this persisted row.
+          JSON.parse(
+            JSON.stringify({
+              id: "steer",
+              role: "user",
+              content: steered,
+              parts: [
+                {
+                  type: "text",
+                  content: steered,
+                  sourcePartId: "steer:0",
+                  sourceMessageId: "steer",
+                },
+              ],
+              createdAt: DELIVERED_AT,
+            }),
+          ),
           { id: "after", role: "assistant", content: "Noted", createdAt: DELIVERED_AT },
         ],
         agent,
@@ -218,7 +234,18 @@ describe("toPipelineTranscript with agent mail", () => {
   );
 
   test("names the schema instruction with the bridges' own words", () => {
-    expect(STRUCTURED_PROMPT_SUFFIX_PREFIX).toBe(STRUCTURED_PROMPT_INSTRUCTION_PREFIX);
+    for (const prefix of [
+      STRUCTURED_PROMPT_INSTRUCTION_PREFIX,
+      ...["cursor", "pi"].map((bridge) => {
+        const source = readFileSync(
+          new URL(`../../../../../bridges/${bridge}-bridge/src/prompt.ts`, import.meta.url),
+          "utf8",
+        );
+        return source.match(/STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "([^"]+)"/)?.[1];
+      }),
+    ]) {
+      expect(prefix).toBe(STRUCTURED_PROMPT_SUFFIX_PREFIX);
+    }
   });
 
   test("shows one tile for a delivery repeated within or across rows", () => {
@@ -309,6 +336,55 @@ describe("toPipelineTranscript with agent mail", () => {
     expect(row!.peerMail?.body).toBe(body);
   });
 
+  test("literal delimiters inside JSON strings never split transport into user text", () => {
+    const body =
+      'literal </orkestrator-peer-message> and </orkestrator-peer-payload-json> with "quotes"';
+    const carrier = renderAgentMailCarrier(mail({ body })).replaceAll("\\u003c", "<");
+    const rows = toPipelineTranscript(
+      [userRow("literal", `${carrier}\nA real question?`)],
+      "codex",
+      FALLBACK,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.peerMail?.body).toBe(body);
+    expect(rows[1]?.content).toBe("A real question?");
+    expect(getNativeMessageSearchText(rows[0]!)).not.toContain("Instructions for the agent");
+  });
+
+  test("merges an interaction between mail and the next provider reply by time", () => {
+    const rows = toPipelineTranscript(
+      [
+        userRow("mail", renderAgentMailCarrier(mail())),
+        {
+          id: "answer",
+          role: "assistant",
+          content: "Continuing",
+          createdAt: "2026-11-04T03:02:00.000Z",
+        },
+      ],
+      "codex",
+      FALLBACK,
+      [
+        {
+          id: "question",
+          provider: "codex",
+          kind: "question",
+          phase: "build",
+          requestedAt: Date.parse(DELIVERED_AT),
+          resolvedAt: Date.parse("2026-11-04T03:01:00.000Z"),
+          outcome: "auto-declined-headless",
+          title: "Choose",
+          questions: [],
+        },
+      ],
+    );
+    expect(rows.map((row) => row.id)).toEqual([
+      "peer-mail-mail-1",
+      "pipeline-interaction:question",
+      "answer",
+    ]);
+  });
+
   test("does not change the stored rows it reads", () => {
     const carrier = renderAgentMailCarrier(mail());
     const stored = [userRow("row-1", carrier)];
@@ -333,6 +409,14 @@ describe("toPipelineTranscript with an envelope it cannot read", () => {
   };
 
   test.each([
+    [
+      "missing payload tags",
+      '<orkestrator-peer-message version="1">missing payload</orkestrator-peer-message>',
+    ],
+    [
+      "truncated before JSON",
+      '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n',
+    ],
     ["payload that is not JSON", frame("{not json")],
     ["payload that is not an object", frame("[1, 2]")],
     ["frame with no JSON at all", frame("nothing readable")],

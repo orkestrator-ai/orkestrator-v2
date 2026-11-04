@@ -7,7 +7,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`, while making stored pipeline,
 ### Tasks
 
 1. **Claude tmux chat shows the raw envelope**: draw delivered mail as tiles in `ClaudeTmuxChatTab`. Status: open.
-2. **Native tabs hide a malformed envelope without a trace**: show the same notice stored transcripts show. Status: open.
+2. **Native tabs hide a malformed envelope without a trace**: show the same notice stored transcripts show. Status: done (review fix routes native rows through the shared presenter).
 3. **Agent and CLI transcript reads return raw envelopes**: decide whether `get_tab_transcript` and `session.transcript` should keep doing so. Status: open.
 
 ### 1. Claude tmux chat shows the raw envelope
@@ -63,6 +63,16 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`, while making stored pipeline,
   - **Have the CLI's human output format mail, keeping `--json` as it is.**
     - Pros: readable output for people.
     - Cons: a second presentation of the envelope to keep in step.
+
+## Assumptions and decisions
+
+### Task 2: shared native presentation
+
+Chose `presentPeerMailCarrierRow` for native tabs during review fixes. Unsupported
+versions and damaged envelopes now remain visible as the same fixed notice as
+stored transcripts, and trailing human text is preserved. Native component
+regressions cover unsupported versions, malformed headers and ordinary tag mentions.
+No live provider turn was used.
 
 ## Related
 

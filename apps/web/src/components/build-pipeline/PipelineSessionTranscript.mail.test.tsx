@@ -24,6 +24,14 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   ),
 }));
 
+import {
+  useGraphRunStore,
+  graphRunCacheKey,
+  type GraphRunTranscriptEntry,
+} from "@/stores/graphRunStore";
+import type { NodeActivation } from "@orkestrator/protocol/graphs/run";
+const { GraphActivationTranscript } =
+  await import("@/components/graph-run/GraphActivationTranscript");
 const { PipelineSessionTranscript } = await import("./PipelineSessionTranscript");
 
 afterEach(cleanup);
@@ -70,15 +78,20 @@ function userRow(id: string, content: string) {
   };
 }
 
-function renderTranscript(status: PipelineSession["status"], messages: unknown[]) {
+function renderTranscript(
+  status: PipelineSession["status"],
+  messages: unknown[],
+  phase: PipelineSession["phase"] = "build",
+  label = "Build Session",
+) {
   const session: PipelineSession = {
-    phase: "build",
+    phase,
     iteration: 0,
     sessionKey: "pipeline-1:build:0:key",
     sdkSessionId: "build-session",
     status,
     startedAt: "2026-11-04T00:00:00.000Z",
-    label: "Build Session",
+    label,
     messages,
   };
   const pipeline = {
@@ -120,6 +133,30 @@ describe("PipelineSessionTranscript agent mail", () => {
     },
   );
 
+  test.each(["review", "verify"] as const)("retains mail through the %s filter", (phase) => {
+    const { container } = renderTranscript("idle", [userRow("row-1", CARRIER)], phase);
+    expect(container.querySelector("[data-mail-tile]")?.textContent).toContain("Scope change");
+  });
+
+  test("retains mail in review-package preparation", () => {
+    const { container } = renderTranscript(
+      "idle",
+      [userRow("row-1", CARRIER)],
+      "build",
+      "Package Preparation Session",
+    );
+    expect(container.querySelector("[data-mail-tile]")?.textContent).toContain("Scope change");
+  });
+
+  test.each([
+    '<orkestrator-peer-message version="1">missing payload</orkestrator-peer-message>',
+    '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n',
+  ])("renders damaged framing as a notice (%#)", (content) => {
+    const { container } = renderTranscript("idle", [userRow("damaged", content)]);
+    expect(container.textContent).toContain(PEER_MAIL_UNREADABLE_TEXT);
+    expect(container.textContent).not.toContain("orkestrator-peer");
+  });
+
   test("shows a clean notice for a malformed envelope and keeps the rest of the stage", () => {
     const { container } = renderTranscript("idle", [
       userRow(
@@ -139,6 +176,60 @@ describe("PipelineSessionTranscript agent mail", () => {
     expect(container.textContent).toContain("Still working");
     expect(container.textContent).not.toContain("orkestrator-peer");
     expect(container.textContent).not.toContain("not json");
+  });
+
+  test("graph activations render stored mail after remount", () => {
+    const before = useGraphRunStore.getState().transcripts;
+    useGraphRunStore.setState({
+      transcripts: new Map([
+        [
+          graphRunCacheKey("run", "activation"),
+          {
+            status: "ready",
+            error: null,
+            revision: 1,
+            view: {
+              status: "found",
+              messages: [userRow("mail", CARRIER)],
+              startIndex: 0,
+              messageCount: 1,
+              revision: 1,
+              complete: true,
+            },
+          } as GraphRunTranscriptEntry,
+        ],
+      ]),
+    });
+    const activation = {
+      key: "activation",
+      state: "completed",
+      session: {
+        agent: "codex",
+        startedAt: "2026-11-04T00:00:00Z",
+        transcript: { manifestRevision: 1, complete: true },
+      },
+    } as unknown as NodeActivation;
+    try {
+      for (let mount = 0; mount < 2; mount += 1) {
+        const view = render(
+          <GraphActivationTranscript
+            runId="run"
+            environmentId="env-1"
+            containerId={undefined}
+            activation={activation}
+            isActive={false}
+            ownsGlobalShortcuts={false}
+          />,
+        );
+        expect(view.container.querySelector("[data-mail-tile]")?.textContent).toContain(
+          "Scope change",
+        );
+        expect(view.container.textContent).not.toContain("orkestrator-peer");
+        view.unmount();
+      }
+    } finally {
+      useGraphRunStore.setState({ transcripts: before });
+    }
   });
 
   test("renders untrusted fields as text rather than as markup", () => {

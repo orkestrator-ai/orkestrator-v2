@@ -164,11 +164,14 @@ const PEER_MAIL_ANY_CARRIER_OPEN = /<orkestrator-peer-message(?:\s[^>]*)?>/y;
  * write that. Any version counts, so a newer envelope is not taken for a person's words.
  */
 const PEER_MAIL_ENVELOPE_START =
-  /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|[^]*?<\/orkestrator-peer-payload-json>)/;
+  /^\s*<orkestrator-peer-message(?:\s[^>]*)?>\s*<orkestrator-peer-payload-json>\s*(?:\{|$|[^]*?<\/orkestrator-peer-payload-json>)/;
 
 /** Whether a provider row is an injected mail prompt rather than something a person typed. */
 export function isPeerMailCarrierContent(content: string): boolean {
-  return PEER_MAIL_ENVELOPE_START.test(content);
+  return (
+    PEER_MAIL_ENVELOPE_START.test(content) ||
+    /^\s*<orkestrator-peer-message(?:\s[^>]*)?>[^]*<\/orkestrator-peer-message>/.test(content)
+  );
 }
 
 /**
@@ -379,11 +382,31 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
   });
 }
 
+/** Find transport delimiters outside JSON strings, including escaped quotes. */
+function peerMailDelimiter(content: string, delimiter: string, start: number): number {
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (content.startsWith(delimiter, index)) return index;
+    else if (character === '"') quoted = true;
+  }
+  return -1;
+}
+
 /** One carrier's slice, as a mail row, or null when it cannot be read. */
 function peerMailFromCarrier(carrier: string, createdAt: string): NativeMessage | null {
   if (!carrier.startsWith(PEER_MAIL_CARRIER_OPEN)) return null;
   const payloadStart = carrier.indexOf(PEER_MAIL_PAYLOAD_OPEN);
-  const payloadEnd = carrier.indexOf(PEER_MAIL_PAYLOAD_CLOSE, payloadStart + 1);
+  const payloadEnd = peerMailDelimiter(
+    carrier,
+    PEER_MAIL_PAYLOAD_CLOSE,
+    payloadStart + PEER_MAIL_PAYLOAD_OPEN.length,
+  );
   if (payloadStart < 0 || payloadEnd < 0) return null;
   try {
     const payload: unknown = JSON.parse(
@@ -412,9 +435,12 @@ function readPeerMailCarriers(message: Pick<NativeMessage, "content" | "createdA
   while (cursor < content.length) {
     PEER_MAIL_ANY_CARRIER_OPEN.lastIndex = cursor;
     if (!PEER_MAIL_ANY_CARRIER_OPEN.test(content)) return { entries, rest: content.slice(cursor) };
-    // Bodies are JSON-escaped, so `<` never appears inside a payload and the
-    // first close tag after an open tag is that carrier's own.
-    const carrierEnd = content.indexOf(PEER_MAIL_CARRIER_CLOSE, cursor);
+    // Stored input can be noncanonical: literal tags inside JSON are body text.
+    const carrierEnd = peerMailDelimiter(
+      content,
+      PEER_MAIL_CARRIER_CLOSE,
+      PEER_MAIL_ANY_CARRIER_OPEN.lastIndex,
+    );
     if (carrierEnd < 0) {
       entries.push(null);
       break;
@@ -441,23 +467,13 @@ function readPeerMailCarriers(message: Pick<NativeMessage, "content" | "createdA
 export function createPeerMailNativeMessagesFromCarrier(
   message: Pick<NativeMessage, "content" | "createdAt">,
 ): NativeMessage[] {
-  const content = message.content.trimStart();
-  if (!content.startsWith(PEER_MAIL_CARRIER_OPEN)) return [];
-  const rows: NativeMessage[] = [];
+  const { entries } = readPeerMailCarriers(message);
   const seen = new Set<string>();
-  let cursor = 0;
-  while (cursor < content.length) {
-    const carrierStart = content.indexOf(PEER_MAIL_CARRIER_OPEN, cursor);
-    if (carrierStart < 0) break;
-    const carrierEnd = content.indexOf(PEER_MAIL_CARRIER_CLOSE, carrierStart);
-    if (carrierEnd < 0) break;
-    cursor = carrierEnd + PEER_MAIL_CARRIER_CLOSE.length;
-    const row = peerMailFromCarrier(content.slice(carrierStart, carrierEnd), message.createdAt);
-    if (!row || seen.has(row.id)) continue;
+  return entries.filter((row): row is NativeMessage => {
+    if (!row || seen.has(row.id)) return false;
     seen.add(row.id);
-    rows.push(row);
-  }
-  return rows;
+    return true;
+  });
 }
 
 /** What a transcript shows in place of a carrier it cannot read; never its raw text. */

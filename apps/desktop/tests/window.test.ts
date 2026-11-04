@@ -13,6 +13,7 @@ import {
 } from "../electron/title-bar-inset";
 
 function createHarness() {
+  const permissionPolicyAtLoad: boolean[] = [];
   const windows: FakeBrowserWindow[] = [];
   const webContentsListeners = new Map<string, (event: any) => void>();
   const listenersAtLoad: string[][] = [];
@@ -27,6 +28,10 @@ function createHarness() {
   class FakeBrowserWindow {
     readonly webContents = {
       mainFrame: {},
+      session: {
+        setPermissionCheckHandler: mock((_handler: unknown) => undefined),
+        setPermissionRequestHandler: mock((_handler: unknown) => undefined),
+      },
       on: mock((event: string, listener: (event: any) => void) => {
         webContentsListeners.set(event, listener);
       }),
@@ -35,6 +40,10 @@ function createHarness() {
     };
     readonly loadFile = mock(async (_filePath: string) => {
       listenersAtLoad.push(Array.from(webContentsListeners.keys()));
+      permissionPolicyAtLoad.push(
+        this.webContents.session.setPermissionRequestHandler.mock.calls.length === 1 &&
+          this.webContents.session.setPermissionCheckHandler.mock.calls.length === 1,
+      );
     });
     readonly loadURL = mock(async (_url: string) => {
       listenersAtLoad.push(Array.from(webContentsListeners.keys()));
@@ -53,6 +62,7 @@ function createHarness() {
       return window;
     },
     listenersAtLoad,
+    permissionPolicyAtLoad,
     menu,
     writeClipboardText,
     webContentsListeners,
@@ -69,6 +79,8 @@ describe("createMainWindow", () => {
       false,
     );
     expect(isTrustedRendererUrl("not a URL", trustedFileUrl)).toBe(false);
+    // The subframe guard must let the design frame document load beside the renderer.
+    expect(isTrustedRendererUrl("file:///app/web/design-frame.html", trustedFileUrl)).toBe(false);
     expect(isTrustedRendererUrl("http://127.0.0.1:5173/settings", "http://127.0.0.1:5173")).toBe(
       true,
     );
@@ -101,9 +113,10 @@ describe("createMainWindow", () => {
         preload: path.join("/app/apps/desktop/dist/electron", "preload.js"),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
+    expect(harness.permissionPolicyAtLoad).toEqual([true]);
     expect(harness.firstWindow().webContents.on.mock.calls[0]?.[0]).toBe("context-menu");
     expect(harness.firstWindow().loadFile).toHaveBeenCalledWith(
       path.join("/app", "dist", "index.html"),

@@ -9,6 +9,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
+  RENDERER_CONTENT_SECURITY_POLICY,
+} from "@orkestrator/protocol/renderer-content-security-policy";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ownProcessGroup, stopProcessGroup, withCleanup } from "../process-cleanup";
@@ -129,8 +133,47 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
         { timeout: 60_000 },
       )
       .toContain(renderer);
+    // Security report M6 and M7: the sandboxed CommonJS preload still exposes the
+    // bridge, the document carries the policy, and that policy refuses script.
+    const page = browser
+      .contexts()
+      .flatMap((c) => c.pages())
+      .find((p) => p.url() === renderer)!;
+    expect(
+      await page.evaluate(async () => {
+        const inline = document.createElement("script");
+        inline.textContent = "window.__inlineScriptRan = true";
+        document.head.append(inline);
+        // CDP's evaluate lifts the eval restriction for its synchronous scope.
+        await new Promise((resolve) => setTimeout(resolve));
+        let evalRan = true;
+        try {
+          new Function("return 1")();
+        } catch {
+          evalRan = false;
+        }
+        return {
+          bridge: typeof (window as unknown as { orkestrator?: { invoke?: unknown } }).orkestrator
+            ?.invoke,
+          nodeIntegration: typeof (window as unknown as { require?: unknown }).require,
+          policy: document
+            .querySelector('meta[http-equiv="Content-Security-Policy"]')
+            ?.getAttribute("content"),
+          inlineScriptRan: "__inlineScriptRan" in window,
+          evalRan,
+        };
+      }),
+    ).toEqual({
+      bridge: "function",
+      nodeIntegration: "undefined",
+      policy: RENDERER_CONTENT_SECURITY_POLICY,
+      inlineScriptRan: false,
+      evalRan: false,
+    });
+    expect(stderr).not.toContain("preload-failed");
     // file:// startup alone does not exercise the backend's HTTP renderer path.
     // Authenticate locally without putting the disposable token in any artifact.
+    let gatewayPolicy: string | null = null;
     await expect
       .poll(
         async () => {
@@ -144,6 +187,7 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
               redirect: "manual",
             });
             await response.arrayBuffer();
+            gatewayPolicy = response.headers.get("content-security-policy");
             return response.status;
           } catch {
             return 0;
@@ -152,6 +196,7 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
         { timeout: 60_000 },
       )
       .toBe(200);
+    expect(gatewayPolicy).toBe(GATEWAY_RENDERER_CONTENT_SECURITY_POLICY);
     expect(requests).toBe(0);
     expect(stderr).toContain("dev-mode.ignored-packaged");
     expect(stderr).not.toContain("Debugger listening");

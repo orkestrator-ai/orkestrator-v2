@@ -90,6 +90,7 @@ function harness(overrides: Partial<WorkspaceViewsOptions> = {}) {
     releaseScope: (scope) => void released.push(scope),
     installRequestAuth: () => undefined,
     installNavigationGuards: () => undefined,
+    installPermissionPolicy: () => undefined,
     register: (record) => void registered.push(record.webContents.id),
     unregister: (record) => void unregistered.push(record.webContents.id),
     ...overrides,
@@ -106,6 +107,11 @@ describe("workspace realms in a desktop window", () => {
       search: { project: "p", environment: "e" },
     });
     const view = parent.children[0] as FakeView;
+    expect(view.options.webPreferences).toMatchObject({
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    });
     expect(bound).toEqual([`realm:${viewId}`]);
     expect(registered).toEqual([view.webContents.id]);
     expect(view.options.webPreferences.partition).toBe(

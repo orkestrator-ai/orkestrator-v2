@@ -38,6 +38,7 @@ import { desktopApplicationVersion } from "./app-version.js";
 import { aboutPanelIconPath, aboutPanelOptions } from "./about-panel.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
+import { installRendererPermissionPolicy } from "./renderer-permissions.js";
 import {
   createMainWindow,
   installRendererNavigationGuards,
@@ -1084,6 +1085,11 @@ function createWorkspaceViews(): WorkspaceViews {
       installRealmRequestAuth(webContents as unknown as Electron.WebContents),
     installNavigationGuards: (webContents) =>
       installRendererNavigationGuards(webContents as never, rendererUrl()),
+    installPermissionPolicy: (webContents) =>
+      installRendererPermissionPolicy(
+        (webContents as unknown as Electron.WebContents).session,
+        rendererUrl(),
+      ),
     register: (record, parentWindow) => registerRealm(record, parentWindow.webContents.id),
     unregister: (record) => unregisterRealm(record),
   });

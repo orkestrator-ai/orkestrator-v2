@@ -292,6 +292,91 @@ describe("a batch", () => {
     await batch.flush();
     expect(await store.has(id)).toBe(true);
   });
+
+  for (const recover of [true, false]) {
+    test(`a mid-chunk rename failure ${recover ? "retries remaining objects" : "discards remaining objects on close"} and retains pending directory syncs`, async () => {
+      let budget = Infinity;
+      const { store, events } = recordingStore({ hardBudgetBytes: () => budget });
+      // Clear initialization syncs so the later flush must remember the name
+      // placed before the rename failure, rather than just syncing startup.
+      await store.batch().flush();
+      events.length = 0;
+      const batch = store.batch();
+      const payloads = ["placed before failure\n", "blocked rename\n", "after failure\n"];
+      const ids: string[] = [];
+      for (const payload of payloads) ids.push((await batch.put("blob", encode(payload))).id);
+      expect(new Set(ids.map((id) => id.slice(0, 2))).size).toBe(3);
+      const [first, blocked, last] = ids as [string, string, string];
+      const stagedNames = tempFiles(store);
+      // A file in place of the fan-out directory makes the real rename fail
+      // with ENOTDIR (not the ENOENT path that creates a missing directory).
+      const obstruction = dirname(objectFile(store, blocked));
+      writeFileSync(obstruction, "obstruction");
+      try {
+        await expect(batch.flush()).rejects.toMatchObject({ code: "ENOTDIR" });
+        expect(await store.get(first)).toEqual(encode(payloads[0]!));
+        expect(await store.has(blocked)).toBe(false);
+        expect(await store.has(last)).toBe(false);
+        const remaining = tempFiles(store);
+        expect(remaining.map((name) => name.split(".")[0]).toSorted()).toEqual(
+          [blocked, last].toSorted(),
+        );
+        expect(events.filter((event) => event.kind === "directory")).toEqual([]);
+
+        const old = new Date(Date.now() - 120_000);
+        for (const name of remaining) utimesSync(join(store.root, "tmp", name), old, old);
+        await store.sweep(new Set(ids), 60_000);
+        expect(tempFiles(store).toSorted()).toEqual(remaining.toSorted());
+
+        events.length = 0;
+        if (recover) {
+          rmSync(obstruction);
+          await batch.flush();
+          for (const [index, id] of ids.entries())
+            expect(await store.get(id)).toEqual(encode(payloads[index]!));
+          expect(
+            events
+              .filter((event) => event.kind === "file")
+              .map((event) => event.id)
+              .toSorted(),
+          ).toEqual([blocked, last].toSorted());
+        } else {
+          await batch.close(); // the rename still fails; close discards its tail
+          expect(await store.get(blocked)).toBeNull();
+          expect(await store.get(last)).toBeNull();
+          expect(events.filter((event) => event.kind === "directory")).toEqual([]);
+          rmSync(obstruction);
+          await store.batch().flush();
+        }
+        expect(tempFiles(store)).toEqual([]);
+        const synced = events
+          .filter((event) => event.kind === "directory")
+          .map((event) => event.path);
+        expect(synced).toContain(dirname(objectFile(store, first)));
+        expect(synced).toContain(join(store.root, "objects"));
+
+        // Released names must no longer be protected as live staged temps.
+        for (const name of stagedNames) {
+          const path = join(store.root, "tmp", name);
+          writeFileSync(path, "abandoned");
+          utimesSync(path, old, old);
+        }
+        await store.sweep(new Set(ids), 60_000);
+        expect(tempFiles(store)).toEqual([]);
+
+        // Exactly enough headroom for one new object proves reservations from
+        // both the placed prefix and the retried/discarded tail were released.
+        const probe = encode("quota after rename failure\n");
+        budget =
+          (await store.storedBytes()) +
+          deflateSync(Buffer.concat([Buffer.from(`blob ${probe.length}\0`), probe])).length;
+        await store.put("blob", probe);
+      } finally {
+        if (existsSync(obstruction) && lstatSync(obstruction).isFile()) rmSync(obstruction);
+        await batch.close();
+      }
+    });
+  }
 });
 
 describe("a capture's durability", () => {

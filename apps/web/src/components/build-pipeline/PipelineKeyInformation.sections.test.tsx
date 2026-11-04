@@ -71,6 +71,7 @@ describe("Key information panel section list", () => {
         .getAllByRole("button")
         .map((button) => button.textContent),
     ).toEqual([
+      "Summary",
       "Objective",
       "Context",
       "Solution",
@@ -82,7 +83,7 @@ describe("Key information panel section list", () => {
       "Verification",
     ]);
     expect(scroller.contains(nav)).toBe(false);
-    expect(current(nav)).toBe("Objective");
+    expect(current(nav)).toBe("Summary");
   });
 
   test("a heading scrolls the column smoothly to its section and becomes current", () => {
@@ -91,9 +92,9 @@ describe("Key information panel section list", () => {
     fireEvent.click(within(nav).getByRole("button", { name: "Decisions" }));
 
     expect(scrollTo).toHaveBeenCalledTimes(1);
-    // The fifth section, less the gap left above its heading.
+    // The sixth section, less the gap left above its heading.
     expect(scrollTo.mock.calls[0]![0]).toEqual({
-      top: 4 * SECTION_HEIGHT - 12,
+      top: 5 * SECTION_HEIGHT - 12,
       behavior: "smooth",
     });
     expect(current(nav)).toBe("Decisions");
@@ -113,7 +114,7 @@ describe("Key information panel section list", () => {
 
     fireEvent.click(within(nav).getByRole("button", { name: "Verification" }));
 
-    expect(scrollTo.mock.calls[0]![0]).toMatchObject({ top: 9 * SECTION_HEIGHT - VIEWPORT });
+    expect(scrollTo.mock.calls[0]![0]).toMatchObject({ top: 10 * SECTION_HEIGHT - VIEWPORT });
     expect(current(nav)).toBe("Verification");
   });
 
@@ -121,14 +122,14 @@ describe("Key information panel section list", () => {
     const { nav, scroller } = renderBody();
 
     await act(async () => {
-      scroller.scrollTop = 2 * SECTION_HEIGHT + 10;
+      scroller.scrollTop = 3 * SECTION_HEIGHT + 10;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(current(nav)).toBe("Solution");
 
     await act(async () => {
-      scroller.scrollTop = 9 * SECTION_HEIGHT - VIEWPORT;
+      scroller.scrollTop = 10 * SECTION_HEIGHT - VIEWPORT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -143,7 +144,7 @@ describe("Key information panel section list", () => {
     fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
     await act(async () => {
       // A frame part-way through the animation, over the Decisions section.
-      scroller.scrollTop = 4 * SECTION_HEIGHT;
+      scroller.scrollTop = 5 * SECTION_HEIGHT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -151,7 +152,7 @@ describe("Key information panel section list", () => {
 
     await act(async () => {
       fireEvent(scroller, new Event("scrollend"));
-      scroller.scrollTop = 4 * SECTION_HEIGHT + 10;
+      scroller.scrollTop = 5 * SECTION_HEIGHT + 10;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -162,7 +163,7 @@ describe("Key information panel section list", () => {
     const { nav, scroller } = renderBody();
     fireEvent.click(within(nav).getByRole("button", { name: "Tests" }));
     await act(async () => {
-      scroller.scrollTop = 4 * SECTION_HEIGHT;
+      scroller.scrollTop = 5 * SECTION_HEIGHT;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });

@@ -167,6 +167,7 @@ describe("PipelineKeyInformationTab", () => {
   test("shows every recorded section with the latest update in the header", () => {
     const tab = renderTab({ ...pipeline, keyInformation, backendRevision: 2 });
 
+    expect(within(section(tab, "Summary")).getByText(keyInformation.summary!)).toBeTruthy();
     expect(within(section(tab, "Objective")).getByText(keyInformation.statement!)).toBeTruthy();
     expect(within(section(tab, "Context")).getByText(keyInformation.context!)).toBeTruthy();
     expect(within(section(tab, "Solution")).getByText(keyInformation.solution!)).toBeTruthy();
@@ -194,7 +195,7 @@ describe("PipelineKeyInformationTab", () => {
 
   test("summarises tests, issues and the latest verification", () => {
     const tab = renderTab({ ...pipeline, keyInformation: twoRounds, backendRevision: 3 });
-    const summary = within(tab).getByRole("group", { name: "Summary" });
+    const summary = within(tab).getByRole("group", { name: "At a glance" });
 
     expect(
       within(summary).getByRole("button", { name: /Tests\s*1\/3 passed\s*1 failed/ }),
@@ -265,7 +266,7 @@ describe("PipelineKeyInformationTab", () => {
     Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 4000 });
     scroller.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
     Array.from(scroller.querySelectorAll<HTMLElement>("section")).forEach((element, index) => {
-      const top = index === 2 ? 300 : index * 300;
+      const top = index === 3 ? 600 : index * 300;
       element.getBoundingClientRect = () => ({ top: top - scroller.scrollTop }) as DOMRect;
     });
     scroller.scrollTo = ((options: ScrollToOptions) => {
@@ -285,13 +286,13 @@ describe("PipelineKeyInformationTab", () => {
       );
     }
     await act(async () => {
-      scroller.scrollTop = 910;
+      scroller.scrollTop = 1210;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(nav.querySelector('[aria-current="location"]')?.textContent).toMatch(/^What was done/);
     await act(async () => {
-      scroller.scrollTop = 310;
+      scroller.scrollTop = 610;
       fireEvent.scroll(scroller);
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
@@ -317,7 +318,7 @@ describe("PipelineKeyInformationTab", () => {
       fireEvent.click(within(nav).getByRole("button", { name: /^Update history/ }));
       expect(scrollTo).toHaveBeenCalledWith({ top: 3600, behavior: "auto" });
       await act(async () => {
-        scroller.scrollTop = 510;
+        scroller.scrollTop = 1010;
         fireEvent.scroll(scroller);
         await new Promise((resolve) => setTimeout(resolve, 50));
       });

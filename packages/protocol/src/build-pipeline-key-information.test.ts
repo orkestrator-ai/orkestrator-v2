@@ -73,6 +73,26 @@ describe("applyKeyInformationPatch", () => {
     });
   });
 
+  test("records the summary without naming it in update history", () => {
+    const info = applyKeyInformationPatch(
+      emptyKeyInformation(AT),
+      { summary: "  Readers can now see how a ticket is going.  " },
+      { at: LATER, author: "build", round: 0 },
+    );
+    expect(info.summary).toBe("Readers can now see how a ticket is going.");
+    expect(hasKeyInformation(info)).toBe(true);
+    // A release in the support window rejects a section it does not know, and
+    // with it the whole pipeline snapshot.
+    expect(info.updates.at(-1)?.sections).toEqual([]);
+    expect(isBuildPipelineKeyInformation(info)).toBe(true);
+    expect(
+      isBuildPipelineKeyInformation({
+        ...info,
+        summary: "x".repeat(KEY_INFORMATION_LIMITS.proseLength + 1),
+      }),
+    ).toBe(false);
+  });
+
   test("an empty prose field clears its section", () => {
     const after = applyKeyInformationPatch(
       built(),

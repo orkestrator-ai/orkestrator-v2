@@ -72,7 +72,10 @@ describe("standalone backend logging", () => {
       logging!.updateSettings({ enabled: true, retentionDays: 7 });
       console.warn("after saving was on");
       await logging!.flush();
-      const files = await readdir(path.join(dataDir, "logs"));
+      const files = (await readdir(path.join(dataDir, "logs"))).filter((name) =>
+        /^orkestrator-backend-\d{4}-\d{2}-\d{2}\.log$/.test(name),
+      );
+      expect(files).toHaveLength(1);
       const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
       expect(contents).toContain("after saving was on");
       expect(contents).not.toContain("before saving was on");

@@ -42,7 +42,7 @@ test("a bridge's filtered essential entry crosses both relays, stays out of the 
   // The backend's hop, which adds where it came from and passes it on.
   resetLogger();
   configureLogger(printing);
-  relayBridgeOutput("stdout", "pi:env-1", bridgeLine);
+  relayBridgeOutput("stdout", "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f", bridgeLine);
   const backendLine = printed.splice(0)[0]!;
 
   // The desktop, which owns the file and whose normal log must not get it.
@@ -64,6 +64,55 @@ test("a bridge's filtered essential entry crosses both relays, stays out of the 
   expect(kept).toHaveLength(1);
   expect(kept[0]?.area).toBe("bridge.pi");
   // The provider's session id stayed behind; only the bridge and environment crossed.
-  expect(kept[0]?.fields).toEqual({ source: "pi:env-1" });
+  expect(kept[0]?.fields).toEqual({ source: "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f" });
   expect(text).not.toContain("provider-session-1");
+});
+
+test("recognized child errors cannot persist arbitrary label-shaped strings with saving off", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-essential-relay-"));
+  temporaryDirectories.push(directory);
+  configureLogger({ sink: () => {} });
+  const essential = installEssentialLog({ dataDir: directory, owner: "desktop" });
+  try {
+    for (const secret of ["private-user-token", "secret", "sk-ant-abcdef"]) {
+      relayBridgeOutput(
+        "stdout",
+        "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+        JSON.stringify({
+          orklog: 1,
+          ts: new Date().toISOString(),
+          area: "bridge.pi",
+          event: "turn.failed",
+          level: "error",
+          fields: {
+            reason: secret,
+            kind: secret,
+            code: secret,
+            error: { name: secret, code: secret, syscall: secret, signal: secret },
+          },
+        }),
+      );
+    }
+    relayBridgeOutput(
+      "stderr",
+      "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+      JSON.stringify({
+        orklog: 1,
+        ts: new Date().toISOString(),
+        area: "bridge.pi",
+        event: "turn.failed",
+        level: "error",
+        fields: { error: { name: "TypeError", code: "ENOENT", syscall: "open" } },
+      }),
+    );
+  } finally {
+    await essential.stop();
+  }
+  const text = await readFile(path.join(essential.directory, "essential.jsonl"), "utf8");
+  for (const secret of ["private-user-token", "secret", "sk-ant-abcdef"])
+    expect(text).not.toContain(secret);
+  expect(text).toContain('"error.name":"TypeError"');
+  expect(text).toContain('"error.code":"ENOENT"');
+  expect(text).toContain('"error.syscall":"open"');
+  expect(text.split("\n").filter((line) => line.includes('"event":"turn.failed"'))).toHaveLength(4);
 });

@@ -28,12 +28,14 @@ export async function getLogStorageStats(
   const budget = { remaining: maxEntries };
   const essential: DirectoryStats = { bytes: 0, files: 0 };
   const debug: DirectoryStats = { bytes: 0, files: 0 };
-  await addDirectoryStats(
-    path.join(logDirectory, ESSENTIAL_LOG_DIRECTORY_NAME),
-    essential,
-    budget,
-    () => true,
-  );
+  const essentialRoot = path.join(logDirectory, ESSENTIAL_LOG_DIRECTORY_NAME);
+  const metadata = await fs.lstat(essentialRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (metadata?.isDirectory()) {
+    await addDirectoryStats(essentialRoot, essential, budget, () => true);
+  }
   await addDirectoryStats(
     logDirectory,
     debug,

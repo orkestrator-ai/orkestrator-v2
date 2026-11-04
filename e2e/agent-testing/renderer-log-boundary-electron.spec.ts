@@ -4,7 +4,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -44,6 +44,124 @@ async function waitForUrl(url: string): Promise<void> {
 }
 
 const count = (text: string, line: string): number => text.split(line).length - 1;
+
+test("rejected second launch leaves crash markers intact and immediate exit flushes without will-quit", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-essential-native-"));
+  const fixture = path.join(root, "main.ts");
+  const bundle = path.join(root, "main.cjs");
+  const dataDir = path.join(root, "data");
+  const ready = path.join(root, "ready");
+  const control = path.join(root, "control");
+  const file = path.join(dataDir, "logs", "essential", "essential.jsonl");
+  const children: ChildProcess[] = [];
+  const closed = new Map<ChildProcess, Promise<number | null>>();
+  const launch = () => {
+    const child = spawn(electronExecutable, [...ELECTRON_TEST_SWITCHES, bundle], {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+    });
+    ownProcessGroup(child);
+    recordProcessOutput("essential-lifecycle", child);
+    children.push(child);
+    closed.set(
+      child,
+      new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", resolve);
+      }),
+    );
+    return child;
+  };
+  try {
+    // Same production admission and native exit helpers, with no backend,
+    // renderer, credentials or production profile. A file requests exit inside
+    // Electron itself, so a launcher wrapper cannot orphan the native process.
+    await writeFile(
+      fixture,
+      `
+      import { app } from "electron";
+      import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+      import { claimDesktopLogging, exitWithEssentialLog } from ${JSON.stringify(path.join(packageRoot, "electron/essential-logging.ts"))};
+      import { configureLogger, createLogger } from ${JSON.stringify(path.join(repositoryRoot, "packages/protocol/src/logger.ts"))};
+      app.setPath("userData", ${JSON.stringify(dataDir)});
+      app.on("window-all-closed", () => {});
+      configureLogger({ sink: () => {} });
+      const { isPrimaryInstance, essentialLog } = claimDesktopLogging(app, app.getPath("userData"));
+      if (isPrimaryInstance) {
+        app.on("will-quit", () => writeFileSync(${JSON.stringify(path.join(root, "will-quit"))}, ""));
+        app.whenReady().then(async () => {
+          await essentialLog.flush();
+          writeFileSync(${JSON.stringify(ready)}, "");
+          setInterval(() => {
+            const file = ${JSON.stringify(control)};
+            if (!existsSync(file)) return;
+            const action = readFileSync(file, "utf8");
+            if (action !== "crash" && action !== "exit") return;
+            unlinkSync(file);
+            if (action === "crash") { process.kill(process.pid, "SIGKILL"); return; }
+            createLogger("backend").info("shutdown.finished", { code: 42 });
+            exitWithEssentialLog(app, essentialLog, 0);
+          }, 10);
+        });
+      }
+    `,
+    );
+    const build = spawnSync(
+      "bun",
+      [
+        "build",
+        fixture,
+        "--target=node",
+        "--format=cjs",
+        "--external=electron",
+        "--outfile",
+        bundle,
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+      },
+    );
+    expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
+    const waitReady = () =>
+      expect
+        .poll(
+          () =>
+            stat(ready).then(
+              () => true,
+              () => false,
+            ),
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+    const primary = launch();
+    await waitReady();
+    const before = await readFile(file, "utf8");
+    expect(before).toContain('"event":"essential.started"');
+    const secondary = launch();
+    expect(await closed.get(secondary)).toBe(0);
+    expect(await readFile(file, "utf8")).toBe(before);
+
+    await writeFile(control, "crash");
+    await closed.get(primary);
+    await rm(ready);
+    const next = launch();
+    await waitReady();
+    const restarted = await readFile(file, "utf8");
+    expect(count(restarted, '"event":"essential.started"')).toBe(2);
+    expect(restarted).not.toContain('"event":"essential.stopped"');
+
+    await writeFile(control, "exit");
+    expect(await closed.get(next)).toBe(0);
+    expect(await readFile(file, "utf8")).toContain('"code":42');
+    await expect(stat(path.join(root, "will-quit"))).rejects.toThrow();
+  } finally {
+    for (const child of children) await stopProcessGroup(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function emitDebugProbes(window: Page): Promise<boolean> {
   return window.evaluate(

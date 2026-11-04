@@ -67,6 +67,32 @@ describe("what is kept", () => {
     }
   });
 
+  test.each(["private-user-token", "secret", "sk-ant-abcdef"])(
+    "rejects token-shaped text %s in every declared label and error identity",
+    (secret) => {
+      for (const { area, event, definition } of essentialEvents) {
+        const fields: Record<string, LogWireValue> = {};
+        for (const name of Object.keys(definition.fields)) fields[name] = secret;
+        fields.error = { name: secret, code: secret, syscall: secret, signal: secret };
+        expect(
+          JSON.stringify(projectEssentialRecord(record(area, event, "error", fields), TS)),
+        ).not.toContain(secret);
+      }
+      const fields = {
+        reason: secret,
+        kind: secret,
+        code: secret,
+        step: secret,
+        site: secret,
+        signal: secret,
+        error: { name: secret, code: secret, syscall: secret, signal: secret },
+      };
+      expect(
+        projectEssentialRecord(record("bridge.pi", "turn.failed", "error", fields), TS)?.fields,
+      ).toEqual({ droppedFields: 10 });
+    },
+  );
+
   test("declared fields are kept, with each kind checked", () => {
     expect(
       projectEssentialRecord(
@@ -168,12 +194,12 @@ describe("what is kept", () => {
     expect(
       projectEssentialRecord(
         record("bridge.pi", "session.resume-fell-back", "warn", {
-          source: "pi:env-1",
+          source: "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
           sessionId: "6e0a6a7e",
         }),
         TS,
       )?.fields,
-    ).toEqual({ source: "pi:env-1" });
+    ).toEqual({ source: "pi:6e0a6a7e-1111-4e95-817f-084f44d18e8f" });
     expect(
       projectEssentialRecord(
         record("bridge.pi", "session.resume-fell-back", "warn", { source: SECRET }),

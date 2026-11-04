@@ -18,9 +18,9 @@ export interface LogAreaSpec {
 }
 
 /**
- * What a field of an essential event may hold. `label` is one short word from a
- * fixed set or an identifier, never free text; `log-essential.ts` drops a value
- * that does not fit, and there is deliberately no kind for an object or text.
+ * What a field of an essential event may hold. `label` admits only the explicit
+ * sets and classifiers in `log-essential-labels.ts`, never arbitrary text or an
+ * identifier-shaped token. There is no kind for an object or free text.
  */
 export type EssentialFieldKind = "number" | "boolean" | "label";
 

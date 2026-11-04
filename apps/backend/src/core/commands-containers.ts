@@ -864,6 +864,7 @@ export async function startContainerOpenCodeServer(
   `,
     [authToken],
   );
+  dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
   await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
     async (error) => {
       const log = await dockerExec(

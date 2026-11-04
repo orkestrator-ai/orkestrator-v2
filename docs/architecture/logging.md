@@ -343,9 +343,13 @@ choice is for. Three limits follow from it:
 - **A container bridge has no hop**, so nothing in it reaches this file: its
   `session.resume-fell-back` stays in `/tmp/<provider>-bridge.log`. The backend's own
   `docker` `bridge.launched` is what records a container bridge's start or relaunch.
-- **A second standalone backend on one data directory** shares the files. A write
-  checks the size on disk, so the cap still holds to within one entry per racing
-  rotation, but a race can cost history.
+- **A second standalone backend on one data directory** shares the files under a
+  cross-process lock covering size inspection, rotation and append. The lock is
+  published as a nonempty directory; only a dead owner's unique empty child can
+  be reclaimed. A slow live process never loses ownership to a timeout. Contention
+  waits asynchronously for up to two seconds, then reports a counted write loss.
+- **A rejected desktop launch** installs no writer or shutdown marker: ownership
+  starts only after winning Electron's single-instance lock.
 
 ### What it holds
 
@@ -361,13 +365,16 @@ defined. Each definition lists its fields, and only those are written:
 },
 ```
 
-A field's kind is `number`, `boolean` or `label`: one short word or identifier
-(`^[A-Za-z0-9][\w.:+-]{0,127}$`), so a space, slash or quote cannot pass. `null` fits
-any kind. There is deliberately no kind for an object or for text. A value that does
+A field's kind is `number`, `boolean` or `label`. Strings pass only the explicit
+sets or field-specific classifiers in `log-essential-labels.ts`: known providers,
+lease reasons, built-in error names, common OS error codes, syscalls and signals;
+version numbers, timestamps, and provider-prefixed environment UUIDs. Unknown names
+and token-shaped strings are dropped even when they look like identifiers. `null`
+fits any kind. There is deliberately no kind for an object or for text. A value that does
 not fit is dropped and counted in `droppedFields`. `ESSENTIAL_ERROR_FIELDS` declares
 what an error may keep: `error.name`, `.code`, `.errno`, `.syscall`, `.exitCode`,
 `.signal`, `.outputOmitted` and `.errorCount`. Its message, stack and cause never come
-along. The `source` a relay adds is kept when it is a label.
+along. The `source` a relay adds is kept only as a known provider plus an environment UUID.
 
 | Area | Event | Fields | Written when |
 | --- | --- | --- | --- |
@@ -402,7 +409,7 @@ rather than a failure, and the transcript artifact warnings stay silent.
 
 An `error` that is not flagged was not reviewed for this file, so it keeps less: its
 numbers, booleans, an error's identity, and a string only under `site`, `kind`, `step`,
-`reason`, `signal` or `code`, and only if it is a label. Everything else is dropped and
+`reason`, `signal` or `code`, and only if its value passes the same explicit classifier. Everything else is dropped and
 counted. This is what makes `error` safe to include by default, and a throttle's
 summary at `error` keeps which site it is about.
 
@@ -449,8 +456,12 @@ takes records.
 
 ### When it cannot write
 
-Writing **never blocks or throws into the caller**. An entry joins a bounded queue that
-one async loop drains.
+Logging calls enqueue without doing filesystem work. One deferred loop drains the
+bounded queue, waiting asynchronously for the cross-process lock. Each size check,
+rotation and append forms a small synchronous transaction, so our own exit drain
+cannot interrupt an in-flight rotation. This trades a short filesystem pause in the
+owner process for safe coordination with immediate native exits. The 4 KiB entry
+bound limits each append; physical disk latency remains outside the writer's control.
 
 - **A write that fails** (a full disk, a read-only directory) loses its entry. The loss
   is counted, reported once as `logging` `essential.write-failed` at `warn`, throttled
@@ -460,16 +471,17 @@ one async loop drains.
   level, so reporting a failed write can never queue another.
 - **A rotation that fails** drops the entry rather than passing the cap.
 - **An exit** has no event loop left to drain the queue, so an `exit` listener writes
-  what is left synchronously. That listener is the one synchronous write, and it is
-  what saves the crash entry below. An entry being written at that moment can appear
-  twice, which is better than not at all.
+  what is left synchronously, one bounded entry at a time under the same lock.
+  Immediate `app.exit()` explicitly drains first because Electron skips `will-quit`.
+  A crash or immediate exit emits no orderly `essential.stopped` marker.
 
 ### A repeating fault
 
 A flood of one event must not evict everything else, so there are two limits.
 **Use `log.throttled`** for a loop that repeats: the first occurrence is written and the
 rest are counted, as [Repeating faults](#repeating-faults) describes, and
-`rejection.unhandled` does. Separately, this log gives each event a budget whatever the
+`rejection.unhandled` does. Separately, this log gives each event and level its own
+budget (a routine `info` exit cannot consume a crash's `warn` allowance), whatever the
 call site does: a burst of 10, then one entry per 10 minutes, or about 36 KB a day from
 one event at most. The next entry that fits carries `suppressed=N`, and a stop or exit
 turns any count nothing reported into `entries.dropped` with `reason=rate-limited`.

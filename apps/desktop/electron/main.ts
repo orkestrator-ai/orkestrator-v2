@@ -113,7 +113,7 @@ import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
   type BrowserPreviewCaptureEvent,
 } from "@orkestrator/protocol/browser-preview";
-import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
+import { registerSecondInstanceFocus } from "./single-instance.js";
 import {
   handleStartupFailure,
   registerQuitReopenRelaunch,
@@ -163,7 +163,7 @@ import {
   registerApplicationLoggingShutdown,
   registerWillQuitHold,
 } from "./application-logging.js";
-import { installEssentialLog } from "@orkestrator/protocol/node/essential-log";
+import { claimDesktopLogging, exitWithEssentialLog } from "./essential-logging.js";
 import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
@@ -251,12 +251,12 @@ protocol.registerSchemesAsPrivileged([ARTIFACT_SHELL_SCHEME_PRIVILEGES]);
 // Before the writer's first line. The backend's settings changes reach this
 // process through `applyStoredLogPolicy`, so none of this waits for a restart.
 applyLogDetail(readApplicationLogPolicy(app.getPath("userData")).detail);
+// Must follow the userData override and precede installing any persistent writer.
+// A rejected secondary launch continues module evaluation until app.quit settles.
+const { isPrimaryInstance, essentialLog } = claimDesktopLogging(app, app.getPath("userData"));
 const ESSENTIAL_LOG_STOP_WAIT_MS = 2_000;
-// Every flavor: unlike the saved log it holds nothing a profile could not keep, and
-// `userData` is already the profile's own directory.
-const essentialLog = installEssentialLog({ dataDir: app.getPath("userData"), owner: "desktop" });
 const applicationLogging =
-  runtimeFlavor === "production"
+  isPrimaryInstance && runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
     : null;
 
@@ -266,9 +266,6 @@ const liveLogPolicy = createLiveLogPolicy({
 });
 const applyStoredLogPolicy = liveLogPolicy.apply;
 app.on("will-quit", () => liveLogPolicy.dispose());
-
-// Must follow the `userData` override above: the lock is scoped to that path.
-const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let backend: BackendHttpClient | null = null;
 let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
@@ -1247,7 +1244,7 @@ function registerIpc(): void {
     createClipboardItem: (items) => new ClipboardItem(items),
     shellApi: shell,
     appApi: {
-      exit: (code) => app.exit(code),
+      exit: (code) => exitWithEssentialLog(app, essentialLog, code),
       quit: () => app.quit(),
       relaunch: () => quitReopen.scheduleRelaunch(),
     },
@@ -1738,11 +1735,13 @@ registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
   settled: backendShutdown.stopped,
   timeoutMs: BACKEND_EXIT_WAIT_MS,
 });
-registerWillQuitHold(
-  app,
-  async () => {
-    await backendShutdown.stopped().catch(() => undefined);
-    await essentialLog.stop();
-  },
-  BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
-);
+if (essentialLog) {
+  registerWillQuitHold(
+    app,
+    async () => {
+      await backendShutdown.stopped().catch(() => undefined);
+      await essentialLog.stop();
+    },
+    BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
+  );
+}

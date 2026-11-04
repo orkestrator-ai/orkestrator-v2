@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { existsSync, renameSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -117,18 +118,18 @@ describe("what is written", () => {
     const saved = installProductionApplicationLogging({ dataDir: directory });
     const essential = install({ dataDir: directory, owner: "desktop" });
     const log = createLogger("docker");
-    log.warn("writer-lease.lost", { reason: "off" });
+    log.warn("writer-lease.lost", { reason: "reclaimed" });
     saved.updateSettings({ enabled: true, retentionDays: 7 });
-    log.warn("writer-lease.lost", { reason: "on" });
+    log.warn("writer-lease.lost", { reason: "unreadable" });
     saved.updateSettings({ enabled: false, retentionDays: 7 });
-    log.warn("writer-lease.lost", { reason: "off-again" });
+    log.warn("writer-lease.lost", { reason: "reclaimed" });
     await essential.flush();
     await saved.stop();
 
     const reasons = (await entries(directory))
       .filter((record) => record.event === "writer-lease.lost")
       .map((record) => record.fields?.reason);
-    expect(reasons).toEqual(["off", "on", "off-again"]);
+    expect(reasons).toEqual(["reclaimed", "unreadable", "reclaimed"]);
     const logs = await readdir(path.join(directory, "logs"));
     const text = await readFile(
       path.join(
@@ -138,8 +139,8 @@ describe("what is written", () => {
       ),
       "utf8",
     );
-    expect(text).toContain("reason=on");
-    expect(text).not.toContain("reason=off");
+    expect(text).toContain("reason=unreadable");
+    expect(text).not.toContain("reason=reclaimed");
   });
 
   test("an error's message never reaches the file, however it is attached", async () => {
@@ -276,15 +277,27 @@ describe("the curated events", () => {
       area: "local-server",
       event: "bridge.started",
       level: "info",
-      fields: { key: "codex:env-1", pid: 42 },
-      kept: { key: "codex:env-1", pid: 42 },
+      fields: { key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f", pid: 42 },
+      kept: { key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f", pid: 42 },
     },
     {
       area: "local-server",
       event: "bridge.exited",
       level: "warn",
-      fields: { key: "codex:env-1", pid: 42, code: 1, signal: null, requested: false },
-      kept: { key: "codex:env-1", pid: 42, code: 1, signal: null, requested: false },
+      fields: {
+        key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+        pid: 42,
+        code: 1,
+        signal: null,
+        requested: false,
+      },
+      kept: {
+        key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+        pid: 42,
+        code: 1,
+        signal: null,
+        requested: false,
+      },
     },
     {
       area: "docker",
@@ -444,10 +457,20 @@ describe("bounds", () => {
     createLogger("docker").warn("writer-lease.lost", { reason: "reclaimed" });
     const log = createLogger("local-server");
     for (let index = 0; index < 5_000; index += 1) {
-      log.warn("bridge.exited", { key: "codex:env-1", code: 1, signal: null, requested: false });
+      log.warn("bridge.exited", {
+        key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+        code: 1,
+        signal: null,
+        requested: false,
+      });
     }
     at += 60_000;
-    log.warn("bridge.exited", { key: "codex:env-1", code: 1, signal: null, requested: false });
+    log.warn("bridge.exited", {
+      key: "codex:6e0a6a7e-1111-4e95-817f-084f44d18e8f",
+      code: 1,
+      signal: null,
+      requested: false,
+    });
     await essential.flush();
     capture.restore();
 
@@ -457,6 +480,54 @@ describe("bounds", () => {
     expect(floods.at(-1)?.fields?.suppressed).toBe(4_997);
     expect(written.some((record) => record.event === "writer-lease.lost")).toBe(true);
   });
+
+  test("routine requested exits cannot spend the crash exit allowance", async () => {
+    const directory = await dataDir();
+    const capture = captureLogs();
+    const essential = install({ dataDir: directory, owner: "backend" });
+    const log = createLogger("local-server");
+    for (let code = 0; code < 20; code += 1) log.info("bridge.exited", { code, requested: true });
+    log.warn("bridge.exited", { code: 99, requested: false });
+    await essential.flush();
+    capture.restore();
+    const exits = (await entries(directory)).filter((record) => record.event === "bridge.exited");
+    expect(exits.filter((record) => record.level === "info")).toHaveLength(10);
+    expect(exits.at(-1)?.fields).toEqual({ code: 99, requested: false });
+  });
+
+  test.each([false, true])(
+    "rotation never overwrites a destination, synchronous flush: %s",
+    async (sync) => {
+      const directory = await dataDir();
+      const capture = captureLogs();
+      const maxFileBytes = 512;
+      let renames = 0;
+      const essential = install({
+        dataDir: directory,
+        owner: "backend",
+        bounds: { maxFileBytes, eventBurst: 10_000 },
+        io: {
+          renameSync: (from, to) => {
+            renames += 1;
+            if (existsSync(to))
+              throw Object.assign(new Error("destination exists"), { code: "EEXIST" });
+            renameSync(from, to);
+          },
+        },
+      });
+      for (let code = 0; code < 100; code += 1)
+        createLogger("backend").info("shutdown.finished", { code });
+      if (sync) essential.flushSync();
+      await essential.flush();
+      capture.restore();
+      expect(renames).toBeGreaterThan(12);
+      expect((await entries(directory)).at(-1)?.fields?.code).toBe(99);
+      expect(await totalBytes(directory)).toBeLessThanOrEqual(4 * maxFileBytes);
+      expect(
+        capture.records().filter((record) => record.event === "essential.write-failed"),
+      ).toEqual([]);
+    },
+  );
 
   test("a stop counts what no later entry reported", async () => {
     const directory = await dataDir();
@@ -508,13 +579,9 @@ describe("a write that fails", () => {
       dataDir: directory,
       owner: "desktop",
       bounds: { maxPendingBytes: 1_024, eventBurst: 10_000 },
-      io: {
-        appendFile: async (...args: Parameters<typeof import("node:fs/promises").appendFile>) => {
-          appends += 1;
-          await stalled;
-          const { appendFile } = await import("node:fs/promises");
-          return appendFile(...args);
-        },
+      beforeWrite: async () => {
+        appends += 1;
+        await stalled;
       },
     });
     const log = createLogger("backend");

@@ -1,3 +1,4 @@
+import { isEssentialLabel } from "./log-essential-labels.js";
 import type { LogErrorDetails } from "./log-error.js";
 import {
   LOG_VOCABULARY,
@@ -19,8 +20,6 @@ import type { LogLevel, LogRecord, LogWireValue } from "./logger.js";
 
 const vocabulary = LOG_VOCABULARY as Readonly<Record<string, LogAreaSpec>>;
 
-/** One word from a fixed set or an identifier. A space, slash or quote cannot pass. */
-const LABEL_PATTERN = /^[A-Za-z0-9][\w.:+-]{0,127}$/;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 /**
@@ -75,7 +74,13 @@ export function isEssentialEntry(area: string, event: string, level: LogLevel): 
   return level === "error" || declaredEssential(area, event, level) !== null;
 }
 
-function fits(kind: EssentialFieldKind, value: LogWireValue): boolean {
+function fits(
+  kind: EssentialFieldKind,
+  value: LogWireValue,
+  area: string,
+  event: string,
+  field: string,
+): boolean {
   if (value === null) return true;
   switch (kind) {
     case "number":
@@ -83,7 +88,10 @@ function fits(kind: EssentialFieldKind, value: LogWireValue): boolean {
     case "boolean":
       return typeof value === "boolean";
     case "label":
-      return typeof value === "number" || (typeof value === "string" && LABEL_PATTERN.test(value));
+      return (
+        typeof value === "number" ||
+        (typeof value === "string" && isEssentialLabel(area, event, field, value))
+      );
   }
 }
 
@@ -99,7 +107,7 @@ export function projectEssentialRecord(record: LogRecord, fallbackTs: string): L
   let unfit = 0;
 
   const admit = (name: string, kind: EssentialFieldKind | undefined, value: LogWireValue) => {
-    if (kind && fits(kind, value)) kept[name] = value;
+    if (kind && fits(kind, value, record.area, record.event, name)) kept[name] = value;
     else unfit += 1;
   };
   const admitScalar = (name: string, value: string | number | boolean | null) => {

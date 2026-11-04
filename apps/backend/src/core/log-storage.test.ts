@@ -155,6 +155,28 @@ describe("the essential log", () => {
     expect(await readFile(path.join(logs, "essential", "essential.jsonl"), "utf8")).toBe("1234567");
   });
 
+  test("does not follow an essential root symlink or spend its budget on outside entries", async () => {
+    const root = await temporaryDirectory();
+    const logs = path.join(root, "logs");
+    const external = path.join(root, "external");
+    await mkdir(logs);
+    await mkdir(external);
+    await writeFile(path.join(logs, "debug.log"), "123");
+    await writeFile(path.join(external, "private.log"), "external bytes");
+    await symlink(external, path.join(logs, "essential"));
+    await expect(getLogStorageStats(logs, 2)).resolves.toEqual(stats(3, 1));
+    await expect(cleanupLogStorage(logs)).resolves.toEqual(stats(0, 0));
+    expect(await readFile(path.join(external, "private.log"), "utf8")).toBe("external bytes");
+  });
+
+  test("counts a regular file called essential as debug storage and cleans it safely", async () => {
+    const logs = path.join(await temporaryDirectory(), "logs");
+    await mkdir(logs);
+    await writeFile(path.join(logs, "essential"), "1234");
+    await expect(getLogStorageStats(logs)).resolves.toEqual(stats(4, 1));
+    await expect(cleanupLogStorage(logs)).resolves.toEqual(stats(0, 0));
+  });
+
   test("only protects the directory at the top, not a name that happens to match", async () => {
     const logs = path.join(await temporaryDirectory(), "logs");
     await mkdir(path.join(logs, "nested", "essential"), { recursive: true });

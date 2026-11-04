@@ -750,4 +750,156 @@ describe("SerialQueue", () => {
     await queue.drainAll();
     expect(queue.pendingDepth).toBe(0);
   });
+  test("runs a synchronous backlog without chaining promises", async () => {
+    const queue = new SerialQueue();
+    const ran: number[] = [];
+    const nativeThen = Promise.prototype.then;
+    let thens = 0;
+    Promise.prototype.then = function (this: Promise<unknown>, ...args: [never, never]) {
+      thens += 1;
+      return nativeThen.apply(this, args);
+    } as typeof Promise.prototype.then;
+    try {
+      for (let index = 0; index < 1_000; index += 1) {
+        queue.run("k", () => {
+          ran.push(index);
+        });
+      }
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+    } finally {
+      Promise.prototype.then = nativeThen;
+    }
+    expect(ran).toEqual(Array.from({ length: 1_000 }, (_, index) => index));
+    expect(thens).toBeLessThan(10);
+    expect(queue.pendingDepth).toBe(0);
+  });
+
+  test("keeps order across synchronous and asynchronous tasks, and past a rejection", async () => {
+    const queue = new SerialQueue();
+    const order: string[] = [];
+    queue.run("k", () => {
+      order.push("sync 1");
+    });
+    queue.run("k", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      order.push("async 2");
+      throw new Error("boom");
+    });
+    queue.run("k", () => {
+      order.push("sync 3");
+    });
+    await queue.drain("k");
+    expect(order).toEqual(["sync 1", "async 2", "sync 3"]);
+    expect(queue.pendingDepth).toBe(0);
+  });
+
+  test("a task queued by a running task runs after it, in the same drain", async () => {
+    const queue = new SerialQueue();
+    const order: string[] = [];
+    queue.run("k", () => {
+      order.push("first");
+      queue.run("k", () => {
+        order.push("nested");
+      });
+    });
+    queue.run("k", () => {
+      order.push("second");
+    });
+    await queue.drainAll();
+    await queue.drain("k");
+    expect(order).toEqual(["first", "second", "nested"]);
+  });
+
+  test("drain waits only for what was queued when it was called", async () => {
+    const queue = new SerialQueue();
+    const blocker = Promise.withResolvers<void>();
+    const later = Promise.withResolvers<void>();
+    queue.run("k", () => blocker.promise);
+    const drained = queue.drain("k");
+    queue.run("k", () => later.promise);
+    let settled = false;
+    void drained.then(() => {
+      settled = true;
+    });
+    blocker.resolve();
+    await drained;
+    expect(settled).toBe(true);
+    expect(queue.pendingDepth).toBe(1);
+    later.resolve();
+    await queue.drain("k");
+    expect(queue.pendingDepth).toBe(0);
+  });
+
+  test("the count bound drops the backlog and reports it once", async () => {
+    const overflows: { depth: number; bytes: number }[] = [];
+    const queue = new SerialQueue({
+      maxDepth: 3,
+      onOverflow: (overflow) => overflows.push(overflow),
+    });
+    const blocker = Promise.withResolvers<void>();
+    const ran: string[] = [];
+    queue.run("k", () => blocker.promise);
+    queue.run("k", () => {
+      ran.push("queued");
+    });
+    queue.run("other", () => {
+      ran.push("other");
+    });
+    expect(overflows).toEqual([]);
+
+    const waiting = queue.drain("k");
+    queue.run("k", () => {
+      ran.push("over the bound");
+    });
+
+    expect(overflows).toEqual([{ depth: 3, bytes: 0 }]);
+    expect(queue.pendingDepth).toBe(0);
+    // A drain cannot wait on tasks that will never run.
+    await waiting;
+
+    blocker.resolve();
+    await Promise.resolve();
+    expect(ran).toEqual([]);
+    // Still accounted from zero once the running task finishes.
+    expect(queue.pendingDepth).toBe(0);
+
+    queue.run("k", () => {
+      ran.push("after");
+    });
+    await queue.drain("k");
+    expect(ran).toEqual(["after"]);
+    expect(queue.pendingDepth).toBe(0);
+  });
+
+  test("the byte bound counts what is queued and releases what finished", async () => {
+    const overflows: { depth: number; bytes: number }[] = [];
+    const queue = new SerialQueue({
+      maxBytes: 100,
+      onOverflow: (overflow) => overflows.push(overflow),
+    });
+    const ran: number[] = [];
+    queue.run("k", () => void ran.push(1), 60);
+    queue.run("k", () => void ran.push(2), 40);
+    expect(overflows).toEqual([]);
+    await queue.drain("k");
+    queue.run("k", () => void ran.push(3), 100);
+    expect(overflows).toEqual([]);
+    queue.run("k", () => void ran.push(4), 1);
+    expect(overflows).toEqual([{ depth: 1, bytes: 100 }]);
+    await queue.drainAll();
+    expect(ran).toEqual([1, 2]);
+  });
+
+  test("clear does not leave the depth negative when a running task ends", async () => {
+    const queue = new SerialQueue();
+    const blocker = Promise.withResolvers<void>();
+    queue.run("k", () => blocker.promise);
+    await Promise.resolve();
+    queue.clear();
+    blocker.resolve();
+    await blocker.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(queue.pendingDepth).toBe(0);
+  });
 });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { listResumableSessions, setSessionListTimeoutForTests } from "./agent-session.js";
 import { workingDirectory } from "./config.js";
+import { SESSION_LIST_CACHE_TTL_MS } from "./session-list-cache.js";
 import { TimeoutError } from "./timeout.js";
 
 let directory: string;
@@ -64,6 +65,35 @@ describe("the resumable session list", () => {
     expect(second).toEqual(first);
     expect(list).toHaveBeenCalledTimes(1);
   });
+
+  test.each([false, true])(
+    "an incomplete resolved list recovers after expiry (partial=%s)",
+    async (partial) => {
+      const firstPath = await writeSession("one", "first prompt");
+      const secondPath = await writeSession("two", "second prompt");
+      const complete = await SessionManager.list(workingDirectory, directory);
+      list.mockClear();
+      list.mockResolvedValueOnce(partial ? complete.slice(0, 1) : []);
+      const clock = spyOn(performance, "now").mockReturnValue(1_000);
+      try {
+        const first = await listResumableSessions();
+        expect(first).toHaveLength(partial ? 1 : 0);
+        clock.mockReturnValue(1_000 + SESSION_LIST_CACHE_TTL_MS - 1);
+        expect(await listResumableSessions()).toEqual(first);
+        expect(list).toHaveBeenCalledTimes(1);
+        clock.mockReturnValue(1_000 + SESSION_LIST_CACHE_TTL_MS);
+        const recovered = await listResumableSessions();
+        expect(recovered.map((entry) => entry.sessionId).sort()).toEqual(
+          [firstPath, secondPath].sort(),
+        );
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(await listResumableSessions()).toEqual(recovered);
+        expect(list).toHaveBeenCalledTimes(2);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   test.each([
     [

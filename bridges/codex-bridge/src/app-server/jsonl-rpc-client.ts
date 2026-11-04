@@ -248,7 +248,12 @@ export class JsonlRpcClient {
     let scanExhausted = false;
     try {
       let newlineIndex: number;
-      while ((newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0) {
+      // Overflow recovery closes this client synchronously; never apply lines
+      // after the dropped gap, even if they arrived in the same stdout chunk.
+      while (
+        !this.closed &&
+        (newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0
+      ) {
         // Slice off `\r` too so CRLF framing does not corrupt the JSON tail.
         const raw = this.buffer.slice(lineStart, newlineIndex).replace(/\r$/, "");
         lineStart = newlineIndex + 1;
@@ -334,7 +339,11 @@ export class JsonlRpcClient {
       case "notification": {
         this.metrics.notificationsReceived += 1;
         try {
-          this.options.onNotification(message, extractThreadId(message.params), line.length);
+          this.options.onNotification(
+            message,
+            extractThreadId(message.params),
+            Buffer.byteLength(line, "utf8"),
+          );
         } catch (error) {
           log.error("notification.enqueue-failed", { error: formatLogError(error) });
         }

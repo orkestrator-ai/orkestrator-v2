@@ -1,5 +1,5 @@
 /**
- * What `GET /session/list` answers while no session file has changed.
+ * What `GET /session/list` answers while no session file has changed, for up to 30 s.
  *
  * `SessionManager.list` reads and parses every session file in full, and Pi
  * does not export the per-file step, so the result can only be kept whole: one
@@ -13,10 +13,14 @@ import { join } from "node:path";
 import type { NativeAgentResumeEntry } from "@orkestrator/protocol/native-agent";
 import { encodedJsonBytes } from "@orkestrator/protocol/node/transcript-budget";
 
+/** The SDK suppresses some read failures, so even an unchanged stamp must retry. */
+export const SESSION_LIST_CACHE_TTL_MS = 30_000;
+
 /** The most a list may hold to be kept; the backend refuses a larger body anyway. */
 export const MAX_CACHED_SESSION_LIST_BYTES = 2 * 1024 * 1024;
 
 interface CachedSessionList {
+  expiresAt: number;
   directory: string;
   stamp: string;
   entries: NativeAgentResumeEntry[];
@@ -51,7 +55,12 @@ export function cachedSessionList(
   directory: string,
   stamp: string | undefined,
 ): NativeAgentResumeEntry[] | undefined {
-  if (stamp === undefined || cached?.directory !== directory || cached.stamp !== stamp) {
+  if (
+    stamp === undefined ||
+    cached?.directory !== directory ||
+    cached.stamp !== stamp ||
+    performance.now() >= cached.expiresAt
+  ) {
     return undefined;
   }
   return cached.entries;
@@ -65,6 +74,6 @@ export function rememberSessionList(
 ): void {
   cached =
     stamp !== undefined && encodedJsonBytes(entries) <= MAX_CACHED_SESSION_LIST_BYTES
-      ? { directory, stamp, entries }
+      ? { directory, stamp, entries, expiresAt: performance.now() + SESSION_LIST_CACHE_TTL_MS }
       : undefined;
 }

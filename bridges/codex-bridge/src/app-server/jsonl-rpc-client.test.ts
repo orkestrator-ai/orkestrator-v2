@@ -687,6 +687,52 @@ describe("scripted app-server round trip", () => {
   });
 });
 
+describe("transport notification queue bounds", () => {
+  test.each(["bytes", "count"])(
+    "%s overflow closes the client before later lines in the same chunk",
+    async (bound) => {
+      const line = JSON.stringify({
+        jsonrpc: "2.0",
+        method: "warning",
+        params: { text: "界".repeat(100) },
+      });
+      const lineBytes = Buffer.byteLength(line, "utf8");
+      expect(lineBytes).toBeGreaterThan(line.length * 2);
+      let overflowCount = 0;
+      const processed: string[] = [];
+      const charges: number[] = [];
+      const queue = new SerialQueue({
+        ...(bound === "bytes" ? { maxBytes: lineBytes * 2 - 1 } : { maxDepth: 1 }),
+        onOverflow: () => {
+          overflowCount += 1;
+          h.client.close();
+        },
+      });
+      const h = harness({
+        onNotification: (notification, threadId, bytes) => {
+          charges.push(bytes);
+          queue.run(
+            threadId ?? "connection",
+            () => {
+              processed.push(notification.method);
+            },
+            bytes,
+          );
+        },
+      });
+      h.stdout.push(Buffer.from(`${line}\n${line}\n${line}\n${line}\n`));
+      await queue.drainAll();
+      await settle();
+      expect(overflowCount).toBe(1);
+      expect(charges).toEqual([lineBytes, lineBytes]);
+      expect(processed).toEqual([]);
+      expect(h.client.isClosed()).toBe(true);
+      h.stdout.push(`${line}\n`);
+      expect(charges).toHaveLength(2);
+    },
+  );
+});
+
 describe("SerialQueue", () => {
   test("preserves order within a key", async () => {
     const queue = new SerialQueue();

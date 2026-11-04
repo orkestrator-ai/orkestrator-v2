@@ -3,11 +3,7 @@ import {
   encodeTerminalBinaryFrame,
   TERMINAL_BINARY_FRAME_TYPE,
 } from "@orkestrator/protocol/terminal-websocket";
-import {
-  MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS,
-  TerminalWebSocketClient,
-  type TerminalSocketPayload,
-} from "./terminal-websocket-client";
+import { TerminalWebSocketClient, type TerminalSocketPayload } from "./terminal-websocket-client";
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -63,7 +59,7 @@ const CALLBACKS = {
   onChannelUnavailable: () => undefined,
 };
 
-function subscribedHarness(mobileHost?: boolean) {
+function subscribedHarness() {
   let now = 1_000_000;
   const sockets: MockWebSocket[] = [];
   const unavailable = mock((_sessionId: string) => undefined);
@@ -75,7 +71,6 @@ function subscribedHarness(mobileHost?: boolean) {
     subscriptionRetryDelayMs: 0,
     acknowledgementDelayMs: 0,
     reconnectNow: () => now,
-    mobileHost,
     createSocket: () => {
       const socket = new MockWebSocket();
       sockets.push(socket);
@@ -117,49 +112,61 @@ function subscribedHarness(mobileHost?: boolean) {
 }
 
 describe("terminal WebSocket on returning to the page (WEB-11)", () => {
-  test("a healthy desktop socket stays up, with no channel reconciled, after any hide", async () => {
-    const { sockets, socket, payloads, unavailable, hideFor } = subscribedHarness(false);
-    hideFor(10 * 60_000);
-    await Promise.resolve();
+  test.each([0, 200, 4_999, 5_000, 600_000])(
+    "an answered but independently stalled OPEN socket recovers after a %i ms hide without input",
+    async (hiddenMs) => {
+      const { sockets, socket, payloads, unavailable, hideFor } = subscribedHarness();
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      // No terminal close/error is delivered. The main event stream stays
+      // healthy (never calls dropConnection); no input or resize drives recovery.
+      hideFor(hiddenMs);
+      await Promise.resolve();
+      expect(socket.closes.at(-1)?.reason).toBe("Foreground reconciliation");
+      expect(sockets).toHaveLength(2);
+      expect(unavailable).toHaveBeenCalledWith("session-a");
+      expect(payloads.at(-1)).toMatchObject({ desynced: true });
 
+      const replacement = sockets[1]!;
+      replacement.open();
+      replacement.receive(JSON.stringify({ type: "ready", version: 1, socketId: "two" }));
+      const subscribe = replacement.sent
+        .filter((frame): frame is string => typeof frame === "string")
+        .map((frame) => JSON.parse(frame) as { type: string; requestId: number })
+        .find((frame) => frame.type === "subscribe")!;
+      replacement.receive(
+        JSON.stringify({
+          type: "subscribed",
+          requestId: subscribe.requestId,
+          sessionId: "session-a",
+          channelId: 8,
+          baseGeneration: 1,
+          baseRevision: 0,
+          targetGeneration: 1,
+          targetRevision: 0,
+          recovery: "current",
+        }),
+      );
+      replacement.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 8,
+          generation: 1,
+          revision: 1,
+          bytes: new TextEncoder().encode("recovered"),
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(payloads.at(-1)).toMatchObject({ generation: 1, revision: 1 });
+      expect(new TextDecoder().decode(payloads.at(-1)?.bytes)).toBe("recovered");
+    },
+  );
+
+  test("hiding alone leaves background terminal work connected", () => {
+    const { sockets, socket, unavailable } = subscribedHarness();
+    setVisibility("hidden");
     expect(sockets).toHaveLength(1);
     expect(socket.closes).toEqual([]);
-    expect(payloads.filter((payload) => "desynced" in payload)).toEqual([]);
     expect(unavailable).not.toHaveBeenCalled();
-  });
-
-  test("a kept channel still receives output in order after the hide", async () => {
-    const { socket, payloads, hideFor } = subscribedHarness(false);
-    hideFor(60_000);
-
-    socket.receive(
-      encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.output,
-        channelId: 7,
-        generation: 1,
-        revision: 1,
-        bytes: new TextEncoder().encode("after"),
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(payloads.at(-1)).toMatchObject({ generation: 1, revision: 1 });
-  });
-
-  test("a mobile socket hidden for a moment stays up", () => {
-    const { sockets, socket, hideFor } = subscribedHarness(true);
-    hideFor(MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS - 1);
-    expect(sockets).toHaveLength(1);
-    expect(socket.closes).toEqual([]);
-  });
-
-  test("a mobile socket hidden past the bound is rebuilt and every channel recovers", async () => {
-    const { sockets, socket, payloads, hideFor } = subscribedHarness(true);
-    hideFor(MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS);
-    await Promise.resolve();
-
-    expect(socket.closes.at(-1)?.reason).toBe("Foreground reconciliation");
-    expect(sockets).toHaveLength(2);
-    expect(payloads.at(-1)).toMatchObject({ desynced: true });
   });
 
   test("a socket that has not been answered retries at once on a desktop too", () => {
@@ -167,7 +174,6 @@ describe("terminal WebSocket on returning to the page (WEB-11)", () => {
     const client = new TerminalWebSocketClient({
       ...CALLBACKS,
       url: "ws://gateway.test/__orkestrator/terminal",
-      mobileHost: false,
       createSocket: () => {
         const socket = new MockWebSocket();
         sockets.push(socket);
@@ -182,48 +188,4 @@ describe("terminal WebSocket on returning to the page (WEB-11)", () => {
     expect(sockets[0]!.closes.at(-1)?.reason).toBe("Foreground reconciliation");
     expect(sockets).toHaveLength(2);
   });
-});
-
-const navigatorDescriptors = new Map(
-  ["userAgentData", "userAgent", "platform", "maxTouchPoints"].map((key) => [
-    key,
-    Object.getOwnPropertyDescriptor(navigator, key),
-  ]),
-);
-afterEach(() => {
-  for (const [key, descriptor] of navigatorDescriptors) {
-    if (descriptor) Object.defineProperty(navigator, key, descriptor);
-    else Reflect.deleteProperty(navigator, key);
-  }
-});
-test.each([
-  [
-    { userAgentData: { mobile: true }, userAgent: "Desktop", platform: "Linux", maxTouchPoints: 0 },
-    true,
-  ],
-  [
-    {
-      userAgentData: { mobile: false },
-      userAgent: "Android",
-      platform: "Linux",
-      maxTouchPoints: 0,
-    },
-    true,
-  ],
-  [{ userAgentData: undefined, userAgent: "iPhone", platform: "iPhone", maxTouchPoints: 1 }, true],
-  [
-    { userAgentData: undefined, userAgent: "Safari", platform: "MacIntel", maxTouchPoints: 5 },
-    true,
-  ],
-  [
-    { userAgentData: undefined, userAgent: "Safari", platform: "MacIntel", maxTouchPoints: 0 },
-    false,
-  ],
-] as const)("detects foreground policy from navigator %j", async (host, mobile) => {
-  for (const [key, value] of Object.entries(host))
-    Object.defineProperty(navigator, key, { configurable: true, value });
-  const { sockets, hideFor } = subscribedHarness();
-  hideFor(MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS);
-  await Promise.resolve();
-  expect(sockets).toHaveLength(mobile ? 2 : 1);
 });

@@ -140,7 +140,7 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 
 #### Tasks
 
-1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: done (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)) as recommended below, with a 5 s bound.
+1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: deferred after review (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)). The mobile-only 5 s policy was reverted because an independently stalled terminal socket has no liveness probe; foreground replacement remains required on all hosts.
 
 #### 1. Rebuild only when needed
 
@@ -153,9 +153,12 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 **Decisions.**
 
 - **What decides a rebuild?**
-  - **Limit the rebuild to mobile hosts and to a page hidden for longer than a short bound (recommended).**
+  - **Keep foreground replacement until terminal-specific liveness exists (recommended, implemented after review).**
+    - Pros: recovers stalled terminal connections without user input on every host.
+    - Cons: retains the per-return channel reconciliation cost.
+  - **Limit the rebuild to mobile hosts and to a page hidden for longer than a short bound (rejected after review).**
     - Pros: a desktop alt-tab costs nothing; needs no new frame; keeps the protection where the comment says it matters.
-    - Cons: a desktop socket silently killed during a short hide waits for the silence path.
+    - Cons: the main-stream silence path never fires when only the terminal socket stalls.
   - **Add an application-level echo and rebuild only if it goes unanswered.**
     - Pros: tests the socket directly on every host.
     - Cons: a protocol addition with a version-compatibility entry, and a delay on return while it waits.

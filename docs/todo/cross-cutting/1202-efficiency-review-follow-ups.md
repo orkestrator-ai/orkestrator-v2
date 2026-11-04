@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9 and WEB-10 done 2026-11-04; WEB-11 deferred pending terminal-specific liveness; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
@@ -193,7 +193,7 @@ No React Profiler run was made; the numbers are render counts from tests.
     - Pros: what the report suggested; the selector is a single `get`.
     - Cons: still re-renders on every change inside that environment.
 
-#### WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix (done 2026-11-04)
+#### WEB-9, WEB-6, WEB-10 and WEB-2's third fix (done 2026-11-04); WEB-11 deferred
 
 Re-checked against `main` at `96ee1eb3e` first. All five still applied, in places differently from the report. Each landed as its own commit. Every change has a test that fails on the previous code, except the WEB-9 sizes and the timings, which are measurements.
 
@@ -233,7 +233,7 @@ These are small absolute costs, which matches the report's reasoning-only impact
 
 The first pass after opening find still reads every row once (179–1,197 ms at those sizes); only later passes and further typing improve. The comparison timings ran once each on one reparsed copy.
 
-**WEB-11, terminal socket.** On becoming visible, `TerminalWebSocketClient` now replaces a socket the server has answered only on a mobile host hidden for at least `MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS` (5 s). A socket that is down or unanswered still retries at once on any host. `terminal-websocket-client.visibility.test.ts`: three of its five tests fail on the old client. Live on a `dev:test` profile with the transport turned on, with `visibilityState` overridden in the page rather than a really hidden window: one terminal socket stayed open through a 200 ms and a 6 s hide, and output before and after arrived.
+**WEB-11, terminal socket (optimization deferred after review).** The mobile-only 5 s policy was reverted: an OPEN terminal socket that answered earlier can silently stall independently of the main event stream. Every foreground return with desired channels now replaces the transport and reconciles from authoritative state, without waiting for input. Hiding alone keeps background work connected. Visibility regressions cover 0 ms, 200 ms, 4,999 ms, 5 s and 10 min hides, resubscription and resumed ordered output. Socket retention needs a terminal-specific liveness probe before it is safe; the previous live retention measurements describe the superseded policy.
 
 **WEB-2's third fix.** The target was the hook rather than the controller, as 0590 found: the controller's only projection store subscription is its own turn-stop marker. `useNativeAgentSession` subscribed to its whole sync and progressive cache entries, whose every use is a `useState` or `useRef` initial value. It now reads them with `getState()`; the shared projection stays subscribed because an effect follows it. `useNativeAgentSession.store-subscriptions.test.tsx`: one cache write cost one hook render before and none now; a new projection still arrives and a remount still restores the cached transcript token. `useNativeAgentSession.background-flags.test.tsx` ("a manual read still raises and clears the flags") only saw the flag because the removed subscription forced a render mid-read, so it now holds the read open.
 
@@ -282,12 +282,12 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
     - Pros: trivial.
     - Cons: every pass still re-parses everything above 512 rows, and matches lag behind the text.
 - **What decides a socket rebuild on return (WEB-11)?**
-  - **Mobile hosts hidden for at least 5 s; a socket that is down or unanswered retries on any host (recommended, done).**
-    - Pros: a desktop alt-tab costs nothing; no new frame or version entry; keeps the protection where the code comment says it matters.
-    - Cons: a desktop socket that dies on its own while the main stream stays healthy has no foreground rescue any more; the gateway's silence watchdog only catches a link that went silent as a whole.
+  - **Rebuild on every foreground return while channels exist (recommended, implemented after review).**
+    - Pros: recovers independently stalled sockets without input; works with the current protocol on all hosts.
+    - Cons: each return reconciles all channels; the retention optimization is deferred.
   - **An application-level echo, rebuilding only if unanswered.**
-    - Pros: tests the socket directly on every host.
-    - Cons: a protocol addition with a version-compatibility entry, and a delay on return while it waits.
+    - Pros: tests the socket directly and can retain quiet healthy channels.
+    - Cons: requires a protocol addition and compatibility handling, plus a delay on return.
 - **How to read the two caches without subscribing (WEB-2)?**
   - **`getState()` on each render (recommended, done).**
     - Pros: removes the subscriptions; holds no reference to an entry, so an evicted cache can be freed.
@@ -1300,3 +1300,12 @@ browser and real-stack suites were not run.
 - [0052 remote client bandwidth](../transcripts-and-observation/0052-remote-client-bandwidth.md), D14.
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md).
 - [Flake 1314](../../tests/flaky-tests/design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md).
+
+## Assumptions and decisions
+
+### Task 3: terminal foreground recovery after review
+
+Chose unconditional foreground replacement until terminal-specific liveness is
+available. The main stream heartbeat cannot establish terminal socket health.
+This restores the safe existing recovery path; WEB-11's retention optimization
+is deferred while the other task 3 efficiency improvements remain implemented.

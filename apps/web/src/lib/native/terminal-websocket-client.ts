@@ -61,19 +61,6 @@ type PendingOperation = {
   reject: (error: Error) => void;
 };
 
-/** Below this a mobile page was only glanced away from; its socket is kept. */
-export const MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS = 5_000;
-
-function isMobileHost(): boolean {
-  const host = globalThis.navigator as
-    (Navigator & { userAgentData?: { mobile?: boolean } }) | undefined;
-  if (!host) return false;
-  if (host.userAgentData?.mobile) return true;
-  if (/Android|iPhone|iPad|iPod|Mobile/i.test(host.userAgent)) return true;
-  // iPadOS reports itself as a Mac; a Mac has no multi-touch screen.
-  return host.platform === "MacIntel" && host.maxTouchPoints > 1;
-}
-
 export type TerminalWebSocketClientOptions = {
   url: string;
   token?: string;
@@ -89,8 +76,6 @@ export type TerminalWebSocketClientOptions = {
   reconnectRandom?: () => number;
   /** Clock that decides whether a dropped socket had stayed up long enough. */
   reconnectNow?: () => number;
-  /** Overrides detecting a mobile host, for the foreground rebuild. */
-  mobileHost?: boolean;
   maxAwaitingSnapshotFrames?: number;
   maxAwaitingSnapshotBytes?: number;
   maxPendingOperations?: number;
@@ -137,15 +122,9 @@ export class TerminalWebSocketClient {
   private serverReady = false;
   private disposed = false;
   private token: string | undefined;
-  private hiddenSince: number | null = null;
-  private readonly now: () => number;
-  private readonly mobileHost: boolean;
 
   constructor(private readonly options: TerminalWebSocketClientOptions) {
     this.token = options.token;
-    this.now = options.reconnectNow ?? Date.now;
-    this.mobileHost = options.mobileHost ?? isMobileHost();
-    if (document.visibilityState === "hidden") this.hiddenSince = this.now();
     this.random = options.reconnectRandom ?? Math.random;
     const reconnectDelay = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
     this.socketBackoff = new ReconnectBackoff(
@@ -378,23 +357,11 @@ export class TerminalWebSocketClient {
   }
 
   private readonly onVisibilityChange = (): void => {
-    if (document.visibilityState !== "visible") {
-      this.hiddenSince ??= this.now();
-      return;
-    }
-    const hiddenFor = this.hiddenSince === null ? 0 : this.now() - this.hiddenSince;
-    this.hiddenSince = null;
-    if (this.desired.size === 0) return;
-    // Mobile WebViews can preserve an apparently-open but dead socket while
-    // backgrounded, so one that was hidden for more than a moment is rebuilt
-    // from the authoritative desired registry. Elsewhere a socket the server
-    // has answered is left alone: replacing it makes every channel reconcile
-    // from a snapshot, and a link that died is caught by the gateway's silence
-    // watchdog (`dropConnection`). A socket still down retries now on any host.
-    const healthy = this.serverReady && this.socket?.readyState === WebSocket.OPEN;
-    if (healthy && !(this.mobileHost && hiddenFor >= MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS)) {
-      return;
-    }
+    if (document.visibilityState !== "visible" || this.desired.size === 0) return;
+    // OPEN and an earlier ready frame cannot prove this transport is still live.
+    // The main event stream has its own connection and may keep heartbeating
+    // while this one silently stalls. Until the terminal protocol has a liveness
+    // probe, foregrounding must replace it and reconcile every desired channel.
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const oldSocket = this.socket;

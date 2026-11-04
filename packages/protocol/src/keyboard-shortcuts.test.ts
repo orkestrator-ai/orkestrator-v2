@@ -109,8 +109,8 @@ describe("matchAppShortcut", () => {
   test("uses the physical key only when the layout types no Latin letter", () => {
     const k = { code: "KeyK", shiftKey: false };
     expect(matchAppShortcut(chord({ ...k, ctrlKey: true, key: "л" }))).toBe("search-projects");
-    // Dvorak: the physical K key types T, and the key typing K sits on KeyV.
-    expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "t" }))).toBeNull();
+    // Dvorak: the physical K key types T, so ⌘ on it is ⌘T; the key typing K sits on KeyV.
+    expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "t" }))).toBe("new-agent-tab");
     expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "k", code: "KeyV" }))).toBe(
       "search-projects",
     );

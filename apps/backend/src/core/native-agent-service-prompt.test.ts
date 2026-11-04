@@ -805,7 +805,6 @@ describe("NativeAgentService", () => {
       expect(converged?.startupAgentSession).toBeUndefined();
       expect((await firstStorage.getPaneLayout("env-1"))?.root).toMatchObject({
         tabs: [
-          { id: "default" },
           {
             id: "startup-agent",
             type: "agent-native",

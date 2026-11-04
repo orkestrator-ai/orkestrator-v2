@@ -322,6 +322,25 @@ const writeInitialPromptAttachmentsMock = mock(
   },
 );
 
+const publishSetupTab = (
+  environmentId = "env-hidden",
+  containerId: string | null = "container-hidden",
+) =>
+  getPaneLayoutMock.mockResolvedValue({
+    version: PANE_LAYOUT_VERSION,
+    environmentId,
+    containerId,
+    activePaneId: "default",
+    root: {
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+      activeTabId: "default",
+    },
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  } as PersistedPaneLayout);
+
 const seedContainerSetupCommands = (environmentId = "env-hidden") => {
   useEnvironmentStore.getState().updateEnvironment(environmentId, {
     setupPhase: "running",
@@ -4628,6 +4647,7 @@ describe("TerminalContainer", () => {
 
   test("renders the backend-owned setup session in a plain terminal", async () => {
     seedContainerSetupCommands();
+    publishSetupTab();
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",
@@ -4668,8 +4688,31 @@ describe("TerminalContainer", () => {
     ).toBe(true);
   });
 
+  test("waits for the backend to publish the setup tab rather than adding one", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+    });
+    const root = usePaneLayoutStore.getState().environments.get("env-hidden")?.root;
+    expect(root?.kind === "leaf" ? root.tabs : []).toEqual([]);
+    expect(screen.getByTestId("environment-tabs-shimmer")).toBeTruthy();
+  });
+
   test("attaches a setup tab to a backend-owned setup session", async () => {
     useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    publishSetupTab();
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",
@@ -4703,7 +4746,6 @@ describe("TerminalContainer", () => {
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
     });
-    expect(getPaneLayoutMock).not.toHaveBeenCalled();
 
     await waitFor(() => {
       const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
@@ -5386,6 +5428,7 @@ describe("TerminalContainer", () => {
   });
 
   test("rehydrates a running backend setup session for a local environment", async () => {
+    publishSetupTab("env-hidden", null);
     getEnvironmentSetupSessionMock.mockResolvedValue({
       environmentId: "env-hidden",
       sessionId: "env-hidden:setup",

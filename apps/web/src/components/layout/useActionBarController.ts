@@ -44,6 +44,9 @@ import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isBackendOnAnotherDevice, isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
+import { onAppShortcut } from "@/lib/app-shortcuts";
+import { beginTabLaunch, claimTabLaunch, type TabLaunchHandle } from "@/lib/tab-launch";
+import type { TabLaunchSurface } from "@/stores/tabLaunchStore";
 import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/ReviewLaunchDialog";
 import { type MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
 import { type AgentLaunchSelection } from "@/components/launch/AgentLaunchDialog";
@@ -57,10 +60,7 @@ import {
   getAllLeaves,
   type EnvironmentPaneState,
 } from "@/stores/paneLayoutStore";
-import {
-  beginPaneTabActivationRequest,
-  requestPaneTabActivation,
-} from "@/lib/pane-layout-authoritative";
+import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
@@ -321,15 +321,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     homeId: isProjectHomeSelected ? (selectedEnvironmentId ?? null) : null,
     tab: projectBoardTab,
   };
-  const activateLaunchedTab = useCallback(
-    (
-      environmentId: string,
-      tabId: string,
-      request: ReturnType<typeof beginPaneTabActivationRequest>,
-    ) => {
-      requestPaneTabActivation(environmentId, tabId, request);
+  // Focus moves when the user presses, not when the backend finishes.
+  const beginLaunchedTab = useCallback(
+    (environmentId: string, tabId: string, title: string, surface: TabLaunchSurface = "agent") => {
       const { homeId, tab } = projectHomeRevealRef.current;
       if (homeId === environmentId && tab !== "home") setProjectBoardTab("home");
+      return beginTabLaunch(environmentId, { tabId, title, surface });
     },
     [setProjectBoardTab],
   );
@@ -753,6 +750,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       },
     ) => {
       if (!createTab || !selectedEnvironmentId || !selectedProjectId || !canCreateTab) return;
+      const releaseLaunch = claimTabLaunch(
+        `review:${agentOverride ?? "default"}`,
+        selectedEnvironmentId,
+      );
+      if (!releaseLaunch) return;
 
       // The same target-branch rule the backend's `review.start` action applies.
       const targetBranch = defaultPrTargetBranch(
@@ -803,6 +805,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         initialFastMode,
       });
       if (!created) {
+        releaseLaunch({ retryable: true });
         toast.error("Could not open review", {
           description: "The environment is not ready or the maximum tab count was reached.",
         });
@@ -830,11 +833,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           mode: "build",
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         },
-      }).catch((error) => {
-        toast.error("Could not start review", {
-          description: error instanceof Error ? error.message : String(error),
+      })
+        .then(() => releaseLaunch())
+        .catch((error) => {
+          releaseLaunch({ retryable: true });
+          toast.error("Could not start review", {
+            description: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
     },
     [
       actionDefaultFor,
@@ -914,7 +920,16 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return;
       multiReviewLaunchInFlightRef.current = true;
       setMultiReviewLaunchPending(true);
-      const activationRequest = beginPaneTabActivationRequest(selectedEnvironmentId);
+      const requestId = createUuid();
+      // Mirrors the backend's id for a new review's root tab; an active review
+      // it reuses answers with its own.
+      const launch = beginLaunchedTab(
+        selectedEnvironmentId,
+        `multi-review:${requestId}`,
+        "Multi Review",
+        "page",
+      );
+      setMultiReviewDialogOpen(false);
       const announceReused = () =>
         toast.info("Multi Review already running", {
           description:
@@ -927,7 +942,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // writes its tab into the layout, so a crash here cannot orphan it.
         const launched = await backend
           .launchMultiReview({
-            requestId: createUuid(),
+            requestId,
             environmentId: selectedEnvironmentId,
             reviewers: selection.reviewers,
             reviewModel: selection.reviewModel,
@@ -940,6 +955,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
             return null;
           });
         if (!launched) {
+          launch.failed();
           const legacy = await legacyLaunchMultiReview({
             environmentId: selectedEnvironmentId,
             projectId: selectedProjectId,
@@ -956,7 +972,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
                 }),
               ),
           });
-          setMultiReviewDialogOpen(false);
           if (legacy.reused) announceReused();
           return;
         }
@@ -964,10 +979,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         if (launched.ui.status !== "opened" || !launched.ui.tabId) {
           throw new Error(launched.recovery ?? "The review's tab could not be opened.");
         }
-        activateLaunchedTab(selectedEnvironmentId, launched.ui.tabId, activationRequest);
-        setMultiReviewDialogOpen(false);
+        launch.settled(launched.ui.tabId);
         if (launched.reused) announceReused();
       } catch (error) {
+        launch.failed();
+        // Back to the dialog, so the launch can simply be retried.
+        setMultiReviewDialogOpen(true);
         toast.error("Could not open Multi Review", {
           description: error instanceof Error ? error.message : String(error),
         });
@@ -977,7 +994,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
-      activateLaunchedTab,
+      beginLaunchedTab,
       canCreateTab,
       config.global.reviewInstruction,
       config.repositories,
@@ -1101,23 +1118,29 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const handleRun = useCallback(async () => {
     const environmentId = selectedEnvironmentId;
     if (!environmentId || tabCount >= MAX_TABS || !runCommands || runCommands.length === 0) return;
-    const activationRequest = beginPaneTabActivationRequest(environmentId);
+    const releaseLaunch = claimTabLaunch("run", environmentId);
+    if (!releaseLaunch) return;
+    const tabId = `terminal-job-${createUuid()}`;
+    const launch = beginLaunchedTab(environmentId, tabId, "Run Commands", "terminal");
     try {
       const result = await backend.launchTerminalJob({
         requestId: `run-commands-${createUuid()}`,
         environmentId,
+        tabId,
         tabType: "plain",
         data: `${runCommands.join(" && ")}\n`,
         title: "Run Commands",
-        activateTab: true,
       });
-      activateLaunchedTab(environmentId, result.tabId, activationRequest);
+      launch.settled(result.tabId);
+      releaseLaunch();
     } catch (error) {
+      launch.failed();
+      releaseLaunch({ retryable: true });
       toast.error("Could not run commands", {
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [activateLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
+  }, [beginLaunchedTab, runCommands, selectedEnvironmentId, tabCount]);
 
   const handleCreateScript = useCallback(
     (
@@ -1149,22 +1172,29 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ? configuredFastMode
           : undefined;
       const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
-      const activationRequest = beginPaneTabActivationRequest(environmentId);
+      const releaseLaunch = claimTabLaunch(
+        `create-script:${agentOverride ?? "default"}`,
+        environmentId,
+      );
+      if (!releaseLaunch) return Promise.resolve(false);
+      const tabId = `agent-job-${createUuid()}`;
+      const launch = beginLaunchedTab(environmentId, tabId, "Run Script");
       return backend
         .launchNativeAgentJob({
           requestId: `run-script-${createUuid()}`,
           environmentId,
+          tabId,
           agent,
           prompt: initialPrompt,
           title: "Run Script",
           conversationMode: "build",
-          activateTab: true,
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         })
         .then((result) => {
-          activateLaunchedTab(environmentId, result.tabId, activationRequest);
+          launch.settled(result.tabId);
+          releaseLaunch({ retryable: result.status === "rejected" });
           if (result.status !== "rejected") return true;
           toast.error("Could not start script creation", {
             description: result.error || "The agent rejected the request.",
@@ -1172,6 +1202,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           return false;
         })
         .catch((error) => {
+          launch.failed();
+          releaseLaunch({ retryable: true });
           toast.error("Could not start script creation", {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1179,7 +1211,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         });
     },
     [
-      activateLaunchedTab,
+      beginLaunchedTab,
       actionDefaultFor,
       isRunning,
       isLocalEnvironment,
@@ -1250,12 +1282,21 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
       return;
     }
+    const environmentId = selectedEnvironment.id;
+    const tabId = `tab-${createUuid()}`;
+    if (!createTab("browser", { tabId })) return;
+    const launch = beginLaunchedTab(environmentId, tabId, "Browser", "page");
     // Prefer the registered entry service: the tab then follows the service
     // across container recreation instead of pinning today's host port.
     void environmentBrowserTarget(selectedEnvironment, environmentBrowserUrl)
       .catch(() => environmentBrowserUrl ?? undefined)
-      .then((initialUrl) => createTab("browser", { initialUrl }));
-  }, [canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
+      .then((initialUrl) => {
+        if (initialUrl) {
+          usePaneLayoutStore.getState().updateTabBrowserUrl(tabId, initialUrl, environmentId);
+        }
+        launch.settled();
+      });
+  }, [beginLaunchedTab, canCreateTab, createTab, environmentBrowserUrl, selectedEnvironment]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands =
@@ -1332,6 +1373,21 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     };
   }, []);
 
+  // An app shortcut, so it opens a tab wherever focus is. Setup owns the first
+  // tab while it runs, so the key waits for it.
+  useEffect(
+    () =>
+      onAppShortcut("new-agent-tab", () => {
+        if (setupRunning) return;
+        if (tabCount >= MAX_TABS && createTab && selectedEnvironment) {
+          showTabLimitReachedToast(MAX_TABS);
+          return;
+        }
+        if (canCreateTab) createTab?.("agent-native");
+      }),
+    [canCreateTab, createTab, selectedEnvironment, setupRunning, tabCount],
+  );
+
   // Keyboard shortcuts for terminal tabs
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1386,13 +1442,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // browser. The renderer acting on it too would open two windows for one
       // keypress on the platforms where both the menu and the DOM see it.
       switch (e.key.toLowerCase()) {
-        case "t":
-          if (reportTabLimit()) break;
-          if (canCreateTab) {
-            e.preventDefault();
-            createTab?.("agent-native");
-          }
-          break;
         case "r":
           if (reportTabLimit()) break;
           if (canCreateTab) {
@@ -1477,6 +1526,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       });
       setCreatePrLaunchClaims(new Map(createPrLaunchClaimsRef.current));
 
+      let launch: TabLaunchHandle | null = null;
       try {
         const repoConfig = config.repositories[selectedProjectId];
         const targetBranch = resolvePrTargetBranch({
@@ -1502,20 +1552,21 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
             ? configuredFastMode
             : undefined;
-        const activationRequest = beginPaneTabActivationRequest(operationEnvironmentId);
+        const tabId = `agent-job-${createUuid()}`;
+        launch = beginLaunchedTab(operationEnvironmentId, tabId, "PR");
         const result = await backend.launchNativeAgentJob({
           requestId: `create-pr-${createUuid()}`,
           environmentId: operationEnvironmentId,
+          tabId,
           agent,
           prompt: prPrompt,
           title: "PR",
           conversationMode: "build",
-          activateTab: true,
           ...(requestedModel && requestedModel !== "default" ? { modelId: requestedModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        activateLaunchedTab(operationEnvironmentId, result.tabId, activationRequest);
+        launch.settled(result.tabId);
         if (result.status === "rejected") {
           releaseCreatePrLaunch(operationEnvironmentId);
           toast.error("Could not start pull request creation", {
@@ -1532,6 +1583,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         setModeCreatePending();
         return true;
       } catch (error) {
+        launch?.failed();
         releaseCreatePrLaunch(operationEnvironmentId);
         toast.error("Could not start pull request creation", {
           description: error instanceof Error ? error.message : String(error),
@@ -1540,7 +1592,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
-      activateLaunchedTab,
+      beginLaunchedTab,
       actionDefaultFor,
       bindCreatePrLaunchTab,
       config.repositories,
@@ -1678,6 +1730,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     async (agentOverride?: AgentPlatform) => {
       const environmentId = selectedEnvironmentId;
       if (!environmentId || tabCount >= MAX_TABS || !isRunning) return;
+      const releaseLaunch = claimTabLaunch(`push:${agentOverride ?? "default"}`, environmentId);
+      if (!releaseLaunch) return;
 
       const pushPrompt = createPushChangesPrompt();
       // The context menu picks an agent only, so its choice keeps the configured
@@ -1692,34 +1746,38 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
           ? configuredFastMode
           : undefined;
-      const activationRequest = beginPaneTabActivationRequest(environmentId);
+      const tabId = `agent-job-${createUuid()}`;
+      const launch = beginLaunchedTab(environmentId, tabId, PUSH_CHANGES_TAB_TITLE);
       try {
         const result = await backend.launchNativeAgentJob({
           requestId: `push-changes-${createUuid()}`,
           environmentId,
+          tabId,
           agent,
           prompt: pushPrompt,
           title: PUSH_CHANGES_TAB_TITLE,
           conversationMode: "build",
-          activateTab: true,
           ...(defaultForAgent?.model ? { modelId: defaultForAgent.model } : {}),
           ...(defaultForAgent?.reasoningEffort
             ? { reasoningId: defaultForAgent.reasoningEffort }
             : {}),
           ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         });
-        activateLaunchedTab(environmentId, result.tabId, activationRequest);
+        launch.settled(result.tabId);
         if (result.status === "rejected") {
           throw new Error(result.error || "The agent rejected the request.");
         }
+        releaseLaunch();
       } catch (error) {
+        launch.failed();
+        releaseLaunch({ retryable: true });
         toast.error("Could not push changes", {
           description: error instanceof Error ? error.message : String(error),
         });
       }
     },
     [
-      activateLaunchedTab,
+      beginLaunchedTab,
       actionDefaultFor,
       isRunning,
       preferredFastModesByPlatform,
@@ -1781,6 +1839,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         return { ok: false, message };
       };
 
+      let launch: TabLaunchHandle | null = null;
       try {
         const actionDefault = actionDefaultFor("resolve");
         const agent = agentOverride || actionDefault.agent;
@@ -1800,10 +1859,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
             ? configuredFastMode
             : undefined;
-        const activationRequest = beginPaneTabActivationRequest(operationEnvironmentId);
+        // An open Resolve tab is usually reused, so there is no new tab to show;
+        // the tab the backend answers with takes focus.
+        const tabId = hasOpenResolveTab ? undefined : `agent-job-${createUuid()}`;
+        launch = tabId ? beginLaunchedTab(operationEnvironmentId, tabId, "Resolve") : null;
         const result = await backend.launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
           environmentId: operationEnvironmentId,
+          ...(tabId ? { tabId } : {}),
           agent,
           prompt: resolvePrompt,
           title: "Resolve",
@@ -1812,12 +1875,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           // A plain press keeps whatever the open tab runs; the dialog's agent
           // and model are an explicit choice the backend has to honour.
           tabReuse: agentOverride || launchOptions ? "same-agent" : "any-agent",
-          activateTab: true,
           ...(initialAgentModel ? { modelId: initialAgentModel } : {}),
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        activateLaunchedTab(operationEnvironmentId, result.tabId, activationRequest);
+        if (launch) launch.settled(result.tabId);
+        else requestPaneTabActivation(operationEnvironmentId, result.tabId);
         if (result.status === "rejected") {
           return fail(result.error || "The conflict-resolution agent rejected the prompt.");
         }
@@ -1841,6 +1904,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         }
         return { ok: true };
       } catch (error) {
+        launch?.failed();
         return fail(error instanceof Error ? error.message : String(error));
       } finally {
         if (resolveLaunchEnvironmentIdRef.current === operationEnvironmentId) {
@@ -1850,9 +1914,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       }
     },
     [
-      activateLaunchedTab,
+      beginLaunchedTab,
       actionDefaultFor,
       canLaunchResolve,
+      hasOpenResolveTab,
       config.repositories,
       preferredFastModesByPlatform,
       preferredModelsByPlatform,

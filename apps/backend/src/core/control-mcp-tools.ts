@@ -1825,13 +1825,13 @@ export async function createControlMcp(
         : null;
       const launchArgs = delegation
         ? withCoordinatorDelegationPresentation(
-            { ...input, prompt: delegation.source, activateTab: true },
+            { ...input, prompt: delegation.source, activateTab: false },
             {
               kind: COORDINATOR_DELEGATION_PRESENTATION,
               frame: delegation.frame,
             },
           )
-        : { ...input, activateTab: true };
+        : { ...input, activateTab: false };
       const job = target
         ? await target.call<unknown>("launch_control_job", launchArgs, `job:${input.requestId}`)
         : await invoke<unknown>("launch_control_job", launchArgs);

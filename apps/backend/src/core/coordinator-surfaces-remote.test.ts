@@ -153,7 +153,7 @@ test("a terminal on another node runs once, across a lost answer and a replay", 
   expect(launch).toHaveBeenCalledTimes(2);
   expect(launch.mock.calls[0]![0].requestId).toBe(launch.mock.calls[1]![0].requestId);
   expect(String(launch.mock.calls[0]![0].requestId)).toStartWith("controller:");
-  expect(launch.mock.calls[0]![0]).toMatchObject({ data: "bun test\n", activateTab: true });
+  expect(launch.mock.calls[0]![0]).toMatchObject({ data: "bun test\n", activateTab: false });
   // A changed payload under the same request is refused before the node runs it.
   expect((await tool("launch_terminal", { ...input, command: "rm -rf ." })).text).toContain(
     "different payload",
@@ -234,7 +234,7 @@ for (const [tabType, options, expected] of [
       environmentId: workerId,
       tabType,
       title: "Inspection",
-      activateTab: true,
+      activateTab: false,
       ...expected,
     });
     if (tabType === "claude-tmux") expect(launch.mock.calls[0]![0]).not.toHaveProperty("data");

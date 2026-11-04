@@ -1185,7 +1185,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByText("Loading tab...")).toBeTruthy();
+    expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     expect(await screen.findByTestId("build-chat-tab")).toMatchObject({
       dataset: {
         pipelineId: "pipeline-1",

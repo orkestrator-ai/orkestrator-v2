@@ -73,6 +73,11 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
+import {
+  EnvironmentTabsShimmer,
+  useEnvironmentTabLaunches,
+} from "@/components/pane-layout/TabLaunchShimmer";
+import { cancelTabLaunchFocus } from "@/lib/tab-launch";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { TerminalContainerOverlays } from "./TerminalContainerOverlays";
 import {
@@ -832,156 +837,152 @@ export function TerminalContainer({
     // finishHydration reconciles tabs added during the request with the
     // restored snapshot, so start the restore before using tab count to decide
     // whether a default terminal needs to be seeded.
-    if (!backendSetupRunning) {
-      if (hydrationStatus === "pending") return;
-      if (hydrationStatus === undefined) {
-        const request = Symbol();
-        paneHydrationRequestsRef.current.set(environmentId, request);
-        beginHydration(environmentId);
-        void Promise.allSettled([
-          backend.getPaneLayout(environmentId),
-          hydrateMultiReviewWorkflowsForEnvironment(environmentId),
-        ]).then(async ([layoutResult, multiReviewResult]) => {
-          // These independent snapshots need not describe the same instant.
-          // A launch between the list read and the layout read must not make
-          // reconciliation discard its new tab and seed a competing terminal.
-          let dependenciesUnknown = false;
-          if (layoutResult.status === "fulfilled" && layoutResult.value) {
-            try {
-              await hydratePaneLayoutDependencies(layoutResult.value.root);
-            } catch {
-              // A failed read is not evidence of deletion. The tab's own view
-              // can retry; retaining it also preserves authoritative focus.
-              dependenciesUnknown = true;
-            }
+    if (hydrationStatus === "pending") return;
+    if (hydrationStatus === undefined) {
+      const request = Symbol();
+      paneHydrationRequestsRef.current.set(environmentId, request);
+      beginHydration(environmentId);
+      void Promise.allSettled([
+        backend.getPaneLayout(environmentId),
+        hydrateMultiReviewWorkflowsForEnvironment(environmentId),
+      ]).then(async ([layoutResult, multiReviewResult]) => {
+        // These independent snapshots need not describe the same instant.
+        // A launch between the list read and the layout read must not make
+        // reconciliation discard its new tab and seed a competing terminal.
+        let dependenciesUnknown = false;
+        if (layoutResult.status === "fulfilled" && layoutResult.value) {
+          try {
+            await hydratePaneLayoutDependencies(layoutResult.value.root);
+          } catch {
+            // A failed read is not evidence of deletion. The tab's own view
+            // can retry; retaining it also preserves authoritative focus.
+            dependenciesUnknown = true;
           }
-          const paneStore = usePaneLayoutStore.getState();
-          // A stop/replacement can clear hydration and start another request
-          // before this read settles. "pending" alone cannot identify it.
-          if (paneHydrationRequestsRef.current.get(environmentId) !== request) return;
-          paneHydrationRequestsRef.current.delete(environmentId);
-          if (paneStore.hydration.get(environmentId) !== "pending") return;
+        }
+        const paneStore = usePaneLayoutStore.getState();
+        // A stop/replacement can clear hydration and start another request
+        // before this read settles. "pending" alone cannot identify it.
+        if (paneHydrationRequestsRef.current.get(environmentId) !== request) return;
+        paneHydrationRequestsRef.current.delete(environmentId);
+        if (paneStore.hydration.get(environmentId) !== "pending") return;
 
-          if (multiReviewResult.status === "rejected") {
-            log.warn("multi-reviews.restore-failed", {
-              environmentId,
-              error: formatLogError(multiReviewResult.reason),
-            });
-          }
-          const latestEnvironment = useEnvironmentStore
-            .getState()
-            .getEnvironmentById(environmentId);
-          const latestContainerId = latestEnvironment
-            ? latestEnvironment.environmentType === "local"
-              ? null
-              : latestEnvironment.containerId
-            : isLocalEnvironment
-              ? null
-              : containerId;
-
-          if (layoutResult.status === "rejected") {
-            log.warn("pane-layout.restore-failed", {
-              environmentId,
-              error: formatLogError(layoutResult.reason),
-            });
-            // Register the environment so a later pane-layout announcement
-            // can apply. finishHydration without a snapshot does not.
-            // Skip when a local record already exists: rewriting it would
-            // retrigger setup-session binding for a tab this renderer seeded.
-            if (!paneStore.environments.has(environmentId)) {
-              paneStore.initialize(latestContainerId, environmentId);
-            }
-            paneStore.finishHydration(environmentId);
-            return;
-          }
-
-          if (!latestEnvironment) {
-            paneStore.finishHydration(environmentId);
-            return;
-          }
-
-          const persisted = layoutResult.value;
-          const restoredSnapshot = reconcilePersistedLayout(persisted, {
+        if (multiReviewResult.status === "rejected") {
+          log.warn("multi-reviews.restore-failed", {
             environmentId,
-            containerId: latestContainerId,
-            isLocal: latestEnvironment.environmentType === "local",
-            worktreePath: latestEnvironment.worktreePath,
-            hasBuildPipeline: (pipelineId) =>
-              dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
-            hasMultiReview: (workflowId) =>
-              // A failed workflow-list request means existence is unknown,
-              // not that every persisted review was deleted. Preserve those
-              // tabs so their own read-through view can retry hydration.
-              dependenciesUnknown ||
-              multiReviewResult.status === "rejected" ||
-              useMultiReviewStore.getState().workflows.has(workflowId),
+            error: formatLogError(multiReviewResult.reason),
           });
-          const restored =
-            restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
-              ? applyStoredPaneSelection(
-                  restoredSnapshot,
-                  environmentId,
-                  readStoredPaneSelection(environmentId),
-                )
-              : restoredSnapshot;
-          if (!restored && !paneStore.environments.has(environmentId)) {
-            // Same empty-hydration contract as a rejected fetch: the
-            // pane-store record must exist before hydration is marked done,
-            // or deferred pane-layout refreshes no-op.
+        }
+        const latestEnvironment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+        const latestContainerId = latestEnvironment
+          ? latestEnvironment.environmentType === "local"
+            ? null
+            : latestEnvironment.containerId
+          : isLocalEnvironment
+            ? null
+            : containerId;
+
+        if (layoutResult.status === "rejected") {
+          log.warn("pane-layout.restore-failed", {
+            environmentId,
+            error: formatLogError(layoutResult.reason),
+          });
+          // Register the environment so a later pane-layout announcement
+          // can apply. finishHydration without a snapshot does not.
+          // Skip when a local record already exists: rewriting it would
+          // retrigger setup-session binding for a tab this renderer seeded.
+          if (!paneStore.environments.has(environmentId)) {
             paneStore.initialize(latestContainerId, environmentId);
           }
-          paneStore.finishHydration(environmentId, restored ?? undefined);
+          paneStore.finishHydration(environmentId);
+          return;
+        }
 
-          // A successful migration may have been performed by this renderer
-          // on an earlier launch or by another client. Once v2 is observed,
-          // the renderer-local v1 selection can no longer be useful.
-          if (persisted?.version === PANE_LAYOUT_VERSION) {
-            clearStoredPaneSelection(environmentId);
-            if (restored) {
-              void migratePaneLayoutBrowserHistory(environmentId, persisted).catch((error) => {
-                log.warn("pane-layout.history-migrate-failed", {
-                  environmentId,
-                  error: formatLogError(error),
-                });
-              });
-            } else {
-              // A stale-generation or malformed current-version snapshot
-              // cannot safely be rewritten as renderer state. Remove only
-              // the exact revision we inspected; a concurrent newer layout
-              // wins the CAS and is preserved for the next reconciliation.
-              void backend.deletePaneLayout(environmentId, persisted.revision).catch((error) => {
-                log.warn("pane-layout.snapshot-remove-failed", {
-                  environmentId,
-                  error: formatLogError(error),
-                });
-              });
-            }
-          }
+        if (!latestEnvironment) {
+          paneStore.finishHydration(environmentId);
+          return;
+        }
 
-          if (restored && persisted && persisted.version < PANE_LAYOUT_VERSION) {
-            // V1 contributes renderer-local selection; v2 contributes legacy
-            // provider-specific native tab records. Reconciliation has now
-            // converted either schema to v3, so persist that exact snapshot
-            // through the normal CAS chain before considering it migrated.
-            const migrated = usePaneLayoutStore.getState().environments.get(environmentId);
-            if (migrated) {
-              void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(migrated))
-                .then(() => {
-                  if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
-                    clearStoredPaneSelection(environmentId);
-                  }
-                })
-                .catch((error) => {
-                  log.warn("pane-layout.selection-migrate-failed", {
-                    environmentId,
-                    error: formatLogError(error),
-                  });
-                });
-            }
-          }
+        const persisted = layoutResult.value;
+        const restoredSnapshot = reconcilePersistedLayout(persisted, {
+          environmentId,
+          containerId: latestContainerId,
+          isLocal: latestEnvironment.environmentType === "local",
+          worktreePath: latestEnvironment.worktreePath,
+          hasBuildPipeline: (pipelineId) =>
+            dependenciesUnknown || useBuildPipelineStore.getState().pipelines.has(pipelineId),
+          hasMultiReview: (workflowId) =>
+            // A failed workflow-list request means existence is unknown,
+            // not that every persisted review was deleted. Preserve those
+            // tabs so their own read-through view can retry hydration.
+            dependenciesUnknown ||
+            multiReviewResult.status === "rejected" ||
+            useMultiReviewStore.getState().workflows.has(workflowId),
         });
-        return;
-      }
+        const restored =
+          restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
+            ? applyStoredPaneSelection(
+                restoredSnapshot,
+                environmentId,
+                readStoredPaneSelection(environmentId),
+              )
+            : restoredSnapshot;
+        if (!restored && !paneStore.environments.has(environmentId)) {
+          // Same empty-hydration contract as a rejected fetch: the
+          // pane-store record must exist before hydration is marked done,
+          // or deferred pane-layout refreshes no-op.
+          paneStore.initialize(latestContainerId, environmentId);
+        }
+        paneStore.finishHydration(environmentId, restored ?? undefined);
+
+        // A successful migration may have been performed by this renderer
+        // on an earlier launch or by another client. Once v2 is observed,
+        // the renderer-local v1 selection can no longer be useful.
+        if (persisted?.version === PANE_LAYOUT_VERSION) {
+          clearStoredPaneSelection(environmentId);
+          if (restored) {
+            void migratePaneLayoutBrowserHistory(environmentId, persisted).catch((error) => {
+              log.warn("pane-layout.history-migrate-failed", {
+                environmentId,
+                error: formatLogError(error),
+              });
+            });
+          } else {
+            // A stale-generation or malformed current-version snapshot
+            // cannot safely be rewritten as renderer state. Remove only
+            // the exact revision we inspected; a concurrent newer layout
+            // wins the CAS and is preserved for the next reconciliation.
+            void backend.deletePaneLayout(environmentId, persisted.revision).catch((error) => {
+              log.warn("pane-layout.snapshot-remove-failed", {
+                environmentId,
+                error: formatLogError(error),
+              });
+            });
+          }
+        }
+
+        if (restored && persisted && persisted.version < PANE_LAYOUT_VERSION) {
+          // V1 contributes renderer-local selection; v2 contributes legacy
+          // provider-specific native tab records. Reconciliation has now
+          // converted either schema to v3, so persist that exact snapshot
+          // through the normal CAS chain before considering it migrated.
+          const migrated = usePaneLayoutStore.getState().environments.get(environmentId);
+          if (migrated) {
+            void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(migrated))
+              .then(() => {
+                if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
+                  clearStoredPaneSelection(environmentId);
+                }
+              })
+              .catch((error) => {
+                log.warn("pane-layout.selection-migrate-failed", {
+                  environmentId,
+                  error: formatLogError(error),
+                });
+              });
+          }
+        }
+      });
+      return;
     }
 
     if (seededTabs.length === 0) {
@@ -989,72 +990,38 @@ export function TerminalContainer({
         environmentId,
         backendSetupRunning,
         setupPhase,
-        hasDefaultSetupSession: hasBoundSetupSession("default"),
         isLocalEnvironment,
         hasWorktreePath: Boolean(worktreePath),
         containerId,
       }));
-      if (backendSetupRunning && !hasBoundSetupSession("default")) {
-        setupLog.debug("session.awaited", () => ({ environmentId, tabId: "default" }));
-        void bindBackendSetupSession("default");
-        return;
-      }
 
-      if (backendSetupRunning) {
-        // Setup owns the temporary layout. Mark hydration complete without
-        // restoring an older layout so the setup/default layout can persist.
-        if (hydrationStatus !== "done") finishHydration(environmentId);
-      }
-
-      // A native startup surface is a backend-owned pane projection. Once
-      // setup has finished, an empty renderer waits for that authoritative
-      // snapshot/event instead of manufacturing a competing tab locally.
+      // Every tab of a starting environment is a backend-owned projection: the
+      // setup terminal appears when setup has something to show, and the job
+      // tab when setup has finished. An empty renderer waits for that snapshot
+      // or event instead of manufacturing a competing tab locally.
       // initialize() still runs: finishHydration without a restored snapshot
       // does not create a pane-store record, and later pane-layout events
       // cannot apply to an environment that was never registered.
       if (
-        !backendSetupRunning &&
-        (environment?.pendingAgentLaunch === true || claudeOptions?.launchAgent === true)
+        backendSetupRunning ||
+        environment?.pendingAgentLaunch === true ||
+        claudeOptions?.launchAgent === true
       ) {
         if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
           initialize(containerId, environmentId);
         }
+        if (claudeOptions?.launchAgent) setHasAppliedClaudeOptions(true);
         return;
       }
 
       initialize(containerId, environmentId);
       // A restored/shared build-only layout can use a non-default pane id.
-      // Seed the ordinary/setup tab into the pane that actually survived
-      // hydration; targeting the literal "default" would be a no-op and make
-      // this effect initialize forever because build tabs are excluded from
-      // `seededTabs` above.
+      // Seed the ordinary tab into the pane that actually survived hydration;
+      // targeting the literal "default" would be a no-op and make this effect
+      // initialize forever because build tabs are excluded from `seededTabs`.
       const initialPaneState = usePaneLayoutStore.getState().environments.get(environmentId);
       const initialPaneId = initialPaneState?.activePaneId ?? "default";
 
-      const launchAgent = claudeOptions?.launchAgent ?? false;
-      if (launchAgent) setHasAppliedClaudeOptions(true);
-
-      if (backendSetupRunning) {
-        setupLog.info("tab.added", {
-          environmentId,
-          tabId: "default",
-          hasDefaultSetupSession: hasBoundSetupSession("default"),
-        });
-        const setupTab: TabInfo = {
-          id: "default",
-          type: "plain",
-          isSetupTab: true,
-        };
-        addTab(initialPaneId, setupTab, environmentId);
-        return;
-      }
-
-      if (launchAgent) {
-        // Startup work and its durable tab are both backend-owned. Returning
-        // here prevents this mount from racing the backend with a second tab or
-        // a second initial prompt.
-        return;
-      }
       // A build tab the backend selected (a pipeline started on an existing
       // environment, whose layout held only that tab) stays selected: the
       // default terminal joins it without taking the user off the pipeline.
@@ -1091,9 +1058,6 @@ export function TerminalContainer({
     codexMode,
     piMode,
     worktreePath,
-    hasBoundSetupSession,
-    bindBackendSetupSession,
-    setupSessionBindNonce,
   ]);
 
   // Reset pane layout when container changes within the same environment
@@ -1182,7 +1146,12 @@ export function TerminalContainer({
   }, [isActive, setTerminalWrite, activePaneId]);
 
   const createBrowserTab = useCallback(
-    (initialUrl: string | undefined, targetPaneId = activePaneId, displayTitle?: string) => {
+    (
+      initialUrl: string | undefined,
+      targetPaneId = activePaneId,
+      displayTitle?: string,
+      requestedTabId?: string,
+    ) => {
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) {
         return false;
       }
@@ -1198,7 +1167,7 @@ export function TerminalContainer({
         return false;
       }
 
-      const newTabId = createUniqueTabId("tab");
+      const newTabId = requestedTabId || createUniqueTabId("tab");
       const newTab: TabInfo = {
         id: newTabId,
         type: "browser",
@@ -1398,7 +1367,12 @@ export function TerminalContainer({
       }
 
       if (type === "browser") {
-        return createBrowserTab(options?.initialUrl, activePaneId, options?.displayTitle);
+        return createBrowserTab(
+          options?.initialUrl,
+          activePaneId,
+          options?.displayTitle,
+          requestedTabId,
+        );
       }
 
       if (type === "multi-review") {
@@ -1889,13 +1863,17 @@ export function TerminalContainer({
   const createTabFromContext = useCallback(
     (type: CreatableTabType, options?: CreateTabOptions): boolean => {
       const created = handleCreateTab(type, options);
-      if (created) revealIfObscured();
+      if (created) {
+        cancelTabLaunchFocus(environmentId);
+        revealIfObscured();
+      }
       return created;
     },
-    [handleCreateTab, revealIfObscured],
+    [environmentId, handleCreateTab, revealIfObscured],
   );
   const selectTabFromContext = useCallback(
     (index: number) => {
+      cancelTabLaunchFocus(environmentId);
       handleSelectTab(index);
       const activePane = getActivePane(environmentId);
       if (activePane && index >= 0 && index < activePane.tabs.length) revealIfObscured();
@@ -2125,6 +2103,8 @@ export function TerminalContainer({
     [onStartContainer],
   );
 
+  const launchingTabs = useEnvironmentTabLaunches(environmentId);
+
   // Determine what overlay to show (if any)
   // For local environments, we don't have a containerId but can still show terminal
   const showNoEnvironmentOverlay = !containerId && !isLocalEnvironment;
@@ -2137,8 +2117,11 @@ export function TerminalContainer({
     ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs)
     : [];
   // Local environments can show terminal without containerId, but need worktreePath
+  const environmentCanShowTabs = isEnvironmentRunning && (containerId || isLocalEnvironmentReady);
   const showTerminal =
-    isEnvironmentRunning && (containerId || isLocalEnvironmentReady) && thisEnvTabs.length > 0;
+    environmentCanShowTabs && (thisEnvTabs.length > 0 || launchingTabs.length > 0);
+  // Nothing to show yet, and something on the way: outlines rather than a blank pane.
+  const showTabsShimmer = environmentCanShowTabs && !showTerminal && setupPhase !== "failed";
 
   // Debug logging for local environment display issues (only in development)
   if (import.meta.env.DEV) {
@@ -2183,6 +2166,8 @@ export function TerminalContainer({
           </div>
         </DndContext>
       )}
+
+      {showTabsShimmer && <EnvironmentTabsShimmer />}
 
       <TerminalContainerOverlays
         environmentId={environmentId}

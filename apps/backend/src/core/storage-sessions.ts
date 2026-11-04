@@ -539,6 +539,11 @@ export class SessionsRepository {
     taskId: string;
     environmentId: string;
     isLocal: boolean;
+    /**
+     * `setup-handoff` is the publish that follows setup: it takes focus only
+     * from the setup terminal, never from a tab the user opened meanwhile.
+     */
+    activate?: "setup-handoff";
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(input.environmentId);
@@ -610,12 +615,17 @@ export class SessionsRepository {
           buildTabData,
         });
       }
-      target.activeTabId = tabId;
+      const focusedLeaf = leaves.find((leaf) => leaf.id === previous?.activePaneId);
+      const takesFocus =
+        input.activate !== "setup-handoff" ||
+        (selectedTabIsSetupHandoffSource(target) &&
+          (!focusedLeaf || focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf)));
+      if (takesFocus) target.activeTabId = tabId;
       const saved: PersistedPaneLayout = {
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.containerId,
-        activePaneId: target.id,
+        activePaneId: takesFocus ? target.id : (previous?.activePaneId ?? target.id),
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
@@ -624,6 +634,86 @@ export class SessionsRepository {
       layouts[input.environmentId] = saved;
       await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
       this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish the terminal that shows environment setup, as the first tab.
+   *
+   * Only setup knows whether it has anything to show, so this is called once
+   * there is: repository preparation output, or setup commands about to run.
+   * An environment with neither never gets this tab. It takes focus unless the
+   * user has already opened a tab of their own; the automatic surfaces that
+   * replace setup afterwards (a build tab) are not a user's choice.
+   */
+  async ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.isSetupTab === true));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.isSetupTab === true);
+      const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+      if (!existingTab && tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+        // Setup still runs. A full layout only costs this view of its output.
+        if (previous) return previous;
+      }
+
+      const target = existingLeaf ?? leaves[0]!;
+      // `default` may already name an ordinary terminal whose PTY is unrelated.
+      const defaultIdTaken = leaves.some((leaf) => leaf.tabs.some((tab) => tab.id === "default"));
+      const tab =
+        existingTab ??
+        ({
+          id: defaultIdTaken ? "setup-terminal" : "default",
+          type: "plain",
+          isSetupTab: true,
+        } as Record<string, unknown>);
+      target.tabs = [tab, ...target.tabs.filter((candidate) => candidate !== tab)];
+
+      const selected = target.tabs.find((candidate) => candidate.id === target.activeTabId);
+      const userChoseTab =
+        selected !== undefined &&
+        selected !== tab &&
+        selected.type !== "claude-build" &&
+        selected.id !== STARTUP_AGENT_TAB_ID;
+      if (!userChoseTab) target.activeTabId = tab.id as string;
+
+      const containerId = environment.environmentType === "local" ? null : environment.containerId;
+      const activePaneId = userChoseTab ? (previous?.activePaneId ?? target.id) : target.id;
+      if (
+        previous &&
+        (previous.containerId ?? null) === (containerId ?? null) &&
+        previous.activePaneId === activePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return previous;
+      }
+
+      const saved: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId,
+        containerId,
+        activePaneId,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
       return saved;
     });
   }
@@ -737,7 +827,8 @@ export class SessionsRepository {
     tabId: string;
     type: BuildPipelineAgent | "plain" | "claude-tmux";
     title?: string;
-    activate?: boolean;
+    /** `setup-handoff` takes focus only from the setup terminal. */
+    activate?: boolean | "setup-handoff";
     terminalSessionId?: string | null;
     existingOnly?: boolean;
   }): Promise<PersistedPaneLayout> {
@@ -751,12 +842,7 @@ export class SessionsRepository {
       const previous = layouts[input.environmentId];
       const root = previous
         ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
-        : {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-            activeTabId: "default",
-          };
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
       const leaves = paneLayoutLeaves(root);
       if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
 
@@ -823,7 +909,15 @@ export class SessionsRepository {
       } else {
         target.tabs.push(tab);
       }
-      const activateTab = input.activate === true;
+      const focusedTerminalLeaf = leaves.find((leaf) => leaf.id === previous?.activePaneId);
+      const activateTab =
+        input.activate === true ||
+        (input.activate === "setup-handoff" &&
+          !existingTab &&
+          selectedTabIsSetupHandoffSource(target) &&
+          (!focusedTerminalLeaf ||
+            focusedTerminalLeaf === target ||
+            selectedTabIsSetupHandoffSource(focusedTerminalLeaf)));
       if (!target.activeTabId || activateTab) target.activeTabId = input.tabId;
 
       const containerId = environment.environmentType === "local" ? null : environment.containerId;
@@ -922,7 +1016,8 @@ export class SessionsRepository {
    * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
    * rewrite silently discarded all of it on every backend start.
    *
-   * Creating the tab selects it. Republishing does not, with one exception: the
+   * Creating the tab selects it unless the user has opened another tab since
+   * setup started. Republishing does not, with one exception: the
    * publish that binds a provider session to a still-setup-focused tab is the
    * post-setup handoff — the same moment `ensureBuildPipelineTab` moves
    * selection onto the build surface. Every other republish leaves the
@@ -968,12 +1063,7 @@ export class SessionsRepository {
 
       const root = previous
         ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
-        : {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-            activeTabId: "default",
-          };
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
       type Leaf = {
         kind: "leaf";
         id: string;
@@ -1093,17 +1183,19 @@ export class SessionsRepository {
       const focusedLeaf = previous
         ? leaves.find((leaf) => leaf.id === previous.activePaneId)
         : undefined;
+      // Both panes must consent: the startup agent's own pane is the one whose
+      // selection changes, and the focused pane is where the user is actually
+      // looking. Either one holding a deliberately chosen tab means this is no
+      // longer a setup handoff. `target.tabs` already holds the agent, so a
+      // pane with nothing selected still reads as a handoff source.
+      const selectionAllowsHandoff =
+        selectedTabIsSetupHandoffSource(target) &&
+        (!focusedLeaf || focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf));
       const shouldActivateStartupAgent =
         !input.existingOnly &&
+        selectionAllowsHandoff &&
         (existingIndex < 0 ||
-          (shouldHandoffAfterSetup &&
-            environmentIsReadyForSetupHandoff(environment) &&
-            // Both panes must consent: the startup agent's own pane is the one
-            // whose selection changes, and the focused pane is where the user is
-            // actually looking. Either one holding a deliberately chosen tab
-            // means this is no longer a setup handoff.
-            selectedTabIsSetupHandoffSource(target) &&
-            (focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf))));
+          (shouldHandoffAfterSetup && environmentIsReadyForSetupHandoff(environment)));
       if (shouldActivateStartupAgent) target.activeTabId = STARTUP_AGENT_TAB_ID;
 
       // Pane focus follows the tab handoff and nothing else. Unconditionally

@@ -223,3 +223,10 @@ mise run test:logged -- --name codex-runtime-env -- mise exec -- bun --cwd=bridg
 ```
 
 Still intermittent, only under aggregate load; no new cause identified.
+
+## Observation, 2026-11-04
+
+- **Command:** `mise run test` (default aggregate), tab focus branch; the bridges group ran alongside the other groups.
+- **Failure:** timed out after 15000.02 ms in `bridges/codex-bridge/src/runtime-env.test.ts`. `codex-bridge` reported 2391 pass, 2 fail.
+- **Owning-file rerun:** `mise run test:logged -- --name runtime-alone -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures` passed (0.2 s).
+- **Hypothesis:** not established. The change under test touches no bridge code. No assertion, timeout or skip was changed.

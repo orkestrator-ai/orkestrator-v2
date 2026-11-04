@@ -91,9 +91,18 @@ const COALESCE_MS = 50;
 export const BOOT_ANNOUNCE_COALESCE_MS = 1_000;
 
 interface PendingDispatch {
-  change: ResourceChange;
+  /** Null while only the leading delivery has happened in this window. */
+  change: ResourceChange | null;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/**
+ * Delivered on the first announcement rather than after the window: a launch
+ * writes its tab early and again when ready, and a trailing timer that every
+ * write restarts is what the user waits on to see the tab. Repeats still
+ * coalesce into one trailing delivery.
+ */
+const LEADING_EDGE_RESOURCES: ReadonlySet<ResourceKind> = new Set(["pane-layout"]);
 
 const pending = new Map<string, PendingDispatch>();
 const activeTransportStops = new Set<() => void>();
@@ -223,13 +232,16 @@ export function dispatchResourceChange(change: ResourceChange): void {
   if (existing) {
     clearTimeout(existing.timer);
     // Keep the highest revision seen so handlers observe the latest ordering.
-    if (change.revision < existing.change.revision) change = existing.change;
+    if (existing.change && change.revision < existing.change.revision) change = existing.change;
   }
+  const leading = !existing && LEADING_EDGE_RESOURCES.has(change.resource);
+  if (leading) void deliver(change);
+  const trailing = leading ? null : change;
   const timer = setTimeout(() => {
     pending.delete(key);
-    void deliver(change);
+    if (trailing) void deliver(trailing);
   }, COALESCE_MS);
-  pending.set(key, { change, timer });
+  pending.set(key, { change: trailing, timer });
 }
 
 /** Drops queued dispatches. Tests use this to avoid cross-file bleed. */

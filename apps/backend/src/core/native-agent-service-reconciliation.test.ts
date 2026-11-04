@@ -1,6 +1,6 @@
 import { projectionInternals } from "./native-agent-service-test-collaborators.js";
 import { launchSelectionReport } from "./control-shared-actions.js";
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
@@ -2721,7 +2721,7 @@ describe("NativeAgentService", () => {
   });
 
   describe("startup launch reconciliation", () => {
-    test("publishes setup and Cursor tabs before setup is ready without starting the provider", async () => {
+    test("waits for setup to finish before publishing the job tab or starting the provider", async () => {
       const { provider, createSession } = createProviderStub("cursor");
       await withService(
         {
@@ -2746,19 +2746,48 @@ describe("NativeAgentService", () => {
               status: "starting",
             },
           });
-          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
-            activeTabId: "startup-agent",
-            tabs: [
-              { id: "default", type: "plain", isSetupTab: true },
-              {
-                id: "startup-agent",
-                type: "agent-native",
-                nativeAgentData: {
-                  environmentId: "env-1",
-                },
-              },
-            ],
+          expect(await storage.getPaneLayout("env-1")).toBeNull();
+        },
+      );
+    });
+
+    test("a request during another pass runs again rather than waiting for the sweep", async () => {
+      const { provider } = createProviderStub("cursor");
+      await withService(
+        {
+          prefix: "orkestrator-native-startup-late-request-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "cursor",
+            opencodeMode: "native",
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          // The pass already running read the environment before setup finished.
+          const stale = await storage.getEnvironment("env-1");
+          const realRead = storage.getEnvironment.bind(storage);
+          let reads = 0;
+          const read = spyOn(storage, "getEnvironment").mockImplementation(async (id: string) => {
+            reads += 1;
+            return reads === 1 ? stale : realRead(id);
           });
+          try {
+            const inFlight = service.reconcileInitialLaunch("env-1");
+            await storage.updateEnvironment("env-1", {
+              setupPhase: "ready",
+              setupScriptsComplete: true,
+            });
+            await Promise.all([inFlight, service.reconcileInitialLaunch("env-1")]);
+          } finally {
+            read.mockRestore();
+          }
+
+          expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).toContain(
+            "startup-agent",
+          );
         },
       );
     });
@@ -2781,20 +2810,7 @@ describe("NativeAgentService", () => {
           await launchInternals(service).reconcilePendingLaunches();
           expect(createSession).not.toHaveBeenCalled();
 
-          const duringSetup = await storage.getPaneLayout("env-1");
-          if (!duringSetup || !duringSetup.root || typeof duringSetup.root !== "object") {
-            throw new Error("expected a pane layout");
-          }
-          await storage.savePaneLayout(
-            "env-1",
-            {
-              version: duringSetup.version,
-              containerId: duringSetup.containerId,
-              activePaneId: duringSetup.activePaneId,
-              root: { ...(duringSetup.root as Record<string, unknown>), activeTabId: "default" },
-            },
-            duringSetup.revision,
-          );
+          await storage.ensureSetupTab("env-1");
 
           await storage.updateEnvironment("env-1", {
             setupPhase: "ready",
@@ -2969,7 +2985,7 @@ describe("NativeAgentService", () => {
           expect(args).toMatchObject({
             environmentId: "env-1",
             tabId: "startup-agent",
-            activateTab: true,
+            activateTab: "setup-handoff",
           });
           if (args?.tabType === "claude-tmux") {
             expect(args.initialPrompt).toBe("Start working");
@@ -3003,10 +3019,7 @@ describe("NativeAgentService", () => {
             );
             expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
               kind: "leaf",
-              tabs: [
-                { id: "default", type: "plain", isSetupTab: true },
-                { id: "startup-agent", backendManagedTerminal: true },
-              ],
+              tabs: [{ id: "startup-agent", backendManagedTerminal: true }],
             });
             expect(invokeMock).toHaveBeenCalledTimes(1);
             expect(createSession).not.toHaveBeenCalled();
@@ -3486,7 +3499,6 @@ describe("NativeAgentService", () => {
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 type: "agent-native",
@@ -3530,7 +3542,6 @@ describe("NativeAgentService", () => {
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 initialAgentModel: "global-codex",
@@ -3568,7 +3579,6 @@ describe("NativeAgentService", () => {
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 initialAgentModel: "global-claude",
@@ -3641,7 +3651,6 @@ describe("NativeAgentService", () => {
               expect(send).not.toHaveBeenCalled();
               expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
                 tabs: [
-                  { id: "default" },
                   {
                     id: "startup-agent",
                     nativeAgentData: { environmentId: "env-1" },
@@ -3685,7 +3694,6 @@ describe("NativeAgentService", () => {
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 initialAgentModel: "env-model",
@@ -3769,7 +3777,7 @@ describe("NativeAgentService", () => {
 
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
-            tabs: [{ id: "default" }, { id: "startup-agent", initialFastMode: false }],
+            tabs: [{ id: "startup-agent", initialFastMode: false }],
           });
           // One-shot means one shot: the next launch falls back to the tier.
           expect((await storage.getEnvironment("env-1"))?.initialFastMode).toBeUndefined();
@@ -3796,7 +3804,7 @@ describe("NativeAgentService", () => {
 
           expect(createSession).not.toHaveBeenCalled();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
-            tabs: [{ id: "default" }, { id: "startup-agent", initialFastMode: true }],
+            tabs: [{ id: "startup-agent", initialFastMode: true }],
           });
         },
       );
@@ -3843,7 +3851,6 @@ describe("NativeAgentService", () => {
           expect(converged?.initialPromptAttachments).toBeUndefined();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 nativeAgentData: { sessionId: "provider-session" },
@@ -4010,7 +4017,6 @@ describe("NativeAgentService", () => {
           expect(converged?.startupAgentSession).toBeUndefined();
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
-              { id: "default" },
               {
                 id: "startup-agent",
                 type: "agent-native",

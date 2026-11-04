@@ -896,6 +896,15 @@ export interface EnvironmentSetupStartOptions {
   approvedSetupHash?: string;
 }
 
+/** A layout write that fails costs the view of setup, never setup itself. */
+async function publishSetupTab(environmentId: string, context: CommandContext): Promise<void> {
+  try {
+    await context.storage.ensureSetupTab(environmentId);
+  } catch (error) {
+    log.warn("setup.tab-publish-failed", { environmentId, error: formatLogError(error) });
+  }
+}
+
 export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
@@ -949,6 +958,9 @@ export async function startEnvironmentSetupOnce(
   const preparationSessionId = running.createdFromCommit
     ? undefined
     : beginSetupPreparationSession(running, context);
+  // Preparation streams to the setup terminal, so it needs its tab now. Without
+  // preparation the tab waits for commands: nothing to run means no tab at all.
+  if (preparationSessionId) await publishSetupTab(running.id, context);
   try {
     return await startEnvironmentSetupAfterPreparation(
       running,
@@ -1046,6 +1058,7 @@ export async function startEnvironmentSetupAfterPreparation(
     }
   }
 
+  await publishSetupTab(current.id, context);
   const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
     continuesPreparationSession: preparationSessionId !== undefined,
   });

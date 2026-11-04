@@ -693,7 +693,9 @@ function createWindowBrowserPreviews(
     }),
     requestPreviewShortcut: (tabId, shortcut) => {
       const target = shortcutRouting.target(manager?.webContentsIdForTab(tabId));
-      if (appShortcut(shortcut).owner === "document") keyboardShortcuts.request(target, "toggle");
+      const owner = appShortcut(shortcut).owner;
+      if (owner === "document") keyboardShortcuts.request(target, "toggle");
+      else if (owner === "workspace") requestAppShortcut(target?.renderer, shortcut);
       else requestAppShortcut(createdWindow.webContents, shortcut);
     },
     getAuthorization: (url) =>

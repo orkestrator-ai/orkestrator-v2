@@ -1166,7 +1166,7 @@ describe("NativeAgentService", () => {
   );
 
   test.each(["codex", "claude"] as const)(
-    "keeps the %s placeholder when every user message contains only annotations",
+    "shows no title for %s while every user message contains only annotations",
     async (agent) => {
       const annotationOnly = buildPromptWithTranscriptAnnotations("", [
         { id: "design-1", text: "Frame Hero at revision 3", comment: "", source: "design" },
@@ -1199,7 +1199,7 @@ describe("NativeAgentService", () => {
           };
           await service.ensureSession(identity);
           const projection = await service.getProjection(identity);
-          expect(projection?.title).toBe(title);
+          expect(projection?.title).toBeUndefined();
           // Only a title the backend chose is pushed; the placeholder is
           // already the provider's own.
           expect(stub.setSessionTitle).not.toHaveBeenCalled();

@@ -1403,11 +1403,6 @@ describe("launch_terminal_job command", () => {
         activeTabId: first.tabId,
         tabs: [
           {
-            id: "default",
-            type: "plain",
-            isSetupTab: true,
-          },
-          {
             id: first.tabId,
             type: "plain",
             displayTitle: "Run Commands",

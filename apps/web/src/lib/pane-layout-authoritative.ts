@@ -56,17 +56,12 @@ import {
 const MAX_DEPENDENCY_SCAN_DEPTH = 10;
 const MAX_PENDING_TAB_ACTIVATIONS = 64;
 
-export interface PaneTabActivationRequest {
-  readonly environmentId: string;
-}
-
-// Backend-owned jobs publish their tabs through pane-layout reconciliation.
-// Electron windows intentionally preserve their own selection while adopting
-// that shared structure, so an action initiated in this renderer needs a
-// renderer-local handoff to focus its resulting tab. Keep only the latest
-// request per environment: a later foreground action supersedes an earlier one.
+// Backend-owned jobs publish their tabs through pane-layout reconciliation, and
+// the backend never moves selection for a launch a user started: that the tab
+// was launched here is the one thing this renderer knows and the backend does
+// not. Keep only the latest request per environment, so a later foreground
+// action supersedes an earlier one.
 const pendingTabActivations = new Map<string, string>();
-const latestTabActivationRequests = new Map<string, PaneTabActivationRequest>();
 const startupAgentActivationCommits = new WeakMap<EnvironmentPaneState, string>();
 const buildPipelineActivationCommits = new WeakMap<
   EnvironmentPaneState,
@@ -79,23 +74,6 @@ function boundActivationMap<T>(map: Map<string, T>): void {
     if (typeof oldestEnvironmentId !== "string") break;
     map.delete(oldestEnvironmentId);
   }
-}
-
-/**
- * Claim the next backend-created tab activation before its asynchronous launch.
- *
- * The object identity is the ordering token. Keeping it here, outside React,
- * makes launch order authoritative across every mounted controller instance.
- */
-export function beginPaneTabActivationRequest(environmentId: string): PaneTabActivationRequest {
-  const request = { environmentId };
-  latestTabActivationRequests.delete(environmentId);
-  latestTabActivationRequests.set(environmentId, request);
-  // A newer foreground action also supersedes an older tab which finished
-  // launching but has not appeared in the authoritative layout yet.
-  pendingTabActivations.delete(environmentId);
-  boundActivationMap(latestTabActivationRequests);
-  return request;
 }
 
 function activateTabInState(
@@ -129,6 +107,27 @@ function findLeaf(root: PaneNode, predicate: (leaf: PaneLeaf) => boolean): PaneL
 }
 
 /**
+ * The backend selects a setup terminal it has just published only when the user
+ * has no tab of their own open, so a window follows that selection when it sees
+ * the tab for the first time.
+ */
+function applySetupTabArrival(
+  authoritative: EnvironmentPaneState,
+  selected: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const leaf = findLeaf(authoritative.root, (candidate) =>
+    candidate.tabs.some((tab) => tab.isSetupTab === true && tab.id === candidate.activeTabId),
+  );
+  if (!leaf?.activeTabId) return selected;
+  const tabId = leaf.activeTabId;
+  if (findLeaf(current.root, (candidate) => candidate.tabs.some((tab) => tab.id === tabId))) {
+    return selected;
+  }
+  return activateTabInState(selected, tabId) ?? selected;
+}
+
+/**
  * Let the post-setup layout revision perform the one setup-to-agent focus
  * handoff requested by this Electron window.
  *
@@ -143,6 +142,7 @@ function applyStartupAgentSetupHandoff(
   environmentId: string,
   authoritative: EnvironmentPaneState,
   selected: EnvironmentPaneState,
+  current: EnvironmentPaneState,
 ): { state: EnvironmentPaneState; retireActivationAfterInstall: boolean } {
   const authoritativeLeaf = findLeaf(authoritative.root, (leaf) =>
     leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID),
@@ -154,7 +154,15 @@ function applyStartupAgentSetupHandoff(
   const setupReady = environmentIsReadyForSetupHandoff(
     useEnvironmentStore.getState().getEnvironmentById(environmentId),
   );
-  if ((!providerSessionId && !setupReady) || !hasWindowStartupAgentActivation(environmentId)) {
+  // The tab lands once setup has finished, so its arrival in this window is the
+  // handoff whichever client started the launch, and it can only happen once.
+  const arrived =
+    Boolean(authoritativeLeaf) &&
+    !findLeaf(current.root, (leaf) => leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID));
+  if (
+    !arrived &&
+    ((!providerSessionId && !setupReady) || !hasWindowStartupAgentActivation(environmentId))
+  ) {
     return { state: selected, retireActivationAfterInstall: false };
   }
 
@@ -408,56 +416,36 @@ export function commitBuildPipelineSetupHandoff(
 }
 
 /**
- * Focus a backend-created tab in the Electron window that launched it.
- *
- * If the resource announcement is still in flight, reconciliation consumes
- * the pending request when the exact tab arrives. Browser clients already use
- * the backend's shared selection and need no renderer-local override.
+ * Focus a backend-created tab in the client that launched it, now if the layout
+ * already holds it and otherwise when it arrives. An ordinary selection, so it
+ * persists the way a click does.
  */
-export function requestPaneTabActivation(
-  environmentId: string,
-  tabId: string,
-  request?: PaneTabActivationRequest,
-): void {
-  if (request) {
-    if (
-      request.environmentId !== environmentId ||
-      latestTabActivationRequests.get(environmentId) !== request
-    ) {
-      return;
-    }
-    latestTabActivationRequests.delete(environmentId);
-  } else {
-    // Preserve the original immediate API for non-launch callers. An explicit
-    // request is itself newer than any unresolved launch for this environment.
-    latestTabActivationRequests.delete(environmentId);
-    pendingTabActivations.delete(environmentId);
-  }
-  if (!window.orkestrator?.isolatedViewState) return;
-
+export function requestPaneTabActivation(environmentId: string, tabId: string): void {
+  pendingTabActivations.delete(environmentId);
   const store = usePaneLayoutStore.getState();
   const pane = store.findPaneWithTab(tabId, environmentId);
   if (pane) {
-    pendingTabActivations.delete(environmentId);
     store.setActiveTab(pane.id, tabId, environmentId);
     return;
   }
-
-  pendingTabActivations.delete(environmentId);
   pendingTabActivations.set(environmentId, tabId);
   boundActivationMap(pendingTabActivations);
 }
 
-function applyPendingTabActivation(
-  environmentId: string,
-  state: EnvironmentPaneState,
-): EnvironmentPaneState {
-  const tabId = pendingTabActivations.get(environmentId);
-  if (!tabId) return state;
-  const activated = activateTabInState(state, tabId);
-  if (!activated) return state;
+/** Withdraw a tab that was still due to take focus when it arrives. */
+export function cancelPaneTabActivation(environmentId: string): void {
   pendingTabActivations.delete(environmentId);
-  return activated;
+}
+
+/** Focus the requested tab if the installed layout now holds it. */
+export function flushPaneTabActivation(environmentId: string): void {
+  const tabId = pendingTabActivations.get(environmentId);
+  if (!tabId) return;
+  const store = usePaneLayoutStore.getState();
+  const pane = store.findPaneWithTab(tabId, environmentId);
+  if (!pane) return;
+  pendingTabActivations.delete(environmentId);
+  store.setActiveTab(pane.id, tabId, environmentId);
 }
 
 export function collectPaneDependencyIds(root: unknown): {
@@ -603,10 +591,14 @@ export function reconcileAuthoritativePaneLayout(
   if (!restored) return null;
 
   if (window.orkestrator?.isolatedViewState) {
-    const selected = applyStoredPaneSelection(
-      preserveClientPaneSelection(restored, current),
-      environmentId,
-      readWindowPaneSelection(environmentId),
+    const selected = applySetupTabArrival(
+      restored,
+      applyStoredPaneSelection(
+        preserveClientPaneSelection(restored, current),
+        environmentId,
+        readWindowPaneSelection(environmentId),
+      ),
+      current,
     );
     // Apply the pipeline handoff first so a Start Build during setup wins over
     // the automatic startup-agent landing in the same reconcile frame. A window
@@ -625,8 +617,9 @@ export function reconcileAuthoritativePaneLayout(
       environmentId,
       restored,
       buildHandoff.state,
+      current,
     );
-    const reconciled = applyPendingTabActivation(environmentId, startupHandoff.state);
+    const reconciled = startupHandoff.state;
     if (startupHandoff.retireActivationAfterInstall) {
       startupAgentActivationCommits.set(reconciled, environmentId);
     }

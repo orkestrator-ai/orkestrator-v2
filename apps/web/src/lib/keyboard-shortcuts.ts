@@ -220,12 +220,10 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
     id: "tabs",
     title: "Tabs and panels",
     shortcuts: [
-      {
-        id: "new-agent-tab",
+      appShortcutEntry("new-agent-tab", {
         description: "New agent tab",
-        mac: ["⌘", "T"],
         keywords: ["chat", "claude", "codex"],
-      },
+      }),
       {
         id: "new-terminal-tab",
         description: "New terminal tab",

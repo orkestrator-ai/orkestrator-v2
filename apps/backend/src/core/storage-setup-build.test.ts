@@ -87,7 +87,180 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
-  test("publishes a backend-owned native startup tab beside the setup terminal", async () => {
+  describe("the setup terminal", () => {
+    const leafOf = (layout: { root: unknown }) =>
+      layout.root as { tabs: Array<Record<string, unknown>>; activeTabId: string | null };
+    const localEnvironment = (id: string) => {
+      const environment = createEnvironment("project-1");
+      environment.id = id;
+      environment.environmentType = "local";
+      environment.containerId = null;
+      return environment;
+    };
+    const selectUserTab = async (storage: StorageService, environmentId: string, tabId: string) => {
+      const previous = (await storage.getPaneLayout(environmentId))!;
+      const root = leafOf(previous);
+      await storage.savePaneLayout(
+        environmentId,
+        {
+          version: previous.version,
+          containerId: previous.containerId,
+          activePaneId: previous.activePaneId,
+          root: {
+            ...root,
+            tabs: [...root.tabs, { id: tabId, type: "plain" }],
+            activeTabId: tabId,
+          },
+        } as Parameters<StorageService["savePaneLayout"]>[1],
+        previous.revision,
+      );
+    };
+
+    test("is published first and focused, ahead of a tab that was already there", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-first");
+        await storage.addEnvironment(environment);
+        await storage.ensureBuildPipelineTab({
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          environmentId: environment.id,
+          isLocal: true,
+        });
+
+        const leaf = leafOf(await storage.ensureSetupTab(environment.id));
+
+        expect(leaf.tabs[0]).toMatchObject({ id: "default", isSetupTab: true });
+        expect(leaf.tabs[1]).toMatchObject({ type: "claude-build" });
+        expect(leaf.activeTabId).toBe("default");
+      });
+    });
+
+    test("does not take focus from a tab the user opened", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-user-tab");
+        await storage.addEnvironment(environment);
+        await storage.ensureBuildPipelineTab({
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          environmentId: environment.id,
+          isLocal: true,
+        });
+        await selectUserTab(storage, environment.id, "user-terminal");
+
+        const leaf = leafOf(await storage.ensureSetupTab(environment.id));
+
+        expect(leaf.tabs[0]).toMatchObject({ isSetupTab: true });
+        expect(leaf.activeTabId).toBe("user-terminal");
+      });
+    });
+
+    test("does not reuse an ordinary terminal's id, and republishing changes nothing", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-default-taken");
+        await storage.addEnvironment(environment);
+        await storage.savePaneLayout(
+          environment.id,
+          {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: "default",
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "default", type: "plain" }],
+              activeTabId: "default",
+            },
+          } as Parameters<StorageService["savePaneLayout"]>[1],
+          0,
+        );
+
+        const first = await storage.ensureSetupTab(environment.id);
+        const leaf = leafOf(first);
+        expect(leaf.tabs.map((tab) => tab.id)).toEqual(["setup-terminal", "default"]);
+        expect((await storage.ensureSetupTab(environment.id)).revision).toBe(first.revision);
+      });
+    });
+
+    test("hands focus to the job tab when setup finishes", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-handoff");
+        await storage.addEnvironment(environment);
+        await storage.ensureSetupTab(environment.id);
+
+        const leaf = leafOf(
+          (await storage.ensureStartupNativeAgentTab({
+            environmentId: environment.id,
+            agent: "claude",
+          }))!,
+        );
+
+        expect(leaf.tabs.map((tab) => tab.id)).toEqual(["default", "startup-agent"]);
+        expect(leaf.activeTabId).toBe("startup-agent");
+      });
+    });
+
+    test("leaves the user on a tab they opened since setup started", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-handoff-declined");
+        await storage.addEnvironment(environment);
+        await storage.ensureSetupTab(environment.id);
+        await selectUserTab(storage, environment.id, "user-terminal");
+
+        const leaf = leafOf(
+          (await storage.ensureStartupNativeAgentTab({
+            environmentId: environment.id,
+            agent: "claude",
+          }))!,
+        );
+
+        expect(leaf.tabs.map((tab) => tab.id)).toEqual([
+          "default",
+          "user-terminal",
+          "startup-agent",
+        ]);
+        expect(leaf.activeTabId).toBe("user-terminal");
+      });
+    });
+
+    test("a build tab's setup handoff also leaves a user's tab focused", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-setup-build-declined");
+        await storage.addEnvironment(environment);
+        await storage.ensureSetupTab(environment.id);
+        const input = {
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+          environmentId: environment.id,
+          isLocal: true,
+          activate: "setup-handoff" as const,
+        };
+
+        await selectUserTab(storage, environment.id, "user-terminal");
+        expect(leafOf(await storage.ensureBuildPipelineTab(input)).activeTabId).toBe(
+          "user-terminal",
+        );
+      });
+    });
+
+    test("a job with no setup to wait for is the first tab, focused", async () => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = localEnvironment("env-no-setup-script");
+        await storage.addEnvironment(environment);
+
+        const leaf = leafOf(
+          (await storage.ensureStartupNativeAgentTab({
+            environmentId: environment.id,
+            agent: "claude",
+          }))!,
+        );
+
+        expect(leaf.tabs.map((tab) => tab.id)).toEqual(["startup-agent"]);
+        expect(leaf.activeTabId).toBe("startup-agent");
+      });
+    });
+  });
+
+  test("publishes a backend-owned native startup tab without manufacturing a setup terminal", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");
       environment.id = "env-cursor-startup";
@@ -105,7 +278,6 @@ describe("backend-owned setup and build surfaces", () => {
         kind: "leaf",
         activeTabId: "startup-agent",
         tabs: [
-          { id: "default", type: "plain", isSetupTab: true },
           {
             id: "startup-agent",
             type: "agent-native",
@@ -121,7 +293,7 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
-  test("publishes a backend-managed terminal job beside the setup terminal", async () => {
+  test("publishes a backend-managed terminal job without manufacturing a setup terminal", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1");
       environment.id = "env-terminal-startup";
@@ -141,7 +313,6 @@ describe("backend-owned setup and build surfaces", () => {
         kind: "leaf",
         activeTabId: "startup-agent",
         tabs: [
-          { id: "default", type: "plain", isSetupTab: true },
           {
             id: "startup-agent",
             type: "codex",
@@ -1059,7 +1230,7 @@ describe("backend-owned setup and build surfaces", () => {
         published!.root as {
           tabs: Array<Record<string, unknown>>;
         }
-      ).tabs[1]!;
+      ).tabs[0]!;
       expect(startupTab.nativeAgentData).toEqual({
         environmentId: environment.id,
         isLocal: false,
@@ -1076,7 +1247,7 @@ describe("backend-owned setup and build surfaces", () => {
           rebound!.root as {
             tabs: Array<Record<string, unknown>>;
           }
-        ).tabs[1]!.nativeAgentData,
+        ).tabs[0]!.nativeAgentData,
       ).toEqual({
         platform: "codex",
         environmentId: environment.id,
@@ -1109,7 +1280,7 @@ describe("backend-owned setup and build surfaces", () => {
         published!.root as {
           tabs: Array<Record<string, unknown>>;
         }
-      ).tabs[1]!;
+      ).tabs[0]!;
       expect(startupTab).toMatchObject({
         id: "startup-agent",
         type: "agent-native",
@@ -1150,7 +1321,7 @@ describe("backend-owned setup and build surfaces", () => {
           handedOff!.root as {
             tabs: Array<{ nativeAgentData?: { platform?: string } }>;
           }
-        ).tabs[1]?.nativeAgentData?.platform,
+        ).tabs[0]?.nativeAgentData?.platform,
       ).toBeUndefined();
     });
   });
@@ -1243,7 +1414,7 @@ describe("backend-owned setup and build surfaces", () => {
           locked!.root as {
             tabs: Array<{ nativeAgentData?: { platform?: string; sessionId?: string } }>;
           }
-        ).tabs[1]?.nativeAgentData,
+        ).tabs[0]?.nativeAgentData,
       ).toMatchObject({
         platform: "codex",
         sessionId: "codex-session-1",
@@ -1258,7 +1429,7 @@ describe("backend-owned setup and build surfaces", () => {
           republished!.root as {
             tabs: Array<{ nativeAgentData?: { platform?: string; sessionId?: string } }>;
           }
-        ).tabs[1]?.nativeAgentData,
+        ).tabs[0]?.nativeAgentData,
       ).toMatchObject({
         platform: "codex",
         sessionId: "codex-session-1",

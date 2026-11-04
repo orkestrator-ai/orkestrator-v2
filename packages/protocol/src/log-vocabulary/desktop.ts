@@ -1,4 +1,4 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, ESSENTIAL_ERROR_FIELDS } from "./define.js";
 
 export const DESKTOP_LOG_AREAS = defineLogAreas({
   desktop: {
@@ -6,17 +6,35 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
     events: {
       "backend.docker-context-seed-failed":
         "An agent-test profile fell back to the default Docker context.",
-      "backend.exited": "The Local backend exited unexpectedly; Local work is unavailable.",
-      "backend.exited-recovering":
-        "The Local backend exited just after a remote update; relaunching unattended.",
+      "backend.exited": {
+        description:
+          "The Local backend exited unexpectedly; Local work is unavailable. `error.exitCode` and `error.signal` say how.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
+      "backend.exited-recovering": {
+        description:
+          "The Local backend exited just after a remote update; relaunching unattended. `error.exitCode` and `error.signal` say how.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
       "backend.keychain-link-remove-failed":
         "An agent-test profile kept a legacy link to the host keychain.",
-      "backend.start-failed": "The Local backend did not start; continuing with remote machines.",
+      "backend.start-failed": {
+        description: "The Local backend did not start; continuing with remote machines.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
       "clipboard.write-failed": "Writing text to the system clipboard failed.",
       "dev-mode.ignored-packaged":
         "A packaged app was launched with ELECTRON_DEV=1 and ignored it; it loads its bundled renderer.",
       "instance.already-running": "Another instance holds this data directory; this one will quit.",
-      "main-thread.stalled": "A timer fired late, so windows, IPC and the stdout reader waited.",
+      "main-thread.stalled": {
+        description: "A timer fired late, so windows, IPC and the stdout reader waited.",
+        essential: true,
+        minLevel: "error",
+        fields: { lagMs: "number", intervalMs: "number" },
+      },
       "quit.stopping-backend": "The app is quitting and has asked the Local backend to stop.",
       "relaunch.schedule-failed":
         "The AppImage relaunch waiter failed; using Electron's relauncher.",
@@ -29,7 +47,11 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "saved-machines.attach-failed": "Saved machines were not imported into the command node yet.",
       "saved-machines.attached": "Saved machines were imported into the local command node.",
       "startup.failed": "The application failed to start.",
-      "uncaught-exception": "The main process hit an uncaught exception.",
+      "uncaught-exception": {
+        description: "The main process hit an uncaught exception.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
       "uncaught-exception.dialog-failed": "The uncaught exception sheet could not be shown.",
       "window.create-failed": "A menu-driven new window could not be created.",
       "window.recreate-failed": "The main window could not be recreated on activation.",

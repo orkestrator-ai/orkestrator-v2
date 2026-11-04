@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/parent-watchdog";
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
 import { CredentialError } from "./acp-credentials.js";
@@ -80,7 +81,7 @@ export function shutdown(): Promise<void> {
 
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[acp-bridge]" });
+installFatalRejectionGuard({ label: "[acp-bridge]", onRejection: logUnhandledRejection });
 
 export const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {

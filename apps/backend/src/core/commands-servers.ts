@@ -1298,6 +1298,7 @@ async function startLocalServerAttempt(
     loginless: launchedLoginless,
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
+  localServers.reportBridgeStart(key, child);
   forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", (code, signal) => {
     localServers.reportBridgeExit(key, child, code, signal);

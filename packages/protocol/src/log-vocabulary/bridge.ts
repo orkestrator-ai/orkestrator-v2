@@ -1,4 +1,4 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, ESSENTIAL_ERROR_FIELDS } from "./define.js";
 
 /** `bridge.diagnostics` holds one snapshot per entry; see `maxStringChars`. */
 export const MAX_BRIDGE_DIAGNOSTIC_BYTES = 8192;
@@ -261,8 +261,12 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "state.publication-recovered": "Saving bridge state recovered.",
       "state.transcripts-shortened":
         "The state file reached its limit, so some sessions were saved with a shortened transcript copy.",
-      "session.resume-fell-back":
-        "A saved conversation could not be resumed, so a new one started; its error message is not logged because it can hold content.",
+      "session.resume-fell-back": {
+        description:
+          "A saved conversation could not be resumed, so a new one started; its error message is not logged because it can hold content.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
       "turn.failed":
         "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
       "turn.recovery-failed":
@@ -286,8 +290,12 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "The state file stayed over budget after shedding transcripts, so the write was skipped.",
       "state.transcripts-shed":
         "The state file was over budget, so some sessions were saved without their transcript.",
-      "session.resume-fell-back":
-        "A saved conversation could not be reopened, so a new one started; its error message is not logged because it can hold content.",
+      "session.resume-fell-back": {
+        description:
+          "A saved conversation could not be reopened, so a new one started; its error message is not logged because it can hold content.",
+        essential: true,
+        fields: ESSENTIAL_ERROR_FIELDS,
+      },
       "turn.failed":
         "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
       "turn.refused":

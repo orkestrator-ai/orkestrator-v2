@@ -32,13 +32,14 @@ export { server, shutdown, start } from "./server.js";
 
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import { start } from "./server.js";
 
 configureBridgeLogger();
 
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[pi-bridge]" });
+installFatalRejectionGuard({ label: "[pi-bridge]", onRejection: logUnhandledRejection });
 
 // Importing this module from a test must not bind a port. The backend runs it
 // as a program; every other consumer imports it as a library.

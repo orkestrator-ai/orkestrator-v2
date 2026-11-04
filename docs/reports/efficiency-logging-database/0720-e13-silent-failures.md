@@ -128,7 +128,7 @@ Already done from report L4's table, so not tasks here:
 ### Constraints and rationale
 
 - Every new event goes in `packages/protocol/src/log-vocabulary/`, content-free. `error.message` can quote a provider, so use `{ message: false }` where it might.
-- These lines reach disk only while **Save Logs to Disk** is on. Capturing a first occurrence is [0750](0750-e15-health-and-diagnostics.md#0750-an-always-on-essential-event-log), which depends on these events existing.
+- Most of these lines reach disk only while **Save Logs to Disk** is on. The writer lease events, `bridge.exited` and `session.resume-fell-back` are also always kept in the [essential log](../../architecture/logging.md#the-essential-event-log) that [0750](0750-e15-health-and-diagnostics.md#0750-an-always-on-essential-event-log) built, and so is any of them at `error`.
 
 ## 0830: Stop inherited vendor debug variables reaching local bridges
 
@@ -190,7 +190,7 @@ The lease guards container mutation and already formats its refusal as a contain
 
 ### Task 1: there is no regained event
 
-`lost` is sticky, the heartbeat stops, and nothing reacquires: a lost lease lasts until the process restarts. A test pins this. A refresh racing `release` finds its own removal, so the transition ignores a released lease rather than warn at every shutdown.
+`lost` is sticky, the heartbeat stops, and nothing reacquires: a lost lease lasts until the process restarts. A test pins this. R6b later added `writer-lease.regained`, written by the backend that takes a stale lease over rather than by the one that lost it, so this stays true. A refresh racing `release` finds its own removal, so the transition ignores a released lease rather than warn at every shutdown.
 
 ### Task 2: stop intent is held per child, in `LocalServerRuntime.terminate`
 

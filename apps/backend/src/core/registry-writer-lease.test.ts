@@ -108,6 +108,28 @@ describe("registry writer lease logging", () => {
     expect(leaseRecords()).toHaveLength(1);
   });
 
+  test("taking over a stale lease writes one regained info with its age", async () => {
+    await replaceLease("crashed-backend");
+    const lastRefresh = new Date(Date.now() - 60_000);
+    await fs.utimes(path.join(directory, REGISTRY_WRITER_LEASE_FILE), lastRefresh, lastRefresh);
+    const lease = await open({ staleMs: 30_000 });
+    expect(lease.isHeld()).toBe(true);
+    const records = leaseRecords();
+    expect(records).toMatchObject([
+      { level: "info", area: "docker", event: "writer-lease.regained" },
+    ]);
+    expect(Object.keys(records[0]!.fields ?? {})).toEqual(["staleForMs"]);
+    expect(records[0]!.fields?.staleForMs).toBeGreaterThanOrEqual(60_000);
+  });
+
+  test("acquiring a lease nobody held, or one a clean shutdown released, writes nothing", async () => {
+    const first = await open();
+    await first.release();
+    const second = await open();
+    expect(second.isHeld()).toBe(true);
+    expect(leaseRecords()).toEqual([]);
+  });
+
   test("a backend that starts without the lease writes one info, and none on later checks", async () => {
     const first = await openRegistryWriter(directory);
     writers.push(first);

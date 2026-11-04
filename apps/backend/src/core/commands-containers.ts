@@ -750,6 +750,7 @@ export async function startContainerServer(
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
   await dockerExecDetached(containerId, command, redactValues);
+  dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
     const log = await dockerExec(
@@ -863,6 +864,7 @@ export async function startContainerOpenCodeServer(
   `,
     [authToken],
   );
+  dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
   await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
     async (error) => {
       const log = await dockerExec(

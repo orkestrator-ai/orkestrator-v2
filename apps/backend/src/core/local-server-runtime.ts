@@ -261,6 +261,10 @@ export class LocalServerRuntime {
     this.releaseOwnership(key, child);
   }
 
+  reportBridgeStart(key: string, child: ChildProcessWithoutNullStreams): void {
+    log.info("bridge.started", { key, pid: child.pid ?? null });
+  }
+
   /**
    * Records how a bridge ended. Ownership plays no part: a replaced child no
    * longer owns its key, and its exit still explains what happened to it. An

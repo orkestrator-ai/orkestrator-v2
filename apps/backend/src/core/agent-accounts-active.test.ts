@@ -654,6 +654,25 @@ test("renews an expired owner login without ordinary sessions before the coordin
   expect(calls).toBe(1);
 });
 
+test("coordinator readers join an in-flight renewal before reading a temporarily empty login", async () => {
+  const home = accountHome("codex");
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(path.join(home, "auth.json"), "");
+  let joined = false;
+  const login = await readCoordinatorCodexLogin(
+    { accountId: ACCOUNT_IDS.codex, home },
+    {
+      refreshLocalCodexLogin: async () => {
+        joined = true;
+        await fs.writeFile(path.join(home, "auth.json"), codexAuth(Date.now() + 3600_000));
+        return true;
+      },
+    },
+  );
+  expect(joined).toBe(true);
+  expect(login.text).toBeTruthy();
+});
+
 test("macOS removes only each coordinator home's Keychain login, once per home", async () => {
   const original = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { value: "darwin", configurable: true });

@@ -299,8 +299,20 @@ export class StorageDatabase {
       const migrations = [SCHEMA, ...(options.migrations ?? [])];
       const target = migrations.reduce((max, migration) => Math.max(max, migration.version), 0);
       const existing = this.schemaVersion();
-      if (existing > 0 && existing < target) options.beforeMigrate?.(this, existing, target);
-      this.migrate(dataDir, migrations);
+      let step = "snapshot";
+      try {
+        if (existing > 0 && existing < target) options.beforeMigrate?.(this, existing, target);
+        step = "migrate";
+        this.migrate(dataDir, migrations);
+      } catch (error) {
+        log.error("migration.failed", {
+          fromVersion: existing,
+          toVersion: target,
+          step,
+          error: formatLogError(error, { message: false }),
+        });
+        throw error;
+      }
       this.ensureIndexes();
       this.instanceId = (
         this.db.query("SELECT value FROM storage_meta WHERE key = 'instance'").get() as {

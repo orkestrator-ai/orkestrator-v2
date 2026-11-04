@@ -707,9 +707,9 @@ test("the tunnel is advertised and a service loads through its credentialed loop
     stored: { transport: boolean };
     effective: { transport: boolean };
   }>("get_preview_settings");
-  // The override reached the isolated backend; nothing was written to the profile.
+  // On by default, and the override the spec also sets agrees with it.
   expect(settings.effective.transport).toBe(true);
-  expect(settings.stored.transport).toBe(false);
+  expect(settings.stored.transport).toBe(true);
   const capabilities = await invoke<{
     surfaces: { desktopTunnel: { available: boolean; reason?: string } };
   }>("get_preview_capabilities");
@@ -2242,6 +2242,54 @@ test("a legacy URL tab keeps a link and Back through routine re-attaches", async
   } finally {
     await uiStore("selectProject", null).catch(() => undefined);
     await preview("destroy", LEGACY_TAB).catch(() => undefined);
+  }
+});
+
+test("a stored 127.0.0.1 URL tab migrates to its service and stays migrated after a reload", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(120_000);
+  const tabId = "legacy-migrated-tab";
+  // Learn the ingress origin so this case does not depend on an earlier test.
+  if (!s().origins.a) {
+    await attachService("a", "origin-probe-a", false);
+    await preview("destroy", "origin-probe-a");
+  }
+  const storedUrl = async () => {
+    const layout = await invoke<{
+      root?: { tabs?: Array<{ id: string; browserData?: { url?: string } }> };
+    } | null>("get_pane_layout", { environmentId: s().environmentId });
+    return layout?.root?.tabs?.find((tab) => tab.id === tabId)?.browserData?.url;
+  };
+  await showTabs(
+    tabId,
+    [
+      {
+        id: tabId,
+        type: "browser",
+        browserData: { url: `http://127.0.0.1:${fixtureOf("a").port}/app/next?tab=2` },
+      },
+    ],
+    "legacy-migration",
+  );
+  try {
+    const expected = formatPreviewServiceUri(serviceTarget("a", "/app/next?tab=2"));
+    await expect.poll(storedUrl, { timeout: 30_000 }).toBe(expected);
+    // Only the tunnel serves this origin, so a visible view on it is the migrated tab's.
+    await expect.poll(() => visibilityOn(origin("a")), { timeout: 30_000 }).toContain(true);
+    for (const view of await viewsOn(origin("a"))) {
+      expect(view.storagePath ?? "").toContain("orkestrator-preview-svc-");
+    }
+
+    await s().window.reload();
+    await waitForApi(s().window);
+    await uiStore("selectProjectAndEnvironment", s().projectId, s().environmentId);
+    await closeStartupDialogs();
+    await expect.poll(() => visibilityOn(origin("a")), { timeout: 30_000 }).toContain(true);
+    expect(await storedUrl()).toBe(expected);
+    record(testInfo, "legacy-migration", JSON.stringify({ migrated: true }));
+  } finally {
+    await uiStore("selectProject", null).catch(() => undefined);
+    await preview("destroy", tabId).catch(() => undefined);
   }
 });
 

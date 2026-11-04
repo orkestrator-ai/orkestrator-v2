@@ -149,6 +149,8 @@ describe("PreviewServiceRegistry", () => {
     await harness.addContainerEnvironment("a", { entryPort: 3000 });
     publish("a", "container-a", {});
     const registry = await started();
+    await harness.runtime.updateSettings((current) => ({ ...current, relay: false }));
+    await registry.settle();
     const endpoint = registry.snapshot({ environmentId: "a" }).services[0]!.endpoint;
     expect(endpoint.state).toBe("unavailable");
     expect(endpoint.failure?.category).toBe("target-unmapped");

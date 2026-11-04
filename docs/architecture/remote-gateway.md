@@ -587,7 +587,8 @@ the client's own disk.
 
 Browser tabs can preview registered services through a scoped desktop tunnel
 (`/__orkestrator/preview/tunnel` on this gateway) or through private HTTPS
-preview origins served by a separate listener. Both are off by default. See
+preview origins served by a separate listener. The tunnel is on by default;
+private origins need an operator's domain and certificate, so they stay off. See
 [browser-previews.md](browser-previews.md) for setup, limits, and the rollback
 procedure.
 
@@ -602,10 +603,11 @@ procedure.
   policy, the same flags as the client's preview iframe. The page stays an
   opaque origin even when opened top-level, so it cannot call gateway routes
   as the signed-in user. It also has no storage or cookies of its own there;
-  applications that need them use the tunnel or a private origin. Making the
-  isolated transports the default is
+  applications that need them use the tunnel or a private origin. The web
+  client without private origins still loads URL tabs through this route.
+  Retiring it is
   [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md)
-  task 7.
+  task 8.
 - The legacy route opens only a port that is the verified binding of an
   enabled preview service of the requesting environment (a container's own
   loopback publication, or a backend-host or worktree listener the resolver

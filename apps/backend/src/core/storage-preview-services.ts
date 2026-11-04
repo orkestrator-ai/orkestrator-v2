@@ -129,8 +129,8 @@ export interface PreviewSettings {
 
 export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
   version: 1,
-  transport: false,
-  relay: false,
+  transport: true,
+  relay: true,
   publication: {
     enabled: false,
     domain: null,

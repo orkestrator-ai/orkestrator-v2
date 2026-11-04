@@ -92,7 +92,7 @@ The material risks are concentrated in four themes:
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
-| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
+| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flipped on the branch, route retirement open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
@@ -320,9 +320,10 @@ explicit opt-in with a scope warning. Avoid persisting the token in
 carries `Content-Security-Policy: sandbox allow-scripts allow-forms
 allow-pointer-lock allow-presentation` in place of the upstream policy, so a
 preview opened top-level is an opaque origin and cannot call gateway routes.
-Turning the isolated transport on by default is not yet low risk (its
-two-machine, Windows and threshold gates are open) and stays with
-`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7.
+The isolated transport defaults on since 2026-11-04, on the maintainer's
+sign-off and without the two-machine run or its thresholds
+(`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7).
+Retiring the route stays with task 8 and the support window.
 
 **Where**
 - `apps/backend/src/gateway-proxy.ts:204-211`: for browser previews the proxy deletes upstream `x-frame-options`, `content-security-policy` and `content-security-policy-report-only`, and adds no `Content-Security-Policy: sandbox` of its own.

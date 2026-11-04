@@ -24,7 +24,7 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 8 | [0200-i1-workspace-grant-allowlist.md](0200-i1-workspace-grant-allowlist.md) | Medium | No | I1: grant deny-list against its documented guarantee | A grant holder can change global config and request host updates, but grants are short-lived and issued through the user's own command node. |
 | 9 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
 | 10 | [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) | Medium | No | §8: H1, M1 and M2 in shipping Safari, H3 on rootless Docker, and gateway reach on Linux Engine | The checks that could run here passed; what is left qualifies other platforms, and accepting a leaked session rests on the Linux Engine answer. |
-| 11 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: default flip and legacy route retirement | The sandbox header already closes the top-level path, and all remaining work is blocked in todo 0042. |
+| 11 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
 | 12 | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) | Low | No | H2: retiring in-container firewall enforcement | The root paths are closed, and the one remaining item is blocked on todo 0018's qualification. |
 | 13 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 | 14 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
@@ -77,7 +77,7 @@ When one of these becomes ready, it joins the lane shown.
 
 | File | Why it waits | Lane |
 | --- | --- | --- |
-| [`0020`](0020-m1-isolated-preview-default.md) | Blocked on todo 0042 | Gateway |
+| [`0020`](0020-m1-isolated-preview-default.md) | Default flipped; retirement blocked on todo 0042 | Gateway |
 | [`0030`](0030-h2-retire-in-container-firewall.md) | Blocked on todo 0018 | Containers |
 | [`0110`](0110-l18-dependency-advisories.md) | Blocked upstream in todo 0032 | No lane |
 

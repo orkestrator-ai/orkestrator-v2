@@ -394,6 +394,20 @@ function ManualBrowserTab({
     tabId,
     updateTabBrowserUrl,
   ]);
+  // Stored legacy tabs migrate on their own once the tunnel can carry them. A
+  // browser client or a disabled tunnel keeps the offer instead: converting
+  // there would replace a working view with a setup message or the same route.
+  // Keyed on the conversion state, not a ref, so StrictMode's cancelled first
+  // attempt retries and a "changed" or "error" outcome waits for the user.
+  const migrateToService =
+    isActive &&
+    nativeBrowserPreview &&
+    serviceMatch !== null &&
+    conversionState === null &&
+    previewCapabilities?.surfaces.desktopTunnel.available === true;
+  useEffect(() => {
+    if (migrateToService) openAsService();
+  }, [migrateToService, openAsService]);
 
   const visibleError = error ?? resolution.error;
   const visibleLoading = isLoading && resolved !== null;

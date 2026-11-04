@@ -27,7 +27,29 @@ describe("preview commands", () => {
     await harness.cleanup();
   });
 
+  test("a backend with no stored settings has the transport and relay on", async () => {
+    const settings = (await invoke("get_preview_settings")) as {
+      stored: { transport: boolean; relay: boolean; publication: { enabled: boolean } };
+      effective: { transport: boolean; relay: boolean };
+    };
+    expect(settings.stored).toMatchObject({
+      transport: true,
+      relay: true,
+      publication: { enabled: false },
+    });
+    expect(settings.effective).toMatchObject({ transport: true, relay: true });
+  });
+
+  test("a stored off survives the default being on", async () => {
+    await invoke("update_preview_settings", { settings: { transport: false, relay: false } });
+    expect(await harness.storage.previewServices.loadPreviewSettings()).toMatchObject({
+      transport: false,
+      relay: false,
+    });
+  });
+
   test("capabilities advertise the registry but not disabled transports", async () => {
+    await invoke("update_preview_settings", { settings: { transport: false } });
     const capabilities = (await invoke("get_preview_capabilities")) as {
       registry: { available: boolean };
       surfaces: {
@@ -80,12 +102,12 @@ describe("preview commands", () => {
 
   test("settings commands toggle the transport kill switch", async () => {
     const updated = (await invoke("update_preview_settings", {
-      settings: { transport: true },
+      settings: { transport: false },
     })) as {
       effective: { transport: boolean };
     };
-    expect(updated.effective.transport).toBe(true);
-    expect((await harness.storage.previewServices.loadPreviewSettings()).transport).toBe(true);
+    expect(updated.effective.transport).toBe(false);
+    expect((await harness.storage.previewServices.loadPreviewSettings()).transport).toBe(false);
   });
 
   test("client metric reports join the preview diagnostics; malformed ones change nothing", async () => {

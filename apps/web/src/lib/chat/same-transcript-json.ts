@@ -23,16 +23,16 @@ function sameJson(a: unknown, b: unknown, skip?: ReadonlySet<string>): boolean {
 }
 
 /**
- * Whether two transcript parts serialize to the same JSON, key order included,
- * without serializing them. Parts come from parsed JSON, so an incoming part is
- * always a new object and a per-object cache of its serialization would never
- * hit; this allocates only key lists and stops at the first difference.
+ * Whether two transcript values (a part, a message) serialize to the same JSON,
+ * key order included, without serializing them. They come from parsed JSON, so a
+ * new copy is always a new object and a per-object cache of its serialization
+ * would never hit; this allocates only key lists and stops at the first difference.
  */
-export function samePart(a: unknown, b: unknown): boolean {
+export function sameTranscriptJson(a: unknown, b: unknown): boolean {
   return sameJson(a, b);
 }
 
-/** `samePart`, ignoring the top-level fields a bridge may reissue for the same content. */
+/** `sameTranscriptJson` for parts, ignoring the top-level fields a bridge may reissue. */
 export function samePartContent(a: unknown, b: unknown): boolean {
   return sameJson(a, b, PART_IDENTITY_FIELDS);
 }

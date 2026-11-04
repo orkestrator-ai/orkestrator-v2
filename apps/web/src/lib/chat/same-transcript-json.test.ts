@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { samePart, samePartContent } from "./same-transcript-part";
+import { samePartContent, sameTranscriptJson } from "./same-transcript-json";
 
 function jsonEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-describe("samePart", () => {
+describe("sameTranscriptJson", () => {
   const cases: Array<[string, unknown, unknown]> = [
     ["equal objects", { a: 1, b: [1, { c: "x" }] }, { a: 1, b: [1, { c: "x" }] }],
     ["different value", { a: 1 }, { a: 2 }],
@@ -24,7 +24,7 @@ describe("samePart", () => {
 
   for (const [name, a, b] of cases) {
     test(`agrees with comparing JSON: ${name}`, () => {
-      expect(samePart(a, b)).toBe(jsonEqual(a, b));
+      expect(sameTranscriptJson(a, b)).toBe(jsonEqual(a, b));
     });
   }
 });

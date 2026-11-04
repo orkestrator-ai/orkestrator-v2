@@ -1,4 +1,4 @@
-import { samePart, samePartContent } from "@/lib/chat/same-transcript-part";
+import { samePartContent, sameTranscriptJson } from "@/lib/chat/same-transcript-json";
 
 /**
  * A provider identity for one part that survives its content changing: a
@@ -51,7 +51,7 @@ function locateIncomingParts(
       // A bridge may reissue source ids for otherwise identical parts.
       return samePartContent(local[localIndex], incoming[incomingIndex]) ? "strict" : false;
     }
-    if (samePart(local[localIndex], incoming[incomingIndex])) return "strict";
+    if (sameTranscriptJson(local[localIndex], incoming[incomingIndex])) return "strict";
     const heldPart = local[localIndex] as { type?: unknown; content?: unknown } | null;
     const nextPart = incoming[incomingIndex] as { type?: unknown; content?: unknown } | null;
     const growsHeldText =
@@ -148,7 +148,7 @@ export function preferCompleteLiveHead<TMessage>(
   if (
     sameHeadFields &&
     parts.length === localParts.length &&
-    headParts.every((part, index) => samePart(part, localParts[offset + index]))
+    headParts.every((part, index) => sameTranscriptJson(part, localParts[offset + index]))
   ) {
     return { messages: [local, ...incoming.slice(1)], restoredPrefix: true };
   }

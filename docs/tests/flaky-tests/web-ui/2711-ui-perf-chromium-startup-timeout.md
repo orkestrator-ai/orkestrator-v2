@@ -22,6 +22,30 @@ remains an intermittent failure without a demonstrated cause; the historical
 target-branch reproductions below do not establish this occurrence's cause.
 The aggregate rerun result is recorded separately in this round's fix result.
 
+The first exact aggregate rerun passed in 313.1 s after the logging fixes.
+After the coordinator test-ordering repair, the same command at
+`315d6953c72e238ea85281abb5cd2f800b32f2e3` failed in 325.6 s with this
+unnamed lifecycle-hook timeout at 5005.63 ms. Root/support again reported
+3,529 passed and one failed. Backend passed (14,069 passed, 102 skipped);
+web had a separate grouping-delivery failure (case 1531). Scheduler grants
+were five workspace slots, one root slot and two bridge slots.
+
+Final aggregate evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.Cj4lpa/review-default-tests.log.gz`
+(lines 2956–2958); inner group evidence is under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kVPV5d/`.
+
+The complete unchanged owner passed again, exit 0 in 5.1 s:
+
+```sh
+mise run test:logged -- --name fix-final-ui-deadlines-owner -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+The owner and performance probe have no diff in `origin/main...HEAD`.
+The preparation triage remains `undetermined`; neither the isolated pass
+nor the earlier green aggregate establishes a cause. No unrelated hook or
+timeout was changed. The final failed aggregate remains a verifier limitation.
+
 - **ID:** 2711
 - **Status:** open
 - **Observed:** 2026-11-02, merging `d7054dace` into logger branch `8f174e4db`.

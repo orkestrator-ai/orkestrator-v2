@@ -75,7 +75,7 @@ describe("LocalEnvironmentDeleteDialog warning parity", () => {
     expect(dialog.textContent).toContain("This will delete the git worktree from your machine.");
     expect(dialog.textContent).not.toContain("Its container");
     expect(dialog.textContent).not.toContain("It will be stopped before deletion.");
-    expect(screen.getByRole("button", { name: "Delete", exact: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 
   test("explains that an associated pull request remains open", () => {

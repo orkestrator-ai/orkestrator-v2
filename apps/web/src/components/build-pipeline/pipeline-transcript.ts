@@ -16,6 +16,10 @@
  * entry with no field of a display row, would leave the stage looking silent.
  * Each run of those becomes one notice row saying how many were not shown and
  * what to update.
+ *
+ * Agent mail reaches a worker as a user prompt holding its delivery envelope,
+ * and the stored row is that prompt. It is presented here as the mail tile, so
+ * every view of a stored transcript that uses this adapter draws it the same way.
  */
 
 import type {
@@ -33,6 +37,7 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
+import { presentPeerMailCarrierRow } from "@/lib/chat/client-only-messages";
 import {
   classifyTranscriptEntry,
   transcriptEntryId,
@@ -440,6 +445,16 @@ function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
   return raw.parts.some((part) => startsWithAgentHandoffCarrier(asRecord(part)?.content));
 }
 
+/** The text of a row that carries it in a part and leaves `content` empty. */
+function firstTextPartContent(raw: Record<string, unknown>): string {
+  if (!Array.isArray(raw.parts)) return "";
+  for (const entry of raw.parts) {
+    const part = asRecord(entry);
+    if (part?.type === "text" && typeof part.content === "string") return part.content;
+  }
+  return "";
+}
+
 /**
  * A stored transcript as display rows, with adjacent tool-only rows merged the
  * way the agent tabs merge them.
@@ -476,6 +491,7 @@ export function toPipelineTranscriptRows(
 ): NativeMessage[] {
   const transcript: NativeMessage[] = [];
   let hasSeenProviderEntry = false;
+  const shownMailIds = new Set<string>();
   /** The current run of entries this renderer cannot show, awaiting its notice. */
   let skipped: { kind: TranscriptSkewKind; count: number; anchor: string } | null = null;
   const flushSkipped = () => {
@@ -513,6 +529,25 @@ export function toPipelineTranscriptRows(
     const content = asString(raw.content) ?? "";
     const createdAt = asString(raw.createdAt) ?? asString(raw.timestamp) ?? fallbackCreatedAt;
     const modelId = asString(raw.modelId);
+
+    if (role === "user") {
+      // Only this row's display changes: the stored row, and so what the agent
+      // received, is left as it is.
+      const mail = presentPeerMailCarrierRow({
+        id: messageId(raw, index),
+        content: content || firstTextPartContent(raw),
+        createdAt,
+      });
+      if (mail) {
+        // Rows are keyed on their id, so a delivery echoed twice is one tile.
+        for (const row of mail) {
+          if (shownMailIds.has(row.id)) continue;
+          shownMailIds.add(row.id);
+          transcript.push(row);
+        }
+        return;
+      }
+    }
 
     if (agentType === "claude") {
       // Claude parts are grouped into their parent Task/Agent call and split at

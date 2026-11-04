@@ -116,6 +116,18 @@ restarted server on the same port gets a new endpoint generation and old
 attachments are revoked. A `user-registered` target shows whatever listens on
 the port, and route details say so.
 
+A full check is reused for the registry's 5-second verification window, but a
+`managed-process` target also keeps the listener pids it was verified against.
+Every new upstream connection inside the window repeats step 1 alone (coalesced
+per port and family, no `ps` walk) and compares them. Different pids, no
+listener, or a lookup that cannot answer send it through the full check, so a
+fast restart gets a new generation, and another environment's server on the
+freed port is refused, before the connection opens. Passing the lookup does not
+extend the window. Taking an idle socket from the upstream pool opens nothing
+and looks nothing up: it stays on the process it was opened to.
+`user-registered` and container targets are reused for the window with no
+lookup, as before.
+
 A generated local service waits for its own server. While refused for
 `none`, `unattributed` or `other-environment` it is re-resolved on the
 readiness backoff schedule (1, 2, 4, 8, 16, 30 s), and **Retry** restarts it.
@@ -808,7 +820,11 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   generated local services wait for confirmation. A listener owned by another
   OS user cannot be attributed. Servers started through `orkestrator environment exec` run
   under detached exec workers, which are not managed roots, so they are
-  `unattributed`. An attribution is reused for the 5-second verification
-  window, as container bindings are.
+  `unattributed`. Inside the verification window only the listener's pid is
+  rechecked, so a pid reused within those 5 seconds would pass, and a server
+  replaced between the lookup and the connect (milliseconds, or the length of a
+  lookup already in flight that the connection joined) is not caught until the
+  next connection. Each cold connection burst to a `managed-process` target
+  costs one `lsof` or `ss`, typically tens of milliseconds.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,
   WebTransport, and UDP are not.

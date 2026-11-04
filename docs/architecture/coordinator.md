@@ -1511,6 +1511,13 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   stage session's committed transcript (`get_build_pipeline_worker_transcript`,
   checkpointed every few seconds while the turn runs). It never touches the
   provider. The `claude-build` tab itself is still not a transcript source.
+  That read returns the stored rows as they are, envelopes included. Only the
+  display changes: `toPipelineTranscript` draws each delivered envelope as the
+  same mail tile a native tab shows, and an envelope it cannot read as a plain
+  notice, so a stage, Multi Review or graph-run transcript never shows the raw
+  markup. Every provider stores mail as its own user row, whether it was steered
+  in or delivered between turns, so the row alone is enough after a reload. What
+  the agent receives is unchanged.
 - **Durability.** Mailboxes and queued mail are rows in the mail store and
   are rebuilt from the pipeline record on start, so they survive a backend
   restart while the pipeline runs. A finished or removed pipeline's worker

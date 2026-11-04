@@ -2,8 +2,9 @@
 
 ## Task analysis
 
-Analysed 2026-11-01 against the branch built from `main` at `93b99bfba`. How it
-works is in [agent-accounts.md](../../architecture/agent-accounts.md#automatic-switching).
+Analysed 2026-11-01 against the branch built from `main` at `93b99bfba`, and task 9
+on 2026-11-04 against `main` at `96ee1eb3e`. How it works is in
+[agent-accounts.md](../../architecture/agent-accounts.md#automatic-switching).
 
 The feature is built and tested on fake accounts and readings, and on real bridges
 and the pinned CLIs against scripted provider servers (`mise run verify:accounts:resend-live`).
@@ -21,6 +22,7 @@ needs a real provider, so none can run in CI.
 6. **Paid-overage fields on real accounts**: Claude's `extra_usage` on the OAuth usage endpoint; Codex's `credits` and `rate_limit.limit_reached` on the HTTP one. Status: open.
 7. **Two machines**: the ticks reach a leaf by email, a pin on the leaf, a notice from a leaf's switch reaching the command node's coordinator, and an older leaf. Status: open; joins the two-machine batch in [0722](0722-per-machine-agent-accounts.md).
 8. **The cost of a coordinator's notice**: each notice wakes a main coordinator for a turn. Status: open; decide after watching a real week.
+9. **The flapping stops on rkmbp**: no more `soonest-reset` moves between the host login and its twin once the fix runs there. Status: open; needs the fixed build running on rkmbp with the tick on.
 
 ### 1. A real Claude weekly refusal
 
@@ -169,7 +171,47 @@ needs a real provider, so none can run in CI.
     - Pros: costs no turn.
     - Cons: a coordinator planning around accounts learns late.
 
+### 9. The flapping stops on rkmbp
+
+**Problem.** rkmbp moved Claude Code five times in about 70 minutes on 2026-11-04 between two entries for one login, always for `soonest-reset`. The fix is proven only by replaying those readings through the rule and the switcher on fakes.
+
+**Context.** The moves came at 01:29:49, 02:07:23, 02:27:23, 02:27:36 and 02:37:23. At 02:46:42 the two entries read 35% with resets at `2026-11-07T17:00:00.404Z` and `.464Z`, and a different login read 0% with a reset at `2026-11-09T21:00:00.485Z`. The same-login rule and the one-hour tolerance are in [When it moves](../../architecture/agent-accounts.md#when-it-moves).
+
+**Investigation.** That the sub-second part of a reset changes between readings, so that the winner changes direction, is inferred from the moves running both ways. No two readings of one entry have been compared, and the build allowed no real usage calls. The replay swaps the values on purpose, and it fails on the old rule. The rule no longer depends on the answer: twins never move for `soonest-reset`, whatever their reset times do.
+
+**Decisions.**
+
+- **How to check it?**
+  - **Watch rkmbp's `lastSwitch` and notices for a day after the fix reaches it (recommended).**
+    - Pros: a read of what is already recorded; costs no turn and changes no setting.
+    - Cons: needs the build deployed there, and quiet proves little if the machine is idle.
+  - **Record two readings per entry over time on rkmbp to confirm the sub-second variation.**
+    - Pros: settles the inference.
+    - Cons: real usage calls for an answer the fix no longer needs.
+
 ## Assumptions and decisions
+
+### Same-login entries and near-identical resets (task 9)
+
+The rule moved in two places, each with its own decision.
+
+- **Where the same-login rule lives.**
+  - **In `rankAutoSwitchAccounts`' filter (chosen).**
+    - Pros: `decideAutoSwitch` and the limit-stop path in `decideStop` both read that order, so neither can reach a twin; the sort is untouched.
+    - Cons: the order no longer lists every entry with room.
+  - **In `readings()`, marking twins used up by account id beside `confirmedOut`.**
+    - Pros: small change in the backend.
+    - Cons: covers only a confirmed stop, not `soonest-reset` or `threshold`, and leaves the pure rule unaware of logins.
+- **How the tolerance is applied.**
+  - **Only in `decideAutoSwitch`, against the top of the strict order (chosen).**
+    - Pros: the order stays total and stable, and the soonest eligible login is the one that decides. The ticket requires it.
+    - Cons: the limit-stop path, which reads the order directly, can still move a machine onto a login less than an hour sooner when its active login has room. The ticket's decision 3 leaves `limit` unheld, and it is one move rather than a flap.
+  - **Bucketing resets inside the comparator.**
+    - Pros: one place.
+    - Cons: not transitive, so the order depends on input order.
+- **A limit stop while the active entry is signed out.** A stop from another login can find the active entry signed out, and then the order may offer its twin. That move is still recorded as `limit`, because `decideStop` always reports that reason, but what it gains is a usable entry, which the ticket allows.
+- **A stale reading of a twin.** It rules out an idle twin, as a stale reading past 98% with its reset ahead rules out the entry itself, and never moves the active entry, because only a fresh reading can say the active login has run out.
+- **A fresh reading of a twin past 98% with no reading of the active entry.** The login is out and the machine moves with `threshold`, rather than staying as a missing reading otherwise would, because that reading is a fresh one of the same login.
 
 ### Whether a resend carries the prompt
 
@@ -278,13 +320,13 @@ the local bridge startup path. The deterministic test is
 ### Moving when the active account still has room
 
 - **Options.**
-  - **Move whenever another included account resets sooner (chosen).**
+  - **Move whenever another included account resets sooner (chosen, then narrowed to more than an hour sooner by another login; see task 9).**
     - Pros: this is what stops allowance expiring unused, and acceptance asks that the machine move to the account that resets soonest.
     - Cons: moves more often than only at 98%, and the first tick can switch at once.
   - **Move only at 98% or a limit.**
     - Pros: fewest switches.
     - Cons: an account with days of unused allowance sits idle until the active one runs out.
-- **Chosen:** the first. A tie stays put, and reset times do not change within a window, so it cannot flap.
+- **Chosen:** the first. A tie stays put. The original build reasoned that reset times do not change within a window, so it could not flap; rkmbp showed otherwise, on two entries for one login (task 9).
 
 ### Paid overage
 

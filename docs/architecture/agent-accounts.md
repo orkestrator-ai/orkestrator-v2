@@ -738,14 +738,39 @@ older bridge still sends the fixed sentence, and so stays stopped.
 
 Among the included, signed-in accounts with room, the soonest reset comes first;
 an account with no known reset ranks after every account with one
-(`rankAutoSwitchAccounts`). A tie stays on the active account, so readings cannot
-make the machine flap. Three things can move it:
+(`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
+to the millisecond; two rules keep small differences from moving the machine:
+
+- **The same login is one account.** Entries with the same email (ignoring case),
+  such as the host login and an added account that signed in to it, share one
+  allowance, so moving between them gains nothing. While the active entry is usable,
+  its twins are not in the order, so no `soonest-reset`, `threshold` or `limit` move
+  goes to one. A used-up entry's twins have no room either: when a fresh reading
+  puts any entry at or past 98%, or a limit error is confirmed on one, the whole
+  login is out. An idle twin of a stale reading past 98% with its reset ahead is out
+  too, but a stale reading of a twin never moves the active entry
+  ([below](#stale-and-unknown-readings)). When the active entry is signed out or its
+  tick is off, a twin that is signed in and included is a real way off it, so
+  `signed-out` and `not-included` can move to one. An account's own tick goes by
+  email (`isAutoSwitchAccountIncluded`), so twins share a tick today and the
+  `not-included` case is one the rule allows rather than one the ticks can reach. An
+  entry with no email is never anyone's twin.
+- **A reset has to be worth a move.** A `soonest-reset` move needs another login to
+  reset more than an hour sooner than the active account
+  (`AUTO_SWITCH_RESET_TOLERANCE_MS`); exactly an hour stays. The tolerance lives in
+  `decideAutoSwitch` rather than the sort, because it is not transitive. `threshold`,
+  `limit`, `signed-out` and `not-included` moves are not held back by it.
+
+Before these rules, one machine moved between two entries for one login five times
+in 70 minutes, because their reset times differed by 60 ms.
+
+Three things can move it:
 
 - **Between turns.** A turn ending anywhere on the machine, at most once a minute,
   and a ten-minute timer for work no turn-end edge reports, read each included
   account's usage (cached for two minutes, as for Settings) and move to the top of
   the order. That is a move when the active limit reaches 98% used, and also when
-  another included account simply resets sooner, or the active account's own tick
+  another login resets more than an hour sooner, or the active account's own tick
   is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over

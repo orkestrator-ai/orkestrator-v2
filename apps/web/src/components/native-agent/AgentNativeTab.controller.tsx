@@ -141,7 +141,7 @@ import {
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
-  createPeerMailNativeMessagesFromCarrier,
+  presentPeerMailCarrierRow,
   isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
@@ -755,7 +755,7 @@ export function SharedNativeAgentController({
         // One injected prompt can carry several batched messages; each one
         // becomes its own mail tile.
         if (message.role === "user" && isPeerMailCarrierContent(message.content)) {
-          return createPeerMailNativeMessagesFromCarrier(message);
+          return presentPeerMailCarrierRow(message) ?? [message];
         }
         // A goal turn is the loop's text, never something the user typed.
         return [createGoalTurnNativeMessage(message) ?? message];

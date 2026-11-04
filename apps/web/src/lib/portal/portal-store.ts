@@ -275,6 +275,8 @@ export interface NodeActionRequestView {
   workerQuestion?: WorkerQuestionRelay;
   /** `message-project-home`: the coordinator's message, held for approval. */
   projectHomeMessage?: ProjectHomeMessage;
+  /** Why the user is asked although Settings lets coordinators act without asking. */
+  askedBecause?: string;
   state: string;
   /** `url`: the pull request an `update-agents-md` approval opened. */
   result?: { code: string; message: string; url?: string };

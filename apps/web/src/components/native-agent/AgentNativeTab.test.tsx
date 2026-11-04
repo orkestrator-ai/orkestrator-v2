@@ -6574,6 +6574,50 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText(/RAW-CARRIER-INSTRUCTIONS/) === null).toBe(true);
   });
 
+  test.each([
+    '<orkestrator-peer-message version="2"><orkestrator-peer-payload-json>{}</orkestrator-peer-payload-json></orkestrator-peer-message>',
+    '<orkestrator-peer-message version="1">missing payload</orkestrator-peer-message>',
+    '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>',
+  ])("keeps unreadable native mail visible (%#)", async (content) => {
+    renderVirtualizedMessages = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "unreadable",
+          role: "user" as const,
+          content,
+          parts: [],
+          createdAt: "2026-11-04T03:00:00Z",
+        },
+      ],
+    }));
+    const { container } = render(
+      <AgentNativeTab tabId="unreadable-mail" data={identity("claude")} isActive />,
+    );
+    expect(await screen.findByText(/could not be read for display here/)).toBeTruthy();
+    expect(container.textContent).not.toContain("orkestrator-peer");
+  });
+
+  test("keeps a native user's leading tag mention", async () => {
+    renderVirtualizedMessages = true;
+    const content = '<orkestrator-peer-message version="1"> is what I see. Why?';
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "mention",
+          role: "user" as const,
+          content,
+          parts: [],
+          createdAt: "2026-11-04T03:00:00Z",
+        },
+      ],
+    }));
+    render(<AgentNativeTab tabId="tag-mention" data={identity("claude")} isActive />);
+    expect(await screen.findByText(/is what I see. Why/)).toBeTruthy();
+  });
+
   // Every coordinator platform echoes the injected carrier as its user row;
   // the projection turns each one into a tile the same way, batches included.
   for (const platform of AGENT_PLATFORMS) {

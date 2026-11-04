@@ -94,12 +94,11 @@ test("running container discovery validates tokens, de-duplicates shared runtime
     undefined,
     {
       getHostPort: async (_id, port) => port + 1000,
-      dockerExec: async (id, command) => {
-        reads.push(`${id}:${command}`);
-        if (command.includes("claude")) return ` ${token}\n`;
-        if (command.includes("codex")) return "invalid token";
-        if (command.includes("cursor")) throw new Error("unreadable");
-        return "";
+      readToken: async (id, agent) => {
+        reads.push(`${id}:${agent}`);
+        if (agent === "claude") return token;
+        if (agent === "cursor") throw new Error("unreadable");
+        return null;
       },
     },
   );
@@ -125,11 +124,12 @@ test("local and healthy Docker targets are emitted while another token read awai
     (target) => emitted.push(target.baseUrl),
     {
       getHostPort: async (_id, port) => port + 1000,
-      dockerExec: async (_id, command, timeoutMs, _redact, signal) => {
-        requests.push(timeoutMs!);
+      readToken: async (_id, agent, options) => {
+        const signal = options?.signal;
+        requests.push(options?.timeoutMs ?? 0);
         expect(signal).toBeDefined();
-        expect(timeoutMs).toBe(3000);
-        if (command.includes("claude")) {
+        expect(options?.timeoutMs).toBe(3000);
+        if (agent === "claude") {
           // Emulate the command runner rejecting on the passed deadline.
           signal!.addEventListener("abort", () => failed.reject(signal!.reason), { once: true });
           reached.resolve();
@@ -170,7 +170,7 @@ test("a failed port lookup is retried with a fresh deadline; absence is not retr
           if (++calls === 1) throw new DOMException("lookup deadline", "TimeoutError");
           return 5097;
         },
-        dockerExec: async () => token,
+        readToken: async () => token,
       },
     );
     expect(calls).toBe(2);
@@ -199,7 +199,7 @@ test("exhausted container lookup retries emit only a content-free failure count"
           calls++;
           throw new Error("private daemon output");
         },
-        dockerExec: async () => token,
+        readToken: async () => token,
       },
     );
     expect(targets).toEqual([]);

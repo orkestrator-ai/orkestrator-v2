@@ -8,7 +8,6 @@ import {
 } from "@orkestrator/protocol/node/bridge-log-policy";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import health from "./routes/health.js";
 import config from "./routes/config.js";
 import session from "./routes/session.js";
@@ -34,6 +33,10 @@ import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failur
 import { serve } from "@hono/node-server";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
+import {
+  bridgeCredentialFromToken,
+  loadBridgeCredential,
+} from "@orkestrator/protocol/node/bridge-credential";
 
 const log = createLogger("bridge.claude");
 
@@ -61,14 +64,10 @@ app.onError((error, c) => {
 
 const BRIDGE_TOKEN_ENV = "CLAUDE_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
-// A missing or blank token env var falls back to a random token nobody holds:
-// the bridge stays fail-closed instead of fail-open. Same policy as codex-bridge.
-const configuredBridgeAuthToken = process.env[BRIDGE_TOKEN_ENV]?.trim();
-let bridgeAuthToken = configuredBridgeAuthToken || randomBytes(32).toString("base64url");
-// The token is bridge-local authentication material, not configuration for
-// SDK/CLI children. Capture it once and remove it before any later subprocess
-// can inherit the bridge credential through process.env.
-delete process.env[BRIDGE_TOKEN_ENV];
+// A missing or blank credential falls back to a token nobody holds, so the bridge
+// stays fail-closed, and it is removed from process.env here, before any later
+// subprocess can inherit it. Same policy as codex-bridge.
+let bridgeCredential = loadBridgeCredential(BRIDGE_TOKEN_ENV);
 // Every CLI this bridge spawns — turns and zero-turn probes alike — loads the
 // container's user settings, whose hooks feed the terminal-only
 // `/tmp/.claude-state` channel. A probe fires UserPromptSubmit and never
@@ -91,10 +90,7 @@ function isBridgeAuthEnabled(): boolean {
 }
 
 function tokenMatches(candidate: string | undefined): boolean {
-  if (!candidate) return false;
-  const expected = Buffer.from(bridgeAuthToken);
-  const actual = Buffer.from(candidate);
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  return bridgeCredential.matches(candidate);
 }
 
 function bearerToken(header: string | undefined): string | undefined {
@@ -284,7 +280,7 @@ export const __testing = {
       bridgeAuthEnabledOverrideForTesting = null;
       return;
     }
-    bridgeAuthToken = token;
+    bridgeCredential = bridgeCredentialFromToken(token);
     bridgeAuthEnabledOverrideForTesting = true;
   },
   startBridgeServerForTesting: startBridgeServer,

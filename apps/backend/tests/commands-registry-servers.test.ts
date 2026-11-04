@@ -141,6 +141,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"||q.url==="/global/auth-check"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url.split("?")[0]==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -244,6 +248,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/codex-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -254,7 +262,7 @@ case "$1" in
       # login; there is none to drop.
       *"delete login.tokens"*) exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
@@ -271,13 +279,15 @@ exit 0
         ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
-        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("/tmp/codex-bridge-token");
-        expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
+        // The token reached the script on stdin, never in docker's argv.
+        expect(execLog).not.toContain(first.authToken);
+        expect(await fs.readFile(`${logs.exec}.secrets`, "utf8")).toContain(first.authToken);
         expectKeepsPreviousLog(execLog, "/tmp/codex-bridge.log", "/tmp/codex-bridge.prev.log");
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
@@ -366,6 +376,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
         : > "$FAKE_CURSOR_DIR_MARKER" ;;
     esac
@@ -400,9 +414,9 @@ case "$1" in
         cat > "$FAKE_CURSOR_KEY_CAPTURE"
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     if [ -z "$token" ]; then
-      token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      token=$(sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     fi
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
@@ -430,7 +444,10 @@ exit 0
         expect(execLog).not.toContain("/opt/acp-bridge/dist/index.js --provider=cursor");
         expect(execLog).not.toContain("export ACP_PROVIDER=");
         expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
-        expect(execLog).toContain("export CURSOR_BRIDGE_TOKEN=");
+        expect(execLog).not.toContain(started.authToken);
+        expect(await fs.readFile(`${logs.exec}.secrets`, "utf8")).toContain(
+          `CURSOR_BRIDGE_TOKEN='${started.authToken}'`,
+        );
         expectKeepsPreviousLog(execLog, "/tmp/cursor-bridge.log", "/tmp/cursor-bridge.prev.log");
         expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
         expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
@@ -571,6 +588,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"/home/node/.grok/auth.json"*)
         cat > "$FAKE_GROK_IMPORTED_AUTH"
         exit 0 ;;
@@ -600,9 +621,9 @@ case "$1" in
     esac
     # A cold launch must see sync's access-only credential first.
     test -s "$FAKE_GROK_IMPORTED_AUTH" || exit 91
-    token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     if [ -z "$token" ]; then
-      token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      token=$(sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     fi
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
@@ -636,7 +657,7 @@ exit 0
         ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
-        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
 
         expect(JSON.parse(await fs.readFile(importedAuth, "utf8")).live).toEqual({
@@ -702,7 +723,10 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain(`export ACP_PROVIDER=${provider}`);
-        expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
+        expect(execLog).not.toContain(first.authToken);
+        expect(await fs.readFile(`${logs.exec}.secrets`, "utf8")).toContain(
+          `ACP_BRIDGE_TOKEN='${first.authToken}'`,
+        );
         expectKeepsPreviousLog(
           execLog,
           `/tmp/${provider}-acp-bridge.log`,
@@ -829,6 +853,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"/home/node/.pi/agent/auth.json"*)
         cat >> "$FAKE_PI_IMPORTED_AUTH"
         printf '\n' >> "$FAKE_PI_IMPORTED_AUTH"
@@ -847,7 +875,7 @@ case "$1" in
     esac
     # A cold launch must see sync's access-only login first.
     test -s "$FAKE_PI_IMPORTED_AUTH" || exit 91
-    token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
@@ -865,7 +893,7 @@ exit 0
         ])) as [ServerStart, ServerStart];
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
-        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
 
         await expect(
@@ -989,6 +1017,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"/home/node/.pi/agent/auth.json"*)
         cat > /dev/null
         : > "$FAKE_PI_SYNC_STARTED"
@@ -1006,7 +1038,7 @@ case "$1" in
         exit 0 ;;
     esac
     printf 'launch\\n' >> "$FAKE_PI_ORDER"
-    token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
@@ -1097,6 +1129,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
         : > "$FAKE_CURSOR_DIR_MARKER" ;;
     esac
@@ -1120,7 +1156,7 @@ case "$1" in
       *"rm -f /tmp/orkestrator-ai/cursor-sdk-auth.json"*)
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
@@ -1232,6 +1268,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
         : > "$FAKE_CURSOR_DIR_MARKER" ;;
     esac
@@ -1254,7 +1294,7 @@ case "$1" in
       *"rm -f /tmp/orkestrator-ai/cursor-sdk-auth.json"*)
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
@@ -1384,13 +1424,17 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/orkestrator-claude-account"*) cat '${marker}' 2>/dev/null || true; exit 0 ;;
       *"printf '%s' '${accountId}'"*) printf '%s' '${accountId}' > '${marker}'; exit 0 ;;
       *"cat /tmp/claude-bridge-token"*) cat '${token}' 2>/dev/null || true; exit 0 ;;
       *"cat /tmp/orkestrator-ai/claude-github-env-fingerprint"*) printf '%s' '${commandTesting.CLAUDE_GITHUB_ENV_FINGERPRINT}'; exit 0 ;;
     esac
     if [ "$2" = "-d" ]; then
-      value=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      value=$(sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
       printf '%s' "$value" > '${token}'
       : > '${healthy}'
     fi
@@ -1460,6 +1504,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     # Only the bridge launch starts a server; credential syncs run first.
     case "$*" in *setsid*) ;; *) exit 0 ;; esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"||q.url==="/global/auth-check"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
@@ -1476,7 +1524,7 @@ exit 0
             context,
           )) as { hostPort: number; wasRunning: boolean; authToken: string };
           expect(result).toMatchObject({ hostPort, wasRunning: false });
-          expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
@@ -1487,7 +1535,10 @@ exit 0
           expect(execLog).toContain("cd /workspace");
           expect(execLog).not.toContain("export CWD=");
           expect(execLog).toContain("/tmp/claude-bridge-token");
-          expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
+          expect(execLog).not.toContain(result.authToken);
+          expect(await fs.readFile(`${logs.exec}.secrets`, "utf8")).toContain(
+            `CLAUDE_BRIDGE_TOKEN='${result.authToken}'`,
+          );
           expect(execLog).toContain("export ORKESTRATOR_LOG_FORMAT=json");
           expect(execLog).toContain("export ORKESTRATOR_LOG_LEVEL='warn,bridge=debug'");
           expect(execLog).toContain("export ORKESTRATOR_BRIDGE_DEBUG=0");
@@ -1584,6 +1635,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"/home/node/.local/share/opencode/auth.json"*)
         cat >> "$FAKE_OPENCODE_IMPORTED_AUTH"
         printf '\n' >> "$FAKE_OPENCODE_IMPORTED_AUTH"
@@ -1598,7 +1653,7 @@ case "$1" in
         rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE" "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
     printf '%s' "$FAKE_OPENCODE_PLUGIN_FINGERPRINT" > "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
@@ -1617,7 +1672,7 @@ exit 0
             context,
           )) as { hostPort: number; wasRunning: boolean; authToken: string };
           expect(first).toMatchObject({ hostPort, wasRunning: false });
-          expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
           // An authenticated server from a build before the GitHub environment
           // hook existed must also restart instead of being reused indefinitely.
@@ -1769,6 +1824,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/claude-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -1780,7 +1839,7 @@ case "$1" in
         exit 0 ;;
     esac
     if [ "$2" = "-d" ]; then
-      token=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+      token=$(sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
       printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
       : > "$FAKE_BRIDGE_HEALTHY_FILE"
     fi
@@ -1883,6 +1942,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/claude-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -1890,7 +1953,7 @@ case "$1" in
         rm -f "$FAKE_BRIDGE_HEALTHY_FILE"
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CLAUDE_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
     : > "$FAKE_BRIDGE_HEALTHY_FILE"
@@ -1914,7 +1977,7 @@ exit 0
         )) as { hostPort: number; wasRunning: boolean; authToken: string };
 
         expect(result).toMatchObject({ hostPort, wasRunning: false });
-        expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         expect(result.authToken).not.toBe(staleToken);
         expect(readTestCredential(liveTokenFile)).toBe(result.authToken);
         expect(await fs.readFile(logs.exec, "utf8")).toContain(
@@ -1965,6 +2028,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     case "$*" in
       *"cat /tmp/claude-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE"
@@ -2025,6 +2092,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
     printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
     exit 0 ;;
@@ -2098,6 +2169,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/codex-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -2105,7 +2180,7 @@ case "$1" in
         : > "$FAKE_BRIDGE_KILLED_FILE"
         exit 0 ;;
     esac
-    token=$(printf '%s' "$*" | sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    token=$(sed -n "s/.*CODEX_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p" "$FAKE_DOCKER_EXEC_LOG.secrets" 2>/dev/null)
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     rm -f "$FAKE_BRIDGE_KILLED_FILE"
     exit 0 ;;
@@ -2126,7 +2201,7 @@ exit 0
           captured.restore();
 
           expect(result).toMatchObject({ hostPort, wasRunning: false });
-          expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
           expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
           expect(launches.map((record) => record.fields)).toEqual([
             { provider: "codex", containerPort: 4098 },
@@ -2183,6 +2258,10 @@ case "$1" in
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
     case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
+    case "$*" in
       *"cat /tmp/codex-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
@@ -2233,14 +2312,18 @@ exit 0
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
 
-    // The start exec fails without writing anything, so the only material left
-    // for an error message is the argv that carries the token.
+    // The start exec fails after the token was delivered on stdin: its argv, the
+    // only material left for an error message, must not carry it.
     const dockerScript = `#!/bin/sh
 case "$1" in
   inspect) printf 'running\\n'; exit 0 ;;
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     case "$*" in
       *"cat /tmp/codex-bridge-token"*) exit 0 ;;
       # A host without a Codex login (CI) first drops any imported container
@@ -2266,10 +2349,11 @@ exit 0
 
         expect(failure).toBeInstanceOf(Error);
         const execLog = await fs.readFile(logs.exec, "utf8");
-        const token = execLog.match(/CODEX_BRIDGE_TOKEN='([^']+)'/)?.[1];
-        expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        const secrets = await fs.readFile(`${logs.exec}.secrets`, "utf8");
+        const token = secrets.match(/CODEX_BRIDGE_TOKEN='([^']+)'/)?.[1];
+        expect(token).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
+        expect(execLog).not.toContain(token!);
         expect(failure!.message).not.toContain(token!);
-        expect(failure!.message).toContain("[REDACTED]");
       });
     } finally {
       if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
@@ -2330,6 +2414,10 @@ case "$1" in
   port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
   exec)
     printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"/run/orkestrator-bridge/"*) exit 0 ;;
+      *"cat > /tmp/.orkestrator-start-"*) cat > "$FAKE_DOCKER_EXEC_LOG.secrets"; exit 0 ;;
+    esac
     case "$*" in
       *"cat /tmp/cursor-bridge-token"*|*"cat /tmp/grok-acp-bridge-token"*|*"cat /tmp/pi-bridge-token"*)
         printf '%s' "$FAKE_BRIDGE_TOKEN"; exit 0 ;;

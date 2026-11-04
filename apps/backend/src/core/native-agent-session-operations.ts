@@ -1,3 +1,4 @@
+import { BridgePolicyWideningRefusedError } from "./agent-provider-contract.js";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionResolution,
@@ -61,6 +62,8 @@ export interface NativeAgentSessionOperationsHost {
   ): Promise<ResolvedProjectionSession | null>;
   /** Resolve a provider, starting its bridge if needed. */
   provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider>;
+  /** Stop an idle bridge so its next start can apply a wider policy; throws if it has live work. */
+  replaceBridgeForWiderPolicy(input: NativeAgentProjectionInput): Promise<void>;
   /** Resolve a provider for observation only, never starting a bridge. */
   observeProvider(
     input: EnsureNativeAgentSessionInput,
@@ -313,7 +316,7 @@ export class NativeAgentSessionOperations {
       executionPolicy: undefined,
       policy: undefined,
     });
-    const provider = await this.host.provider(trustedInput);
+    let provider = await this.host.provider(trustedInput);
     if (!provider.resumeSession) {
       throw new Error(`${input.agent} does not support session resume`);
     }
@@ -344,10 +347,19 @@ export class NativeAgentSessionOperations {
     try {
       resumedId = await resumeAndAdopt();
     } catch (error) {
-      // A last-owner close can take the fence between the reopen and the
-      // adoption, which then finds the session missing. That close has
-      // finished by then, so one more reopen recovers the conversation.
-      if (!(error instanceof NativeAgentProviderSessionMissingError)) throw error;
+      if (error instanceof BridgePolicyWideningRefusedError) {
+        // The user widened the environment's policy and a bridge still holds this
+        // conversation live. Only a restart applies a wider policy, so this backend
+        // does it, and a second refusal is not retried.
+        await this.host.replaceBridgeForWiderPolicy(input);
+        provider = await this.host.provider(trustedInput);
+        log.info("session.bridge-replaced-for-policy", { agent: input.agent });
+      } else if (!(error instanceof NativeAgentProviderSessionMissingError)) {
+        // A last-owner close can take the fence between the reopen and the
+        // adoption, which then finds the session missing. That close has
+        // finished by then, so one more reopen recovers the conversation.
+        throw error;
+      }
       resumedId = await resumeAndAdopt();
     }
     const replacedId = existing?.providerSessionId;

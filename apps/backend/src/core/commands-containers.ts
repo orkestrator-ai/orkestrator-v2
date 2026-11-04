@@ -9,7 +9,6 @@ import { persistentStateExports } from "./container-state-layout.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
@@ -59,6 +58,14 @@ import {
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
 } from "./agent-credential-files.js";
 import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError } from "./local-server-runtime.js";
+import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
+import {
+  containerBridgeLaunch,
+  launchContainerScript,
+  readContainerBridgeToken,
+  type ContainerCredentialMode,
+  type ContainerScriptLaunch,
+} from "./container-bridge-credential.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
@@ -76,7 +83,6 @@ import {
 } from "./commands-project-files.js";
 import { dockerExec } from "./commands-container-exec.js";
 import {
-  dockerExecDetached,
   checkHttpHealth,
   isHttpServerReachable,
   waitForHealth,
@@ -757,7 +763,7 @@ export async function startContainerServer(
   port: number,
   processName: LocalServerKind,
   command: string,
-  redactValues?: ReadonlyArray<string | null | undefined>,
+  launch?: ContainerScriptLaunch,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
   assertContainerNotDraining(containerId);
   if (!(await isContainerRunning(containerId))) {
@@ -769,16 +775,14 @@ export async function startContainerServer(
   // Launching into a container Docker restarted since readiness was checked
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
-  await dockerExecDetached(containerId, command, redactValues);
+  await launchContainerScript(containerId, command, launch);
   dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
-    const log = await dockerExec(
-      containerId,
-      boundedTailCommand(logFile),
-      undefined,
-      redactValues,
-    ).then(boundDiagnosticTail, () => "");
+    const log = await dockerExec(containerId, boundedTailCommand(logFile), undefined, [
+      ...Object.values(launch?.secrets ?? {}),
+      launch?.rootCredential?.token,
+    ]).then(boundDiagnosticTail, () => "");
     throw new Error(
       `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
     );
@@ -861,8 +865,8 @@ export async function startContainerOpenCodeServer(
   }
 
   await ensureCurrentBootReady(containerId);
-  const authToken = randomBytes(32).toString("base64url");
-  await dockerExecDetached(
+  const authToken = mintBridgeToken();
+  await launchContainerScript(
     containerId,
     `
     set -e
@@ -873,16 +877,15 @@ export async function startContainerOpenCodeServer(
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)} > ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
     chmod 600 ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT)} > ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}
-    printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
+    printf '%s' "$OPENCODE_SERVER_PASSWORD" > /tmp/opencode-server-password
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true
     unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
     export OPENCODE_SERVER_USERNAME=opencode
-    export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     ${persistentStateExports("opencode")}
     ${boundedBackgroundLaunch(`opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0`, "/tmp/opencode-serve.log")}
   `,
-    [authToken],
+    { secrets: { OPENCODE_SERVER_PASSWORD: authToken } },
   );
   dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
   await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
@@ -910,9 +913,9 @@ export async function startContainerOpenCodeServer(
 /**
  * Starts the in-container Claude bridge behind a per-container auth token, with
  * the same persistence and recovery contract as `start_codex_server`: the token
- * lives in `/tmp/claude-bridge-token` so later starts can return it, and a
- * healthy bridge without a readable token (from before per-process
- * authentication) is replaced rather than served unauthenticated.
+ * stays in the container (`container-bridge-credential.ts`) so later starts can
+ * return it, and a healthy bridge without a readable token (from before
+ * per-process authentication) is replaced rather than served unauthenticated.
  *
  * `backgroundCommandLimitHours` only reaches a bridge this call starts: a
  * running bridge is not replaced for it, since that would stop the background
@@ -923,17 +926,13 @@ export async function startContainerClaudeServer(
   agentToolConnection?: AgentToolConnection,
   debugLogging = false,
   backgroundCommandLimitHours?: number,
+  credentialMode: ContainerCredentialMode = "token-file",
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
   const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(backgroundCommandLimitHours);
   const expectedAgentToolsFingerprint = agentToolConnection
     ? agentToolConnectionFingerprint(agentToolConnection)
     : null;
-  const readPersistedToken = async (): Promise<string | null> => {
-    const persistedToken = (
-      await dockerExec(containerId, "cat /tmp/claude-bridge-token 2>/dev/null || true")
-    ).trim();
-    return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
-  };
+  const readPersistedToken = () => readContainerBridgeToken(containerId, "claude");
   const hasCurrentAgentTools = async (): Promise<boolean> => {
     if (!expectedAgentToolsFingerprint) return true;
     const persisted = (
@@ -959,7 +958,8 @@ export async function startContainerClaudeServer(
     wasRunning: boolean;
     authToken: string;
   }> => {
-    const authToken = randomBytes(32).toString("base64url");
+    const credential = containerBridgeLaunch("claude", credentialMode);
+    const authToken = credential.token;
     const started = await startContainerServer(
       containerId,
       CLAUDE_BRIDGE_PORT,
@@ -969,7 +969,7 @@ export async function startContainerClaudeServer(
       ${keepPreviousLogCommand("/tmp/claude-bridge.log")}
       umask 077
       mkdir -p /tmp/orkestrator-ai
-      printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
+      ${credential.script}
       printf '%s' ${quoteShell(CLAUDE_GITHUB_ENV_FINGERPRINT)} > ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}
       ${
         expectedAgentToolsFingerprint
@@ -988,19 +988,23 @@ export async function startContainerClaudeServer(
       unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
-      export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
       export ORKESTRATOR_BRIDGE_DEBUG=${debugLogging ? "1" : "0"}
       ${bridgeLogEnvironmentExports()}
       ${bashMaxTimeout ? `export ${CLAUDE_BASH_MAX_TIMEOUT_ENV}=${quoteShell(bashMaxTimeout)}` : ""}
       ${
         agentToolConnection
-          ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
-      export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
+          ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}`
           : ""
       }
-      ${boundedBackgroundLaunch("bun /opt/claude-bridge/dist/index.js", "/tmp/claude-bridge.log")}
+      ${boundedBackgroundLaunch(`${credential.bun} /opt/claude-bridge/dist/index.js`, "/tmp/claude-bridge.log")}
     `,
-      [authToken, agentToolConnection?.token],
+      {
+        ...credential.launch,
+        secrets: {
+          ...credential.launch.secrets,
+          [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: agentToolConnection?.token,
+        },
+      },
     );
     if (!started.wasRunning) {
       await waitForHealth(

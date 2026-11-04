@@ -19,6 +19,8 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
+  /** A container bridge's token was read from its `node`-readable `/tmp` file. */
+  "bridge-credential.token-file",
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
   "slash-catalogue.outdated-bridge",
   /** A bridge without `POST /session/:id/close` got the restart notice. */

@@ -8,6 +8,7 @@
  * re-run in one that has already imported it.
  */
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +57,44 @@ describe("Cursor bridge token", () => {
         parent: null,
         child: "",
         usesToken: true,
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("given a verifier, holds no token: what a same-uid reader finds is refused", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ork-h4-token-env-"));
+    const verifier = createHash("sha256").update(PROBE_TOKEN).digest("hex");
+    const verifierProbe = `
+const mod = await import(${JSON.stringify(moduleUrl)});
+const accepts = async (token) => mod.authenticate({ authorization: "Bearer " + token });
+process.stdout.write(JSON.stringify({
+  env: process.env.CURSOR_BRIDGE_TOKEN_SHA256 ?? null,
+  token: await accepts("${PROBE_TOKEN}"),
+  verifier: await accepts("${verifier}"),
+}));
+process.exit(0);
+`;
+    try {
+      const result = Bun.spawnSync([process.execPath, "-e", verifierProbe], {
+        cwd,
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: cwd,
+          NODE_ENV: "test",
+          CURSOR_BRIDGE_TOKEN_SHA256: verifier,
+        },
+      });
+      const stdout = result.stdout.toString();
+      expect({
+        exitCode: result.exitCode,
+        stderr: result.exitCode === 0 ? "" : result.stderr.toString(),
+      }).toEqual({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(stdout.slice(stdout.lastIndexOf("{")))).toEqual({
+        env: null,
+        token: true,
+        verifier: false,
       });
     } finally {
       rmSync(cwd, { recursive: true, force: true });

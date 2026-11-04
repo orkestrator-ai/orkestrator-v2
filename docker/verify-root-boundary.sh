@@ -25,13 +25,11 @@ export PATH
 #   /usr/local/share/npm-global               `npm install -g` as node
 #   /ms-playwright                            Playwright browsers; a project
 #                                             pinning another version adds one
-#   /opt/*-bridge                             bridges, run only as node
 #   /run/orkestrator                          node's boot status and records
 #   /tmp, /var/tmp, /run/lock                 sticky world-writable
 NODE_WRITABLE=(
     /home/node /workspace /commandhistory
     /usr/local/share/npm-global /ms-playwright
-    /opt/claude-bridge /opt/codex-bridge /opt/cursor-bridge /opt/pi-bridge /opt/acp-bridge
     /run/orkestrator /tmp /var/tmp /run/lock
 )
 # Directories on a root PATH: the backend's fixed PATH for root execs, the

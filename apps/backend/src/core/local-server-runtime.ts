@@ -48,8 +48,12 @@ export function retryableBridgeStartupError(
   return Object.assign(new Error(message), { retryable: true as const, retryAfterMs });
 }
 
-/** Shape of a base64url-encoded 32-byte bridge token persisted in the container. */
-export const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/**
+ * Shape of a bridge token read back from a container: 32 base64url-encoded
+ * bytes, `okb_` prefixed. The unprefixed form is a bridge an older backend
+ * started, still running (version-compatibility.md).
+ */
+export const BRIDGE_TOKEN_PATTERN = /^(?:okb_)?[A-Za-z0-9_-]{43}$/;
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process
 // group before escalating the bridge itself.

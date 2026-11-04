@@ -172,6 +172,7 @@ import {
   PromptRejectedError,
   type ProviderMcpConfigEvidenceRead,
 } from "./agent-provider-contract.js";
+import { localServerStopCommandName } from "./local-server-runtime.js";
 import { claudeReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import { type AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -866,6 +867,7 @@ export class NativeAgentService {
       assertProjectionInput: (input) => this.assertProjectionInput(input),
       resolveProjectionSession: (input) => this.resolveProjectionSession(input),
       provider: (input) => this.provider(input),
+      replaceBridgeForWiderPolicy: (input) => this.replaceBridgeForWiderPolicy(input),
       observeProvider: (input) => this.observeProvider(input),
       trustedSessionInput: (input) => this.trustedSessionInput(input),
       adoptSession: (input) => this.adoptSession(input),
@@ -917,6 +919,28 @@ export class NativeAgentService {
   /** Resolve a provider, starting its bridge if needed. */
   private provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
     return this.providerRegistry.resolve(input);
+  }
+
+  /**
+   * Stop a bridge so the provider resolved next starts a fresh one. A bridge
+   * with live work keeps it: the user's change to one conversation must not end
+   * another's turn, so the resume fails with what to do instead.
+   */
+  private async replaceBridgeForWiderPolicy(input: NativeAgentProjectionInput): Promise<void> {
+    if (await this.hasObservedLiveWork(input.environmentId, input.agent)) {
+      throw new Error(
+        `The wider execution policy cannot apply while a ${input.agent} turn is running in this environment. Resume this conversation again once it has finished.`,
+      );
+    }
+    const environment = await this.assertEnvironmentLive(input.environmentId);
+    if (environment.environmentType === "local") {
+      await this.invoke(localServerStopCommandName(input.agent), {
+        environmentId: environment.id,
+      });
+      return;
+    }
+    if (!environment.containerId) throw new Error("Native agent container is unavailable");
+    await this.invoke(`stop_${input.agent}_server`, { containerId: environment.containerId });
   }
 
   /** Resolve a provider for observation only, never starting a bridge. */

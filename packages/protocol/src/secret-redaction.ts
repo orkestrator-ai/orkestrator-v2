@@ -39,6 +39,9 @@ const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
     pattern: /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g,
     replacement: "[redacted]",
   },
+  // Orkestrator's own bridge and agent-tools tokens. A token cut by `tail -c`
+  // may have lost its prefix, and no shape rule can catch that.
+  { pattern: /\bok[ab]_[A-Za-z0-9_-]{16,}/g, replacement: "[redacted]" },
   { pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: "[redacted]" },
   { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g, replacement: "[redacted]" },
   { pattern: /\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}/g, replacement: "[redacted]" },

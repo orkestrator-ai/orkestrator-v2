@@ -4,6 +4,8 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
   "native-agent": {
     description: "Native agent sessions and what the backend reads from their bridges.",
     events: {
+      "session.bridge-replaced-for-policy":
+        "An idle bridge was stopped so a resume could apply the user's wider execution policy.",
       "catalogue.outdated-bridge":
         "A bridge predates the command catalogue, so its commands stay unavailable.",
       "compact.instructions-ignored":

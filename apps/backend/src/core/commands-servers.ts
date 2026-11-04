@@ -70,11 +70,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
-import {
-  BRIDGE_TOKEN_PATTERN,
-  retryableBridgeStartupError,
-  LOCAL_SERVER_KINDS,
-} from "./local-server-runtime.js";
+import { retryableBridgeStartupError, LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
 import {
   resolveCodexBinary,
   resolveOpenCodeBinary,
@@ -94,7 +90,12 @@ import {
   deleteMergedEnvironmentRemoteBranch,
 } from "./commands-environment.js";
 import { getHostPort } from "./commands-container-exec.js";
-import { dockerExec } from "./commands-container-exec.js";
+import {
+  bridgeTokenVerifier,
+  bridgeTokenVerifierEnv,
+  mintBridgeToken,
+} from "@orkestrator/protocol/node/bridge-credential";
+import { readContainerBridgeToken } from "./container-bridge-credential.js";
 import { cleanupErrorMessage } from "./commands-error-text.js";
 import {
   applyClaudeHostCredentialEnvironment,
@@ -459,20 +460,14 @@ export function asLocalServerKind(value: unknown, field: string): LocalServerKin
   return value as LocalServerKind;
 }
 
-/** Where each container bridge publishes its port and its renderer credential. */
-export const CONTAINER_BRIDGE_PEEK: Record<
-  LocalServerKind,
-  { containerPort: number; tokenFile: string }
-> = {
-  claude: { containerPort: CLAUDE_BRIDGE_PORT, tokenFile: "/tmp/claude-bridge-token" },
-  codex: { containerPort: CODEX_BRIDGE_PORT, tokenFile: "/tmp/codex-bridge-token" },
-  cursor: { containerPort: CURSOR_BRIDGE_PORT, tokenFile: "/tmp/cursor-bridge-token" },
-  grok: { containerPort: GROK_ACP_BRIDGE_PORT, tokenFile: "/tmp/grok-acp-bridge-token" },
-  pi: { containerPort: PI_BRIDGE_PORT, tokenFile: "/tmp/pi-bridge-token" },
-  opencode: {
-    containerPort: OPENCODE_SERVER_PORT,
-    tokenFile: "/tmp/opencode-server-password",
-  },
+/** Where each container bridge publishes its port. */
+export const CONTAINER_BRIDGE_PORTS: Record<LocalServerKind, number> = {
+  claude: CLAUDE_BRIDGE_PORT,
+  codex: CODEX_BRIDGE_PORT,
+  cursor: CURSOR_BRIDGE_PORT,
+  grok: GROK_ACP_BRIDGE_PORT,
+  pi: PI_BRIDGE_PORT,
+  opencode: OPENCODE_SERVER_PORT,
 };
 
 /**
@@ -548,11 +543,10 @@ export async function peekContainerAgentBridge(
   containerId: string,
   kind: LocalServerKind,
 ): Promise<{ hostPort: number; authToken: string } | null> {
-  const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[kind];
-  const hostPort = await getHostPort(containerId, containerPort);
+  const hostPort = await getHostPort(containerId, CONTAINER_BRIDGE_PORTS[kind]);
   if (!hostPort) return null;
-  const authToken = (await dockerExec(containerId, `cat ${tokenFile} 2>/dev/null || true`)).trim();
-  if (!BRIDGE_TOKEN_PATTERN.test(authToken)) return null;
+  const authToken = await readContainerBridgeToken(containerId, kind);
+  if (!authToken) return null;
   const healthy = await checkHttpHealth(
     hostPort,
     "/global/health",
@@ -1242,21 +1236,27 @@ async function startLocalServerAttempt(
     env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = agentToolConnection.token;
   }
 
-  const bridgeToken = randomBytes(32).toString("base64url");
-  env[
-    kind === "codex"
-      ? "CODEX_BRIDGE_TOKEN"
-      : kind === "claude"
-        ? "CLAUDE_BRIDGE_TOKEN"
-        : kind === "opencode"
-          ? "OPENCODE_SERVER_PASSWORD"
-          : kind === "pi"
-            ? "PI_BRIDGE_TOKEN"
-            : kind === "cursor"
-              ? "CURSOR_BRIDGE_TOKEN"
-              : "ACP_BRIDGE_TOKEN"
-  ] = bridgeToken;
-  if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
+  const bridgeToken = mintBridgeToken();
+  if (kind === "opencode") {
+    env.OPENCODE_SERVER_PASSWORD = bridgeToken;
+    env.OPENCODE_SERVER_USERNAME = "opencode";
+  } else {
+    // A local bridge is this backend's own child and build, so it always takes
+    // a verifier; the token stays in this process.
+    env[
+      bridgeTokenVerifierEnv(
+        kind === "codex"
+          ? "CODEX_BRIDGE_TOKEN"
+          : kind === "claude"
+            ? "CLAUDE_BRIDGE_TOKEN"
+            : kind === "pi"
+              ? "PI_BRIDGE_TOKEN"
+              : kind === "cursor"
+                ? "CURSOR_BRIDGE_TOKEN"
+                : "ACP_BRIDGE_TOKEN",
+      )
+    ] = bridgeTokenVerifier(bridgeToken);
+  }
   localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 
   const args =

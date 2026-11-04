@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { BridgePolicyWideningRefusedError } from "./agent-provider-contract.js";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS } from "@orkestrator/protocol/native-agent";
 import {
@@ -387,9 +388,10 @@ describe("HTTP bridge provider", () => {
             : Response.json(refusal, { status: 403 }),
         connection,
       );
-      await expect(provider.resumeSession!("session-1", undefined, policy)).rejects.toThrow(
-        /HTTP 403\): Execution policy can only be narrowed/,
-      );
+      const refused = provider.resumeSession!("session-1", undefined, policy);
+      await expect(refused).rejects.toThrow(/HTTP 403\): Execution policy can only be narrowed/);
+      // The session operations restart the bridge on this type, and only this type.
+      await expect(refused).rejects.toBeInstanceOf(BridgePolicyWideningRefusedError);
     }
   });
 

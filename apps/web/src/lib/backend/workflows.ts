@@ -680,13 +680,21 @@ export async function stopNativeAgentSuborks(input: {
 
 /** One subork's stored transcript. Reading it touches no provider. */
 export type NativeAgentSuborkTranscript =
-  | { status: "found"; messages: unknown[]; agent?: string }
+  | {
+      status: "found";
+      messages: unknown[];
+      agent?: string;
+      startIndex: number;
+      messageCount: number;
+      truncated?: true;
+    }
   | { status: "missing" | "none" | "unavailable" };
 
 export async function getNativeAgentSuborkTranscript(input: {
   environmentId: string;
   batchId: string;
   suborkId: string;
+  fromIndex?: number;
 }): Promise<NativeAgentSuborkTranscript> {
   return invoke("native_agent_subork_transcript", input);
 }

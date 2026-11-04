@@ -33,9 +33,16 @@ export function registerSuborkCommands(register: CommandRegistrar): void {
   });
 
   register("native_agent_subork_transcript", async (args, context) => {
-    assertOnlyKeys(args, ["environmentId", "batchId", "suborkId"], "arguments");
+    assertOnlyKeys(args, ["environmentId", "batchId", "suborkId", "fromIndex"], "arguments");
     if (!context.suborks) throw new Error("Suborks are unavailable on this backend");
+    if (
+      args.fromIndex !== undefined &&
+      (!Number.isSafeInteger(args.fromIndex) || (args.fromIndex as number) < 0)
+    ) {
+      throw new Error("fromIndex must be a non-negative safe integer");
+    }
     return context.suborks.readTranscript({
+      ...(args.fromIndex !== undefined ? { fromIndex: args.fromIndex as number } : {}),
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       batchId: asNonBlankString(args.batchId, "batchId"),
       suborkId: asNonBlankString(args.suborkId, "suborkId"),

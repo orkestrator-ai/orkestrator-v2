@@ -3,6 +3,8 @@
  * MCP, targets run on the shared branch runner, and the answers reach the
  * caller's mailbox. No test here reaches a real provider.
  */
+import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands-context.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
@@ -471,6 +473,76 @@ describe("depth and limits", () => {
 });
 
 describe("stopping and lifecycle", () => {
+  test("Stop fences both an admission awaiting the catalogue and queued admissions", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<never[]>();
+    const w = await world({
+      service: {
+        modelCatalog: () => {
+          entered.resolve();
+          return release.promise;
+        },
+      },
+    });
+    const caller = {
+      environmentId: "e1",
+      projectId: "p1",
+      tabId: "agent",
+      agent: "claude" as const,
+    };
+    const input = { targets: [{ agent: "codex" }], prompt: "Look." };
+    const first = w.service.ask(caller, input).catch((error) => error);
+    await entered.promise;
+    const queued = w.service.ask(caller, input).catch((error) => error);
+    await w.service.stopForSession(SESSION_KEY);
+    release.resolve([]);
+    expect(await first).toBeInstanceOf(Error);
+    expect(await queued).toBeInstanceOf(Error);
+    expect(w.service.views(SESSION_KEY)).toBeUndefined();
+    expect(w.provider("codex").turns()).toHaveLength(0);
+    expect(await w.mail()).toHaveLength(0);
+  });
+
+  for (const transient of [false, true]) {
+    test(`Stop fences waiting delivery (transient failure: ${transient})`, async () => {
+      const w = await world();
+      const send = w.storage.sendAgentMail.bind(w.storage);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let attempts = 0;
+      w.storage.sendAgentMail = async (...args) => {
+        attempts++;
+        if (transient) throw new Error("temporary mail failure");
+        entered.resolve();
+        await release.promise;
+        return send(...args);
+      };
+      const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+      if (transient) {
+        for (let i = 0; i < 15 && attempts === 0; i++) {
+          await w.service.advanceNow(started.batchId);
+          await w.settleProviders();
+        }
+        expect(attempts).toBe(1);
+      } else {
+        const driving = w.drive(started.batchId);
+        await entered.promise;
+        await w.service.stopForSession(SESSION_KEY);
+        release.resolve();
+        await driving;
+      }
+      await w.service.stopForSession(SESSION_KEY);
+      const before = attempts;
+      w.storage.sendAgentMail = send;
+      await w.service.advanceNow(started.batchId);
+      await w.restart();
+      await w.service.advanceNow(started.batchId);
+      expect(attempts).toBe(before);
+      expect(await w.mail()).toHaveLength(0);
+      expect(w.service.views(SESSION_KEY)![0]!.delivery).toBe("not-needed");
+    });
+  }
+
   test("stopping the caller aborts running suborks and sends no mail", async () => {
     const w = await world({ script: () => () => new Promise<"idle">(() => {}) });
     w.provider("codex").runningPolls = 1_000_000;
@@ -504,6 +576,37 @@ describe("stopping and lifecycle", () => {
     expect(w.service.views(SESSION_KEY)![0]!.status).toBe("stopped");
     const session = [...w.provider("codex").sessions.values()][0];
     if (session) expect(session.aborted).toBeGreaterThan(0);
+  });
+
+  test("a late mail publication cannot be claimed after Stop or restart", async () => {
+    const w = await world();
+    const send = w.storage.sendAgentMail.bind(w.storage);
+    const published = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    w.storage.sendAgentMail = async (...args) => {
+      const message = await send(...args);
+      published.resolve();
+      await release.promise;
+      return message;
+    };
+    const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+    const driving = w.drive(started.batchId);
+    await published.promise;
+    const pending = (await w.storage.listPendingAgentMailInjects())[0]!;
+    expect(pending).toBeDefined();
+    await w.service.stopForSession(SESSION_KEY);
+    expect(
+      await w.storage.beginAgentMailInject(
+        pending.mailbox.mailboxId,
+        pending.message.id,
+        pending.mailbox.incarnationId,
+      ),
+    ).toBeNull();
+    release.resolve();
+    await driving;
+    await w.restart();
+    expect((await w.mail())[0]!.placement).toBe("expired");
+    expect(w.service.views(SESSION_KEY)![0]!.delivery).toBe("not-needed");
   });
 
   test("Stop withdraws answers that have not reached the caller yet", async () => {
@@ -649,6 +752,38 @@ describe("the transcript", () => {
     expect(row.status).toBe("finished");
     expect(row.line).toBe("I would ship it. Everything passed.");
     expect(w.announced.length).toBeGreaterThan(0);
+  });
+
+  test("the command pages beyond 4 MiB to reach the final answer", async () => {
+    const stored = [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: "assistant",
+        content: "x".repeat(900_000),
+      })),
+      { id: "answer", role: "assistant", content: "Final answer" },
+    ];
+    const w = await world({ messages: () => stored });
+    const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+    await w.drive(started.batchId);
+    const row = w.service.views(SESSION_KEY)![0]!.suborks[0]!;
+    const command = createCommandRegistry().get("native_agent_subork_transcript")!;
+    const context = { suborks: w.service } as unknown as CommandContext;
+    const input = { environmentId: "e1", batchId: started.batchId, suborkId: row.id };
+    const first = (await command(input, context)) as {
+      messages: unknown[];
+      startIndex: number;
+      truncated: boolean;
+    };
+    expect(first.truncated).toBe(true);
+    expect(first.messages.length).toBeGreaterThan(0);
+    const next = (await command({ ...input, fromIndex: first.messages.length }, context)) as {
+      messages: unknown[];
+      startIndex: number;
+    };
+    expect(next.startIndex).toBe(first.messages.length);
+    expect(next.messages.at(-1)).toEqual(stored.at(-1));
+    await expect(command({ ...input, fromIndex: -1 }, context)).rejects.toThrow("fromIndex");
   });
 
   test("a subork's transcript can be read from its row, without touching the provider", async () => {

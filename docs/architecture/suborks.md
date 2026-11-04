@@ -152,7 +152,7 @@ when it is advisory.
 | Started per session, ever | 64 | New targets fail on their own. It survives retention and restarts through each row's running total |
 | Prompt | 64 KiB | That target fails: name files rather than pasting them |
 | Response kept | 64 KiB | Kept from the start; the delivery marks the cut |
-| Answers in the mail | 30 KiB in total | Shared fairly, so short answers stay whole, and each cut is marked with where the full text is |
+| Answers in the mail | 30 KiB in total | Shared fairly after reserving frames, UTF-8 labels and cut notices within the 32 KiB mail limit; each cut points to the transcript |
 | Calls retained per session | 16 | The oldest finished call is removed with its transcripts |
 | Running time | 45 minutes | Fails that target; the runner's stall and idle bounds usually end it sooner |
 
@@ -170,7 +170,9 @@ own tab can be the caller on one.
 - **Stop.** Stopping the caller, the group's Stop button (a turn that has ended has
   no other Stop to press) and closing its tab all stop the session's running calls.
   The row is committed first, so a pass in flight is fenced by its next read or
-  save, and a turn it had just sent is aborted once more. A stopped call sends no
+  save, and a turn it had just sent is aborted once more. Pending admissions, including queued calls, are fenced when the caller stops.
+  Waiting deliveries are durably stopped, and mail publication and injection
+  check that fence. A stopped call sends no
   mail, and Stop withdraws answers that have not reached the caller yet. A sweep
   stops a call whose caller's session has gone.
 - **Environment.** A call whose environment stops resolves its running targets as
@@ -195,7 +197,10 @@ start of its response, or why it failed), its clock and a chevron. A row opens
 `SuborkTranscriptDialog`, which reads the stored transcript with
 `native_agent_subork_transcript`. Transcripts live in the content-addressed store a
 graph step's do, captured at most every 15 seconds and at the end, and reading them
-touches no provider.
+touches no provider. Reads are bounded to 4 MiB per page. The dialog labels partial
+transcripts and offers **Next page** and **Back to start**, using the stored
+message index; it retains only the current page. A message larger than the page
+limit is identified and can be skipped to reach later messages.
 
 The `/subork` row shows the person's words (`withSuborkRequestText`), not the carrier.
 

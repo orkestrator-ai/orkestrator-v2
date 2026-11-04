@@ -273,6 +273,7 @@ export class NativeAgentSuborkService {
   /** A running or undelivered call's caller; what the timers and the sweep walk. */
   private readonly live = new Map<string, string>();
   private readonly locks = new Map<string, Promise<void>>();
+  private readonly pendingAdmissions = new Map<string, Set<{ cancelled: boolean }>>();
   private readonly admissions = new Map<string, Promise<unknown>>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly passFailures = new Map<string, number>();
@@ -377,15 +378,21 @@ export class NativeAgentSuborkService {
       caller.agent,
       `env-${caller.environmentId}:${caller.tabId}`,
     );
+    const token = { cancelled: false };
+    const pending = this.pendingAdmissions.get(sessionKey) ?? new Set();
+    pending.add(token);
+    this.pendingAdmissions.set(sessionKey, pending);
     // Serialized per session: the limits are read and spent together.
     const previous = this.admissions.get(sessionKey) ?? Promise.resolve();
     const run = previous.then(
-      () => this.admit(caller, sessionKey, input),
-      () => this.admit(caller, sessionKey, input),
+      () => this.admit(caller, sessionKey, input, token),
+      () => this.admit(caller, sessionKey, input, token),
     );
     const settled = run.catch(() => undefined);
     this.admissions.set(sessionKey, settled);
     void settled.finally(() => {
+      pending.delete(token);
+      if (pending.size === 0) this.pendingAdmissions.delete(sessionKey);
       if (this.admissions.get(sessionKey) === settled) this.admissions.delete(sessionKey);
     });
     return run;
@@ -405,6 +412,7 @@ export class NativeAgentSuborkService {
     caller: SuborkCaller,
     sessionKey: string,
     input: SuborkAskInput,
+    token: { cancelled: boolean },
   ): Promise<SuborkAskResult> {
     if (this.stopped) throw new SuborkRefusedError("The backend is stopping. Try again shortly.");
     const { workflowResults, agentTools, rollout } = this.options;
@@ -520,6 +528,9 @@ export class NativeAgentSuborkService {
         status: "pending",
       });
     });
+    if (token.cancelled || this.stopped) {
+      throw new SuborkRefusedError("This subork request was stopped before it could start.");
+    }
     const nothingStarted = suborks.length === 0;
     const created = this.batches.createSuborkBatch({
       version: SUBORK_BATCH_VERSION,
@@ -540,7 +551,7 @@ export class NativeAgentSuborkService {
     });
     this.publish(created);
     await this.pruneRetained(sessionKey);
-    if (!nothingStarted) {
+    if (!nothingStarted && this.batches.getSuborkBatch(created.id)?.status === "running") {
       this.live.set(created.id, created.sessionKey);
       this.schedule(created.id, 0);
     }
@@ -598,12 +609,15 @@ export class NativeAgentSuborkService {
    * and a crash after this point does not resume them.
    */
   async stopForSession(sessionKey: string, batchId?: string): Promise<void> {
+    if (!batchId) {
+      for (const token of this.pendingAdmissions.get(sessionKey) ?? []) token.cancelled = true;
+    }
     const calls = this.bySession.get(sessionKey);
     if (!calls) return;
     const work: Promise<void>[] = [];
     for (const call of Array.from(calls.values())) {
       if (batchId && call.id !== batchId) continue;
-      if (call.status === "running") {
+      if (call.status === "running" || (call.status === "settled" && call.delivery === "waiting")) {
         const stopped = this.markStopped(call.id);
         if (stopped) work.push(this.afterStop(stopped));
       } else if (call.status === "settled" && call.delivery === "sent") {
@@ -616,7 +630,11 @@ export class NativeAgentSuborkService {
   private markStopped(batchId: string): PersistedSuborkBatch | null {
     const at = new Date(this.now()).toISOString();
     const stored = this.batches.updateSuborkBatch(batchId, (batch) => {
-      if (batch.status !== "running") return undefined;
+      if (
+        batch.status !== "running" &&
+        !(batch.status === "settled" && batch.delivery === "waiting")
+      )
+        return undefined;
       return {
         ...batch,
         status: "stopped",
@@ -900,6 +918,11 @@ export class NativeAgentSuborkService {
    * the rows; the answers themselves stay readable there either way.
    */
   private async deliver(batch: PersistedSuborkBatch): Promise<void> {
+    const canDeliver = () => {
+      const current = this.batches.getSuborkBatch(batch.id);
+      return current?.status === "settled" && current.delivery === "waiting";
+    };
+    if (!canDeliver()) return;
     const entries = deliveryEntries(batch);
     const finished = entries.filter((entry) => entry.status === "finished").length;
     const save = (
@@ -932,6 +955,7 @@ export class NativeAgentSuborkService {
           body: renderSuborkDeliveryBody(entries),
         },
         {
+          isStillWanted: canDeliver,
           notice: {
             resource: {
               kind: "subork",
@@ -944,6 +968,10 @@ export class NativeAgentSuborkService {
           },
         },
       );
+      if (!canDeliver()) {
+        await this.options.storage.discardAgentMail(batch.environmentId, batch.tabId, message.id);
+        return;
+      }
       if (message.placement === "bounced" || message.placement === "undeliverable") {
         save("failed", message.placementReason ?? message.placement, message.id);
       } else if (message.placement === "stored") {
@@ -952,6 +980,7 @@ export class NativeAgentSuborkService {
         save("sent", undefined, message.id);
       }
     } catch (error) {
+      if (!canDeliver()) return;
       if (error instanceof SuborkStorageError) throw new SuborkFenceError();
       const failures = (this.deliveryFailures.get(batch.id) ?? 0) + 1;
       this.deliveryFailures.set(batch.id, failures);

@@ -1792,6 +1792,8 @@ export class StorageService {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       nodePrefix?: string;
       nodeParent?: { id: string; threadId: string; hopCount: number };

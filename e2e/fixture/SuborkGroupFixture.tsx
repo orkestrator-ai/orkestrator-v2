@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { NativeAgentSuborkBatchView } from "@orkestrator/protocol/suborks";
+import { SuborkTranscriptDialog } from "../../apps/web/src/components/chat/SuborkTranscriptDialog";
 import { SuborkGroup } from "../../apps/web/src/components/chat/SuborkGroup";
 import { SuborkGroupActionsContext } from "../../apps/web/src/components/chat/subork-context";
 
@@ -48,6 +49,32 @@ const BATCH: NativeAgentSuborkBatchView = {
 
 /** The transcript group on the transcript's own background. `?settled=1` ends the call. */
 export function SuborkGroupFixture() {
+  const [paging] = useState(() => {
+    if (!new URLSearchParams(window.location.search).has("paging")) return false;
+    window.orkestrator = {
+      ...window.orkestrator,
+      invoke: async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
+        if (command !== "native_agent_subork_transcript") return null as T;
+        const startIndex = Number(args?.fromIndex ?? 0);
+        const text = startIndex === 0 ? "First transcript page" : "Final consultation answer";
+        return {
+          status: "found",
+          startIndex,
+          messageCount: 2,
+          truncated: startIndex === 0 ? true : undefined,
+          messages: [
+            {
+              id: `page-${startIndex}`,
+              role: "assistant",
+              content: text,
+              parts: [{ type: "text", content: text }],
+            },
+          ],
+        } as T;
+      },
+    } as typeof window.orkestrator;
+    return true;
+  });
   const settled = new URLSearchParams(window.location.search).get("settled") === "1";
   const [opened, setOpened] = useState<string>("");
   const [stopped, setStopped] = useState(false);
@@ -79,6 +106,15 @@ export function SuborkGroupFixture() {
         className="@container min-h-screen bg-background py-4 text-foreground"
       >
         <SuborkGroup batch={batch} expansionKey="subork-group-collapsed:fixture" />
+        {paging && opened && (
+          <SuborkTranscriptDialog
+            environmentId="fixture"
+            containerId={undefined}
+            batchId="batch-1"
+            subork={BATCH.suborks[0]!}
+            onClose={() => setOpened("")}
+          />
+        )}
         <output data-testid="opened-transcript" className="sr-only">
           {opened}
         </output>

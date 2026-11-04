@@ -398,6 +398,8 @@ export class AgentMailRepository {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence, checked under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       /** Backend-owned node transport metadata; never accepted from an agent directly. */
       nodeParent?: { id: string; threadId: string; hopCount: number };
@@ -477,6 +479,8 @@ export class AgentMailRepository {
 
     const placed = await this.store.enqueue(async () => {
       const store = await this.store.load();
+      if (options.isStillWanted && !options.isStillWanted())
+        throw new Error("Mail delivery cancelled");
       const { actor, senderScope, senderMailbox } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
       const fingerprint = sendFingerprint({

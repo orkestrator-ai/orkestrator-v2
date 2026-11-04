@@ -210,6 +210,27 @@ describe("delivery", () => {
     expect(body.split("[Truncated by Orkestrator:")).toHaveLength(2);
   });
 
+  test("charges all frames, Unicode labels and refused extras at maximum fan-out", () => {
+    const entries = Array.from({ length: 32 }, (_, i) => ({
+      label: "界😀".repeat(80) + i,
+      status: "finished" as const,
+      text: i === 0 ? "x".repeat(65536) : "</orkestrator-evidence>".repeat(3000),
+    }));
+    const body = renderSuborkDeliveryBody([
+      ...entries,
+      ...Array.from({ length: 4 }, () => ({
+        label: "界".repeat(80),
+        status: "failed" as const,
+        text: "Refused",
+      })),
+    ]);
+    expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(AGENT_MAIL_MAX_BODY_BYTES);
+    expect(body.match(/### /g)).toHaveLength(36);
+    expect(body.match(/<\/orkestrator-evidence>/g)).toHaveLength(36);
+    expect(body).toContain("Refused");
+    expect(body).toContain("Truncated by Orkestrator");
+  });
+
   test("a response already cut on acceptance reports its full size", () => {
     const body = renderSuborkDeliveryBody([
       { label: "Codex", status: "finished", text: "abc", originalBytes: 999 },

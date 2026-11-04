@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 test.describe("subork group", () => {
@@ -45,4 +46,35 @@ test.describe("subork group", () => {
     expect(fits).toBe(true);
     await expect(page.getByText("1 working · 1 done · 1 failed", { exact: true })).toBeVisible();
   });
+});
+
+test("the transcript identifies partial pages and reaches the final answer", async ({ page }) => {
+  await page.goto("/subork-group?paging=1");
+  await page.getByRole("button", { name: /Council r12: Opus review/ }).click();
+  await expect(page.getByRole("status")).toContainText("Partial transcript: messages 1–1 of 2");
+  await expect(page.getByText("First transcript page", { exact: true })).toBeVisible();
+  const preview = path.resolve("output/visual-previews");
+  const layout = test.info().project.name;
+  await page.screenshot({ path: path.join(preview, `subork-pagination-verified-${layout}.png`) });
+  // Reconstruct the prior dialog's missing paging strip for a visual comparison.
+  await page
+    .getByRole("dialog")
+    .getByRole("status", { includeHidden: true })
+    .evaluate((node) => {
+      (node as HTMLElement).style.display = "none";
+    });
+  await page.screenshot({
+    path: path.join(preview, `subork-pagination-before-reconstruction-verified-${layout}.png`),
+  });
+  await page
+    .getByRole("dialog")
+    .getByRole("status", { includeHidden: true })
+    .evaluate((node) => {
+      (node as HTMLElement).style.display = "";
+    });
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect(page.getByText("Final consultation answer", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
+  await page.getByRole("button", { name: "Back to start" }).click();
+  await expect(page.getByText("First transcript page", { exact: true })).toBeVisible();
 });

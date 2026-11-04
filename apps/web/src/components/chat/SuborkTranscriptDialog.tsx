@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { AGENT_PLATFORM_LABELS, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentSuborkView } from "@orkestrator/protocol/suborks";
@@ -36,13 +37,22 @@ function SuborkTranscriptBody({
 }) {
   const [read, setRead] = useState<NativeAgentSuborkTranscript | undefined>();
   const [error, setError] = useState<string | undefined>();
+  const [fromIndex, setFromIndex] = useState(0);
   const revision = subork.transcriptRevision;
   useEffect(() => {
     if (revision === undefined) return;
     let current = true;
-    void getNativeAgentSuborkTranscript({ environmentId, batchId, suborkId: subork.id }).then(
+    void getNativeAgentSuborkTranscript({
+      environmentId,
+      batchId,
+      suborkId: subork.id,
+      fromIndex,
+    }).then(
       (view) => {
-        if (current) setRead(view);
+        if (current) {
+          setRead(view);
+          setError(undefined);
+        }
       },
       (reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : String(reason));
@@ -51,7 +61,7 @@ function SuborkTranscriptBody({
     return () => {
       current = false;
     };
-  }, [environmentId, batchId, subork.id, revision]);
+  }, [environmentId, batchId, subork.id, revision, fromIndex]);
   const [fallbackCreatedAt] = useState(() => new Date().toISOString());
   const agent = subork.agent;
   const messages = useMemo(
@@ -90,6 +100,39 @@ function SuborkTranscriptBody({
       data-testid="subork-transcript"
       className="@container relative flex min-h-0 min-w-0 flex-1 flex-col"
     >
+      {read?.status === "found" && (read.truncated || fromIndex > 0) && (
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-sm" role="status">
+          <span>
+            Partial transcript: messages {read.startIndex + 1}–
+            {read.startIndex + read.messages.length} of {read.messageCount}.
+          </span>
+          {read.messages.length === 0 && (
+            <span>This message exceeds the page limit. Next page skips it.</span>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={fromIndex === 0}
+            onClick={() => setFromIndex(0)}
+          >
+            Back to start
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              read.startIndex !== fromIndex ||
+              read.startIndex + read.messages.length >= read.messageCount
+            }
+            onClick={() => setFromIndex(read.startIndex + Math.max(1, read.messages.length))}
+          >
+            Next page
+          </Button>
+        </div>
+      )}
+      {error && messages.length > 0 && (
+        <p role="alert">The transcript could not be read: {error}</p>
+      )}
       <VirtualizedMessageList
         messages={messages}
         computeItemKey={(_index, message) => message.id}

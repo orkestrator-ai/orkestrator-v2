@@ -24,8 +24,9 @@ export interface SidebarMotionPins {
  * `index.css` animates the panels' `flex-grow` while the group carries
  * `data-sidebar-width-animating`, so a drag (which never sets it) follows the
  * pointer. Content is held at a fixed width for the duration (see
- * `sidebarMotionPins`), and releasing it fires one `resize`: a native preview
- * follows its host only on a resize, and its host moved without changing size.
+ * `sidebarMotionPins`), and a frame after releasing it one `resize` fires: a
+ * native preview follows its host only on a resize, and its host moved without
+ * changing size.
  *
  * The full sidebar's width is kept in `uiStore.sidebarWidth` while it is
  * compact or hidden, so leaving either restores it, across reloads too.
@@ -45,6 +46,7 @@ export function useSidebarPanelMotion(input: {
   const previousMode = useRef(mode);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoreFrame = useRef(0);
+  const releaseFrame = useRef(0);
 
   const settle = useCallback(() => {
     if (settleTimer.current === null) return;
@@ -52,7 +54,12 @@ export function useSidebarPanelMotion(input: {
     settleTimer.current = null;
     setPins(null);
     if (previousMode.current === "hidden") setContentShown(false);
-    window.dispatchEvent(new Event("resize"));
+    // A frame on, once the release is laid out: a terminal's fit from this event
+    // and from its own ResizeObserver are then one fit, and one PTY resize.
+    cancelAnimationFrame(releaseFrame.current);
+    releaseFrame.current = requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
   }, []);
 
   useLayoutEffect(() => {
@@ -114,6 +121,7 @@ export function useSidebarPanelMotion(input: {
   useEffect(
     () => () => {
       cancelAnimationFrame(restoreFrame.current);
+      cancelAnimationFrame(releaseFrame.current);
       if (settleTimer.current !== null) clearTimeout(settleTimer.current);
       settleTimer.current = null;
     },

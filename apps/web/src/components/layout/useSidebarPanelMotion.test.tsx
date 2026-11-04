@@ -108,6 +108,27 @@ describe("animating a width change", () => {
     expect(resizes).toHaveBeenCalledTimes(1);
   });
 
+  test("the release's resize waits a frame, so a terminal's two fits become one", async () => {
+    const resizes = mock(() => {});
+    window.addEventListener("resize", resizes);
+    const originalFrame = globalThis.requestAnimationFrame;
+    const frames: FrameRequestCallback[] = [];
+    globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+    try {
+      const props = { sidebar: element(344), main: element(900) };
+      const { rerender } = render(<Harness mode="full" {...props} />);
+      rerender(<Harness mode="compact" {...props} />);
+      await settle();
+      expect(motion.pins).toBeNull();
+      expect(resizes).not.toHaveBeenCalled();
+      for (const frame of frames.splice(0)) frame(0);
+      expect(resizes).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.requestAnimationFrame = originalFrame;
+      window.removeEventListener("resize", resizes);
+    }
+  });
+
   test("is off under reduced motion", () => {
     const props = { sidebar: element(344), main: element(900) };
     const { rerender } = render(<Harness mode="full" reducedMotion {...props} />);

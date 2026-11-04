@@ -82,3 +82,23 @@ Main evidence:
 renderer retry: `orkestrator-test-run.hXakYF/r4-main-renderer-built.log.gz` below
 the same temporary root. A bounded missing-CLI excerpt is retained in the repair
 workspace at `output/agent-testing/r4-fix-main-evidence/`.
+
+## 2026-11-04: the leaf-project click is a stale locator, not load
+
+The `locator.click` timeout on `getByRole('button', { name: /^leaf-app\s*\d*$/ })`
+is deterministic. The row's accessible name is `Open leaf-app on Leaf`
+(`RemoteMachineTree.tsx`), which that pattern cannot match, so it does not
+depend on host load, startup dialogs or the branch. A single-project repository
+is also a plain row rather than a titled folder, so
+`getByTitle("Open leaf-app on Leaf")` under By repository could not match either.
+Both now use the role and exact name. Branch `sidebar-grouping-cfa31bc87ba7-r1`,
+Linux, `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, one worker.
+
+The spec then stopped at a later step, every run: after Enter on `Open agent
+information`, `expect.poll(panelState)` timed out with `{ label: null, focused:
+false }` (5 s). Skipping the sidebar steps the same branch added gave the same
+failure, so they do not cause it. The step sends native input through
+`sendInputEvent`, and it was only run under headless Ozone here, so a display may
+behave differently; that was not tested. No other symptom in this case was
+retested, and the case stays open.
+

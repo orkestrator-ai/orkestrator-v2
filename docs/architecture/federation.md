@@ -561,9 +561,16 @@ transitions the panels' `flex-grow` for 180ms, only while the group carries
 `prefers-reduced-motion`. For the duration, the sidebar's and the main column's
 content are held at the larger of their start and end widths and clipped by
 their panels (`sidebarMotionPins`). So a terminal or editor is laid out at most
-twice instead of on every frame, and a realm moves without resizing. Release fires
-one `resize`, because a native preview follows its host only on a resize. A native
-preview therefore stays put during the transition and moves when it ends.
+twice instead of on every frame, and its PTY is resized at most twice. A desktop
+realm's view follows the panel's edge every frame, and only its position changes:
+its width changes once, so everything inside it is laid out once. A frame after
+the release one `resize` fires, because a native preview follows its host only on
+a resize. A native preview therefore stays put during the transition and moves
+when it ends. Waiting that frame makes a terminal's fit from this event and from
+its own `ResizeObserver` a single fit.
+`e2e/agent-testing/sidebar-width-consumers.spec.ts` measures a real terminal and
+Monaco editor, and `workspace-realm-electron.spec.ts` a real realm's bounds and
+window size, through these changes.
 The handle is disabled in compact. The full width is kept in
 `uiStore.sidebarWidth` while compact or hidden, so it returns on leaving, across
 reloads too.

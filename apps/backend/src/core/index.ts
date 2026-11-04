@@ -5,6 +5,9 @@ import { startLogPolicyService } from "./log-policy-service.js";
 import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-agent-goal";
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
+import { NativeAgentSuborkService } from "./native-agent-suborks.js";
+import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
@@ -295,6 +298,8 @@ export class OrkestratorBackend {
   private readonly graphDescribeProviders: GraphAgentProviders;
   private readonly goalVerifier: NativeAgentGoalVerifier;
   private readonly goalVerifierProviders: GraphAgentProviders;
+  private readonly suborks: NativeAgentSuborkService;
+  private readonly suborkProviders: GraphAgentProviders;
   /** Mock run launches and their retention (item 213). */
   private readonly graphMock: GraphMockRuns;
   /** Waiting graph runs in the sidebar: activity and attention (item 208). */
@@ -368,6 +373,7 @@ export class OrkestratorBackend {
       Pick<
         AgentToolsServer,
         | "setGoalToolHost"
+        | "setSuborkToolHost"
         | "revokeTab"
         | "workflowResultConnection"
         | "servicePort"
@@ -432,6 +438,7 @@ export class OrkestratorBackend {
         Pick<
           AgentToolsServer,
           | "setGoalToolHost"
+          | "setSuborkToolHost"
           | "revokeTab"
           | "workflowResultConnection"
           | "servicePort"
@@ -1119,6 +1126,13 @@ export class OrkestratorBackend {
             problem: (agent) => this.goalVerifier.problem(agent),
           },
         },
+        // Built after this service: its bridges need the command invoker.
+        suborks: {
+          views: (sessionKey) => this.suborks?.views(sessionKey),
+          stopForSession: (sessionKey, batchId) =>
+            this.suborks?.stopForSession(sessionKey, batchId) ?? Promise.resolve(),
+          sweep: () => this.suborks?.sweep(),
+        },
         onGoalReleasedTurnEnd: async (session) => {
           if (
             session.owner?.kind !== "coordinator" &&
@@ -1609,6 +1623,45 @@ export class OrkestratorBackend {
       ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
       rollout: this.workflowResultRollout,
     });
+    // `ask_agents` (docs/architecture/suborks.md).
+    this.suborkProviders = new GraphAgentProviders({
+      connection: (environment, agent) =>
+        graphAgentBridgeConnection(invokeCommand, agent, environment),
+      dependencies: {
+        workflowResults: this.workflowResults,
+        planUsage: this.runtime.accounts.planUsage,
+      },
+    });
+    this.suborks = new NativeAgentSuborkService({
+      storage,
+      providers: this.suborkProviders,
+      workflowResults: this.workflowResults,
+      ...(resolveAgentToolConnection
+        ? { agentTools: { workflowResultConnection: resolveAgentToolConnection } }
+        : {}),
+      ...(assertAgentToolsReachable ? { assertAgentToolsReachable } : {}),
+      rollout: this.workflowResultRollout,
+      modelCatalog: (environmentId) =>
+        invokeCommand<AgentModel[]>("get_native_agent_model_catalog", { environmentId }),
+      settingsTiers: (environment) =>
+        launchSettingsTiers(
+          invokeCommand,
+          environment.projectId,
+          environment as unknown as Record<string, unknown>,
+        ),
+      // A container's own command sandbox is not probed from the host: assume
+      // none, which never overstates the tier.
+      enforcementHost: (environment) =>
+        environment.environmentType === "local"
+          ? defaultCoordinatorHostCapabilities()
+          : { claudeSandbox: false },
+      announce: (sessionKey) => this.nativeAgents.announceSuborks(sessionKey),
+      // Below `enforced`, a subork's answer is certified against the workspace.
+      workspaceProbe: commandWorkspaceProbe(invokeCommand),
+      acceptanceChecks: this.workflowResults,
+    });
+    context.suborks = this.suborks;
+    this.agentTools.setSuborkToolHost?.(this.suborks);
     // Live reviewers' `report_finding` calls reach the review through the
     // agent tools server, which lists the tool only for a reviewer it accepts.
     (
@@ -2146,6 +2199,9 @@ export class OrkestratorBackend {
     });
     await this.graphDescribe.init().catch((error) => {
       log.warn("startup.step-failed", { step: "graph-describe", error: formatLogError(error) });
+    });
+    await this.suborks.init().catch((error) => {
+      log.warn("startup.step-failed", { step: "suborks", error: formatLogError(error) });
     });
     // Environment-less mock runs of deleted projects (item 213); off the startup path.
     void this.graphMock.sweepOrphans().catch(() => undefined);
@@ -2958,6 +3014,12 @@ export class OrkestratorBackend {
         }
         // After the service above stops its verifiers, so none loses a provider mid-call.
         this.goalVerifierProviders.shutdown();
+        try {
+          await this.suborks.shutdown();
+          this.suborkProviders.shutdown();
+        } catch (error) {
+          log.warn("shutdown.step-failed", { step: "suborks", error: formatLogError(error) });
+        }
         await nodesStopped;
         await scheduledJobsStopped;
         const commandTermination = await userCommandsStopped;

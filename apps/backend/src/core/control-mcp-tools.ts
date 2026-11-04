@@ -98,6 +98,7 @@ import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./control-mcp-coordinator-
 import { WORKER_TURN_TOOL_CAPABILITIES } from "./control-mcp-coordinator-worker-turns.js";
 import { ACCOUNT_TOOL_CAPABILITIES } from "./control-mcp-account-tools.js";
 import { COORDINATOR_GOAL_TOOL_CAPABILITIES } from "./control-mcp-coordinator-goals.js";
+import { COORDINATOR_SUBORK_TOOL_CAPABILITIES } from "./control-mcp-coordinator-suborks.js";
 import { goalForModel, type NativeAgentGoalView } from "@orkestrator/protocol/native-agent-goal";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 import {
@@ -185,6 +186,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ...WORKER_TURN_TOOL_CAPABILITIES,
   ...ACCOUNT_TOOL_CAPABILITIES,
   ...COORDINATOR_GOAL_TOOL_CAPABILITIES,
+  ...COORDINATOR_SUBORK_TOOL_CAPABILITIES,
 ]);
 export const COORDINATOR_CAPABILITIES = new Set(COORDINATOR_TOOL_CAPABILITY.values());
 

@@ -1056,6 +1056,8 @@ export interface NativeAgentCapabilities {
     steer?: boolean;
     /** The backend's `/goal` loop runs on this platform (`plans/goals.md`). */
     goal?: boolean;
+    /** `/subork` and the `ask_agents` tool work on this platform (`docs/architecture/suborks.md`). */
+    subork?: boolean;
     review?: boolean;
     rewindMessages?: boolean;
     branches?: boolean;
@@ -1123,7 +1125,9 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
  * so the divergence was invisible until a user hit it.
  */
 export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
-  const capabilities = platformCapabilities(agent);
+  const base = platformCapabilities(agent);
+  // Every native agent has the Orkestrator tools and a mailbox that can wake it.
+  const capabilities = { ...base, actions: { ...base.actions, subork: true } };
   // A platform gains the goal loop only after its live run passes (D14).
   return (GOAL_QUALIFIED_PLATFORMS as readonly AgentPlatform[]).includes(agent)
     ? { ...capabilities, actions: { ...capabilities.actions, goal: true } }
@@ -2488,6 +2492,8 @@ export interface NativeAgentSessionProjection<TMessage = unknown> {
   contextUsage?: NativeAgentContextUsage;
   /** The session's goal, read from the session record. Absent: no goal. */
   goal?: import("./native-agent-goal.js").NativeAgentGoalView;
+  /** The session's `ask_agents` calls, oldest first. Absent: none. */
+  suborks?: import("./suborks.js").NativeAgentSuborkBatchView[];
   /** Backend-owned policy actually supplied to the provider session. */
   policy?: NativeAgentExecutionPolicy;
   /** Provider limits can arrive before the first token-usage snapshot. */
@@ -2593,6 +2599,8 @@ export interface NativeAgentSessionStateView {
   contextUsage?: NativeAgentContextUsage;
   /** The session's goal, read from the session record. Absent: no goal. */
   goal?: import("./native-agent-goal.js").NativeAgentGoalView;
+  /** The session's `ask_agents` calls, oldest first. Absent: none. */
+  suborks?: import("./suborks.js").NativeAgentSuborkBatchView[];
   policy?: NativeAgentExecutionPolicy;
   rateLimits?: NativeAgentRateLimitWindow[];
   /** False when runtime-backed notices could not be refreshed for this state. */
@@ -2742,6 +2750,7 @@ export type NativeAgentProjectionField =
   | "asyncQuestionResponses"
   | "contextUsage"
   | "goal"
+  | "suborks"
   | "rateLimits"
   | "runtime"
   | "runtimeHealthAuthoritative"
@@ -2833,6 +2842,7 @@ const PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "asyncQuestionResponses",
   "contextUsage",
   "goal",
+  "suborks",
   "rateLimits",
   "runtime",
   "runtimeHealthAuthoritative",
@@ -2858,6 +2868,7 @@ const OPTIONAL_PROJECTION_FIELD_SET: ReadonlySet<string> = new Set([
   "asyncQuestionResponses",
   "contextUsage",
   "goal",
+  "suborks",
   "rateLimits",
   "runtime",
   "runtimeHealthAuthoritative",

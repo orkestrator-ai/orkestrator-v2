@@ -13,6 +13,7 @@ import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfa
 import { registerCoordinatorWorkerTools } from "./control-mcp-coordinator-worker-tools.js";
 import { registerCoordinatorWorkerTurnTools } from "./control-mcp-coordinator-worker-turns.js";
 import { registerCoordinatorGoalTools } from "./control-mcp-coordinator-goals.js";
+import { registerCoordinatorSuborkTool } from "./control-mcp-coordinator-suborks.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
@@ -84,6 +85,7 @@ export function registerCoordinatorWorkflowTools(
   registerCoordinatorWorkerTools(server, invoke, coordinatorScope);
   registerCoordinatorWorkerTurnTools(server, invoke, coordinatorScope);
   registerCoordinatorGoalTools(server, invoke, coordinatorScope);
+  registerCoordinatorSuborkTool(server, invoke, coordinatorScope);
   registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,

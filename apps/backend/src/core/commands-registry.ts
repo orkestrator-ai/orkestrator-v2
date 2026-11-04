@@ -2,6 +2,7 @@ import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
 import { registerGraphLaunchCommands } from "./commands-registry-graph-launch.js";
+import { registerSuborkCommands } from "./commands-registry-suborks.js";
 import {
   registerGraphRunCommands,
   registerGraphRunRewindCommands,
@@ -387,6 +388,7 @@ export function createCommandRegistry(
   registerWorkflowResultCommands(register);
   registerGraphTemplateCommands(register);
   registerGraphRunCommands(register);
+  registerSuborkCommands(register);
   registerGraphLaunchCommands(register);
   registerGraphRunRewindCommands(register);
   registerGraphDescribeCommands(register);

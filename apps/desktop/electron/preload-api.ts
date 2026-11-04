@@ -35,6 +35,31 @@ export type IpcRendererLike = {
   send?(channel: string, ...args: unknown[]): void;
 };
 
+/**
+ * Electron rejects a failed `invoke` with "Error invoking remote method
+ * '<channel>': Error: <message>". The channel name means nothing to a user, and
+ * every renderer surface shows `error.message` as is, so drop the wrapper here
+ * and keep only the handler's own message (the browser gateway already sends
+ * just that).
+ */
+const REMOTE_METHOD_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+
+function readableInvokeError(error: unknown): unknown {
+  if (!(error instanceof Error) || !REMOTE_METHOD_ERROR_PREFIX.test(error.message)) return error;
+  return new Error(error.message.replace(REMOTE_METHOD_ERROR_PREFIX, ""));
+}
+
+function withReadableInvokeErrors(ipcRenderer: IpcRendererLike): IpcRendererLike {
+  return {
+    invoke: <R = unknown>(channel: string, ...args: unknown[]): Promise<R> =>
+      ipcRenderer.invoke<R>(channel, ...args).catch((error: unknown) => {
+        throw readableInvokeError(error);
+      }),
+    on: (channel, listener) => ipcRenderer.on(channel, listener),
+    send: ipcRenderer.send ? (channel, ...args) => ipcRenderer.send?.(channel, ...args) : undefined,
+  };
+}
+
 type WorkspaceTarget = {
   nodeId: string;
   nodeName: string;
@@ -302,7 +327,8 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
  * `window.orkestratorPortal`: the window's own command node while its
  * workspace (`window.orkestrator`) is on another node.
  */
-export function createPortalApi(ipcRenderer: IpcRendererLike) {
+export function createPortalApi(rawIpcRenderer: IpcRendererLike) {
+  const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
   ipcRenderer.on("orkestrator:portal-event", (_event, name: string, payload: unknown) => {
     const callbacks = listeners.get(name);
@@ -389,7 +415,8 @@ export function createWorkspaceRealmApi(ipcRenderer: IpcRendererLike) {
   };
 }
 
-export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
+export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
+  const ipcRenderer = withReadableInvokeErrors(rawIpcRenderer);
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {

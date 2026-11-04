@@ -41,7 +41,8 @@ The area fields are `kanban` (`KanbanStorage`), `coordinators`
 `agentAccounts` (`AgentAccountsStorage`), `graphTemplates`
 (`GraphTemplatesStorage`), `graphRuns` (`GraphRunsStorage`), `graphEffects`
 (`GraphEffectsStorage`), `clientState` (`ClientStateStorage`), `setupApprovals`
-(`SetupApprovalsStorage`) and `watchedPullRequests` (`WatchedPullRequestsStorage`). Each area type is declared next to
+(`SetupApprovalsStorage`), `suborks` (`SuborksStorage`) and `watchedPullRequests`
+(`WatchedPullRequestsStorage`). Each area type is declared next to
 its repository and re-exported from `storage.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
@@ -78,6 +79,7 @@ the change journal.
 | `GraphTemplatesRepository` | `storage-graph-templates.ts` | `graph-templates`: user graph templates (one row each, revision compare-and-swap inside the row's transaction) and per-project trust records and capability ceilings; a project's row is deleted with the project. Item 405 adds `sharing` (one row: the installation's share-bundle signing key, whose private half no command returns, and the trusted public keys) and `approvals` (one row per project: approved template copies for review diffs, bounded per template and per project, and rejected digests), deleted with the project too |
 | `GraphRunsRepository` | `storage-graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets); run writes and deletions announce the `graph-run` resource. Runs leave with their environment; an environment-less mock run (item 213) is removed by `deleteEnvironmentlessGraphRun` (mock-run retention) |
 | `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
+| `SuborksRepository` | `storage-suborks.ts` | `native-agent-suborks`: one row per `ask_agents` call, holding each target's branch record, its bounded answer and the delivery state ([suborks.md](suborks.md)); revision compare-and-swap inside the row's transaction; owned by the environment, deleted with it. Its transcripts share the content-addressed transcript store |
 | `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
 | `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
 | `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
@@ -211,13 +213,17 @@ from that.
   every connection and process; no lease or queue is involved. Use it whenever
   the mutation does not await (sessions, project notes, feature plans,
   completion comments).
-- **`updateStoreRow(file, key, mutate, { collection })`**: the same for one row
-  of a `record` store or of one `envelope` collection. It neither parses nor
-  rewrites the other rows, so a write costs O(row) and holders of different
-  keys' leases cannot overwrite each other. `updateSensitiveStoreRow` is the
-  same for a record store holding sensitive content: it also prunes what the
-  row's new value drops from the retired JSON archive, as `saveSensitiveJson`
-  does (see "Retired JSON archive").
+- **`updateStoreRow(file, key, mutate, { collection, archiveCleanup })`**: the
+  same for one row of a `record` store, of a keyed `array` store or of one
+  `envelope` collection. It neither parses nor rewrites the other rows, so a
+  write costs O(row) and holders of different keys' leases cannot overwrite each
+  other. An array item keeps its position when updated, a new one goes last, and
+  its value must carry the row's key in the layout's key field. A store held
+  whole as a document falls back to a whole-value read-modify-write.
+  `archiveCleanup` commits an attributable archive cleanup with the row.
+  `updateSensitiveStoreRow` is the same for a record store holding sensitive
+  content: it also prunes what the row's new value drops from the retired JSON
+  archive, as `saveSensitiveJson` does (see "Retired JSON archive").
 - **`serialize(target, description, operation, options)`**: an
   asynchronous critical section. An in-process FIFO per target plus a
   cross-process **lease** in the `leases` table (owner token and heartbeat;
@@ -249,6 +255,18 @@ from that.
   draft's `revision` in its own transaction, so typing never decodes or
   rewrites the other drafts. An owner sweep is one `updateStore` that removes
   only that owner's rows and writes nothing when the owner has none.
+
+  Environments keep their store lease too, because a write awaits between its
+  read and its commit (a caller's `shouldUpdate` observation, the removal's
+  usage label) and must stay ordered against other writers and against
+  deletion. Inside it a writer reads its environment's row and commits it with
+  `updateStoreRow`. A writer of several environments (a reorder, the activity
+  lease sweeps, a container status change) commits only the rows it changed, in
+  one transaction. A row write also refuses a row that has gone since the read,
+  so a holder whose lease was taken over cannot bring back a removed environment.
+  `storage-writer-guards.test.ts` requires the lease on every row write of this
+  store (`LEASED_ROW_STORES`), since a row transaction alone would not serialize
+  the read before it.
 
   Looped and Multi Review workflows keep **one lease per store for writers**:
   a save awaits its environment check, and launch and the environment sweep
@@ -520,11 +538,20 @@ The archive stays that pre-migration copy, except that deletes reach it:
   are matched by `id`, else by equal content, so an item without an `id` that
   was edited in place counts as removed.
 - `deleteStore` removes every archived copy of the store.
-- Deleting boundaries that know exactly what they removed (environments,
-  drafts, handoffs, prompt queues, reviews, build pipelines) scrub with an
-  attributable predicate through `scrubSensitiveJsonBackups` or
-  `scrubLegacyJsonStore`. Writes through `updateStore` or `updateStoreRow`
-  never touch the archive, so a delete made that way must scrub explicitly.
+- Deleting boundaries that know exactly what they removed (drafts, handoffs,
+  prompt queues, reviews, build pipelines) scrub with an attributable predicate
+  through `scrubSensitiveJsonBackups` or `scrubLegacyJsonStore`. Writes through
+  `updateStore` or `updateStoreRow` touch the archive only when asked, so a
+  delete made that way must scrub explicitly.
+- Environments commit their scrub with the row: `updateStoreRow`'s
+  `archiveCleanup` journals `delete-item` (a removed environment) or
+  `drop-item-field` (its superseded launch attachments) in the row's transaction
+  through `commitWithLegacyJsonCleanup`. The intent names the row and holds none
+  of its content, and it replays on reopen after a crash. A routine row write
+  leaves the archive byte-identical. A build that predates these two kinds
+  removes the store's archived copies if it replays one, which it can see only
+  after a crash followed by a downgrade: the deletion holds and only that
+  recovery copy is lost.
   `updateSensitiveStoreRow` commits a keyed pruning intent with the row
   mutation, including inside `atomically()`. After commit it prunes what the
   row's new value drops from that record's archived copies; when it replaced

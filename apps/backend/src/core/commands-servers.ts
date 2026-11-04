@@ -33,6 +33,7 @@ import {
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { existsSync, promises as seedFs } from "node:fs";
 import { seedFilesDir } from "./nodes/index.js";
+import { removeProjectHomeMailAttachments } from "./mail-attachments.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -1297,6 +1298,7 @@ async function startLocalServerAttempt(
     loginless: launchedLoginless,
   });
   if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
+  localServers.reportBridgeStart(key, child);
   forwardBridgeOutput(child, `${kind}:${environmentId}`);
   child.once("exit", (code, signal) => {
     localServers.reportBridgeExit(key, child, code, signal);
@@ -1555,6 +1557,7 @@ export async function deleteEnvironment(
       // Agents lose tool access first: nothing an agent calls back into may act
       // on an environment that is being taken apart.
       context.agentTools?.revokeEnvironment(environmentId);
+      await context.suborks?.deleteEnvironment(environmentId);
       await stopEnvironmentReviewValidation(environmentId, context);
       await stopEnvironmentExecWorkers(environmentId, context);
       // The user's `!` commands run in the worktree too.
@@ -1670,6 +1673,7 @@ export async function deleteEnvironment(
       // A graph run is scoped to one environment (D7) and its artifacts to the
       // run: both go with it, like a pipeline.
       if (storage.graphRuns) await storage.graphRuns.deleteGraphRunsByEnvironment(environmentId);
+      if (storage.suborks) await storage.suborks.deleteSuborkBatchesByEnvironment(environmentId);
       // Its "Describe a graph" job can never run again either (item 215).
       storage.graphDescribe?.deleteGraphDescribeJob(environmentId);
       // Queued prompts for a deleted environment can never be dispatched.
@@ -1771,6 +1775,9 @@ export async function deleteEnvironment(
         recursive: true,
         force: true,
       });
+      // A project home's mailed images live outside the user's checkout and
+      // go with the project home (docs/architecture/coordinator.md).
+      await removeProjectHomeMailAttachments(storage.getDataDir(), environmentId);
       // A coordinator following this worker's pull request still hears the
       // merge Merge and Cleanup just recorded, once the record is gone.
       const last = await storage.getEnvironment(environmentId).catch(() => null);

@@ -50,7 +50,7 @@ import {
   runtimeEnvironmentSnapshot,
 } from "../runtime-env.js";
 import type { EngineGeneration, EngineState } from "../engine/types.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.codex");
 
@@ -101,7 +101,11 @@ export interface AppServerSupervisorOptions {
     notification: InboundNotification,
     threadId: string | null,
     generation: EngineGeneration,
+    lineBytes: number,
   ) => void;
+  /** Overrides the notification queue's bounds. Injected in tests. */
+  notificationQueueMaxDepth?: number;
+  notificationQueueMaxBytes?: number;
   onServerRequest: (request: InboundServerRequest, generation: EngineGeneration) => void;
   onStateChange?: (state: EngineState, detail?: string) => void;
   /** Called after a successful restart so callers can resume their threads. */
@@ -252,7 +256,7 @@ export class AppServerSupervisor {
   private readonly fingerprintEnvironment: () => string;
 
   /** Serial queues for notification processing, keyed by thread id. */
-  readonly notificationQueue = new SerialQueue();
+  readonly notificationQueue: SerialQueue;
 
   private state: EngineState = "stopped";
   private generationCounter = 0;
@@ -301,6 +305,11 @@ export class AppServerSupervisor {
     this.nextCircuitCooldownMs = this.circuitCooldownMs;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.fingerprintEnvironment = options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
+    this.notificationQueue = new SerialQueue({
+      maxDepth: options.notificationQueueMaxDepth,
+      maxBytes: options.notificationQueueMaxBytes,
+      onOverflow: () => this.handleNotificationQueueOverflow(),
+    });
   }
 
   getState(): EngineState {
@@ -658,8 +667,8 @@ export class AppServerSupervisor {
       generation: generationId,
       stdin: child.stdin,
       stdout: child.stdout,
-      onNotification: (notification, threadId) =>
-        this.options.onNotification(notification, threadId, generationId),
+      onNotification: (notification, threadId, lineBytes) =>
+        this.options.onNotification(notification, threadId, generationId, lineBytes),
       onServerRequest: (request) => this.options.onServerRequest(request, generationId),
       onProtocolViolation: (detail) => {
         this.unknownNotifications += 1;
@@ -788,6 +797,22 @@ export class AppServerSupervisor {
       "restarting",
       `generation ${generationId} exited (code=${code ?? "null"}, signal=${signal ?? "null"})`,
     );
+  }
+
+  /**
+   * A consumer fell so far behind that the backlog hit its bound. Notifications
+   * were dropped, so this child's stream can no longer be trusted: replace it,
+   * and let generation recovery re-read every thread's authoritative state.
+   * Called from the read loop, so the restart is never awaited here.
+   */
+  private handleNotificationQueueOverflow(): void {
+    if (this.stopping) return;
+    const reason = "notification queue overflowed";
+    this.lastError = reason;
+    void this.restartNow(reason).catch((error: unknown) => {
+      // The next `ensureReady()` tries again; the state already says restarting.
+      log.error("app-server.overflow-restart-failed", { error: formatLogError(error) });
+    });
   }
 
   /**

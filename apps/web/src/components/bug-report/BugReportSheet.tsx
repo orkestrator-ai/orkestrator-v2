@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bug,
@@ -18,7 +19,8 @@ import {
   isBugReportAgent,
   type BugReportSnapshot,
 } from "@orkestrator/protocol/bug-report";
-import { AgentNativeTab } from "@/components/native-agent";
+import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { Button } from "@/components/ui/button";
 import {
@@ -180,10 +182,14 @@ export function BugReportSheet() {
         reading = false;
       }
     };
-    const timer = setInterval(() => void poll(), DRAFT_POLL_MS);
+    const stopPolling = startCoordinatedPoll({
+      resource: "bug-report-draft",
+      intervalMs: DRAFT_POLL_MS,
+      read: poll,
+    });
     return () => {
       current = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [apply, open, report]);
 
@@ -517,7 +523,7 @@ export function BugReportSheet() {
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1">
           {loadError ? (
             <div className="grid h-full place-items-center p-6 text-center text-sm text-destructive">
               <div className="space-y-3">
@@ -537,33 +543,42 @@ export function BugReportSheet() {
               <Loader2 className="size-5 animate-spin" aria-label="Starting the bug report" />
             </div>
           ) : (
-            <AgentNativeTab
-              key={`${report.id}:${report.agent ?? "unassigned"}`}
-              tabId={report.tabId}
-              data={{
-                platform: report.agent,
-                environmentId: report.runtimeId,
-                isLocal: true,
-                ...(report.providerSessionId ? { sessionId: report.providerSessionId } : {}),
-              }}
-              isActive
-              ownsGlobalShortcuts={false}
-              coordinatorWorkspacePath={report.scratchDir}
-              availablePlatforms={BUG_REPORT_AGENTS}
-              unassignedPlaceholder="Describe what went wrong, and what you expected to happen…"
-              emptyPlatformsMessage="Bug reports use Claude Code, Codex or OpenCode. Enable one of them in Settings → Agents."
-              onAssignPlatform={report.agent ? undefined : assign}
-              {...(launch
-                ? {
-                    initialPrompt: launch.prompt,
-                    initialAgentModel: launch.modelId,
-                    initialReasoningEffort: launch.reasoningId,
-                    initialConversationMode: launch.mode,
-                    initialFastMode: launch.fastMode,
-                    initialExecutionProfileId: launch.executionProfileId,
-                  }
-                : {})}
-            />
+            <LazyLoadBoundary
+              loadingFallback={
+                <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                  <Loader2 className="size-5 animate-spin" aria-label="Starting the bug report" />
+                </div>
+              }
+              renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
+            >
+              <LazyAgentNativeTab
+                key={`${report.id}:${report.agent ?? "unassigned"}`}
+                tabId={report.tabId}
+                data={{
+                  platform: report.agent,
+                  environmentId: report.runtimeId,
+                  isLocal: true,
+                  ...(report.providerSessionId ? { sessionId: report.providerSessionId } : {}),
+                }}
+                isActive
+                ownsGlobalShortcuts={false}
+                coordinatorWorkspacePath={report.scratchDir}
+                availablePlatforms={BUG_REPORT_AGENTS}
+                unassignedPlaceholder="Describe what went wrong, and what you expected to happen…"
+                emptyPlatformsMessage="Bug reports use Claude Code, Codex or OpenCode. Enable one of them in Settings → Agents."
+                onAssignPlatform={report.agent ? undefined : assign}
+                {...(launch
+                  ? {
+                      initialPrompt: launch.prompt,
+                      initialAgentModel: launch.modelId,
+                      initialReasoningEffort: launch.reasoningId,
+                      initialConversationMode: launch.mode,
+                      initialFastMode: launch.fastMode,
+                      initialExecutionProfileId: launch.executionProfileId,
+                    }
+                  : {})}
+              />
+            </LazyLoadBoundary>
           )}
         </div>
       </SheetContent>

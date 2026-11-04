@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as federation from "@/components/federation/FederationProvider";
 import * as commandNode from "@/components/federation/useCommandNode";
@@ -319,13 +320,11 @@ for (const scenario of [
   test(`switching Docker hosts discards ${scenario} and ignores late responses`, async () => {
     const callbacks = new Map<number, () => void>();
     let nextId = 0;
-    spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
-      callbacks.set(++nextId, callback);
-      return nextId;
-    }) as typeof setInterval);
-    spyOn(globalThis, "clearInterval").mockImplementation(((id: number) => {
-      callbacks.delete(id);
-    }) as typeof clearInterval);
+    spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read }) => {
+      const id = ++nextId;
+      callbacks.set(id, read);
+      return () => callbacks.delete(id);
+    });
     const nodes = [
       {
         nodeId: "bk_remote",

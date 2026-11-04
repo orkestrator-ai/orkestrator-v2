@@ -37,6 +37,19 @@ export type GatewayRequestRouter = Pick<GatewayAuth, "handle"> &
 /** The loopback client gateway binds IPv4 loopback only. */
 const LOOPBACK_CLIENT_BIND_ADDRESS = "127.0.0.1";
 
+/**
+ * How long an idle keep-alive connection stays open. It must outlast the idle
+ * timeout of a reverse proxy in front, so the proxy is always the side that
+ * closes. Tailscale Serve keeps idle upstream connections for 90 s (`getTransport`
+ * in ipn/ipnlocal/serve.go). If the gateway closes first, a POST that Serve has
+ * just put on that connection fails, Go will not replay it, and the client gets
+ * an empty-bodied 502. Bun closes about a second after this value.
+ *
+ * `headersTimeout` is left alone: on Bun 1.4 it neither ends an idle connection
+ * at its default 60 s nor limits a slow request.
+ */
+export const GATEWAY_KEEP_ALIVE_TIMEOUT_MS = 120_000;
+
 /** Listeners, the durable gateway token, and shutdown. */
 export class GatewayLifecycle {
   constructor(
@@ -228,6 +241,7 @@ export class GatewayLifecycle {
         }
       });
     });
+    server.keepAliveTimeout = GATEWAY_KEEP_ALIVE_TIMEOUT_MS;
     server.on("connection", (socket) => {
       this.ctx.sockets.add(socket);
       socket.once("close", () => this.ctx.sockets.delete(socket));

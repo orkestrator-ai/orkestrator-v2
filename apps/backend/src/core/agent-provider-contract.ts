@@ -944,7 +944,14 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * configuration.
    */
   resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
-  interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
+  /**
+   * `limit` asks for only the newest messages. A provider with its own history
+   * bound may ignore it, so the caller still applies its own window.
+   */
+  interactiveSnapshot?(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,
     update: NativeAgentControlUpdate,

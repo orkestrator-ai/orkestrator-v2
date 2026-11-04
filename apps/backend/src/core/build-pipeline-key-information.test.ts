@@ -283,6 +283,7 @@ describe("what the supervisor records", () => {
   test("clears superseded narrative and update history on rewind", () => {
     const subject = pipeline({ iteration: 1 });
     applyAgentKeyInformationUpdate(subject, {
+      summary: "Later summary",
       statement: "Later objective",
       context: "Later context",
       solution: "Later solution",
@@ -300,6 +301,7 @@ describe("what the supervisor records", () => {
       tests: [],
       updates: [],
     });
+    expect(subject.keyInformation?.summary).toBeUndefined();
     expect(subject.keyInformation?.statement).toBeUndefined();
     expect(subject.keyInformation?.context).toBeUndefined();
     expect(subject.keyInformation?.solution).toBeUndefined();
@@ -362,6 +364,7 @@ describe("the key information tools", () => {
     expect(read.structuredContent).toMatchObject({ pipelineId: "pipeline-1", round: 1 });
 
     const update = {
+      summary: "Readers can now see how a ticket is going.",
       framing: "objective",
       decisions: [
         {
@@ -492,6 +495,10 @@ describe("keyInformationInstruction", () => {
 
   test("asks Build, Fix, Address and Verify to keep the brief, and no other stage", () => {
     expect(keyInformationInstruction("build")).toContain("`framing`");
+    expect(keyInformationInstruction("build")).toContain("`summary` (one paragraph");
+    expect(keyInformationInstruction("build")).toContain("plain language");
+    expect(keyInformationInstruction("fix")).toContain("`summary`");
+    expect(keyInformationInstruction("address")).toContain("`summary`");
     expect(keyInformationInstruction("build")).toContain("pros and cons");
     expect(keyInformationInstruction("fix")).toContain("update_key_information");
     expect(keyInformationInstruction("address")).toContain("`issues`");

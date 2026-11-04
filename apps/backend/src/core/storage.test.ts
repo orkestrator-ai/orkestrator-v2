@@ -392,16 +392,23 @@ describe("hot store read caching", () => {
         if (store === "environments") throw new Error("SQLITE_IOERR: disk I/O error");
         return readStore(store);
       });
+      const readOwnerRows = database.readStoreRowsByOwner.bind(database);
+      const ownerSpy = spyOn(database, "readStoreRowsByOwner").mockImplementation(
+        (store, owner) => {
+          if (store === "environments") throw new Error("SQLITE_IOERR: disk I/O error");
+          return readOwnerRows(store, owner);
+        },
+      );
       try {
         await expect(storage.loadEnvironments()).rejects.toThrow("SQLITE_IOERR");
-        // The empty view was never the real damage: the next mutation would
-        // have appended to that empty list and written it back over the
-        // user's intact data.
+        // An empty view of the project's environments must not admit a create:
+        // it would hand out an order and pass a request-id check against nothing.
         await expect(storage.addEnvironment(createEnvironment("project-1"))).rejects.toThrow(
           "SQLITE_IOERR",
         );
       } finally {
         readSpy.mockRestore();
+        ownerSpy.mockRestore();
       }
 
       expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([stored.id]);

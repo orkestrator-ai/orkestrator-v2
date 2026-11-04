@@ -1,6 +1,7 @@
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
+import type { MailAttachmentBatch } from "../mail-attachments.js";
 import {
   describeLeafCoordinatorMail,
   describeLeafMail,
@@ -43,6 +44,8 @@ export interface CollectorDeps {
     nodePrefix?: string;
     nodeParent?: { id: string; threadId: string; hopCount: number };
     requestId: string;
+    /** Images to fetch from the sender's node before delivering it. */
+    attachments?: MailAttachmentBatch;
     /** The agent that sent it, on its node: node mail is authenticated by the link. */
     from: {
       nodeId: string;
@@ -167,6 +170,7 @@ export class NodeMailCollector {
           after,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
           ...(notices ? { coordinatorNotices: { repositoryHints } } : {}),
+          ...(link.hello?.capabilities?.["node-mail-attachments"] ? { attachmentMail: true } : {}),
         },
       );
       if (!batch?.items?.length) return !batch?.more && !failed;
@@ -201,6 +205,7 @@ export class NodeMailCollector {
               : {}),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
             requestId: `node:${nodeId}:${item.seq}`,
+            ...(item.attachments ? { attachments: item.attachments } : {}),
             from: {
               nodeId,
               nodeName: name,
@@ -226,6 +231,7 @@ export class NodeMailCollector {
           upTo: deliveredPrefix,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
           ...(notices ? { coordinatorNotices: { declined } } : {}),
+          ...(link.hello?.capabilities?.["node-mail-attachments"] ? { attachmentMail: true } : {}),
           sequences: delivered,
         });
       }

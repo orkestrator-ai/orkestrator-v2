@@ -1,13 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
-  createOrkestratorElectronApi,
   exposeActiveConnectionGateway,
+  exposeDesktopApi,
   exposePortal,
   type OrkestratorElectronApi,
 } from "./preload-api.js";
 import { applyDesktopTitleBarInset } from "./title-bar-inset.js";
 
-contextBridge.exposeInMainWorld("orkestrator", createOrkestratorElectronApi(ipcRenderer));
+exposeDesktopApi(contextBridge, ipcRenderer);
 
 exposeActiveConnectionGateway(contextBridge, ipcRenderer);
 

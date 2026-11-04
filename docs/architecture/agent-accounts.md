@@ -675,6 +675,7 @@ when the user said so in advance.
   carries the user's permission ([scheduled-jobs.md](scheduled-jobs.md#self-timers)):
   set with `authorizeAccountSwitch` in a turn the user started, naming the
   providers and any other machines, and used within two hours of firing.
+  The other is the [standing permission](#switching-without-asking) in Settings.
 - `get_usage_limits` (`agent-usage-limits.ts`, command
   `get_project_usage_limits`) finds the tabs that need it. No provider reports
   a usage limit as structured state, so it classifies each session's last
@@ -688,6 +689,55 @@ when the user said so in advance.
   stopped by itself and tells the coordinator each time.
 
 Grok, Pi, OpenCode and Cursor have no accounts to switch; the tools say so.
+
+### Switching without asking
+
+An approval only helps while someone is there to give it. On 2026-11-04 two
+requests waited about four and a half hours overnight while seven build
+pipelines failed on the 5-hour limit they were meant to avoid. So each
+provider's accounts in Settings have a second tick, **Let coordinators switch
+accounts without asking**, off by default
+(`@orkestrator/protocol/coordinator-account-switch-grant`).
+
+- **Where it is held.** In the global config of the machine where the approval
+  would otherwise be asked, the coordinator's own (`coordinatorAccountSwitchGrant`,
+  per provider). It covers the switches that machine's coordinators make on
+  itself and, with `nodeId`, on the machines it controls. It is not inherited: a
+  command node's choice says nothing about a leaf's own coordinators, and Settings
+  shows and changes the tick of the machine picked in its header. Only
+  `set_coordinator_account_switch_grant` writes it; `update_global_config` keeps
+  the stored value, so neither a stale settings form nor anything a coordinator
+  can reach grants it.
+- **What it does.** `switch_provider_account` reads it on every call, so turning
+  it off takes effect for the next one. When on, the tool calls
+  `run_granted_agent_account_switch` on its own backend (never routed to another
+  node), which checks it again, records the switch in the request store as a
+  `switch-agent-account` request with `authorizedBy: "standing-grant"`, already
+  approved, and runs it with the same executor an approved request uses
+  (`nodes/node-account-switch.ts`). The tool returns `state: "switched"`; no
+  request waits and no mail repeats the outcome. A leaf receives only the same
+  `set_active_agent_account` as before, so an older leaf works unchanged.
+- **Guardrails.** Only to a signed-in account of that provider, and never to one
+  whose usage reading has a window used up that has not reset (an account with
+  no reading is not refused: an idle Claude account often has none). At most
+  three such switches per target machine and provider in a rolling hour, failed
+  ones not counted; the store's records are the count, so it survives a restart.
+  Past that the call files an ordinary approval request whose `askedBecause`
+  says so, and the dialog shows it. A rescue needs one switch per machine and a
+  second covers a wrong first choice; the third is the most a coordinator
+  flipping accounts in a loop gets before someone has to look.
+- **What the user sees.** Each switch shows a toast naming the machine, both
+  accounts, the coordinator and its reason (`coordinator-account-switched`), and
+  stays listed under the tick (`get_coordinator_account_switch_grant`, the newest
+  ten) as long as the request store keeps it.
+- **Semantics.** Unchanged: machine-wide, a running turn finishes on the old
+  account, and while automatic switching is on the switch pins the account and
+  turns it off, as any manual switch does. That is deliberate. Automatic
+  switching follows the weekly limit only, so if it stayed on it could move the
+  machine straight back to the account the coordinator moved it off for the
+  5-hour limit.
+- A self-timer's permission (`scheduleId`) still takes precedence over the
+  standing permission, and keeps its own rules.
 
 ## Automatic switching
 
@@ -738,14 +788,39 @@ older bridge still sends the fixed sentence, and so stays stopped.
 
 Among the included, signed-in accounts with room, the soonest reset comes first;
 an account with no known reset ranks after every account with one
-(`rankAutoSwitchAccounts`). A tie stays on the active account, so readings cannot
-make the machine flap. Three things can move it:
+(`rankAutoSwitchAccounts`). A tie stays on the active account. The order is strict
+to the millisecond; two rules keep small differences from moving the machine:
+
+- **The same login is one account.** Entries with the same email (ignoring case),
+  such as the host login and an added account that signed in to it, share one
+  allowance, so moving between them gains nothing. While the active entry is usable,
+  its twins are not in the order, so no `soonest-reset`, `threshold` or `limit` move
+  goes to one. A used-up entry's twins have no room either: when a fresh reading
+  puts any entry at or past 98%, or a limit error is confirmed on one, the whole
+  login is out. An idle twin of a stale reading past 98% with its reset ahead is out
+  too, but a stale reading of a twin never moves the active entry
+  ([below](#stale-and-unknown-readings)). When the active entry is signed out or its
+  tick is off, a twin that is signed in and included is a real way off it, so
+  `signed-out` and `not-included` can move to one. An account's own tick goes by
+  email (`isAutoSwitchAccountIncluded`), so twins share a tick today and the
+  `not-included` case is one the rule allows rather than one the ticks can reach. An
+  entry with no email is never anyone's twin.
+- **A reset has to be worth a move.** A `soonest-reset` move needs another login to
+  reset more than an hour sooner than the active account
+  (`AUTO_SWITCH_RESET_TOLERANCE_MS`); exactly an hour stays. The tolerance lives in
+  `decideAutoSwitch` rather than the sort, because it is not transitive. `threshold`,
+  `limit`, `signed-out` and `not-included` moves are not held back by it.
+
+Before these rules, one machine moved between two entries for one login five times
+in 70 minutes, because their reset times differed by 60 ms.
+
+Three things can move it:
 
 - **Between turns.** A turn ending anywhere on the machine, at most once a minute,
   and a ten-minute timer for work no turn-end edge reports, read each included
   account's usage (cached for two minutes, as for Settings) and move to the top of
   the order. That is a move when the active limit reaches 98% used, and also when
-  another included account simply resets sooner, or the active account's own tick
+  another login resets more than an hour sooner, or the active account's own tick
   is off. A running turn finishes on the old account, as with any switch. A native
   tab's next turn moves over. Workflow providers resolve the local bridge before
   creating a session or preparing each new turn, so an idle bridge moves over
@@ -946,8 +1021,9 @@ that stays overridden, so a client sends them to the command node.
 approval because it is a setting rather than a switch. On a leaf the tool says the
 shared ticks belong to the command node, which it cannot reach from there, and can
 still end that leaf's pin and change the tick of an account with no email. A
-coordinator's own `switch_provider_account` still needs an approval, and pins like
-any other. Each automatic
+coordinator's own `switch_provider_account` still needs an approval unless a
+self-timer or the [standing permission](#switching-without-asking) carries it, and
+pins like any other. Each automatic
 switch tells the open main coordinators through the mail store, following
 [Who hears a notice](coordinator.md#who-hears-a-notice): on a leaf the command
 node's coordinators hear it through the leaf's outbox, which keeps it across a link

@@ -875,6 +875,22 @@ describe("CoordinatorPanel", () => {
       expect(mergeDialog() === null).toBe(true);
     });
 
+    test("a fast-forward the backend made after a slow fetch is not synced again", async () => {
+      prepareUnassignedLaunch();
+      checkUpstream.mockImplementation(async () => ({
+        offer: false,
+        reason: "fast-forwarded",
+        status: behindGit({ behind: 0, headCommit: firstUpstreamTip }),
+      }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      expect(syncGit).not.toHaveBeenCalled();
+      expect(screen.queryByText(/commits? behind/)).toBeNull();
+      expect(mergeDialog() === null).toBe(true);
+    });
+
     test.each(["turn-running", "declined", "blocked"] as const)(
       "sends without merging when the backend answers %s",
       async (reason) => {

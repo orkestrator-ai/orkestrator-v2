@@ -6,6 +6,7 @@ import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { createXtermTerminal } from "@/lib/terminal-xterm";
 
 const persistentTerminalSnapshot = { ...realPersistentTerminal };
 const terminalPortalStoreSnapshot = { ...realTerminalPortalStore };
@@ -225,6 +226,7 @@ describe("TerminalPortalHost", () => {
           tabId: "default",
           containerId: "container-1",
         }),
+        createXtermTerminal,
       );
     });
   });

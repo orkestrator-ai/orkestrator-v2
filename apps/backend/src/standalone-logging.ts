@@ -4,6 +4,7 @@ import {
   installProductionApplicationLogging,
   type InstalledApplicationLogging,
 } from "@orkestrator/protocol/node/application-logging";
+import { installEssentialLog } from "@orkestrator/protocol/node/essential-log";
 import type { BackendOptions } from "./options.js";
 
 /**
@@ -16,7 +17,8 @@ import type { BackendOptions } from "./options.js";
  * an agent that vanished mid-turn left no trace once the scrollback was gone.
  *
  * Follows the same Debug logging setting and retention as the desktop log, and
- * writes beside it under its own file prefix.
+ * writes beside it under its own file prefix. It also owns the essential log,
+ * which follows neither.
  */
 export function installStandaloneBackendLogging(
   options: Pick<BackendOptions, "dataDir" | "runtimeFlavor">,
@@ -30,10 +32,16 @@ export function installStandaloneBackendLogging(
   }
   // Isolated test profiles keep their diagnostics under the profile's logDir.
   if (options.runtimeFlavor === "agent-test") return null;
-  return installProductionApplicationLogging({
+  const essential = installEssentialLog({ dataDir: options.dataDir, owner: "backend" });
+  const logging = installProductionApplicationLogging({
     dataDir: options.dataDir,
     filePrefix: BACKEND_LOG_FILE_PREFIX,
   });
+  return {
+    ...logging,
+    flush: () => Promise.all([logging.flush(), essential.flush()]).then(() => undefined),
+    stop: () => Promise.all([logging.stop(), essential.stop()]).then(() => undefined),
+  };
 }
 
 /** Flushes buffered entries before exit, bounded so a stalled disk cannot hang shutdown. */

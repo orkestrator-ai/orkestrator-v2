@@ -153,6 +153,26 @@ const fastForward: CoordinatorRepositoryContextEvent = {
   occurredAt: new Date(0).toISOString(),
 };
 
+describe("a coordinator's pasted images", () => {
+  test("its turn names where each one is saved, so it can pass them on", async () => {
+    await withCoordinator({ acknowledged: 3 }, async ({ service, send }) => {
+      const stored = "/data/coordinator-attachments/coordinator-1/conversation-1/1.png";
+      await service.dispatchPrompt({
+        environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-1",
+        prompt: "Send this to the worker.",
+        attachments: [{ type: "image", path: stored, filename: "clipboard.png" }],
+      });
+      const sent = send.mock.calls[0]![1];
+      expect(sent).toContain("Send this to the worker.");
+      expect(sent).toContain('<orkestrator-attachment-paths source="orkestrator">');
+      expect(sent).toContain(stored);
+    });
+  });
+});
+
 describe("coordinator checkout-update notice", () => {
   test("the first turn after a fast-forward says what came in, once", async () => {
     await withCoordinator(
@@ -177,15 +197,15 @@ describe("coordinator checkout-update notice", () => {
     );
   });
 
-  test.each([false, true])("mail waits for sync beyond timeout (failure=%s)", async (fails) => {
+  test.each([false, true])("mail waits for busy sync (failure=%s)", async (fails) => {
     let finish!: () => void;
     let started!: () => void;
-    let timedOut!: () => void;
+    let hookReturned!: () => void;
     const syncStarted = new Promise<void>((resolve) => {
       started = resolve;
     });
     const hookFinished = new Promise<void>((resolve) => {
-      timedOut = resolve;
+      hookReturned = resolve;
     });
     await withCoordinator(
       {
@@ -224,8 +244,8 @@ describe("coordinator checkout-update notice", () => {
             beforeMailInject: async (runtimeId) => {
               expect(
                 await fastForwardBeforeCoordinatorMail({ storage, git, timeoutMs: 5 }, runtimeId),
-              ).toBe("timed-out");
-              timedOut();
+              ).toBe("busy");
+              hookReturned();
             },
             waitForMergeSync: (id) => git.waitForMergeSync(id),
             beginCoordinatorTurn: (id) => git.beginTurnAfterMergeSync(id),

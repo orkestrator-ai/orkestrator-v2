@@ -212,6 +212,14 @@ export const BACKEND_CAPABILITIES = {
    */
   coordinatorNotices: "coordinator-notices",
   /**
+   * Images on coordinator mail between nodes: `deliver_node_mail` and
+   * `collect_node_outbox` take `attachments`/`attachmentMail`, with the node
+   * file commands' `mailAttachments` scope and `prepare_node_mail_attachments`.
+   * An older node would refuse the unknown keys, or hand on a message without
+   * its files, so neither side sends any to a node that does not advertise it.
+   */
+  nodeMailAttachments: "node-mail-attachments",
+  /**
    * The leaf side of Kanban sync (`@orkestrator/protocol/ticket-sync`):
    * `apply_ticket_sync`, `get_ticket_sync_cursor`, `collect_ticket_sync_outbox`
    * and `ack_ticket_sync_outbox`. A command node syncs tickets only with a

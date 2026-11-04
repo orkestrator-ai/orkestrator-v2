@@ -2,6 +2,7 @@ import { registerChangeCommands } from "./commands-registry-changes.js";
 import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
 import { registerGraphTemplateCommands } from "./commands-registry-graphs.js";
 import { registerGraphLaunchCommands } from "./commands-registry-graph-launch.js";
+import { registerSuborkCommands } from "./commands-registry-suborks.js";
 import {
   registerGraphRunCommands,
   registerGraphRunRewindCommands,
@@ -59,6 +60,7 @@ import { registerControllerWorkflowCommands } from "./commands-registry-controll
 import { registerCoordinatorNodeCommands } from "./commands-registry-coordinator-nodes.js";
 import { registerCoordinatorNodeTicketCommands } from "./coordinator-node-tickets.js";
 import { registerCoordinatorCommandNodeMail } from "./coordinator-node-coordinator-mail.js";
+import { registerMailAttachmentCommands } from "./coordinator-mail-attachments.js";
 import { registerCoordinatorForkWorker } from "./coordinator-fork-worker.js";
 import { registerCoordinatorWorkerChanges } from "./coordinator-worker-changes.js";
 import { registerDockerCommands } from "./commands-registry-docker.js";
@@ -348,6 +350,7 @@ export function createCommandRegistry(
   registerCoordinatorNodeCommands(register);
   registerCoordinatorNodeTicketCommands(register);
   registerCoordinatorCommandNodeMail(register);
+  registerMailAttachmentCommands(register, dependencies);
   registerCoordinatorForkWorker(register, dependencies);
   registerCoordinatorWorkerChanges(register, dependencies);
   registerLinearCommands(register, dependencies);
@@ -385,6 +388,7 @@ export function createCommandRegistry(
   registerWorkflowResultCommands(register);
   registerGraphTemplateCommands(register);
   registerGraphRunCommands(register);
+  registerSuborkCommands(register);
   registerGraphLaunchCommands(register);
   registerGraphRunRewindCommands(register);
   registerGraphDescribeCommands(register);

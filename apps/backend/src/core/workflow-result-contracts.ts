@@ -15,6 +15,7 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { validateGraphProvenance } from "@orkestrator/protocol/graphs/provenance";
+import { SUBORK_RESULT_KIND } from "@orkestrator/protocol/suborks";
 import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 import {
   WORKFLOW_RESULT_KINDS,
@@ -505,6 +506,20 @@ function reviewReportDomain(value: unknown): WorkflowResultValidationIssue[] {
   return parsed.success ? [] : parsed.error.issues.map(fromReviewIssue);
 }
 
+/** A subork answers in prose: all this contract asks is that there is some. */
+const SUBORK_ANSWER_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["answer"],
+  properties: {
+    answer: {
+      type: "string",
+      minLength: 1,
+      description: "Your complete answer, for a reader who has seen none of your work.",
+    },
+  },
+} satisfies JsonSchema;
+
 const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
   builtInKind("feature-plan-state", () => FEATURE_PLAN_STATE_SCHEMA, {
     validator: parses(
@@ -565,6 +580,7 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
     validator: parses(parsePrResult),
     finalContent: finalPrResult,
   }),
+  builtInKind(SUBORK_RESULT_KIND, () => SUBORK_ANSWER_SCHEMA),
 ];
 
 for (const definition of BUILT_IN_KINDS) registerWorkflowResultKind(definition);

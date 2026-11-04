@@ -13,6 +13,7 @@ import { registerCoordinatorSurfaceTools } from "./control-mcp-coordinator-surfa
 import { registerCoordinatorWorkerTools } from "./control-mcp-coordinator-worker-tools.js";
 import { registerCoordinatorWorkerTurnTools } from "./control-mcp-coordinator-worker-turns.js";
 import { registerCoordinatorGoalTools } from "./control-mcp-coordinator-goals.js";
+import { registerCoordinatorSuborkTool } from "./control-mcp-coordinator-suborks.js";
 import { registerCoordinatorGraphTools } from "./control-mcp-graph-tools.js";
 import { registerNodeFileTools } from "./control-mcp-node-files.js";
 import { registerNodeTools, type NodeTarget } from "./control-mcp-nodes.js";
@@ -42,7 +43,10 @@ import {
 } from "./coordinator-pr-status.js";
 import { featurePlanFollowSummary } from "./coordinator-feature-plan-status.js";
 import { withScheduleActor } from "./commands-registry-scheduled-jobs.js";
-import { MAX_BUILD_PIPELINE_ITERATIONS } from "@orkestrator/protocol/build-pipeline";
+import {
+  BUILD_CANCELLED_ERROR,
+  MAX_BUILD_PIPELINE_ITERATIONS,
+} from "@orkestrator/protocol/build-pipeline";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
 import {
   SCHEDULED_JOB_LIMITS,
@@ -81,6 +85,7 @@ export function registerCoordinatorWorkflowTools(
   registerCoordinatorWorkerTools(server, invoke, coordinatorScope);
   registerCoordinatorWorkerTurnTools(server, invoke, coordinatorScope);
   registerCoordinatorGoalTools(server, invoke, coordinatorScope);
+  registerCoordinatorSuborkTool(server, invoke, coordinatorScope);
   registerCoordinatorGraphTools(server, invoke, coordinatorScope);
   const nodeToolScope = {
     projectId: coordinatorScope.projectId,
@@ -454,7 +459,10 @@ export function registerCoordinatorWorkflowTools(
       tool,
       {
         title,
-        description: `${title} in this coordinator's project.`,
+        description:
+          tool === "resume_build_pipeline"
+            ? `${title} in this coordinator's project. Only a paused pipeline resumes; any other phase is refused with the phase. To carry on after a failed step, use restart_build_pipeline_step.`
+            : `${title} in this coordinator's project.`,
         inputSchema: z.object({
           pipelineId: z.string().trim().min(1).max(200),
           nodeId: nodeIdField,
@@ -468,7 +476,10 @@ export function registerCoordinatorWorkflowTools(
       },
       async ({ pipelineId, nodeId }) => {
         const target = await onNode(nodeId);
-        await scopedWorkflow("build", pipelineId, target);
+        const current = await scopedWorkflow("build", pipelineId, target);
+        if (tool === "resume_build_pipeline" && current.phase !== "paused") {
+          throw new Error(resumeRefusal(current));
+        }
         const workflow = target
           ? await target.call<unknown>(command, { pipelineId }, `${command}:${pipelineId}`)
           : await invoke<unknown>(command, { pipelineId });
@@ -480,6 +491,79 @@ export function registerCoordinatorWorkflowTools(
       },
     );
   }
+
+  server.registerTool(
+    "restart_build_pipeline_step",
+    {
+      title: "Restart a build pipeline step",
+      description:
+        "Restart one step of a build pipeline in this project, as the step's Restart in the UI does, so a pipeline that failed for a passing reason (a usage limit, an unreachable agent) carries on without the user. Omit stepId to restart the step a failed pipeline failed in, or the current step of a paused, stalled or running one; or name a step by its worker address from get_build_pipeline. Earlier rounds and the work already committed are kept: the step reruns on the code as it is now, and that step's old session and any after it stay readable as a previous attempt. Set selection to rerun the step on another agent or model (the UI's Restart in…); the step keeps it for later rounds. A cancelled or completed pipeline, a failure before any step started, and an unknown step are refused. Code rewind and skipping a step are not offered here: they discard or bypass work, so they stay the user's. Retry with the same requestId after a lost answer: it never restarts twice. Pass nodeId for a pipeline on another connected node.",
+      inputSchema: z
+        .object({
+          requestId: z
+            .string()
+            .trim()
+            .min(1)
+            .max(256)
+            .describe("Stable key for this restart; reuse it only to retry the same call."),
+          pipelineId: z.string().trim().min(1).max(200),
+          stepId: z
+            .string()
+            .trim()
+            .min(1)
+            .max(300)
+            .optional()
+            .describe(
+              "A worker address from get_build_pipeline (workers[].address). Omit for the failed or current step.",
+            ),
+          selection: agentSelectionSchema
+            .extend({ fastMode: z.boolean().optional() })
+            .strict()
+            .optional()
+            .describe(
+              "Optional. Rerun the step on this agent and model (and reasoning effort, speed) from now on. Omit to keep the step's own selection.",
+            ),
+          nodeId: nodeIdField,
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (input) => {
+      // The command checks the node, the project and the pipeline itself.
+      const result = await invoke<JsonRecord>("restart_coordinator_build_pipeline_step", {
+        scope: {
+          projectId: coordinatorScope.projectId,
+          coordinatorId: coordinatorScope.coordinatorId,
+          conversationId: coordinatorScope.conversationId,
+        },
+        input,
+      });
+      const failedAgain = result.phase === "failed";
+      return toolResult({
+        ...result,
+        ...(failedAgain
+          ? {
+              nextStep:
+                "The step failed again as soon as it restarted; read error. Do not retry until its cause has changed.",
+            }
+          : result.followed === true
+            ? {
+                delivery: "async",
+                wake: "This conversation follows the pipeline: it will be woken by the usual status wake when the pipeline completes, fails or pauses for a decision.",
+                nextStep: "The step restarted. Finish your turn now. Do not poll.",
+              }
+            : {
+                nextStep:
+                  "The step restarted. This conversation does not follow the pipeline, so nothing will wake you about it; adopt it with adopt_workflow to be told, or read it later with get_build_pipeline.",
+              }),
+      });
+    },
+  );
 
   server.registerTool(
     "start_multi_review",
@@ -740,4 +824,20 @@ function coordinatorScheduleBackend(
       );
     },
   };
+}
+
+/** Why resume did nothing: a pipeline resumes only from paused. */
+export function resumeRefusal(workflow: Record<string, unknown>): string {
+  const phase = typeof workflow.phase === "string" ? workflow.phase : "unknown";
+  const error = typeof workflow.error === "string" ? workflow.error : "";
+  if (phase === "failed" && error.startsWith(BUILD_CANCELLED_ERROR)) {
+    return "This build pipeline was cancelled, not paused, so it cannot be resumed or restarted.";
+  }
+  if (phase === "failed") {
+    return "This build pipeline is failed, not paused, so resume does nothing. To restart the step it failed in, call restart_build_pipeline_step with this pipelineId (omit stepId).";
+  }
+  if (phase === "complete") {
+    return "This build pipeline is complete, not paused; there is nothing to resume.";
+  }
+  return `This build pipeline is ${phase}, not paused, so there is nothing to resume. It is already running; no action is needed.`;
 }

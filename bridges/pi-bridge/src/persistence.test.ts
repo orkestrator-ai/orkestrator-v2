@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { newSessionState } from "./agent-session.js";
-import { drainPersistence, loadPersistedState, schedulePersist } from "./persistence.js";
+import {
+  drainPersistence,
+  encodeStateWithinBudget,
+  loadPersistedState,
+  schedulePersist,
+} from "./persistence.js";
 import {
   buildCommandCatalogue,
   publishCommandCatalogue,
@@ -106,6 +111,44 @@ describe("the whole-file bound", () => {
     expect(state.transcriptTruncated).toBe(false);
   });
 
+  test("shedding encodes each record once, not the whole payload per session", async () => {
+    // Forty 1 MB transcripts, so several have to go before the 32 MB cap is met.
+    for (let index = 0; index < 40; index += 1) {
+      const state = newSessionState(`session-${index}`);
+      state.lastAccessed = index + 1;
+      state.messages.push({
+        id: `message-${index}`,
+        role: "assistant",
+        content: "x".repeat(1024 * 1024),
+        parts: [],
+        createdAt: "2026-11-04T00:00:00.000Z",
+      });
+      sessions.set(state.id, state);
+    }
+    const stringify = spyOn(JSON, "stringify");
+    try {
+      schedulePersist();
+      await drainPersistence();
+      const encoded = stringify.mock.results.reduce(
+        (sum, result) => sum + ((result.value as string | undefined)?.length ?? 0),
+        0,
+      );
+      // Twice the file would already be one whole re-encoding too many.
+      expect(encoded).toBeLessThan(2 * 40 * 1024 * 1024);
+    } finally {
+      stringify.mockRestore();
+    }
+
+    const written = await readState();
+    expect(written.sessions).toHaveLength(40);
+    const kept = written.sessions.filter((entry) => entry.messages.length > 0);
+    // Oldest-touched first, and it stops as soon as the file fits.
+    expect(kept.map((entry) => entry.clientSessionKey)).toEqual(
+      Array.from({ length: kept.length }, (_, index) => `session-${40 - kept.length + index}`),
+    );
+    expect(kept.length).toBe(31);
+  });
+
   test("refuses to load a file past the bound rather than parsing it", async () => {
     await writeFile(
       join(directory, "state.json"),
@@ -120,6 +163,84 @@ describe("the whole-file bound", () => {
 
     await loadPersistedState();
     expect(sessions.size).toBe(0);
+  });
+});
+
+describe("encoding the state file", () => {
+  /** The encoding this replaced, kept verbatim as the bytes it must still produce. */
+  function encodeAsBefore(
+    payload: PersistedState,
+    order: Map<string, number>,
+    budget: number,
+  ): string | undefined {
+    const serialized = JSON.stringify(payload);
+    if (Buffer.byteLength(serialized) <= budget) return serialized;
+    const byOldest = [...payload.sessions].sort(
+      (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+    );
+    for (const session of byOldest) {
+      if (session.messages.length === 0) continue;
+      session.droppedMessages = (session.droppedMessages ?? 0) + session.messages.length;
+      session.messages = [];
+      session.transcriptTruncated = true;
+      if (Buffer.byteLength(JSON.stringify(payload)) <= budget) return JSON.stringify(payload);
+    }
+    return undefined;
+  }
+
+  function randomState(random: () => number): PersistedState {
+    const count = Math.floor(random() * 6);
+    return {
+      version: 1,
+      provider: "pi",
+      sessions: Array.from({ length: count }, (_, index) => ({
+        id: `session-${index}`,
+        status: "idle",
+        messages: Array.from({ length: Math.floor(random() * 3) }, (_, row) => ({
+          id: `row-${row}`,
+          role: "assistant",
+          // Multibyte and escaped text, so characters and bytes disagree.
+          content: `é"🙂\n`.repeat(Math.floor(random() * 40)),
+          parts: [],
+          createdAt: "2026-11-04T00:00:00.000Z",
+        })),
+        droppedMessages: Math.floor(random() * 3),
+        droppedParts: 0,
+        transcriptTruncated: false,
+        revision: index,
+        structured: [],
+        promptJournal: [],
+        steerJournal: [],
+        composer: {},
+      })) as unknown as PersistedState["sessions"],
+    };
+  }
+
+  test("writes the old bytes for any state and budget", () => {
+    let seed = 11;
+    const random = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    for (let round = 0; round < 300; round += 1) {
+      const state = randomState(random);
+      const order = new Map(
+        state.sessions.map((session) => [session.id, Math.floor(random() * 4)]),
+      );
+      const budget = 50 + Math.floor(random() * 1_500);
+      const expected = encodeAsBefore(structuredClone(state), order, budget);
+      expect(encodeStateWithinBudget(structuredClone(state), order, budget)).toBe(expected);
+    }
+  });
+
+  test("an empty state is the empty envelope", () => {
+    const payload: PersistedState = { version: 1, provider: "pi", sessions: [] };
+    expect(encodeStateWithinBudget(payload, new Map(), 1_000)).toBe(JSON.stringify(payload));
+  });
+
+  test("answers nothing when the non-transcript state alone does not fit", () => {
+    const state = randomState(() => 0.9);
+    expect(encodeStateWithinBudget(state, new Map(), 10)).toBeUndefined();
   });
 });
 

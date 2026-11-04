@@ -1,4 +1,5 @@
 import { createLogger } from "@orkestrator/protocol/logger";
+import { createHash } from "node:crypto";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
@@ -9,6 +10,8 @@ import {
   type CoordinatorNoticeRoute,
   type UpwardCoordinatorNotice,
 } from "@orkestrator/protocol/coordinator-notices";
+
+import type { MailAttachmentBatch } from "../mail-attachments.js";
 
 /**
  * Mail between a command node's coordinators and agents on its leaves.
@@ -61,6 +64,9 @@ const MAX_COLLECT = 50;
  */
 export const NOTICE_HOLD_MAX_MS = 60 * 60_000;
 const MAX_NOTICE_REPOSITORIES = 2_000;
+/** Bytes of images one command node's outbox may hold in the spool at once. */
+export const MAX_OUTBOX_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_ACKNOWLEDGED_ATTACHMENT_REQUESTS = 2_000;
 
 /** Where on the command node a reply goes: one coordinator conversation's mailbox. */
 export interface CoordinatorMailbox {
@@ -101,6 +107,8 @@ export interface OutboxItem {
   handedBack?: true;
   /** Command owns delivery until an explicit decline; survives ambiguous/lost acknowledgements. */
   collected?: true;
+  /** Images waiting in this node's spool for the command node to fetch. */
+  attachments?: MailAttachmentBatch;
 }
 
 /** A command node's coordinator's latest contact with one environment. */
@@ -132,6 +140,63 @@ export interface NodeMailState {
    * and the repositories it has. Optional: an older one never says.
    */
   noticeRoutes?: Record<string, { repositoryHints: string[]; at: string }>;
+  /**
+   * Mail with images the command node has acknowledged, so a late retry of the
+   * same requestId is recognised after its item left the outbox instead of
+   * copying and delivering everything again. Bounded, oldest out.
+   */
+  acknowledgedAttachmentMail?: Record<string, AcknowledgedAttachmentMail>;
+}
+
+interface AcknowledgedAttachmentMail {
+  seq: number;
+  createdAt: string;
+  bytes: number;
+  sha256: string[];
+  /** Missing on legacy receipts: refuse unverifiable retries. */
+  fingerprint?: string;
+}
+
+/** Content digest keeps acknowledged receipts bounded without retaining message bodies. */
+function mailRequestFingerprint(item: Omit<OutboxItem, "seq" | "createdAt" | "bytes">): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        item.fromCoordinator ?? false,
+        item.body,
+        item.subject ?? null,
+        item.toCoordinator?.environmentId ?? null,
+        item.toCoordinator?.tabId ?? null,
+        item.replyToMessageId ?? null,
+        item.nodeParent
+          ? [item.nodeParent.id, item.nodeParent.threadId, item.nodeParent.hopCount]
+          : null,
+        item.repositoryHint ?? null,
+        item.attachments
+          ? [
+              item.attachments.batch,
+              item.attachments.files.map((file) => [
+                file.name,
+                file.bytes,
+                file.sha256,
+                file.mediaType,
+              ]),
+            ]
+          : null,
+      ]),
+    )
+    .digest("hex");
+}
+
+function attachmentMailKey(
+  controllerId: string,
+  item: Pick<OutboxItem, "fromEnvironmentId" | "fromTabId" | "requestId">,
+): string {
+  return JSON.stringify([controllerId, item.fromEnvironmentId, item.fromTabId, item.requestId]);
+}
+
+function outboxAttachmentBytes(item: Pick<OutboxItem, "attachments">): number {
+  return item.attachments?.files.reduce((sum, file) => sum + file.bytes, 0) ?? 0;
 }
 
 export function emptyNodeMailState(): NodeMailState {
@@ -166,6 +231,8 @@ export class LeafNodeMail {
     private readonly context: LeafMailContext,
     private readonly emit: (event: string, payload: unknown) => void,
     private readonly now: () => number = Date.now,
+    /** Items that have left the outbox, whose spooled images can go too. */
+    private readonly onAcknowledged: (items: OutboxItem[]) => void = () => undefined,
   ) {}
 
   /**
@@ -301,6 +368,25 @@ export class LeafNodeMail {
     return { controllerId: recent, ...(name ? { controllerName: name } : {}) };
   }
 
+  /** Whether this request is queued already, or was delivered and acknowledged. */
+  async knownRequest(
+    controllerId: BackendId,
+    item: Pick<OutboxItem, "fromEnvironmentId" | "fromTabId" | "requestId">,
+  ): Promise<boolean> {
+    const state = await this.store.load();
+    return (
+      Boolean(state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)]) ||
+      Boolean(
+        state.outbox[controllerId]?.items.some(
+          (entry) =>
+            entry.requestId === item.requestId &&
+            entry.fromEnvironmentId === item.fromEnvironmentId &&
+            entry.fromTabId === item.fromTabId,
+        ),
+      )
+    );
+  }
+
   /** Queue a message for a command node. Bounded; refused (never dropped) when full. */
   async enqueue(
     controllerId: BackendId,
@@ -321,16 +407,33 @@ export class LeafNodeMail {
         if (duplicate.coordinatorNotice && item.coordinatorNotice) {
           return { next: null, result: duplicate };
         }
-        if (
-          duplicate.body !== item.body ||
-          duplicate.subject !== item.subject ||
-          JSON.stringify(duplicate.toCoordinator) !== JSON.stringify(item.toCoordinator) ||
-          duplicate.replyToMessageId !== item.replyToMessageId ||
-          JSON.stringify(duplicate.nodeParent) !== JSON.stringify(item.nodeParent) ||
-          duplicate.repositoryHint !== item.repositoryHint
-        )
+        if (mailRequestFingerprint(duplicate) !== mailRequestFingerprint(item))
           throw new Error("Conflicting mail request ID.");
         return { next: null, result: duplicate };
+      }
+      const acknowledged =
+        state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)];
+      if (acknowledged) {
+        if (acknowledged.fingerprint !== mailRequestFingerprint(item))
+          throw new Error("Conflicting mail request ID.");
+        return {
+          next: null,
+          result: {
+            ...item,
+            seq: acknowledged.seq,
+            createdAt: acknowledged.createdAt,
+            bytes: acknowledged.bytes,
+          },
+        };
+      }
+      const attachmentBytes = current.items.reduce(
+        (sum, entry) => sum + outboxAttachmentBytes(entry),
+        outboxAttachmentBytes(item),
+      );
+      if (item.attachments && attachmentBytes > MAX_OUTBOX_ATTACHMENT_BYTES) {
+        throw new Error(
+          "The images waiting for that command node are at the limit; retry once it has collected its mail. Nothing was sent.",
+        );
       }
       const total = current.items.reduce((sum, entry) => sum + entry.bytes, 0);
       if (current.items.length >= MAX_OUTBOX_ITEMS || total + bytes > MAX_OUTBOX_BYTES) {
@@ -398,6 +501,8 @@ export class LeafNodeMail {
     controllerId: BackendId,
     after: number,
     coordinatorMail = false,
+    /** An older command node would deliver the message and drop its images. */
+    attachmentMail = false,
     notices?: { repositoryHints: string[] },
   ): Promise<{ items: OutboxItem[]; more: boolean }> {
     if (notices) await this.recordNoticeRoute(controllerId, notices.repositoryHints);
@@ -408,6 +513,7 @@ export class LeafNodeMail {
         (entry) =>
           entry.seq > after &&
           (coordinatorMail || !entry.fromCoordinator) &&
+          (attachmentMail || !entry.attachments) &&
           (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
       );
       const items = eligible.slice(0, MAX_COLLECT);
@@ -574,12 +680,17 @@ export class LeafNodeMail {
     upTo: number,
     sequences?: number[],
     coordinatorMail = false,
+    attachmentMail = false,
     notices?: { declined?: number[] },
   ): Promise<{ remaining: number }> {
     const declined = new Set(notices?.declined ?? []);
     const answer = await this.store.mutate((state) => {
       const current = state.outbox[controllerId];
-      if (!current) return { next: null, result: { remaining: 0, handedBack: false } };
+      if (!current)
+        return {
+          next: null,
+          result: { remaining: 0, handedBack: false, removed: [] as OutboxItem[] },
+        };
       let handedBack = false;
       const items = current.items
         .map((entry) => {
@@ -594,17 +705,45 @@ export class LeafNodeMail {
             entry.handedBack ||
             (notices === undefined && entry.coordinatorNotice) ||
             (!coordinatorMail && entry.fromCoordinator) ||
+            (!attachmentMail && entry.attachments) ||
             (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
         );
       if (!handedBack && items.length === current.items.length) {
-        return { next: null, result: { remaining: items.length, handedBack: false } };
+        return {
+          next: null,
+          result: { remaining: items.length, handedBack: false, removed: [] as OutboxItem[] },
+        };
       }
+      const retained = new Set(items.map((entry) => entry.seq));
+      const removed = current.items.filter((entry) => !retained.has(entry.seq));
+      const acknowledged = { ...state.acknowledgedAttachmentMail };
+      for (const entry of removed) {
+        if (!entry.attachments) continue;
+        acknowledged[attachmentMailKey(controllerId, entry)] = {
+          seq: entry.seq,
+          createdAt: entry.createdAt,
+          bytes: entry.bytes,
+          sha256: entry.attachments.files.map((file) => file.sha256),
+          fingerprint: mailRequestFingerprint(entry),
+        };
+      }
+      const keys = Object.keys(acknowledged);
+      for (const key of keys.slice(
+        0,
+        Math.max(0, keys.length - MAX_ACKNOWLEDGED_ATTACHMENT_REQUESTS),
+      ))
+        delete acknowledged[key];
       return {
-        next: { ...state, outbox: { ...state.outbox, [controllerId]: { ...current, items } } },
-        result: { remaining: items.length, handedBack },
+        next: {
+          ...state,
+          outbox: { ...state.outbox, [controllerId]: { ...current, items } },
+          ...(Object.keys(acknowledged).length ? { acknowledgedAttachmentMail: acknowledged } : {}),
+        },
+        result: { remaining: items.length, removed, handedBack },
       };
     });
     if (answer.handedBack) this.context.noticesHandedBack?.();
+    if (answer.removed.length) this.onAcknowledged(answer.removed);
     return { remaining: answer.remaining };
   }
 

@@ -25,6 +25,7 @@ import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
   ARTIFACT_TOOL_NAMES,
@@ -155,6 +156,7 @@ const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
     ...AGENT_MAIL_TOOL_NAMES,
     ...ARTIFACT_TOOL_NAMES,
     ...AGENT_GOAL_TOOL_NAMES,
+    ...AGENT_SUBORK_TOOL_NAMES,
     ...KEY_INFORMATION_TOOL_NAMES,
   ].map((name) => [name, { approval_mode: "approve" }]),
 );
@@ -962,14 +964,18 @@ export class AppServerEngine implements CodexEngine {
       ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these
       // would mean silently dropping every event and hanging every turn.
-      onNotification: (notification, threadId, generation) => {
+      onNotification: (notification, threadId, generation, lineBytes) => {
         // Enqueue only — reduction happens on the per-thread drain so this
         // returns immediately and the transport never back-pressures.
         const key = threadId ?? "connection";
         const sequence = ++this.notificationSequence;
-        this.supervisor.notificationQueue.run(key, () => {
-          this.processNotification(notification, generation, sequence);
-        });
+        this.supervisor.notificationQueue.run(
+          key,
+          () => {
+            this.processNotification(notification, generation, sequence);
+          },
+          lineBytes,
+        );
       },
       onServerRequest: (request, generation) => this.router.handle(request, generation),
       onStateChange: (state, detail) =>

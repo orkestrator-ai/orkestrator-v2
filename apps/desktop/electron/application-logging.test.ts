@@ -2,6 +2,7 @@ import { installControlledTimeout } from "../../../tests/helpers/controlled-time
 import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
@@ -22,6 +23,7 @@ import {
   readApplicationLogSettings,
   readStoredApplicationLogPolicy,
   registerApplicationLoggingShutdown,
+  type ApplicationLogFileOperations,
   type ApplicationLoggingQuitHost,
   type InstalledApplicationLogging,
 } from "./application-logging";
@@ -449,6 +451,473 @@ describe("production application log writing", () => {
     expect(
       await readFile(path.join(logDirectory, "orkestrator-ai-2026-08-25.1.log"), "utf8"),
     ).toContain("after restart");
+  });
+});
+
+describe("production application log batching", () => {
+  const LOG_FILE = "orkestrator-ai-2026-08-25.log";
+  const now = () => new Date("2026-08-25T18:00:00.000Z");
+
+  /** The real filesystem, counted, with room for a test to fail or hold a call. */
+  function countedFiles(overrides: Partial<ApplicationLogFileOperations> = {}) {
+    const calls = { mkdir: 0, appendFile: 0 };
+    const files: ApplicationLogFileOperations = {
+      mkdir(directory, options) {
+        calls.mkdir += 1;
+        return overrides.mkdir ? overrides.mkdir(directory, options) : mkdir(directory, options);
+      },
+      appendFile(target, data, options) {
+        calls.appendFile += 1;
+        return overrides.appendFile
+          ? overrides.appendFile(target, data, options)
+          : appendFile(target, data, options);
+      },
+    };
+    return { calls, files };
+  }
+
+  function failure(code: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`${code}: simulated`), { code });
+  }
+
+  async function savedLines(dataDir: string, file = LOG_FILE): Promise<string[]> {
+    const contents = await readFile(path.join(dataDir, "logs", file), "utf8");
+    return contents.split("\n").filter((line) => line.includes("line-"));
+  }
+
+  function numbersIn(lines: string[]): number[] {
+    return lines.map((line) => Number(line.match(/line-(\d+)/)?.[1]));
+  }
+
+  /** Captures what the writer reports, which goes to the console it was installed over. */
+  function captureConsoleError() {
+    const original = console.error;
+    const reported: string[] = [];
+    console.error = (...args: unknown[]) => void reported.push(args.join(" "));
+    return { reported, restore: () => void (console.error = original) };
+  }
+
+  test("mixed formats retain rollover reservations before any append", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      bounds: { maxFileBytes: 400 },
+    });
+    try {
+      console.log(`line-0 ${"x".repeat(220)}`);
+      console.log(`line-1 ${"x".repeat(220)}`);
+      configureLogger({ format: "json" });
+      console.log("line-2");
+      configureLogger({ format: "text" });
+      console.log(`line-3 ${"x".repeat(220)}`);
+      await logging.flush();
+      const textFiles = (await readdir(path.join(dataDir, "logs"))).filter((file) =>
+        file.endsWith(".log"),
+      );
+      // The base file precedes the numbered files regardless of lexical order.
+      textFiles.sort(
+        (a, b) =>
+          Number(a.match(/\.(\d+)\.log$/)?.[1] ?? 0) - Number(b.match(/\.(\d+)\.log$/)?.[1] ?? 0),
+      );
+      expect(textFiles.length).toBeGreaterThanOrEqual(3);
+      const lines: string[] = [];
+      for (const file of textFiles) {
+        expect((await stat(path.join(dataDir, "logs", file))).size).toBeLessThanOrEqual(400);
+        lines.push(...(await savedLines(dataDir, file)));
+      }
+      expect(numbersIn(lines)).toEqual([0, 1, 3]);
+      expect(numbersIn(await savedLines(dataDir, LOG_FILE.replace(".log", ".jsonl")))).toEqual([2]);
+    } finally {
+      await logging.stop();
+      resetLogger();
+    }
+  });
+
+  for (const code of ["ENOENT", "ENOSPC", "ENOENT-twice"]) {
+    test(`a later run failing with ${code} preserves earlier success and permits later batches`, async () => {
+      const dataDir = await enabledDataDir();
+      const capture = captureConsoleError();
+      const attempts: string[] = [];
+      let remainingFailures = code === "ENOENT-twice" ? 2 : 1;
+      const { calls, files } = countedFiles({
+        async appendFile(target, data, options) {
+          attempts.push(data.toString());
+          if (data.toString().includes("line-1") && remainingFailures > 0) {
+            remainingFailures -= 1;
+            throw failure(code === "ENOSPC" ? "ENOSPC" : "ENOENT");
+          }
+          await appendFile(target, data, options);
+        },
+      });
+      const logging = installProductionApplicationLogging({ dataDir, now, files });
+      try {
+        console.log("line-0");
+        configureLogger({ format: "json" });
+        console.log("line-1");
+        console.log("line-2");
+        configureLogger({ format: "text" });
+        console.log("line-3");
+        await logging.flush();
+        const recovered = code === "ENOENT";
+        expect(attempts.filter((data) => data.includes("line-0"))).toHaveLength(1);
+        expect(attempts.filter((data) => data.includes("line-1"))).toHaveLength(
+          code === "ENOSPC" ? 1 : 2,
+        );
+        expect(calls.appendFile).toBe(recovered ? 4 : code === "ENOSPC" ? 2 : 3);
+        const reports = capture.reported.filter((line) => line.includes("write.failed"));
+        expect(reports).toHaveLength(recovered ? 0 : 1);
+        if (!recovered) {
+          expect(reports[0]).toContain("entries=3");
+          const lostBytes = attempts.find((data) => data.includes("line-1"))!;
+          // The failed JSON run plus the unattempted text run are reported.
+          const textBytes = Buffer.byteLength(`${now().toISOString()} LOG line-3\n`);
+          expect(reports[0]).toContain(`bytes=${Buffer.byteLength(lostBytes) + textBytes}`);
+        }
+        expect(numbersIn(await savedLines(dataDir))).toEqual(recovered ? [0, 3] : [0]);
+        if (recovered) {
+          expect(numbersIn(await savedLines(dataDir, LOG_FILE.replace(".log", ".jsonl")))).toEqual([
+            1, 2,
+          ]);
+        } else {
+          expect(
+            (await readdir(path.join(dataDir, "logs"))).filter((file) => file.endsWith(".jsonl")),
+          ).toEqual([]);
+        }
+        console.log("line-4");
+        await logging.flush();
+        expect(numbersIn(await savedLines(dataDir))).toEqual(recovered ? [0, 3, 4] : [0, 4]);
+        expect(calls.mkdir).toBe(recovered ? 2 : code === "ENOSPC" ? 2 : 3);
+      } finally {
+        await logging.stop();
+        capture.restore();
+        resetLogger();
+      }
+    });
+  }
+
+  test("a burst makes one mkdir and far fewer appends than lines", async () => {
+    const dataDir = await enabledDataDir();
+    const { calls, files } = countedFiles();
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    const lines = 2_000;
+    for (let index = 0; index < lines; index += 1) console.log(`line-${index}`);
+    await logging.stop();
+
+    expect(calls.mkdir).toBe(1);
+    expect(calls.appendFile).toBeLessThan(5);
+    expect(await savedLines(dataDir)).toHaveLength(lines);
+  });
+
+  test("keeps every line in order across batches and lines logged mid-write", async () => {
+    const dataDir = await enabledDataDir();
+    const { calls, files } = countedFiles();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      files,
+      bounds: { maxBatchBytes: 256 },
+    });
+    let index = 0;
+    for (let round = 0; round < 20; round += 1) {
+      for (let line = 0; line < 25; line += 1) console.log(`line-${index++}`);
+      // Lets some of the writer's work run between the bursts of lines.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await logging.stop();
+
+    expect(numbersIn(await savedLines(dataDir))).toEqual(
+      Array.from({ length: index }, (_, n) => n),
+    );
+    expect(calls.appendFile).toBeGreaterThan(1);
+    expect(calls.appendFile).toBeLessThan(index);
+    expect(logging.dropStats()).toEqual({ droppedEntries: 0, droppedBytes: 0 });
+  });
+
+  test("never passes the batch bound unless a single entry does", async () => {
+    const dataDir = await enabledDataDir();
+    const sizes: number[] = [];
+    const { files } = countedFiles({
+      appendFile(target, data, options) {
+        sizes.push(data.byteLength);
+        return appendFile(target, data, options);
+      },
+    });
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      files,
+      bounds: { maxBatchBytes: 512 },
+    });
+    await logging.flush();
+    sizes.length = 0;
+    for (let index = 0; index < 40; index += 1) console.log(`line-${index} ${"y".repeat(40)}`);
+    console.log(`line-40 ${"z".repeat(2_000)}`);
+    await logging.stop();
+
+    expect(sizes.length).toBeGreaterThan(1);
+    expect(sizes.at(-1)).toBeGreaterThan(2_000);
+    for (const size of sizes.slice(0, -1)) expect(size).toBeLessThanOrEqual(512);
+    expect(numbersIn(await savedLines(dataDir))).toEqual(Array.from({ length: 41 }, (_, n) => n));
+  });
+
+  test("a line reaches the file within a few event-loop turns, with nothing asking", async () => {
+    const dataDir = await enabledDataDir();
+    let written = "";
+    const { files } = countedFiles({
+      mkdir: async () => undefined,
+      appendFile: async (_target, data) => {
+        written += data.toString();
+      },
+    });
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    try {
+      // The first write sizes the file on the real disk, which takes no fixed
+      // number of turns. Every later one has nothing to wait for but the writer.
+      await logging.flush();
+      console.log("line-bounded");
+      expect(written).not.toContain("line-bounded");
+      // Counted in turns, not milliseconds, so a loaded host cannot fail it.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(written).toContain("line-bounded");
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("stop waits for every queued line and an append in flight", async () => {
+    const dataDir = await enabledDataDir();
+    const held = Promise.withResolvers<void>();
+    let holding = true;
+    const { files } = countedFiles({
+      async appendFile(target, data, options) {
+        if (holding) await held.promise;
+        await appendFile(target, data, options);
+      },
+    });
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    console.log("line-0");
+    await new Promise((resolve) => setImmediate(resolve));
+    console.log("line-1");
+
+    let stopped = false;
+    const stopping = logging.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+
+    holding = false;
+    held.resolve();
+    await stopping;
+    expect(numbersIn(await savedLines(dataDir))).toEqual([0, 1]);
+  });
+
+  test("the quit hold leaves queued lines on disk before the app quits", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({ dataDir, now });
+    const quit = Promise.withResolvers<void>();
+    let listener: ((event: { preventDefault(): void }) => void) | undefined;
+    const host: ApplicationLoggingQuitHost = {
+      on(_event, next) {
+        listener = next;
+        return host;
+      },
+      quit: () => quit.resolve(),
+    };
+    registerApplicationLoggingShutdown(host, logging, 30_000);
+
+    for (let index = 0; index < 100; index += 1) console.log(`line-${index}`);
+    listener?.({ preventDefault: () => {} });
+    await quit.promise;
+
+    expect(numbersIn(await savedLines(dataDir))).toEqual(Array.from({ length: 100 }, (_, n) => n));
+  });
+
+  test("flush covers every line logged before it, however many pieces they take", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      bounds: { maxBatchBytes: 64 },
+    });
+    try {
+      for (let index = 0; index < 50; index += 1) console.log(`line-${index}`);
+      await logging.flush();
+      expect(numbersIn(await savedLines(dataDir))).toEqual(Array.from({ length: 50 }, (_, n) => n));
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("recovers when the log folder is removed while running", async () => {
+    const dataDir = await enabledDataDir();
+    const { calls, files } = countedFiles();
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    try {
+      console.log("line-0");
+      await logging.flush();
+      expect(calls.mkdir).toBe(1);
+
+      await rm(path.join(dataDir, "logs"), { recursive: true, force: true });
+      console.log("line-1");
+      console.log("line-2");
+      await logging.flush();
+
+      expect(calls.mkdir).toBe(2);
+      expect(numbersIn(await savedLines(dataDir))).toEqual([1, 2]);
+      // Back to the first file, sized from what is there now, not numbered on
+      // from the file that went away.
+      expect(await readdir(path.join(dataDir, "logs"))).toEqual([LOG_FILE]);
+
+      console.log("line-3");
+      await logging.flush();
+      expect(calls.mkdir).toBe(2);
+      expect(numbersIn(await savedLines(dataDir))).toEqual([1, 2, 3]);
+    } finally {
+      await logging.stop();
+    }
+  });
+
+  test("a folder that cannot be recreated reports once per batch and retries next time", async () => {
+    const dataDir = await enabledDataDir();
+    let failing = true;
+    const { calls, files } = countedFiles({
+      mkdir(directory, options) {
+        if (failing) return Promise.reject(failure("EACCES"));
+        return mkdir(directory, options);
+      },
+    });
+    const capture = captureConsoleError();
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    try {
+      console.log("line-0");
+      await logging.flush();
+      expect(calls.appendFile).toBe(0);
+      expect(capture.reported.filter((line) => line.includes("write.failed"))).toHaveLength(1);
+      expect(capture.reported.join("\n")).toMatch(/write\.failed .*entries=\d+ bytes=\d+/);
+
+      failing = false;
+      console.log("line-1");
+      await logging.flush();
+      expect(numbersIn(await savedLines(dataDir))).toEqual([1]);
+    } finally {
+      await logging.stop();
+      capture.restore();
+    }
+  });
+
+  test("a failed append does not throw to the caller, and writing carries on", async () => {
+    const dataDir = await enabledDataDir();
+    let failures = 1;
+    const { calls, files } = countedFiles({
+      async appendFile(target, data, options) {
+        if (failures > 0) {
+          failures -= 1;
+          throw failure("ENOSPC");
+        }
+        await appendFile(target, data, options);
+      },
+    });
+    const capture = captureConsoleError();
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    try {
+      expect(() => console.log("line-0")).not.toThrow();
+      await expect(logging.flush()).resolves.toBeUndefined();
+      expect(capture.reported.join("\n")).toContain("write.failed");
+      // ENOSPC is not retried, or a partial write could appear twice.
+      expect(calls.appendFile).toBe(1);
+
+      console.log("line-1");
+      await logging.flush();
+      expect(numbersIn(await savedLines(dataDir))).toEqual([1]);
+      // The directory is proved again after any failed write.
+      expect(calls.mkdir).toBe(2);
+    } finally {
+      await logging.stop();
+      capture.restore();
+    }
+  });
+
+  test("a report that throws cannot break the write chain", async () => {
+    const dataDir = await enabledDataDir();
+    let failures = 1;
+    const { files } = countedFiles({
+      async appendFile(target, data, options) {
+        if (failures > 0) {
+          failures -= 1;
+          throw failure("EIO");
+        }
+        await appendFile(target, data, options);
+      },
+    });
+    const original = console.error;
+    console.error = () => {
+      throw new Error("console is gone");
+    };
+    const logging = installProductionApplicationLogging({ dataDir, now, files });
+    try {
+      console.log("line-0");
+      await logging.flush();
+      console.log("line-1");
+      await logging.stop();
+      expect(numbersIn(await savedLines(dataDir))).toEqual([1]);
+    } finally {
+      await logging.stop();
+      console.error = original;
+    }
+  });
+
+  test("pending bytes stay bounded while the disk is stalled, and the gap is announced", async () => {
+    const dataDir = await enabledDataDir();
+    const held = Promise.withResolvers<void>();
+    let written = 0;
+    const { files } = countedFiles({
+      async appendFile(target, data, options) {
+        await held.promise;
+        written += data.byteLength;
+        await appendFile(target, data, options);
+      },
+    });
+    const maxPendingBytes = 2_048;
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      files,
+      bounds: { maxPendingBytes },
+    });
+    for (let index = 0; index < 500; index += 1) {
+      console.log(`line-${index} ${"x".repeat(100)}`);
+      if (index % 50 === 0) await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(logging.dropStats().droppedEntries).toBeGreaterThan(0);
+
+    held.resolve();
+    await logging.flush();
+    expect(written).toBeLessThanOrEqual(maxPendingBytes);
+
+    console.log("line-after");
+    await logging.stop();
+    const contents = await readFile(path.join(dataDir, "logs", LOG_FILE), "utf8");
+    expect(contents).toMatch(/entries\.dropped entries=\d+ bytes=\d+ reason=queue-full/);
+    expect(contents).toContain("line-after");
+  });
+
+  test("pending entries stay bounded by count as well as by bytes", async () => {
+    const dataDir = await enabledDataDir();
+    const logging = installProductionApplicationLogging({
+      dataDir,
+      now,
+      bounds: { maxPendingEntries: 10 },
+    });
+    // The capture.started line holds one of the ten.
+    for (let index = 0; index < 50; index += 1) console.log(`line-${index}`);
+    expect(logging.dropStats().droppedEntries).toBe(41);
+    await logging.stop();
+    expect(numbersIn(await savedLines(dataDir))).toEqual(Array.from({ length: 9 }, (_, n) => n));
+    const contents = await readFile(path.join(dataDir, "logs", LOG_FILE), "utf8");
+    expect(contents).toMatch(/entries\.dropped entries=41 /);
   });
 });
 

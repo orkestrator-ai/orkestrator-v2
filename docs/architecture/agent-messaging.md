@@ -117,7 +117,11 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 - Inject batch: 10 messages or 128 KiB of rendered carriers per wake
 - Agent Tools rate limits: read 30/min and 2 000/day; send 20/min and 200/day, per `(environment, tab, kind)`
 
-There are no attachments, no multicast, and no search-over-bodies API. One
+There is no multicast and no search-over-bodies API. The only attachments are
+images a coordinator sends from its own conversation
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)): at most 8, 8 MiB
+each and 32 MiB together, copied for the recipient before the message exists, and
+stored on it as paths rather than content. One
 `requestId` per sender scope is idempotent; retrying the same id with a
 different body is `idempotency-conflict`.
 
@@ -472,6 +476,7 @@ Tools (always the same set; enforcement is at call time):
 | `ack_message` | Agent receipt |
 | `reply_message` | Derived destination; acks the parent |
 | `get_message_status` | Placement and receipts for mail this tab sent |
+| `ask_agents` | Ask other agents; the answers come back as mail ([suborks.md](suborks.md)) |
 | `create_schedule`, `list_schedules`, `cancel_schedule` | Mail (or a reminder to this tab) sent later by the backend, as this tab; see [scheduled-jobs.md](scheduled-jobs.md) |
 
 If the resolved mailbox has `canPull: false`, every tool returns
@@ -556,7 +561,9 @@ wins.
 | Cursor | Never asks |
 
 `report_goal` shares the mail tools' footing: it never prompts, and it writes only
-to Orkestrator's own record ([goals.md](goals.md)).
+to Orkestrator's own record ([goals.md](goals.md)). So does `ask_agents`, which
+writes only to that record and starts read-only sessions. Its answers come back as
+a system-route notice ([suborks.md](suborks.md#results-delivery)).
 
 ## How each provider gets the tools
 

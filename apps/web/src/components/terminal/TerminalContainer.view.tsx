@@ -1,5 +1,13 @@
 import { linkBrowserTarget, serviceLinkTarget } from "@/lib/preview-service-entry";
-import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useCallback,
+  useState,
+  type MouseEvent,
+} from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import {
@@ -73,7 +81,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
-import { TerminalPortalHost } from "./TerminalPortalHost";
+import { LazyTerminalPortalHost } from "./LazyTerminalPortalHost";
 import { TerminalContainerOverlays } from "./TerminalContainerOverlays";
 import {
   parseDraggableTabId,
@@ -121,9 +129,12 @@ export function TerminalContainer({
 }: TerminalContainerProps) {
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
-  obscuredRef.current = obscured;
   const onRevealRef = useRef(onReveal);
-  onRevealRef.current = onReveal;
+  // Latest props for handlers that outlive a render, published at commit.
+  useLayoutEffect(() => {
+    obscuredRef.current = obscured;
+    onRevealRef.current = onReveal;
+  });
 
   // Track currently dragged tab ID for cross-pane visual feedback
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -138,10 +149,47 @@ export function TerminalContainer({
 
   // Get config for agent modes - per-environment overrides take precedence over global
   const config = useConfigStore((state) => state.config);
-  const { envAgentSettings, envProjectId } = useEnvironmentStore(
+  // Only the fields this container reads: the environment record changes for
+  // status, activity, pull request and name updates it does not use, and each of
+  // those would otherwise re-render the whole pane tree.
+  const {
+    environmentExists,
+    envAgentSettings,
+    envProjectId,
+    environmentName,
+    isLocalEnvironment,
+    pendingAgentLaunch,
+    setupPhase,
+    setupReady,
+    setupScriptsComplete,
+    startupAgent,
+    startupError,
+    startupProviderSessionId,
+    startupStatus,
+    worktreePath,
+  } = useEnvironmentStore(
     useShallow((state) => {
       const env = state.environments.find((e) => e.id === environmentId);
-      return { envAgentSettings: env?.agentSettings, envProjectId: env?.projectId };
+      const startup = env?.startupAgentSession;
+      return {
+        environmentExists: env !== undefined,
+        envAgentSettings: env?.agentSettings,
+        envProjectId: env?.projectId,
+        environmentName: env?.name,
+        isLocalEnvironment: env?.environmentType === "local",
+        // Prompt-bearing launches keep this true until the initial prompt is
+        // dispatched. Prompt-less launches consume it in the same setup-complete
+        // snapshot, so the one-shot window activation is the remaining owed handoff.
+        pendingAgentLaunch: env?.pendingAgentLaunch === true,
+        setupPhase: env?.setupPhase ?? "pending",
+        setupReady: isEnvironmentSetupSettled(env),
+        setupScriptsComplete: env?.setupScriptsComplete === true,
+        startupAgent: startup?.agent,
+        startupError: startup?.error,
+        startupProviderSessionId: startup?.providerSessionId,
+        startupStatus: startup?.status,
+        worktreePath: env?.worktreePath,
+      };
     }),
   );
   // One assembly of the three tiers, then every question is asked of the shared
@@ -164,21 +212,10 @@ export function TerminalContainer({
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
   const claudeNativeBackend = claude.claudeNativeBackend;
-  // Check if this is a local environment (no container)
-  const environment = useEnvironmentStore((state) =>
-    state.environments.find((env) => env.id === environmentId),
-  );
-  const isLocalEnvironment = environment?.environmentType === "local";
-  const setupPhase = environment?.setupPhase ?? "pending";
   const backendSetupRunning = setupPhase === "running";
-  const setupReady = isEnvironmentSetupSettled(environment);
-  // Prompt-bearing launches keep this true until the initial prompt is
-  // dispatched. Prompt-less launches consume it in the same setup-complete
-  // snapshot, so the one-shot window activation is the remaining owed handoff.
-  const isStartupLaunchPending = environment?.pendingAgentLaunch === true;
+  const isStartupLaunchPending = pendingAgentLaunch;
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
   // For local environments, worktreePath must be set before terminal can work
-  const worktreePath = environment?.worktreePath;
   // Local environment is ready when it has a worktree path (created during start_environment)
   const isLocalEnvironmentReady = isLocalEnvironment && !!worktreePath;
   const isEnvironmentRunning = isContainerRunning || isLocalEnvironmentReady;
@@ -270,7 +307,9 @@ export function TerminalContainer({
   // it captured, or a turn that finished mid-flight is recorded as if it had
   // been checked after setup completed.
   const backendSetupRunningRef = useRef(backendSetupRunning);
-  backendSetupRunningRef.current = backendSetupRunning;
+  useLayoutEffect(() => {
+    backendSetupRunningRef.current = backendSetupRunning;
+  });
   // Keyed by environment, not a single "last handed off" id: this component is
   // reused across environment selections (see the container-change effect
   // below), so a scalar would be re-armed by every switch away and back.
@@ -683,7 +722,7 @@ export function TerminalContainer({
   }, []);
 
   useEffect(() => {
-    if (!currentEnvState || environment?.pendingAgentLaunch || backendSetupRunning) {
+    if (!currentEnvState || pendingAgentLaunch || backendSetupRunning) {
       return;
     }
     // `setupScriptsComplete` is deliberately not required here. Once a lookup
@@ -718,7 +757,7 @@ export function TerminalContainer({
     }
   }, [
     currentEnvState,
-    environment?.pendingAgentLaunch,
+    pendingAgentLaunch,
     environmentId,
     removeTab,
     setupSessionBindNonce,
@@ -736,62 +775,48 @@ export function TerminalContainer({
   // retrying, but nothing else renders it: without this the user gets a plain
   // terminal, no agent tab, and an initial prompt that never arrives.
   const reportedStartupErrorRef = useRef<string | null>(null);
-  // The three startupAgentSession fields this reads are listed individually, so
-  // the object itself would only add re-runs when it is replaced unchanged.
-  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
-    const startupSession = environment?.startupAgentSession;
-    if (startupSession?.status !== "error") {
+    if (startupStatus !== "error") {
       reportedStartupErrorRef.current = null;
       return;
     }
-    const reason = startupSession.error ?? "The agent could not be started.";
+    const reason = startupError ?? "The agent could not be started.";
     // Keyed on the message so a repeated retry failure does not re-toast, but a
     // different failure still does.
     if (reportedStartupErrorRef.current === reason) return;
     reportedStartupErrorRef.current = reason;
-    toast.error(
-      `${startupSession.agent} could not start in ${environment?.name ?? "this environment"}`,
-      {
-        description: reason,
-        duration: 10_000,
-      },
-    );
-  }, [
-    environment?.name,
-    environment?.startupAgentSession?.agent,
-    environment?.startupAgentSession?.error,
-    environment?.startupAgentSession?.status,
-  ]);
-  /* oxlint-enable react-hooks/exhaustive-deps */
+    toast.error(`${startupAgent} could not start in ${environmentName ?? "this environment"}`, {
+      description: reason,
+      duration: 10_000,
+    });
+  }, [environmentName, startupAgent, startupError, startupStatus]);
 
   // Bind provider identity onto the durable startup tab once the backend has
   // published both. The renderer never creates or dispatches startup work.
   useEffect(() => {
-    if (!environment) return;
-    const startupSession = environment.startupAgentSession;
-    if (startupSession && startupSession.status !== "running") return;
-    if ((!environment.pendingAgentLaunch && !startupSession) || !currentEnvState) return;
-    if (!isEnvironmentRunning || (!setupReady && environment.setupScriptsComplete !== true)) return;
+    if (!environmentExists) return;
+    if (startupStatus && startupStatus !== "running") return;
+    if ((!pendingAgentLaunch && !startupStatus) || !currentEnvState) return;
+    if (!isEnvironmentRunning || (!setupReady && !setupScriptsComplete)) return;
     const existingStartupTabId = findStartupAgentTabId(currentEnvState);
     if (!existingStartupTabId) return;
-    if (startupSession?.providerSessionId) {
+    if (startupProviderSessionId) {
       usePaneLayoutStore
         .getState()
-        .updateTabNativeSessionId(
-          existingStartupTabId,
-          startupSession.providerSessionId,
-          environmentId,
-        );
+        .updateTabNativeSessionId(existingStartupTabId, startupProviderSessionId, environmentId);
     }
     if (claudeOptions?.launchAgent) clearOptions(environmentId);
   }, [
     claudeOptions?.launchAgent,
     currentEnvState,
-    environment,
+    environmentExists,
     environmentId,
     isEnvironmentRunning,
+    pendingAgentLaunch,
     setupReady,
+    setupScriptsComplete,
+    startupProviderSessionId,
+    startupStatus,
     clearOptions,
   ]);
 
@@ -1012,10 +1037,7 @@ export function TerminalContainer({
       // initialize() still runs: finishHydration without a restored snapshot
       // does not create a pane-store record, and later pane-layout events
       // cannot apply to an environment that was never registered.
-      if (
-        !backendSetupRunning &&
-        (environment?.pendingAgentLaunch === true || claudeOptions?.launchAgent === true)
-      ) {
+      if (!backendSetupRunning && (pendingAgentLaunch || claudeOptions?.launchAgent === true)) {
         if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
           initialize(containerId, environmentId);
         }
@@ -1032,6 +1054,9 @@ export function TerminalContainer({
       const initialPaneId = initialPaneState?.activePaneId ?? "default";
 
       const launchAgent = claudeOptions?.launchAgent ?? false;
+      // Recorded in the effect that consumes the options, in the same pass as
+      // the tabs it seeds below, so a later effect can clear them afterwards.
+      // oxlint-disable-next-line react/set-state-in-effect
       if (launchAgent) setHasAppliedClaudeOptions(true);
 
       if (backendSetupRunning) {
@@ -1081,7 +1106,7 @@ export function TerminalContainer({
     addTab,
     environmentId,
     currentEnvState,
-    environment?.pendingAgentLaunch,
+    pendingAgentLaunch,
     hydrationStatus,
     beginHydration,
     finishHydration,
@@ -2179,7 +2204,7 @@ export function TerminalContainer({
               dragOverPaneId={dragOverPaneId}
             />
             {/* Terminal portal host - renders all terminals via portals into pane targets */}
-            <TerminalPortalHost containerId={containerId} environmentId={environmentId} />
+            <LazyTerminalPortalHost containerId={containerId} environmentId={environmentId} />
           </div>
         </DndContext>
       )}

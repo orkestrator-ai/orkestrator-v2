@@ -764,7 +764,23 @@ describe("agent Kanban tools", () => {
     server = new AgentToolsServer(storage, "127.0.0.1", workflowResults);
     await server.start();
 
+    // A pipeline owner would expose both key-information tools on other result sessions.
+    const pipelineHost = {
+      read: async () => ({
+        pipelineId: "pipeline-1",
+        taskTitle: "Build",
+        phase: "building" as const,
+        round: 1,
+        maxRounds: 1,
+        author: "build" as const,
+        keyInformation: null,
+      }),
+      update: async () => {
+        throw new Error("Subork must not update pipeline information");
+      },
+    };
     for (const kind of WORKFLOW_RESULT_KINDS) {
+      server.setKeyInformationToolHost(kind === "subork-answer" ? pipelineHost : null);
       const resultKey = crypto.randomUUID();
       await workflowResults.prepare({
         resultKey,
@@ -779,6 +795,8 @@ describe("agent Kanban tools", () => {
         "validate_workflow_result",
         workflowResultToolName(kind),
         "get_workflow_result_status",
+        // A subork finds a refusal rather than a missing tool.
+        ...(kind === "subork-answer" ? ["ask_agents"] : []),
       ]);
       const submission = listed.body.result?.tools?.[1];
       expect(submission?.inputSchema).toMatchObject({

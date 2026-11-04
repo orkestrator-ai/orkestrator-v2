@@ -1,3 +1,4 @@
+import type { NativeAgentSuborkBatchView } from "@orkestrator/protocol/suborks";
 import { createHash, randomUUID } from "node:crypto";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
@@ -473,6 +474,12 @@ export interface NativeAgentServiceOptions {
     /** Absent: a goal cannot ask for a verifier session on this backend. */
     verifier?: GoalVerifierHost;
   };
+  /** Suborks, owned by the composition root because their bridges need its invoker. */
+  suborks?: {
+    views(sessionKey: string): NativeAgentSuborkBatchView[] | undefined;
+    stopForSession(sessionKey: string, batchId?: string): Promise<void>;
+    sweep(): void;
+  };
   /** A goal stopped: run the turn-end work it was holding back. */
   onGoalReleasedTurnEnd?: (session: PersistedNativeAgentSession) => Promise<void> | void;
   /**
@@ -741,6 +748,12 @@ export const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
 export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
 export const NATIVE_SYNC_LIVE_MESSAGES = 100;
 export const NATIVE_SYNC_LIVE_TARGET_BYTES = 512 * 1024;
+/**
+ * Rows a refresh whose result nobody reads asks for (after a dispatch, an
+ * interaction answer). It exists for the turn state and side caches, which do
+ * not depend on the transcript's length.
+ */
+export const NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES = 32;
 export const NATIVE_SYNC_MAX_REVISIONS = 128;
 export const NATIVE_SYNC_MAX_REVISION_BYTES = 2 * 1024 * 1024;
 export const NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES = 32 * 1024 * 1024;

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import * as events from "@/lib/native/events";
 import * as native from "@/lib/native/backend";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import * as sync from "@/lib/resource-sync";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useHumanPrompts, useUserCommands } from "./useUserCommands";
 import type { UserCommandRecord } from "@orkestrator/protocol/user-commands";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
@@ -128,3 +130,25 @@ for (const kind of ["commands", "prompts"] as const) {
     expect(view.result.current).toEqual([]);
   });
 }
+
+test("the running-command poll stops while hidden and reads again on return", async () => {
+  const { clock, document } = installFakeReadCoordinator();
+  commands = [{ id: "running", status: "running" } as UserCommandRecord];
+  renderHook(() => useUserCommands("env", "tab"));
+  await flush();
+  const reads = () => calls.filter((call) => call === "list_user_commands").length;
+  const afterMount = reads();
+
+  await act(async () => clock.advance(3_000));
+  expect(reads()).toBe(afterMount + 1);
+
+  act(() => document.setVisibility("hidden"));
+  await act(async () => clock.advance(60_000));
+  expect(reads()).toBe(afterMount + 1);
+
+  act(() => document.setVisibility("visible"));
+  await act(async () => clock.advance(1_000));
+  expect(reads()).toBe(afterMount + 2);
+  cleanup();
+  resetReadCoordinatorForTests();
+});

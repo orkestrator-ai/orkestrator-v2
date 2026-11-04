@@ -343,7 +343,7 @@ export function ContainerHostReachabilityNotice() {
         <div
           role="alert"
           data-testid="container-host-reachability-banner"
-          className="fixed bottom-4 right-4 z-[89] flex max-w-md flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+          className="fixed bottom-4 right-4 z-[89] flex max-w-md flex-col gap-2 rounded-lg border border-border bg-popover/95 px-4 py-3 text-sm text-popover-foreground shadow-xl backdrop-blur-sm"
         >
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-400" />
@@ -358,7 +358,6 @@ export function ContainerHostReachabilityNotice() {
               type="button"
               variant="ghost"
               size="sm"
-              className="text-amber-100 hover:bg-amber-900/60"
               onClick={() => {
                 if (!key) return;
                 writeSession(DISMISSED_KEY, key);

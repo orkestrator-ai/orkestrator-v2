@@ -1610,86 +1610,108 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const first = (await commands.get("start_opencode_server")?.(
-          { containerId: "container-opencode-auth" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
-        expect(first).toMatchObject({ hostPort, wasRunning: false });
-        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
-
-        // An authenticated server from a build before the GitHub environment
-        // hook existed must also restart instead of being reused indefinitely.
-        await fs.rm(pluginFingerprintFile);
-        const capabilityReplacement = (await commands.get("start_opencode_server")?.(
-          { containerId: "container-opencode-auth" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
-        expect(capabilityReplacement).toMatchObject({ hostPort, wasRunning: false });
-        expect(capabilityReplacement.authToken).not.toBe(first.authToken);
-
-        // A reachable legacy process without a readable password is replaced,
-        // rather than being handed to the renderer unauthenticated.
-        await fs.rm(tokenFile);
-        const legacyReplacement = (await commands.get("start_opencode_server")?.(
-          { containerId: "container-opencode-auth" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
-        expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
-        expect(legacyReplacement.authToken).not.toBe(first.authToken);
-
-        const stalePassword = "S".repeat(43);
-        await fs.writeFile(tokenFile, stalePassword);
-        await fs.writeFile(liveTokenFile, "L".repeat(43));
-        const replacement = (await commands.get("start_opencode_server")?.(
-          { containerId: "container-opencode-auth" },
-          context,
-        )) as { hostPort: number; wasRunning: boolean; authToken: string };
-        expect(replacement).toMatchObject({ hostPort, wasRunning: false });
-        expect(replacement.authToken).not.toBe(stalePassword);
-
-        await expect(
-          commands.get("start_opencode_server")?.(
+        const captured = captureLogs();
+        try {
+          const first = (await commands.get("start_opencode_server")?.(
             { containerId: "container-opencode-auth" },
             context,
-          ),
-        ).resolves.toEqual({
-          hostPort,
-          wasRunning: true,
-          authToken: replacement.authToken,
-        });
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          expect(first).toMatchObject({ hostPort, wasRunning: false });
+          expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
-        // Each fresh server loads /workspace with its own credential before
-        // the start returns, so a prompt's first status read does not pay for
-        // OpenCode's plugin install in a new container layer. The reused
-        // server is not warmed again.
-        expect(statusReads).toEqual(
-          Array.from({ length: 4 }, () => ({
-            url: "/session/status?directory=%2Fworkspace",
-            authorized: true,
-          })),
-        );
+          // An authenticated server from a build before the GitHub environment
+          // hook existed must also restart instead of being reused indefinitely.
+          await fs.rm(pluginFingerprintFile);
+          const capabilityReplacement = (await commands.get("start_opencode_server")?.(
+            { containerId: "container-opencode-auth" },
+            context,
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          expect(capabilityReplacement).toMatchObject({ hostPort, wasRunning: false });
+          expect(capabilityReplacement.authToken).not.toBe(first.authToken);
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
-        expect(execLog).toContain("pkill -f '[o]pencode serve'");
-        // A container connection names no directory, so the server's own cwd,
-        // the container's workspace, scopes `command.list`.
-        expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
-        expectKeepsPreviousLog(execLog, "/tmp/opencode-serve.log", "/tmp/opencode-serve.prev.log");
-        expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
-        expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
-        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
-        // Every start, the reused one too, hands over the host login access-only.
-        const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
-        expect(pushes).toHaveLength(5);
-        expect(JSON.parse(pushes[4]!)).toEqual({
-          logins: {
-            "opencode-go": { type: "api", key: "go-key" },
-            openai: expect.objectContaining({ access: "oc-access", refresh: "" }),
-          },
-          accessOnly: ["openai"],
-        });
-        expect(execLog).not.toContain("SENTINEL");
+          // A reachable legacy process without a readable password is replaced,
+          // rather than being handed to the renderer unauthenticated.
+          await fs.rm(tokenFile);
+          const legacyReplacement = (await commands.get("start_opencode_server")?.(
+            { containerId: "container-opencode-auth" },
+            context,
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
+          expect(legacyReplacement.authToken).not.toBe(first.authToken);
+
+          const stalePassword = "S".repeat(43);
+          await fs.writeFile(tokenFile, stalePassword);
+          await fs.writeFile(liveTokenFile, "L".repeat(43));
+          const replacement = (await commands.get("start_opencode_server")?.(
+            { containerId: "container-opencode-auth" },
+            context,
+          )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          expect(replacement).toMatchObject({ hostPort, wasRunning: false });
+          expect(replacement.authToken).not.toBe(stalePassword);
+
+          await expect(
+            commands.get("start_opencode_server")?.(
+              { containerId: "container-opencode-auth" },
+              context,
+            ),
+          ).resolves.toEqual({
+            hostPort,
+            wasRunning: true,
+            authToken: replacement.authToken,
+          });
+
+          // Each fresh server loads /workspace with its own credential before
+          // the start returns, so a prompt's first status read does not pay for
+          // OpenCode's plugin install in a new container layer. The reused
+          // server is not warmed again.
+          expect(statusReads).toEqual(
+            Array.from({ length: 4 }, () => ({
+              url: "/session/status?directory=%2Fworkspace",
+              authorized: true,
+            })),
+          );
+
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
+          expect(execLog).toContain("pkill -f '[o]pencode serve'");
+          // A container connection names no directory, so the server's own cwd,
+          // the container's workspace, scopes `command.list`.
+          expect(execLog).toMatch(/cd \/workspace\n[\s\S]*opencode serve --port/);
+          expectKeepsPreviousLog(
+            execLog,
+            "/tmp/opencode-serve.log",
+            "/tmp/opencode-serve.prev.log",
+          );
+          expect(execLog).toContain(
+            "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
+          );
+          expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
+          expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN");
+          // Every start, the reused one too, hands over the host login access-only.
+          const pushes = (await fs.readFile(importedAuth, "utf8")).trim().split("\n");
+          expect(pushes).toHaveLength(5);
+          expect(JSON.parse(pushes[4]!)).toEqual({
+            logins: {
+              "opencode-go": { type: "api", key: "go-key" },
+              openai: expect.objectContaining({ access: "oc-access", refresh: "" }),
+            },
+            accessOnly: ["openai"],
+          });
+          expect(execLog).not.toContain("SENTINEL");
+          expect(
+            captured
+              .records()
+              .filter((record) => record.event === "bridge.launched")
+              .map((record) => record.fields),
+          ).toEqual(
+            Array.from({ length: 4 }, () => ({
+              provider: "opencode",
+              containerPort: 4096,
+            })),
+          );
+        } finally {
+          captured.restore();
+        }
       });
     } finally {
       await bridge.close();
@@ -2093,14 +2115,22 @@ exit 0
 
       try {
         await withFakeDocker(dockerScript, async (logs) => {
+          const captured = captureLogs();
           const result = (await commands.get("start_codex_server")?.(
             { containerId: "container-codex-legacy" },
             context,
           )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          const launches = captured
+            .records()
+            .filter((record) => record.event === "bridge.launched");
+          captured.restore();
 
           expect(result).toMatchObject({ hostPort, wasRunning: false });
           expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
           expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
+          expect(launches.map((record) => record.fields)).toEqual([
+            { provider: "codex", containerPort: 4098 },
+          ]);
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
@@ -2164,16 +2194,21 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
+        const captured = captureLogs();
         const result = (await commands.get("start_codex_server")?.(
           { containerId: "container-codex-late" },
           context,
         )) as { hostPort: number; wasRunning: boolean; authToken: string };
+        const launches = captured.records().filter((record) => record.event === "bridge.launched");
+        captured.restore();
 
         expect(result).toEqual({ hostPort, wasRunning: true, authToken: persistedToken });
         expect(await fs.readFile(tokenFile, "utf8")).toBe(persistedToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).not.toContain("exec -d ");
+        // Nothing was launched, so no relaunch is recorded.
+        expect(launches).toEqual([]);
       });
     } finally {
       await bridge.close();

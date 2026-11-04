@@ -165,9 +165,37 @@ export async function getFileTreeSnapshot(
   return normalizeConditionalArraySnapshot<FileNode>(response, "get_file_tree");
 }
 
+function normalizeFileSubtreeSnapshot(
+  response: unknown,
+  command: string,
+): ConditionalSnapshot<FileSubtree> {
+  // Older backends ignore knownDigest and return the directory itself.
+  if (isRecord(response) && Array.isArray(response.children)) {
+    return { unchanged: false, digest: "", value: response as unknown as FileSubtree };
+  }
+  if (
+    !isRecord(response) ||
+    typeof response.unchanged !== "boolean" ||
+    typeof response.digest !== "string" ||
+    (!response.unchanged && (!isRecord(response.value) || !Array.isArray(response.value.children)))
+  ) {
+    throw new Error(`Invalid ${command} response`);
+  }
+  return response as unknown as ConditionalSnapshot<FileSubtree>;
+}
+
 /** Read one truncated directory of a container's file tree */
-export async function getFileSubtree(containerId: string, directory: string): Promise<FileSubtree> {
-  return invoke<FileSubtree>("get_file_subtree", { containerId, directory });
+export async function getFileSubtreeSnapshot(
+  containerId: string,
+  directory: string,
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<FileSubtree>> {
+  const response = await invoke<unknown>("get_file_subtree", {
+    containerId,
+    directory,
+    knownDigest: knownDigest ?? "",
+  });
+  return normalizeFileSubtreeSnapshot(response, "get_file_subtree");
 }
 
 /** Read a file from inside a container */
@@ -487,11 +515,17 @@ export async function getLocalFileTreeSnapshot(
 }
 
 /** Read one truncated directory of a local environment's file tree */
-export async function getLocalFileSubtree(
+export async function getLocalFileSubtreeSnapshot(
   worktreePath: string,
   directory: string,
-): Promise<FileSubtree> {
-  return invoke<FileSubtree>("get_local_file_subtree", { worktreePath, directory });
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<FileSubtree>> {
+  const response = await invoke<unknown>("get_local_file_subtree", {
+    worktreePath,
+    directory,
+    knownDigest: knownDigest ?? "",
+  });
+  return normalizeFileSubtreeSnapshot(response, "get_local_file_subtree");
 }
 
 /** Read a file from a local environment (worktree path) */

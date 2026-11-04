@@ -75,9 +75,9 @@ Watcher events are hints, never proof, and the safety scan covers a missed event
 
 #### Tasks
 
-1. **One diff pass**: replace the separate `--name-status` and `--numstat` diffs with one. Status: open.
-2. **Ensure the exclude file once per worktree**: stop resolving and reading it on every scan. Status: open.
-3. **Reuse the resolved base oid**: stop resolving the base twice. Status: open.
+1. **One diff pass**: replace the separate `--name-status` and `--numstat` diffs with one. Status: done 2026-11-04.
+2. **Ensure the exclude file once per worktree**: stop resolving and reading it on every scan. Status: done 2026-11-04.
+3. **Reuse the resolved base oid**: stop resolving the base twice. Status: done 2026-11-04.
 
 #### 1. One diff pass
 
@@ -131,8 +131,8 @@ The scan's hardening must stay: `HARDENED_GIT_CONFIG`, `neutralizeGitFilters` be
 
 ### Needs verification
 
-- Whether `--raw --numstat -z -M` reports stat-only modifications the same way the two separate runs do.
-- Process counts per scan; the report's 7 to 9 is from reading code. `git-spawn` per job kind in the recurring-work metrics can confirm it.
+- Whether `--raw --numstat -z -M` reports stat-only modifications the same way the two separate runs do. Verified 2026-11-04: `git-diff-summary.test.ts` compares both against real Git.
+- Process counts per scan; the report's 7 to 9 is from reading code. Measured 2026-11-04: 7, and 4 after this work (`scripts/benchmark-local-diff-scan.ts`).
 
 ## 0450: Untracked files are re-read on every scan
 
@@ -140,8 +140,8 @@ The scan's hardening must stay: `HARDENED_GIT_CONFIG`, `neutralizeGitFilters` be
 
 #### Tasks
 
-1. **Stat-keyed line count cache**: skip reading an untracked file whose stamp has not changed. Status: open.
-2. **Bounded concurrency in Git scopes**: count untracked files concurrently there too. Status: open.
+1. **Stat-keyed line count cache**: skip reading an untracked file whose stamp has not changed. Status: done 2026-11-04.
+2. **Bounded concurrency in Git scopes**: count untracked files concurrently there too. Status: done 2026-11-04.
 
 #### 1. Stat-keyed line count cache
 
@@ -185,7 +185,7 @@ The report's [invariant](../2026-10-27-efficiency.md#invariants-every-fix-must-k
 
 #### Tasks
 
-1. **Expire scope demand**: stop recomputing a scope nobody has read for a while. Status: open.
+1. **Expire scope demand**: stop recomputing a scope nobody has read for a while. Status: done 2026-11-04; a view reads once and then follows events, so the TTL alone would freeze an open view, and expiry also sends a `reset` event. See [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 7.
 
 #### 1. Expire scope demand
 
@@ -211,7 +211,7 @@ The report's [invariant](../2026-10-27-efficiency.md#invariants-every-fix-must-k
 
 ### Needs verification
 
-- How long a Git scope view stays open without a read in practice, which sets the TTL. I did not find its read cadence.
+- How long a Git scope view stays open without a read in practice, which sets the TTL. Answered 2026-11-04: a view reads once on mount and on a resync (`apps/web/src/lib/changes/subscriptions.ts`) and has no cadence.
 
 ## 0570: Recursive `fs.watch` covers the whole worktree, `node_modules` included
 

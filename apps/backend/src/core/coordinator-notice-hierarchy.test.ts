@@ -230,6 +230,7 @@ async function fleet(
                   COMMAND,
                   args.after as number,
                   args.coordinatorMail === true,
+                  args.attachmentMail === true,
                   notices ? { repositoryHints: notices.repositoryHints ?? [] } : undefined,
                 )) as T;
               }
@@ -242,6 +243,7 @@ async function fleet(
                 args.upTo as number,
                 args.sequences as number[],
                 args.coordinatorMail === true,
+                args.attachmentMail === true,
                 notices ? { declined: notices.declined ?? [] } : undefined,
               )) as T;
             },
@@ -406,7 +408,9 @@ describe("who hears a notice", () => {
         () => undefined,
       );
       if (collected)
-        await mail.collect(COMMAND, 0, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
+        await mail.collect(COMMAND, 0, false, false, {
+          repositoryHints: [repositoryHint(GIT_URL)!],
+        });
       expect((await mail.collect(COMMAND, 0, true)).items).toHaveLength(0);
       expect(f.store.state.noticeRoutes?.[COMMAND]).toBeUndefined();
       await f.takeBack();
@@ -1558,7 +1562,7 @@ test("a collected batch survives silence and delivers once on reconnect", async 
       () => undefined,
       () => Date.parse("2030-01-01T12:00:00.000Z"),
     );
-    await mail.collect(COMMAND, 0, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
+    await mail.collect(COMMAND, 0, false, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
     expect(await mail.noticesToTakeBack()).toHaveLength(0);
     expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(1);
     const requestId = f.store.state.outbox[COMMAND]!.items[0]!.requestId;

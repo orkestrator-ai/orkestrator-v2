@@ -194,6 +194,10 @@ import {
 } from "./native-agent-goal-service.js";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
+  parseSuborkRequestCarrier,
+  renderSuborkRequestCarrier,
+} from "@orkestrator/protocol/suborks";
+import {
   commandDispatchNeedsCatalogue,
   planCommandDispatch,
   type CommandDispatchPlan,
@@ -203,6 +207,7 @@ import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
   NativeAgentHandoffs,
   pendingHandoffCommandRefusal,
+  coordinatorPromptWithAttachmentPaths,
   promptWithPendingAgentHandoff,
 } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
@@ -714,7 +719,7 @@ export class NativeAgentService {
       storage,
       isStopped: () => this.stopped,
       trackScan: (task) => this.trackScan(task),
-      refreshProjection: (input) => this.projections.refreshProjection(input, true),
+      refreshProjection: (input) => this.projections.refreshProjectionState(input),
       queueSessionObservedBusy: (environmentId, agent, logicalSessionKey, head) =>
         this.launches.queueSessionObservedBusy(environmentId, agent, logicalSessionKey, head),
       assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
@@ -757,7 +762,10 @@ export class NativeAgentService {
       dispatchPromptWithPreparation: (input, prepare) =>
         this.dispatchPromptInternal(input, prepare),
       goalHoldsTurnEnd: (sessionKey) => this.goals.holdsTurnEnd(sessionKey),
-      sweepGoals: () => this.goals.sweep(),
+      sweepGoals: () => {
+        this.goals.sweep();
+        this.options.suborks?.sweep();
+      },
     });
     this.goals = new NativeAgentGoalService({
       storage,
@@ -2020,7 +2028,7 @@ export class NativeAgentService {
       await this.dispatchPromptInternal(input, undefined, true, false, false, () => {
         instructionsIgnored = true;
       });
-      void this.projections.refreshProjection(input, true).catch(() => undefined);
+      void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "accepted",
         requestId: input.requestId,
@@ -2038,7 +2046,7 @@ export class NativeAgentService {
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending);
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
       }
       if (error instanceof PendingNativeAgentSteerError) {
@@ -2048,7 +2056,7 @@ export class NativeAgentService {
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending);
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
       }
       if (error instanceof AmbiguousPromptDispatchError) {
@@ -2057,20 +2065,20 @@ export class NativeAgentService {
         // provider's own dispatch journal can usually tell the two apart.
         const settled = await this.settleAmbiguousDispatch(input, key, input.requestId);
         if (settled === "confirmed") {
-          void this.projections.refreshProjection(input, true).catch(() => undefined);
+          void this.projections.refreshProjectionState(input).catch(() => undefined);
           return { outcome: "accepted", requestId: input.requestId };
         }
         if (settled === "retired") {
           // The bridge restarted under this very request and will refuse the
           // id for good: the same answer a retry would get, without the card.
-          void this.projections.refreshProjection(input, true).catch(() => undefined);
+          void this.projections.refreshProjectionState(input).catch(() => undefined);
           return {
             outcome: "rejected",
             error: dispatchOutcomeLostMessage(input.agent),
             requestIdRetired: true,
           };
         }
-        void this.projections.refreshProjection(input, true).catch(() => undefined);
+        void this.projections.refreshProjectionState(input).catch(() => undefined);
         return {
           outcome: "unknown",
           requestId: input.requestId,
@@ -2083,7 +2091,7 @@ export class NativeAgentService {
       if (!preserveExistingPending || retired) {
         await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
       }
-      if (retired) void this.projections.refreshProjection(input, true).catch(() => undefined);
+      if (retired) void this.projections.refreshProjectionState(input).catch(() => undefined);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
@@ -2118,7 +2126,7 @@ export class NativeAgentService {
         ? await this.storage.clearPendingNativeAgentSteer(key, input.requestId, true)
         : await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
     if (discarded) {
-      void this.projections.refreshProjection(input, true).catch(() => undefined);
+      void this.projections.refreshProjectionState(input).catch(() => undefined);
     }
     return { discarded };
   }
@@ -2347,8 +2355,29 @@ export class NativeAgentService {
         nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
       ),
       this.sessionOperations.stopProjectionSession(input),
+      // Stopping the caller stops what it asked for. Its own bound on a bridge
+      // that does not answer keeps this from holding Stop up indefinitely.
+      this.options.suborks?.stopForSession(
+        nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+      ),
     ]);
     return projection;
+  }
+
+  /** A tab's close, or the person's Stop on the group: stops what the session asked for. */
+  async stopSuborksForSession(sessionKey: string, batchId?: string): Promise<void> {
+    await this.options.suborks?.stopForSession(sessionKey, batchId);
+  }
+
+  /** A session's `ask_agents` calls changed: its views read the projection again. */
+  announceSuborks(sessionKey: string): void {
+    this.projections.invalidateProjection(sessionKey);
+    void this.storage
+      .getNativeAgentSession(sessionKey)
+      .then((session) => {
+        if (session) this.launches.announceSessionContent(session);
+      })
+      .catch(() => undefined);
   }
 
   stopProjectionBackgroundTask(
@@ -3424,12 +3453,40 @@ export class NativeAgentService {
        * this input is refused here with the draft intact; it is never sent as
        * ordinary text instead.
        */
-      const commandPlan = await this.planDispatchCommand(input, session, provider);
-      if (commandPlan.kind === "rejected") throw new PromptRejectedError(commandPlan.message);
+      const planned = await this.planDispatchCommand(input, session, provider);
+      if (planned.kind === "rejected") throw new PromptRejectedError(planned.message);
       // A "Continue in…" handoff travels with whatever reaches this tab first.
       const pendingHandoff = recovery ? undefined : await this.handoffs.pending(session, provider);
-      const handoffRefusal = pendingHandoff && pendingHandoffCommandRefusal(commandPlan);
+      const handoffRefusal = pendingHandoff && pendingHandoffCommandRefusal(planned);
       if (handoffRefusal) throw new PromptRejectedError(handoffRefusal);
+      /*
+       * `/subork` is an ordinary turn from here on: the carrier asks the agent to
+       * call `ask_agents`, and a retry resends that literal text.
+       */
+      const commandPlan: Exclude<CommandDispatchPlan, { kind: "rejected" | "subork" }> =
+        planned.kind === "subork"
+          ? {
+              kind: "prompt",
+              allowProviderCommands: false,
+              persistedIntent: { kind: "literal" },
+              commandName: planned.commandName,
+            }
+          : planned;
+      if (planned.kind === "subork") {
+        // Environment tabs and coordinator conversations (whose key is a tab key
+        // on their runtime id) each have `ask_agents` and a mailbox the answers
+        // wake. A session Orkestrator runs itself (a pipeline worker, a reviewer,
+        // a subork) has neither, so the request would only fail inside the turn.
+        if (
+          !session.logicalSessionKey.startsWith(`env-${session.environmentId}:`) &&
+          session.owner?.kind !== "coordinator"
+        ) {
+          throw new PromptRejectedError(
+            "/subork works in agent tabs and coordinator conversations. This session is run by Orkestrator itself (a pipeline, review or subork), which has no mailbox for the answers to wake.",
+          );
+        }
+        input = { ...input, prompt: renderSuborkRequestCarrier(planned.request) };
+      }
       if (commandPlan.kind === "goal") {
         try {
           await this.goals.command(session, commandPlan.arguments, {
@@ -3602,7 +3659,11 @@ export class NativeAgentService {
             // The journal is re-read under this lease, so a delivery another
             // request settled while this one waited is not sent again.
             const outgoing = promptWithPendingAgentHandoff(
-              insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+              coordinatorPromptWithAttachmentPaths(
+                insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+                durable.environmentId,
+                commandPlan.command ? undefined : input.attachments,
+              ),
               pendingHandoff,
               durable,
             );
@@ -3833,7 +3894,10 @@ export class NativeAgentService {
         environmentId: input.environmentId,
         // A goal's first turn is a carrier. Name the environment from what the
         // person asked for, not from its framing.
-        prompt: parseGoalCarrier(input.prompt)?.objective ?? input.prompt,
+        prompt:
+          parseGoalCarrier(input.prompt)?.objective ??
+          parseSuborkRequestCarrier(input.prompt)?.request ??
+          input.prompt,
       });
     } catch (error) {
       log.warn("naming.prepare-failed", {

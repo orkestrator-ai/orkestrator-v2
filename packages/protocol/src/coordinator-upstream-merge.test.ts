@@ -107,6 +107,15 @@ describe("decideUpstreamMergeOffer", () => {
     expect(
       parseCoordinatorUpstreamMergeCheck({ offer: false, reason: "turn-running", status: null }),
     ).toEqual({ offer: false, reason: "turn-running", status: null });
+    // A backend that fast-forwarded to the upstream already fetched.
+    const merged = { ...behind, behind: 0 };
+    expect(
+      parseCoordinatorUpstreamMergeCheck({
+        offer: false,
+        reason: "fast-forwarded",
+        status: merged,
+      }),
+    ).toEqual({ offer: false, reason: "fast-forwarded", status: merged });
     expect(parseCoordinatorUpstreamMergeCheck({ offer: true })).toBeNull();
     expect(parseCoordinatorUpstreamMergeCheck({ offer: false, reason: "other" })).toBeNull();
     expect(parseCoordinatorUpstreamMergeCheck(undefined)).toBeNull();

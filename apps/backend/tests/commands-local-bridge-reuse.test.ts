@@ -205,10 +205,13 @@ describe("local bridge reuse under load", () => {
       () => true,
     );
     const logs = captureLogs();
+    // A replacement also stops the old child and starts a new one; this test
+    // asserts only the warning and recovery lines around that.
+    const lifecycleEvents = new Set(["server.stopping", "bridge.exited", "bridge.started"]);
     const events = () =>
       logs
         .records()
-        .filter((record) => record.area === "local-server" && record.event !== "server.stopping")
+        .filter((record) => record.area === "local-server" && !lifecycleEvents.has(record.event))
         .map((record) => record.event);
     try {
       await requestOk(first.port, "/stall");

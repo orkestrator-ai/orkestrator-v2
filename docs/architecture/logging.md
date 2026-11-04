@@ -262,7 +262,11 @@ and no site logs a stderr tail.
 
 | Area | Event | Level | Written when |
 | --- | --- | --- | --- |
-| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process, so there is no regained line. |
+| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
+| `docker` | `writer-lease.regained` | `info` | A backend took the lease over from a holder that stopped refreshing it (crashed, killed or stalled), with `staleForMs` since that holder's last refresh. A lease a clean shutdown released is acquired silently. |
+| `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
+| `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
+| `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
 | `docker` | `writer-lease.not-acquired` | `info` | A backend starts without the lease, with `reason` (`busy`, `schema-incompatible`). A second backend on one directory is normal. |
 | `local-server` | `bridge.exited` | `warn`, or `info` if the backend asked | Every exit of a local bridge, with `code`, `signal` and `requested`. A clean exit 0 nothing asked for warns. Read it with `server.stopping`. |
 | `bridge.pi`, `bridge.cursor` | `session.resume-fell-back` | `warn` | A saved conversation could not be resumed and a new one started. |
@@ -274,10 +278,258 @@ and no site logs a stderr tail.
 | `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
 
-These lines reach disk only while **Save Logs to Disk** is on. A normal agent close
+The lines the [essential log](#the-essential-event-log) lists are always kept there;
+the rest reach disk only while **Save Logs to Disk** is on. A normal agent close
 also writes `agent.exited` at `warn`, on every session close, so filter on
 `requested=false` to find the exits nothing asked for. Stopping a turn sends
 `session/cancel` and keeps the process, so it writes no such line.
+
+## The essential event log
+
+With **Save Logs to Disk** off, which is the default, the saved log keeps nothing, so
+the first occurrence of a crash or a silent fallback would be lost. So a small event
+log is written **whatever that setting says**. This is a deliberate change from
+"nothing persisted unless enabled", and Settings says so.
+
+**The privacy rule is the point of the design.** Nobody chose to save this, so every
+entry is an event name and scalar fields. It holds no error message, no stack, no
+path, no prompt, no file content and no token (AGENTS.md invariant 12). That is not
+left to call sites: `packages/protocol/src/log-essential.ts` builds each entry field
+by field, and anything it does not recognise stays out.
+
+```json
+{"orklog":1,"ts":"2026-11-04T10:00:00.000Z","level":"warn","area":"local-server","event":"bridge.exited","fields":{"key":"codex:6e0a6a7e","pid":4242,"code":null,"signal":"SIGKILL","requested":false}}
+```
+
+### Where it is
+
+`logs/essential/` under the data directory, always JSON lines whatever
+`ORKESTRATOR_LOG_FORMAT` says, mode `0600`.
+
+| Bound | Value |
+| --- | --- |
+| Files | `essential.jsonl` plus 3 rotated (`essential.1.jsonl` is the newest of those) |
+| Per file | 1 MiB; a write that would pass it rotates first |
+| **Total** | **4 MiB, a hard cap** |
+| Per entry | 4 KiB; a larger entry loses its fields |
+| Queue | 256 KiB in memory |
+| One event | A burst of 10 entries, then one per 10 minutes |
+
+A file rather than a database table, because it has to work when the database is the
+failing part, and adds no writes to a busy database. It is not queryable.
+
+It is **outside retention**. The sweep, the directory budget and **Clean up logs** all
+skip the directory (only that name, at the top of `logs/`, as a real directory), and
+`debugLogRetentionDays` does not apply. `get_log_storage_stats` reports it apart, as
+`essentialBytes` and `essentialFileCount`, and its `totalBytes` and `fileCount` are
+what cleaning removes.
+
+### Who writes it
+
+One process, the one that owns the log file today:
+
+| Setup | Writer | How the others reach it |
+| --- | --- | --- |
+| The app | The desktop main process, in every runtime flavor | The backend's lines over the [Electron relay](#the-electron-relay), a local bridge's over [the hop](#the-bridge-hop) first |
+| A standalone backend | That backend | A local bridge's over the hop |
+
+So a backend crash in the app is still captured, by the desktop, which is what the
+choice is for. Three limits follow from it:
+
+- **A desktop crash cannot write its own entry.** A JavaScript exception is logged by
+  the existing handler (`native-dialogs.ts`) and the process carries on. A native crash
+  writes nothing, and only its next start can show it: `essential.started` with no
+  `essential.stopped` before it means the last writer died. A process ended by a kill
+  rather than a quit reads the same way, as `dev:stop`'s does.
+- **A container bridge has no hop**, so nothing in it reaches this file: its
+  `session.resume-fell-back` stays in `/tmp/<provider>-bridge.log`. The backend's own
+  `docker` `bridge.launched` is what records a container bridge's start or relaunch.
+- **A second standalone backend on one data directory** shares the files under a
+  cross-process lock covering size inspection, rotation and append. The lock is
+  published as a nonempty directory; only a dead owner's unique empty child can
+  be reclaimed. A slow live process never loses ownership to a timeout. Contention
+  waits asynchronously for up to two seconds, then reports a counted write loss.
+- **A rejected desktop launch** installs no writer or shutdown marker: ownership
+  starts only after winning Electron's single-instance lock.
+
+### What it holds
+
+Two kinds of entry: every `error`, and each event flagged `essential: true` in
+`log-vocabulary/`. The flag is the only way in, so it is reviewed where the event is
+defined. Each definition lists its fields, and only those are written:
+
+```ts
+"writer-lease.lost": {
+  description: "This backend lost the registry writer lease...",
+  essential: true,
+  fields: { reason: "label" },
+},
+```
+
+A field's kind is `number`, `boolean` or `label`. Strings pass only the explicit
+sets or field-specific classifiers in `log-essential-labels.ts`: known providers,
+lease reasons, built-in error names, common OS error codes, syscalls and signals;
+version numbers, timestamps, and provider-prefixed environment UUIDs. Unknown names
+and token-shaped strings are dropped even when they look like identifiers. `null`
+fits any kind. There is deliberately no kind for an object or for text. A value that does
+not fit is dropped and counted in `droppedFields`. `ESSENTIAL_ERROR_FIELDS` declares
+what an error may keep: `error.name`, `.code`, `.errno`, `.syscall`, `.exitCode`,
+`.signal`, `.outputOmitted` and `.errorCount`. Its message, stack and cause never come
+along. The `source` a relay adds is kept only as a known provider plus an environment UUID.
+
+| Area | Event | Fields | Written when |
+| --- | --- | --- | --- |
+| `backend` | `starting` | `version` | The backend process is starting. |
+| `backend` | `shutdown.signal-received` | `signal` | A signal started shutdown. |
+| `backend` | `shutdown.finished` | `code` | Shutdown finished; the process exits with `code`. |
+| `process` | `uncaught-exception` | `origin`, error | An exception reached the top of the backend. |
+| `process` | `rejection.unhandled` | `kind`, error | A rejection reached the guard, in the backend or a local bridge. |
+| `desktop` | `backend.exited` | error (`exitCode`, `signal`) | The Local backend exited unexpectedly. |
+| `desktop` | `backend.exited-recovering` | error (`exitCode`, `signal`) | The same, just after a remote update. |
+| `desktop` | `backend.start-failed` | error | The Local backend did not start. |
+| `desktop` | `uncaught-exception` | error | The main process hit an uncaught exception. |
+| `local-server` | `bridge.started` | `key`, `pid` | A local bridge was spawned. `key` is `kind:environmentId`. |
+| `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
+| `docker` | `bridge.launched` | `provider`, `containerPort` | A bridge was launched in a container, for the first time there or as a relaunch. |
+| `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
+| `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |
+| `docker` | `writer-lease.not-acquired` | `reason` | This backend started without it. |
+| `bridge.pi` | `session.resume-fell-back` | error | A saved conversation could not be reopened, so a new one started. |
+| `bridge.cursor` | `session.resume-fell-back` | error | The same. |
+| `storage` | `migration.failed` | `fromVersion`, `toVersion`, `step`, error | The database did not reach this build's schema. |
+| `storage` | `snapshot.failed` | `retryAt`, error | The hourly database snapshot failed. |
+| `storage` | `snapshot.integrity-failed` | none | A snapshot failed its integrity check. |
+| `event-loop` | `stalled` | `lagMs`, `intervalMs` | A stall of 10 seconds or more: only at `error`, not the routine `warn`. |
+| `desktop` | `main-thread.stalled` | `lagMs`, `intervalMs` | The same, for the main process. |
+| `logging` | `essential.started` | `owner` | This process began writing the file. |
+| `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
+| `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
+
+A lease is **regained** by the next backend, not by the one that lost it: a lost lease
+is final until that process restarts, so `writer-lease.regained` is written by whichever
+backend removes the stale lease and takes it. Read with the previous holder's
+`writer-lease.lost` (`reason=reclaimed`), or with a `backend.exited` and no lost line
+when the holder crashed. `snapshot.skipped-low-disk` stays out as a skip
+rather than a failure, and the transcript artifact warnings stay silent.
+
+An `error` that is not flagged was not reviewed for this file, so it keeps less: its
+numbers and booleans under the fixed names `attempts`, `retried`, `exitCode`,
+`errno`, `suppressed`, `windowSeconds` and `droppedFields`, an error's identity
+only under the `error` prefix, and a string only under `site`, `kind`, `step`,
+`reason`, `signal` or `code`, and only if its value passes the same explicit classifier. Everything else is dropped and
+counted. This is what makes `error` safe to include by default, and a throttle's
+summary at `error` keeps which site it is about.
+
+`log-vocabulary.test.ts` holds the list above to the code in both directions: the flagged
+events must be exactly the curated list, every field a scalar kind, no field named for
+content, and this table must name every one.
+
+### Levels cannot switch it off
+
+An `error` is never filtered. A flagged event below the threshold is still offered to
+this log and to no other. Where the process owns the file it goes straight in.
+Otherwise it crosses the relay marked `"essentialOnly":true`, so the desktop keeps it
+without writing it to the normal log, which levels still decide.
+
+```mermaid
+flowchart LR
+  L["log.info at a level that is off"] -->|flagged?| D{owns the file?}
+  D -->|yes| F[(logs/essential)]
+  D -->|no, relayed| R["JSON record, essentialOnly"] --> D2[next process]
+  D2 --> F
+  L2["log.warn at a level that is on"] --> N[normal log and relay]
+  N --> F
+```
+
+An unflagged call in a level that is off still costs one comparison and builds nothing,
+and an area with no essential event adds one boolean. `log.isEnabled` still answers for
+the normal log, so do not guard an essential event's call with it.
+
+The marker is honoured only for an entry the essential log takes, so an imitation on
+stdout can hide nothing else from the normal log. Beyond that, an imitation can add a
+false line here, but no content: it passes the same projection, and its fields must
+still fit. Its timestamp is replaced unless it looks like one.
+
+### Writes with saving on and off
+
+| Save Logs to Disk | Normal log | Essential log |
+| --- | --- | --- |
+| Off | Not written | Written |
+| On | Written, unchanged | Written as well |
+
+Switching takes effect at once and does not touch this file. The two share nothing:
+the saved log is a tee on `console`, and this log is a `configureLogger` sink that
+takes records.
+
+### When it cannot write
+
+Logging calls enqueue without doing filesystem work. One deferred loop drains the
+bounded queue, sending one transaction at a time to a dedicated worker. Lock
+acquisition, directory reads, size checks, rotation and append all run off the
+owning event loop. The worker and exit fallback share the same lock and transaction
+implementation. A shared atomic completion word lets an exit cancel an unstarted
+write or acknowledge a committed one without replaying it. An executing write gets
+a bounded 100 ms wait; an ambiguous append is never replayed. A physically stalled
+disk can still lose exit records, but routine I/O cannot stall the application.
+
+- **A write that fails** (a full disk, a read-only directory) loses its entry. The loss
+  is counted, reported once as `logging` `essential.write-failed` at `warn`, throttled
+  and with no message, and a marker reaches the file at the next write that works:
+  `entries.dropped` with `reason=write-failed`. A `queue-full` loss works the same way.
+- **That report cannot recurse.** The event is refused by the essential log at any
+  level, so reporting a failed write can never queue another.
+- **A rotation that fails** drops the entry rather than passing the cap.
+- **An exit** has no event loop left to drain the queue, so an `exit` listener writes
+  what is left synchronously, one bounded entry at a time under the same lock.
+  Immediate `app.exit()` explicitly drains first because Electron skips `will-quit`.
+  A crash or immediate exit emits no orderly `essential.stopped` marker.
+  Standalone ownership is installed before startup awaits, so toolchain lease
+  failures are captured too.
+
+### A repeating fault
+
+A flood of one event must not evict everything else, so there are two limits.
+**Use `log.throttled`** for a loop that repeats: the first occurrence is written and the
+rest are counted, as [Repeating faults](#repeating-faults) describes, and
+`rejection.unhandled` does. Separately, this log gives each event and level its own
+budget (a routine `info` exit cannot consume a crash's `warn` allowance), whatever the
+call site does: a burst of 10, then one entry per 10 minutes, or about 36 KB a day from
+one event at most. The next entry that fits carries `suppressed=N`, and a stop or exit
+turns any count nothing reported into `entries.dropped` with `reason=rate-limited`.
+
+### The uncaught exception handler
+
+`process` `uncaught-exception` is written from an `uncaughtExceptionMonitor` listener
+(`node/process-failure-log.ts`), not an `uncaughtException` one, because of what Bun
+1.4.4 does. All of this comes from real runs, and
+`apps/backend/src/uncaught-exception.integration.test.ts` keeps pinning it:
+
+| Listener | What happens |
+| --- | --- |
+| None | Bun prints its dump to stderr, fires `exit` with code 1, and exits 1. |
+| `uncaughtException` that returns | **The process keeps running**, with no dump, in an unknown state. Not usable. |
+| `uncaughtException` that rethrows | Exits 7. Not usable. |
+| `uncaughtExceptionMonitor` | Runs first, then exactly as with none: the same dump, `exit` with code 1, exit 1. |
+| `uncaughtExceptionMonitor` that throws | Exits 7, so the listener lets nothing escape. |
+
+A rejected top-level await reaches the monitor too, with `origin=unhandledRejection`,
+and still exits 1, which covers a startup failure in `main.ts`. An ordinary unhandled
+rejection does not reach the monitor: it goes to the fatal rejection guard as before.
+A line written during the monitor reaches a draining stdout pipe before the process is
+gone, so the desktop gets it. If the desktop's reader has stalled, it can be lost.
+
+### No `crashReporter`
+
+Electron's `crashReporter` stays off, on purpose. Minidumps hold process memory, so
+they are not content-free, even with uploads off. The cost is that a native crash stays
+unexplained beyond its exit signal.
+
+### Reading it
+
+Each line is a record `parseLogRecordLine` reads, so `jq` works on the file. **Open log
+folder** in Settings → Debug shows it, as `essential/`. Later work may read it (a
+diagnostics export) or write to it (renderer diagnostics); neither is decided, and
+renderer lines do not reach it today.
 
 ## Command failures
 
@@ -443,8 +695,9 @@ bounded, and neither is child output, so neither has a backstop. A raw error fro
 their log sites go through `formatLogError`, which is what covers them.
 
 **The fatal rejection guard is bounded.** `packages/protocol/src/fatal-rejections.ts`
-is serialized into workers, so it imports nothing and keeps its raw `console`. It
-writes one line of at most about 5 KiB: a message cut at 1 KiB, up to 16 frames of 240
+is serialized into workers, so it imports nothing and keeps its raw `console`. Its
+`onRejection` option is how the backend and bridges add a logger entry beside that line,
+for the essential log. It writes one line of at most about 5 KiB: a message cut at 1 KiB, up to 16 frames of 240
 characters with the same relative paths, and any `code`, `exitCode` and `signal` that
 look like identifiers. It drops a command failure's message and output. An arbitrary
 rejected object is described by shape (`[object Object] code=E_NOPE keys=3`), never by
@@ -485,6 +738,33 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
   `console.debug`, because `console.trace` prints a stack of its own and neither
   the bounded console nor the file tee wraps it.
 
+## The file writer
+
+`installProductionApplicationLogging` tees each console call into a queue, and one
+serialized chain moves the queue to the daily file. A burst costs one `appendFile`,
+however many lines it holds.
+
+- **When it writes.** On the next event-loop turn after a line arrives, or after the
+  append in flight finishes. Lines logged during an append share the next one. There
+  is no timer, so a lone line waits for nothing else. A blocked main thread still
+  delays it.
+- **How much at once.** Everything queued, in appends of at most 256 KiB
+  (`maxBatchBytes`), or more for a single larger entry. A batch splits where the file
+  rolls, so one line is never cut across two appends by the writer.
+- **Order and completion.** Lines reach the file in the order they were logged.
+  `flush` and `stop` wait for every line accepted before the call, which is how a
+  quit or a standalone backend's shutdown keeps them. A process that exits without
+  calling them can lose what is queued.
+- **The directory.** `mkdir` runs before the first write and again only after a failed
+  write. When the log folder is removed while running, the failed append's `ENOENT`
+  makes the writer create it, recount the file sizes and retry those lines once.
+- **A failed write.** Any other failure loses that batch and writes one `logging`
+  `write.failed` line, with `entries` and `bytes`, to the console. The file has no
+  marker for it. It never reaches the code that logged, and the next batch tries again.
+- **Bounds.** The queue holds at most 4 MiB (`maxPendingBytes`) and 65,536 entries
+  (`maxPendingEntries`), counting what is being written. A line past either is
+  dropped, and the next line that fits writes `entries.dropped` first.
+
 ## Live settings
 
 **Settings → Debug** has two controls. Neither needs a restart, and neither
@@ -492,8 +772,8 @@ interrupts a running agent.
 
 | Control | Config keys | Decides |
 | --- | --- | --- |
-| **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. |
-| **Log Detail** | `logDetail` (`level`, `areaLevels`) | What each process writes: a default level and levels by area. |
+| **Save Logs to Disk**, with retention | `debugLogging`, `debugLogRetentionDays` | Whether what is written reaches the log file, and for how long it stays. The [essential log](#the-essential-event-log) follows neither. |
+| **Log Detail** | `logDetail` (`level`, `areaLevels`) | What each process writes: a default level and levels by area. It cannot switch off an essential event. |
 
 An area covers its children unless a child has its own entry: `desktop=debug` also
 covers `desktop.dialog`. The default is `info`. Bridge snapshots
@@ -542,7 +822,7 @@ flowchart LR
   reported. The byte bounds and drop markers do not change. A retention change
   while saving is on sweeps at once. While saving is off nothing sweeps, as before,
   and files already on disk stay until saving returns or someone uses **Clean up
-  logs**.
+  logs**, which leaves `logs/essential/` alone.
 - **Upgrading.** Before the split, `debugLogging` meant saving and bridge snapshots.
   A config without `logDetail` is upgraded once by `normalizePersistedConfig`: on
   maps to `level: info`, `areaLevels: { bridge: debug }`, off to the defaults.
@@ -635,7 +915,8 @@ flowchart LR
 - **Who turns it on.** The backend's `main.ts` passes `relayToSupervisor` when
   `ORKESTRATOR_DESKTOP_SUPERVISED=1`, before standalone logging clears that flag.
   So only the desktop's direct child uses it, not the bridges it launches or a
-  standalone backend.
+  standalone backend. An agent-test profile's backend sets it too, so a real-stack
+  test sees what production does.
 - **The wire format is the JSON-lines format.** There is one record shape, not a
   second grammar, and it is versioned by its `{"orklog":1,` prefix. Fields survive
   the crossing as well as the level, so the desktop renders them in its own format.
@@ -657,8 +938,11 @@ Two alternatives were rejected. A one-character level prefix needs a second gram
 and loses the fields. A separate pipe avoids any parsing but adds a stream with its
 own backpressure and no ordering against stdout and stderr.
 
-The rest of the relay and writer work (batching, a line length bound, skipping the
-relay when nothing consumes it) is undecided and not built.
+The relay carries the [essential log](#the-essential-event-log) too, and its
+`essentialOnly` entries are the one thing it does not write to the normal log.
+
+The rest of the relay work (a line length bound, skipping the relay when nothing
+consumes it) is undecided and not built.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.

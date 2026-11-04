@@ -262,15 +262,19 @@ function KeyInformationContents({
   }
 
   const sections: SectionEntry[] = [];
+  if (info.summary) {
+    sections.push({
+      key: "summary",
+      title: "Summary",
+      body: <LeadProse text={info.summary} />,
+    });
+  }
   if (info.statement) {
     sections.push({
       key: "statement",
       title: info.framing === "objective" ? "Objective" : "Problem",
-      body: (
-        <div className="rounded-lg border-l-2 border-amber-400/60 bg-muted/15 px-4 py-3">
-          <TabProse text={info.statement} lead />
-        </div>
-      ),
+      // Only the brief's opening section is set apart.
+      body: info.summary ? <TabProse text={info.statement} /> : <LeadProse text={info.statement} />,
     });
   }
   if (info.context) {
@@ -389,7 +393,7 @@ function KeyInformationContents({
       <div className="flex min-w-0 flex-1 flex-col gap-8">
         {tiles.length > 0 ? (
           <div
-            aria-label="Summary"
+            aria-label="At a glance"
             role="group"
             className="grid grid-cols-2 gap-2 @2xl:grid-cols-3 @5xl:grid-cols-5"
           >
@@ -446,6 +450,14 @@ function KeyInformationContents({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function LeadProse({ text }: { text: string }) {
+  return (
+    <div className="rounded-lg border-l-2 border-amber-400/60 bg-muted/15 px-4 py-3">
+      <TabProse text={text} lead />
     </div>
   );
 }

@@ -251,11 +251,37 @@ describe("git fsmonitor", () => {
       ensureFetched: async () => undefined,
     });
     expect(status.changes).toMatchObject([{ path: "new.txt", status: "?" }]);
-    expect(reads).toHaveLength(3);
+    expect(reads).toHaveLength(2);
     for (const args of reads) {
       expect(args.slice(0, HARDENED_GIT_CONFIG.length)).toEqual([...HARDENED_GIT_CONFIG]);
     }
   });
+
+  test.skipIf(!daemonSupported)(
+    "project-home status auto-starts and preserves the configured daemon",
+    async () => {
+      const { project } = await createRepositoryWithWorktree();
+      const data = await fs.mkdtemp(path.join(os.tmpdir(), "ork-fsmonitor-auto-"));
+      tempDirectories.push(data);
+      const storage = new StorageService(data);
+      await storage.init();
+      const record = await storage.addProject(createProject("remote", project));
+      await git(project, ["config", "core.fsmonitor", "true"]);
+      try {
+        await expect(git(project, ["fsmonitor--daemon", "status"])).rejects.toThrow();
+        const status = await new ProjectGitService(storage).status(record.id);
+        expect(status.branch).toBe("main");
+        await expect(git(project, ["fsmonitor--daemon", "status"])).resolves.toContain(
+          "is watching",
+        );
+        await expect(
+          readConfig(path.join(project, ".git", "config"), "core.fsmonitor"),
+        ).resolves.toBe("true");
+      } finally {
+        await stopGitFsmonitorDaemon(project);
+      }
+    },
+  );
 
   test("project-home toolbar status retries a timeout with fsmonitor disabled", async () => {
     const { project } = await createRepositoryWithWorktree();

@@ -1,33 +1,41 @@
 import { describe, expect, test } from "bun:test";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import Markdown from "react-markdown";
-import type { PluggableList, Processor } from "unified";
-import {
-  IncrementalMarkdownCache,
-  lastSafeBoundary,
-  remarkIncrementalParse,
-} from "./incremental-parse";
+import type { PluggableList } from "unified";
+import { IncrementalMarkdownCache, lastSafeBoundary, remarkParseRange } from "./incremental-parse";
 import { blockMarkdownPlugins, markdownUrlTransform } from "./markdown-plugins";
 
-/** Records the tree the parser produced, before any transform runs. */
-function captureParse(this: Processor, sink: { tree: unknown }) {
-  return (tree: unknown) => {
-    sink.tree = structuredClone(tree);
-  };
+function blocksOf(fragment: ReactElement): ReactNode[] {
+  const { children } = fragment.props as { children?: ReactNode };
+  if (children === undefined) return [];
+  return Array.isArray(children) ? (children as ReactNode[]) : [children];
 }
 
-function render(source: string, plugins: PluggableList) {
-  const sink: { tree: unknown } = { tree: null };
-  const html = renderToStaticMarkup(
-    <Markdown
-      remarkPlugins={[[captureParse, sink], ...plugins]}
-      urlTransform={markdownUrlTransform}
-    >
-      {source}
-    </Markdown>,
+function renderIncremental(
+  cache: IncrementalMarkdownCache,
+  source: string,
+  plugins: PluggableList,
+): ReactNode[] {
+  return cache.render(source, (range) =>
+    blocksOf(
+      Markdown({
+        children: source,
+        remarkPlugins: [[remarkParseRange, range], ...plugins],
+        urlTransform: markdownUrlTransform,
+      }),
+    ),
   );
-  return { html, tree: sink.tree };
 }
+
+function renderFull(source: string, plugins: PluggableList): ReactNode[] {
+  return blocksOf(
+    Markdown({ children: source, remarkPlugins: plugins, urlTransform: markdownUrlTransform }),
+  );
+}
+
+const html = (nodes: ReactNode[]) => renderToStaticMarkup(<>{nodes}</>);
+const keys = (nodes: ReactNode[]) => nodes.map((node) => (isValidElement(node) ? node.key : node));
 
 const FIXTURES: Record<string, string> = {
   prose: [
@@ -111,21 +119,18 @@ const FIXTURES: Record<string, string> = {
 };
 
 for (const [name, fixture] of Object.entries(FIXTURES)) {
-  describe(`incremental parse equals a full parse: ${name}`, () => {
+  describe(`incremental render equals a full render: ${name}`, () => {
     for (const rich of [false, true]) {
       test(`every streamed prefix (rich: ${rich})`, () => {
         const plugins = blockMarkdownPlugins({ rich, enableBreaks: true, clipped: false });
         const cache = new IncrementalMarkdownCache();
-        const incremental: PluggableList = [[remarkIncrementalParse, cache], ...plugins];
         for (let length = 0; length <= fixture.length; length += 1) {
           const prefix = fixture.slice(0, length);
-          const full = render(prefix, plugins);
-          const reused = render(prefix, incremental);
-          if (JSON.stringify(reused.tree) !== JSON.stringify(full.tree)) {
-            throw new Error(`tree differs at length ${length}`);
-          }
-          if (reused.html !== full.html) throw new Error(`html differs at length ${length}`);
-          if (length > 0 && full.tree === null) throw new Error("the oracle captured no tree");
+          const full = renderFull(prefix, plugins);
+          const reused = renderIncremental(cache, prefix, plugins);
+          if (html(reused) !== html(full)) throw new Error(`html differs at length ${length}`);
+          // The same keys are what let the final render update these in place.
+          expect(keys(reused)).toEqual(keys(full));
         }
         // Not vacuous: where nothing disables reuse, the prefix was reused.
         // (A definition disables it only once it has streamed in.)
@@ -137,32 +142,61 @@ for (const [name, fixture] of Object.entries(FIXTURES)) {
   });
 }
 
-describe("incremental parse reuse", () => {
-  test("a long streamed answer parses each completed segment once", () => {
+describe("incremental render reuse", () => {
+  const plugins = blockMarkdownPlugins({ rich: true, enableBreaks: true, clipped: false });
+
+  test("a long streamed answer renders each completed segment once", () => {
     const paragraphs = Array.from(
       { length: 200 },
       (_, index) => `Paragraph ${index} explains one more step of the change in some detail.`,
     );
     const document = paragraphs.join("\n\n") + "\n";
-    const plugins = blockMarkdownPlugins({ rich: true, enableBreaks: true, clipped: false });
     const cache = new IncrementalMarkdownCache();
     let streamed = 0;
     for (let length = 1; length <= document.length; length += 40) {
-      render(document.slice(0, length), [[remarkIncrementalParse, cache], ...plugins]);
+      renderIncremental(cache, document.slice(0, length), plugins);
       streamed += length;
     }
-    // A full parse of every update would read `streamed` characters.
+    // A full render of every update would read `streamed` characters.
     expect(cache.reused).toBeGreaterThan(0);
-    expect(cache.parsedCharacters).toBeLessThan(streamed / 20);
+    expect(cache.renderedCharacters).toBeLessThan(streamed / 20);
+  });
+
+  test("a finished block keeps the same element while text arrives after it", () => {
+    const cache = new IncrementalMarkdownCache();
+    const first = renderIncremental(cache, "First.\n\nSecond.\n\nThird.\n\nFo", plugins);
+    const second = renderIncremental(cache, "First.\n\nSecond.\n\nThird.\n\nFour", plugins);
+    expect(second[0]).toBe(first[0]);
+    expect(second[2]).toBe(first[2]);
+    // The block still arriving is rendered again.
+    expect(second.at(-1)).not.toBe(first.at(-1));
+  });
+
+  test("a code block's id holds its offset in the whole document", () => {
+    const text = "Intro.\n\nMore.\n\n```ts\nconst a = 1;\n```\n\nAfter.\n\nTail";
+    const cache = new IncrementalMarkdownCache();
+    const markup = html(renderIncremental(cache, text, plugins));
+    expect(markup).toContain(`code:${text.indexOf("```")}`);
+    expect(markup).toBe(html(renderFull(text, plugins)));
   });
 
   test("text that no longer extends the cached prefix resets it", () => {
-    const plugins = blockMarkdownPlugins({ rich: false, enableBreaks: true, clipped: false });
     const cache = new IncrementalMarkdownCache();
-    const incremental: PluggableList = [[remarkIncrementalParse, cache], ...plugins];
-    render("First.\n\nSecond.\n\nThird", incremental);
+    renderIncremental(cache, "First.\n\nSecond.\n\nThird", plugins);
     const replaced = "Other.\n\nSecond.\n\nThird";
-    expect(render(replaced, incremental).html).toBe(render(replaced, plugins).html);
+    expect(html(renderIncremental(cache, replaced, plugins))).toBe(
+      html(renderFull(replaced, plugins)),
+    );
+  });
+
+  test("a construct with document-wide meaning arriving later re-renders what came before", () => {
+    const cache = new IncrementalMarkdownCache();
+    const opening = "See [the docs][docs].\n\nMore text.\n\nEven more";
+    renderIncremental(cache, opening, plugins);
+    const complete = `${opening}.\n\n[docs]: https://example.com/docs\n`;
+    const markup = html(renderIncremental(cache, complete, plugins));
+    expect(markup).toContain('href="https://example.com/docs"');
+    expect(markup).toBe(html(renderFull(complete, plugins)));
   });
 
   test("boundaries are never inside a fence, an indented block, a list or a quote", () => {

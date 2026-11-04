@@ -5,13 +5,21 @@ import {
 } from "./native-agent-prompt-queue-dispatcher.js";
 import {
   nativeAgentSessionStorageKey,
+  type DispatchNativeAgentPromptInput,
   type NativeAgentRuntimeProvider,
 } from "./native-agent-service-shared.js";
 
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage.js";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorConversationSessionKey,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import { coordinatorRuntimeEnvironment, resolveCoordinatorRuntime } from "./coordinator-runtime.js";
 import {
   seedLegacyPromptQueueClaim,
   storageDatabase,
@@ -390,4 +398,96 @@ test("queue holds while limit recovery is pending, then releases the head", asyn
       clock.mockRestore();
     }
   });
+});
+
+test("a coordinator's queued message waits for the running turn, then is sent as the next turn", async () => {
+  // What a refused or unavailable steer leaves behind on the Coordinator page:
+  // the durable queue row. The drain must hold it while the turn runs and
+  // deliver it once the turn ends, as it does for an environment's tab.
+  const runtimeId = coordinatorRuntimeId("coordinator-1", "main");
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-coordinator-queue-"));
+  const storage = new StorageService(directory);
+  await storage.init();
+  try {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", directory),
+    );
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: project.id,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "main",
+          tabId: "coordinator-main",
+          logicalSessionKey: coordinatorConversationSessionKey("coordinator-1", {
+            id: "main",
+            tabId: "coordinator-main",
+          }),
+          agent: "claude",
+          title: "Coordinator",
+          createdAt: new Date(0).toISOString(),
+          mailboxIncarnationId: "incarnation-main",
+          role: "main",
+        },
+      ],
+      selectedConversationId: "main",
+      repositoryContextRevision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }));
+    const resolved = await resolveCoordinatorRuntime(storage, runtimeId);
+    if (resolved.status !== "ready") throw new Error(`coordinator ${resolved.status}`);
+    const environment = coordinatorRuntimeEnvironment(runtimeId, resolved);
+    const coordinator = {
+      environmentId: runtimeId,
+      agent: "claude" as const,
+      logicalSessionKey: `env-${runtimeId}:coordinator-main`,
+    };
+    const key = nativeAgentSessionStorageKey(
+      coordinator.environmentId,
+      coordinator.agent,
+      coordinator.logicalSessionKey,
+    );
+    const coordinatorQueueKey = `${coordinator.agent}\0${coordinator.logicalSessionKey}`;
+    const session = await storage.getOrCreateNativeAgentSession(
+      { ...coordinator, key },
+      async () => "provider-1",
+    );
+    let status = "running";
+    const dispatchPrompt = mock(async (_input: DispatchNativeAgentPromptInput) => session);
+    const { dispatcher } = harness({
+      storage,
+      assertEnvironmentLive: async () => environment,
+      ensureSession: async () => session,
+      provider: async () =>
+        ({ status: async () => status }) as unknown as NativeAgentRuntimeProvider,
+      dispatchPrompt,
+    });
+    await storage.enqueuePromptQueueMessage(coordinatorQueueKey, runtimeId, {
+      id: "queued-1",
+      text: "also check the open pull requests",
+    });
+
+    await dispatcher.drainPromptQueueForSession(coordinator);
+    expect(dispatchPrompt).not.toHaveBeenCalled();
+    expect((await storage.getPromptQueue(coordinatorQueueKey))?.messages).toHaveLength(1);
+
+    status = "idle";
+    await dispatcher.drainPromptQueueForSession(coordinator);
+    expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+    expect(dispatchPrompt.mock.calls[0]![0]).toMatchObject({
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: coordinator.logicalSessionKey,
+      prompt: "also check the open pull requests",
+      requestId: "queued-1",
+    });
+    expect((await storage.getPromptQueue(coordinatorQueueKey))?.messages ?? []).toHaveLength(0);
+  } finally {
+    storage.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });

@@ -63,7 +63,11 @@ mock.module("@/lib/backend", () => ({
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   copyExternalFile: copyExternalFileMock,
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
-  getLocalFileSubtree: getLocalFileSubtreeMock,
+  getLocalFileSubtreeSnapshot: async (worktreePath: string, directory: string) => ({
+    unchanged: false,
+    digest: "",
+    value: await getLocalFileSubtreeMock(worktreePath, directory),
+  }),
   getLocalGitStatusSnapshot: getLocalGitStatusSnapshotMock,
   refreshChanges: refreshChangesMock,
 }));

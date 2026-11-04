@@ -13,9 +13,48 @@ export interface LogAreaSpec {
    * diagnostic snapshot is; the vocabulary test pins who has one.
    */
   readonly maxStringChars?: number;
-  /** Static event name to one sentence saying when it is written. */
-  readonly events: Readonly<Record<string, string>>;
+  /** Static event name to one sentence saying when it is written, or its essential definition. */
+  readonly events: Readonly<Record<string, LogEventSpec>>;
 }
+
+/**
+ * What a field of an essential event may hold. `label` admits only the explicit
+ * sets and classifiers in `log-essential-labels.ts`, never arbitrary text or an
+ * identifier-shaped token. There is no kind for an object or free text.
+ */
+export type EssentialFieldKind = "number" | "boolean" | "label";
+
+/**
+ * An event kept in the always-on essential log, whatever "Save Logs to Disk" and
+ * the levels say (docs/architecture/logging.md, "The essential event log"). Only
+ * the fields declared here reach that file, so reviewing this list is reviewing
+ * what the app keeps by default.
+ */
+export interface EssentialLogEvent {
+  /** One sentence saying when it is written. */
+  readonly description: string;
+  readonly essential: true;
+  /** Only an entry at `error` counts, for an event whose `warn` is routine. */
+  readonly minLevel?: "error";
+  readonly fields: Readonly<Record<string, EssentialFieldKind>>;
+}
+
+export type LogEventSpec = string | EssentialLogEvent;
+
+/**
+ * What an essential entry may keep of a `formatLogError` field called `error`:
+ * its identity, with no message, stack or cause.
+ */
+export const ESSENTIAL_ERROR_FIELDS = {
+  "error.name": "label",
+  "error.code": "label",
+  "error.errno": "number",
+  "error.syscall": "label",
+  "error.exitCode": "number",
+  "error.signal": "label",
+  "error.outputOmitted": "boolean",
+  "error.errorCount": "number",
+} as const satisfies Readonly<Record<string, EssentialFieldKind>>;
 
 /**
  * The lines `log.throttled` adds. An area that throttles spreads these into its

@@ -105,9 +105,10 @@ export function parseLeadingSlashCommand(text: string): ParsedSlashCommand | nul
 }
 
 export const GOAL_COMMAND_ID = "orkestrator:goal";
+export const SUBORK_COMMAND_ID = "orkestrator:subork";
 
 /** Session actions a composer command can invoke, keyed by command name. */
-export type SessionActionCommandKind = "steer" | "compact" | "goal";
+export type SessionActionCommandKind = "steer" | "compact" | "goal" | "subork";
 
 interface SessionActionCommandDefinition {
   kind: SessionActionCommandKind;
@@ -190,6 +191,18 @@ export const SESSION_ACTION_SLASH_COMMANDS: Readonly<
     capability: "goal",
     description: "Keep working until a goal is proven, or check, pause, resume or clear one",
     argumentHint: "<objective> [--check <command>] | pause | resume | clear",
+    collision: "reserve",
+  },
+  // Goes to the current agent as an instruction to call `ask_agents`, so the
+  // same words mean the same thing on every provider. Reserved, so a provider's
+  // own sub-agent command can never answer to this name.
+  "/subork": {
+    kind: "subork",
+    id: SUBORK_COMMAND_ID,
+    capability: "subork",
+    requiresArguments: "Add who to ask and what to ask them after /subork.",
+    description: "Ask one or more other agents and get their answers back",
+    argumentHint: "ask <agent or model> [and <agent or model>] to <request>",
     collision: "reserve",
   },
 };

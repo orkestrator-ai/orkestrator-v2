@@ -79,6 +79,21 @@ function isRealmGrouping(value: unknown): value is RealmGrouping {
 }
 
 /**
+ * What the window tells a realm about its sidebar. Compact links a repository's
+ * projects across machines as repository grouping does, so it is sent as that:
+ * a realm on another node may predate compact and would refuse the value.
+ */
+export function realmGroupingFor(
+  sortMode: "project" | "activity",
+  grouping: Exclude<RealmGrouping, "activity"> | "compact",
+  phoneLayout = false,
+): RealmGrouping {
+  if (grouping === "compact")
+    return phoneLayout && sortMode === "activity" ? "activity" : "repository";
+  return sortMode === "activity" ? "activity" : grouping;
+}
+
+/**
  * Whether a realm's coordinator defers to the command node's. Grouped by
  * repository, the window links each repository's projects across machines,
  * so coordination for it runs on the command node where it can. Grouped by

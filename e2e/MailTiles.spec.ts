@@ -128,3 +128,29 @@ test("find reveals a match below the mail preview and restores the saved expansi
   await expect(report).toHaveAttribute("data-expanded", "false");
   await expect(tiles(page).nth(1)).toHaveAttribute("data-expanded", "true");
 });
+
+test("mail with images lists each one by name and size, never by path", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/mail-tiles?variant=attachments");
+  await expect(tiles(page)).toHaveCount(1);
+  const tile = tiles(page).first();
+  const list = tile.getByRole("list", { name: "Attached images" });
+  await expect(list.getByRole("listitem")).toHaveCount(2);
+  await expect(list.getByRole("listitem").nth(0)).toContainText(
+    "f3c1a9e2-5b7d-4e0a-9c61-2d8f4b7a1e03.png",
+  );
+  await expect(list.getByRole("listitem").nth(0)).toContainText("470.8 KiB");
+  await expect(list.getByRole("listitem").nth(1)).toContainText("1.8 MiB");
+  // The recipient's path is for the agent; the tile never shows it.
+  await expect(tile).not.toContainText("/workspace/");
+  await expect(tile).not.toContainText("mail-attachments");
+  // A long name truncates inside the tile rather than widening the page.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: `output/visual-previews/mail-tile-attachments-real-${testInfo.project.name}.png`,
+    clip: (await tile.boundingBox()) ?? undefined,
+  });
+});

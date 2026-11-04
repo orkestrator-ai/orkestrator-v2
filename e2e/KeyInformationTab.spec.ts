@@ -32,7 +32,8 @@ test("the panel's pop-out button opens the brief as a tab", async ({ page }) => 
   await expect(page.getByTestId("opened-with")).toHaveText(expectedTarget);
   const tab = page.getByTestId("pipeline-key-information-tab");
   await expect(tab.getByRole("region", { name: "Problem" })).toBeVisible();
-  await expect(tab.getByRole("group", { name: "Summary" })).toBeVisible();
+  await expect(tab.getByRole("region", { name: "Summary" })).toBeVisible();
+  await expect(tab.getByRole("group", { name: "At a glance" })).toBeVisible();
   await expect(tab.getByRole("region", { name: "Tests" }).getByRole("row")).toHaveCount(6);
   await expectNoHorizontalOverflow(page);
 });
@@ -53,7 +54,7 @@ test("a summary tile jumps to its section", async ({ page }) => {
   await page.goto("/key-information-tab?view=tab");
   const tab = page.getByTestId("pipeline-key-information-tab");
   await tab
-    .getByRole("group", { name: "Summary" })
+    .getByRole("group", { name: "At a glance" })
     .getByRole("button", { name: /Verification/ })
     .click();
 

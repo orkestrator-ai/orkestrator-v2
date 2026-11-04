@@ -12,7 +12,12 @@ import path from "node:path";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
@@ -204,15 +209,17 @@ test("a leaf's workspace opens in the window's central region without moving or 
     ownProcessGroup(vite);
     recordProcessOutput("vite", vite);
     await waitForUrl(rendererUrl);
+    const headless = headlessElectronRequested();
     app = await electron.launch({
       executablePath: electronExecutable,
       args: [
         ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
         path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
       ],
       cwd: repositoryRoot,
       env: {
-        ...process.env,
+        ...(headless ? withoutDisplay(process.env) : process.env),
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
@@ -223,7 +230,14 @@ test("a leaf's workspace opens in the window's central region without moving or 
     dismissStartupDialogs(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);
-    await expect(window).toHaveTitle(profile.electronTitle, { timeout: 60_000 });
+    // The backend's boot-time reachability probe creates a Docker network, and
+    // Chromium aborts the dev server's module loads on that interface change
+    // (ERR_NETWORK_CHANGED, flake 0167). A production build has no such loads.
+    const startupFailed = window.getByText("Orkestrator couldn’t connect");
+    await expect(async () => {
+      if (await startupFailed.isVisible()) await window.reload();
+      await expect(window).toHaveTitle(profile.electronTitle, { timeout: 5_000 });
+    }).toPass({ timeout: 60_000 });
     await trackWebContentsFocus(electronApp);
     const invoke = <T>(command: string, args: Record<string, unknown> = {}) =>
       window.evaluate(
@@ -322,7 +336,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
       ).toBeNull();
     };
 
-    const leafProject = window.getByRole("button", { name: /^leaf-app\s*\d*$/ });
+    const leafProject = window.getByRole("button", { name: "Open leaf-app on Leaf", exact: true });
     await leafProject.click();
 
     // The main process opened one realm, bound to the leaf, over the central region.
@@ -402,6 +416,90 @@ test("a leaf's workspace opens in the window's central region without moving or 
     await expect.poll(async () => (await realmState())?.coordinatorChecking).toBe(false);
     await expect.poll(async () => (await realmState())?.coordinatorPanel).toBe(true);
     await expect.poll(async () => (await realmState())?.coordinatorGate).toBe(false);
+
+    // The sidebar's animated width moves the realm with it, and resizes it (and
+    // so every terminal and editor in it) no more than once or twice.
+    const shellSidebar = window.locator("[data-panel]").first();
+    const shellSidebarWidth = async () => Math.round((await shellSidebar.boundingBox())!.width);
+    const realmWidthChange = async (view: string, width: number) => {
+      await electronApp.evaluate(async ({ BrowserWindow, webContents }) => {
+        const realm = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().includes("realm=workspace"))!;
+        const owner = BrowserWindow.getAllWindows()[0]!;
+        const child = owner.contentView.children.find(
+          (candidate) =>
+            (candidate as { webContents?: { id: number } }).webContents?.id === realm.id,
+        ) as unknown as { getBounds(): Electron.Rectangle };
+        await realm.executeJavaScript(
+          `window.realmResizes = []; window.realmOnResize ??= window.addEventListener("resize", () => window.realmResizes.push(window.innerWidth));`,
+        );
+        const samples: Electron.Rectangle[] = [];
+        const timer = setInterval(() => samples.push(child.getBounds()), 8);
+        (
+          globalThis as unknown as { stopRealmRecording: () => Promise<unknown> }
+        ).stopRealmRecording = async () => {
+          clearInterval(timer);
+          return {
+            samples,
+            resizes: await realm.executeJavaScript("window.realmResizes"),
+          };
+        };
+      });
+      await window.getByRole("button", { name: /^(Sort environments|Sidebar view):/ }).click();
+      await window.getByRole("menuitemradio", { name: view, exact: true }).click();
+      await expect.poll(shellSidebarWidth).toBe(width);
+      await expect(window.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+      await window.waitForTimeout(300);
+      const { samples, resizes } = await electronApp.evaluate(() =>
+        (
+          globalThis as unknown as {
+            stopRealmRecording: () => Promise<{
+              samples: Electron.Rectangle[];
+              resizes: number[];
+            }>;
+          }
+        ).stopRealmRecording(),
+      );
+      const widths = samples
+        .map((sample) => sample.width)
+        .filter((sampled, index, all) => sampled !== all[index - 1]);
+      test.info().annotations.push({
+        type: "realm-width-change",
+        description: JSON.stringify({
+          view,
+          positions: new Set(samples.map((sample) => sample.x)).size,
+          widths,
+          resizes,
+        }),
+      });
+      // It followed the panel through intermediate positions, not to the end at once.
+      expect(new Set(samples.map((sample) => sample.x)).size).toBeGreaterThan(3);
+      // The first value is where it started, so at most two changes.
+      expect(widths.length).toBeLessThanOrEqual(3);
+      expect(resizes.length).toBeLessThanOrEqual(2);
+      // It settled exactly over the region.
+      const settledState = (await realmState())!;
+      const settledRegion = await window
+        .locator('[data-testid="remote-workspace-region"]')
+        .evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+        });
+      await expect.poll(async () => (await realmState())?.visible).toBe(true);
+      expect(settledState.bounds).toEqual({
+        x: Math.round(settledRegion.x * settledState.zoom),
+        y: Math.round(settledRegion.y * settledState.zoom),
+        width: Math.round(settledRegion.width * settledState.zoom),
+        height: Math.round(settledRegion.height * settledState.zoom),
+      });
+    };
+    const fullSidebarWidth = await shellSidebarWidth();
+    await realmWidthChange("Compact", 56);
+    await realmWidthChange("By machine", fullSidebarWidth);
+    expect((await realmState())?.count).toBe(1);
+    await sameWindow();
+
     // Reselecting the project restores the grouping's landing tab.
     const realmPageForTabs = electronApp
       .context()
@@ -416,7 +514,7 @@ test("a leaf's workspace opens in the window's central region without moving or 
     // Repository grouping opens Home in the same realm, on initial click and reselection.
     await window.getByRole("button", { name: /^Sort environments:/ }).click();
     await window.getByRole("menuitemradio", { name: "By repository", exact: true }).click();
-    const repositoryProject = window.getByTitle("Open leaf-app on Leaf");
+    const repositoryProject = leafProject;
     await repositoryProject.click();
     await expect.poll(async () => (await realmState())?.homeSelected).toBe(true);
     await realmPageForTabs!.getByRole("tab", { name: "Coordinator", exact: true }).click();

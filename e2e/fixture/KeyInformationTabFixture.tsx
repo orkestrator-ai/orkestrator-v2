@@ -22,6 +22,8 @@ const PIPELINE_ID = "key-info-pipeline";
 /** A brief shaped like a real pipeline's, long enough to need the tab's space. */
 const keyInformation: BuildPipelineKeyInformation = {
   framing: "problem",
+  summary:
+    "Agents that run for a long time slowed down as their conversations grew, because each small update made the app recheck the whole conversation. Now it only looks at what changed, so long sessions stay responsive, and what you see in the conversation is exactly the same as before.",
   statement:
     "The Pi, Cursor and ACP bridges each had their own copy of the transcript helpers, and every bound re-measured or re-serialised whole transcripts and tool cards: BR-4 (each dirty read serialised every row), BR-5 (each tool-card update serialised the whole card), BR-6 (each delta re-measured the whole buffer) and BR-15 (duplicated helpers).",
   context:

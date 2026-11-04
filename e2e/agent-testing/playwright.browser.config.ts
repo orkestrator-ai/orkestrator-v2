@@ -20,6 +20,7 @@ export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: [
     "browser-gateway.spec.ts",
+    "headless-profile.spec.ts",
     "pull-request-pane.spec.ts",
     "backend-owned-state.spec.ts",
     "agent-accounts.spec.ts",
@@ -47,6 +48,7 @@ export default defineConfig({
     "container-claude-terminal-signal.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
+    "sidebar-width-consumers.spec.ts",
     "opencode-live.spec.ts",
     "close-retention-live.spec.ts",
     "codex-typed-prompts-live.spec.ts",

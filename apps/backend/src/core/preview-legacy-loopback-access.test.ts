@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
+import { LoopbackListenerOwnership } from "./preview-listener-ownership.js";
 import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
 
 /**
@@ -37,6 +38,61 @@ describe("PreviewRuntime.legacyLoopbackPortAccess", () => {
     await harness.runtime.registry.settle();
     return harness.runtime;
   }
+
+  test("managed-process requests look up each listener and refuse a takeover inside the TTL", async () => {
+    await harness.addLocalEnvironment("a", { entryPort: 3000 });
+    await harness.addLocalEnvironment("b");
+    let pid = 300;
+    let lookups = 0;
+    let ancestryWalks = 0;
+    const runtime = harness.newRuntime({
+      registry: { now: () => 1000, probeBackoffMs: [] },
+      listenerOwnership: new LoopbackListenerOwnership({
+        platform: "darwin",
+        processCacheMs: 0,
+        roots: () => [
+          { environmentId: "a", pid: 100 },
+          { environmentId: "b", pid: 400 },
+        ],
+        runCommand: async (command) => {
+          if (command === "ps") {
+            ancestryWalks += 1;
+            return {
+              stdout: [
+                "100 1 Sun Oct 25 09:00:00 2026",
+                "300 100 Sun Oct 25 09:01:00 2026",
+                "400 1 Sun Oct 25 09:02:00 2026",
+                "500 400 Sun Oct 25 09:03:00 2026",
+              ].join("\n"),
+            };
+          }
+          lookups += 1;
+          return { stdout: `p${pid}\nf12\ntIPv4\nn127.0.0.1:3000\n` };
+        },
+      }),
+    });
+    await runtime.init();
+    await runtime.registry.settle();
+    const service = runtime.registry.snapshot({ environmentId: "a" }).services[0]!;
+    expect(service.endpoint.ownership).toBe("managed-process");
+    lookups = 0;
+    ancestryWalks = 0;
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("allowed");
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("allowed");
+    expect(lookups).toBe(2);
+    expect(ancestryWalks).toBe(0);
+
+    pid = 500;
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("unknown");
+    expect(lookups).toBe(4);
+    expect(ancestryWalks).toBe(1);
+    expect(runtime.registry.serviceSnapshot(service.definition.serviceId)!.endpoint).toMatchObject({
+      state: "unavailable",
+      listener: "other-environment",
+      endpointGeneration: service.endpoint.endpointGeneration + 1,
+    });
+    expect(await runtime.legacyLoopbackPortAccess(3000, "a")).toBe("unknown");
+  });
 
   test("admits a container's verified published host port and nothing else", async () => {
     await harness.addContainerEnvironment("a", {

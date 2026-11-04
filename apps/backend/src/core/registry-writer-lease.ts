@@ -69,6 +69,9 @@ export class RegistryWriterLease {
     const takeoverPath = `${leasePath}.takeover`;
     await fs.mkdir(dataDir, { recursive: true });
     const token = randomUUID();
+    // Age of a stale lease this call removed, so the acquisition it enables can
+    // say the lease was regained from a holder that stopped refreshing it.
+    let reclaimedStaleForMs: number | undefined;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (
@@ -93,6 +96,9 @@ export class RegistryWriterLease {
         }, heartbeatMs);
         heartbeat.unref?.();
         lease = new RegistryWriterLease(leasePath, token, handle, heartbeat);
+        if (reclaimedStaleForMs !== undefined) {
+          log.info("writer-lease.regained", { staleForMs: reclaimedStaleForMs });
+        }
         return lease;
       } catch (error) {
         const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -115,6 +121,7 @@ export class RegistryWriterLease {
               staleToken === (await readToken(leasePath))
             ) {
               await fs.rm(leasePath, { force: true });
+              reclaimedStaleForMs = Math.max(0, Math.round(now() - current.mtimeMs));
               continue;
             }
           } finally {
@@ -156,7 +163,8 @@ export class RegistryWriterLease {
 
   /**
    * The one held-to-lost transition. Losing the lease is final for this
-   * process, so there is no regained case to report. A refresh that was reading
+   * process: `writer-lease.regained` is written by the process that takes a
+   * stale lease over, never by this one. A refresh that was reading
    * while `release` removed the file has found its own release, not a loss.
    */
   private markLost(reason: "reclaimed" | "unreadable"): void {

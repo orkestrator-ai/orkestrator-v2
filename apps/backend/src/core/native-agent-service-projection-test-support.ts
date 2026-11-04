@@ -29,7 +29,6 @@ import {
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
   type ProviderActivityState,
-  type ProviderInteractiveSnapshot,
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./native-agent-provider.js";
@@ -72,7 +71,7 @@ export function createProviderStub(
     activityBatch?: (sessionIds: readonly string[]) => Promise<Map<string, ProviderActivityState>>;
     interactions?: AgentInteractionProviderCapability;
     messages?: (sessionId: string) => Promise<unknown[]>;
-    interactiveSnapshot?: (sessionId: string) => Promise<ProviderInteractiveSnapshot>;
+    interactiveSnapshot?: NonNullable<NativeAgentRuntimeProvider["interactiveSnapshot"]>;
     transcriptSnapshot?: NativeAgentRuntimeProvider["transcriptSnapshot"];
     transcriptDetail?: NativeAgentRuntimeProvider["transcriptDetail"];
     transcriptPage?: NativeAgentRuntimeProvider["transcriptPage"];
@@ -241,6 +240,7 @@ export async function withService(
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
     artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
     beforeMailInject?: NativeAgentServiceOptions["beforeMailInject"];
+    suborks?: NativeAgentServiceOptions["suborks"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -249,6 +249,7 @@ export async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
+    ...(setup.suborks ? { suborks: setup.suborks } : {}),
     ...(setup.environmentFence ? { environmentFence: setup.environmentFence } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),

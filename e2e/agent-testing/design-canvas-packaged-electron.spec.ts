@@ -20,7 +20,7 @@
  * agent homes. The profile enables no agent platform and no provider starts.
  *
  * On Linux it runs on Chromium's headless Ozone platform with no `DISPLAY` or
- * `WAYLAND_DISPLAY` (as `dev:test --headless-electron` does), so it never opens
+ * `WAYLAND_DISPLAY` (as `dev:test --headless` does), so it never opens
  * a window on the signed-in desktop. Playwright drives the page over CDP,
  * which needs no display.
  */

@@ -22,7 +22,11 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
   backend: {
     description: "The backend process: startup, background notices and shutdown.",
     events: {
-      starting: "The backend process is starting.",
+      starting: {
+        description: "The backend process is starting.",
+        essential: true,
+        fields: { version: "label" },
+      },
       "ssh-socket.resolved": "An SSH agent socket was found.",
       "ssh-socket.missing": "No usable SSH agent socket was found.",
       "standalone-updater.mismatch":
@@ -42,9 +46,17 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "artifacts.live-unavailable": "Live interactive artifacts are unavailable.",
       "shutdown.step-failed":
         "One part of shutdown failed and the rest went on; `step` says which.",
-      "shutdown.signal-received":
-        "A signal started shutdown, which tells a clean quit from the backend being killed.",
-      "shutdown.finished": "Shutdown finished, and the process exits with `code`.",
+      "shutdown.signal-received": {
+        description:
+          "A signal started shutdown, which tells a clean quit from the backend being killed.",
+        essential: true,
+        fields: { signal: "label" },
+      },
+      "shutdown.finished": {
+        description: "Shutdown finished, and the process exits with `code`.",
+        essential: true,
+        fields: { code: "number" },
+      },
       "port-policy.second-backend":
         "Another backend serves the default data directory, so this one avoids its ports.",
       "port-policy.serve-on-free-port":

@@ -860,8 +860,10 @@ export class DiffStatsService {
 
   private beginLineage(entry: DiffStatsEntry): void {
     entry.inFlight?.abort.abort();
-    // The superseded scan can no longer publish, so nothing in the new lineage
-    // waits for it. It may take as long as its slowest child's timeout, and a
+    // Detach the superseded promise so new reads do not join it. Admission still
+    // serializes scans of the same worktree until the old work settles, and
+    // readers already awaiting that promise retain their wait. It may take as
+    // long as its slowest child's timeout, and a
     // Git child can look unfinished after it has exited
     // (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
     entry.inFlight = undefined;

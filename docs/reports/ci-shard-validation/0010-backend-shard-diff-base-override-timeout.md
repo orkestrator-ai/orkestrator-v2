@@ -42,7 +42,7 @@ The body (`apps/backend/src/core/diff-base-override.integration.test.ts:16-136`)
 - **Root, in the runtime.** Bun 1.4.4 sometimes loses a completion event of a child that has already exited. `runCommand` settles on the child's `close`, so the child looks unfinished until its own timeout: 10 s or 60 s depending on the command. A 60 s `git status` or `git diff` cannot fit in a 30 s test.
 - **Why this test waited, in `DiffStatsService`.** Every stuck child traced at a 10 s timeout on Linux, 18 of 18, belonged to a scan of the previous target. The retarget in the test's `diffStats.sync` step aborted that scan and it could no longer publish, but `entry.inFlight` stayed set, so the new target's first scan and the read at step 24 both waited for it.
 
-The second link is removed: a retarget clears `entry.inFlight` (`beginLineage`), and a superseded attempt no longer requests a rerun when it settles. With that change the test passed 600 of 600 runs on Linux. The first link is not removed: stalled children still occurred, 50 across the last 150 of those runs, and 3 of them were on the current target. The test did not happen to wait on any of them, but a stuck child that it does wait on would still miss the deadline. That is why [todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md) exists and why the CI confirmation matters.
+For replacement-worktree retargets, the second link is removed: a retarget clears `entry.inFlight` (`beginLineage`), and a superseded attempt no longer requests a rerun when it settles. With that change the test passed 600 of 600 runs on Linux. The first link is not removed: stalled children still occurred, 50 across the last 150 of those runs, and 3 of them were on the current target. The test did not happen to wait on any of them, but a stuck child that it does wait on would still miss the deadline. That is why [todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md) exists and why the CI confirmation matters.
 
 **Decisions.**
 
@@ -76,6 +76,12 @@ The second link is removed: a retarget clears `entry.inFlight` (`beginLineage`),
 
 - **Chose:** mark the case resolved, because this test's cause is shown and removed and the stress run is clean, as this file's constraints require. Track the runtime defect separately in [todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
 - **Why:** the two have different owners and evidence. The case records how to reopen it: a new miss will name its step, and a miss on any step means the root reached this test by another path.
+
+### Task 2: scope of the retarget guarantee after review
+
+- **Chose:** retain physical admission keyed by worktree and narrow the guarantee to detaching the superseded promise. A same-worktree comparison-ref change still queues behind the old lease, and a reader already awaiting the old promise retains its wait. Real-pool service tests now cover both limits and the path-changing success case.
+- **Alternative:** release the lease on abort or key it by comparison ref. That could unblock same-worktree work, but permits overlapping physical scans without proving the old work stopped and weakens the per-worktree resource bound.
+- **Why:** the observed miss was a replacement-worktree retarget. The local fix removes that wait while preserving admission bounds. Same-worktree stalls and parked readers remain runtime follow-up work in todo 4260; the fix makes no universal deadline guarantee.
 
 ## Current state
 

@@ -1,7 +1,8 @@
 # Diff-base override integration scan timeout
 
 - **ID:** 1537
-- **Status:** resolved (2026-11-04); needs a run of green CI passes to confirm, see [Fix](#fix-and-what-it-does-not-cover)
+- **Status:** resolved
+- **Resolution date:** 2026-11-04; needs a run of green CI passes to confirm, see [Fix](#fix-and-what-it-does-not-cover)
 - **Observed:** 2026-10-31
 - **Test:** `saved/reset overrides retarget real scans and reverts; replacement drops an unpushed base`
 - **File:** `apps/backend/src/core/diff-base-override.integration.test.ts`
@@ -141,10 +142,19 @@ different a scan pattern, to blame the watcher.
 
 ## Fix and what it does not cover
 
-Removed: the second link. `beginLineage` clears `entry.inFlight`, and a superseded
+Removed for replacement-worktree retargets: the second link. `beginLineage` clears `entry.inFlight`, and a superseded
 attempt no longer requests a rerun when it settles (`diff-stats-service.ts`, with
-two tests in `apps/backend/tests/diff-stats-service.test.ts`). The 30 s deadline,
+tests in `apps/backend/tests/diff-stats-service.test.ts`). The 30 s deadline,
 assertions and test tier are unchanged.
+
+The guarantee is limited to detaching the old promise. The production admission
+pool keeps one physical scan per worktree: a same-path comparison-ref retarget
+still queues behind a stalled superseded scan, so its read can still miss the
+deadline. A reader already awaiting the old promise also keeps waiting until
+it settles, then reads its original identity ad hoc. Service tests using a real
+`WorkAdmissionPool` cover both limits and a path-changing retarget. Releasing a
+lease on abort without proof that the physical work stopped would break the
+pool's resource bound; changing that is outside this replacement-worktree fix.
 
 Stress verification: 0 misses in 600 Linux runs against 10 in 300 before, and at
 that rate the chance of no miss in the 300 runs without a probe alone is about

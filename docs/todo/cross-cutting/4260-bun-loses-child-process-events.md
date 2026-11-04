@@ -49,7 +49,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 ### 3. Decide on a bound in `runCommand`
 
-**Problem.** Any backend Git command can hit this. A 60 s command waits its whole 60 s after the child has exited, and that wait reaches anything awaiting it, including a user-facing read. This test no longer waits on superseded scans, but the same stall on a scan or command that is awaited is still possible, in the product as well as in tests.
+**Problem.** Any backend Git command can hit this. A 60 s command waits its whole 60 s after the child has exited, and that wait reaches anything awaiting it, including a user-facing read. Replacement-worktree retargets no longer join the superseded promise. Same-worktree comparison-ref retargets still queue behind its physical admission lease, so a stalled superseded scan can still block their reads. The same stall on any awaited scan or command remains possible in the product and tests.
 
 **Context.** `runCommand` settles on `close` (`apps/backend/src/core/shell.ts`), deliberately, because a descendant can still hold the pipes after the leader exits. How often this reaches users is not measured: the rate above comes from one test.
 
@@ -70,9 +70,9 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 
 ### 4. Unblock readers parked on a superseded scan
 
-**Problem.** Case 1537's fix stops new work waiting on a superseded scan. A `readFileList` already awaiting that scan's promise when the retarget arrives keeps waiting for it, then falls back to an ad hoc read.
+**Problem.** Case 1537's fix detaches new work from the superseded promise, subject to the same-worktree admission limit in task 3. A `readFileList` already awaiting that scan's promise when the retarget arrives keeps waiting for it, then falls back to an ad hoc read.
 
-**Context.** `readTrackedFileList` in `apps/backend/src/core/diff-stats-service.ts`. This was not seen in any run; it follows from the code.
+**Context.** `readTrackedFileList` in `apps/backend/src/core/diff-stats-service.ts`. This was not seen in the original stress runs; a deterministic real-pool service test now confirms the wait and the subsequent ad hoc read of the original identity.
 
 **Investigation.** A parked reader holds `attempt.promise` directly, so clearing `entry.inFlight` does not reach it. The scan's `abort` signal only cancels a queued admission, not a running child.
 
@@ -85,6 +85,12 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
   - **Pass the abort signal down to the scan's commands.**
     - Pros: also stops the superseded child and frees its admission slot.
     - Cons: plumbs a signal through every local and container status read.
+
+## Assumptions and decisions
+
+### Tasks 3 and 4: preserve physical admission during the case 1537 repair
+
+Chose to document and test the same-worktree admission wait and the already-parked reader instead of releasing a running scan's lease on abort. A real `WorkAdmissionPool` test verifies that a comparison-ref-only retarget stays queued until the old work settles; a path-changing retarget proceeds. Another verifies that a parked reader waits, then returns an ad hoc result for its original identity. Releasing on abort would allow overlapping work without proof that the process stopped, violating the pool's physical-release contract. Runtime cancellation and early reader release remain the open work in tasks 3 and 4.
 
 ## Constraints and rationale
 

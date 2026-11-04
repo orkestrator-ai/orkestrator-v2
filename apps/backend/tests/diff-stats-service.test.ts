@@ -7,6 +7,8 @@ import {
   type DiffStatsWarning,
 } from "../src/core/diff-stats-service";
 
+import { WorkAdmissionPool } from "../src/core/work-admission";
+
 interface Harness {
   service: DiffStatsService;
   /** Diff-stat events only; worktree-snapshot events are in `snapshotEvents`. */
@@ -35,6 +37,7 @@ function stats(overrides: Partial<DiffScanResult["stats"]> = {}) {
 
 function createHarness(
   options: {
+    admission?: WorkAdmissionPool;
     watchable?: boolean;
     watcherStartError?: Error;
     emit?: (event: string, payload: unknown) => void;
@@ -70,6 +73,7 @@ function createHarness(
   let schedulingFor: string | undefined;
 
   const service = new DiffStatsService({
+    admission: options.admission,
     scan: (target) => {
       scans.push(target);
       return scan(target);
@@ -506,6 +510,101 @@ describe("DiffStatsService", () => {
         refresh: true,
       }),
     ).resolves.toMatchObject({ changes: [{ path: "new.ts" }] });
+  });
+
+  for (const samePath of [true, false]) {
+    test(`production admission ${samePath ? "queues same-worktree" : "admits replacement-worktree"} retargets`, async () => {
+      const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+      const harness = createHarness({ admission });
+      let releaseOld!: () => void;
+      harness.setScan((target) =>
+        target.comparisonRef === "main"
+          ? new Promise((resolve) => {
+              releaseOld = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
+            })
+          : Promise.resolve({ stats: stats({ additions: 7 }), changes: [{ path: "new.ts" }] }),
+      );
+      try {
+        harness.service.track(localTarget());
+        for (let i = 0; i < 4; i++) await settle();
+        const worktreePath = samePath ? "/tmp/env-local-worktree" : "/tmp/replacement-worktree";
+        harness.service.track(localTarget({ worktreePath, comparisonRef: "develop" }));
+        let completed = false;
+        const read = harness.service
+          .readFileList({
+            lookup: { worktreePath },
+            comparisonRef: "develop",
+            includeUncommitted: true,
+          })
+          .then((result) => {
+            completed = true;
+            return result;
+          });
+        for (let i = 0; i < 8; i++) await settle();
+        expect(harness.scans.map((target) => target.comparisonRef)).toEqual(
+          samePath ? ["main"] : ["main", "develop"],
+        );
+        expect(completed).toBe(!samePath);
+        releaseOld();
+        await expect(read).resolves.toMatchObject({ changes: [{ path: "new.ts" }] });
+        for (let i = 0; i < 4; i++) await settle();
+        expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main", "develop"]);
+        expect(harness.service.snapshot()).toEqual([
+          expect.objectContaining({ comparisonRef: "develop", stats: stats({ additions: 7 }) }),
+        ]);
+      } finally {
+        releaseOld?.();
+        harness.service.shutdown();
+        admission.close();
+      }
+    });
+  }
+
+  test("a reader parked before retarget waits for the old scan then reads its original identity", async () => {
+    const admission = new WorkAdmissionPool({ name: "git-docker-scan", diagnostics: null });
+    const harness = createHarness({ admission });
+    let releaseOld!: () => void;
+    let oldCalls = 0;
+    harness.setScan((target) => {
+      if (target.comparisonRef === "main" && oldCalls++ === 0) {
+        return new Promise((resolve) => {
+          releaseOld = () => resolve({ stats: stats(), changes: [{ path: "obsolete.ts" }] });
+        });
+      }
+      return Promise.resolve({ stats: stats(), changes: [{ path: target.comparisonRef + ".ts" }] });
+    });
+    try {
+      harness.service.track(localTarget());
+      for (let i = 0; i < 4; i++) await settle();
+      let completed = false;
+      const read = harness.service
+        .readFileList({
+          lookup: { worktreePath: "/tmp/env-local-worktree" },
+          comparisonRef: "main",
+          includeUncommitted: true,
+        })
+        .then((result) => {
+          completed = true;
+          return result;
+        });
+      harness.service.track(
+        localTarget({ worktreePath: "/tmp/replacement-worktree", comparisonRef: "develop" }),
+      );
+      for (let i = 0; i < 8; i++) await settle();
+      expect(harness.service.snapshot()[0]?.comparisonRef).toBe("develop");
+      expect(completed).toBe(false);
+      releaseOld();
+      await expect(read).resolves.toMatchObject({ changes: [{ path: "main.ts" }] });
+      expect(harness.scans.map((target) => [target.worktreePath, target.comparisonRef])).toEqual([
+        ["/tmp/env-local-worktree", "main"],
+        ["/tmp/replacement-worktree", "develop"],
+        ["/tmp/env-local-worktree", "main"],
+      ]);
+    } finally {
+      releaseOld?.();
+      harness.service.shutdown();
+      admission.close();
+    }
   });
 
   test("a superseded scan settling late neither publishes nor rescans", async () => {

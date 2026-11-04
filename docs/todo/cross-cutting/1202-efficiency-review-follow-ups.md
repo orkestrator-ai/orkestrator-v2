@@ -36,7 +36,7 @@ governs, marked "Decided".
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-10, GW-11, GW-15 and GW-16 open).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
@@ -688,13 +688,18 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** Per-frame and per-request costs remain in the gateway (GW-5, GW-6, GW-10 to GW-12, GW-14 to GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9) are fixed.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15, GW-16). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6) and the event frame costs (GW-5, GW-12, GW-14) are fixed.
 
 **Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
 - GW-8: the private-origin proxy keeps idle upstream connections (`apps/backend/src/preview-upstream-pool.ts`). A connection is reused only by the access (attachment), endpoint generation and target it was opened for, after the access and target are re-checked. The pool is registered with the access service, so revocation, expiry and a new endpoint generation close it at once; a registry revocation also drops it. Bounds: 8 idle per access, 64 per backend, 2 s idle. A safe bodyless request whose reused connection was already closed is resent once on a fresh connection (`preview-forward.ts`); nothing else is retried. Counters `upstream.opened`, `upstream.reused`, `upstream.stale_retry` and the gauge `publication.upstream_idle` are in preview diagnostics.
 - GW-9: when the gateway proxy compresses a body, or the legacy browser-preview route rewrites one, it sends a weak ETag derived from the upstream tag, `W/"<upstream>|ork:<w|s>:<coding>[:<rewrite key>]"`, instead of none, and turns it back into the upstream's exact tag on `If-None-Match` (`apps/backend/src/gateway-proxy-etag.ts`). The application's 304 is answered with the client's tag. Reloads now revalidate, so GW-10's rewrite runs only on first loads and changed modules.
-- Tests: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
+- GW-6, done 2026-11-04: `flush` in `apps/backend/src/terminal-websocket-server.ts` stops moving channel frames to a socket holding 256 KiB (`TERMINAL_WEBSOCKET_FLUSH_LOW_WATERMARK_BYTES`) and resumes from the `ws.send` callback. The backlog stays in the per-channel queues, so the 512 KiB channel limit desyncs only the channel that built it. Control frames ignore the watermark. A paused socket does no work: it is not rescheduled, and new output waits for the callback.
+- GW-5, done 2026-11-04: a frame is UTF-8 encoded once (`encodeGatewayFrame` in `gateway-event-replay.ts`), the replay ring holds that `Buffer` instead of the string, every client is written the same `Buffer`, and writers take the byte count as an argument (`EventClientWriter.write(chunk, byteLength?)`). Only short fixed strings such as keepalives are still measured by the writer.
+- GW-12, done 2026-11-04: `GatewayEvents.writeReplayFrames` writes one cursor frame per run of skipped events, just before the next matching frame or at the end of the window. The cursor it carries is the newest skipped revision. `gateway.connected`'s `replayed` count and the replay metrics still count the whole window.
+- GW-14, done 2026-11-04: `since()` finds the range with `slice(revision + 1 - oldest)`, and `replay.ring.oversizedAppends` in `/__orkestrator/metrics` counts frames larger than the ring's byte bound. Such a frame still empties the window, which keeps the gap detectable.
+- Tests for these four: `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `apps/backend/tests/gateway-frame-costs.test.ts`, and the window and oversized cases in `apps/backend/src/gateway-event-replay.test.ts`.
+- Tests for GW-8 and GW-9: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
 
 **Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee14`. GW-8 held for the private origin only: `preview-http-proxy.ts` supplied no `reuse` hook although the forwarder and HTTP client supported one, while Electron's local ingress already pooled its tunnel connections and the legacy route already reused connections through Bun's HTTP client. GW-9 held for the legacy browser-preview route and the compressing loopback proxy; the private origin already passed ETags through, so its reloads already got 304s.
 
@@ -708,7 +713,37 @@ Measured with `vite-page-load.spec.ts` (Chromium, the pinned Vite 7.3.6 fixture 
 
 The fixture's own page (7 requests): private-origin connections 6 / 6 / 6 before, 3 / 1 / 1 after; legacy repeat-load bytes 43.5 KB before, 0 after. Page-load times were taken on beelink with about ten builds running (load average 30 to 55) and moved more with host load than with the change: wide-page private-origin first load 418 ms median before and 622 ms after, but in different load windows. An interleaved A/B on the same build (four alternating runs with reuse on and off, `ORKESTRATOR_TEST_PREVIEW_POOL_OFF=1`, load average about 50) gave wide-page private-origin medians of 753 ms on / 744 ms off for a first load, 540 / 577 ms for a repeat load and 611 / 645 ms after clearing the cache, with 7 / 1 / 1 against 155 / 155 / 155 upstream connections: within noise. On loopback a TCP connect costs well under a millisecond, so the gain is in connections, sockets and, for TLS and relay targets, handshakes, not visible milliseconds. Raw lines are in `output/efficiency/preview-page-load/` of the build worktree (git-ignored).
 
-Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), GW-10 to GW-12, GW-14 to GW-16.
+Re-checked on 2026-11-04 against `main` at `a8bdce444`, and reproduced on the unchanged code before any change (table below). All four held as the report describes, at moved lines:
+
+- GW-6: `flush` (`terminal-websocket-server.ts:885-932`) never read `bufferedAmount`; the quiet channel's check was in `enqueueOutput` (`:795-813`).
+- GW-5: `emit` serialised once (`gateway-events.ts:38-62`), then both writers (`gateway-support-extra.ts:674`, `:721`) and `instrumentGatewayResponse` (`gateway-support-core.ts:1321`) measured the string again.
+- GW-12: one cursor per skipped frame (`gateway-events.ts:214`, loop at `:316-320`).
+- GW-14: `frames.filter` at `gateway-event-replay.ts:162`; eviction loop at `:131-136` with only `droppedFrames` counted.
+
+Bun's `ws` was checked directly, since 0100 had only read it from code. With a raw TCP peer that stopped reading (Bun 1.4.4, 16 KiB frames over loopback), `send` callbacks were never synchronous, and they fired for the frames the kernel took (about 4.4 MB). They then stopped while `bufferedAmount` climbed to 8.6 MB, and all arrived once the peer resumed. So a stalled socket produces no callbacks, which makes the callback a sound resume signal.
+
+**Before and after.** `apps/backend/scripts/gateway-frame-costs.ts`, the same script against `a8bdce444` and against this change, 5 runs each on one host with load average about 3, Bun 1.4.4. Ranges are the 5 runs. Each workload runs the real gateway over real sockets, except `replay-lookup`, which calls `GatewayEventReplay` directly. Raw JSON is in `output/efficiency/gateway-frame-costs/` of the build worktree (git-ignored).
+
+| Workload | Measure | Before | After |
+| --- | --- | --- | --- |
+| `terminal-flood` (GW-6): two channels on one socket, peer stops reading, 1,024 × 16 KiB noisy and 32 × 1 KiB quiet frames | Quiet channel desyncs per run | 1 | 0 |
+| | Noisy channel desyncs per run | 1 | 1 |
+| | Quiet frames delivered of 32 | 25 | 32 |
+| | Noisy frames delivered before its desync | 383–385 | 273–275 |
+| | Peak queued bytes | 2,096,561–2,097,093 | 783,640–784,172 |
+| `terminal-burst` (GW-6 regression check): the same emission, peer keeps reading | Desyncs, either channel | 0 | 0 |
+| | Time to deliver the burst | 113–162 ms | 113–127 ms |
+| `fan-out` (GW-5): 200 × 64 KiB authoritative events, 4 event streams | Frame measures (`Buffer.byteLength`) per emit | 13 | 0 |
+| | Time inside `emit` per event | 433–565 µs | 258–426 µs |
+| `scoped-replay` (GW-12): `?events=menu-` reconnects across 1,500 skipped, 1 matching, 500 skipped | Cursor frames | 2,000 | 2 |
+| | Stream bytes | 181,180 | 469 |
+| | Ends on the latest cursor | yes | yes |
+| `replay-lookup` (GW-14): full 2,048-frame window | `since()`, newest 64 frames | 2,454–2,593 ns | 68–260 ns |
+| | `since()`, whole window | 7,963–8,762 ns | 2,060–7,099 ns |
+
+The noisy channel now desyncs sooner: about 110 frames (1.8 MB) earlier in this workload, because it no longer has the socket's 2 MiB to fill. The timings move with the host: an earlier `fan-out` pair on the same builds gave 447–481 µs before and 192–403 µs after, and the whole-window `since()` range after the change is wide. The desync, frame-measure and cursor counts did not vary between runs.
+
+Not re-checked: GW-10, GW-11, GW-15, GW-16.
 
 **Decisions.**
 
@@ -747,14 +782,32 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
   - **The report's `W/"<upstream>|<encoding>|rw<prefix-hash>"`.**
     - Pros: shorter.
     - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
+- **How does a paused flush resume (GW-6)?** Done.
+  - **From the `ws.send` callback, pausing only while a send is in flight (recommended).**
+    - Pros: no work while a socket is stalled; a pause can never be left with nothing to wake it, whatever else `bufferedAmount` holds; `terminal-burst` shows no cost to a reading client.
+    - Cons: a single flooding channel desyncs at about 768 KiB of backlog rather than about 2 MiB.
+  - **Keep rescheduling with `setImmediate` and skip while above the watermark.**
+    - Pros: the smallest change.
+    - Cons: spins the event loop for as long as a client stays behind.
+- **Where do skipped replay events cost a cursor (GW-12)?** Done.
+  - **Before the next matching frame and at the end of the window, as the report and the ticket say (recommended).**
+    - Pros: a client's cursor reaches each revision in the order it does today, and the existing `advances scoped replay cursors` test stands unchanged.
+    - Cons: one extra frame per run of skips, since the matching frame's own `id` would also advance the client.
+  - **Only at the end of the window, as 0290 recommended.**
+    - Pros: fewest frames.
+    - Cons: changes what a client sees mid-window, against this ticket's constraint that semantics do not change.
+- **Should a scoped client's replay budget count only the small cursors it now receives?** Open, not done here.
+  - **Yes, as a separate change, keeping the figure an upper bound (recommended).**
+    - Pros: `replayFitsClientBudget` sums every frame's bytes, so a scoped client can be told `replay-too-large` for a window it would barely receive.
+    - Cons: a client that reconciles today would replay instead, which this ticket ruled out by requiring the same result for every client.
+  - **Leave it.**
+    - Pros: no behaviour change; the figure stays a safe overestimate.
+    - Cons: the needless reconcile stays.
 - **Next step?** Open.
-  - **GW-6, the terminal WebSocket flush that ignores `bufferedAmount` (recommended).**
-    - Pros: correctness-adjacent; small.
-    - Cons: only users of the opt-in terminal WebSocket benefit.
-  - **GW-10, one combined rewrite regex with a no-match fast path.**
+  - **GW-10, one combined rewrite regex with a no-match fast path (recommended).**
     - Pros: cheaper first loads on the legacy route.
     - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
-  - **GW-11 and GW-12, per-node federation event names and one cursor frame per skipped range.**
+  - **GW-11, per-node federation event names.**
     - Pros: less replay-window pressure for federation users.
     - Cons: federation only; touches replay invariants.
 
@@ -1572,6 +1625,22 @@ The ticket's criterion is "fixed with a test or recorded as no longer applying",
 ### Task 12: the setting
 
 Read per window at creation from `config.json`, off by default, on Settings → Experimental for a local desktop window only, as the ticket decides. The switch is not offered in a browser or on a remote window, where it would edit a config this app does not read.
+
+### Task 11: the watermark constant stays in the server (GW-6)
+
+`TERMINAL_WEBSOCKET_FLUSH_LOW_WATERMARK_BYTES` lives in `terminal-websocket-server.ts`, not beside the buffer limits in `packages/protocol`, because no client reads it and a protocol change would be wide-reaching for nothing.
+
+### Task 11: no flush-pause metric (GW-6)
+
+The ticket asks for a metric only on oversized appends, and `desyncs` and `peakQueuedBytes` already show the effect, so the metrics shape did not grow.
+
+### Task 11: frames are encoded with `TextEncoder`, not `Buffer.from` (GW-5)
+
+`Buffer.from(string)` may place a small frame in a shared pool slab, and a retained frame would then pin the whole slab, which the ring's byte bound would not count. `encodeGatewayFrame` gives each frame memory of its own. The bound counts the same bytes as before.
+
+### Task 11: the flood test stalls the server's socket by hand (GW-6)
+
+A non-reading peer needs several megabytes to fill the kernel's buffers, and how many varies by platform. `terminal-websocket-backpressure.test.ts` therefore holds `send` and its callback on the real server socket, and `terminal-flood` in `gateway-frame-costs.ts` covers the real stalled peer. With the watermark disabled, the flood, resume and ordering tests fail.
 
 ## Current state
 

@@ -218,6 +218,13 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
+The flush stops moving channel frames to a socket holding 256 KiB and resumes
+from the `ws.send` callback, so a backlog stays in its own channel's queue and
+the 512 KiB channel limit desyncs only the channel that built it. Control frames
+ignore this watermark and have their own hard limit. Several flooding channels
+together can still reach the 2 MiB socket limit, which then desyncs whichever
+channel has output next, because by then the socket really is behind.
+
 Terminal input and resizes wait on one ordering tail per session, owned by the
 gateway rather than the socket, so a plain disconnect still delivers what was
 already accepted and a reconnect cannot overtake it. Revocation is the
@@ -440,6 +447,11 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   ladder from the current cursor. Left alone, a browser retries it by itself on
   a fixed 3 s timer for the whole outage, in step with every other tab the same
   outage dropped. The gateway still accepts `Last-Event-ID`.
+- A scoped stream's replay advances through revisions its filter omits with one
+  `gateway.cursor` frame per run of them, before the next matching frame or at
+  the end of the window. An event larger than the replay ring's byte bound empties
+  the window, so reconnecting clients reconcile, and it is counted in
+  `replay.ring.oversizedAppends` on `/__orkestrator/metrics`.
 - A link can drop with no answer at all (a tailnet peer that vanished), and then
   an open stream never errors: its socket waits on TCP for many minutes. So
   every client watches for silence. A main stream that shows no sign of life for

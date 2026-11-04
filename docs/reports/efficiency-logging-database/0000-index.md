@@ -164,16 +164,16 @@ When one of these becomes ready, it joins the lane shown.
 | GW-2 | Done | The default compression mode is `on` (`apps/backend/src/gateway-support-core.ts:536`, #1548 `12289fc56`, 0052 D14), and SSE streams use `GzipEventClientWriter` (`apps/backend/src/gateway-handlers.ts:211`). |
 | GW-3 | Open | Bearer and cross-origin clients still open one fetch stream per terminal (`apps/web/src/lib/native/web-gateway.ts:1092-1098`); see 0120. |
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
-| GW-5 | Open | Writers still call `Buffer.byteLength` per subscriber (`apps/backend/src/gateway-support-extra.ts:661`, `:708`); see 0280. |
-| GW-6 | Open | `flush` never reads `bufferedAmount` (`apps/backend/src/terminal-websocket-server.ts:868`); see 0100. |
+| GW-5 | Done | One `Buffer` per frame is written to every client, with its byte count passed to the writer (`apps/backend/src/gateway-events.ts:30`, `apps/backend/src/gateway-support-extra.ts:653`); see 0280 and 1202 task 11. |
+| GW-6 | Done | `flush` pauses channel frames at a 256 KiB watermark and resumes on the send callback (`apps/backend/src/terminal-websocket-server.ts:905`, `:932`); see 0100 and 1202 task 11. |
 | GW-7 | Open | No compression option is set (`apps/backend/src/terminal-websocket-server.ts:193-198`), and 0052 D6 defers the work; see 0390. |
 | GW-8 | Done | The private-origin proxy reuses pooled connections (`apps/backend/src/preview-http-proxy.ts:160`, `apps/backend/src/preview-upstream-pool.ts`, #1604 `b64242842`). |
 | GW-9 | Done | Compressed and rewritten bodies get a derived ETag that maps back upstream (`apps/backend/src/gateway-proxy.ts:188`, `:397`, `apps/backend/src/gateway-proxy-etag.ts`, #1604 `b64242842`). |
 | GW-10 | Open | The rewrite still runs nine `replace` passes on HTML (`apps/backend/src/gateway-support-extra.ts:555`); see 0365. |
 | GW-11 | Open | All relayed frames share one event name (`apps/backend/src/core/nodes/node-event-relay.ts:233`, `:248`) and the main replay ring; see 0370. |
-| GW-12 | Open | Each skipped replay frame still writes a cursor frame (`apps/backend/src/gateway-events.ts:214`); see 0290. |
+| GW-12 | Done | One cursor frame per run of skipped replay frames (`apps/backend/src/gateway-events.ts:198`); see 0290 and 1202 task 11. |
 | GW-13 | Done | The rebuild section follows `container-lifecycle-updated` with a 15 s backstop (`apps/web/src/components/environments/EnvironmentRebuildSection.tsx:146`, `:175-177`, #1606 `9c06cb7aa`), and 1202 records the choice to leave the other two 3 s backstops. |
-| GW-14 | Open | The lookup is still `frames.filter` (`apps/backend/src/gateway-event-replay.ts:162`) and no oversized metric exists; see 0300. |
+| GW-14 | Done | The lookup is a `slice` (`apps/backend/src/gateway-event-replay.ts:182`), and `oversizedAppends` counts frames over the byte bound (`:146`); see 0300 and 1202 task 11. |
 | GW-15 | Open | Compression still runs before the 304 check (`apps/backend/src/gateway-proxy.ts:794`, `:860`); see 0310. |
 | GW-16 | Open | Timers, decoders, per-operation results and 50 ms acks all remain (`apps/backend/src/gateway-proxy.ts:301-308`, `apps/backend/src/terminal-websocket-server.ts:400`, `:1040`, `apps/web/src/lib/native/terminal-websocket-client.ts:97`); see 0375. |
 | TX-1 | Open | The view cache holds one entry per key, and a delta needs the newest token (`apps/backend/src/core/native-agent-transcript-projection.ts:468`, `:3012-3017`); see 0160. |

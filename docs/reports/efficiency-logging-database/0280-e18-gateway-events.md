@@ -21,7 +21,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Share one encoded frame across subscribers**: keep a `Buffer` in the replay frame and pass the byte count to writers. Status: open.
+1. **Share one encoded frame across subscribers**: keep a `Buffer` in the replay frame and pass the byte count to writers. Status: done (2026-11-04; see [1202 task 11](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)).
 
 #### 1. Share one encoded frame across subscribers
 
@@ -47,7 +47,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Needs verification
 
-- Whether this shows in a profile at all, since it was reasoned, not measured. Low priority until it does.
+- Measured on 2026-11-04 (1202 task 11): frame measures per emit went from 13 to 0 with 4 subscribers. The time inside `emit` fell from 433–565 µs to 258–426 µs per 64 KiB event, and moves with host load. No production profile was taken.
 
 ## 0290: Scoped stream replay writes one cursor frame per skipped event
 
@@ -55,7 +55,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Collapse skipped replay frames into one cursor**: track the highest skipped revision and emit it once. Status: open.
+1. **Collapse skipped replay frames into one cursor**: track the highest skipped revision and emit it once. Status: done (2026-11-04; one cursor before the next matching frame and one at the end, as the report says. The budget decision below stays open, see [1202 task 11](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)).
 
 #### 1. Collapse skipped replay frames into one cursor
 
@@ -94,8 +94,8 @@ A related cost: `replayFitsClientBudget` (`:226-233`) sums `encodedBytes` for ev
 
 #### Tasks
 
-1. **Find the replay range by index**: replace the filter with a slice. Status: open.
-2. **Count oversized appends**: add a metric for an event that empties the window. Status: open.
+1. **Find the replay range by index**: replace the filter with a slice. Status: done (2026-11-04).
+2. **Count oversized appends**: add a metric for an event that empties the window. Status: done (2026-11-04; `replay.ring.oversizedAppends`).
 
 #### 1. Find the replay range by index
 

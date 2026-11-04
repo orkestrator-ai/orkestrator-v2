@@ -85,6 +85,7 @@ describe("GatewayEventReplay configuration and append", () => {
         retainedFrames: 0,
         retainedBytes: 0,
         droppedFrames: 0,
+        oversizedAppends: 0,
         frameCapacity: DEFAULT_GATEWAY_REPLAY_FRAME_CAPACITY,
         maxBytes: DEFAULT_GATEWAY_REPLAY_MAX_BYTES,
         idleRetentionMs: DEFAULT_GATEWAY_REPLAY_IDLE_RETENTION_MS,
@@ -129,7 +130,7 @@ describe("GatewayEventReplay configuration and append", () => {
         revision: 1,
         cursor: `${GENERATION}:1`,
         event: "environment-renamed",
-        message: expectedMessage,
+        message: Buffer.from(expectedMessage),
         encodedBytes: Buffer.byteLength(expectedMessage),
       });
       expect(frame.encodedBytes).toBeGreaterThan(expectedMessage.length);
@@ -296,6 +297,52 @@ describe("GatewayEventReplay replay windows", () => {
     }
   });
 
+  test("finds the same range as a full filter at every cursor, across evictions and releases", () => {
+    const replay = new GatewayEventReplay(GENERATION, {
+      frameCapacity: 8,
+      idleRetentionMs: 60_000,
+    });
+    try {
+      const retained: { revision: number; event: string }[] = [];
+      const expectEveryCursor = () => {
+        const oldest = retained[0]?.revision ?? 0;
+        for (let revision = 0; revision <= replay.latestRevision; revision += 1) {
+          const result = replay.since(revision);
+          const inWindow =
+            revision === replay.latestRevision || (oldest !== 0 && revision + 1 >= oldest);
+          expect(result.complete).toBe(inWindow);
+          expect(result.frames.map((frame) => frame.revision)).toEqual(
+            inWindow
+              ? retained.filter((frame) => frame.revision > revision).map((frame) => frame.revision)
+              : [],
+          );
+        }
+      };
+      const append = (count: number) => {
+        for (let index = 0; index < count; index += 1) {
+          const { revision, event } = replay.append(`event-${index}`, index);
+          retained.push({ revision, event });
+          if (retained.length > 8) retained.shift();
+          expectEveryCursor();
+        }
+      };
+
+      expectEveryCursor();
+      // Filling, exactly full, and past the capacity with eviction from the front.
+      append(20);
+      // A released window restarts at a later revision, not at zero.
+      replay.releaseRetained();
+      retained.length = 0;
+      expectEveryCursor();
+      append(3);
+      expect(replay.oldestRevision).toBe(21);
+      expect(replay.since(20).frames.map((frame) => frame.revision)).toEqual([21, 22, 23]);
+      expect(replay.since(19).complete).toBe(false);
+    } finally {
+      replay.releaseRetained();
+    }
+  });
+
   test("releaseRetained preserves revisions while expiring the replay window", () => {
     const replay = new GatewayEventReplay(GENERATION, { idleRetentionMs: 60_000 });
     replay.append("one", 1);
@@ -314,6 +361,44 @@ describe("GatewayEventReplay replay windows", () => {
       latestRevision: 1,
       oldestRevision: 0,
     });
+  });
+});
+
+describe("GatewayEventReplay oversized appends", () => {
+  test("counts a frame over the byte bound, and not ordinary turnover", () => {
+    const probe = new GatewayEventReplay(GENERATION, { idleRetentionMs: 60_000 });
+    const frameBytes = probe.append("event", "x").encodedBytes;
+    probe.releaseRetained();
+    const replay = new GatewayEventReplay(GENERATION, {
+      maxBytes: frameBytes * 2,
+      idleRetentionMs: 60_000,
+    });
+    try {
+      // Byte-bound eviction of ordinary frames, each small enough to retain.
+      replay.append("event", "x");
+      replay.append("event", "x");
+      replay.append("event", "x");
+      expect(replay.getStats()).toMatchObject({
+        retainedFrames: 2,
+        droppedFrames: 1,
+        oversizedAppends: 0,
+      });
+
+      // Exactly at the bound still fits, so it is not oversized.
+      replay.append("event", "x".repeat(frameBytes + 1));
+      expect(replay.getStats()).toMatchObject({ retainedFrames: 1, oversizedAppends: 0 });
+
+      replay.append("event", "x".repeat(frameBytes * 2));
+      expect(replay.getStats()).toMatchObject({
+        retainedFrames: 0,
+        retainedBytes: 0,
+        oversizedAppends: 1,
+      });
+      // The empty window still answers incomplete, so the gap stays detectable.
+      expect(replay.since(replay.latestRevision - 1).complete).toBe(false);
+    } finally {
+      replay.releaseRetained();
+    }
   });
 });
 

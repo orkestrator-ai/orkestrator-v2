@@ -23,7 +23,8 @@ export interface GatewayReplayFrame {
   revision: number;
   cursor: string;
   event: string;
-  message: string;
+  /** The encoded SSE frame. Every client is written these same bytes. */
+  message: Buffer;
   encodedBytes: number;
 }
 
@@ -50,8 +51,20 @@ export interface GatewayEventReplayOptions {
   idleRetentionMs?: number;
 }
 
-function formatDataMessage(cursor: string, event: string, payload: unknown): string {
-  return `id: ${cursor}\ndata: ${JSON.stringify({ event, payload })}\n\n`;
+const frameEncoder = new TextEncoder();
+
+/**
+ * UTF-8 encodes a frame into memory of its own. `Buffer.from(string)` may carve
+ * a small frame out of a shared pool slab, and a retained frame would then pin
+ * the whole slab, so the ring's byte bound would understate what it holds.
+ */
+export function encodeGatewayFrame(frame: string): Buffer {
+  const encoded = frameEncoder.encode(frame);
+  return Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+}
+
+function formatDataMessage(cursor: string, event: string, payload: unknown): Buffer {
+  return encodeGatewayFrame(`id: ${cursor}\ndata: ${JSON.stringify({ event, payload })}\n\n`);
 }
 
 export function formatGatewayCursor(generation: string, revision: number): string {
@@ -88,6 +101,7 @@ export class GatewayEventReplay {
   private revision = 0;
   private retainedBytes = 0;
   private droppedFrames = 0;
+  private oversizedAppends = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(generation: string, options: GatewayEventReplayOptions = {}) {
@@ -124,8 +138,12 @@ export class GatewayEventReplay {
       cursor,
       event,
       message,
-      encodedBytes: Buffer.byteLength(message),
+      encodedBytes: message.byteLength,
     };
+    // One frame over the byte bound evicts the whole window, itself included, and
+    // every reconnecting client then reconciles. Keeping the older frames instead
+    // would make that gap undetectable, so this only makes it visible.
+    if (frame.encodedBytes > this.maxBytes) this.oversizedAppends += 1;
     this.frames.push(frame);
     this.retainedBytes += frame.encodedBytes;
     while (this.frames.length > this.frameCapacity || this.retainedBytes > this.maxBytes) {
@@ -159,7 +177,9 @@ export class GatewayEventReplay {
     const complete = oldestRevision !== 0 && revision + 1 >= oldestRevision;
     return {
       complete,
-      frames: complete ? this.frames.filter((frame) => frame.revision > revision) : [],
+      // Revisions are contiguous: `append` adds one per frame and frames leave
+      // only from the front, so the range's start is a subtraction away.
+      frames: complete ? this.frames.slice(revision + 1 - oldestRevision) : [],
       latestRevision: this.revision,
       oldestRevision,
     };
@@ -179,6 +199,7 @@ export class GatewayEventReplay {
     retainedFrames: number;
     retainedBytes: number;
     droppedFrames: number;
+    oversizedAppends: number;
     frameCapacity: number;
     maxBytes: number;
     idleRetentionMs: number;
@@ -190,6 +211,7 @@ export class GatewayEventReplay {
       retainedFrames: this.frames.length,
       retainedBytes: this.retainedBytes,
       droppedFrames: this.droppedFrames,
+      oversizedAppends: this.oversizedAppends,
       frameCapacity: this.frameCapacity,
       maxBytes: this.maxBytes,
       idleRetentionMs: this.idleRetentionMs,

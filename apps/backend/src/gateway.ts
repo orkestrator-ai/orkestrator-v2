@@ -151,10 +151,10 @@ export class OrkestratorGateway {
     return this.events.initializeEventReplay(...args);
   }
 
-  protected writeReplayFrame(
-    ...args: Parameters<GatewayEvents["writeReplayFrame"]>
-  ): ReturnType<GatewayEvents["writeReplayFrame"]> {
-    return this.events.writeReplayFrame(...args);
+  protected writeReplayFrames(
+    ...args: Parameters<GatewayEvents["writeReplayFrames"]>
+  ): ReturnType<GatewayEvents["writeReplayFrames"]> {
+    return this.events.writeReplayFrames(...args);
   }
 
   protected handleEvents(

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -448,6 +449,105 @@ describe("runCommand capture", () => {
     expect(failure).toBeInstanceOf(CommandFailedError);
     expect((failure as CommandFailedError).executableMissing).toBe(true);
     expect((failure as CommandFailedError).timedOut).toBe(false);
+  });
+
+  // Bun's pipe readers can miss EOF, through Bun.spawn and child_process alike, so a
+  // child that already exited looked unfinished until its timeout (flake case 1537).
+  test("captures output through files, so completion needs no pipe reader", async () => {
+    const launch = spyOn(Bun, "spawn");
+    try {
+      expect((await runCommand(process.execPath, ["-e", "console.log('ok')"])).stdout).toBe("ok\n");
+      const [, options] = launch.mock.calls[0] as unknown as [string[], Record<string, unknown>];
+      expect(options.stdout).toBeTypeOf("number");
+      expect(options.stderr).toBeTypeOf("number");
+    } finally {
+      launch.mockRestore();
+    }
+  });
+
+  posixOnly("keeps no capture file on disk and no descriptor open", async () => {
+    const original = process.env.TMPDIR;
+    const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
+    process.env.TMPDIR = directory;
+    try {
+      const before = readdirSync("/dev/fd").length;
+      const listed = await runCommand("sh", ["-c", 'ls -A "$1"; echo done', "sh", directory]);
+      expect(listed.stdout).toBe("done\n");
+      for (let index = 0; index < 8; index += 1) {
+        await runCommand("sh", ["-c", "exit 3"]).catch(() => undefined);
+        await runCommand("orkestrator-nonexistent-shell-test-command").catch(() => undefined);
+        await runCommand("sh", ["-c", "sleep 5"], { timeoutMs: 20 }).catch(() => undefined);
+      }
+      expect(readdirSync("/dev/fd").length).toBe(before);
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  posixOnly("does not report an unusable temporary directory as a missing executable", async () => {
+    const original = process.env.TMPDIR;
+    process.env.TMPDIR = path.join(os.tmpdir(), "orkestrator-shell-test-missing-directory");
+    try {
+      const failure = await runCommand("sh", ["-c", "true"]).catch((error: unknown) => error);
+      expect((failure as Error).message).toContain("temporary directory: ENOENT");
+      expect((failure as CommandFailedError).executableMissing).toBeFalsy();
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+    }
+  });
+
+  posixOnly("keeps each concurrent command's streams apart", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 32 }, (_, index) =>
+        runCommand("sh", ["-c", 'echo "out $1"; echo "err $1" >&2', "sh", String(index)]),
+      ),
+    );
+    results.forEach((result, index) => {
+      expect(result).toEqual({ stdout: `out ${index}\n`, stderr: `err ${index}\n` });
+    });
+  });
+
+  posixOnly("gives a command with no payload a closed pipe, not /dev/null", async () => {
+    const { stdout } = await runCommand("sh", [
+      "-c",
+      "if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then echo pipe; fi; cat; echo eof",
+    ]);
+    expect(stdout).toBe("pipe\neof\n");
+  });
+
+  posixOnly("waits for a descendant holding the pipes and keeps its output", async () => {
+    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.2; echo late) & echo early"]);
+    expect(stdout).toBe("early\nlate\n");
+  });
+
+  posixOnly("reports a fatal signal without an exit code", async () => {
+    const failure = await runCommand("sh", ["-c", "kill -KILL $$"]).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).exitCode).toBeNull();
+    expect((failure as CommandFailedError).signal).toBe("SIGKILL");
+    expect((failure as CommandFailedError).timedOut).toBe(false);
+  });
+
+  test("leaves an undefined environment value unset and refuses a NUL argument", async () => {
+    const { stdout } = await runCommand("sh", ["-c", 'echo "[${SHELL_TEST_VALUE-unset}]"'], {
+      env: { PATH: process.env.PATH, SHELL_TEST_VALUE: undefined },
+    });
+    expect(stdout).toBe("[unset]\n");
+    await expect(runCommand("sh", ["-c", "true", "a\0b"])).rejects.toThrow("null bytes");
+  });
+
+  test("reports a missing working directory as a failure to start", async () => {
+    const failure = await runCommand("sh", ["-c", "true"], {
+      cwd: path.join(os.tmpdir(), "orkestrator-shell-test-missing-directory"),
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).executableMissing).toBe(true);
   });
 });
 

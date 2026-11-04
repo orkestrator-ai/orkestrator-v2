@@ -863,9 +863,7 @@ export class DiffStatsService {
     // Detach the superseded promise so new reads do not join it. Admission still
     // serializes scans of the same worktree until the old work settles, and
     // readers already awaiting that promise retain their wait. It may take as
-    // long as its slowest child's timeout, and a
-    // Git child can look unfinished after it has exited
-    // (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
+    // long as its slowest child's timeout, and its result is thrown away.
     entry.inFlight = undefined;
     entry.targetGeneration = this.nextTargetGeneration++;
     entry.mutationGeneration += 1;

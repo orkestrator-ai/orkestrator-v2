@@ -1,8 +1,14 @@
 # HTML preview fixture startup
 
-Status: open. Observed 2026-11-04.
+- **ID:** 4043
+- **Status:** open
+- **Date observed:** 2026-11-04
+- **Test:** `HTML boundary refuses resources, scripts, forms and mutated navigation`; `preview releases keyboard focus, saves, and permits divider dragging`
+- **File:** `e2e/HtmlPreview.spec.ts`
 
-`e2e/HtmlPreview.spec.ts`, mobile Chromium:
+Renumbered from 4042, which `backend-services-and-tooling/4042-toolchain-full-check-stamp-same-instant.md` had already taken.
+
+Mobile Chromium:
 
 - `HTML boundary refuses resources, scripts, forms and mutated navigation` initially reached its page evaluation before React mounted the iframe (`Cannot set properties of null (setting 'srcdoc')`). An explicit attached assertion now synchronizes that test's setup.
 - `preview releases keyboard focus, saves, and permits divider dragging` timed out after 30 seconds waiting for the Report heading in the iframe, with no page snapshot. This test was unchanged on the passing rerun; the underlying startup cause is unconfirmed.

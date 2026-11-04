@@ -1255,6 +1255,33 @@ and `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
 knows it hides its toggle. A browser's own copy of the declines is deleted on
 the first check.
 
+### Branch switch and Sync while a turn runs
+
+The backend refuses to change the checkout while any turn holds it: a turn in
+any open conversation or in the project home
+(`findCoordinatorCheckoutTurn`, `coordinator-checkout-turn.ts`). The toolbar
+disables the branch picker and Sync for the same reason and names who holds it
+("Coordinator is running a turn…", or "Home"), so a user with a side agent
+focused is not refused only after confirming a discard. Refresh stays enabled,
+because a fetch does not touch the checkout.
+
+The panel cannot work this out alone. Only the front tab of each group is
+mounted, and only a mounted tab keeps its projection current, so a stored
+projection misses a turn that started behind another tab and keeps saying
+`running` after one that finished there. The panel therefore asks the backend
+(`get_coordinator_checkout_turn`), which answers from the activity observer
+with no liveness touch or hydration, and adds the projections of the
+conversations it has mounted, which can be ahead of the observer
+(`useCoordinatorActiveTurn`). It reads again on every mount, on an activity or
+session hint for those conversations or the home, on a resync or safety check,
+and every 30 seconds while a turn is held. Against a backend without the
+command, or before its first answer, it goes by every projection it has.
+
+The panel's Git actions and conversation actions keep separate busy flags
+(`useCoordinatorActions`), since the backend serializes Git per repository root
+and conversations per project: a fetch does not disable New side agent, and
+closing a conversation does not disable Refresh.
+
 ## Work panel
 
 The **Work** panel on the right of the Coordinator panel lists everything this

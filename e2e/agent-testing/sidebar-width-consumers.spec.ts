@@ -243,8 +243,14 @@ test("the sidebar's animated width lays out a real terminal and editor at most t
       const steps = new Set(motion.frames.map((frame) => Math.round(frame.sidebar)));
       // The panel really moved through intermediate widths.
       expect(steps.size).toBeGreaterThan(3);
-      expect(motion.terminalWidths.length).toBeLessThanOrEqual(MAX_LAYOUTS_PER_CHANGE);
-      expect(motion.editorWidths.length).toBeLessThanOrEqual(MAX_LAYOUTS_PER_CHANGE);
+      expect(
+        motion.terminalWidths.length,
+        `terminal widths ${JSON.stringify(motion.terminalWidths)}`,
+      ).toBeLessThanOrEqual(MAX_LAYOUTS_PER_CHANGE);
+      expect(
+        motion.editorWidths.length,
+        `editor widths ${JSON.stringify(motion.editorWidths)}`,
+      ).toBeLessThanOrEqual(MAX_LAYOUTS_PER_CHANGE);
       expect(ptyResizes.length).toBeLessThanOrEqual(MAX_LAYOUTS_PER_CHANGE);
       // No layout jump: the first pane stays against the moving edge, and the
       // second moves relative to it only when the column is laid out.

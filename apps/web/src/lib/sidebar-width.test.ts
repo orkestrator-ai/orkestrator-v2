@@ -79,6 +79,21 @@ describe("the widths content is held at while panels animate", () => {
       main: 1164,
     });
   });
+
+  test("a resize handle that comes or goes is held in the main column", () => {
+    expect(
+      sidebarMotionPins({ sidebarFrom: 320, sidebarTo: 0, mainFrom: 900, separator: 1 }),
+    ).toEqual({ sidebar: 320, main: 1221 });
+    expect(
+      sidebarMotionPins({
+        sidebarFrom: 1.25,
+        sidebarTo: 0,
+        mainFrom: 1000,
+        separator: 1.25,
+        zoom: 1.25,
+      }),
+    ).toEqual({ sidebar: 1, main: 802 });
+  });
 });
 
 for (const zoom of [0.8, 1.25, 1.5]) {

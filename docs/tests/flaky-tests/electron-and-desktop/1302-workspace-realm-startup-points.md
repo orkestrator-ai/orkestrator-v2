@@ -101,4 +101,3 @@ failure, so they do not cause it. The step sends native input through
 `sendInputEvent`, and it was only run under headless Ozone here, so a display may
 behave differently; that was not tested. No other symptom in this case was
 retested, and the case stays open.
-

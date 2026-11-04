@@ -184,6 +184,38 @@ test("reversal measures the panel, not the pinned content", () => {
   expect(motion.pins).toEqual({ sidebar: 344, main: 1100 });
 });
 
+describe("the resize handle a hidden sidebar does not have", () => {
+  function group() {
+    const parent = document.createElement("div");
+    const sidebar = element(344, parent);
+    element(1, parent).setAttribute("data-separator", "");
+    return { sidebar, main: element(900) };
+  }
+
+  test("hiding holds the column at the width it gets once the handle has gone", () => {
+    const props = group();
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="hidden" {...props} />);
+    expect(motion.pins).toEqual({ sidebar: 344, main: 900 + 344 + 1 });
+  });
+
+  test("showing holds the column at the width it had before the handle mounted", () => {
+    const props = { ...group(), sidebar: element(0, group().sidebar.parentElement!) };
+    props.sidebar.parentElement!.append(props.sidebar, element(1));
+    props.sidebar.nextElementSibling!.setAttribute("data-separator", "");
+    const { rerender } = render(<Harness mode="hidden" {...props} />);
+    rerender(<Harness mode="full" {...props} />);
+    expect(motion.pins).toEqual({ sidebar: 280, main: 900 + 1 });
+  });
+
+  test("a change that keeps the handle holds no extra width", () => {
+    const props = group();
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode="compact" {...props} />);
+    expect(motion.pins).toEqual({ sidebar: 344, main: 900 + 344 - 56 });
+  });
+});
+
 describe("the sidebar's content", () => {
   test("stays until a hidden panel has finished closing", async () => {
     const props = { sidebar: element(344), main: element(900) };

@@ -48,7 +48,9 @@ export function SidebarMotionFixture() {
         }}
       >
         <ResizablePanel
-          defaultSize="344px"
+          defaultSize={
+            new URLSearchParams(window.location.search).has("shellDefault") ? 28 : "344px"
+          }
           {...sidebarPanelConstraints(mode)}
           panelRef={motion.panelRef}
           elementRef={setSidebar}
@@ -73,7 +75,8 @@ export function SidebarMotionFixture() {
             )}
           </div>
         </ResizablePanel>
-        <ResizableHandle disabled={mode !== "full"} />
+        {/* As in the shell: hidden unmounts it, and remounting it re-lays out the group. */}
+        {motion.contentShown ? <ResizableHandle disabled={mode !== "full"} /> : null}
         <ResizablePanel minSize="0px">
           <div
             ref={setMain}

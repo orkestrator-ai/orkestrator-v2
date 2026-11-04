@@ -106,6 +106,13 @@ export function useSidebarPanelMotion(input: {
           // The content may still be pinned by an interrupted transition.
           // Its panel is the authoritative available width.
           mainFrom: (mainElement.parentElement ?? mainElement).getBoundingClientRect().width,
+          // A hidden sidebar has no handle: it has just mounted, or goes on release.
+          separator:
+            previous === "hidden" || mode === "hidden"
+              ? sidebarElement.nextElementSibling?.matches("[data-separator]")
+                ? sidebarElement.nextElementSibling.getBoundingClientRect().width
+                : 0
+              : 0,
         }),
       );
       settleTimer.current = setTimeout(settle, SETTLE_MS);

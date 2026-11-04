@@ -72,6 +72,12 @@ export function sidebarMotionPins(input: {
   sidebarFrom: number;
   sidebarTo: number;
   mainFrom: number;
+  /**
+   * The resize handle's width when this change mounts or unmounts it. Held in
+   * the main column's width, it spares a layout at the start of showing the
+   * sidebar and at the end of hiding it.
+   */
+  separator?: number;
   /** Bounding rectangles are viewport pixels; pins are CSS layout pixels. */
   zoom?: number;
 }): { sidebar: number; main: number } {
@@ -80,6 +86,7 @@ export function sidebarMotionPins(input: {
   const mainFrom = input.mainFrom / zoom;
   return {
     sidebar: Math.max(sidebarFrom, input.sidebarTo),
-    main: Math.max(mainFrom, mainFrom + sidebarFrom - input.sidebarTo),
+    main:
+      Math.max(mainFrom, mainFrom + sidebarFrom - input.sidebarTo) + (input.separator ?? 0) / zoom,
   };
 }

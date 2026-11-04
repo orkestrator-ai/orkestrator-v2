@@ -562,7 +562,10 @@ transitions the panels' `flex-grow` for 180ms, only while the group carries
 `data-sidebar-width-animating`; a held resize handle turns that off, as does
 `prefers-reduced-motion`. For the duration, the sidebar's and the main column's
 content are held at the larger of their start and end widths and clipped by
-their panels (`sidebarMotionPins`). So a terminal or editor is laid out at most
+their panels (`sidebarMotionPins`). A hidden sidebar has no resize handle, so
+showing mounts it and hiding removes it on release; the main column's hold
+includes the handle's width for those changes, or the column would be laid out
+once more when the handle comes or goes. So a terminal or editor is laid out at most
 twice instead of on every frame, and its PTY is resized at most twice. A desktop
 realm's view follows the panel's edge every frame, and only its position changes:
 its width changes once, so everything inside it is laid out once. A frame after

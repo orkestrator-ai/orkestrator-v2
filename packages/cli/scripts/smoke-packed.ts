@@ -123,6 +123,7 @@ async function probePackedBridge(directory: string, name: string): Promise<void>
 // Tracked outside the try so the cleanup below can never delete the installed
 // package and its data directory out from under a still-running child.
 let backend: Bun.Subprocess | undefined;
+let lockedRelease: string | undefined;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packed-smoke-"));
 try {
   await run(
@@ -194,7 +195,9 @@ try {
   // The standalone updater installs a release's dependencies from its published
   // lockfile (`installRelease`). Do the same from the packed files, so a lockfile
   // the registry no longer satisfies fails here, and run the result.
-  const lockedRelease = path.join(temporaryRoot, "locked-release");
+  // Keep this outside the fresh install: upward resolution must never borrow
+  // dependencies from temporaryRoot/node_modules.
+  lockedRelease = await mkdtemp(path.join(os.tmpdir(), "orkestrator-locked-smoke-"));
   await cp(path.join(installedRoot, RELEASE_RUNTIME_PATH), lockedRelease, { recursive: true });
   await run(
     [
@@ -214,6 +217,13 @@ try {
     recursive: true,
     filter: (source) => path.basename(source) !== "node_modules",
   });
+  for (const specifier of ["sharp", "playwright-core", "@anthropic-ai/claude-agent-sdk"]) {
+    const resolved = await realpath(Bun.resolveSync(specifier, lockedPackage));
+    const relative = path.relative(await realpath(lockedRelease), resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Frozen release resolved ${specifier} outside its own tree: ${resolved}`);
+    }
+  }
   const lockedProbe = path.join(lockedPackage, "locked-probe.mjs");
   await writeFile(
     lockedProbe,
@@ -468,4 +478,5 @@ try {
 } finally {
   if (backend) await stop(backend);
   await rm(temporaryRoot, { recursive: true, force: true });
+  if (lockedRelease) await rm(lockedRelease, { recursive: true, force: true });
 }

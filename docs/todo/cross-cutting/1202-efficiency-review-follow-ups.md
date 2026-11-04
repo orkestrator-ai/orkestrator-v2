@@ -32,7 +32,7 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -298,7 +298,31 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 **Context.** The report's ST-1 to ST-6 and ST-13 to ST-21. fsmonitor is no longer enabled (`docs/architecture/git-scan-caches.md`), so ST-17's second option is gone. Done on 2026-11-02: ST-1 (a host capture reuses a settled stat-cache entry's oid after `fstat`, without reading or hashing), ST-2's first half (libc is `dlopen`ed once per process, and the `readlinkat` probe uses one scratch buffer) and ST-4 (a bounded LRU of line counts by blob pair in `snapshot-diff.ts`). The capture benchmark (`scripts/benchmark-change-tracking.ts`) gained the report's large-asset and 200-changed-file fixtures (`--only=assets,long-turn`). Tests: `capture-stat-reuse.test.ts` and `snapshot-diff-count-cache.test.ts`.
 
-**Investigation.** Re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
+Done on 2026-11-04: ST-3 (`ObjectStore.reuse` leaves a fence younger than half the orphan grace alone, and the closure check skips objects proven present in the pass; `capture-orphan-fence.test.ts`, [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup") and ST-16's minimum gap (`LOCAL_SCAN_MIN_GAP_MS`; `worktree-snapshots.test.ts` "minimum scan gap", [git-scan-caches.md](../../architecture/git-scan-caches.md)). Container helper captures stay out of scope.
+
+**Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
+
+**Investigation.** Re-checked on 2026-11-04 against `main` at `96ee1eb3`: `reuse` still called `utimes` under the store lock for every unchanged file, the closure still called `has` for every entry, and `DiffStatsService.request` started a scan for every hint with none running. Micro-benchmark over 10,000 objects (median of 7, same host):
+
+| Per-object call | 10,000 objects |
+| --- | --- |
+| `utimes` awaited under a lock (the old `reuse`) | 100 ms |
+| `stat` awaited (the old closure `has`) | 80 ms |
+| `lstatSync` (the new `reuse`) | 7 ms |
+| `Map` lookup | 0.1 ms |
+
+`bun scripts/benchmark-change-tracking.ts --only=capture --sizes=10000,1000 --runs=10`, warm capture p50 range over three runs of the old (`96ee1eb3`) and new store and capture code, on the shared build host:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 10,000 files, one changed, runs interleaved, load average 40–56 | 681–797 ms | 211–319 ms |
+| 1,000 files, one changed, runs interleaved, load average 40–56 | 62–100 ms | 29–51 ms |
+| 10,000 files, one changed, runs one after the other, load average 23–32 before and 16–21 after | 349–482 ms | 107–114 ms |
+| 1,000 files, one changed, runs one after the other, same loads | 37–58 ms | 16–17 ms |
+
+Cold captures write objects rather than reuse them and did not improve (one cold capture per round: 2.5–2.7 s old and 2.8–3.4 s new at the higher load, 1.1–1.6 s old and 1.4–1.5 s new at the lower one). The interleaved rows are the fair comparison, because the load moved between the other two batches. Twenty settled bursts over ten seconds now start four or five scans instead of twenty (`worktree-snapshots.test.ts`, fake watcher and clock; not measured under a real install).
+
+Earlier, re-checked on 2026-11-02 against `main` at `38d55ee1`: ST-1, ST-2 and ST-4 were still as the report describes; the rest of this task was not re-checked. Measured on the shared build host under heavy load (load average 25 to 34), three interleaved runs each of the old and new code, 10 warm runs per workload, p50 range:
 
 | Workload | Before | After |
 | --- | --- | --- |
@@ -349,13 +373,58 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Send cached stamps to the helper so it can skip settled files too.**
     - Pros: the same saving inside the container.
     - Cons: a protocol change to the helper and a larger stdin per batch; needs container qualification.
-- **Next step for this task?**
+- **Next step for this task?** Decided 2026-11-04: both, as separate commits.
   - **ST-3: skip the closure `has` for objects proven present in this pass and the `utimes` inside the grace window (recommended).**
     - Pros: it is now the largest part of a warm capture over many small files.
     - Cons: touches the orphan fence that retention relies on, so the grace-window reasoning needs care.
   - **ST-16's minimum scan gap.**
     - Pros: small and independent.
     - Cons: does not touch capture cost.
+- **How does a reuse learn how old the fence is?** Done as recommended.
+  - **One `lstatSync` per reused object (recommended).**
+    - Pros: reads the same mtime `sweep` decides on, so the two cannot disagree; proves the object present in this pass, so a missing object is still read and rewritten; no state to bound and nothing lost on a restart; 7 ms per 10,000 objects.
+    - Cons: a synchronous call per unchanged file on the event loop, about 1 µs on this host, beside the synchronous `confinedRead` that already runs per file.
+  - **An in-memory map of when each object was last fenced.**
+    - Pros: 0.1 ms per 10,000 objects; no system call.
+    - Cons: needs its own count and byte bounds; proves nothing in this pass, so a missing object would go unnoticed until the entry aged out; empty after a restart.
+  - **An awaited `lstat`.**
+    - Pros: never blocks the event loop.
+    - Cons: 80 ms per 10,000 objects, so it would keep most of the cost it replaces.
+- **How long may a fence go unrenewed?** Done as recommended.
+  - **Half the orphan grace (recommended).**
+    - Pros: leaves 30 min of the 1 h grace for the capture deadline and the sweep's ledger walk; renews each object at most every 30 min under constant captures.
+    - Cons: every object past the window is renewed in one pass, so one warm capture in each half hour pays the old renewal cost.
+  - **Up to the whole grace.**
+    - Pros: fewer renewals.
+    - Cons: an object just inside the grace has no margin left, and a sweep during the capture deletes it. `capture-orphan-fence.test.ts` fails this way.
+- **Does the renewal leave the store lock, as the report suggests?** Not done.
+  - **Keep it under the lock; only the skip runs without one (recommended).**
+    - Pros: a renewal cannot land between a sweep's `lstat` and its `rm`, which would report success for an object about to be deleted.
+    - Cons: a pass that does renew still queues behind other store work.
+  - **Run every renewal outside the lock.**
+    - Pros: no queueing.
+    - Cons: opens exactly that race; the renewal is what retention relies on.
+- **What does the closure check skip?** Done as recommended.
+  - **Objects written or proven present in this pass, unless `removedObjects` shows a sweep removed something since the pass began (recommended).**
+    - Pros: no second system call per entry on a normal pass; a pass that overlapped a removal gets the full check it always had.
+    - Cons: one more counter on the store, and an object deleted by something other than `sweep` during the pass goes unnoticed until it is read.
+  - **Skip it for proven objects unconditionally.**
+    - Pros: simplest.
+    - Cons: a removal during the pass could publish a manifest with a missing blob.
+- **Where does ST-16's gap run from, and what does it hold back?** Done as recommended.
+  - **From the end of the last scan, holding back only hints and the reruns they queue, on local targets (recommended).**
+    - Pros: a slow scan cannot make the gap vanish; a reader, refresh, known mutation or new target still gets a scan straight away; containers are not spaced twice.
+    - Cons: under constant writes the badge can lag by up to 2 s plus a scan.
+  - **From the start of the last scan.**
+    - Pros: a steadier cadence for quick scans.
+    - Cons: a scan longer than the gap would be followed by another at once, which is the cost being removed.
+- **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Not done.
+  - **Leave them counting; the gap bounds their cost (recommended).**
+    - Pros: `classifyWorktreeChange` already records why: a build directory can hold tracked or visible untracked files, so a path's location does not prove the file list is unchanged.
+    - Cons: an install still costs a scan every 2 s or so while it runs.
+  - **Filter hints against the worktree's ignore rules.**
+    - Pros: no scans at all for writes that truly are ignored.
+    - Cons: needs an ignore matcher kept current per worktree, and a wrong answer freezes the counts until the two-minute safety scan.
 
 ### 8. tmux and container polling
 
@@ -1151,6 +1220,34 @@ its cache or with a delta the public page cannot express. It would also make
 `unchanged` depend on cache state rather than on the transcript. The provider
 read on each poll stays, and reducing it belongs with task 4.
 
+### Task 7: a store that is not told its grace always renews (ST-3)
+
+Made on 2026-11-04. `ObjectStore` takes `orphanGraceMs` as an option, read fresh
+from the policy on each reuse. Unset, it means 0, so every reuse renews as before.
+A wrong default here would delete objects, and a missing option only costs time.
+The benchmark passes the policy's value, so it measures what the service runs.
+
+### Task 7: `sweep`'s grace argument stays separate (ST-3)
+
+Made on 2026-11-04. `sweep` keeps its explicit `graceMs` rather than reading the
+store's option, because tests and `ChangeRetentionService` already pass it.
+Retention reads the same policy field, so the two agree in production. A caller
+passing a much shorter grace than the store's would narrow the margin.
+
+### Task 7: the gap's value (ST-16)
+
+Made on 2026-11-04. 2 s, the top of the report's 1–2 s and the value containers
+already use, so a local and a container environment refresh at the same rate
+under load. It is a service option (`localScanMinGapMs`), not a setting.
+
+### Task 7: the owner tests turn the gap off by default (ST-16)
+
+Made on 2026-11-04. The harness in `worktree-snapshots.test.ts` and one case in
+`recurring-work-metrics.test.ts` pass `localScanMinGapMs: 0`, because they assert
+what one hint does at once on a clock that does not advance. The "minimum scan
+gap" cases and the real-Git case in `worktree-snapshots-git.test.ts` use the
+real value.
+
 ## Current state
 
 Done on 2026-11-01 (see each task's Context): ST-7, ST-8, WEB-2 (partly),
@@ -1174,6 +1271,9 @@ browser and real-stack suites were not run.
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.
 - The compression default under real remote load: tracked in 0052 task 2.
+- Task 7: `lstatSync` and warm-capture numbers come from this Linux host only;
+  macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
+  a real install was not measured.
 
 ## Related
 

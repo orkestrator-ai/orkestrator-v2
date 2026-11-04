@@ -1252,7 +1252,7 @@ export async function resolveRemoteWorktreeStartPoint(
   try {
     await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
   } catch (error) {
-    if (error instanceof CommandFailedError && error.timedOut) {
+    if (error instanceof CommandFailedError && error.timedOut && !error.outputCloseTimedOut) {
       throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
     }
     throw error;

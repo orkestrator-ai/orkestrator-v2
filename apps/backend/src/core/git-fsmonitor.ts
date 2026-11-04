@@ -153,7 +153,9 @@ export async function retryGitWithoutFsmonitorOnTimeout<T>(
   try {
     return await run(args);
   } catch (error) {
-    if (!(error instanceof CommandFailedError) || !error.timedOut) throw error;
+    if (!(error instanceof CommandFailedError) || !error.timedOut || error.outputCloseTimedOut) {
+      throw error;
+    }
     if (signal?.aborted) throw signal.reason;
     return run([...GIT_FSMONITOR_DISABLED_ARGS, ...args]);
   }

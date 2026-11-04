@@ -6,7 +6,7 @@ Analysed 2026-11-03 against main at `b0dcf1660`.
 
 ### Tasks
 
-1. **The DOM-assertion scanner finds six offending test files**: open.
+1. **The DOM-assertion scanner finds six offending test files**: done (2026-11-04: #1705 cleared these six; five new files from #1709 and #1710 are rewritten; see Assumptions and decisions).
 2. **`build pipeline commands` expects `restartStep` without its selection argument**: open.
 3. **The workflow baseline cannot capture a ticket delivery policy**: open.
 4. **Two graph journeys cannot find their environment in the sidebar**: done (spec drift, not a regression).
@@ -153,6 +153,10 @@ The ticket asked to fix whichever of product or spec was wrong. Options: pause t
 ### Task 5: run with a full-network fixture container
 
 On beelink, 29 leaked `reach-probe-net` networks from other owners fill Docker's default address pools (follow-up [3320](../containers-and-environments/3320-leaked-probe-networks-block-docker-fixtures-on-beelink.md)), so the fixture could not create its environment network. For the live runs a PATH shim outside the repository gave this profile's networks explicit `10.229.x.0/24` subnets. With that subnet the restricted container's egress gateway failed to apply its policy, so the fixture used `--fixture-network full`. The Files panel path does not depend on the network policy. Not run: the restricted-mode fixture and `mise run test:agent:docker:isolated` end to end.
+
+### Task 1: rewrite the offenders that had replaced the original six
+
+`a2827f52f` (#1705) had already cleared the listed files. The scanner failed again at `a44641cbc` on five others, from `0bd2cea99` (#1709) and `a06f16d74` (#1710): `BuildChatTab.messaging`, `PipelineMessageComposer`, `QueuedPromptStack`, `CoordinatorPanel` and `CoordinatorWorkPanel`. I ran the recommended `scripts/rewrite-bounded-dom-assertions.ts`, which changed 15 assertions in those files and nothing else. The scanner and the five owning test files pass. It can recur while a PR can merge on a red gate, which stays with [0030](0030-test-suite-and-ci-health.md), task 1.
 
 ## Related
 

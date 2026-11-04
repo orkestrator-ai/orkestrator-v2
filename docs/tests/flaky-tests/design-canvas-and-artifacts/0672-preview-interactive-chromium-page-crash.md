@@ -68,3 +68,11 @@
   file passed without fault injection. The CI crash's underlying cause remains
   unconfirmed.
 
+## CI recurrence (2026-11-03)
+
+Failed in the `Tests (backend)` shard on `main` at
+[`a44641cbc`](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41737163492/job/126269206874),
+at `preview-interactive.test.ts:393`, the only backend failure of that run
+(17,062 passed, 1 failed). The owning file passed alone on 2026-11-04 on the Linux
+worktree host (`bun test --cwd apps/backend ./src/core/transcript-artifacts/preview-interactive.test.ts --parallel=1 --only-failures`,
+exit zero, 12.2 s).

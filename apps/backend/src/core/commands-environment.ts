@@ -76,7 +76,7 @@ import {
 } from "./container-project-seed-files.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
-import { pathExists, runCommand } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
@@ -2288,7 +2288,16 @@ export async function createLocalWorktree(
   ];
   assertWorktreePathUnlinked(worktreePath);
   recheckBase();
-  await runCommand("git", args, { timeoutMs: 120_000 });
+  try {
+    await runCommand("git", args, { timeoutMs: 120_000 });
+  } catch (error) {
+    // Exit zero proves add created our allocation even if output was lost.
+    // Ordinary add failures may be collisions; never delete their resources.
+    if (error instanceof CommandFailedError && error.exitCode === 0) {
+      await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
+    }
+    throw error;
+  }
 
   try {
     await configureSameNamedOriginPush(worktreePath);

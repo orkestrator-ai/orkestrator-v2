@@ -219,7 +219,6 @@ function DockerSettingsPanel() {
     fetchData(false);
     return startCoordinatedPoll({
       resource: "docker-settings-stats",
-      target: machine ?? "",
       intervalMs: STATS_REFRESH_MS,
       read: () => fetchData(true),
     });

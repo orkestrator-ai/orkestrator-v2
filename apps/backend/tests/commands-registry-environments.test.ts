@@ -6,7 +6,6 @@ import * as githubCredential from "../src/core/container-github-credential";
 import { lowPriorityCommand } from "../src/core/process-priority";
 import * as shell from "../src/core/shell";
 
-import { toClientEnvironment } from "../src/core/commands-terminal";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

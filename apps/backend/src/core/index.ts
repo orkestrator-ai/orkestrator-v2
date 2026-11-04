@@ -938,7 +938,11 @@ export class OrkestratorBackend {
       }),
       coordinatorAccountKey: async (environmentId, agent) => {
         const session = await readSessionAgentAccount(context, environmentId, agent);
-        const account = coordinatorSessionAccount(session);
+        const account = coordinatorSessionAccount(
+          session,
+          session?.running === true &&
+            (await this.nativeAgents.hasObservedLiveWork(environmentId, session.platform)),
+        );
         if (session?.source !== "account" || !account) return null;
         return usageLimitAccountKey({
           platform: agent,

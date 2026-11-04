@@ -258,17 +258,22 @@ ledger (the `coordinator-usage-limit-notices` store):
   together, then sends one wake listing them. A later stop in the window is filed
   without a wake (`usage-limit-window-already-notified`). A flush is recorded before it
   is sent, under a fixed request id, so a restart resends it rather than repeating it.
+  A group still unsent after a restart can start a coordinator only while its window is
+  open: once the window has ended it is older state, and it starts nothing.
 - **The coordinator on the limited account.** Accounts compare by provider and email,
-  across machines; without an email only the entry on its own machine matches. A
-  coordinator on the limited login (or about to be, counting a pending move) has its
-  machine moved off first by `moveOffLimitedAccount`, the automatic switcher's own path:
-  it never pins, and every entry of the login counts as limited. That move's automatic
-  switch notice skips this coordinator, whose own notice says so.
+  across machines; without an email only the entry on its own machine matches. What is
+  compared is the login the coordinator's next turn runs on: an idle bridge launched on
+  another account is replaced on its next use, so it counts as already on the machine's
+  active account. A coordinator on the limited login has its machine moved off first by
+  `moveOffLimitedAccount`, the automatic switcher's own path: it never pins, and every
+  entry of the login counts as limited. That move's automatic switch notice skips this
+  coordinator, whose own notice says so.
 - **No move possible.** With no account with headroom, an explicit pin, or automatic
   switching off, the notice is kept (`coordinator-on-limited-account`), no turn starts,
-  and the reason is in the notice and the ledger (`keptReason`). Nothing retries it; the
-  coordinator reads it on its next turn. With status wakes off, a notice is filed without
-  a wake and starts nothing.
+  and the reason is in the notice and the ledger (`keptReason`). The same happens when the
+  coordinator's bridge has live work on that login, which holds it there until the work
+  ends (`coordinator-busy`). Nothing retries it; the coordinator reads it on its next
+  turn. With status wakes off, a notice is filed without a wake and starts nothing.
 
 **A coordinator's own stop never notifies itself.** A leaf coordinator's goes up to the
 command node's coordinator for that repository. With nobody above, it attempts the same
@@ -1847,9 +1852,10 @@ delegations `launch_environment`,
 build the user started in the UI has no association and never wakes a
 coordinator. A pull request the user raised is not followed either, but on a
 worker the coordinator owns its merge or close still reaches it, as a
-[worker outcome](#worker-outcomes). Notices go to the main coordinator, like every other report, and
-do not start one: with no main open they wait, and the sweep sends the state
-current when one opens.
+[worker outcome](#worker-outcomes). Notices go to the main coordinator that
+[should hear them](#who-hears-a-notice), like every other report. With no main running,
+a new event starts one. A sweep starts nothing: it waits, and sends the state current
+when one opens.
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association

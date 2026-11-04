@@ -74,8 +74,9 @@ describe("readSessionAgentAccount", () => {
       account: { id: "default", isDefault: true },
       pendingActive: { id: SECOND, label: "Work" },
     });
-    expect(coordinatorSessionAccount(result)?.id).toBe("default");
-    expect(coordinatorSessionAccount(result && { ...result, running: false })?.id).toBe(SECOND);
+    // Idle, it is replaced on its next use; with live work it stays until that ends.
+    expect(coordinatorSessionAccount(result, false)?.id).toBe(SECOND);
+    expect(coordinatorSessionAccount(result, true)?.id).toBe("default");
   });
 
   test("a container reports the login its marker records", async () => {

@@ -218,7 +218,11 @@ export function parseUpwardCoordinatorNotice(value: unknown): UpwardCoordinatorN
 
 /** Why a notice was kept rather than waking a coordinator on the limited account. */
 export type CoordinatorAccountKeptReason =
-  "no-account-with-headroom" | "account-pinned" | "auto-switch-off" | "switch-refused";
+  | "no-account-with-headroom"
+  | "account-pinned"
+  | "auto-switch-off"
+  | "switch-refused"
+  | "coordinator-busy";
 
 /** Placement reason of a notice kept without a wake; see `sendAgentMail`'s `keepWithoutWake`. */
 export const USAGE_LIMIT_NOTICE_KEPT_REASON = "coordinator-on-limited-account";
@@ -233,6 +237,7 @@ function keptReasonText(reason: CoordinatorAccountKeptReason): string {
     "account-pinned": "this machine's account was chosen by hand and is pinned",
     "auto-switch-off": "automatic account switching is off here",
     "switch-refused": "the switch gave way to a change made at the same moment",
+    "coordinator-busy": "you have work still running on it, and you move once that work ends",
   }[reason];
 }
 

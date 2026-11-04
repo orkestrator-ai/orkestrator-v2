@@ -344,7 +344,9 @@ export class CoordinatorUsageLimitNotices {
       (await this.deps.storage.loadConfig()).global.agentMessaging,
     );
     const quiet = settings.coordinatorStatusWakes === "off";
-    const target = await this.deps.router.mainFor(group.projectId, first && !quiet);
+    // A window that ended while this backend was down is older state, not a new event.
+    const windowOpen = group.windowEndsAt > this.now();
+    const target = await this.deps.router.mainFor(group.projectId, first && !quiet && windowOpen);
     if (!target) {
       // Nobody to file it with and no leave to start anyone: the window ends with it.
       this.update(id, (current) => {
@@ -433,13 +435,14 @@ export class CoordinatorUsageLimitNotices {
       quietProjectId: group.projectId,
     });
     if (!move.moved) return { kind: "kept", reason: move.reason };
-    // A default switch does not change the login held by an already-running bridge.
+    // An idle bridge moves on its next use. One with live work keeps its login until
+    // that work ends, so a turn woken now would still run on the limited account.
     const after = await this.deps.coordinatorAccountKey(
       coordinatorRuntimeId(coordinatorId, main.id),
       main.agent,
     );
     return after === group.accountKey
-      ? { kind: "kept", reason: "switch-refused" }
+      ? { kind: "kept", reason: "coordinator-busy" }
       : { kind: "moved", to: move.to };
   }
 

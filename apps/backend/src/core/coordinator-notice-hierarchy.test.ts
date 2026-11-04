@@ -105,6 +105,7 @@ function stopNotices(
     move?: LimitedAccountMove;
     machineKey?: string;
     machineName?: string;
+    now?: () => number;
   } = {},
 ) {
   const moves: Array<{ platform: string; key: string; quiet?: string | undefined }> = [];
@@ -124,6 +125,7 @@ function stopNotices(
       return options.move ?? { moved: true, to: "other@example.com" };
     },
     coalesceMs: 1,
+    ...(options.now ? { now: options.now } : {}),
   });
   target.coordinator.noticeRouter.setUsageLimitStops(notices);
   const settle = async () => {
@@ -1103,7 +1105,7 @@ describe("review regressions", () => {
     n.notices.stop();
   });
 
-  test("a running bridge still bound after a default move keeps the notice", async () => {
+  test("a bridge whose live work holds it on the limited login keeps the notice", async () => {
     const w = await world();
     const worker = await w.addEnvironment("worker");
     const n = stopNotices(w, {
@@ -1113,10 +1115,28 @@ describe("review regressions", () => {
     await n.notices.noteStop(report(worker.environmentId));
     await n.settle();
     expect(w.wakes(await w.main())).toBe(0);
-    expect((await inbox(w, await w.main()))[0]!.placementReason).toBe(
-      "coordinator-on-limited-account",
-    );
+    const message = (await inbox(w, await w.main()))[0]!;
+    expect(message.placementReason).toBe("coordinator-on-limited-account");
+    expect(message.body).toContain("work still running");
+    expect(
+      w.storage.coordinatorNotices.updateUsageLimitNoticeLedger((l) => l.groups[0]!.keptReason),
+    ).toBe("coordinator-busy");
     n.notices.stop();
+  });
+
+  test("a stop whose window ended before the restart starts no session", async () => {
+    const w = await world();
+    const worker = await w.addEnvironment("worker");
+    const first = stopNotices(w);
+    await first.notices.noteStop(report(worker.environmentId));
+    first.notices.stop();
+    await w.closeMain();
+
+    const again = stopNotices(w, { now: () => RESET_AT + 1 });
+    again.notices.start();
+    await again.settle();
+    expect(await openMains(w)).toHaveLength(0);
+    again.notices.stop();
   });
 
   test("fallback owns the notice before delivery yields to a reconnecting collector", async () => {

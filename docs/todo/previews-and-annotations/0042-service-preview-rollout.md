@@ -6,7 +6,8 @@ fault tests and single-machine runs against `b83ae534` (2026-10-22); node
 retention, tunnel liveness, compatibility cases and UI items against
 `00a0cb82` (2026-10-25); the preview flakes (task 11) against `93b99bfba`
 (2026-11-01); the Next.js fixture (task 5) and task 6's metric additions
-against `7b48c23fb` (2026-11-03).
+against `7b48c23fb` (2026-11-03); the default flip and legacy tab migration
+(tasks 7 and 8) against `4e3caa079` (2026-11-04).
 
 ## Task analysis
 
@@ -24,7 +25,8 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    the hostile-worker case there, and the iOS handoff on a device or
    simulator. Status: blocked (on macOS Safari and iOS hardware).
 4. **Docker Desktop on Windows**: binding inspection, Auto ports, recreation
-   and the exec relay. Status: blocked (on a Windows host).
+   and the exec relay. Status: not needed (2026-11-04): the maintainer put
+   Windows out of scope, so no default waits on it (D18).
 5. **Remaining compatibility cases**: a streaming or router framework fixture
    and real-provider OAuth. Status: partly done (2026-11-03): the Next.js
    16.4.3 app-router fixture and its spec pass in Chromium and Firefox (WebKit
@@ -35,11 +37,12 @@ Analysed 2026-10-27 against `main` at `863b5782`.
    desktop reconnect counts and ingress connect and first-byte series; HMR
    delivery stays with the latency script).
 7. **Flip defaults and cohort sign-off**: tunnel and relay defaults, the
-   observation window and who signs off. Status: blocked (on tasks 1, 4 and
-   6).
+   observation window and who signs off. Status: partly done (2026-11-04): both
+   default on, on the maintainer's sign-off with no observation window (D19).
+   Tasks 1 and 6 did not run first and stay open as evidence for that flip.
 8. **Retire the legacy route and compatibility mode**: code item 6 and the
-   support-window and legacy-tab annotation questions. Status: blocked (on
-   task 7 plus the support window).
+   support-window and legacy-tab annotation questions. Status: blocked (on the
+   support window). Stored tabs that match one service now migrate (D21).
 9. **Shared legacy partition retention**: the remaining half of code item 4.
    Status: blocked (on task 8).
 10. **Real-window leftovers**: the pane-layout announcement (item 9), node
@@ -154,7 +157,9 @@ Desktop for macOS, not Windows. It gates the relay default.
 [0019](../containers-and-environments/0019-container-platform-qualification.md).
 
 **Investigation.** The suite is `mise run test:preview:docker`; nothing in it
-is Windows-specific.
+is Windows-specific. On 2026-11-04 the maintainer said Windows support is not
+needed now, so the question below is settled by D18 and the run is not
+scheduled.
 
 **Decisions.**
 
@@ -257,10 +262,12 @@ this flip. Its first half shipped separately: every legacy
 so the legacy route no longer runs preview HTML on the gateway origin and
 this flip is no longer the only fix for M1.
 
-**Investigation.** `DEFAULT_PREVIEW_SETTINGS` still has `transport: false`,
-`relay: false` (`apps/backend/src/core/storage-preview-services.ts:129-130`).
+**Investigation.** `DEFAULT_PREVIEW_SETTINGS` has `transport: true`,
+`relay: true` since 2026-11-04
+(`apps/backend/src/core/storage-preview-services.ts`).
 `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` remain the
-overrides.
+overrides. The maintainer chose both decisions below on 2026-11-04 (D19): flip
+right after, not after a cohort, and sign-off by the maintainer.
 
 **Decisions.**
 
@@ -301,8 +308,10 @@ default, and stored legacy tabs have a migration.
 `ServiceBrowserTab` compatibility mode
 (`apps/web/src/components/browser/ServiceBrowserTab.tsx:259-262`). **Open as
 service** (`legacyUrlServiceMatch`,
-`apps/web/src/lib/preview-service-entry.ts:116`) is the only conversion; there
-is no automatic migration of stored legacy tabs.
+`apps/web/src/lib/preview-service-entry.ts:116`) decides every conversion. Since
+2026-11-04 a desktop with the tunnel available converts a matching tab when it
+becomes active (D21), so only the `localhost` tabs have no migration, and the
+register's condition now turns on them and the support window.
 
 **Decisions.**
 
@@ -314,7 +323,8 @@ is no automatic migration of stored legacy tabs.
   - **Remove it at the flip.**
     - Pros: less code sooner.
     - Cons: no fallback if the tunnel fails for a user.
-- **How do stored legacy URL tabs migrate?**
+- **How do stored legacy URL tabs migrate?** Chose automatic (2026-11-04, D21);
+  plain URL tabs opening externally waits for the route's removal.
   - **Convert automatically where `legacyUrlServiceMatch` finds exactly one
     match; leave the rest as plain URL tabs that open externally
     (recommended).**
@@ -457,8 +467,8 @@ are recorded (93 MB of shared partitions on one profile, 172 kB on another).
 
 Service previews shipped in #831 (`4f02156b`). Each previewed application gets
 a backend-owned service identity, carried by a desktop tunnel, private HTTPS
-origins or an optional container relay. Every new transport ships off by
-default. Real-stack evidence is single-machine only: Linux and Chromium
+origins or an optional container relay. The tunnel and relay default on since
+2026-11-04; publication stays an opt-in. Real-stack evidence is single-machine only: Linux and Chromium
 (2026-09-23), macOS re-baselines (2026-10-17), and a real Electron window with
 the desktop tunnel on (2026-10-18, remaining cases 2026-10-21), and a
 hostile service worker in Chromium and Auto mappings on Docker Desktop for
@@ -471,7 +481,8 @@ partitions, and the evidence log where run results are now recorded.
 
 - Defaults: `DEFAULT_PREVIEW_SETTINGS`
   (`apps/backend/src/core/storage-preview-services.ts`) sets
-  `transport: false`, `relay: false` and `publication.enabled: false`.
+  `transport: true`, `relay: true` and `publication.enabled: false`. A backend
+  with saved settings keeps them (D20).
   `PreviewRuntime.effectiveSettings` (`core/preview-runtime.ts`) applies the
   `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` overrides.
   Since #969, settings, definitions and identity are the SQLite stores
@@ -507,8 +518,9 @@ partitions, and the evidence log where run results are now recorded.
   [browser-previews.md](../../architecture/browser-previews.md). Since
   2026-10-25 it also clears a workspace node's partitions once every command
   node that listed the node has removed it. The shared legacy partitions of
-  live connections are never cleared. A legacy URL tab is converted to a
-  service tab only when the user chooses **Open as service** (2026-10-25).
+  live connections are never cleared. A legacy URL tab converts to a service
+  tab when the user chooses **Open as service** (2026-10-25) or, on a desktop
+  with the tunnel available, by itself when it becomes active (2026-11-04).
 - Tests: `e2e/preview/private-origin.spec.ts` has Chromium, Firefox and WebKit
   projects on an isolated stack (`apps/backend/src/preview-browser-harness.ts`,
   throwaway CA and browser-local loopback proxy). Since 2026-10-25, each runs
@@ -708,7 +720,7 @@ log below.
   Orkestrator's Auto mapping (`hostPort: 0`). On 2026-10-22 an Auto mapping
   passed on Docker Desktop 4.88.1 for macOS (published with the backend's own
   `publishedPortArguments`, seeded, resolved from Docker's binding and
-  followed through recreation). Windows is still open.
+  followed through recreation). Windows is out of scope (D18).
 - Hostile service worker. Real Chromium on private origins passed on
   2026-10-22 (see the evidence log): re-sign-in is blocked until site data is
   cleared, the worker never sees a grant, its captured session code is
@@ -747,16 +759,17 @@ log below.
 
 ### Enabling defaults
 
-- Desktop tunnel: change `DEFAULT_PREVIEW_SETTINGS.transport` to `true` only
-  after the two-machine run passes and an observation window with error and
-  resource thresholds is recorded here. The real-Electron cases passed on
-  2026-10-21. An absence of
-  complaints is not a metric.
+- Desktop tunnel: on by default since 2026-11-04, on the maintainer's sign-off
+  and ahead of the criteria this file set: the two-machine run has not passed
+  and no observation window or threshold is recorded (D19). The real-Electron
+  cases passed on 2026-10-21. An absence of complaints is not a metric, so this
+  flip has no field evidence behind it yet.
 - Publication cannot be a default: it needs an operator-provided domain,
   certificate, key and listen address. It stays a per-deployment opt-in, gated
   by the DNS and certificate run for that deployment type.
-- Relay: default-on needs the Docker Desktop run and documented image
-  requirements (`node` or `bun`, and the `node` user).
+- Relay: on by default since 2026-11-04. Docker Desktop for macOS and Linux
+  Engine passed, Windows is out of scope (D18), and the image requirements
+  (`node` or `bun`, and the `node` user) are in `browser-previews.md`.
 - Every flip keeps the rollback drill passing
   (`apps/backend/tests/gateway-preview.test.ts`, "rollback drill").
 
@@ -1716,6 +1729,37 @@ running.
   (`browser-address.test.ts`). Pre-#831 backends reject Auto mappings
   (`hostPort: 0`).
 
+2026-11-04, default flip and legacy tab migration (tasks 4, 7 and 8), branch
+`build-delete-file-5d96944a6cd8-r1` based on `4e3caa079`, Linux, one machine.
+
+- Two machines: not run. `tailscale ping mbp3` answered in 5 ms over a direct
+  path, but SSH to it was refused on port 22 on every attempt, so nothing ran on
+  a second machine and no baseline or threshold exists from this work.
+- Observed in a fresh agent-test profile (`dev:test --fixture --headless-electron`):
+  **Issue new preview access** and **Container relay** are both on, Desktop tunnel
+  and Container relay show Available, and both switches turn off.
+- Real Electron, headless on Linux (`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1
+  bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts
+  e2e/agent-testing/service-preview-electron.spec.ts --grep <case>`): the tunnel
+  case and the new stored-tab migration case passed, the migration case both alone
+  and after the tunnel case. The complete spec was not run.
+- `a legacy URL tab keeps a link and Back through routine re-attaches` failed 4 of
+  4 headless, at the stale-attach step (address stays `/app/next`, expected `/`).
+  It also failed 2 of 2 with this change's product code reversed, so this change
+  did not cause it. It was not run on a real display, because that would open
+  windows on the host's desktop, so whether it is specific to headless or already
+  broken on `main` is unknown. It is deterministic here, so it is not recorded as a
+  flake.
+- `mise run test` failed on one test of more than 32,000:
+  [4041](../../tests/flaky-tests/backend-services-and-tooling/4041-toolchain-full-check-stamp-same-instant.md),
+  in a package this change does not touch. Workspace counts: backend 14032, web
+  11801, protocol 4498, desktop 1674, CLI 458, web-public 41, toolchain 123 pass
+  with 1 fail; root and bridges groups passed. `mise run format:check`, `mise run
+  lint` and `mise run typecheck` passed.
+- Not run: `test:preview:browser`, `test:preview:docker`, `test:browser`, a real
+  container through the default-on relay, and anything on macOS. Profiles were
+  stopped and reset.
+
 ## Open questions
 
 - How long is the support window for the legacy route and the pre-preview
@@ -1729,8 +1773,9 @@ running.
   requests. The fallback question stays open; recommendation in D8.)
 - Is it acceptable that annotations on legacy URL tabs keep needing the legacy
   route? (Recommendation in D8.)
-- What observation window and thresholds apply to each cohort, and who signs
-  off? (Proposed starting point in D8; needs the two-machine baseline.)
+- What thresholds should the flipped default be held to? (Proposed starting
+  point in D8; needs the two-machine baseline. The window and sign-off are
+  answered by D19.)
 - Answered 2026-10-25 (decision D3): the preview browser and Docker suites
   join change-gated validation, not CI. The testing guide's "Verification by
   change type" table and `AGENTS.md` now name `mise run test:preview:browser`
@@ -1809,6 +1854,36 @@ Recorded 2026-10-25 for the work done on branch
   the direct route over the same link, no
   unbounded queue growth, and zero cross-service reach), signed off by the
   maintainer.
+
+Recorded 2026-11-04 for tasks 4, 7 and 8, on branch
+`build-delete-file-5d96944a6cd8-r1`.
+
+- **D18. Windows (task 4).** Options: (a) keep the relay off until Windows passes,
+  as the task recommended; (b) drop the gate. Chose (b): the maintainer said on
+  2026-11-04 that only macOS and Linux are in use and Windows is not needed now.
+  Cost: a future Windows desktop inherits a relay default no run has proved.
+- **D19. Flip ahead of its evidence (task 7).** Options: (a) an opt-in cohort for
+  one Stable release, which this file recommended; (b) flip now on the
+  maintainer's sign-off. The maintainer chose (b) on 2026-11-04, and also asked
+  for the two-machine run on mbp3, which could not start (see the evidence log).
+  Pro: every desktop leaves the shared legacy origin sooner. Con: remote-backend
+  previews have no real-network evidence and no thresholds, and there is no field
+  data. Rollback is the settings switch or the overrides, and the rollback drill
+  still passes.
+- **D20. Saved settings on upgrade.** Options: (a) change only the default for
+  backends with no saved row; (b) a one-time upgrade that turns saved rows on.
+  Chose (a): a saved off is indistinguishable from a deliberate kill switch, and
+  (b) would override it. Cost: an install that saved these settings with the
+  switch off stays on the legacy route until someone turns it on.
+- **D21. Where stored tabs migrate (task 8).** Options: (a) in the tab, when it
+  becomes active on a desktop with the tunnel available; (b) in the backend over
+  stored layouts; (c) in the tab on every client. Chose (a). (b) converts tabs
+  against bindings nobody is looking at, and the strict match needs a live
+  snapshot anyway. (c) gives a web client without publication a setup message in
+  place of a working view. A failed or changed check leaves the tab and shows the
+  existing message rather than retrying. Cost: `localhost` tabs do not match and
+  stay URL tabs, and a migrated tab starts with an empty service partition, so an
+  application it was signed in to asks again.
 
 Recorded 2026-11-01 for task 11 (flakes 0620 and 0622), on branch
 `preview-flakes-d5abda30c5f5-r1`.

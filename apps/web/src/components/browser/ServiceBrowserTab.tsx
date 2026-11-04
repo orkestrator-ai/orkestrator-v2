@@ -267,7 +267,8 @@ function ServicePreview({
       if (capabilities.surfaces.desktopTunnel.available) return "desktop-tunnel";
       return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
     }
-    return capabilities.surfaces.browserTopLevel.available ? "top-level" : "unsupported";
+    if (capabilities.surfaces.browserTopLevel.available) return "top-level";
+    return capabilities.surfaces.legacyPath.available ? "compatibility" : "unsupported";
   }, [capabilities, nativeBrowserPreview, status]);
 
   // Follow the durable path when another client (or an undo) changes it.

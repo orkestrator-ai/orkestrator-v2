@@ -211,6 +211,13 @@ export const BACKEND_CAPABILITIES = {
    */
   nodeMailAttachments: "node-mail-attachments",
   /**
+   * `return_node_outbox_mail`: a command node with no coordinator for a
+   * repository hands an agent's mail back, and the leaf delivers it to its own
+   * coordinator. An older leaf does not know the command, so its mail keeps
+   * waiting in the outbox.
+   */
+  nodeMailReturn: "node-mail-return",
+  /**
    * The leaf side of Kanban sync (`@orkestrator/protocol/ticket-sync`):
    * `apply_ticket_sync`, `get_ticket_sync_cursor`, `collect_ticket_sync_outbox`
    * and `ack_ticket_sync_outbox`. A command node syncs tickets only with a

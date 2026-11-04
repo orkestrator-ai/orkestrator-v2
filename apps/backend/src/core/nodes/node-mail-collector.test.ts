@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import { type OutboxItem } from "./node-mail.js";
 
@@ -86,6 +86,91 @@ for (const failure of ["collect", "deliver", "ack"])
     expect(delivered.size).toBe(1);
     collector.dispose();
   });
+
+describe("a repository with no coordinator on this node", () => {
+  const noCoordinator = () =>
+    Object.assign(new Error("No open coordinator"), { code: "no-coordinator" });
+  function collecting(
+    items: OutboxItem[],
+    options: { capable?: boolean; deliverError?: () => Error; returnFails?: boolean } = {},
+  ) {
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const capabilities: Record<string, number> =
+      options.capable === false ? {} : { "node-mail-return": 1 };
+    let pending = items;
+    const collector = new NodeMailCollector({
+      retryDelayMs: 1000,
+      selfId: async () => "bk_cmd" as never,
+      nodeName: async () => "Leaf",
+      link: () => ({
+        connected: true,
+        hello: { capabilities },
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+          calls.push({ command, args });
+          if (command === "collect_node_outbox") return { items: pending, more: false } as T;
+          if (command === "return_node_outbox_mail" && options.returnFails) {
+            throw new Error("This project has no coordinator");
+          }
+          if (command === "ack_node_outbox") {
+            pending = pending.filter((entry) => !(args.sequences as number[]).includes(entry.seq));
+          }
+          return {} as T;
+        },
+      }),
+      deliver: async () => {
+        throw (options.deliverError ?? noCoordinator)();
+      },
+    });
+    return {
+      calls,
+      collector,
+      returned: () =>
+        calls.filter((call) => call.command === "return_node_outbox_mail").map((call) => call.args),
+      pending: () => pending.map((entry) => entry.seq),
+    };
+  }
+
+  test("an agent's mail goes back to the leaf and leaves the outbox", async () => {
+    const world = collecting([item(1)]);
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(true);
+    expect(world.returned()).toEqual([{ controllerId: "bk_cmd", seq: 1 }]);
+    expect(world.pending()).toEqual([]);
+    world.collector.dispose();
+  });
+
+  test("stays queued when the leaf has no coordinator to take it either", async () => {
+    const world = collecting([item(1)], { returnFails: true });
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+    expect(world.pending()).toEqual([1]);
+    world.collector.dispose();
+  });
+
+  test("an older leaf is never asked, and its mail keeps waiting", async () => {
+    const world = collecting([item(1)], { capable: false });
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+    expect(world.returned()).toEqual([]);
+    expect(world.pending()).toEqual([1]);
+    world.collector.dispose();
+  });
+
+  test("a transient failure is retried here, not handed back", async () => {
+    const world = collecting([item(1)], { deliverError: () => new Error("temporary") });
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+    expect(world.returned()).toEqual([]);
+    world.collector.dispose();
+  });
+
+  test("mail for a named conversation and a leaf coordinator's own mail stay queued", async () => {
+    const world = collecting([
+      { ...item(1), toCoordinator: { environmentId: "coordinator:c:m", tabId: "t" } },
+      { ...item(2), fromCoordinator: true },
+    ]);
+    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+    expect(world.returned()).toEqual([]);
+    expect(world.pending()).toEqual([1, 2]);
+    world.collector.dispose();
+  });
+});
 
 test("stream resync reconciles a pending outbox", async () => {
   let delivered = 0;

@@ -22,10 +22,14 @@ import type { MailAttachmentBatch } from "../mail-attachments.js";
  *   it), local or remote. An environment a local coordinator launched reports
  *   locally until a command node's coordinator contacts it, and back again
  *   once the local one does. With no coordinator contact at all, it goes to
- *   this project's local coordinator if there is one, otherwise to the
- *   command node that contacted this leaf most recently. Remote mail waits in
- *   this leaf's outbox until that command node collects it; it is never
- *   dropped or sent to another command node.
+ *   the command node that contacted this leaf most recently, even when this
+ *   project has a coordinator here: coordination happens on the command node.
+ *   Remote mail waits in this leaf's outbox until that command node collects
+ *   it; it is never dropped or sent to another command node. A command node
+ *   with no coordinator for the repository hands it back, and this node's own
+ *   coordinator gets it.
+ * - An agent names either end itself with `"local-coordinator"` (this machine,
+ *   when the user asks for it) or `"command-node-coordinator"`.
  * With no command node attached, mail stays local exactly as before.
  *
  * The two nodes' coordinators exchange the same mail:
@@ -90,8 +94,6 @@ export type CoordinatorContact = CoordinatorMailbox & { at: string };
 export interface LocalCoordinatorContact {
   /** Latest launch, delegation or mail from a local coordinator (ISO time). */
   at?: string;
-  /** The environment's project has a coordinator on this backend. */
-  hasCoordinator: boolean;
 }
 
 export interface NodeMailState {
@@ -291,7 +293,13 @@ export class LeafNodeMail {
 
   /**
    * Where a leaf agent's message goes. `null` keeps it local: it is not for a
-   * coordinator, or no command node is attached.
+   * coordinator, no command node is attached, or the coordinator on this node
+   * is the one that last contacted the environment.
+   *
+   * "coordinator" means the command node's unless this node's own coordinator
+   * launched, delegated to or mailed the environment more recently, so a worker
+   * reports to whoever is waiting on it. `"command-node-coordinator"` always
+   * goes up.
    */
   async route(input: {
     fromEnvironmentId: string;
@@ -299,34 +307,45 @@ export class LeafNodeMail {
     toEnvironmentId: string;
     replyToMessageId?: string;
   }): Promise<CoordinatorMailbox | { controllerId: BackendId; controllerName?: string } | null> {
+    const upward = input.toEnvironmentId === COMMAND_NODE_COORDINATOR_MAIL_ADDRESS;
     const attached = this.context.attachedControllers();
-    if (attached.length === 0) return null;
+    if (attached.length === 0) {
+      if (!upward) return null;
+      throw new Error(
+        `This node is not controlled by a command node, so "${COMMAND_NODE_COORDINATOR_MAIL_ADDRESS}" reaches no one.`,
+      );
+    }
     const isAttached = (id: string) => attached.some((entry) => entry.controllerId === id);
     const state = await this.store.load();
     if (input.replyToMessageId) {
       // A reply goes back to whoever sent the message it answers: a command
       // node's coordinator through the outbox, anyone on this node locally.
       const thread = state.threads[input.replyToMessageId];
-      return thread && isAttached(thread.controllerId) ? thread : null;
+      if (thread && isAttached(thread.controllerId)) return thread;
+      if (!upward) return null;
     }
-    if (input.toEnvironmentId !== COORDINATOR_MAIL_ADDRESS) return null;
-    // "coordinator" is whichever coordinator last contacted the environment.
+    if (!upward && input.toEnvironmentId !== COORDINATOR_MAIL_ADDRESS) return null;
     const origin = state.origins[input.fromEnvironmentId];
     const remote: CoordinatorContact | undefined =
       state.contacts?.[input.fromEnvironmentId] ?? (origin ? { ...origin, at: "" } : undefined);
-    const local = await this.context.localCoordinatorContact?.(
-      input.fromEnvironmentId,
-      input.fromTabId,
-    );
+    const local = upward
+      ? undefined
+      : await this.context.localCoordinatorContact?.(input.fromEnvironmentId, input.fromTabId);
     if (remote && isAttached(remote.controllerId) && !(local?.at && local.at >= remote.at)) {
       const { at: _at, ...mailbox } = remote;
       return mailbox;
     }
-    if (local?.at || local?.hasCoordinator) return null;
+    if (local?.at) return null;
     const recent = this.context.mostRecentControllerId();
-    if (!recent || !isAttached(recent)) return null;
-    const name = attached.find((entry) => entry.controllerId === recent)?.displayName;
-    return { controllerId: recent, ...(name ? { controllerName: name } : {}) };
+    const controllerId = recent && isAttached(recent) ? recent : attached[0]!.controllerId;
+    const name = attached.find((entry) => entry.controllerId === controllerId)?.displayName;
+    return { controllerId, ...(name ? { controllerName: name } : {}) };
+  }
+
+  /** One item still waiting for a command node. */
+  async queued(controllerId: BackendId, seq: number): Promise<OutboxItem | undefined> {
+    const state = await this.store.load();
+    return state.outbox[controllerId]?.items.find((entry) => entry.seq === seq);
   }
 
   /** Whether this request is queued already, or was delivered and acknowledged. */

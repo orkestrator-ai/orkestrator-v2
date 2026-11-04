@@ -6,8 +6,10 @@ import {
   type AgentMailIdentity,
 } from "@orkestrator/protocol/agent-mail";
 import {
+  COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_DELEGATION_HOLD_REASON,
   COORDINATOR_MAIL_ADDRESS,
+  LOCAL_COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -248,7 +250,7 @@ export function registerAgentMessagingTools(
     {
       title: "Send an agent message",
       description: describe(
-        "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to \"coordinator\" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; the result names which. To answer a specific message use reply_message, which always goes back to that message's sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
+        `Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "${COORDINATOR_MAIL_ADDRESS}" and omit toTabId: it reaches the coordinator that most recently launched, delegated to or messaged this environment, on this machine or on a command node; on a machine controlled by a command node, with no such contact, it reaches the command node's coordinator. The result names which. Only when the user asks for the coordinator on this machine, set toEnvironmentId to "${LOCAL_COORDINATOR_MAIL_ADDRESS}"; only when they ask for the command node's while another coordinator is working with you, set it to "${COMMAND_NODE_COORDINATOR_MAIL_ADDRESS}". To answer a specific message use reply_message, which always goes back to that message's sender. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.`,
       ),
       inputSchema: z.object({
         ...scopeFields,
@@ -313,6 +315,8 @@ export function registerAgentMessagingTools(
             deliveryHint: `queued for the coordinator on ${remote.controllerName ?? "the command node"}; delivered when it collects its mail`,
           });
         }
+        // Named by the sender, so it never takes the command node route above.
+        const local = input.toEnvironmentId === LOCAL_COORDINATOR_MAIL_ADDRESS;
         const message = await storage.sendAgentMail(
           {
             kind: "tab",
@@ -320,7 +324,11 @@ export function registerAgentMessagingTools(
             projectId: scope.projectId,
             tabId: identity.tabId,
           },
-          { ...input, toTabId: input.toTabId ?? "" },
+          {
+            ...input,
+            ...(local ? { toEnvironmentId: COORDINATOR_MAIL_ADDRESS } : {}),
+            toTabId: input.toTabId ?? "",
+          },
         );
         const recipient = await storage.getAgentMailMailbox(
           message.toEnvironmentId,
@@ -330,7 +338,7 @@ export function registerAgentMessagingTools(
         return result({
           identity,
           message: { ...message, body: undefined },
-          ...(input.toEnvironmentId === COORDINATOR_MAIL_ADDRESS
+          ...(local || input.toEnvironmentId === COORDINATOR_MAIL_ADDRESS
             ? { coordinator: "this machine" }
             : {}),
           placement: message.placement,

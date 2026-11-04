@@ -256,6 +256,102 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     ).toBeNull();
   });
 
+  test("an agent no coordinator has contacted mails the command node even with a coordinator here", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const agent = await world.addEnvironment("agent");
+    coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+    expect(await world.storage.coordinators.getCoordinatorWorkspace(world.projectId)).toBeTruthy();
+    expect(
+      await world.storage.nodeMailRouter!.route({
+        fromEnvironmentId: agent.environmentId,
+        fromTabId: agent.tabId,
+        toEnvironmentId: "coordinator",
+      }),
+    ).toMatchObject({ controllerId: "bk_cmd", controllerName: "arktech-mini" });
+  });
+
+  // Delegations are not the only local contact: a leaf coordinator's build
+  // pipeline reports to it too, and has no `environment` association.
+  test("a workflow the local coordinator started keeps its environment's mail local", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const worker = await world.addEnvironment("pipeline-worker");
+    coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+    const route = () =>
+      world.storage.nodeMailRouter!.route({
+        fromEnvironmentId: worker.environmentId,
+        fromTabId: worker.tabId,
+        toEnvironmentId: "coordinator",
+      });
+    expect(await route()).toMatchObject({ controllerId: "bk_cmd" });
+    const pipelines = spyOn(world.storage, "getBuildPipeline").mockResolvedValue({
+      snapshot: { environmentId: worker.environmentId },
+    } as never);
+    const main = await world.main();
+    try {
+      await world.storage.coordinators.reserveCoordinatorWorkflowAssociation({
+        id: "pipeline-association",
+        projectId: world.projectId,
+        coordinatorId: world.coordinatorId,
+        conversationId: main.conversationId!,
+        kind: "build-pipeline",
+        resourceId: "pipeline-1",
+        requestId: "pipeline-request",
+        createdAt: new Date().toISOString(),
+      });
+      await world.storage.coordinators.completeCoordinatorWorkflowAssociation(
+        "pipeline-association",
+        "pipeline-1",
+      );
+      expect(await route()).toBeNull();
+    } finally {
+      pipelines.mockRestore();
+    }
+  });
+
+  test("mail the command node hands back reaches this node's coordinator and leaves the outbox", async () => {
+    const world = await MailWorld.create();
+    worlds.push(world);
+    const agent = await world.addEnvironment("agent");
+    const { instance } = coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+    const router = world.storage.nodeMailRouter!;
+    const destination = await router.route({
+      fromEnvironmentId: agent.environmentId,
+      fromTabId: agent.tabId,
+      toEnvironmentId: "coordinator",
+    });
+    const queued = await router.enqueue(destination!, {
+      requestId: "handed-back",
+      fromEnvironmentId: agent.environmentId,
+      fromTabId: agent.tabId,
+      body: "Please create build environments.",
+    });
+
+    await expect(instance.returnOutboxMail("bk_stranger" as never, queued.seq)).rejects.toThrow(
+      "Only an attached command node",
+    );
+    await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
+
+    const main = await world.main();
+    const { messages } = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+    expect(messages).toHaveLength(1);
+    const message = await world.storage.getAgentMailMessage(
+      main.environmentId,
+      main.tabId,
+      messages[0]!.id,
+    );
+    expect(message.body).toContain("arktech-mini has no coordinator for this repository");
+    expect(message.body).toContain("Please create build environments.");
+    expect(message.from).toMatchObject({ kind: "tab", environmentId: agent.environmentId });
+    expect((await instance.leafMail.collect("bk_cmd" as never, 0)).items).toEqual([]);
+    // Already gone: a repeat from a lost answer does nothing.
+    await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
+    expect(
+      (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages,
+    ).toHaveLength(1);
+  });
+
   // Regression (2026-10-26): on a leaf attached to a command node, a local
   // coordinator's worker reported to "coordinator" and the report went to the
   // command node's outbox. The local coordinator never saw it, and its

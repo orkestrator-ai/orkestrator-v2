@@ -876,7 +876,7 @@ describe("Orkestrator control MCP server", () => {
     expect(invocations.some((entry) => entry.command.startsWith("start_environment"))).toBe(false);
   });
 
-  test("rejects cross-project environments and invalidates paused, superseded, and expired credentials", async () => {
+  test("rejects cross-project environments and invalidates paused, superseded, and revoked credentials", async () => {
     let lifecycleState = "ready";
     let incarnation = "incarnation-1";
     overrides.set("get_project_coordinator", () => ({
@@ -937,10 +937,34 @@ describe("Orkestrator control MCP server", () => {
 
     incarnation = "incarnation-1";
     credential = issue();
-    const now = Date.now();
-    const clock = spyOn(Date, "now").mockReturnValue(now + 12 * 60 * 60 * 1_000 + 1);
+    server.revokeCoordinatorCredentials("coordinator-1", "conversation-1");
+    expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+  });
+
+  // A bridge reads its token once, at launch, so a credential that lapsed while
+  // it sat idle overnight left a live coordinator with no tools at all: no
+  // launches and no send_message to hand the work on with.
+  test("a coordinator credential outlives any idle period while its bridge runs", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "discovery", "mail"],
+    });
+    const later = Date.now() + 30 * 24 * 60 * 60 * 1_000;
+    const clock = spyOn(Date, "now").mockReturnValue(later);
     try {
-      expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+      const listed = await rpc(credential.url, credential.token, "tools/list");
+      expect(listed.response.status).toBe(200);
     } finally {
       clock.mockRestore();
     }

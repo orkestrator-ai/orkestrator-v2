@@ -600,6 +600,7 @@ export class GatewayAuth {
       capabilities[BACKEND_CAPABILITIES.nodeMailSteer] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailAttachments] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeMailReturn] = 1;
       capabilities[BACKEND_CAPABILITIES.ticketSync] = 1;
     }
     const hello: BackendHello = {

@@ -34,7 +34,12 @@ The durable owner is `{ kind: "coordinator", projectId, coordinatorId }`.
 Provider processes, projections, queues, transcripts, attachments, and mail
 use a distinct `coordinator:` runtime namespace
 (`coordinator:<id>:<conversation>`). Each conversation gets its own bridge so
-its scoped MCP and mail credential cannot be shared with a sibling tab.
+its scoped MCP and mail credential cannot be shared with a sibling tab. The
+bridge reads that credential once, at launch, so it lives exactly as long as
+the bridge: it is revoked when the process exits, the conversation closes or
+the project is removed, every request revalidates its scope, and it has no
+clock. An expiry only ever left an idle bridge alive with no Orkestrator tools,
+which showed the user "orkestrator MCP authentication required".
 A conversation's native session key is the ordinary tab key,
 `env-coordinator:<id>:<conversation>:<tabId>`
 (`coordinatorConversationSessionKey`), on every path — the renderer, mail
@@ -162,11 +167,15 @@ works across the nodes that node controls:
 The coordinator's context says whether its node is a command node. A command
 node attached to another runs in leaf mode: its coordinator's context names
 the controlling node, its node tools refuse, and it handles any message as
-an agent on that node would. Its one cross-node action is mail to the
+an agent on that node would, launching workers on its own node if that is what
+it takes. Its one cross-node action is mail to the
 command node's coordinator: it answers that coordinator's mail with
 `send_message` and `replyToMessageId`, and starts a message with
-`toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
-but hidden behind a warning in the project's Coordinator tab.
+`toEnvironmentId: "command-node-coordinator"`, which is also how its context
+tells it to hand on anything it cannot do from there. Agents on a leaf mail
+the command node's coordinator by default rather than this one
+([command-nodes.md](command-nodes.md#updates-from-leaves)). Its conversations
+are kept but hidden behind a warning in the project's Coordinator tab.
 
 ### Coordinators on two nodes
 

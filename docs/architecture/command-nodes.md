@@ -314,17 +314,27 @@ Updates that have a single destination are routed intelligently:
   locally.
 - Mail to "the coordinator" and task completion reports go to the
   coordinator that last contacted that environment (launched it, delegated
-  to it, prompted it or mailed it), whether that is one of the leaf's own
-  coordinators or a command node's. An environment the leaf's own
-  coordinator launched reports locally until a command node's coordinator
-  contacts it, and back again once the local coordinator does
-  (`LeafNodeMail.route`, `localCoordinatorContact`).
-- With no coordinator contact at all, mail stays local when the project has
-  a coordinator on the leaf, and otherwise goes to the command node that
-  contacted the leaf most recently. Being attached is not a contact: the
-  link's own traffic would otherwise send every local worker's report to the
-  command node (the 2026-10-26 incident, where three release workers'
-  reports never reached their local coordinator).
+  to it, started a workflow in it, prompted it or mailed it), whether that is
+  one of the leaf's own coordinators or a command node's. An environment the
+  leaf's own coordinator launched reports locally until a command node's
+  coordinator contacts it, and back again once the local coordinator does
+  (`LeafNodeMail.route`, `localCoordinatorContact`). A worker's report
+  therefore always reaches the coordinator waiting on it: the 2026-10-26
+  incident was three release workers' reports never reaching their local
+  coordinator.
+- With no coordinator contact at all, mail goes to the command node that
+  contacted the leaf most recently, for its main coordinator of the
+  repository, even when the project has a coordinator on the leaf:
+  coordination happens on the command node, and the leaf's coordinator cannot
+  act across nodes. A closed main there is reopened with the default agent.
+- An agent names either end itself. `"local-coordinator"` reaches the
+  coordinator on its own machine and is for when the user asks for that one;
+  `"command-node-coordinator"` goes up even from a worker a local coordinator
+  is working with. The `send_message` result names where it went.
+- A command node with no coordinator for the repository hands an agent's mail
+  back (`return_node_outbox_mail`), and the leaf's own coordinator receives it
+  with a line saying why. With no coordinator there either, it stays in the
+  outbox.
 - If that command node is unreachable, the update waits in the leaf's
   outbox until a command node collects it; it is not dropped or sent to a
   different command node silently.
@@ -343,10 +353,12 @@ A command node attached to another command node operates in leaf mode:
   (controlling other nodes, creating environments elsewhere, file transfer
   to other nodes) are unavailable. If one receives a message, it handles it
   as an agent on a leaf would — acting on its own node and replying — and
-  does not start acting as a command node. Its one cross-node action is
-  mail to the command node's coordinator for the repository: a reply to
-  that coordinator's request, or a new message to
-  `"command-node-coordinator"`, both through the outbox. Every other node
+  does not start acting as a command node. It can still launch environments
+  and workers on its own node. Its one cross-node action is mail to the
+  command node's coordinator for the repository: a reply to that
+  coordinator's request, or a new message to `"command-node-coordinator"`,
+  both through the outbox, and its context tells it to hand on anything it
+  cannot do itself this way rather than leave it stranded. Every other node
   tool still refuses.
 - Its coordinator conversations are kept, because they may hold important
   information, but they are mostly hidden: the portal and the node's own UI

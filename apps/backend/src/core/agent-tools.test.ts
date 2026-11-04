@@ -942,6 +942,69 @@ describe("agent Kanban tools", () => {
     });
   });
 
+  test("on a leaf, coordinator mail goes up by default and stays here only when named", async () => {
+    await addMessagingEnvironment("env-a", "project-mail", ["agent-a"]);
+    const now = new Date().toISOString();
+    await storage.coordinators.mutateCoordinatorWorkspace("project-mail", () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "leaf-coordinator",
+      projectId: "project-mail",
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "main",
+          tabId: "main-tab",
+          logicalSessionKey: "leaf-main",
+          title: "Coordinator",
+          createdAt: now,
+          mailboxIncarnationId: "leaf-main-incarnation",
+          role: "main",
+          agent: "codex",
+        },
+      ],
+      selectedConversationId: "main",
+      repositoryContextRevision: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await storage.synchronizeAgentMailboxes();
+    const enqueued: unknown[] = [];
+    storage.nodeMailRouter = {
+      route: async (input) =>
+        input.toEnvironmentId === "coordinator"
+          ? { controllerId: "bk_cmd", controllerName: "Office desktop" }
+          : null,
+      enqueue: async (_destination, item) => {
+        enqueued.push(item);
+        return { seq: 1 };
+      },
+    };
+    const sender = server.connection("env-a", "project-mail", "host", "agent-a");
+    const send = (requestId: string, toEnvironmentId: string) =>
+      rpc(sender.url, sender.token, "tools/call", {
+        name: "send_message",
+        arguments: { requestId, toEnvironmentId, body: "Please build this." },
+      });
+
+    const up = await send("default", "coordinator");
+    expect(up.body.result?.structuredContent).toMatchObject({
+      placement: "node-outbox",
+      coordinator: "command node Office desktop",
+    });
+    expect(enqueued).toHaveLength(1);
+
+    const local = await send("named", "local-coordinator");
+    expect(local.body.result?.structuredContent).toMatchObject({
+      coordinator: "this machine",
+      message: {
+        toEnvironmentId: coordinatorRuntimeId("leaf-coordinator", "main"),
+        toTabId: "main-tab",
+      },
+    });
+    expect(enqueued).toHaveLength(1);
+  });
+
   test("binds messaging actions to the credential's tab and covers send/read/ack/reply/status", async () => {
     await addMessagingEnvironment("env-a", "project-mail", ["agent-a", "agent-b"]);
     await addMessagingEnvironment("env-c", "project-mail", ["agent-c"]);

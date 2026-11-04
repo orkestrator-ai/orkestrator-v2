@@ -277,6 +277,9 @@ describe("LM-01/LM-03 the coordinator's node context", () => {
     )!;
     expect(line).toContain("Node mode: leaf. This node is controlled by Office desktop");
     expect(line).toContain("handle it as an agent on this node would");
+    expect(line).toContain("You can still launch environments and workers on this node");
+    expect(line).toContain('toEnvironmentId "command-node-coordinator"');
+    expect(line).toContain("Do not leave it stranded here");
   });
 
   test("a command node with nodes defaults to itself and deletes only on request", () => {

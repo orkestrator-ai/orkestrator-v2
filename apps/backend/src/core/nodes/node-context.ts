@@ -8,7 +8,8 @@ import { COMMAND_NODE_COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coo
  * - Leaf mode: the node is subordinate to a named command node; the
  *   coordinator does not act as a cross-node coordinator and handles
  *   messages as an agent on this node would. Its one cross-node action is
- *   mail to the command node's coordinator.
+ *   mail to the command node's coordinator, which is also where anything it
+ *   cannot do itself goes.
  * - Command node: it can work across the connected nodes, creates on the node
  *   the user names, else on its own unless load or OS says otherwise, and
  *   deletes only on the user's request.
@@ -21,8 +22,10 @@ export function coordinatorNodeContext(status: NodeStatus, connectedNodes: numbe
       `Node mode: leaf. This node is controlled by ${controllers}, and coordination happens there. ` +
       `You are not a cross-node coordinator here: do not try to control other nodes, create environments elsewhere or transfer files to other nodes (those tools refuse). ` +
       `If you receive a message, handle it as an agent on this node would: act on this node and reply. ` +
+      `You can still launch environments and workers on this node. ` +
       `Mail from the command node's coordinator is a request from it: answer with send_message and replyToMessageId set to its message id; you may act on this node to answer it, never on other nodes. ` +
-      `To raise something with it yourself, send_message to toEnvironmentId "${COMMAND_NODE_COORDINATOR_MAIL_ADDRESS}"; that is the only cross-node action available here.\n`
+      `To raise something with it yourself, send_message to toEnvironmentId "${COMMAND_NODE_COORDINATOR_MAIL_ADDRESS}"; that is the only cross-node action available here. ` +
+      `When something you are given needs what you cannot do from here, hand it to that coordinator the same way, with everything it needs to act, and tell the user you did. Do not leave it stranded here.\n`
     );
   }
   if (status.mode === "command" && connectedNodes > 0) {

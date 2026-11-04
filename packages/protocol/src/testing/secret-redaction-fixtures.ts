@@ -8,6 +8,14 @@ export const SECRET_REDACTION_FIXTURES: ReadonlyArray<readonly [string, string]>
     "eyJhbGciOiJIUzI1NiJ9",
   ],
   ["ghp_0123456789abcdefghij", "ghp_0123456789abcdefghij"],
+  [
+    "okb_AbCdEfGhIjKlMnOpQrSt0123456789-_aBcDeFgHiJk",
+    "okb_AbCdEfGhIjKlMnOpQrSt0123456789-_aBcDeFgHiJk",
+  ],
+  [
+    "oka_AbCdEfGhIjKlMnOpQrSt0123456789-_aBcDeFgHiJk",
+    "oka_AbCdEfGhIjKlMnOpQrSt0123456789-_aBcDeFgHiJk",
+  ],
   ["github_pat_11ABCDEFG0abcdefghijklmnop", "github_pat_11ABCDEFG0abcdefghijklmnop"],
   ["sk-live-0123456789abcdefgh", "sk-live-0123456789abcdefgh"],
   ["xoxb-1234567890-abcdefghij", "xoxb-1234567890-abcdefghij"],

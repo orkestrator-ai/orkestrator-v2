@@ -23,6 +23,8 @@ export const COMPATIBILITY_PATH_IDS = [
   "slash-catalogue.outdated-bridge",
   /** A bridge without `POST /session/:id/close` got the restart notice. */
   "bridge-close.upgrade-required",
+  /** A renderer that predates paged tmux transcripts read a whole transcript. */
+  "tmux-transcript.whole-read",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",
   /**

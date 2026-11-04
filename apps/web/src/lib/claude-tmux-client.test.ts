@@ -50,7 +50,7 @@ import {
   getPendingHooks,
   getStatus,
   getTaskList,
-  getTranscript,
+  getTranscriptPage,
   holdHook,
   interruptSession,
   listPreviousSessions,
@@ -148,10 +148,25 @@ describe("claude-tmux-client invoke wrappers", () => {
     ]);
   });
 
-  test("getTranscript invokes the transcript command with tabId and environmentId", async () => {
-    await getTranscript("tab-1", "env-1");
+  test("getTranscriptPage asks for the tail, and for what comes before a cursor", async () => {
+    await getTranscriptPage("tab-1", "env-1");
+    await getTranscriptPage("tab-1", "env-1", "session:42");
     expect(calls[0]!.cmd).toBe("claude_tmux_transcript");
-    expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
+    expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1", page: {} });
+    expect(calls[1]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      page: { before: "session:42" },
+    });
+  });
+
+  test("getTranscriptPage reads a backend's whole-file array as a page with nothing before it", async () => {
+    const line = { type: "user", uuid: "u1" };
+    invokeResult = [line];
+    await expect(getTranscriptPage("tab-1", "env-1")).resolves.toEqual({
+      lines: [line],
+      earlierCursor: null,
+    });
   });
 
   test("getPendingHooks invokes the pending hooks command with tabId and environmentId", async () => {

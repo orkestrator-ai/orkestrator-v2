@@ -37,6 +37,7 @@ import {
   resolveBackend,
   workspaceAndClaudeHome,
 } from "./tmux-session-manager.js";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
 import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -343,13 +344,22 @@ export function registerTmuxBackendCommands(
         : undefined;
     return session.status(recent ?? (await session.tmuxAlive().catch(() => false)));
   });
-  register("claude_tmux_transcript", ({ tabId, environmentId }, context) =>
-    requireSession(
+  // `page` selects a bounded read; `page.before` is the cursor of an earlier
+  // page. Without it the caller predates paging and expects the whole file as
+  // an array (see the compatibility register in version-compatibility.md).
+  register("claude_tmux_transcript", ({ tabId, environmentId, page }, context) => {
+    const session = requireSession(
       context,
       asString(environmentId, "environmentId"),
       asString(tabId, "tabId"),
-    ).transcriptLines(),
-  );
+    );
+    if (page === undefined) {
+      compatibilityPathUsage.record("tmux-transcript.whole-read");
+      return session.transcriptLines();
+    }
+    const before = (page as { before?: unknown } | null)?.before;
+    return session.transcriptPage(context, typeof before === "string" ? before : undefined);
+  });
   // Authoritative task list for a tmux tab, for callers rehydrating without
   // replaying the whole transcript.
   register("claude_tmux_tasks", ({ tabId, environmentId }, context) =>

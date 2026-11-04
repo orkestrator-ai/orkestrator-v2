@@ -14,6 +14,7 @@ import {
   payloadToPlan,
   payloadToQuestion,
   useClaudeTmuxStore,
+  visibleTmuxMessages,
 } from "./claudeTmuxStore";
 import {
   tmuxElicitationDraftKey,
@@ -1659,5 +1660,203 @@ describe("session lifecycle", () => {
     expect(useClaudeTmuxStore.getState().getDraftText("e")).toBe("");
     expect(useClaudeTmuxStore.getState().getAttachments("e")).toEqual([]);
     expect(useClaudeTmuxStore.getState().getQueuedMessages("e")).toEqual([]);
+  });
+});
+
+describe("transcript pages", () => {
+  const text = (uuid: string, role: "user" | "assistant" = "assistant"): TranscriptLine => ({
+    type: role,
+    uuid,
+    timestamp: "2026-11-04T10:00:00.000Z",
+    message: { role, content: [{ type: "text", text: uuid }] },
+  });
+  const toolUse = (uuid: string, id: string): TranscriptLine => ({
+    type: "assistant",
+    uuid,
+    timestamp: "2026-11-04T10:00:00.000Z",
+    message: { role: "assistant", content: [{ type: "tool_use", id, name: "Read" }] },
+  });
+  const toolResult = (uuid: string, id: string, output = "done"): TranscriptLine => ({
+    type: "user",
+    uuid,
+    timestamp: "2026-11-04T10:00:05.000Z",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: id, content: output }],
+    },
+  });
+  const ids = () =>
+    useClaudeTmuxStore
+      .getState()
+      .getTab("e")
+      .messages.map((message) => message.id);
+  const tab = () => useClaudeTmuxStore.getState().getTab("e");
+
+  test("a tail page shows its rows and remembers the way to what came before", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
+    expect(ids()).toEqual(["c", "d"]);
+    expect(tab().earlierCursor).toBe("s:100");
+  });
+
+  test("an earlier page lands above the loaded rows and moves the cursor on", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
+    store.prependTranscriptPage("e", "s:100", {
+      lines: [text("a"), text("b")],
+      earlierCursor: null,
+    });
+    expect(ids()).toEqual(["a", "b", "c", "d"]);
+    expect(tab().earlierCursor).toBeNull();
+  });
+
+  test("a page for a cursor the tab has moved on from is dropped", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
+    store.applyTailPage("e", { lines: [text("z")], earlierCursor: "s:500" });
+    store.prependTranscriptPage("e", "s:100", { lines: [text("a")], earlierCursor: null });
+    expect(ids()).toEqual(["z"]);
+    expect(tab().earlierCursor).toBe("s:500");
+  });
+
+  test("a row already loaded keeps its newer copy when a page repeats it", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
+    store.prependTranscriptPage("e", "s:100", {
+      lines: [text("a"), text("c")],
+      earlierCursor: null,
+    });
+    expect(ids()).toEqual(["a", "c"]);
+  });
+
+  test("a result whose call is on an earlier page waits, hidden, and settles the call when it loads", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", {
+      lines: [toolResult("result-1", "tool-1"), text("after")],
+      earlierCursor: "s:100",
+    });
+    // Not a message from the user, and not lost either.
+    expect(ids()).toEqual(["result-1", "after"]);
+    expect(visibleTmuxMessages(tab().messages, true).map((message) => message.id)).toEqual([
+      "after",
+    ]);
+
+    store.prependTranscriptPage("e", "s:100", {
+      lines: [text("before"), toolUse("call-1", "tool-1")],
+      earlierCursor: null,
+    });
+
+    expect(ids()).toEqual(["before", "call-1", "after"]);
+    const call = tab().messages[1]!.parts.find((part) => part.type === "tool-invocation")!;
+    expect(call.toolState).toBe("success");
+    expect(call.toolOutput).toBe("done");
+    expect(call.settledAt).toBe("2026-11-04T10:00:05.000Z");
+  });
+
+  test("a result with no call anywhere shows once nothing earlier is left to load", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [toolResult("result-1", "gone")], earlierCursor: "s:100" });
+    store.prependTranscriptPage("e", "s:100", { lines: [text("a")], earlierCursor: null });
+    expect(ids()).toEqual(["a", "result-1"]);
+    expect(visibleTmuxMessages(tab().messages, false)).toBe(tab().messages);
+  });
+
+  test("a live result settles a call in the loaded rows as before", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [toolUse("call-1", "tool-1")], earlierCursor: "s:100" });
+    store.applyTranscriptLine("e", toolResult("result-1", "tool-1"));
+    expect(ids()).toEqual(["call-1"]);
+  });
+
+  describe("reopening", () => {
+    function loadTwoPages() {
+      const store = useClaudeTmuxStore.getState();
+      store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
+      store.prependTranscriptPage("e", "s:100", {
+        lines: [text("a"), text("b")],
+        earlierCursor: "s:50",
+      });
+    }
+
+    test("keeps what the reader paged in when the tail overlaps it", () => {
+      loadTwoPages();
+      useClaudeTmuxStore.getState().applyTailPage("e", {
+        lines: [text("d"), text("e"), text("f")],
+        earlierCursor: "s:300",
+      });
+      expect(ids()).toEqual(["a", "b", "c", "d", "e", "f"]);
+      expect(tab().earlierCursor).toBe("s:50");
+    });
+
+    test("settles a loaded call whose result arrived while the tab was hidden", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.applyTailPage("e", {
+        lines: [text("a"), toolUse("call-1", "tool-1"), text("b")],
+        earlierCursor: "s:10",
+      });
+      store.applyTailPage("e", {
+        lines: [toolResult("result-1", "tool-1"), text("b"), text("c")],
+        earlierCursor: "s:90",
+      });
+      expect(ids()).toEqual(["a", "call-1", "b", "c"]);
+      const call = tab().messages[1]!.parts.find((part) => part.type === "tool-invocation")!;
+      expect(call.toolState).toBe("success");
+    });
+
+    test("starts again from the tail when more than a page was missed", () => {
+      loadTwoPages();
+      useClaudeTmuxStore
+        .getState()
+        .applyTailPage("e", { lines: [text("x"), text("y")], earlierCursor: "s:900" });
+      expect(ids()).toEqual(["x", "y"]);
+      expect(tab().earlierCursor).toBe("s:900");
+    });
+
+    test("a manual refresh starts again from the tail even when it overlaps", () => {
+      loadTwoPages();
+      useClaudeTmuxStore
+        .getState()
+        .applyTailPage(
+          "e",
+          { lines: [text("c"), text("d")], earlierCursor: "s:100" },
+          { retainHistory: false },
+        );
+      expect(ids()).toEqual(["c", "d"]);
+      expect(tab().earlierCursor).toBe("s:100");
+    });
+
+    test("a page that reaches the file's start replaces everything", () => {
+      loadTwoPages();
+      useClaudeTmuxStore
+        .getState()
+        .applyTailPage("e", { lines: [text("only")], earlierCursor: null });
+      expect(ids()).toEqual(["only"]);
+      expect(tab().earlierCursor).toBeNull();
+    });
+
+    test("rows from before any page was applied are not taken for history", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.applyTranscriptLine("e", text("older-live"));
+      store.applyTranscriptLine("e", text("c"));
+      store.applyTailPage("e", { lines: [text("c"), text("d")], earlierCursor: "s:100" });
+      expect(ids()).toEqual(["c", "d"]);
+      expect(tab().earlierCursor).toBe("s:100");
+    });
+
+    test("a whole transcript stays whole when only its tail is read again", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.applyTailPage("e", { lines: [text("a"), text("b")], earlierCursor: null });
+      store.applyTranscriptLine("e", text("c"));
+      store.applyTailPage("e", { lines: [text("b"), text("c")], earlierCursor: "s:40" });
+      expect(ids()).toEqual(["a", "b", "c"]);
+      expect(tab().earlierCursor).toBeNull();
+    });
+  });
+
+  test("replacing the transcript forgets what was known about earlier pages", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTailPage("e", { lines: [text("c")], earlierCursor: "s:100" });
+    store.replaceTranscript("e", []);
+    expect(tab().earlierCursor).toBeUndefined();
   });
 });

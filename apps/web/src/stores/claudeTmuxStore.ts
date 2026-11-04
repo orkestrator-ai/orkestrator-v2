@@ -18,6 +18,7 @@ import type {
   TmuxHookHold,
   TranscriptLine,
   TranscriptContent,
+  TranscriptPage,
 } from "@/lib/claude-tmux-client";
 import type {
   ClaudeEffortLevel,
@@ -169,6 +170,12 @@ interface TmuxTabState {
   running: boolean;
   /** Claude-shaped messages, normalized by native tab renderers. */
   messages: ClaudeMessage[];
+  /**
+   * What is known about the transcript before `messages[0]`: a cursor to the
+   * page before it, null when `messages` starts at the beginning, undefined
+   * while no page has been applied.
+   */
+  earlierCursor: string | null | undefined;
   pendingApprovals: TmuxPendingApproval[];
   pendingQuestions: TmuxPendingQuestion[];
   pendingPlans: TmuxPendingPlan[];
@@ -201,6 +208,7 @@ const emptyTabState = (): TmuxTabState => ({
   sessionId: null,
   running: false,
   messages: [],
+  earlierCursor: undefined,
   pendingApprovals: [],
   pendingQuestions: [],
   pendingPlans: [],
@@ -245,6 +253,22 @@ interface ClaudeTmuxState {
   resetTab: (tabId: string) => void;
   applyTranscriptLine: (tabId: string, line: TranscriptLine) => void;
   replaceTranscript: (tabId: string, lines: TranscriptLine[]) => void;
+  /**
+   * Apply the transcript's tail after a reopen. Rows the reader already paged
+   * in stay when the tail overlaps them; with `retainHistory: false`, or
+   * without an overlap, the tab starts again from this page.
+   */
+  applyTailPage: (
+    tabId: string,
+    page: Pick<TranscriptPage, "lines" | "earlierCursor">,
+    options?: { retainHistory?: boolean },
+  ) => void;
+  /** Add the page requested with `before`, unless the tab has moved on from that cursor. */
+  prependTranscriptPage: (
+    tabId: string,
+    before: string,
+    page: Pick<TranscriptPage, "lines" | "earlierCursor">,
+  ) => void;
   addPendingApproval: (tabId: string, approval: TmuxPendingApproval) => void;
   removePendingApproval: (tabId: string, eventId: string) => void;
   addPendingQuestion: (tabId: string, question: TmuxPendingQuestion) => void;
@@ -404,7 +428,45 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   replaceTranscript: (tabId, lines) =>
     set((state) =>
-      patchTab(state, tabId, (current) => lines.reduce(applyLine, { ...current, messages: [] })),
+      patchTab(state, tabId, (current) => ({
+        ...lines.reduce(applyLine, { ...current, messages: [] }),
+        earlierCursor: undefined,
+      })),
+    ),
+
+  applyTailPage: (tabId, page, options) =>
+    set((state) =>
+      patchTab(state, tabId, (current) => {
+        const fresh = page.lines.reduce(applyLine, { ...current, messages: [] }).messages;
+        const retained =
+          options?.retainHistory !== false &&
+          page.earlierCursor !== null &&
+          current.earlierCursor !== undefined
+            ? rowsBeforeOverlap(current.messages, fresh)
+            : [];
+        return retained.length > 0
+          ? {
+              ...current,
+              messages: adoptToolResults([...retained, ...fresh], retained.length),
+            }
+          : { ...current, messages: fresh, earlierCursor: page.earlierCursor };
+      }),
+    ),
+
+  prependTranscriptPage: (tabId, before, page) =>
+    set((state) =>
+      patchTab(state, tabId, (current) => {
+        if (current.earlierCursor !== before) return current;
+        const loaded = new Set(current.messages.map((message) => message.id));
+        const older = page.lines
+          .reduce(applyLine, { ...current, messages: [] })
+          .messages.filter((message) => !loaded.has(message.id));
+        return {
+          ...current,
+          messages: adoptToolResults([...older, ...current.messages], older.length),
+          earlierCursor: page.earlierCursor,
+        };
+      }),
     ),
 
   addPendingApproval: (tabId, approval) =>
@@ -1070,6 +1132,60 @@ function mergeToolResultsIntoPrior(
     return newMessages;
   }
   return null;
+}
+
+/** A row holding only tool results, whose calls were not among the rows before it. */
+function isUnmatchedToolResultRow(message: ClaudeMessage): boolean {
+  return (
+    message.role === "user" &&
+    message.parts.length > 0 &&
+    message.parts.every((part) => part.type === "tool-result")
+  );
+}
+
+/**
+ * The rows to show. While earlier history is unloaded, a result whose call is
+ * in it is waiting for that call, not a message from the user.
+ */
+export function visibleTmuxMessages(messages: ClaudeMessage[], earlierUnloaded: boolean) {
+  return earlierUnloaded
+    ? messages.filter((message) => !isUnmatchedToolResultRow(message))
+    : messages;
+}
+
+/** Loaded rows older than the first row a fresh tail page has in common with them. */
+function rowsBeforeOverlap(loaded: ClaudeMessage[], fresh: ClaudeMessage[]): ClaudeMessage[] {
+  const anchor = fresh.find((message) => !isUnmatchedToolResultRow(message));
+  if (!anchor) return [];
+  const index = loaded.findIndex((message) => message.id === anchor.id);
+  return index > 0 ? loaded.slice(0, index) : [];
+}
+
+/**
+ * Settles results that were waiting for a call now loaded above them.
+ *
+ * A result only waits when no earlier row held its call, so only the rows from
+ * `newStart` on can be waiting on the rows newly placed before them. The merge
+ * stamps the result row's own time, which is the record's clock whenever the
+ * record has one.
+ */
+function adoptToolResults(messages: ClaudeMessage[], newStart: number): ClaudeMessage[] {
+  let adopted: ClaudeMessage[] | undefined;
+  for (let index = newStart; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (!isUnmatchedToolResultRow(message)) {
+      adopted?.push(message);
+      continue;
+    }
+    const merged = mergeToolResultsIntoPrior(
+      adopted ?? messages.slice(0, index),
+      message.parts,
+      message.createdAt,
+    );
+    if (merged) adopted = merged;
+    else (adopted ??= messages.slice(0, index)).push(message);
+  }
+  return adopted ?? messages;
 }
 
 function mergeMessage(prev: ClaudeMessage, next: ClaudeMessage): ClaudeMessage {

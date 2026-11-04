@@ -138,6 +138,56 @@ describe("fastForwardBeforeCoordinatorMail", () => {
     expect(git.fetch).toHaveBeenCalledTimes(2);
   });
 
+  test.each([
+    ["the fetch times out", { fetch: mock(() => new Promise<ProjectGitStatus>(() => undefined)) }],
+    ["the fetch fails", { fetch: mock(async () => ({ ...behind, remoteState: "stale" })) }],
+    [
+      "the sync fails",
+      {
+        syncAfterMerge: mock(async () => {
+          throw new Error("Could not read from remote repository.");
+        }),
+      },
+    ],
+  ] as const)(
+    "when %s, the upstream commit already fetched is still merged",
+    async (_label, overrides) => {
+      const git = fakeGit({
+        ...overrides,
+        fastForwardToFetchedUpstream: mock(async () => ({
+          outcome: "fast-forwarded" as const,
+          status: { ...behind, behind: 0 } as ProjectGitStatus,
+        })),
+      } as Partial<ProjectCheckoutGit>);
+      expect(
+        await fastForwardBeforeCoordinatorMail(
+          { storage: storageWith(), git, timeoutMs: 5 },
+          runtimeId,
+        ),
+      ).toBe("fast-forwarded-fetched");
+      expect(git.fastForwardToFetchedUpstream).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("a busy or blocked checkout gets no fetched-upstream merge", async () => {
+    const local = mock(async () => ({ outcome: "fast-forwarded" as const, status: behind }));
+    const busy = fakeGit({
+      isCheckoutBusy: mock(async () => true),
+      fastForwardToFetchedUpstream: local,
+    });
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: busy }, runtimeId),
+    ).toBe("busy");
+    const dirty = fakeGit({
+      fetch: mock(async () => ({ ...behind, untrackedChanges: 1 })),
+      fastForwardToFetchedUpstream: local,
+    });
+    expect(
+      await fastForwardBeforeCoordinatorMail({ storage: storageWith(), git: dirty }, runtimeId),
+    ).toBe("blocked");
+    expect(local).not.toHaveBeenCalled();
+  });
+
   test("mail held behind a running turn does not spend the cooldown", async () => {
     // The mail is held while the turn runs and redelivered when it ends; that
     // delivery is the one the checkout has to be current for.

@@ -2,12 +2,13 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `96ee1eb3`.
+Analysed 2026-11-04 against `main` at `96ee1eb3`. Tasks 1 and 2 built the
+same day on this branch, at the coordinator's request.
 
 ### Tasks
 
-1. **Log the typed-path check**: `check_coordinator_upstream_merge` records its outcome and how long it took. Status: open.
-2. **Fast-forward to the already-fetched upstream when the fetch is slow**: a checkout that is behind a remote-tracking ref it already has is merged even when the fresh fetch outlasts the panel's bound. Status: open.
+1. **Log the typed-path check**: `check_coordinator_upstream_merge` records its outcome and how long it took. Status: done (2026-11-04): `checkout.message-check`.
+2. **Fast-forward to the already-fetched upstream when the fetch is slow**: a checkout that is behind a remote-tracking ref it already has is merged even when the fresh fetch outlasts the panel's bound. Status: done in code (2026-11-04), for typed messages and mail; a live run against a slow remote remains (see Needs verification).
 3. **Mail held behind a running turn spent the mail cooldown**: the redelivery when the turn ended skipped its fast-forward. Status: done (2026-11-04).
 
 ### 1. Log the typed-path check
@@ -73,11 +74,52 @@ So the typed check almost certainly waited on a fetch that took longer than 5 s,
 
 ## Assumptions and decisions
 
+### Task 1: one line per check, with the fetch result
+
+`checkout.message-check` carries `outcome` (`offer`, `fast-forwarded`,
+`turn-running`, `not-behind`, `blocked`, `no-status`), `fetch` (`fetched`,
+`failed`, `timed-out`, `skipped`) and `durationMs`, and nothing else. A failed
+local fast-forward also logs `checkout.message-check-failed`. Both are in the
+coordinator log vocabulary.
+
+### Task 2: the backend merges, and outside the Git queue
+
+- **The backend bounds its own fetch (3 s) and merges itself.** The panel's
+  5 s race happens in the renderer, which cannot tell the backend it gave up,
+  and `syncProjectGit` pulls over the network again. So
+  `checkUpstreamBeforeMessage` (`coordinator-message-upstream.ts`) waits 3 s,
+  then calls `ProjectGitService.fastForwardToFetchedUpstream` and answers
+  `{ offer: false, reason: "fast-forwarded", status }`. That reason is new in
+  `@orkestrator/protocol/coordinator-upstream-merge`. An older panel rejects
+  it in `parseCoordinatorUpstreamMergeCheck`, which reads as "nothing to
+  merge", so it simply sends; the checkout is already merged either way.
+- **The local merge does not join the per-checkout queue.** The slow fetch
+  holds that queue, so a queued merge would run only after it, too late for
+  the message. The merge claims `activeMutations` (keeping every other
+  mutation out) and a map entry that `waitForMergeSync` awaits, so turn
+  admission waits for it. It writes the branch, index and worktree; the fetch
+  writes remote-tracking refs and `FETCH_HEAD`, and Git's own locks cover any
+  overlap.
+- **It merges the exact commit it checked** (`upstreamCommit`), not
+  `@{upstream}`, which the slow fetch may move mid-way. The rules are
+  `canFastForwardUpstream` (upstream set, behind, no local commits, no
+  uncommitted or untracked changes, no unfinished operation), plus no running
+  or starting turn.
+- **Mail takes the same fallback** after `timed-out`, `no-status` (failed
+  fetch) and `failed` (failed sync), and logs
+  `outcome=fast-forwarded-fetched`. The late fetch's own fast-forward is still
+  stopped by `proceed`, and the fallback answers `busy` while a merge sync is
+  running, so nothing merges twice.
+- **Typed messages still pull when the fetch is in time.** Using the local
+  merge then as well would save the pull's second network round trip; left
+  as it was, because it was not asked for and changes the common path.
+
 ### Task 3: drop the record rather than check first
 
 Chose to drop the attempt record on `busy` so the active-turn read runs once per mail. The test "mail held behind a running turn does not spend the cooldown" in `coordinator-mail-upstream.test.ts` fails on the old code (`cooldown`).
 
 ## Needs verification
 
-- How long the typed check actually took at 09:55 UTC; nothing logged it (task 1).
+- How long the typed check actually took at 09:55 UTC; nothing logged it then (task 1 logs it from now on).
+- A live typed message to a coordinator whose remote is slow, on a disposable profile, showing `checkout.message-check outcome=fast-forwarded fetch=timed-out`. Covered so far by unit tests and a real-Git integration test with a hanging SSH command (`project-git-fetched-fast-forward.integration.test.ts`, slow tier).
 - Whether GitHub SSH from arktech-mini is still slow; the measurements above are from 2026-11-04 around 10:00 UTC only.

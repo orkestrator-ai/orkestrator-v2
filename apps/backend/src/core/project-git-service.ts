@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchConfirmation,
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
+import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstream-merge";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
@@ -113,6 +114,12 @@ export type CheckoutChanges = {
   files: string[];
 };
 
+/** What `fastForwardToFetchedUpstream` did. */
+export type FetchedUpstreamFastForward =
+  | { outcome: "fast-forwarded"; status: ProjectGitStatus }
+  | { outcome: "not-behind" | "blocked"; status: ProjectGitStatus }
+  | { outcome: "busy"; status: null };
+
 export type ProjectBaseContainment = { contained: true } | { contained: false; reason: string };
 
 async function readCommit(root: string, ref: string): Promise<string | null> {
@@ -134,6 +141,7 @@ import { resolveProjectGitRoot } from "./project-git-root.js";
 export class ProjectGitService {
   private readonly operations = new Map<string, Promise<unknown>>();
   private readonly mergeSyncs = new Map<string, Promise<ProjectGitStatus>>();
+  private readonly fetchedFastForwards = new Map<string, Promise<FetchedUpstreamFastForward>>();
   private readonly activeMutations = new Set<string>();
   private readonly pendingTurns = new Map<string, number>();
   private readonly fetches = new Map<
@@ -965,7 +973,10 @@ export class ProjectGitService {
 
   /** User operations wait for an unattended merge sync, then recheck admission. */
   async waitForMergeSync(projectId: string): Promise<void> {
-    await this.mergeSyncs.get(projectId)?.catch(() => undefined);
+    await Promise.all([
+      this.mergeSyncs.get(projectId)?.catch(() => undefined),
+      this.fetchedFastForwards.get(projectId)?.catch(() => undefined),
+    ]);
   }
 
   async beginTurnAfterMergeSync(projectId: string): Promise<() => void> {
@@ -983,6 +994,82 @@ export class ProjectGitService {
       () => this.mergeSyncs.delete(projectId),
     );
     return sync;
+  }
+
+  /**
+   * Fast-forwards the checkout to the upstream commit it has already fetched,
+   * without the network: what a coordinator message does when a fresh fetch
+   * is slow or fails. The same rule as a sync (a clean checkout, no local
+   * commits, no unfinished operation, no running or starting turn), and turn
+   * admission waits for it like a merge sync.
+   *
+   * Deliberately outside the per-checkout queue: the slow fetch it stands in
+   * for holds that queue, and it writes only remote-tracking refs, which this
+   * neither reads past its first status nor writes. Other mutations are kept
+   * out by `activeMutations`; Git's own locks cover the rest.
+   */
+  fastForwardToFetchedUpstream(projectId: string): Promise<FetchedUpstreamFastForward> {
+    if (
+      this.activeMutations.has(projectId) ||
+      (this.pendingTurns.get(projectId) ?? 0) > 0 ||
+      this.mergeSyncs.has(projectId) ||
+      this.fetchedFastForwards.has(projectId)
+    ) {
+      return Promise.resolve({ outcome: "busy", status: null });
+    }
+    // Claimed synchronously, as a merge sync is, so a turn that starts now
+    // waits for it rather than racing it.
+    this.activeMutations.add(projectId);
+    const run = this.fastForwardToFetchedUpstreamOnce(projectId).finally(() => {
+      this.activeMutations.delete(projectId);
+      this.fetchedFastForwards.delete(projectId);
+    });
+    this.fetchedFastForwards.set(projectId, run);
+    return run;
+  }
+
+  private async fastForwardToFetchedUpstreamOnce(
+    projectId: string,
+  ): Promise<FetchedUpstreamFastForward> {
+    if (await this.hasActiveCoordinatorTurns(projectId)) return { outcome: "busy", status: null };
+    const root = await this.root(projectId);
+    const before = await this.readStatus(
+      projectId,
+      root,
+      (await this.storage.coordinators.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+    );
+    if (!canFastForwardUpstream(before) || !before.upstreamCommit) {
+      const status = await this.persist(projectId, before);
+      return {
+        outcome: before.upstream && (before.behind ?? 0) > 0 ? "blocked" : "not-behind",
+        status,
+      };
+    }
+    if (!COMMIT_ID.test(before.upstreamCommit)) {
+      throw new Error("The upstream commit could not be read");
+    }
+    await this.operationState(projectId, "syncing");
+    try {
+      // The exact commit just checked, not `@{upstream}`, which the slow
+      // fetch may move while this runs.
+      await runCommand("git", ["merge", "--ff-only", "--no-stat", before.upstreamCommit], {
+        cwd: root,
+        timeoutMs: 30_000,
+      });
+    } catch (error) {
+      const refreshed = await this.readStatus(projectId, root, before).catch(() => before);
+      refreshed.operationState = "idle";
+      refreshed.lastError = gitError("sync", error);
+      await this.persist(projectId, refreshed);
+      throw new Error(refreshed.lastError.message);
+    }
+    const refreshed = await this.readStatus(projectId, root, before);
+    // A failed or unfinished fetch is still news; an earlier sync failure is not.
+    if (refreshed.lastError?.operation !== "fetch") refreshed.lastError = null;
+    return {
+      outcome: "fast-forwarded",
+      status: await this.persist(projectId, refreshed, "upstream"),
+    };
   }
 
   async sync(projectId: string): Promise<ProjectGitStatus> {

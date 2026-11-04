@@ -17,9 +17,12 @@
  * project-home turn. Side agents do not merge, as with typed messages.
  *
  * The wait is bounded. A slow or unreachable remote delays the mail by at most
- * `timeoutMs`; past it the mail is delivered without merging, and the late
- * fetch is told not to start a fast-forward. A fast-forward that has begun is
- * never abandoned: the turn's own admission waits for it
+ * `timeoutMs`; past it the late fetch is told not to start a fast-forward, and
+ * the checkout is fast-forwarded instead to the upstream commit it already
+ * has (`fastForwardToFetchedUpstream`, local and quick), as it is after a
+ * failed fetch or sync. This is the rule a typed message follows
+ * (`coordinator-message-upstream.ts`). A fast-forward that has begun is never
+ * abandoned: the turn's own admission waits for it
  * (`beginTurnAfterMergeSync`), so it cannot run against a half-changed
  * checkout. Every failure is logged and swallowed; mail is never held back by
  * this step.
@@ -45,7 +48,19 @@ export type CoordinatorMailUpstreamOutcome =
   /** Recent mail attempt, including a failed or timed-out fetch. */
   | "cooldown"
   /** The fetch outlasted the bound; the mail went on without merging. */
-  | "timed-out";
+  | "timed-out"
+  /**
+   * The fetch was slow or failed, or the sync failed; the checkout was
+   * fast-forwarded to the upstream commit it had already fetched.
+   */
+  | "fast-forwarded-fetched";
+
+/** Outcomes after which the already-fetched upstream is still merged. */
+const FETCHED_UPSTREAM_FALLBACK = new Set<CoordinatorMailUpstreamOutcome>([
+  "timed-out",
+  "no-status",
+  "failed",
+]);
 
 export interface CoordinatorMailUpstreamDeps {
   storage: Pick<StorageService, "coordinators">;
@@ -95,7 +110,7 @@ export async function fastForwardBeforeCoordinatorMail(
       forceFetch: false,
       proceed: () => waiting,
     });
-    const outcome = await Promise.race([
+    let outcome: CoordinatorMailUpstreamOutcome = await Promise.race([
       attempt,
       new Promise<"timed-out">((resolve) => {
         timer = setTimeout(
@@ -115,7 +130,19 @@ export async function fastForwardBeforeCoordinatorMail(
     // redelivered when it ends, and that delivery must not find the cooldown
     // spent by an attempt that did nothing.
     if (outcome === "busy" && attempts.get(projectId) === now) attempts.delete(projectId);
-    if (outcome === "fast-forwarded" || outcome === "timed-out" || outcome === "failed") {
+    if (FETCHED_UPSTREAM_FALLBACK.has(outcome) && git.fastForwardToFetchedUpstream) {
+      const fallback = await git.fastForwardToFetchedUpstream(projectId).catch((error: unknown) => {
+        log.warn("checkout.mail-follow-failed", { projectId, error: formatLogError(error) });
+        return null;
+      });
+      if (fallback?.outcome === "fast-forwarded") outcome = "fast-forwarded-fetched";
+    }
+    if (
+      outcome === "fast-forwarded" ||
+      outcome === "fast-forwarded-fetched" ||
+      outcome === "timed-out" ||
+      outcome === "failed"
+    ) {
       log.info("checkout.mail-follow", { projectId, outcome });
     }
     return outcome;

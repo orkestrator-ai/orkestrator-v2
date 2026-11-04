@@ -934,7 +934,16 @@ the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
 at most five seconds). The backend answers without fetching while the
 checkout cannot change, and otherwise runs the cooldown-bound fetch and
 answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
-then fast-forwards with `syncProjectGit` and sends. A fast-forward that fails
+then fast-forwards with `syncProjectGit` and sends. The backend waits for the
+fetch for at most three seconds (`coordinator-message-upstream.ts`). When it
+is slower, or fails, the backend fast-forwards the checkout itself to the
+upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a
+local `git merge --ff-only` under the same rules) and answers
+`{ offer: false, reason: "fast-forwarded" }`; the panel refreshes and sends.
+That merge does not wait in the checkout's Git queue, where the slow fetch
+is, and turn admission waits for it as for a merge sync. The late fetch only
+refreshes the status. Every check logs `checkout.message-check` with its
+outcome, how the fetch went and `durationMs`. A fast-forward that fails
 anyway (the remote moved, the network dropped) is reported in the toolbar's
 error and the message is still sent, since there is no question left from
 which to choose to skip it. Side agents and `!` commands do not merge, and
@@ -954,9 +963,12 @@ delivery and batching. A slow coordinator fetch therefore does not block worker
 mail in the same pass. Mail attempts have a 60-second per-project backoff,
 including failed and timed-out attempts, separate from the successful-fetch
 cooldown. Mail held because the checkout was busy (a running turn) does not
-count as an attempt, so its redelivery when the turn ends still tries. The fetch is cooldown-bound and the wait for it
-is capped at five seconds: past that the mail is delivered without merging,
-and the late fetch does not start a fast-forward afterwards. A fast-forward
+count as an attempt, so its redelivery when the turn ends still tries. The
+fetch is cooldown-bound and the wait for it is capped at five seconds: past
+that the late fetch does not start a fast-forward afterwards, and the
+checkout is fast-forwarded instead to the upstream commit it already has, as
+it is after a failed fetch or sync (`checkout.mail-follow`
+`outcome=fast-forwarded-fetched`), the same rule as a typed message. A fast-forward
 that has begun is finished first, because the turn's admission
 (`beginTurnAfterMergeSync`) waits for it. A running turn, a blocked checkout,
 a side agent, a paused coordinator and a steered message (one taken into a

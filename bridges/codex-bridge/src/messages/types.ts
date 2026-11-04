@@ -111,8 +111,12 @@ export interface MessagePatchEventData {
   messageId: string;
   partCount: number;
   changedParts: { index: number; part: NormalizedPart }[];
-  /** Authoritative flat message body after applying the patch. */
-  content: string;
+  /**
+   * Authoritative flat message body after applying the patch. Sent only when it
+   * changed: a patch applies at `revision - 1`, where the recipient already
+   * holds the body, so absent means unchanged.
+   */
+  content?: string;
   createdAt: string;
   turnId?: string;
   /** Valid only when the local message is at `revision - 1`. */

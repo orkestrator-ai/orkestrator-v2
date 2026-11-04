@@ -75,7 +75,7 @@ describe("ACP provider errors", () => {
         },
         "cursor",
       ),
-    ).toBe("Cursor Agent usage balance is exhausted. Add usage credits, then retry this message.");
+    ).toBe("The agent usage balance is exhausted. Add usage credits, then retry this message.");
   });
 
   test("keeps allowlisted non-billing provider details", () => {

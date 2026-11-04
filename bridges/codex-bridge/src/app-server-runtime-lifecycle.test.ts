@@ -3487,6 +3487,60 @@ describe("crash recovery", () => {
    * `interrupted`. Settling that as an ordinary interruption left the session
    * idle with no error, so the transcript stopped mid-task and read as done.
    */
+  test("a notification backlog past its bound restarts the child and fails the turn as a restart", async () => {
+    const h = await harness(
+      {
+        "thread/read": () => ({
+          thread: threadPayload("thread-1", {
+            turns: [
+              {
+                id: "turn-1",
+                status: "interrupted",
+                items: [{ type: "userMessage", clientId: "req-1" }],
+              },
+            ],
+          }),
+        }),
+      },
+      { sweepIntervalMs: 0, notificationQueueMaxDepth: 3 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    const supervisor = h.engine.getSupervisor();
+    const generation = supervisor.getGeneration();
+    const firstChild = h.child();
+    const stuck = Promise.withResolvers<void>();
+    supervisor.notificationQueue.run("thread-1", () => stuck.promise);
+
+    for (let delta = 0; delta < 4; delta += 1) {
+      firstChild.notify("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "lost",
+        delta: `lost ${delta}`,
+      });
+    }
+    await waitUntil(() => supervisor.getGeneration() !== generation);
+    await supervisor.ensureReady();
+    stuck.resolve();
+    await h.drain();
+
+    expect(h.child()).not.toBe(firstChild);
+    expect(supervisor.getHealth()).toMatchObject({
+      state: "ready",
+      restartCount: 1,
+      notificationQueueDepth: 0,
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+      interruption: "restart",
+    });
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(JSON.stringify(messages)).not.toContain("lost");
+  });
+
   test("a turn the restart interrupted is surfaced as failed, not a silent finish", async () => {
     let clock = Date.now();
     const h = await harness(

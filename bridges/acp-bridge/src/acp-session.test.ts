@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  NativeAbortController,
+  nativeFetch,
+  spawnBridge,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
   test("reports an ACP agent without session listing instead of showing an empty history", async () => {
@@ -10,7 +16,7 @@ describe("ACP bridge", () => {
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
-      error: "cursor cannot list resumable ACP sessions",
+      error: "acp-fixture cannot list resumable ACP sessions",
     });
   });
 
@@ -19,7 +25,7 @@ describe("ACP bridge", () => {
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
-      error: "cursor cannot list resumable ACP sessions",
+      error: "acp-fixture cannot list resumable ACP sessions",
     });
   });
 
@@ -158,7 +164,7 @@ describe("ACP bridge", () => {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
     const external = listed.sessions.find((session) => session.title === "Previous ACP work")!;
-    const controller = new AbortController();
+    const controller = new NativeAbortController();
     const first = nativeFetch(`${bridge.base}/session/resume`, {
       method: "POST",
       headers: bridge.headers,
@@ -311,7 +317,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_888,
       reasoningTokens: 31,
       apiDurationMs: 1_448,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage?.durationMs).toBeGreaterThanOrEqual(0);
     expect(session.contextUsage).not.toHaveProperty("costUsd");
@@ -388,7 +394,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(sparseSession.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -421,7 +427,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(restored.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(restored.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -484,7 +490,7 @@ describe("ACP bridge", () => {
       inputTokens: 850,
       outputTokens: 50,
       reasoningTokens: 77,
-      source: "cursor",
+      source: "acp-fixture",
     });
     // No turn was in flight, so the elapsed time must be carried over rather
     // than measured again from a clock this turn no longer owns.
@@ -637,7 +643,7 @@ describe("ACP bridge", () => {
     expect(session.contextUsage).toMatchObject({
       usedTokens: 1_500,
       maximumTokens: 30_000,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(5);
   });
@@ -668,7 +674,7 @@ describe("ACP bridge", () => {
       usedTokens: 4_321,
       inputTokens: 4_000,
       outputTokens: 321,
-      source: "cursor",
+      source: "acp-fixture",
     });
   });
 
@@ -698,7 +704,7 @@ describe("ACP bridge", () => {
       outputTokens: 20,
       cacheReadTokens: 30,
       cacheWriteTokens: 5,
-      source: "cursor",
+      source: "acp-fixture",
     });
   });
 

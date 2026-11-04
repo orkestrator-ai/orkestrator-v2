@@ -29,6 +29,15 @@ describe("HTTP bridge resume-list archive", () => {
     );
   });
 
+  test("a bridge's timed-out list reaches the caller as an error, not an empty list", async () => {
+    const { provider } = httpProvider(() =>
+      Response.json({ error: "Pi took too long to read its session history" }, { status: 504 }),
+    );
+    await expect(provider.listResumableSessions!()).rejects.toThrow(
+      "Pi took too long to read its session history",
+    );
+  });
+
   test("asks for archived rows only on request, and keeps only a true flag", async () => {
     const { provider, requests } = httpProvider(
       () =>

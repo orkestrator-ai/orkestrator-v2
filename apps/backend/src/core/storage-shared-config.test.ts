@@ -36,6 +36,31 @@ describe("defaultConfig", () => {
       ).toBeUndefined();
     });
   });
+  test.each(["none", "pat"] as const)(
+    "preserves container credential choice %s across older-client saves and unsets",
+    async (choice) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const initial = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...initial.global,
+          useHostGitHubCredentials: true,
+          githubToken: "test-pat",
+          containerGitHubCredential: choice,
+        });
+        for (const operation of ["update", "save", "unset"] as const) {
+          const incoming = structuredClone(await storage.loadConfig());
+          delete incoming.global.containerGitHubCredential;
+          if (operation === "update") await storage.updateGlobalConfig(incoming.global);
+          else if (operation === "save") await storage.saveConfig(incoming);
+          else await storage.patchGlobalConfig({}, { unset: ["containerGitHubCredential"] });
+          const restarted = new StorageService(dataDir);
+          await restarted.init();
+          expect((await restarted.loadConfig()).global.containerGitHubCredential).toBe(choice);
+        }
+      });
+    },
+  );
+
   test("returns the current default model selection", () => {
     const platforms = defaultConfig().global.agentSettings?.platforms;
     // Unset: OpenCode's connected, allowlisted default, which no fixed id matches

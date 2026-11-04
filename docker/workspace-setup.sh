@@ -371,6 +371,15 @@ trust_agent_test_git_remote
 # again at the end of the file. The helper reads the token file per request, so
 # the token never enters this config. `""` drops any helper a copied host config
 # names for GitHub. No token leaves SSH remotes on SSH.
+# Copied configs and earlier images may still carry a token in a URL rewrite.
+# Remove it before any clone, including when credentials are withheld.
+git config --global --name-only --get-regexp '^url\.https://x-access-token:' 2>/dev/null |
+    sed 's/\.[^.]*$//' |
+    sort -u |
+    while IFS= read -r section; do
+        git config --global --remove-section "$section" 2>/dev/null || true
+    done
+
 git config --global --remove-section credential.https://github.com 2>/dev/null || true
 git config --global --unset-all url.https://github.com/.insteadOf '^git@github\.com:$' 2>/dev/null || true
 if [ -n "$TOKEN" ]; then
@@ -515,7 +524,7 @@ if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
         echo ""
         echo -e "${GREEN}Repository ready:${NC}"
         echo "  Branch: $(git branch --show-current)"
-        echo "  Remote: $(git remote get-url origin 2>/dev/null || echo 'none')"
+        echo "  Remote: $(git config --get remote.origin.url 2>/dev/null | sed -E 's#(https?://)[^/@]*@#\1[REDACTED]@#g' || echo 'none')"
     else
         echo -e "${RED}Clone failed! Trying fallback...${NC}"
 

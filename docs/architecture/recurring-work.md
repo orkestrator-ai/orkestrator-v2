@@ -243,18 +243,22 @@ None of these is recorded; the IDs are the only names.
 | C06 | `ReviewValidationStatus.tsx` | 2 s, completion-scheduled, while the output modal is open and the result queued or running; byte-offset reads. |
 | C07 | `InitializationLogs.tsx` | 1 s while mounted; the backend shares the Docker log tail across clients. |
 | C08 | `SystemUsageIndicator.tsx`, `AgentInfoButton.tsx` | One shared read key: title bar 5 s, process and agent popovers 3 s while open. |
-| C09 | `App.tsx` | Startup, explicit retry and every 60 s. |
+| C09 | `App.tsx` | Startup, explicit retry and every 60 s (`startCoordinatedPoll`). |
 | C10 | `ServerConnectionSwitcher.tsx` | Active connection every 30 s and on focus; inactive entries on demand with a 10 s cache; young in-flight probes are joined, probes older than 5 s superseded. |
 | C11 | `useCoordinatorPanelData.ts` | Event-led from scoped `coordinator` resource changes with conditional reads; a 60 s repository-status probe (the full 60 s poll only for older backends); focus probes at least 10 s apart. |
 | C12 | `design-controller.ts` | Events plus a 3 s cursor check. |
 | C14 | `CursorSdkSignIn.tsx` | 1.5 s only while a login is pending; one read in flight. |
 
 C05 to C14 are scheduled through the read coordinator, so they pause while
-hidden and reconcile on return. Presentation clocks (`useElapsedTimer`,
-`usePromptDeadline`, usually 1 s) are not recurring work in this sense; the
-server's approval expiry stays authoritative. Web-annotation capture polls
-status while a selection is in progress (`SELECTION_POLL_MS` in
-`useAnnotationCapture.ts`); see [web-page-annotations.md](web-page-annotations.md).
+hidden and reconcile on return. So do the polls of open dialogs and panels
+(Docker settings, rebuild, recovery copies, project copy, machine maintenance,
+bug report draft, GitHub CLI login), through `startCoordinatedPoll`
+(`lib/coordinated-poll.ts`), the replacement for a bare `setInterval` around a
+read. Presentation clocks (`useElapsedTimer`, `usePromptDeadline`, usually 1 s)
+are not recurring work in this sense; the server's approval expiry stays
+authoritative. Web-annotation capture polls status through the same helper while
+a selection is in progress (`SELECTION_POLL_MS` in `useAnnotationCapture.ts`);
+see [web-page-annotations.md](web-page-annotations.md).
 Transport timers (gateway reconnect, terminal socket acknowledgement and
 batching) are recovery work covered by
 [event-snapshot-recovery.md](event-snapshot-recovery.md).

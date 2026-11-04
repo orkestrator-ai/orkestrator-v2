@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
@@ -149,7 +149,7 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below). No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below; the rest are in "WEB-12, WEB-13, WEB-14, WEB-16, WEB-18 and WEB-19" below. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -317,6 +317,83 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
   - **Select individual fields with `useShallow`.**
     - Pros: no change to how the values are read.
     - Cons: subscribes to values only used as initial state, and a token that moves still re-renders.
+
+#### WEB-12, WEB-13, WEB-14, WEB-16, WEB-18 and WEB-19 (done 2026-11-04)
+
+Re-checked against `main` at `a8bdce444`, which includes #1747. All six still held, so none was left as "does not hold". Each landed as its own commit, with a test that fails on the previous code, except the WEB-19 timings, which are measurements.
+
+| Item | Measure | Before | After | Source |
+| --- | --- | --- | --- | --- |
+| WEB-12 | Reads for one rename | 1 whole-project list | 1 record, 0 lists | Chromium on a `dev:test` profile |
+| WEB-12 | Reads for one deletion | 1 or more lists | 2 records, 0 lists | Chromium |
+| WEB-13 | 12 s with one expanded truncated folder | 2 reads, each with the contents, each replacing `fileSubtrees` | 2 reads, 2 `unchanged`, 0 with contents, `fileSubtrees` keeps its identity | Chromium; before read from code |
+| WEB-14 | Maps copied by a poll's `setProjection` | 4 | 1 (2 when the messages changed) | `nativeAgentProjectionStore.test.ts` |
+| WEB-14 | Rewriting the newest projection | Copies 4 Maps and notifies every subscriber | Publishes nothing | same |
+| WEB-16 | Container renders for unrelated fields, or another environment, in one batch | 1 | 0 | `TerminalContainer.render-count.test.tsx` |
+| WEB-18 | All renderer commands in 12 s, Files panel open | Not comparable: only the polls moved here changed | 8 visible, 0 hidden; 5 in the 3 s after return, including the overdue `check_docker` | Chromium |
+| WEB-18 | Reads by a 3 s poll in 10 min hidden | 200 | 0 | `coordinated-poll.test.ts` |
+| WEB-19 | Median per streamed update, 5 KB message | 3.3 ms | 2.2 ms | Production React under Happy DOM, one local run |
+| WEB-19 | Same, 10 KB | 4.5 ms | 2.1 ms | same |
+| WEB-19 | Same, 20 KB | 6.7 ms | 2.4 ms | same |
+| WEB-19 | Same, 30 KB (the parser cap is 32,000 characters) | 10.2 ms | 3.7 ms | same |
+
+The "before" WEB-12 and WEB-13 browser rows come from the code rather than a browser run on the old commit; the counts follow directly from it.
+
+**WEB-14.** `setProjection` and `setProgressiveCache` copy each Map the first time they have to change it (`copyOnWrite`, `nativeAgentProjectionStore.ts`). A byte Map is left alone when the size is unchanged. No reader depends on its order: eviction walks the entry Maps. Rewriting the projection already at the most-recent end, clearing an absent progressive entry and an eviction with nothing to release now publish nothing.
+
+**WEB-16.** The container selected its whole environment object but reads only a few of its fields, which are now selected one by one with `useShallow`. That alone was not enough: `mergeEnvironmentsForProject` gave every environment in the project a new object whenever one changed, nested `agentSettings` included. `reuseUnchangedFields` (`environmentStore.ts`) keeps the identity of every environment and field a snapshot left unchanged, in `setEnvironments`, `mergeEnvironmentsForProject`, `applyEnvironmentSnapshot` and `updateEnvironment`, so this helps every subscriber of the store. Removing the effect's `exhaustive-deps` suppression exposed the React Compiler rules to the whole component for the first time: three refs written during render now publish in a layout effect, and one state write that has to stay in its effect keeps a directive with its reason.
+
+**WEB-12.** The announcement already names the environment and its project. `get_environment_snapshot` returns that one record as the list would (one keyed row, `toClientEnvironment`), and `refreshEnvironmentSnapshot` (`useEnvironments.ts`) applies it, removing the environment on `null`. It keeps the list path's lifecycle-attempt and subscription handling. A record not held yet is ignored while a creation in this client is running or just finished, because the creation's own response adds it and `addEnvironment` does not deduplicate. `useEnvironmentListSync` uses it only for one pending change: several waiting at once (a reorder announces per moved environment), an announcement without a project and every explicit resync read the list, and manifest recovery still reads every list, so a missed event stays detectable. Backends without the command fall back to the list until the next explicit resync (row in the [version compatibility register](../../architecture/version-compatibility.md#register)).
+
+**WEB-13.** `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `{ unchanged, digest, value? }` through the existing `conditionalSnapshot`. The store holds each folder's digest beside its contents and drops it with them on collapse, retry or target change, so a folder not held is always read whole. An unchanged answer clears the loading and failure marks and leaves `fileSubtrees` alone, so nothing merges the tree again. The backend still walks the folder: nothing else can say an ignored folder has not changed, and that walk is what makes a change appear. In Chromium a new file appeared 1.35 s after it was written. Without `knownDigest` the commands answer as before; a backend that ignores it sends the directory, which reads as changed with no digest (register row added).
+
+**WEB-18.** `startCoordinatedPoll` (`lib/coordinated-poll.ts`) replaces `setInterval` where it stands and hands the schedule to the read coordinator: nothing while the window is hidden or the transport has declared itself disconnected, and one read after it returns if the interval has passed, `critical` polls first. A failed read logs (`poll.read-failed`) and keeps its interval. Moved: the Docker probe (60 s), user commands (3 s), annotation selection (400 ms, `critical`), Docker settings' probe and stats (5 s each), the Docker image task (2 s), recovery copies (3 s), the rebuild section (2 s or 15 s), project copy (3 s), machine maintenance (2.5 s or 20 s), the bug report draft (3 s), GitHub CLI login (1.5 s) and the Multi Review pull request phase (2 s). `coordinated-poll.test.ts` covers the behaviour and checks each of these files uses it; `useUserCommands`, `useAnnotationCapture` and the rebuild section also have a hidden-window test of their own.
+
+Left on their own timers, and why: `CAPTURE_RESUME_INTERVAL_MS` in `useAnnotationCapture` retries uploads, which is a mutation the coordinator must not own. The sign-in reads in `AgentInfoButton` are bounded to 60 reads or the device-code deadline and already read on focus. `ContainerLogViewer` (1 s) holds a backend log subscription, and whether that survives a long pause was not checked. `WorkflowLiveInspector` schedules itself adaptively. `TicketSyncStrip` (30 s) and `useMaintenanceSummaries` (5 min) were not in the finding. `ServerConnectionSwitcher`, `pullRequestsStore` and the web annotation sync already skip while hidden. `lib/portal/workspaces.ts` renews a lease.
+
+**WEB-19.** The finding holds, and fixing it was worth it: 10.2 ms per update at the parser cap is about 20% of a core at the 20 updates per second limit, and it grew with the message. Each completed segment now runs through `react-markdown` once (`IncrementalMarkdownCache.render`, `incremental-parse.ts`) and its React elements are reused, so React skips them. The cost is now close to flat with length. Equivalence: `incremental-parse.test.tsx` compares HTML and top-level keys with a full render at every prefix of 16 fixtures, rich and plain, including open and closed fences, partial tables, definitions, footnotes, HTML and CRLF. `MessageMarkdown.incremental.test.tsx` compares the DOM with one pass over the whole text every 3 characters through the real rich components, and shows finished blocks do not render again and the final render remounts nothing. A block is treated as finished only once a later line has ended, so the last two blocks render per update. The thin rich adapters that read `RichMarkdownRenderContext` still re-render, because the context carries the source; the heavy blocks under them are memoized on their own props.
+
+**Browser and real-stack checks.** On a credential-free `dev:test` profile (`web-refetch-qa`, stopped and reset) in Chromium: a rename and a deletion reached the sidebar and the name survived a reload; the WEB-13 and WEB-18 numbers above; no page error. `e2e/StreamingTranscript.spec.ts` and `e2e/TranscriptArrival.spec.ts` with one worker: 46 passed and 4 failed on this branch, 46 passed and 4 failed on `a8bdce444`, with different tests each time, mostly the page not appearing in time. Of the branch's failures, only `scrollbar departure after find` (flake [0767](../../tests/flaky-tests/native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md)) failed again alone, in 2 of 4 runs, against 1 of 4 on the base commit.
+
+**Decisions.**
+
+- **How should one environment change reach the store (WEB-12)?**
+  - **A new one-record read used only when exactly one change is waiting (recommended, done).**
+    - Pros: announcements stay body-free, as the change feed requires; one keyed row on the backend; a burst still costs one list read; unknown-command fallback is detectable.
+    - Cons: a new command and one compatibility path; two different changes in sequence read two records.
+  - **An `environmentId` argument on `get_environment_snapshots`.**
+    - Pros: an older backend answers with the list, so no failed request.
+    - Cons: one command with two answer shapes, and the argument's meaning is invisible to the conditional manifest path it shares.
+  - **Carry the environment in the announcement.**
+    - Pros: no read at all.
+    - Cons: `resource-events.ts` rules it out: a client must never trust a body delivered out of band, and a mutation would have to serialize the record for every client.
+- **Where should WEB-16's fix live?**
+  - **Narrow the container's selector and keep unchanged identities in the store (recommended, done).**
+    - Pros: the selector alone would still re-render on `agentSettings`, a new object in every snapshot; the store change helps every other subscriber.
+    - Cons: one deep comparison per field of each environment in a merge, about what the whole-record comparison it replaces already cost.
+  - **Narrow the selector only, comparing `agentSettings` deeply there.**
+    - Pros: touches one file.
+    - Cons: every other selector of a nested environment field keeps the problem.
+- **How should polls pause (WEB-18)?**
+  - **`startCoordinatedPoll`, a one-for-one replacement built on the coordinator (recommended, done).**
+    - Pros: each effect keeps its closures and cleanup; one implementation of return, reconnect and server switch; no state for a poll that does not need it.
+    - Cons: every owning test that captured `setInterval` had to change; a tick is skipped while a read runs, rather than overlapping.
+  - **`useCoordinatedRead` at each site.**
+    - Pros: the documented hook.
+    - Cons: most sites define their read inside an effect, against that effect's own closures, so each would have to be restructured.
+  - **A `document.hidden` check inside each interval.**
+    - Pros: smallest diff.
+    - Cons: no read on return unless every site also adds a listener, and timers keep firing while hidden.
+- **How should finished markdown blocks be kept (WEB-19)?**
+  - **Reuse React elements from `react-markdown`, called as a function (recommended, done).**
+    - Pros: no copy of its pipeline; the plugins still see the whole document, so offsets and block ids are unchanged; the same keys as a full render, so the final render updates in place.
+    - Cons: depends on `react-markdown` staying a plain function and on `hast-util-to-jsx-runtime`'s `name-count` keys, both of which the tests pin; the top-level `<Markdown>` element is gone.
+  - **Render each completed block in its own memoized `<Markdown>`.**
+    - Pros: plain React.
+    - Cons: a different tree shape from the final render, so finishing a message would remount every block, and code highlighting and diagrams would start over.
+  - **Leave it, as the finding's medium confidence allowed.**
+    - Pros: no change.
+    - Cons: about 20% of a core per long streaming answer, growing with its length.
 
 ### 4. Live agent view requests
 
@@ -1182,6 +1259,22 @@ row writer with no lease, whose read would then race the others.
 read `environment.id` from a reassigned `let`. It now uses the `environmentId`
 parameter, the same value, so the backend typecheck can pass.
 
+### Task 3: which polls WEB-18 covers (2026-11-04)
+
+The report names "dialog polls at 2–5 s" without listing them. Took that as every bare timer reading state for a dialog, settings panel or sheet at about that rate, and added two like them: GitHub CLI login (1.5 s) and the Multi Review pull request phase (2 s). Left the slower `TicketSyncStrip` and `useMaintenanceSummaries`, which the finding does not name, and the others listed under WEB-18 for the reasons there.
+
+### Task 3: a poll's priority on return (2026-11-04)
+
+Annotation selection is `critical`, so a selection that ended while hidden clears within 50 ms. The Docker probe is `auxiliary`, up to about 1.5 s. Everything else is `standard`, up to about 0.6 s. These are the coordinator's existing bands, and a shown window repaints before any of them.
+
+### Task 3: an unrecognised record on the single-environment read (2026-11-04)
+
+A record not held yet is ignored while a creation is active or just finished, rather than added. If that record belonged to another client's creation, it arrives with the next announcement or resync. This matches what the list path does in the same window, which drops the whole snapshot.
+
+### Task 3: the digest and the file tree (2026-11-04)
+
+Used `conditionalSnapshot`, not `snapshotResponse`, because `snapshotResponse` counts outcomes under `file-tree-read` and a folder read is not one. Folder reads therefore have no recurring-work outcome counter yet.
+
 ### Task 3: what counts as the WEB-9 startup closure (2026-11-04)
 
 Counted `src/renderer-entry.tsx` and its static imports with `index.html`'s, because `main.tsx` always imports it dynamically. Counting strict static imports alone gives 2 chunks and 0.13 MB, which measures nothing useful. The report's own figure is not comparable either way: it came from an older build by a method the report does not spell out.
@@ -1700,6 +1793,8 @@ browser and real-stack suites were not run.
   macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
   a real install was not measured.
 
+- WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
+- WEB-19 timings in Chromium: the numbers are production React under Happy DOM; no React Profiler run was made.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
 
 ## Related

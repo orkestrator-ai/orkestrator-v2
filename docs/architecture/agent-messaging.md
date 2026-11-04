@@ -203,8 +203,11 @@ link: the command node delivers coordinator mail with `deliver_node_mail`,
 and collects an agent's mail to `"coordinator"` (or a reply on such a
 thread) from that node's outbox. On a leaf, `"coordinator"` is the
 coordinator that last contacted the sending environment, local or remote,
-and a reply always goes back to its sender; see
-[command-nodes.md](command-nodes.md#updates-from-leaves). The `send_message`
+else the command node's, and a reply always goes back to its sender; see
+[command-nodes.md](command-nodes.md#updates-from-leaves). An agent reaches its
+own machine's coordinator by name with `"local-coordinator"`, when the user
+asks for that one, and the command node's with
+`"command-node-coordinator"`. The `send_message`
 result names the destination in `coordinator` (`this machine` or
 `command node <name>`). Each side stores it with a `node` sender
 (`NodeMailActor`): the node, the remote party's role (`coordinator` or

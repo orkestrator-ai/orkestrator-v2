@@ -42,7 +42,6 @@ const log = createLogger("control-mcp");
 const CONTROL_MCP_PATH = "/mcp";
 const CONTROL_MCP_DESCRIPTOR = "control-mcp.json";
 const MAX_REQUEST_BYTES = 1024 * 1024;
-const COORDINATOR_CREDENTIAL_TTL_MS = 12 * 60 * 60 * 1_000;
 const MAX_COORDINATOR_CREDENTIALS = 512;
 /**
  * How many identical answers a conversation may collect before it is told to
@@ -187,10 +186,13 @@ export class ControlMcpServer {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelayMs: number;
   private readonly stateListeners = new Set<() => void>();
-  private readonly coordinatorCredentials = new Map<
-    string,
-    { scope: CoordinatorControlScope; expiresAt: number }
-  >();
+  /**
+   * Live for as long as the bridge holding the token: it is revoked when that
+   * process exits, its conversation closes or its project is removed, and every
+   * request revalidates the scope. A clock would add nothing but a dead token
+   * in a bridge that sat idle past it, which can never be given a new one.
+   */
+  private readonly coordinatorCredentials = new Map<string, { scope: CoordinatorControlScope }>();
   /**
    * Repeated-unchanged-read counters, per conversation and read.
    *
@@ -332,10 +334,7 @@ export class ControlMcpServer {
       this.coordinatorCredentials.delete(oldest);
     }
     const token = randomBytes(32).toString("base64url");
-    this.coordinatorCredentials.set(token, {
-      scope: Object.freeze({ ...scope }),
-      expiresAt: Date.now() + COORDINATOR_CREDENTIAL_TTL_MS,
-    });
+    this.coordinatorCredentials.set(token, { scope: Object.freeze({ ...scope }) });
     return { url: this.info.url, token };
   }
 
@@ -706,16 +705,9 @@ export class ControlMcpServer {
       return;
     }
     const presentedToken = bearerToken(request);
-    const coordinatorCredential = presentedToken
-      ? this.coordinatorCredentials.get(presentedToken)
+    const coordinatorScope = presentedToken
+      ? this.coordinatorCredentials.get(presentedToken)?.scope
       : undefined;
-    if (presentedToken && coordinatorCredential && coordinatorCredential.expiresAt <= Date.now()) {
-      this.coordinatorCredentials.delete(presentedToken);
-    }
-    const coordinatorScope =
-      coordinatorCredential && coordinatorCredential.expiresAt > Date.now()
-        ? coordinatorCredential.scope
-        : undefined;
     const operatorCredential = coordinatorScope
       ? null
       : this.credentials.authenticate(presentedToken);
@@ -740,11 +732,6 @@ export class ControlMcpServer {
         if (checked.status === 401) this.coordinatorCredentials.delete(presentedToken!);
         jsonResponse(response, checked.status, { error: checked.error });
         return;
-      }
-      // Expire abandoned credentials without interrupting a healthy,
-      // long-lived coordinator bridge that continues to revalidate normally.
-      if (coordinatorCredential) {
-        coordinatorCredential.expiresAt = Date.now() + COORDINATOR_CREDENTIAL_TTL_MS;
       }
       const messages = Array.isArray(body) ? body : [body];
       for (const message of messages) {

@@ -506,6 +506,8 @@ export class AgentMailRepository {
       nodeParent?: { id: string; threadId: string; hopCount: number };
       /** Transport framing is separate from the bounded user payload. */
       nodePrefix?: string;
+      /** Backend-owned fallback context, outside the bounded payload. */
+      fallbackNotice?: string;
       /** Structured facts for a workflow notice; ignored for any other sender. */
       notice?: AgentMailNotice;
       /**
@@ -557,6 +559,8 @@ export class AgentMailRepository {
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const nodeParent = sender.kind === "node" ? options.nodeParent : undefined;
+    if (Buffer.byteLength(options.fallbackNotice ?? "", "utf8") > 4096)
+      throw new Error("Fallback framing is too large");
     const nodePrefix = sender.kind === "node" ? (options.nodePrefix ?? "") : "";
     if (Buffer.byteLength(nodePrefix, "utf8") > 4096) throw new Error("Node framing is too large");
     if (
@@ -880,6 +884,7 @@ export class AgentMailRepository {
         toTabId: recipient.tabId,
         toIncarnationId: recipient.incarnationId,
         ...(subject ? { subject } : {}),
+        ...(options.fallbackNotice ? { fallbackNotice: options.fallbackNotice } : {}),
         body: nodePrefix + input.body,
         bodyBytes: bodyBytes + Buffer.byteLength(nodePrefix, "utf8"),
         trust,

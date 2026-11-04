@@ -1,6 +1,7 @@
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
+import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { MailAttachmentBatch } from "../mail-attachments.js";
 import {
   describeLeafCoordinatorMail,
@@ -219,6 +220,11 @@ export class NodeMailCollector {
           delivered.push(item.seq);
           if (!failed && !deferred) deliveredPrefix = item.seq;
         } catch (error) {
+          if (await this.handBack(link, controllerId, item, error)) {
+            delivered.push(item.seq);
+            if (!failed) deliveredPrefix = item.seq;
+            continue;
+          }
           log.warn("mail.delivery-deferred", { error: formatLogError(error, { message: false }) });
           failed = true;
         }
@@ -244,5 +250,45 @@ export class NodeMailCollector {
     }
     this.retry(nodeId);
     return false;
+  }
+
+  /**
+   * An agent's mail to "coordinator" for a repository with no coordinator here
+   * goes back to the leaf's own. True once the leaf has taken it. Anything else
+   * stays in the outbox: mail addressed to a conversation, a coordinator's own
+   * mail, an older leaf, or a leaf with no coordinator either.
+   */
+  private async handBack(
+    link: CollectorLink,
+    controllerId: BackendId,
+    item: OutboxItem,
+    error: unknown,
+  ): Promise<boolean> {
+    if (
+      (error as { code?: unknown } | null)?.code !== "no-coordinator" ||
+      item.toCoordinator ||
+      item.fromCoordinator ||
+      item.allowLocalFallback === false
+    ) {
+      return false;
+    }
+    if (!link.hello?.capabilities?.[BACKEND_CAPABILITIES.nodeMailReturn]) {
+      compatibilityPathUsage.record("node-mail-return.older-leaf");
+      return false;
+    }
+    return link
+      .invoke("return_node_outbox_mail", { controllerId, seq: item.seq })
+      .then(() => {
+        log.recovered("mail.return-deferred", `${controllerId}:${item.seq}`);
+        return true;
+      })
+      .catch((error: unknown) => {
+        log.throttled("warn", "mail.return-deferred", {
+          scope: `${controllerId}:${item.seq}`,
+          error,
+          fields: () => ({ error: formatLogError(error) }),
+        });
+        return false;
+      });
   }
 }

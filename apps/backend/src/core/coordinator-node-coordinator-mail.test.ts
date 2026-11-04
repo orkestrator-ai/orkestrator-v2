@@ -37,6 +37,7 @@ const ALL_CAPABILITIES = {
   "node-attachment": 1,
   "node-mail-steer": 1,
   "node-coordinator-mail": 1,
+  "node-mail-return": 1,
 };
 
 async function setBudget(world: MailWorld, autonomousWakeBudget: number) {
@@ -303,6 +304,76 @@ describe("command node coordinator ↔ leaf coordinator", () => {
     expect(reopened.conversationId).not.toBe(world.commandMain.conversationId);
     await world.command.deliver();
     expect(world.command.received(reopened).join("\n")).toContain("Status from the leaf");
+  });
+
+  describe("an agent on the leaf that no coordinator has contacted", () => {
+    async function agentOnLeaf(world: Awaited<ReturnType<typeof link>>) {
+      const agent = await world.leaf.addEnvironment("component-reuse-review");
+      const router = world.leaf.storage.nodeMailRouter!;
+      const destination = await router.route({
+        fromEnvironmentId: agent.environmentId,
+        fromTabId: agent.tabId,
+        toEnvironmentId: "coordinator",
+      });
+      await router.enqueue(destination!, {
+        requestId: "handoff",
+        fromEnvironmentId: agent.environmentId,
+        fromTabId: agent.tabId,
+        body: "Create build environments for these items.",
+      });
+      return agent;
+    }
+    const inboxOf = async (world: MailWorld, actor: MailActor) =>
+      (await world.storage.getAgentMailMailbox(actor.environmentId, actor.tabId)).messages;
+
+    // What the user saw: the leaf's coordinator got the request it could not act on.
+    test("reaches the command node's coordinator, not the leaf's", async () => {
+      const world = await link();
+      await agentOnLeaf(world);
+      expect(await world.collect()).toBe(true);
+      await world.command.deliver();
+      expect(world.command.received(world.commandMain).join("\n")).toContain(
+        "Create build environments for these items.",
+      );
+      expect(await inboxOf(world.leaf, world.leafMain)).toEqual([]);
+    });
+
+    test("reopens a closed main on the command node instead of waiting in the outbox", async () => {
+      const world = await link();
+      await world.command.closeMain();
+      await agentOnLeaf(world);
+      expect(await world.collect()).toBe(true);
+      const reopened = await world.command.main();
+      expect(reopened.conversationId).not.toBe(world.commandMain.conversationId);
+      await world.command.deliver();
+      expect(world.command.received(reopened).join("\n")).toContain(
+        "Create build environments for these items.",
+      );
+    });
+
+    test("falls back to the leaf's coordinator when the command node has none for the repository", async () => {
+      const world = await link();
+      await world.command.storage.updateProject(world.command.projectId, {
+        gitUrl: "git@github.com:acme/other.git",
+      });
+      await agentOnLeaf(world);
+      expect(await world.collect()).toBe(true);
+      expect(await inboxOf(world.command, world.commandMain)).toEqual([]);
+      const [returned] = await inboxOf(world.leaf, world.leafMain);
+      const message = await world.leaf.storage.getAgentMailMessage(
+        world.leafMain.environmentId,
+        world.leafMain.tabId,
+        returned!.id,
+      );
+      expect(message.body).toContain("Office desktop has no coordinator for this repository");
+      expect(message.body).toContain("Create build environments for these items.");
+      const outbox = await world.leafCall("collect_node_outbox", {
+        controllerId: "bk_cmd",
+        after: 0,
+        coordinatorMail: true,
+      });
+      expect(outbox.items).toEqual([]);
+    });
   });
 
   test("a question reaches the leaf's main coordinator and its answer comes back in the same thread", async () => {

@@ -75,6 +75,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-mail-attachments.older-node",
   /**
+   * A command node has no coordinator for an agent's mail and the leaf does not
+   * advertise `node-mail-return`, so the mail stays in its outbox.
+   */
+  "node-mail-return.older-leaf",
+  /**
    * A command node's coordinator used ticket tools or a build with a `nodeId`
    * on a leaf that does not advertise `ticket-sync`.
    */

@@ -312,6 +312,22 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("projects a workflow environment without cloning the full pipeline", async () => {
+    await withStorage(async (storage) => {
+      expect(await storage.getBuildPipelineEnvironmentId("missing")).toBeUndefined();
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, {
+        ...snapshot(),
+        environmentId: "e1",
+      });
+      expect(await storage.getBuildPipelineEnvironmentId("p1")).toBe("e1");
+      await storage.saveBuildPipeline("p1", "proj-1", "e2", 2, {
+        ...snapshot(),
+        environmentId: "e2",
+      });
+      expect(await storage.getBuildPipelineEnvironmentId("p1")).toBe("e2");
+    });
+  });
+
   test("rejects blank identifiers", async () => {
     await withStorage(async (storage) => {
       await expect(storage.getBuildPipeline("")).rejects.toThrow("must not be blank");

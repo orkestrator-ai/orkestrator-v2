@@ -48,8 +48,7 @@ function leaf(
       mostRecentControllerId: () => recent as BackendId | undefined,
       ...(local
         ? {
-            localCoordinatorContact: async (environmentId: string) =>
-              local[environmentId] ?? { hasCoordinator: false },
+            localCoordinatorContact: async (environmentId: string) => local[environmentId] ?? {},
           }
         : {}),
     },
@@ -73,6 +72,18 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
     const { mail } = leaf([]);
     expect(
       await mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "coordinator" }),
+    ).toBeNull();
+  });
+
+  test("the explicit local address overrides a command-node reply thread", async () => {
+    const { mail } = leaf(["bk_a"]);
+    await mail.recordThread("remote", coordinatorOf("bk_a"));
+    expect(
+      await mail.route({
+        fromEnvironmentId: "e1",
+        toEnvironmentId: "local-coordinator",
+        replyToMessageId: "remote",
+      }),
     ).toBeNull();
   });
 
@@ -118,7 +129,7 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
   // because the command node had contacted this leaf most recently.
   test("a worker a local coordinator launched reports locally, not to the most recent command node", async () => {
     const { mail } = leaf(["bk_mini"], "bk_mini", {
-      worker: { at: "2026-10-26T13:21:50.000Z", hasCoordinator: true },
+      worker: { at: "2026-10-26T13:21:50.000Z" },
     });
     expect(
       await mail.route({
@@ -129,20 +140,64 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
     ).toBeNull();
   });
 
-  test("with no coordinator contact, a project with a local coordinator keeps mail local", async () => {
-    const { mail } = leaf(["bk_mini"], "bk_mini", { own: { hasCoordinator: true } });
+  // A user told an agent on a leaf to tell "the coordinator". It reached the
+  // leaf's own, which cannot act across nodes, and stranded there.
+  test("with no coordinator contact, mail reaches the command node's coordinator", async () => {
+    const { mail } = leaf(["bk_mini"], "bk_mini", { other: {} });
+    expect(await mail.route({ fromEnvironmentId: "own", toEnvironmentId: "coordinator" })).toEqual({
+      controllerId: "bk_mini" as BackendId,
+      controllerName: "bk_mini",
+    });
+  });
+
+  test("an attached command node is found even before it has contacted this node", async () => {
+    const { mail } = leaf(["bk_a"], undefined);
     expect(
-      await mail.route({ fromEnvironmentId: "own", toEnvironmentId: "coordinator" }),
+      await mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "coordinator" }),
+    ).toMatchObject({ controllerId: "bk_a" });
+  });
+
+  test("the local address never goes up; it is not a route", async () => {
+    const { mail } = leaf(["bk_mini"], "bk_mini");
+    await mail.recordOrigin("e1", coordinatorOf("bk_mini"));
+    expect(
+      await mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "local-coordinator" }),
     ).toBeNull();
-    // A project with no coordinator on this node still reaches the command node.
+  });
+
+  test("the command node's address goes up even from a local coordinator's worker", async () => {
+    const { mail } = leaf(["bk_a", "bk_b"], "bk_b", {
+      worker: { at: "2026-10-26T13:21:50.000Z" },
+    });
+    const route = () =>
+      mail.route({ fromEnvironmentId: "worker", toEnvironmentId: "command-node-coordinator" });
+    expect(await route()).toMatchObject({ controllerId: "bk_b" });
+    // To the coordinator it already works with, when one has contacted it.
+    await mail.recordOrigin("worker", coordinatorOf("bk_a"));
+    expect(await route()).toMatchObject({
+      controllerId: "bk_a",
+      coordinatorTabId: "coordinator-tab",
+    });
+    // A reply to something local does not keep it down here.
     expect(
-      await mail.route({ fromEnvironmentId: "other", toEnvironmentId: "coordinator" }),
-    ).toMatchObject({ controllerId: "bk_mini" });
+      await mail.route({
+        fromEnvironmentId: "worker",
+        toEnvironmentId: "command-node-coordinator",
+        replyToMessageId: "local-msg",
+      }),
+    ).toMatchObject({ controllerId: "bk_a" });
+  });
+
+  test("the command node's address is refused, by name, with no command node attached", async () => {
+    const { mail } = leaf([]);
+    await expect(
+      mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "command-node-coordinator" }),
+    ).rejects.toThrow("This node is not controlled by a command node");
   });
 
   test("the coordinator that contacted the environment last is primary, local or remote", async () => {
     const local: Record<string, LocalCoordinatorContact> = {
-      worker: { at: "2026-10-26T13:00:00.000Z", hasCoordinator: true },
+      worker: { at: "2026-10-26T13:00:00.000Z" },
     };
     const { mail, at } = leaf(["bk_cmd"], "bk_cmd", local);
     const route = () => mail.route({ fromEnvironmentId: "worker", toEnvironmentId: "coordinator" });
@@ -156,7 +211,7 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
       coordinatorTabId: "coordinator-tab",
     });
     // The local coordinator delegates again afterwards: back to local.
-    local.worker = { at: "2026-10-26T13:20:00.000Z", hasCoordinator: true };
+    local.worker = { at: "2026-10-26T13:20:00.000Z" };
     expect(await route()).toBeNull();
     // And the command node again.
     at("2026-10-26T13:30:00.000Z");
@@ -165,18 +220,18 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
   });
 
   test("an environment a command node launched reports there until a local coordinator contacts it", async () => {
-    const local: Record<string, LocalCoordinatorContact> = { e1: { hasCoordinator: true } };
+    const local: Record<string, LocalCoordinatorContact> = { e1: {} };
     const { mail } = leaf(["bk_cmd"], "bk_cmd", local);
     await mail.recordOrigin("e1", coordinatorOf("bk_cmd"));
     const route = () => mail.route({ fromEnvironmentId: "e1", toEnvironmentId: "coordinator" });
     expect(await route()).toMatchObject({ controllerId: "bk_cmd" });
-    local.e1 = { at: "2026-10-26T14:00:00.000Z", hasCoordinator: true };
+    local.e1 = { at: "2026-10-26T14:00:00.000Z" };
     expect(await route()).toBeNull();
   });
 
   test("an origin recorded before contact times is older than any local contact", async () => {
     const { mail, store } = leaf(["bk_cmd"], "bk_cmd", {
-      e1: { at: "2026-10-01T00:00:00.000Z", hasCoordinator: true },
+      e1: { at: "2026-10-01T00:00:00.000Z" },
     });
     store.state = { ...store.state, origins: { e1: coordinatorOf("bk_cmd") } };
     expect(
@@ -186,7 +241,7 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
 
   test("a reply goes back to the sender of the message it answers", async () => {
     const { mail, at } = leaf(["bk_cmd"], "bk_cmd", {
-      worker: { at: "2026-10-26T13:20:00.000Z", hasCoordinator: true },
+      worker: { at: "2026-10-26T13:20:00.000Z" },
     });
     at("2026-10-26T13:10:00.000Z");
     await mail.recordThread("remote-msg", coordinatorOf("bk_cmd"));

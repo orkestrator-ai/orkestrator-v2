@@ -48,6 +48,7 @@ export interface NodeMailRouter {
       requestId: string;
       fromEnvironmentId: string;
       fromTabId: string;
+      allowLocalFallback?: false;
       subject?: string;
       body: string;
     },

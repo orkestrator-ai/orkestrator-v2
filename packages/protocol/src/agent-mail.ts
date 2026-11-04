@@ -307,6 +307,8 @@ export function nodeMailSenderKey(
 }
 
 export interface AgentMailMessage {
+  /** Backend-owned explanation of a return to the local coordinator. */
+  fallbackNotice?: string;
   version: typeof AGENT_MAIL_VERSION;
   id: string;
   threadId: string;
@@ -996,6 +998,7 @@ export function renderAgentMailCarrier(message: AgentMailMessage): string {
     ...(message.subject ? { subject: message.subject } : {}),
     ...(notice ? { notice } : {}),
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+    ...(message.fallbackNotice ? { fallbackNotice: message.fallbackNotice } : {}),
     body: message.body,
   });
   const attachmentGuidance = message.attachments?.length

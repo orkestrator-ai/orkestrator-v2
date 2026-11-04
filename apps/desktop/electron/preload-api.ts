@@ -55,6 +55,7 @@ type DesktopGatewaySnapshot = {
   backendId: string | null;
   legacyOrigin: string | null;
   backendOnThisDevice: boolean;
+  localGatewayBaseUrl: string | null;
   workspaceTarget: WorkspaceTarget | null;
   portalIdentity: DesktopIdentity | null;
 };
@@ -103,6 +104,7 @@ function readGatewaySnapshot(ipcRenderer: {
       backendId: text(value.backendId),
       legacyOrigin: text(value.legacyOrigin),
       backendOnThisDevice: value.backendOnThisDevice === true,
+      localGatewayBaseUrl: text(value.localGatewayBaseUrl),
       workspaceTarget: parseWorkspaceTarget(value.workspaceTarget),
       portalIdentity: parseIdentity(value.portalIdentity),
     };
@@ -151,6 +153,22 @@ export function exposeActiveConnectionGateway(
       : {}),
   });
   return true;
+}
+
+/**
+ * Expose the desktop API. A local window on the direct gateway transport gets
+ * it as `orkestratorDesktopHost` instead: `exposeInMainWorld` properties cannot
+ * be replaced, and the renderer composes `window.orkestrator` from this host
+ * and its own gateway client, so commands and events cross no context bridge.
+ */
+export function exposeDesktopApi(
+  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
+  ipcRenderer: IpcRendererLike & { sendSync(channel: string): unknown },
+): void {
+  const api = createOrkestratorElectronApi(ipcRenderer);
+  const baseUrl = readGatewaySnapshot(ipcRenderer)?.localGatewayBaseUrl;
+  if (baseUrl) contextBridge.exposeInMainWorld("orkestratorDesktopHost", { api, baseUrl });
+  else contextBridge.exposeInMainWorld("orkestrator", api);
 }
 
 /** `window.orkestrator.browserPreview.capture`, exactly `BrowserPreviewCaptureApi`. */

@@ -344,6 +344,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
+    localWindowGatewayTransport,
+    setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
     debugLogging,
@@ -2397,6 +2399,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </SettingsPageLayout>
   );
 
+  // Electron reads this setting from its own data directory, so a window on
+  // another machine would be editing a config nothing reads it from.
+  const isLocalDesktopWindow =
+    window.orkestrator?.isolatedViewState === true && !window.orkestratorGateway?.enabled;
+
   const renderExperimental = () => (
     <SettingsPageLayout title="Experimental">
       {isWindowMachine(machine) && (
@@ -2433,6 +2440,20 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               aria-label="Enable scheduling"
             />
           </SettingsRow>
+          {isLocalDesktopWindow && (
+            <SettingsRow
+              label="Direct transport for new windows"
+              htmlFor="local-window-gateway-transport"
+              description="A window opened after you turn this on sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one."
+            >
+              <Switch
+                id="local-window-gateway-transport"
+                checked={localWindowGatewayTransport}
+                onCheckedChange={setLocalWindowGatewayTransport}
+                aria-label="Use the direct transport for new windows"
+              />
+            </SettingsRow>
+          )}
         </div>
       )}
       <div className="space-y-3">

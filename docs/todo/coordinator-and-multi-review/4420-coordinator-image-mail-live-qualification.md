@@ -10,7 +10,7 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: done (two real backends that share no files; a slow or dropped link is not covered).
 2. **Live container run**: a containerized worker opens a mailed image inside a real container. Status: done (real container, read as the agent's user; no agent turn).
 3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (Claude and Codex done offline for a worktree and a conversation directory; Cursor, Pi, Grok and an agent inside a container remain).
-4. **Clearing images from the project home**: mailed images stay in the user's own checkout until someone removes them. Status: open.
+4. **Clearing images from the project home**: mailed images used to stay in the user's own checkout until someone removed them. Status: done (they now live in the data directory and go with the project home or after mail retention).
 
 ### 1. Live two-node run
 
@@ -71,21 +71,24 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 ### 4. Clearing images from the project home
 
-**Problem.** A mailed image the user approved stays in `<checkout>/.orkestrator/mail-attachments/` indefinitely: the project home is never deleted the way an environment is.
+**Problem.** A mailed image the user approved stayed in `<checkout>/.orkestrator/mail-attachments/` indefinitely: the project home is never deleted the way an environment is, and the ticket requires a sent image to be removed with its environment.
 
-**Context.** It is Git-excluded and only follows an approval, so it is clutter rather than a risk. Other environments lose theirs with the workspace.
+**Context.** Other environments lose theirs with the workspace. The project home is the user's own checkout, and Orkestrator never cleans it (`project-home-environment.ts`).
 
-**Investigation.** No retention runs on this directory. Mail retention (14 days) could drive one, but deleting a file an agent is still using would be a worse failure than a few stale images.
+**Investigation.** No retention ran on that directory. A file a message names is needed only while the message exists; mail retention is 14 days (`AGENT_MAIL_DEFAULT_RETENTION_DAYS`). The project home's agents run on the host and read outside their checkout (the Claude bridge approves `Read` up front; the read-live test shows Claude and Codex reading from the data directory).
 
 **Decisions.**
 
-- **Should it be swept?**
-  - **Leave it until a user reports it, and mention it in the docs (recommended).**
-    - Pros: nothing can delete a file in use; approval already makes these rare.
-    - Cons: images accumulate in the user's checkout, unnoticed.
-  - **Prune batches older than the mail retention window.**
-    - Pros: bounded.
-    - Cons: another sweep writing inside the user's own checkout.
+- **Where a project home's images live, and when they go.**
+  - **The data directory, removed with the project home and after mail retention (recommended, done).**
+    - Pros: nothing is written into the user's checkout, so no image can be staged there; one place to remove on deletion; a sweep there never touches user files.
+    - Cons: the recipient reads a path outside its checkout.
+  - **The checkout, pruned after mail retention.**
+    - Pros: the path is inside the agent's working directory.
+    - Cons: a sweep writing inside the user's own checkout, and nothing removes the files when the project goes.
+  - **Leave them, and document it.**
+    - Pros: nothing can delete a file in use.
+    - Cons: fails the ticket's "removed with the environment" criterion.
 
 ## Assumptions and decisions
 
@@ -104,6 +107,10 @@ Ran each QA backend in an unprivileged user and mount namespace (`unshare`) with
 ### Task 3: a scripted loopback model instead of a billed turn
 
 Pointed the pinned Claude and Codex CLIs at a local scripted model, the pattern `tests/conformance/execution-policy/scripted-anthropic.ts` and `session-title-codex-live.test.ts` already use, rather than spending a provider turn. The CLI's own tool still opens the real file and returns its bytes; only the model's choice of call is scripted. `scriptedAnthropicEndpoint` now passes the first request to the script and records request bodies so the test can find the path and the returned image.
+
+### Task 4: project home images outside the checkout
+
+Placed a project home's images in `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/` instead of `<checkout>/.orkestrator/mail-attachments/`, so the user's checkout is never written to. `deleteEnvironment` removes the directory with the project home, and the node maintenance pass (`NodeFiles.sweepMailAttachments`, every 30 seconds on every backend) removes it once the project home's record is gone, which covers a removed project, and drops batches older than mail retention. A failed record read keeps the files. Chose retention equal to mail retention because after that no message names the file. Covered by `mail-attachments.test.ts`, `coordinator-worker-mail.test.ts` (nothing in the checkout, not even ignored files; removed after the record goes) and `commands-environment-cleanup.test.ts` (removed on delete, checkout kept).
 
 ## Related
 

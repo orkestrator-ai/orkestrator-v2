@@ -684,6 +684,11 @@ size and hash, with no content in a log or receipt.
   that node is updated. Its plain mail is unaffected.
 - **Abandoned batches** (a process that stopped between staging and placing) are
   swept after a day; an `outbox-` batch never is, since it is the only copy.
+  The same maintenance pass, which runs on every backend, removes images placed
+  for a project home whose record is gone or that are past mail retention. Those
+  are kept in `<dataDir>/project-home-mail-attachments/`, never in the user's
+  checkout. A connected node's project home cannot be messaged, so they are only
+  ever placed on the sender's own node.
   `transfer_files` follows the same path as the down direction, with the normal
   receipt and no mail.
 

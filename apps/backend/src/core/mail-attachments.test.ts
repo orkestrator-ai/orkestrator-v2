@@ -13,9 +13,12 @@ import {
   mailAttachmentSpoolDir,
   outboxMailAttachmentBatch,
   parseMailAttachmentBatch,
+  projectHomeMailAttachmentDir,
   readOwnAttachments,
+  removeProjectHomeMailAttachments,
   readSpooledAttachment,
   stageMailAttachments,
+  sweepProjectHomeMailAttachments,
   sweepStaleMailAttachmentBatches,
 } from "./mail-attachments.js";
 
@@ -192,5 +195,49 @@ describe("the spool", () => {
     await sweepStaleMailAttachmentBatches(root, Date.now() + 2 * 24 * 60 * 60 * 1_000);
     await expect(fs.stat(abandoned)).rejects.toThrow();
     expect((await fs.stat(waiting)).isDirectory()).toBe(true);
+  });
+});
+
+describe("project home images", () => {
+  const batch = mailAttachmentBatchId(["coordinator", "home-1"]);
+  const later = mailAttachmentBatchId(["coordinator", "home-2"]);
+
+  test("live in the data directory and cannot be named out of it", () => {
+    const directory = projectHomeMailAttachmentDir(root, "env-1", batch);
+    expect(directory.startsWith(path.join(root, "project-home-mail-attachments", "env-1"))).toBe(
+      true,
+    );
+    expect(() => projectHomeMailAttachmentDir(root, "../env-1", batch)).toThrow(/Invalid/);
+    expect(() => projectHomeMailAttachmentDir(root, "env-1", "../../etc")).toThrow(/Invalid/);
+    expect(() =>
+      projectHomeMailAttachmentDir(root, "env-1", outboxMailAttachmentBatch(batch)),
+    ).toThrow(/Invalid/);
+  });
+
+  test("go with the project home", async () => {
+    const directory = projectHomeMailAttachmentDir(root, "env-1", batch);
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "shot.png"), PNG);
+    await removeProjectHomeMailAttachments(root, "env-1");
+    await expect(fs.stat(projectHomeMailAttachmentDir(root, "env-1"))).rejects.toThrow();
+    // A name that is not an environment id removes nothing.
+    await removeProjectHomeMailAttachments(root, "..");
+    expect((await fs.stat(root)).isDirectory()).toBe(true);
+  });
+
+  test("the sweep removes a gone project home and batches past mail retention", async () => {
+    const old = projectHomeMailAttachmentDir(root, "env-1", batch);
+    const fresh = projectHomeMailAttachmentDir(root, "env-1", later);
+    const orphan = projectHomeMailAttachmentDir(root, "env-gone", batch);
+    for (const directory of [old, fresh, orphan]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "shot.png"), PNG);
+    }
+    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1_000);
+    await fs.utimes(old, fifteenDaysAgo, fifteenDaysAgo);
+    await sweepProjectHomeMailAttachments(root, async (id) => id === "env-1");
+    await expect(fs.stat(old)).rejects.toThrow();
+    await expect(fs.stat(projectHomeMailAttachmentDir(root, "env-gone"))).rejects.toThrow();
+    expect((await fs.readFile(path.join(fresh, "shot.png"))).equals(PNG)).toBe(true);
   });
 });

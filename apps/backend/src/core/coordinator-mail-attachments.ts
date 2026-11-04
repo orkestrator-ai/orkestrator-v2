@@ -25,6 +25,7 @@ import {
   mailAttachmentBatchId,
   mailAttachmentFiles,
   parseMailAttachmentBatch,
+  projectHomeMailAttachmentDir,
   readOwnAttachments,
   readSpooledAttachment,
   removeMailAttachmentBatch,
@@ -35,6 +36,7 @@ import {
 } from "./mail-attachments.js";
 import type { Environment } from "./models.js";
 import type { NodeFileTransfer } from "./nodes/index.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 /**
  * A coordinator's pasted images reaching whoever it mails
@@ -51,8 +53,10 @@ import type { NodeFileTransfer } from "./nodes/index.js";
  *   refuses a recipient that cannot take them before any bytes move;
  * - `place_node_mail_attachments` puts the batch's files where the recipient
  *   reads them: `.orkestrator/mail-attachments/<batch>/` in an environment
- *   (Git-excluded, and proved so first), or a coordinator conversation's own
- *   attachment directory, the one root its read-only rules let it read.
+ *   (Git-excluded, and proved so first), a private directory in the data
+ *   directory for the project home (never the user's checkout), or a
+ *   coordinator conversation's own attachment directory, the one root its
+ *   read-only rules let it read.
  */
 
 type JsonRecord = Record<string, unknown>;
@@ -91,7 +95,8 @@ interface AttachmentSink {
   release(): void;
 }
 
-function conversationSink(directory: string): AttachmentSink {
+/** A directory only the backend writes: a conversation's own, or a project home's. */
+function privateDirectorySink(directory: string): AttachmentSink {
   const pathOf = (name: string) => path.join(directory, name);
   return {
     pathOf,
@@ -265,12 +270,20 @@ async function sinkFor(
     if (!workspace?.conversations.some((item) => item.id === conversationId && !item.closedAt)) {
       throw new Error("The recipient's coordinator conversation is not open.");
     }
-    return conversationSink(
+    return privateDirectorySink(
       storage.coordinators.coordinatorAttachmentDirectory(coordinatorId, conversationId),
     );
   }
   const environment = await storage.getEnvironment(address);
   if (!environment) throw new Error("That environment does not exist on this node.");
+  // The project home is the user's own checkout, which nothing ever cleans up,
+  // so its images stay out of it: in the data directory, removed with the
+  // project home (or when the mail naming them passes retention).
+  if (isProjectHomeEnvironment(environment)) {
+    return privateDirectorySink(
+      projectHomeMailAttachmentDir(storage.getDataDir(), environment.id, batch),
+    );
+  }
   if (environment.worktreeMove) {
     throw new Error(`${environment.name} is being moved, so an image cannot be copied into it.`);
   }

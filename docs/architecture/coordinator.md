@@ -925,13 +925,20 @@ Where a file lands:
 | --- | --- | --- |
 | Environment (worktree) | `<worktree>/.orkestrator/mail-attachments/<batch>/` | With the worktree |
 | Environment (container) | `/workspace/.orkestrator/mail-attachments/<batch>/` | With its storage |
-| Project home | `<checkout>/.orkestrator/mail-attachments/<batch>/`, copied only once the user approves the message | Not automatically: it is the user's own checkout |
+| Project home | `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/`, outside the user's checkout, copied only once the user approves the message | With the project home (environment deletion, or the next maintenance pass once its record is gone, as when the project is removed), or once past mail retention (14 days) |
 | Coordinator or side agent | That conversation's attachment directory, the root its read-only rules can read | With the conversation's retention or the project |
 
 `.orkestrator` is Git-excluded in every environment, and the copy first proves
 that for the location (`ensureWorkspaceArtifactIsGitExcluded`) and fails if it
 cannot, so a sent image does not reach a commit or pull request through normal
-staging. A stopped container is refused rather than queued: there is nothing to
+staging. The project home is the user's own checkout, which Orkestrator never
+cleans, so nothing is written into it: its images stay in the data directory
+(`projectHomeMailAttachmentDir`, `apps/backend/src/core/mail-attachments.ts`),
+where no repository can stage them. `deleteEnvironment` removes that directory
+with the project home, and every backend's 30-second node maintenance pass
+(`NodeFiles.sweepMailAttachments`) removes the directory of a project home whose
+record is gone and any batch older than mail retention, by which time no
+message names it. A failed record read keeps the files. A stopped container is refused rather than queued: there is nothing to
 write into until it starts.
 
 The message records each file as `attachments` (`AgentMailAttachment`: name,
@@ -1310,7 +1317,8 @@ Every other coordinator action refuses the project home (see
   coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
   sent at once if it carries text only, and the tool result carries a `warning`
   that this is discouraged. Messages with images always need their own approval,
-  even within this window, before files are copied into the checkout.
+  even within this window, before their files are given to the project home
+  (outside the checkout; see [Passing a pasted image on](#passing-a-pasted-image-on)).
 - **Otherwise the message is held** as a `message-project-home` node action
   request, shown in the same approval dialog as `request_environment_deletion`
   and `answer_worker_question` (`ProjectHomeMessageApprovalDialog`), with the

@@ -100,8 +100,8 @@ export function ProjectHomeMessageApprovalDialog({
               className="border-t border-border/60 px-3 py-2 text-xs break-words text-muted-foreground"
               data-testid="project-home-message-attachments"
             >
-              With {message.attachments.length === 1 ? "an image" : "images"}, copied to
-              .orkestrator/mail-attachments in your checkout if you approve:{" "}
+              With {message.attachments.length === 1 ? "an image" : "images"}, given to the project
+              home if you approve (kept outside your checkout, and removed with the project home):{" "}
               {message.attachments.join(", ")}
             </p>
           ) : null}

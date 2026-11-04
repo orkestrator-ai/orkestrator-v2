@@ -5,7 +5,12 @@ import path from "node:path";
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
-import { mailAttachmentSpoolDir, sweepStaleMailAttachmentBatches } from "../mail-attachments.js";
+import {
+  mailAttachmentSpoolDir,
+  sweepProjectHomeMailAttachments,
+  sweepStaleMailAttachmentBatches,
+} from "../mail-attachments.js";
+import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
@@ -93,6 +98,15 @@ export class NodeFiles {
           (upload) => "mailAttachments" in upload.scope && upload.scope.mailAttachments === batch,
         ),
     );
+    // A project home whose record is gone (a removed project, a deletion that
+    // stopped part-way) loses its images; a failed read keeps them.
+    await sweepProjectHomeMailAttachments(this.storage.getDataDir(), async (environmentId) => {
+      const environment = await this.storage.getEnvironment(environmentId).then(
+        (value) => value ?? null,
+        () => undefined,
+      );
+      return environment === undefined || isProjectHomeEnvironment(environment);
+    });
   }
 
   /** The scope's root directory on this node. */

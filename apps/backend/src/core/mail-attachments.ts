@@ -3,6 +3,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
 import {
+  AGENT_MAIL_DEFAULT_RETENTION_DAYS,
   AGENT_MAIL_MAX_ATTACHMENT_BYTES,
   AGENT_MAIL_MAX_ATTACHMENTS,
   AGENT_MAIL_MAX_TOTAL_ATTACHMENT_BYTES,
@@ -31,6 +32,14 @@ const BATCH = /^(?:outbox-)?[0-9a-f]{32}$/;
 /** A batch still in the outbox is kept until the command node acknowledges its mail. */
 const OUTBOX_PREFIX = "outbox-";
 const STALE_SPOOL_MS = 24 * 60 * 60 * 1_000;
+/** Images for a project home: kept outside the user's checkout, in the data directory. */
+const PROJECT_HOME_DIRECTORY = "project-home-mail-attachments";
+const ENVIRONMENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * A project home's images last as long as the mail that names them: once the
+ * mail is past retention nothing points at the file any more.
+ */
+const PROJECT_HOME_RETENTION_MS = AGENT_MAIL_DEFAULT_RETENTION_DAYS * 24 * 60 * 60 * 1_000;
 /** Bytes read to recognise an image: enough for the longest signature, in whole base64 groups. */
 const SIGNATURE_BYTES = 18;
 
@@ -294,4 +303,69 @@ export async function sweepStaleMailAttachmentBatches(
         }
       }),
   );
+}
+
+function projectHomeRoot(dataDir: string): string {
+  return path.join(dataDir, PROJECT_HOME_DIRECTORY);
+}
+
+/**
+ * Where a project home reads the images mailed to it. The project home is the
+ * user's own checkout, which Orkestrator never cleans, so its images live here
+ * instead: outside every repository, and removed with the project home.
+ */
+export function projectHomeMailAttachmentDir(
+  dataDir: string,
+  environmentId: string,
+  batch?: string,
+): string {
+  if (!ENVIRONMENT_ID.test(environmentId)) throw new Error("Invalid environment id.");
+  const directory = path.join(projectHomeRoot(dataDir), environmentId);
+  if (batch === undefined) return directory;
+  if (!BATCH.test(batch) || batch.startsWith(OUTBOX_PREFIX)) {
+    throw new Error("Invalid mail attachment batch.");
+  }
+  return path.join(directory, batch);
+}
+
+/** Everything mailed to one project home, when that environment is deleted. */
+export async function removeProjectHomeMailAttachments(
+  dataDir: string,
+  environmentId: string,
+): Promise<void> {
+  if (!ENVIRONMENT_ID.test(environmentId)) return;
+  await fs.rm(projectHomeMailAttachmentDir(dataDir, environmentId), {
+    recursive: true,
+    force: true,
+  });
+}
+
+/**
+ * A project home's images whose environment is gone (a deletion that stopped
+ * part-way, a removed project), and batches older than mail retention.
+ */
+export async function sweepProjectHomeMailAttachments(
+  dataDir: string,
+  isLiveProjectHome: (environmentId: string) => Promise<boolean>,
+  now = Date.now(),
+): Promise<void> {
+  const root = projectHomeRoot(dataDir);
+  const homes = await fs.readdir(root).catch(() => [] as string[]);
+  for (const home of homes) {
+    const directory = path.join(root, home);
+    if (!ENVIRONMENT_ID.test(home) || !(await isLiveProjectHome(home))) {
+      await fs.rm(directory, { recursive: true, force: true });
+      continue;
+    }
+    const batches = await fs.readdir(directory).catch(() => [] as string[]);
+    await Promise.all(
+      batches.map(async (batch) => {
+        const target = path.join(directory, batch);
+        const stats = await fs.lstat(target).catch(() => null);
+        if (stats && now - stats.mtimeMs > PROJECT_HOME_RETENTION_MS) {
+          await fs.rm(target, { recursive: true, force: true });
+        }
+      }),
+    );
+  }
 }

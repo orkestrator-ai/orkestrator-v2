@@ -16,6 +16,7 @@ import {
   PROJECT_HOME_WARNING,
   projectHomeApprovalRequestId,
 } from "./coordinator-worker-mail.js";
+import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { isNodeExcludedCommand } from "./nodes/node-routing.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { runCommand } from "./shell.js";
@@ -453,8 +454,8 @@ describe("coordinator messages to the project home", () => {
     });
     const priorMail = await mailTo(homeId);
     const message = homeMessage({ attachments: [source] });
-    const copies = async () =>
-      readdir(path.join(checkout, ".orkestrator", "mail-attachments")).catch(() => []);
+    const homeImages = projectHomeMailAttachmentDir(storage.getDataDir(), homeId);
+    const copies = async () => readdir(homeImages).catch(() => []);
 
     const held = await send(message);
     expect(held).toMatchObject({ sent: false, state: "pending" });
@@ -467,15 +468,27 @@ describe("coordinator messages to the project home", () => {
 
     const delivered = (await mailTo(homeId)).find((mail) => mail.requestId === "home-1");
     const file = delivered!.attachments![0]!.path;
-    expect(file.startsWith(path.join(checkout, ".orkestrator", "mail-attachments"))).toBe(true);
+    // Outside the user's checkout, which nothing ever cleans up.
+    expect(file.startsWith(homeImages + path.sep)).toBe(true);
     expect((await readFile(file)).length).toBe(9);
-    // The user's own checkout: nothing to commit.
+    await expect(readdir(path.join(checkout, ".orkestrator"))).rejects.toThrow();
     expect((await runCommand("git", ["status", "--porcelain"], { cwd: checkout })).stdout).toBe("");
+    expect(
+      (await runCommand("git", ["status", "--porcelain", "--ignored"], { cwd: checkout })).stdout,
+    ).toBe("");
 
     // A retry finds what the approval sent, with the same image.
     const again = await send(message);
     expect(again).toMatchObject({ id: delivered!.id, projectHome: true });
     expect(await mailTo(homeId)).toHaveLength(priorMail.length + 1);
+
+    // The maintenance pass keeps a live project home's images, and removes
+    // them once its record is gone (a removed project, an interrupted delete).
+    await coordination.files.sweepMailAttachments();
+    expect((await readFile(file)).length).toBe(9);
+    await storage.removeEnvironment(homeId);
+    await coordination.files.sweepMailAttachments();
+    await expect(readdir(homeImages)).rejects.toThrow();
   });
 
   test("an image gone by the time of approval sends nothing, and says why", async () => {

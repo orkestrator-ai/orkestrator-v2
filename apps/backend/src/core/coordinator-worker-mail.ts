@@ -312,8 +312,8 @@ export function registerCoordinatorWorkerMailCommands(
       }))
     )
       return { sent: true };
-    // The recent-message window permits text only. Every new image copy into
-    // the user's checkout needs its own approval.
+    // The recent-message window permits text only. Every new image for the
+    // project home needs its own approval.
     if (
       !existing &&
       !mail.own.length &&

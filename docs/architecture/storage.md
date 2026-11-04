@@ -162,11 +162,21 @@ These keep their own modules but store their state as database rows:
 | Compatibility-path usage | `compatibility-path-usage` (document: per path id, a count and the first and last use) | Counts are merged at most once a minute, on read and at shutdown, in one transaction; content-free ([version-compatibility.md](version-compatibility.md#usage-counters)) |
 | Host maintenance | `host-maintenance` (document: the current or last update job, the pending check request, the last check) | Each change is one transaction; a job left in progress by the previous process is settled at startup from the running version, never resumed |
 | Scheduled jobs | `scheduled-jobs` (one row per schedule, owner = the owner key) | Every write is one `updateStoreRow`, which is also the exactly-once fire claim across backends; bounded history inside the row; an environment's agent schedules are deleted with it ([scheduled-jobs.md](scheduled-jobs.md)) |
-| Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
+| Agent usage history | `usage-history` (one row per agent session, owner = environment) | Each recorded turn is one `updateStoreRow`; reports walk every row uncached and never prune (retention is swept from the write path); day buckets past 400 days and the least recently used rows above 20,000 are pruned hourly, 250 rows per transaction with the event loop free between batches. Each row is read and decided inside its transaction, so a turn recorded during the sweep stays and a row it refreshed is not dropped. Turn ids are scoped by provider session, because a row outlives the conversation in its tab. A turn is bucketed by the day its bridge finalized it (`NativeAgentTurnUsage.at`), falling back to the day it was first seen. Rows outlive the environment they came from and are deleted only on request |
 
 Large engines read and write through `database.rows(store)`, an uncached
 row API, so they never hold a whole store in memory; the cached APIs stay
 correct because every row write bumps the store's revision.
+
+`list({ values: false })` reports each row's size without reading its value. It
+uses `octet_length(value)`, which reads the length from the record header, and
+falls back to `length(CAST(value AS BLOB))` on a SQLite older than 3.43: Bun on
+macOS loads the system library, so the version follows the macOS release (3.54.0
+on macOS 27 and 3.53.4 in Bun's Linux image, both with Bun 1.4.4). It also scans
+the primary key and sorts in JavaScript instead of using `ORDER BY`, because
+`store_rows` is `WITHOUT ROWID`: a seek compares whole cells, reading their
+overflow pages, so seeking each row through `store_rows_position` costs as much
+as reading the values whichever size expression is used.
 
 ## Stores and layouts
 
@@ -211,8 +221,8 @@ from that.
 - **`updateStore(file, fallback, mutate)`**: a synchronous read-modify-write in
   one `BEGIN IMMEDIATE` transaction. SQLite's write lock serializes it across
   every connection and process; no lease or queue is involved. Use it whenever
-  the mutation does not await (sessions, project notes, feature plans,
-  completion comments).
+  the mutation does not await (project notes, feature plans, completion
+  comments).
 - **`updateStoreRow(file, key, mutate, { collection, archiveCleanup })`**: the
   same for one row of a `record` store, of a keyed `array` store or of one
   `envelope` collection. It neither parses nor rewrites the other rows, so a
@@ -240,7 +250,13 @@ from that.
   Native agent sessions take **one lease per session key**
   (`native-agent-session-leases/<sha256(key)>`), and every write under it is a
   single-row `updateStoreRow`, so a slow provider call for one session never
-  stalls another. Order: the service's per-key work fence, then the session
+  stalls another. A mutation reads its record with
+  `readNativeAgentSessionUnderLease`, which fetches that one row and refuses that
+  key's unreadable record; another key's bad row is neither read nor rewritten.
+  The value is a fresh parse, never a frozen snapshot object. Whole-store loads
+  remain for what walks the store and holds no key's lease: the owner migration,
+  the catalogue list, the environment sweep's key search and a store held as a
+  document. Order: the service's per-key work fence, then the session
   lease, then leaf leases (prompt queue, display tails); never hold two
   session leases at once. Deleting an environment's sessions takes each key's
   lease in turn, and inserts check the environment's deletion tombstone inside
@@ -268,6 +284,23 @@ from that.
   store (`LEASED_ROW_STORES`), since a row transaction alone would not serialize
   the read before it.
 
+  Projects keep their store lease for the same reason: a write can await between
+  its read and its commit (`addProject`'s caller-supplied validation), and the
+  uniqueness of a remote and a checkout path is decided against the other
+  projects. Inside it a writer commits one row (`saveProject`), or the rows an
+  arrangement changed, in one transaction. A one-field edit reads one row; only
+  an add, a new remote or a new checkout path reads the whole store, and those
+  still write one row. The store is in `LEASED_ROW_STORES` too. A gesture that
+  moves a project to the far end of a long list changes every row's `order`, so
+  it costs one row write each, slower than the whole-value diff it replaced
+  (about 6 ms against 3 ms at 500 projects).
+
+  Terminal sessions take no lease, because no writer awaits. Each mutation is one
+  transaction over only the rows it names: `updateStoreRow` for one session, and
+  the environment's rows by their owner column for a create, a reorder, a
+  disconnect or a removal, read inside that transaction so the order and the
+  per-environment cap are decided against what it commits next to.
+
   Looped and Multi Review workflows keep **one lease per store for writers**:
   a save awaits its environment check, and launch and the environment sweep
   scan every workflow. Each write is still a single-row `updateStoreRow` that
@@ -277,7 +310,10 @@ from that.
   lease. A lease held for a read is released before the caller acts on the
   answer, so it would cost two write transactions per check and protect
   nothing; the commit's own check is what stops a controller that lost its
-  lease.
+  lease. The same rule applies to the interaction journal's read
+  (`getAgentInteractionResolutionJournal`, whose prune only filters the copy it
+  returns) and to an agent mail backoff reset with nothing to reset, which checks
+  the shared read model first and takes the lease only when an entry matches.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the

@@ -18,6 +18,7 @@ import {
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
 import { useCoordinatorPanelData } from "./useCoordinatorPanelData";
 import { useCoordinatorWorkItems } from "./useCoordinatorWorkItems";
 import { CoordinatorWorkPanel } from "./CoordinatorWorkPanel";
@@ -131,15 +132,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   }, [projectId]);
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
-  const [pendingLaunch, setPendingLaunch] = useState<{
-    conversationId: string;
-    prompt: string;
-    modelId?: string;
-    reasoningId?: string;
-    fastMode: boolean;
-    mode?: "build" | "plan";
-    executionProfileId?: string;
-  } | null>(null);
 
   const runGit = useCallback(
     async (
@@ -343,33 +335,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     }
     return notes;
   }, [availablePlatforms, snapshot]);
-  const assignAgent = useCallback(
-    async (
-      conversationId: string,
-      platform: AgentPlatform,
-      launch: {
-        modelId?: string;
-        reasoningId?: string;
-        fastMode: boolean;
-        mode?: "build" | "plan";
-        executionProfileId?: string;
-      },
-      prompt: string,
-    ) => {
-      const next = await backend.assignCoordinatorConversationAgent(
-        projectId,
-        conversationId,
-        platform,
-      );
-      // Held only until the assigned tab mounts and consumes them. They are not
-      // durable state: the backend owns the conversation, and a reload before
-      // the first dispatch legitimately returns the user to the composer with
-      // their draft rather than replaying a prompt that was never sent.
-      setPendingLaunch({ conversationId, prompt, ...launch });
-      setSnapshot(next);
-    },
-    [projectId, setSnapshot],
-  );
   /*
    * The main coordinator reads this checkout, so a message sent while the
    * branch is behind its upstream is answered from older code. Before each
@@ -489,18 +454,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     },
     [projectId, refreshView, setGit],
   );
-  const startConversation = useCallback(
-    async (
-      conversation: { id: string; role?: string },
-      platform: AgentPlatform,
-      launch: Parameters<typeof assignAgent>[2],
-      prompt: string,
-    ) => {
-      if ((await confirmUpstreamMerge(conversation)) === false) return;
-      await assignAgent(conversation.id, platform, launch, prompt);
-    },
-    [assignAgent, confirmUpstreamMerge],
-  );
+  const { pendingLaunch, startConversation } = useCoordinatorLaunches({
+    projectId,
+    snapshot,
+    setSnapshot,
+    confirmUpstreamMerge,
+  });
   // The conversation in the focused group; the backend's selection until the
   // layout has caught up with it.
   const focusedId = layout ? focusedCoordinatorConversationId(layout) : null;
@@ -589,36 +548,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selectedTurnPhase = useNativeAgentProjectionStore((state) =>
     selectedSessionKey ? state.projections.get(selectedSessionKey)?.turn.phase : undefined,
   );
-  // The conversation's own tab id, never a reconstructed one: the workspace
-  // assigns it, and a key that does not match leaves the prompt held for good.
-  const launchConversation = pendingLaunch
-    ? snapshot?.workspace.conversations.find((item) => item.id === pendingLaunch.conversationId)
-    : undefined;
-  const launchSessionKey =
-    snapshot && launchConversation
-      ? createSessionKey(
-          coordinatorRuntimeId(snapshot.workspace.id, launchConversation.id),
-          launchConversation.tabId,
-        )
-      : null;
-  // Either half is enough: a turn that has started, or a message already in the
-  // transcript. A slow first read shows neither, which is precisely when the
-  // prompt still has to be held. Only phases a turn produces count: the first
-  // read of a new session is the backend's `recovering` placeholder while the
-  // provider mapping settles, and an `error` with no transcript is a failed
-  // start. Releasing on either dropped the prompt before it was ever sent.
-  const launchObserved = useNativeAgentProjectionStore((state) => {
-    if (!launchSessionKey) return false;
-    const projection = state.projections.get(launchSessionKey);
-    if (!projection) return false;
-    const phase = projection.turn.phase;
-    return (
-      phase === "running" ||
-      phase === "blocked" ||
-      phase === "cancelling" ||
-      projection.messages.length > 0
-    );
-  });
   const coordinatorTurnActive =
     selectedTurnPhase === "running" ||
     selectedTurnPhase === "blocked" ||
@@ -636,18 +565,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-
-  /*
-   * Held until the turn is observed, not until the tab has rendered once.
-   *
-   * The agent tab dispatches an opening prompt only after its first
-   * authoritative read, so dropping the prompt on the next render — which the
-   * snapshot poll triggers within a second or two — raced that read and left
-   * the text sitting in the composer unsent. Evidence of the turn is the
-   * authoritative signal, and re-dispatch is safe in the meantime because the
-   * opening submit carries a deterministic idempotency key.
-   */
-  if (pendingLaunch && launchObserved) setPendingLaunch(null);
 
   // A settled turn may have changed delegations: one coalesced conditional read.
   useEffect(() => {

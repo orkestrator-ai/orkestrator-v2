@@ -32,3 +32,13 @@ so Chromium's start-up cost is paid there, and gives each case a 30 s budget.
 No assertion was changed. The timeout could not be reproduced locally: with
 32 busy-loop processes on a 16-core host, both the old and new file passed
 3 of 3 runs. Mark this resolved once CI on that change shows the file green.
+
+## Sub-agent model setting — 2026-11-04
+
+Recurred in `mise run test:logged -- --name full-test -- mise run test` on branch
+`sub-agent-models-ed8b12224ab5-r1`, which does not touch this test or its
+fixture: `in-page deadlines > (unnamed)` failed at 5001.58 ms (root group 3529
+pass, 1 fail, 860.9 s) with the host at load average 83–96. Artifact:
+`orkestrator-test-run.z5S1lI`. `bun test
+./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1` passed
+the unchanged file twice alone (5.4 s and 5.6 s).

@@ -193,6 +193,23 @@ describe("rehydrateSubagentParts", () => {
     expect(row.parts.some((part) => part.content === "Look around")).toBe(false);
   });
 
+  test("labels the call with the model its subagent's responses reported", async () => {
+    const messages = rootTranscript();
+    const call = () =>
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "toolu_agent");
+    expect(call()?.subagentModelId).toBeUndefined();
+    await rehydrateSubagentParts(
+      {
+        listSubagents: mock(async () => ["agent-1"]),
+        getSubagentMessages: mock(async () => subagent("toolu_agent", "one")),
+      },
+      "sdk-1",
+      "/w",
+      messages,
+    );
+    expect(call()?.subagentModelId).toBe("claude-test");
+  });
+
   test("follows a nested subagent into its parent's parts", async () => {
     const messages = rootTranscript();
     const outer = subagent("toolu_agent", "outer");

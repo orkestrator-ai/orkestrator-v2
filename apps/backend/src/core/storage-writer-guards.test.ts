@@ -31,8 +31,9 @@ describe("StorageService store writers", () => {
     // Leased stores, including one helper reached from many callers in
     // several repositories and a store held under another store's lease.
     expect(stores.get("kanbanFile")).toMatchObject({ kind: "whole", leases: ["kanbanFile"] });
+    // Row writes, every one of them still under the environment lease.
     expect(stores.get("environmentsFile")).toMatchObject({
-      kind: "whole",
+      kind: "transactional",
       leases: ["environmentsFile"],
     });
     expect(stores.get("environmentsFile")!.paths).toBeGreaterThan(10);
@@ -107,6 +108,40 @@ describe("StorageService store writers", () => {
       expect.arrayContaining([expect.objectContaining({ keyed: true })]),
     );
     expect(result.violations.join("\n")).toContain("recordNativeAgentSessionResumeIdentity");
+  });
+
+  test("an environment row write outside the environment lease is refused", () => {
+    const sources = readStorageSources().map((source) => ({
+      ...source,
+      source: source.source
+        .replace(
+          `return this.enqueueEnvironmentMutation(async () => {
+      const environment = await this.requireEnvironment(environmentId);
+      const startupSession = environment.startupAgentSession;`,
+          `return (async () => {
+      const environment = await this.requireEnvironment(environmentId);
+      const startupSession = environment.startupAgentSession;`,
+        )
+        .replace(
+          `this.saveEnvironment(environment);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  async recordEnvironmentActivity(`,
+          `this.saveEnvironment(environment);
+      this.context.changes.announce("environment", environmentId, environment.projectId);
+      return environment;
+    })();
+  }
+
+  async recordEnvironmentActivity(`,
+        ),
+    }));
+    expect(sources.some((source) => source.source.includes("return (async () => {"))).toBe(true);
+    const result = analyzeStorageWriters(sources, { rootClass: "StorageService" });
+    expect(result.violations.join("\n")).toContain("acknowledgeStartupAgentSession");
   });
 
   test("the facade's area fields make their picked members entry points", () => {

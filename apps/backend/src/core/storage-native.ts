@@ -1170,8 +1170,7 @@ export class NativeAgentSessionsRepository {
       throw new Error(`${label} environment ID must not be blank`);
     }
     return this.repos.projects.enqueueEnvironmentMutation(async () => {
-      const environments = await this.repos.projects.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
+      const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment) {
         throw new Error(`${label} environment not found: ${environmentId}`);
       }

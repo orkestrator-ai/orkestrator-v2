@@ -47,6 +47,11 @@ export class ChangeResourcePublisher implements ProjectionAnnouncer {
     });
   }
 
+  /** Asks whoever shows a resource to read it again; nobody showing it ignores this. */
+  reset(resourceKey: string): void {
+    this.send({ kind: "reset", resourceKey, ownerGeneration: this.projections.ownerGeneration });
+  }
+
   /** Move committed outbox rows into pending announcements. */
   drainOutbox(): number {
     let drained = 0;

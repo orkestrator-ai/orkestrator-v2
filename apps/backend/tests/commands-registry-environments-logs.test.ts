@@ -21,7 +21,7 @@ describe("log storage commands", () => {
 
     await expect(
       commands.get("get_log_storage_stats")?.({}, logStorageContext(logDirectory)),
-    ).resolves.toEqual({ totalBytes: 10, fileCount: 2 });
+    ).resolves.toEqual({ totalBytes: 10, fileCount: 2, essentialBytes: 0, essentialFileCount: 0 });
   });
 
   test("reports zero for a log directory that was never created", async () => {
@@ -30,7 +30,7 @@ describe("log storage commands", () => {
 
     await expect(
       commands.get("get_log_storage_stats")?.({}, logStorageContext(path.join(dataDir, "logs"))),
-    ).resolves.toEqual({ totalBytes: 0, fileCount: 0 });
+    ).resolves.toEqual({ totalBytes: 0, fileCount: 0, essentialBytes: 0, essentialFileCount: 0 });
   });
 
   test("deletes every stored log and returns the emptied stats", async () => {
@@ -43,7 +43,7 @@ describe("log storage commands", () => {
 
     await expect(
       commands.get("cleanup_logs")?.({}, logStorageContext(logDirectory)),
-    ).resolves.toEqual({ totalBytes: 0, fileCount: 0 });
+    ).resolves.toEqual({ totalBytes: 0, fileCount: 0, essentialBytes: 0, essentialFileCount: 0 });
     expect(await fs.readdir(logDirectory)).toEqual([]);
   });
 

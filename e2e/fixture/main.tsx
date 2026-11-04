@@ -1,3 +1,4 @@
+import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
@@ -171,6 +172,9 @@ const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
 
+const PipelineWorkerMailFixture = lazy(async () => ({
+  default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -185,6 +189,9 @@ const SetupRecoveryFixture = lazy(async () => ({
   default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
+const AutoMergeErrorFixture = lazy(async () => ({
+  default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
+}));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
 }));
@@ -1858,6 +1865,13 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/pipeline-worker-mail") {
+    return (
+      <Suspense fallback={null}>
+        <PipelineWorkerMailFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/coordinator-activity") {
     return (
       <Suspense fallback={null}>
@@ -1901,6 +1915,7 @@ function fixtureForPath() {
       </Suspense>
     );
   }
+  if (window.location.pathname === "/sidebar-motion") return <SidebarMotionFixture />;
   if (window.location.pathname === "/sidebar-drag") {
     return (
       <Suspense fallback={null}>
@@ -1977,6 +1992,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <SidebarActivityProbeFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/auto-merge-error") {
+    return (
+      <Suspense fallback={null}>
+        <AutoMergeErrorFixture />
       </Suspense>
     );
   }

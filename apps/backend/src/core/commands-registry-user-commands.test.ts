@@ -4,6 +4,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
+import { resolveLocalShellPath } from "./commands-terminal.js";
+import { lowPriorityCommand } from "./process-priority.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { runCommand } from "./shell.js";
 import { BackendRuntime } from "./backend-runtime.js";
@@ -67,7 +69,9 @@ test("local launch uses the checkout and a login shell, holding move admission t
   });
   try {
     expect(() => launch.spawn("echo test")).toThrow("spawn boundary");
-    expect(spawn.mock.calls[0]?.[1]).toEqual(["-lc", "echo test"]);
+    const lowered = lowPriorityCommand(resolveLocalShellPath(), ["-lc", "echo test"]);
+    expect(spawn.mock.calls[0]?.[0]).toBe(lowered.command);
+    expect(spawn.mock.calls[0]?.[1]).toEqual(lowered.args);
     expect(spawn.mock.calls[0]?.[2]).toMatchObject({ cwd: root, cols: 120, rows: 40 });
     expect(spawn.mock.calls[0]?.[2]?.env?.PATH).toBeString();
   } finally {

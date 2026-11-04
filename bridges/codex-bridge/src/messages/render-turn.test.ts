@@ -1757,6 +1757,221 @@ describe("renderTurn", () => {
   });
 });
 
+describe("running items across publish ticks", () => {
+  const liveTurn = () =>
+    new TurnAccumulator({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      engineGeneration: 1,
+      assistantMessageId: "message-1",
+      startedAt: "2026-07-25T12:00:00.000Z",
+    });
+  const command = (id: string, status: "in_progress" | "completed" = "in_progress") =>
+    ({
+      id,
+      type: "command_execution",
+      command: `run ${id}`,
+      aggregated_output: status === "completed" ? `done ${id}` : "",
+      status,
+    }) as Parameters<TurnAccumulator["onItemStarted"]>[0];
+  const mcp = (id: string) =>
+    ({
+      id,
+      type: "mcp_tool_call",
+      server: "docs",
+      tool: "search",
+      arguments: { query: "events" },
+      status: "in_progress",
+    }) as Parameters<TurnAccumulator["onItemStarted"]>[0];
+  const renderWith = (
+    accumulator: TurnAccumulator,
+    state: ReturnType<typeof createTurnRenderState>,
+  ) =>
+    renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [],
+    });
+
+  test("an item that did not change keeps its part objects, progress line included", async () => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"), 1_000);
+    accumulator.onItemStarted(mcp("m1"), 2_000);
+    accumulator.onItemProgress("m1", "Reading");
+    const state = createTurnRenderState();
+
+    const first = await renderWith(accumulator, state);
+    const second = await renderWith(accumulator, state);
+
+    expect(second.parts).toHaveLength(3);
+    second.parts.forEach((part, index) => expect(part).toBe(first.parts[index]!));
+  });
+
+  test("only the item that moved gets new parts", async () => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"));
+    accumulator.onItemStarted(command("c2"));
+    accumulator.onItemStarted(mcp("m1"));
+    accumulator.onItemProgress("m1", "Reading");
+    const state = createTurnRenderState();
+    const first = await renderWith(accumulator, state);
+
+    accumulator.onCommandOutputDelta("c2", "partial");
+    const second = await renderWith(accumulator, state);
+
+    expect(second.parts[0]).toBe(first.parts[0]!);
+    expect(second.parts[1]).not.toBe(first.parts[1]!);
+    expect(second.parts[1]).toMatchObject({ toolUseId: "c2", toolOutput: "partial" });
+    expect(second.parts[2]).toBe(first.parts[2]!);
+    expect(second.parts[3]).toBe(first.parts[3]!);
+  });
+
+  test.each([
+    [
+      "a progress line",
+      (accumulator: TurnAccumulator) => accumulator.onItemProgress("c1", "Still going"),
+      { toolUseId: "c1", content: "Still going" },
+    ],
+    [
+      "an updated item",
+      (accumulator: TurnAccumulator) =>
+        accumulator.onItemUpdated({
+          ...command("c1"),
+          command: "run renamed",
+        } as Parameters<TurnAccumulator["onItemUpdated"]>[0]),
+      { toolUseId: "c1", content: "run renamed" },
+    ],
+    [
+      "a measurement",
+      (accumulator: TurnAccumulator) =>
+        accumulator.onCommandChanges("c1", { additions: 1, deletions: 2, files: [] } as never),
+      { toolUseId: "c1", commandChanges: { additions: 1, deletions: 2, files: [] } },
+    ],
+  ] as const)("%s reaches a running item's parts", async (_name, change, expected) => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"));
+    const state = createTurnRenderState();
+    await renderWith(accumulator, state);
+
+    change(accumulator);
+    const { parts } = await renderWith(accumulator, state);
+
+    expect(parts).toEqual(
+      expect.arrayContaining([expect.objectContaining(expected as Record<string, unknown>)]),
+    );
+  });
+
+  test("the turn ending shows a raw patch a running render held back", async () => {
+    const accumulator = liveTurn();
+    accumulator.onDynamicToolStarted({
+      id: "patch-1",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: { input: "*** Begin Patch\n*** End Patch" },
+      content_items: [],
+      status: "in_progress",
+    } as Parameters<TurnAccumulator["onDynamicToolStarted"]>[0]);
+    const state = createTurnRenderState();
+    expect((await renderWith(accumulator, state)).parts).toEqual([]);
+
+    accumulator.complete("completed");
+
+    const { parts } = await renderWith(accumulator, state);
+    expect(parts).toMatchObject([{ toolUseId: "patch-1" }]);
+  });
+
+  test("an item settling leaves the running cache for the completed one", async () => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"));
+    accumulator.onItemProgress("c1", "Going");
+    const state = createTurnRenderState();
+    await renderWith(accumulator, state);
+    expect(state.runningItemParts.size).toBe(1);
+
+    accumulator.onItemCompleted(command("c1", "completed"));
+    const { parts } = await renderWith(accumulator, state);
+
+    expect(parts).toMatchObject([{ toolUseId: "c1", toolOutput: "done c1", toolState: "success" }]);
+    expect(state.runningItemParts.size).toBe(0);
+    expect(state.completedItemParts.has("c1")).toBe(true);
+  });
+
+  test("an item that leaves the row leaves the cache", async () => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"));
+    const state = createTurnRenderState();
+    await renderWith(accumulator, state);
+
+    accumulator.items.delete("c1");
+    accumulator.itemOrder.length = 0;
+    await renderWith(accumulator, state);
+
+    expect(state.runningItemParts.size).toBe(0);
+  });
+
+  test("a delta landing while a render is awaited is not cached away", async () => {
+    const accumulator = liveTurn();
+    accumulator.onItemStarted(command("c1"));
+    accumulator.onItemStarted(command("c2"));
+    const state = createTurnRenderState();
+
+    const rendering = renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      skipSubagentProbe: true,
+    });
+    accumulator.onCommandOutputDelta("c2", "late");
+    await rendering;
+
+    const { parts } = await renderWith(accumulator, state);
+    expect(parts[1]).toMatchObject({ toolUseId: "c2", toolOutput: "late" });
+  });
+
+  test("a kept state renders exactly what a fresh one does", async () => {
+    let seed = 7;
+    const random = (limit: number) => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed % limit;
+    };
+    const accumulator = liveTurn();
+    const kept = createTurnRenderState();
+    const running: string[] = [];
+    for (let step = 0; step < 300; step += 1) {
+      if (running.length === 0 || random(10) === 0) {
+        running.push(`c${step}`);
+        accumulator.onItemStarted(command(`c${step}`), 1_000 + step);
+      }
+      const id = running[random(running.length)]!;
+      switch (random(6)) {
+        case 0:
+          accumulator.onCommandOutputDelta(id, `delta ${step}\n`);
+          break;
+        case 1:
+          accumulator.onItemProgress(id, `progress ${step}`);
+          break;
+        case 2:
+          accumulator.onItemCompleted(command(id, "completed"), 2_000 + step);
+          running.splice(running.indexOf(id), 1);
+          break;
+        case 3:
+          accumulator.onTextDelta(`text-${random(2)}`, `word ${step} `);
+          break;
+        case 4:
+          accumulator.onReasoningDelta("thinking", `idea ${step} `, "summary", 0);
+          break;
+        default:
+          // A tick with nothing new.
+          break;
+      }
+      const incremental = await renderWith(accumulator, kept);
+      const fresh = await renderWith(accumulator, createTurnRenderState());
+      expect(incremental).toEqual(fresh);
+    }
+  });
+});
+
 describe("sub-agent cards across a turn's rows", () => {
   const spawn = {
     id: "spawn",

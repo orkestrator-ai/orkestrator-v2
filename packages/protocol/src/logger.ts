@@ -6,6 +6,7 @@ import {
   type LogErrorDetails,
   type SafeLogError,
 } from "./log-error.js";
+import { hasEssentialEvents, isEssentialEntry } from "./log-essential.js";
 import { LOG_VOCABULARY, type LogAreaSpec, type ThrottleLogEvent } from "./log-vocabulary/index.js";
 
 /**
@@ -117,6 +118,11 @@ export interface LogRecord {
   readonly area: string;
   readonly event: string;
   readonly fields?: Readonly<Record<string, LogWireValue>>;
+  /**
+   * Set on an essential entry its source's level filtered out: it crosses a relay
+   * only to reach the essential log, and is not written anywhere else.
+   */
+  readonly essentialOnly?: true;
 }
 
 /** The console method an output line uses. `log` is unstructured stdout. */
@@ -131,6 +137,9 @@ export interface LogOutput {
 
 export type LogSink = (output: LogOutput) => void;
 
+/** Takes every entry the essential log may want. It must not throw or wait. */
+export type EssentialLogSink = (record: LogRecord) => void;
+
 export interface LoggerConfig {
   /** Applies to every area without its own entry in `areaLevels`. */
   level: LogLevel;
@@ -138,6 +147,13 @@ export interface LoggerConfig {
   areaLevels: Readonly<Record<string, LogLevel>>;
   format: LogFormat;
   sink: LogSink;
+  /** Set in the one process that owns the essential log file; see `essential-log.ts`. */
+  essentialSink: EssentialLogSink | null;
+  /**
+   * Whether this process's output is read as records, so an essential entry the
+   * level filtered out can still cross to the process that owns the file.
+   */
+  relayEssential: boolean;
 }
 
 /** Every JSON line starts with this, so a reader can skip others without parsing. */
@@ -195,6 +211,8 @@ const DEFAULT_CONFIG: LoggerConfig = {
   areaLevels: {},
   format: "text",
   sink: consoleSink,
+  essentialSink: null,
+  relayEssential: false,
 };
 
 let config: LoggerConfig = DEFAULT_CONFIG;
@@ -336,17 +354,47 @@ function renderJson(record: LogRecord): string {
   return escapeLogLine(JSON.stringify(record));
 }
 
+function offerEssential(record: LogRecord): void {
+  if (!config.essentialSink || !isEssentialEntry(record.area, record.event, record.level)) return;
+  try {
+    config.essentialSink(record);
+  } catch {
+    // Logging never owns the operation being logged.
+  }
+}
+
 function deliver(record: LogRecord): boolean {
+  let delivered = true;
   try {
     config.sink({
       method: OUTPUT_METHOD[record.level],
       line: config.format === "json" ? renderJson(record) : renderText(record),
       record,
     });
-    return true;
   } catch {
     // Logging never owns the operation being logged.
-    return false;
+    delivered = false;
+  }
+  offerEssential(record);
+  return delivered;
+}
+
+/**
+ * An essential entry the level filtered out. Levels decide what the normal log
+ * holds, so it goes only to the essential log: straight in where this process
+ * owns the file, and otherwise marked and relayed to the process that does.
+ */
+function deliverEssentialOnly(record: LogRecord): void {
+  if (config.essentialSink) {
+    offerEssential(record);
+    return;
+  }
+  if (!config.relayEssential) return;
+  const marked: LogRecord = { ...record, essentialOnly: true };
+  try {
+    config.sink({ method: OUTPUT_METHOD[record.level], line: renderJson(marked), record: marked });
+  } catch {
+    // Logging never owns the operation being logged.
   }
 }
 
@@ -593,12 +641,18 @@ export function tryWriteLog<Area extends LogArea>(
   event: LogEventOf<Area>,
   fields?: LogFieldsInput,
 ): boolean {
-  if (LEVEL_RANK[level] > thresholdRank(area)) return false;
+  if (LEVEL_RANK[level] > thresholdRank(area)) {
+    if (isEssentialEntry(area, event, level)) {
+      deliverEssentialOnly(buildRecord(level, area, event, resolveFields(fields)));
+    }
+    return false;
+  }
   return deliverEvent(level, area, event, resolveFields(fields));
 }
 
 export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventOf<Area>> {
   const spec = areaSpec(area);
+  const mayHoldEssential = hasEssentialEvents(area);
   let seenGeneration = -1;
   let rank = 0;
   const enabled = (level: LogLevel): boolean => {
@@ -615,8 +669,17 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
   ): void => {
     deliverEvent(level, area, event, resolved);
   };
+  // A level cannot switch an essential event off. An area with none pays one
+  // more boolean on a filtered call, so a hot `debug` site still builds nothing.
+  const writeFiltered = (level: LogLevel, event: string, fields?: LogFieldsInput): void => {
+    if (!mayHoldEssential || !isEssentialEntry(area, event, level)) return;
+    deliverEssentialOnly(buildRecord(level, area, event, resolveFields(fields)));
+  };
   const write = (level: LogLevel, event: string, fields?: LogFieldsInput): void => {
-    if (!enabled(level)) return;
+    if (!enabled(level)) {
+      writeFiltered(level, event, fields);
+      return;
+    }
     writeResolved(level, event, resolveFields(fields));
   };
   return {
@@ -627,8 +690,12 @@ export function createLogger<Area extends LogArea>(area: Area): Logger<LogEventO
     trace: (event, fields) => write("trace", event, fields),
     throttled: (level, event, options) => {
       syncThrottleLevels();
-      // While the level is off a call counts nothing and builds nothing.
-      if (!enabled(level)) return;
+      // While the level is off a call counts nothing and builds nothing, except
+      // for an essential event, whose flood the essential log bounds itself.
+      if (!enabled(level)) {
+        writeFiltered(level, event, options.fields);
+        return;
+      }
       if (
         !spec ||
         !Object.hasOwn(spec.events, event) ||
@@ -700,7 +767,19 @@ export function parseLogRecordLine(line: string): LogRecord | null {
           spec.maxStringChars ?? MAX_FIELD_CHARS,
         )
       : undefined;
-  return { orklog: 1, ts, level, area, event, ...(clean ? { fields: clean } : {}) };
+  return {
+    orklog: 1,
+    ts,
+    level,
+    area,
+    event,
+    ...(clean ? { fields: clean } : {}),
+    // Honoured only for what the essential log takes, so an imitation can hide
+    // nothing else from the normal log.
+    ...(parsed.essentialOnly === true && isEssentialEntry(area, event, level)
+      ? { essentialOnly: true as const }
+      : {}),
+  };
 }
 
 function reviveWireErrors(fields: Record<string, unknown>): Record<string, unknown> {
@@ -718,7 +797,8 @@ function reviveWireErrors(fields: Record<string, unknown>): Record<string, unkno
  * lose what the source chose to emit.
  */
 export function emitLogRecord(record: LogRecord): void {
-  deliver(record);
+  if (record.essentialOnly) deliverEssentialOnly(record);
+  else deliver(record);
 }
 
 /**

@@ -154,3 +154,38 @@ pipelines' Docker work.
 - The Electron suite was not rerun: those specs open windows on the host
   display, which on beelink is the user's live desktop. Follow-up is task 5
   of [to-do 4340](../../../todo/agent-engines/4340-suborks-live-qualification.md).
+
+## 2026-11-04: the to-do 2181 qualification, and a measured way past it
+
+The isolated browser run for to-do
+[2181](../../../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md)
+(44 passed, 6 failed, 94 skipped, at `b16b51da1`) lost four cases to this, each
+ending on the "Orkestrator couldn't connect" screen, which is what a browser client
+shows when its modules fail to load. Their traces held these counts of
+`net::ERR_NETWORK_CHANGED`: `headless-profile.spec.ts` 33,
+`design-canvas.spec.ts:16` 82, `graph-designer.spec.ts:239` 119 and
+`graph-run-view.spec.ts:48` 133. `docker network ls` afterwards showed a network from
+another owner created at 01:33:45 UTC, about a second after the first aborts in the
+graph-designer case; the profile's own reset removed no networks. The other two failures in that run had no such requests
+and were spec problems; see the to-do.
+
+Reproduced on beelink at load average about 1, on a `--headless --fixture` profile,
+with `headless-profile.spec.ts --repeat-each=3 --workers=1`:
+
+- A `docker run --rm` of a labelled container every 0.3 s (veth churn on the default
+  bridge, about 75 link and address events per second by `ip monitor`): the previous
+  spec passed 3 of 3 with no aborts. Veth churn alone does not reproduce this.
+- `docker network create` and `rm` of a labelled network every 0.3 s, with an explicit
+  `--subnet` so the daemon's default address pools were not used: the previous spec
+  failed 3 of 3, with 127, 12 and 96 aborts in its traces.
+- The same network churn with the spec's module requests going through
+  `route.fetch()`: passed 3 of 3 at about 2.7 s each. The previous spec took about
+  1.8 s each when nothing aborted it.
+
+`headless-profile.spec.ts` now does this, because that case is about what the profile
+serves. No other spec changed: fetching modules outside Chromium changes what a real
+browser journey exercises, so the choice for the whole suite is task 3 of to-do
+[4222](../../../todo/cross-cutting/4222-browser-failures-left-after-headless-qualification.md).
+
+A run's output now names the failed cases whose trace has this error
+(`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.

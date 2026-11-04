@@ -10,6 +10,7 @@ import {
   MAX_SUMMARY_ENVIRONMENTS_PER_PROJECT,
   MAX_SUMMARY_PROJECTS,
   NODE_SUMMARY_CHANGED_EVENT,
+  boundedText,
   NODE_SUMMARY_ENVIRONMENT_READ_ARGS,
   toNodeEnvironmentSummary,
   toNodeProjectSummary,
@@ -36,7 +37,8 @@ import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js
  * - Reads are fenced by the link epoch: a late answer from an older
  *   connection never applies.
  * - An unavailable node keeps its last-known summaries, labelled stale;
- *   last-known state survives a command-node restart.
+ *   last-known state survives a command-node restart. Its version does not:
+ *   that is read from the live link, so it is never reported stale.
  * - Summary reads are bounded and never fetch transcripts or content.
  * - Events keep summaries current; a re-read of every connected node every
  *   {@link SUMMARY_RECONCILE_MS} bounds how long any missed change (an event
@@ -48,6 +50,8 @@ import { NodeEventStream, type NodeEventTransport } from "./node-event-stream.js
 export interface ReadModelLink {
   readonly connected: boolean;
   readonly view: { epoch: number };
+  /** The hello of the active route, when connected. */
+  readonly hello?: { appVersion?: string } | null;
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
   transport(): NodeEventTransport | null;
 }
@@ -87,6 +91,8 @@ const REFRESH_DEBOUNCE_MS = 250;
 export const SUMMARY_RECONCILE_MS = 60_000;
 const PERSIST_DEBOUNCE_MS = 5_000;
 const MAX_PERSISTED_BYTES = 2 * 1024 * 1024;
+/** The hello's own bound on `appVersion`. */
+const MAX_NODE_VERSION_LENGTH = 64;
 
 interface NodeState {
   nodeId: BackendId;
@@ -104,6 +110,12 @@ interface NodeState {
   dirtyProjects: Set<string>;
   refreshTimer: ReturnType<typeof setTimeout> | null;
   lastRevision: number | null;
+}
+
+/** The version a node's current connection announced; a dropped link has none. */
+function connectedVersion(link: ReadModelLink | null): string | null {
+  if (!link?.connected) return null;
+  return boundedText(link.hello?.appVersion, MAX_NODE_VERSION_LENGTH) || null;
 }
 
 /** What clients see of one node's summaries, to skip announcing an unchanged re-read. */
@@ -225,6 +237,7 @@ export class NodeReadModel {
         nodeId: view.nodeId,
         view,
         available,
+        version: available ? connectedVersion(this.options.nodes.link(view.nodeId)) : null,
         freshness: state
           ? available
             ? state.freshness

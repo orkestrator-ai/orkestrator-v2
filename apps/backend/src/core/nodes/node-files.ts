@@ -1,3 +1,4 @@
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -5,6 +6,12 @@ import path from "node:path";
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
+import {
+  mailAttachmentSpoolDir,
+  sweepProjectHomeMailAttachments,
+  sweepStaleMailAttachmentBatches,
+} from "../mail-attachments.js";
+import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
@@ -28,7 +35,9 @@ export type NodeFileScope =
   | { environmentId: string }
   | { projectId: string }
   /** The staging area for an environment's seed files (deleted after setup). */
-  | { seedEnvironmentId: string };
+  | { seedEnvironmentId: string }
+  /** A batch of mailed images between a coordinator and where they land. */
+  | { mailAttachments: string };
 
 export function seedFilesDir(dataDir: string, environmentId: string): string {
   if (!/^[A-Za-z0-9_-][A-Za-z0-9_-]{0,199}$/.test(environmentId)) {
@@ -47,6 +56,9 @@ export function parseNodeFileScope(value: unknown): NodeFileScope {
   }
   if (record && typeof record.seedEnvironmentId === "string" && record.seedEnvironmentId) {
     return { seedEnvironmentId: record.seedEnvironmentId };
+  }
+  if (record && typeof record.mailAttachments === "string" && record.mailAttachments) {
+    return { mailAttachments: record.mailAttachments };
   }
   throw new Error("Expected a file scope: an environmentId, a projectId or a seedEnvironmentId.");
 }
@@ -67,6 +79,8 @@ export class NodeFiles {
     }
   >();
 
+  private readonly committingMailBatches = new Map<string, string>();
+
   private readonly envWrites = new Map<string, Promise<unknown>>();
 
   constructor(
@@ -74,8 +88,41 @@ export class NodeFiles {
     private readonly options: { uploadTtlMs?: number } = {},
   ) {}
 
+  /** Receiving-only nodes must also expire transfers abandoned before delivery. */
+  async sweepMailAttachments(): Promise<void> {
+    await sweepStaleMailAttachmentBatches(
+      this.storage.getDataDir(),
+      Date.now(),
+      (batch) =>
+        Array.from(this.committingMailBatches.values()).includes(batch) ||
+        Array.from(this.uploads.values()).some(
+          (upload) => "mailAttachments" in upload.scope && upload.scope.mailAttachments === batch,
+        ),
+    );
+    // A project home whose record is gone (a removed project, a deletion that
+    // stopped part-way) loses its images; a failed read keeps them.
+    const config = await this.storage.loadConfig();
+    await sweepProjectHomeMailAttachments(
+      this.storage.getDataDir(),
+      async (environmentId) => {
+        const environment = await this.storage.getEnvironment(environmentId).then(
+          (value) => value ?? null,
+          () => undefined,
+        );
+        return environment === undefined || isProjectHomeEnvironment(environment);
+      },
+      Date.now(),
+      normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays,
+    );
+  }
+
   /** The scope's root directory on this node. */
   async root(scope: NodeFileScope, options: { create?: boolean } = {}): Promise<string> {
+    if ("mailAttachments" in scope) {
+      const dir = mailAttachmentSpoolDir(this.storage.getDataDir(), scope.mailAttachments);
+      if (options.create) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    }
     if ("seedEnvironmentId" in scope) {
       const dir = seedFilesDir(this.storage.getDataDir(), scope.seedEnvironmentId);
       if (!(await this.storage.getEnvironment(scope.seedEnvironmentId))) {
@@ -282,6 +329,8 @@ export class NodeFiles {
     const upload = this.uploads.get(uploadId);
     if (!upload) throw new Error("That upload is not open.");
     this.uploads.delete(uploadId);
+    if ("mailAttachments" in upload.scope)
+      this.committingMailBatches.set(uploadId, upload.scope.mailAttachments);
     clearTimeout(upload.expiry);
     try {
       if ((await this.resolve(upload.scope, upload.relativePath, true)) !== upload.target) {
@@ -321,6 +370,7 @@ export class NodeFiles {
       }
       return { bytes: upload.written, sha256: actual };
     } finally {
+      this.committingMailBatches.delete(uploadId);
       await fs.rm(upload.temp, { force: true }).catch(() => undefined);
     }
   }

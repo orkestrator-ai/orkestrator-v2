@@ -15,6 +15,7 @@ import {
   isClientOnlyNativeMessage,
   isOptimisticNativeMessage,
   positionOptimisticNativeMessage,
+  presentPeerMailCarrierRow,
   splitPeerMailNativeMessageContent,
   SYSTEM_MESSAGE_PREFIX,
 } from "./client-only-messages";
@@ -122,6 +123,28 @@ describe("client-only optimistic messages", () => {
       ...overrides,
     };
   }
+
+  test("a carrier's attached images reach the tile by name and size, never by path", () => {
+    const [row] = createPeerMailNativeMessagesFromCarrier({
+      createdAt: "2026-11-04T00:00:00.000Z",
+      content: renderAgentMailCarrier(
+        mailMessage({
+          id: "mail-image",
+          attachments: [
+            {
+              name: "shot.png",
+              path: "/workspace/.orkestrator/mail-attachments/abc/shot.png",
+              mediaType: "image/png",
+              bytes: 2048,
+              sha256: "a".repeat(64),
+            },
+          ],
+        }),
+      ),
+    });
+    expect(row!.peerMail?.attachments).toEqual([{ name: "shot.png", bytes: 2048 }]);
+    expect(JSON.stringify(row!.peerMail)).not.toContain("mail-attachments");
+  });
 
   test("turns every carrier in a batched mail prompt into its own row", () => {
     const content = [
@@ -332,6 +355,78 @@ describe("client-only optimistic messages", () => {
     const [row] = createPeerMailNativeMessagesFromCarrier({ content, createdAt: "x" });
     expect(row!.peerMail?.kind).toBe("notice");
     expect(row!.peerMail?.notice).toBeUndefined();
+  });
+
+  test("recognises an envelope, not a message that names its tag", () => {
+    expect(isPeerMailCarrierContent(renderAgentMailCarrier(mailMessage({})))).toBe(true);
+    expect(
+      isPeerMailCarrierContent(
+        '<orkestrator-peer-message version="2"><orkestrator-peer-payload-json>{"future":true}',
+      ),
+    ).toBe(true);
+    expect(isPeerMailCarrierContent("What is <orkestrator-peer-message>?")).toBe(false);
+    expect(isPeerMailCarrierContent('<orkestrator-peer-message version="1"> is what I see')).toBe(
+      false,
+    );
+    expect(
+      isPeerMailCarrierContent(
+        '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json> is what I see',
+      ),
+    ).toBe(false);
+  });
+
+  test("does not throw on an address the mailbox helpers refuse", () => {
+    // Rows are built during render, so a throw here would take the transcript down.
+    const content =
+      '<orkestrator-peer-message version="1"><orkestrator-peer-payload-json>' +
+      JSON.stringify({
+        messageId: "mail-bad",
+        trust: "same-project",
+        body: "Report",
+        from: mailMessage({}).from,
+        to: { environmentId: "", tabId: "" },
+      }) +
+      "</orkestrator-peer-payload-json></orkestrator-peer-message>";
+    expect(createPeerMailNativeMessagesFromCarrier({ content, createdAt: "x" })).toEqual([]);
+  });
+
+  test("presents a stored row holding only carriers, or leaves it alone", () => {
+    const createdAt = "2026-08-28T10:00:00.000Z";
+    const good = renderAgentMailCarrier(mailMessage({ id: "mail-a" }));
+    const broken =
+      '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n{not json}\n' +
+      "</orkestrator-peer-payload-json>\n</orkestrator-peer-message>";
+
+    expect(
+      presentPeerMailCarrierRow({ id: "row", content: `${broken}\n\n${good}`, createdAt })?.map(
+        (row) => [row.id, row.role],
+      ),
+    ).toEqual([
+      ["system-peer-mail-unreadable:row:0", "system"],
+      ["peer-mail-mail-a", "system"],
+    ]);
+    // A notice is client-only too, so it never anchors a provider-row boundary.
+    expect(isClientOnlyNativeMessage({ id: "system-peer-mail-unreadable:row:0" })).toBe(true);
+    // A carrier cut off before its close tag is one unreadable message.
+    expect(
+      presentPeerMailCarrierRow({ id: "row", content: good.slice(0, 80), createdAt })?.map(
+        (row) => row.id,
+      ),
+    ).toEqual(["system-peer-mail-unreadable:row:0"]);
+    for (const content of ["ordinary prompt", `Look: ${good}`, "<orkestrator-peer-message>"]) {
+      expect(presentPeerMailCarrierRow({ id: "row", content, createdAt })).toBeNull();
+    }
+    // A person who pastes an envelope and adds a question keeps their question.
+    expect(
+      presentPeerMailCarrierRow({
+        id: "row",
+        content: `${good}\n\nLook at this`,
+        createdAt,
+      })?.map((row) => [row.id, row.role, row.content]),
+    ).toEqual([
+      ["peer-mail-mail-a", "system", expect.stringContaining("Report")],
+      ["row", "user", "Look at this"],
+    ]);
   });
 
   test("includes file parts for optimistic attachments", () => {

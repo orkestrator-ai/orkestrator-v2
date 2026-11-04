@@ -113,7 +113,7 @@ import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
   type BrowserPreviewCaptureEvent,
 } from "@orkestrator/protocol/browser-preview";
-import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
+import { registerSecondInstanceFocus } from "./single-instance.js";
 import {
   handleStartupFailure,
   registerQuitReopenRelaunch,
@@ -161,7 +161,9 @@ import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
   registerApplicationLoggingShutdown,
+  registerWillQuitHold,
 } from "./application-logging.js";
+import { claimDesktopLogging, exitWithEssentialLog } from "./essential-logging.js";
 import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
@@ -190,6 +192,7 @@ import { reportArtifactHostDiagnostics, reportMainThreadStall } from "./diagnost
 import { ARTIFACT_SHELL_SCHEME_PRIVILEGES } from "./artifact-host-shell.js";
 import { ARTIFACT_HOST_CHANNELS } from "@orkestrator/protocol/artifact-host-ipc";
 import { DesktopWindowContexts, emitToContents } from "./desktop-window-contexts.js";
+import { readLocalWindowGatewayTransport } from "./local-window-transport.js";
 import { installSocketTypeOfServiceGuard } from "./socket-tos-guard.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
@@ -248,8 +251,12 @@ protocol.registerSchemesAsPrivileged([ARTIFACT_SHELL_SCHEME_PRIVILEGES]);
 // Before the writer's first line. The backend's settings changes reach this
 // process through `applyStoredLogPolicy`, so none of this waits for a restart.
 applyLogDetail(readApplicationLogPolicy(app.getPath("userData")).detail);
+// Must follow the userData override and precede installing any persistent writer.
+// A rejected secondary launch continues module evaluation until app.quit settles.
+const { isPrimaryInstance, essentialLog } = claimDesktopLogging(app, app.getPath("userData"));
+const ESSENTIAL_LOG_STOP_WAIT_MS = 2_000;
 const applicationLogging =
-  runtimeFlavor === "production"
+  isPrimaryInstance && runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
     : null;
 
@@ -259,9 +266,6 @@ const liveLogPolicy = createLiveLogPolicy({
 });
 const applyStoredLogPolicy = liveLogPolicy.apply;
 app.on("will-quit", () => liveLogPolicy.dispose());
-
-// Must follow the `userData` override above: the lock is scoped to that path.
-const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let backend: BackendHttpClient | null = null;
 let nodeWorkspaceScopes: NodeWorkspaceScopes | null = null;
@@ -286,6 +290,8 @@ type DesktopWindowContext = {
    */
   portalScope: string | null;
   target: WindowWorkspaceTarget | null;
+  /** Local events and commands use the gateway directly; see `local-window-transport.ts`. */
+  localGatewayTransport?: boolean;
   /** A workspace realm: another node's workspace in a window's central region. */
   realm: {
     parentWebContentsId: number;
@@ -473,6 +479,16 @@ function controlScope(context: DesktopWindowContext): string {
 
 function emitToConnection(connectionId: string, event: string, payload: unknown): void {
   desktopWindows.emitToConnection(connectionId, event, payload);
+}
+
+/**
+ * Terminal output stays on main's local stream only while an open window takes
+ * it from there. With no window open nothing changes until the next one says.
+ */
+function syncLocalTerminalRelay(): void {
+  if (windowContexts.size > 0) {
+    backend?.setTerminalOutputRelay(desktopWindows.needsLocalTerminalRelay());
+  }
 }
 
 /** Machine state changes arrive in bursts (connect, hello, stream open); coalesce them. */
@@ -899,6 +915,14 @@ async function createWindow(connectionId?: string): Promise<void> {
   const activeConnectionId = activeConnection?.id ?? LOCAL_CONNECTION_ID;
   const useLegacyDefaultSession = !legacyRendererSessionClaimed;
   legacyRendererSessionClaimed = true;
+  // Read per window at creation: a window already open keeps its transport, so
+  // one that misbehaves can be left for a new one on the other transport.
+  const localGatewayTransport =
+    backend !== null && readLocalWindowGatewayTransport(app.getPath("userData"));
+  const localRequestAuthorization = (url: string): string | null =>
+    localGatewayTransport && connectionManager?.getConnectionId(scope) === LOCAL_CONNECTION_ID
+      ? (backend?.directTransportAuthorization(url) ?? null)
+      : null;
   let registered = false;
   const allocation: { window: BrowserWindow | null } = { window: null };
   try {
@@ -919,7 +943,12 @@ async function createWindow(connectionId?: string): Promise<void> {
           emitToWindow(createdWindow, event, payload);
         installRemoteGatewayRequestAuth(
           createdWindow.webContents.session.webRequest,
-          (url) => connectionManager?.getRendererRequestAuthorization(url, scope) ?? null,
+          (url) =>
+            connectionManager?.getRendererRequestAuthorization(url, scope) ??
+            localRequestAuthorization(url),
+          {
+            requestOrigin: (url) => (localRequestAuthorization(url) ? new URL(url).origin : null),
+          },
         );
         const browserPreviewRuntime = createWindowBrowserPreviews(
           createdWindow,
@@ -941,8 +970,10 @@ async function createWindow(connectionId?: string): Promise<void> {
           portalScope: null,
           target: null,
           realm: null,
+          localGatewayTransport,
         });
         registered = true;
+        syncLocalTerminalRelay();
         createMenu();
         createdWindow.on("page-title-updated", (event) => {
           event.preventDefault();
@@ -963,7 +994,10 @@ async function createWindow(connectionId?: string): Promise<void> {
           desktopWindows.lastFocusedWindowId = webContentsId;
           createMenu();
         });
-        createdWindow.once("closed", windowClosed);
+        createdWindow.once("closed", () => {
+          windowClosed();
+          syncLocalTerminalRelay();
+        });
       },
     });
     windowAllClosedQuit.markMainWindowCreated();
@@ -1210,7 +1244,7 @@ function registerIpc(): void {
     createClipboardItem: (items) => new ClipboardItem(items),
     shellApi: shell,
     appApi: {
-      exit: (code) => app.exit(code),
+      exit: (code) => exitWithEssentialLog(app, essentialLog, code),
       quit: () => app.quit(),
       relaunch: () => quitReopen.scheduleRelaunch(),
     },
@@ -1311,8 +1345,13 @@ function registerIpc(): void {
     gatewaySnapshot: (event) => {
       const context = contextForEvent(event);
       const identity = manager().getBackendIdentity(context.scope);
+      const onLocalGateway =
+        context.localGatewayTransport === true &&
+        identity.connectionId === LOCAL_CONNECTION_ID &&
+        backend !== null;
       return {
         baseUrl: manager().getGatewayBaseUrl(context.scope),
+        ...(onLocalGateway && backend ? { localGatewayBaseUrl: backend.origin } : {}),
         connectionId: identity.connectionId,
         backendId: identity.backendId,
         legacyOrigin: identity.legacyOrigin,
@@ -1492,6 +1531,9 @@ async function startApplication(): Promise<void> {
       strictDockerOwner: runtimeFlavor === "agent-test",
       strictGatewayPort: runtimeFlavor === "agent-test",
       credentialSources: runtimeProfile?.credentialSources,
+      // Before any window exists, so a launch with the setting on never opens
+      // the unfiltered stream only to replace it for the first window.
+      relayTerminalOutput: !readLocalWindowGatewayTransport(dataDir),
       onLogPolicyChanged: applyStoredLogPolicy,
       onEvent: (event, payload) => {
         hostUpdates?.handleEvent(event, payload);
@@ -1557,7 +1599,8 @@ async function startApplication(): Promise<void> {
       : null,
     sshTunnels,
     onEvent: () => undefined,
-    onConnectionEvent: emitToConnection,
+    onConnectionEvent: (connectionId, event, payload) =>
+      desktopWindows.relayBackendEvent(connectionId, event, payload),
     onStateChange: scheduleConnectionListPublish,
   });
   await connectionManager.initialize();
@@ -1692,3 +1735,13 @@ registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
   settled: backendShutdown.stopped,
   timeoutMs: BACKEND_EXIT_WAIT_MS,
 });
+if (essentialLog) {
+  registerWillQuitHold(
+    app,
+    async () => {
+      await backendShutdown.stopped().catch(() => undefined);
+      await essentialLog.stop();
+    },
+    BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
+  );
+}

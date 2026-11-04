@@ -21,6 +21,7 @@ import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
+import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { transcriptMediaPins, TRANSCRIPT_MEDIA_PINS_DIRECTORY } from "./transcript-media-pins.js";
 
 afterEach(() => closeEnvironmentCleanupStorage());
@@ -376,6 +377,26 @@ describe("delete_environment durable child-state cleanup", () => {
         await invokeDelete();
         expect(purge).toHaveBeenCalledWith("e1");
         expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
+  test("removes the images mailed to a project home, and leaves its checkout alone", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        const checkout = path.join(storage.getDataDir(), "checkout");
+        await fs.mkdir(checkout);
+        await storage.addEnvironment(environment({ projectHome: true, worktreePath: checkout }));
+      },
+      async (invokeDelete, storage) => {
+        const images = projectHomeMailAttachmentDir(storage.getDataDir(), "e1", "a".repeat(32));
+        await fs.mkdir(images, { recursive: true });
+        await fs.writeFile(path.join(images, "shot.png"), "image");
+
+        await invokeDelete();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        expect(await exists(projectHomeMailAttachmentDir(storage.getDataDir(), "e1"))).toBe(false);
+        expect(await exists(path.join(storage.getDataDir(), "checkout"))).toBe(true);
       },
     );
   });

@@ -1,7 +1,7 @@
 # Browser smoke terminal history omits the completion marker
 
 - **ID:** 2401
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-01
 - **Test:** `real browser gateway exercises an authoritative local environment`
 - **File:** `e2e/agent-testing/browser-gateway.spec.ts:634`
@@ -30,8 +30,9 @@ Worktree `subork-agent-command-19d44fc3d0c3-r1`, isolated profile
 `agent-subork-review-fixes`, one Chromium worker. The unchanged owning case
 failed at line 624 twice: the snapshot poll saw `background-done`, but the
 following history page did not. Runs took 8.2 s and 9.0 s, each 0 passed / 1
-failed. This recurrence remains unresolved; neither terminal read path was
-changed by the subork repairs.
+failed. This recurrence was unresolved during the subork review; neither terminal
+read path was changed by those repairs. The upstream root cause and spec fix
+are recorded below.
 
 Command: `ORKESTRATOR_AGENT_TEST_PROFILE=agent-subork-review-fixes ORKESTRATOR_AGENT_TEST_RUN_ID=subork-review-fixes-smoke mise run test:logged -- --name repair-browser-smoke -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep 'real browser gateway exercises an authoritative local environment' --workers=1`.
 
@@ -39,3 +40,12 @@ Evidence: `/tmp/orkestrator-test-run.70AlOh/repair-browser-smoke.log.gz` and
 `/tmp/orkestrator-test-run.bbtANS/repair-browser-smoke.log.gz`. The spec, assertion
 and terminal implementation were left unchanged. This is an observation of the
 existing case, not a claim that an isolated rerun passed this time.
+
+## Root cause and fix, 2026-11-04
+
+Not a read-path difference: the archive dropped the line. The spec prints 1,100 lines, and `enqueueHistoryRecord` admits 256 queued records per session (`TERMINAL_HISTORY_PENDING_RECORDS`), draining on a 250 ms timer. When the burst outruns that, the later lines are dropped and the session reports `historyGap`. The state snapshot is unaffected, which is why it held the marker. So the case passed only when the burst happened to be slow enough.
+
+- **Evidence:** `output/agent-testing/qa-browser-08cf3c58-15c/browser/artifacts/browser-gateway-real-brows-5ed26-oritative-local-environment/trace.zip`, from `mise run test:agent:browser:isolated` at `0f586e738`. The snapshot at 23:51:00.996 held the marker; the page 17 ms later had 258 rows, `historyGap: true` and no marker.
+- **Fix:** the spec keeps the strict check when the page reports no gap. It then prints a second line after that read, which drained the queue, and requires that line in the history whether or not the burst overflowed. The marker is printed with `printf 'background-%s\n' done`, so the echoed command can no longer satisfy the snapshot poll.
+- **Verification:** `real browser gateway exercises…` passed 3 of 3 with `--repeat-each=3 --workers=1`, alongside the other two cases in [0901](../web-ui/0901-cli-ui-fixture-project-hydration.md). Those runs do not show which branch of the check each one took.
+- **Follow-up:** the bound itself is to-do [4223](../../../todo/cross-cutting/4223-terminal-history-drops-burst-output.md). The blank page in the 2026-11-02 recurrence above was not checked against 0901's cause.

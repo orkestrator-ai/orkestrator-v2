@@ -25,6 +25,12 @@ export const AUTO_SWITCH_THRESHOLD_PERCENT = 98;
 export const WEEKLY_LIMIT_USED_UP_PERCENT = 100;
 /** Resends of one stopped turn. Each needs another confirmed used-up account. */
 export const MAX_USAGE_LIMIT_RESENDS = 3;
+/**
+ * For `soonest-reset` alone: another login has to reset more than this much
+ * sooner to be worth a move. Applied in `decideAutoSwitch`, not when ranking,
+ * because a tolerance in a comparator is not transitive.
+ */
+export const AUTO_SWITCH_RESET_TOLERANCE_MS = 60 * 60_000;
 
 const WEEK_MINUTES = 7 * 24 * 60;
 const MAX_TICKED_EMAILS = 64;
@@ -294,8 +300,15 @@ function hasRoom(reading: WeeklyLimitReading, active: boolean): boolean {
   return active || reading.resetsAt === undefined;
 }
 
+function freshlyPastThreshold(reading: WeeklyLimitReading): boolean {
+  return (
+    reading.freshness === "fresh" && (reading.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT
+  );
+}
+
 export interface AutoSwitchAccount {
-  account: Pick<AgentAccountSummary, "id" | "signedIn">;
+  account: Pick<AgentAccountSummary, "id" | "signedIn"> &
+    Partial<Pick<AgentAccountSummary, "identity">>;
   included: boolean;
   reading: WeeklyLimitReading;
 }
@@ -303,16 +316,41 @@ export interface AutoSwitchAccount {
 export type AutoSwitchDecision =
   { action: "stay" } | { action: "switch"; accountId: string; reason: AutoSwitchReason };
 
-/** Included, signed-in accounts with room, soonest reset first; no known reset ranks last. */
+/**
+ * Two entries with one email are one login, sharing one allowance. An entry with
+ * no email cannot be matched, so it is never a twin of another.
+ */
+function sameLogin(left: AutoSwitchAccount, right: AutoSwitchAccount): boolean {
+  const email = normalizeEmail(left.account.identity?.email);
+  return email !== undefined && email === normalizeEmail(right.account.identity?.email);
+}
+
+/**
+ * Included, signed-in accounts with room, soonest reset first; no known reset
+ * ranks last. A used-up entry's twins have no room either, though only a fresh
+ * reading says so about the active entry. While the active entry is usable its
+ * twins are left out, because moving to one gains no allowance. Once it is signed
+ * out or unticked, a twin is a real way off it.
+ */
 export function rankAutoSwitchAccounts(
   accounts: readonly AutoSwitchAccount[],
   activeAccountId: string,
 ): AutoSwitchAccount[] {
+  const current = accounts.find(({ account }) => account.id === activeAccountId);
+  const currentUsable = current?.included === true && current.account.signedIn;
   return accounts
-    .filter(({ account, included, reading }) => {
+    .filter((entry) => {
+      const { account, included, reading } = entry;
       if (!included || !account.signedIn) return false;
       const active = account.id === activeAccountId;
-      return hasRoom(reading, active) && (active || !reading.wouldPay);
+      if (!active && currentUsable && sameLogin(entry, current)) return false;
+      const twinOut = accounts.some(
+        (other) =>
+          other !== entry &&
+          sameLogin(other, entry) &&
+          (active ? freshlyPastThreshold(other.reading) : !hasRoom(other.reading, false)),
+      );
+      return !twinOut && hasRoom(reading, active) && (active || !reading.wouldPay);
     })
     .sort((left, right) => {
       const leftReset = left.reading.resetsAt ?? Number.POSITIVE_INFINITY;
@@ -336,20 +374,36 @@ export function decideAutoSwitch(
   activeAccountId: string,
 ): AutoSwitchDecision {
   const current = accounts.find(({ account }) => account.id === activeAccountId);
-  if (current?.included && current.account.signedIn && current.reading.freshness === "none")
+  const loginPastThreshold =
+    current !== undefined &&
+    accounts.some(
+      (entry) =>
+        (entry === current || sameLogin(entry, current)) && freshlyPastThreshold(entry.reading),
+    );
+  if (
+    current?.included &&
+    current.account.signedIn &&
+    current.reading.freshness === "none" &&
+    !loginPastThreshold
+  )
     return { action: "stay" };
   const best = rankAutoSwitchAccounts(accounts, activeAccountId)[0];
   if (!best || best.account.id === activeAccountId) return { action: "stay" };
-  const active = accounts.find(({ account }) => account.id === activeAccountId);
   const reason: AutoSwitchReason =
-    active && !active.account.signedIn
+    current && !current.account.signedIn
       ? "signed-out"
-      : !active?.included
+      : !current?.included
         ? "not-included"
-        : active.reading.freshness === "fresh" &&
-            (active.reading.usedPercent ?? 0) >= AUTO_SWITCH_THRESHOLD_PERCENT
+        : loginPastThreshold
           ? "threshold"
           : "soonest-reset";
+  if (reason === "soonest-reset") {
+    // Ranked ahead of the active account, so `best` has a known reset.
+    const soonerBy =
+      (current?.reading.resetsAt ?? Number.POSITIVE_INFINITY) -
+      (best.reading.resetsAt ?? Number.POSITIVE_INFINITY);
+    if (!(soonerBy > AUTO_SWITCH_RESET_TOLERANCE_MS)) return { action: "stay" };
+  }
   return { action: "switch", accountId: best.account.id, reason };
 }
 

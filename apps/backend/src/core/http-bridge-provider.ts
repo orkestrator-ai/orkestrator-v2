@@ -564,10 +564,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
       throw new RangeError(`${this.agent} transcript limit must be a positive integer`);
     }
-    const messages = (await this.transcripts.legacy(sessionId, limit)).messages;
-    // A bridge that predates `?limit=` answered its whole window.
-    if (limit === undefined) return messages;
-    return messages.length > limit ? messages.slice(-limit) : messages;
+    return (await this.transcripts.legacy(sessionId, limit)).messages;
   }
 
   async sessionStateSnapshot(sessionId: string): Promise<ProviderSessionStateSnapshot> {
@@ -629,7 +626,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
+  async interactiveSnapshot(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<ProviderInteractiveSnapshot> {
+    const limit = options?.limit;
     const cachedMetadata = this.interactiveMetadata.get(sessionId);
     const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
     if (cachedMetadata && refreshMetadata) {
@@ -645,7 +646,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           {},
           this.fetchImpl,
         ),
-        this.transcripts.legacy(sessionId),
+        this.transcripts.legacy(sessionId, limit),
         refreshMetadata && !cachedMetadata
           ? this.runtimeHealth(sessionId)
           : Promise.resolve(undefined),
@@ -726,7 +727,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? reportedKinds.filter((kind): kind is string => typeof kind === "string")
         : undefined;
       const noticeOptions: Parameters<typeof snapshotNotices>[0] = {
-        transcriptTruncated: transcript.truncated,
+        transcriptTruncated: transcript.omittedByTransport,
         ...(runtime ? { runtime } : {}),
       };
       const statusNotices = snapshotNotices(noticeOptions);
@@ -768,7 +769,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] =
       await Promise.all([
         bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-        this.transcripts.legacy(sessionId),
+        this.transcripts.legacy(sessionId, limit),
         this.agent === "codex"
           ? bridgeFetch(
               this.connection,
@@ -834,7 +835,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const codexReadiness = normalizeProviderReadiness(payload.readiness);
       const codexAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
       const codexNotices = snapshotNotices({
-        transcriptTruncated: transcript.truncated,
+        transcriptTruncated: transcript.omittedByTransport,
         ...(runtime ? { runtime } : {}),
         ...(codexAuthNotice ? { auth: codexAuthNotice } : {}),
       });
@@ -955,7 +956,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const claudeReadiness = normalizeProviderReadiness(payload.readiness);
     const claudeAuthNotice = normalizeProviderAuthNotice(payload.authNotice);
     const claudeNotices = snapshotNotices({
-      transcriptTruncated: transcript.truncated,
+      transcriptTruncated: transcript.omittedByTransport,
       ...(runtime ? { runtime } : {}),
       ...(claudeAuthNotice ? { auth: claudeAuthNotice } : {}),
     });

@@ -101,7 +101,8 @@ describe("BuildChatTab key information", () => {
     const panel = openPanel();
 
     const section = (name: string) => within(panel).getByRole("region", { name });
-    // The framing names the first section.
+    expect(within(section("Summary")).getByText(keyInformation.summary!)).toBeTruthy();
+    // The framing names the section after the summary.
     expect(within(panel).queryByRole("region", { name: "Problem" }) === null).toBe(true);
     expect(within(section("Objective")).getByText(keyInformation.statement!)).toBeTruthy();
     expect(within(section("Context")).getByText(keyInformation.context!)).toBeTruthy();
@@ -161,7 +162,7 @@ describe("BuildChatTab key information", () => {
     expect(panel.textContent).not.toContain("`");
   });
 
-  test("names the first section Problem by default", () => {
+  test("names the statement's section Problem by default", () => {
     renderTab({
       ...reviewed,
       keyInformation: { ...keyInformation, framing: "problem" },

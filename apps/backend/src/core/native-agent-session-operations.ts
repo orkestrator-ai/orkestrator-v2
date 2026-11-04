@@ -710,7 +710,7 @@ export class NativeAgentSessionOperations {
     );
     // Observers must re-read instead of reporting an answered question as pending.
     this.host.interactions.forgetPendingInteractions(resolved.key);
-    void this.host.projections.refreshProjection(input, true).catch(() => undefined);
+    void this.host.projections.refreshProjectionState(input).catch(() => undefined);
     return outcome;
   }
 
@@ -742,7 +742,7 @@ export class NativeAgentSessionOperations {
       input.choice,
     );
     this.host.interactions.forgetPendingInteractions(resolved.key);
-    void this.host.projections.refreshProjection(input, true).catch(() => undefined);
+    void this.host.projections.refreshProjectionState(input).catch(() => undefined);
     return result;
   }
 
@@ -776,7 +776,7 @@ export class NativeAgentSessionOperations {
       input.held,
     );
     this.host.interactions.forgetPendingInteractions(resolved.key);
-    void this.host.projections.refreshProjection(input, true).catch(() => undefined);
+    void this.host.projections.refreshProjectionState(input).catch(() => undefined);
     return outcome;
   }
 }

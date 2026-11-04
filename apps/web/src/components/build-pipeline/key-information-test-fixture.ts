@@ -3,6 +3,7 @@ import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pi
 /** A brief with every section filled, for the key information panel and tab. */
 export const keyInformation: BuildPipelineKeyInformation = {
   framing: "objective",
+  summary: "The pipeline now keeps a short brief anyone can read to see how a ticket is going.",
   statement: "Show the pipeline's status at a glance.",
   context: "The build tab only showed a temporary banner.",
   solution: "A key information panel in the header.",

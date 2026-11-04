@@ -1,12 +1,19 @@
-import { promises as fs } from "node:fs";
+import { ESSENTIAL_LOG_DIRECTORY_NAME } from "@orkestrator/protocol/node/essential-log";
+import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 
 const MAX_LOG_STORAGE_ENTRIES = 100_000;
 
 export type LogStorageStats = {
+  /** The debug logs, which **Clean up logs** removes. */
   totalBytes: number;
   fileCount: number;
+  /** The always-on essential log, which it leaves alone. */
+  essentialBytes: number;
+  essentialFileCount: number;
 };
+
+type DirectoryStats = { bytes: number; files: number };
 
 /**
  * Walks the log directory without following symlinks, so a link planted inside
@@ -18,10 +25,44 @@ export async function getLogStorageStats(
   logDirectory: string,
   maxEntries = MAX_LOG_STORAGE_ENTRIES,
 ): Promise<LogStorageStats> {
-  const stats: LogStorageStats = { totalBytes: 0, fileCount: 0 };
-  const pending = [logDirectory];
-  let visitedEntries = 0;
+  const budget = { remaining: maxEntries };
+  const essential: DirectoryStats = { bytes: 0, files: 0 };
+  const debug: DirectoryStats = { bytes: 0, files: 0 };
+  const essentialRoot = path.join(logDirectory, ESSENTIAL_LOG_DIRECTORY_NAME);
+  const metadata = await fs.lstat(essentialRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (metadata?.isDirectory()) {
+    await addDirectoryStats(essentialRoot, essential, budget, () => true);
+  }
+  await addDirectoryStats(
+    logDirectory,
+    debug,
+    budget,
+    (entry, directory) => !isEssentialEntry(entry, directory, logDirectory),
+  );
+  return {
+    totalBytes: debug.bytes,
+    fileCount: debug.files,
+    essentialBytes: essential.bytes,
+    essentialFileCount: essential.files,
+  };
+}
 
+function isEssentialEntry(entry: Dirent, directory: string, logDirectory: string): boolean {
+  return (
+    directory === logDirectory && entry.name === ESSENTIAL_LOG_DIRECTORY_NAME && entry.isDirectory()
+  );
+}
+
+async function addDirectoryStats(
+  root: string,
+  stats: DirectoryStats,
+  budget: { remaining: number },
+  include: (entry: Dirent, directory: string) => boolean,
+): Promise<void> {
+  const pending = [root];
   while (pending.length > 0) {
     const directory = pending.pop()!;
     const entries = await fs
@@ -31,8 +72,9 @@ export async function getLogStorageStats(
         throw error;
       });
     for (const entry of entries) {
-      visitedEntries += 1;
-      if (visitedEntries > maxEntries) {
+      if (!include(entry, directory)) continue;
+      budget.remaining -= 1;
+      if (budget.remaining < 0) {
         throw new Error("Log directory contains too many entries to inspect safely");
       }
       if (entry.isSymbolicLink()) continue;
@@ -47,12 +89,10 @@ export async function getLogStorageStats(
         throw error;
       });
       if (!metadata) continue;
-      stats.fileCount += 1;
-      stats.totalBytes += metadata.size;
+      stats.files += 1;
+      stats.bytes += metadata.size;
     }
   }
-
-  return stats;
 }
 
 export async function cleanupLogStorage(
@@ -66,6 +106,7 @@ export async function cleanupLogStorage(
       throw error;
     });
   for (const entry of entries) {
+    if (isEssentialEntry(entry, logDirectory, logDirectory)) continue;
     await fs.rm(path.join(logDirectory, entry.name), {
       recursive: entry.isDirectory() && !entry.isSymbolicLink(),
       force: true,

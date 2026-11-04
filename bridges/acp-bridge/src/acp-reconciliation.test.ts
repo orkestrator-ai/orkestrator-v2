@@ -17,7 +17,7 @@ describe("ACP bridge", () => {
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
         version: 3,
-        provider: "cursor",
+        provider: "acp-fixture",
         sessions: [
           {
             id: "session-idle-pending",
@@ -294,7 +294,9 @@ describe("ACP bridge", () => {
       (value) => value.status === "error",
     );
 
-    expect(session.error).toBe("cursor remained in a retriable provider error after 4 retries");
+    expect(session.error).toBe(
+      "acp-fixture remained in a retriable provider error after 4 retries",
+    );
     expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(session.messages.at(-1)?.content).toContain(
       "Error: RetriableError: [resource_exhausted] Error",
@@ -469,7 +471,9 @@ describe("ACP bridge", () => {
       (value) => value.status === "error",
     );
 
-    expect(session.error).toBe("cursor remained in a retriable provider error after 4 retries");
+    expect(session.error).toBe(
+      "acp-fixture remained in a retriable provider error after 4 retries",
+    );
     expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(session.messages.at(-1)?.content).toContain(
       "Error: RetriableError: [unavailable] PING timed out",
@@ -1015,7 +1019,7 @@ describe("ACP bridge", () => {
     });
     expect(refused.status).toBe(410);
     expect(await refused.json()).toMatchObject({
-      error: "cursor cannot reload persisted ACP sessions",
+      error: "acp-fixture cannot reload persisted ACP sessions",
     });
     expect(await fs.readFile(lifecycleFile, "utf8")).not.toContain("load:");
     // The refusal released the claim, so the same requestId is not journaled
@@ -1124,7 +1128,7 @@ describe("ACP bridge", () => {
     expect(redelivery.status).toBe(410);
     expect(await redelivery.json()).toMatchObject({
       error:
-        "cursor prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+        "acp-fixture prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
       kind: "dispatch-outcome-lost",
     });
 

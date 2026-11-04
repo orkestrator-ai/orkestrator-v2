@@ -15,7 +15,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, openSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -54,6 +54,11 @@ export interface ObjectStoreOptions {
   /** fsync objects when publishing; disabled only in tests. */
   durable?: boolean;
   hardBudgetBytes?: () => number;
+  /**
+   * The grace {@link ObjectStore.sweep} is given. Unset, the store does not
+   * know its fence is safe to keep, so every reuse renews it.
+   */
+  orphanGraceMs?: () => number;
 }
 
 export class ObjectStore {
@@ -61,8 +66,10 @@ export class ObjectStore {
   private readonly objects: string;
   private readonly durable: boolean;
   private readonly hardBudgetBytes: () => number;
+  private readonly orphanGraceMs: () => number;
   private mutation: Promise<unknown> = Promise.resolve();
   private usedBytes: number | null = null;
+  private removedCount = 0;
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.mutation.then(work);
@@ -74,6 +81,7 @@ export class ObjectStore {
 
   constructor(options: ObjectStoreOptions) {
     this.hardBudgetBytes = options.hardBudgetBytes ?? (() => Infinity);
+    this.orphanGraceMs = options.orphanGraceMs ?? (() => 0);
     this.root = options.root;
     this.objects = join(options.root, "objects");
     this.durable = options.durable ?? true;
@@ -106,9 +114,27 @@ export class ObjectStore {
     );
   }
 
-  /** Renew the orphan fence before adopting a metadata-reused object. */
+  /**
+   * Prove an object present and fenced before adopting a metadata-reused copy.
+   * True means it exists now and {@link sweep} leaves it alone for at least
+   * half of the orphan grace, however stale the sweep's reachable set is.
+   *
+   * A fence younger than half the grace is left as it is, with no lock and no
+   * `utimes`: a sweep deletes only past the full grace, measured from the same
+   * mtime this reads, so at least the other half remains. That margin has to
+   * outlast the capture's deadline (seconds) and the sweep's walk of the
+   * ledger, which is the same assumption the renewal itself makes.
+   *
+   * An older fence is renewed under the lock, never beside it: a sweep that has
+   * already read the old mtime would delete the object straight after a
+   * renewal that reported success. Behind the lock the renewal either fences
+   * the object or fails on the missing file, and the capture rewrites it.
+   */
   reuse(id: string): Promise<boolean> {
     if (!isObjectId(id)) return Promise.resolve(false);
+    const fenced = this.fencedAt(id);
+    if (fenced === null) return Promise.resolve(false);
+    if (Date.now() - fenced < this.orphanGraceMs() / 2) return Promise.resolve(true);
     return this.exclusive(async () => {
       const now = new Date();
       return utimes(this.path(id), now, now).then(
@@ -116,6 +142,28 @@ export class ObjectStore {
         () => false,
       );
     });
+  }
+
+  /**
+   * The object's fence, or null when it is absent. Synchronous on purpose: this
+   * runs once per unchanged file in a capture, and on Linux an `lstatSync` costs
+   * about 1 µs where an awaited `lstat` costs about 8 µs on the thread pool.
+   */
+  private fencedAt(id: string): number | null {
+    try {
+      return lstatSync(this.path(id)).mtimeMs;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Objects {@link sweep} has removed from this store. A capture compares it
+   * across its pass: nothing else deletes objects, so an unchanged count means
+   * what the pass proved present is still present.
+   */
+  get removedObjects(): number {
+    return this.removedCount;
   }
 
   /**
@@ -210,6 +258,7 @@ export class ObjectStore {
           const info = await lstat(join(directory, name)).catch(() => null);
           if (!info || nowMs - info.mtimeMs <= graceMs) continue;
           await rm(join(directory, name), { force: true });
+          this.removedCount++;
           removed++;
           bytes += info.size;
         }

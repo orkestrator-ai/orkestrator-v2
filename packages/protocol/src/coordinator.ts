@@ -423,6 +423,8 @@ export interface CoordinatorWorkflowAssociation {
   createdAt: string;
   lastNotifiedRevision?: number;
   terminalNotifiedAt?: string;
+  /** Durable restart episode; absent on follows created before the first restart. */
+  statusWakeEpisode?: string;
   /** Last status wake sent for this resource; see `coordinator-status-wakes.ts`. */
   statusNotice?: CoordinatorStatusNoticeRecord;
   adoptedByConversationId?: string;
@@ -533,6 +535,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "request_project_on_node",
   "request_root_changes",
   "resolve_conflicts",
+  "restart_build_pipeline_step",
   "resume_build_pipeline",
   "resume_schedule",
   "run_worker_command",
@@ -634,7 +637,7 @@ export const COORDINATOR_VALIDATION_RULE =
  * when it fires (nobody may be there) or switch without asking.
  */
 export const COORDINATOR_TIMERS_AND_ACCOUNTS_RULE =
-  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
+  'Timers and accounts: for "in 2 hours" or "at 14:30" call create_schedule with action type remind_me (times are the user\'s local time) and put the whole instruction in its body; it wakes you with that text, queued until you are idle. If the user\'s own message asks you to switch accounts then, add authorizeAccountSwitch. When woken: get_usage_limits, list_provider_accounts, then switch_provider_account with the timer\'s scheduleId; without one the user approves the switch, unless Settings lets coordinators switch without asking: then it runs at once (state switched), so tell the user what you switched and never ask them to approve it. Never switch accounts on your own initiative. Automatic switching is separate: when the user asks, set_account_auto_switch turns it on, the backend then moves accounts by itself and you get a notice each time, and your own switch would pin the account and turn it off.';
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";

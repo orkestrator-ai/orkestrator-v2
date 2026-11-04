@@ -964,14 +964,18 @@ export class AppServerEngine implements CodexEngine {
       ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these
       // would mean silently dropping every event and hanging every turn.
-      onNotification: (notification, threadId, generation) => {
+      onNotification: (notification, threadId, generation, lineBytes) => {
         // Enqueue only — reduction happens on the per-thread drain so this
         // returns immediately and the transport never back-pressures.
         const key = threadId ?? "connection";
         const sequence = ++this.notificationSequence;
-        this.supervisor.notificationQueue.run(key, () => {
-          this.processNotification(notification, generation, sequence);
-        });
+        this.supervisor.notificationQueue.run(
+          key,
+          () => {
+            this.processNotification(notification, generation, sequence);
+          },
+          lineBytes,
+        );
       },
       onServerRequest: (request, generation) => this.router.handle(request, generation),
       onStateChange: (state, detail) =>

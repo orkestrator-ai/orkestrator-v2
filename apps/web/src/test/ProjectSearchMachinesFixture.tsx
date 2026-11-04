@@ -208,7 +208,7 @@ function SearchContent() {
             shownIds={
               new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))
             }
-            mode={grouping}
+            mode={grouping === "compact" ? "repository" : grouping}
             renderBoundProject={() => null}
             onBoundEnvironmentDragEnd={() => {}}
           />

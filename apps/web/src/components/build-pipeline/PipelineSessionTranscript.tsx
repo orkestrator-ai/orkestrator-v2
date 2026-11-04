@@ -25,11 +25,15 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
-import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import {
+  coalesceAdjacentToolMessages,
+  type CoalescedRowAliases,
+  findPreviousNativeMessage,
+} from "@/lib/chat/native-message-adapters";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { PipelineMessageComposer, usePipelineMessageComposer } from "./PipelineMessageComposer";
-import { toPipelineTranscript } from "./pipeline-transcript";
+import { toPipelineTranscriptRows } from "./pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -253,9 +257,9 @@ export function PipelineSessionTranscript({
   // through the Claude adapter silently drops its subagent and tool-group parts.
   // Snapshots written before per-step harnesses carry no session agent.
   const agentType = session?.agent ?? pipeline.agentType;
-  const stageTranscript = useMemo(() => {
+  const stageRows = useMemo(() => {
     if (!agentType) return [];
-    const transcript = toPipelineTranscript(
+    const transcript = toPipelineTranscriptRows(
       session?.messages,
       agentType,
       session?.startedAt ?? transcriptFallbackCreatedAt,
@@ -300,6 +304,14 @@ export function PipelineSessionTranscript({
     structuredResultAccepted,
     transcriptFallbackCreatedAt,
   ]);
+  // Records are parsed afresh on every read, so a coalesced run's surviving id
+  // is remembered by member id here. Merged after the rows above are hidden, so
+  // tool runs either side of a withheld document become one block.
+  const [coalescedAliases] = useState<CoalescedRowAliases>(() => new Map());
+  const stageTranscript = useMemo(
+    () => coalesceAdjacentToolMessages(stageRows, coalescedAliases),
+    [coalescedAliases, stageRows],
+  );
   /*
    * The stage session's own key owns what its agent publishes, in the
    * pipeline's environment; a replaced provider session is a new generation.

@@ -11,6 +11,10 @@ import { McpServer } from "@modelcontextprotocol/server";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
+  AGENT_MAIL_MAX_ATTACHMENT_BYTES,
+  AGENT_MAIL_MAX_ATTACHMENTS,
+} from "@orkestrator/protocol/agent-mail";
+import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
@@ -149,6 +153,7 @@ export const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["pause_build_pipeline", "build-pipelines"],
   ["resume_build_pipeline", "build-pipelines"],
   ["cancel_build_pipeline", "build-pipelines"],
+  ["restart_build_pipeline_step", "build-pipelines"],
   ["start_multi_review", "multi-review"],
   ["launch_multi_review", "multi-review"],
   ["open_multi_review", "multi-review"],
@@ -2046,7 +2051,7 @@ export async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. A pipeline environment never resolves that way: name one build pipeline worker with toTabId set to its address from list_mailboxes (with environmentId) or get_build_pipeline. The message goes to that worker only and is never re-routed; a worker that has finished, failed or been cancelled refuses it, and mail still queued when its worker ends expires and you are told. Queued mail reaches the worker as its next turn when its current turn ends, before the pipeline moves on; deliverNow steers it into the running turn. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours.'
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. A pipeline environment never resolves that way: name one build pipeline worker with toTabId set to its address from list_mailboxes (with environmentId) or get_build_pipeline. The message goes to that worker only and is never re-routed; a worker that has finished, failed or been cancelled refuses it, and mail still queued when its worker ends expires and you are told. Queued mail reaches the worker as its next turn when its current turn ends, before the pipeline moves on; deliverNow steers it into the running turn. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes. To pass on an image the user pasted to you, do not describe it in words: name it in attachments; the backend copies it, you need no file access, and the recipient gets a path it can open. On a command node, nodeId with toEnvironmentId "coordinator" asks that node\'s main coordinator for this project (list_mailboxes with nodeId says whether it has one); its answer arrives as mail. On a node in leaf mode, toEnvironmentId "command-node-coordinator" starts a message to the controlling command node\'s coordinator, and replyToMessageId answers its mail; that is the only cross-node send there. A busy worker normally receives mail when its turn ends. Set deliverNow only for a course correction the worker must see mid-turn ("add this to your task", "stop, the requirement changed"), not for routine follow-ups or replies: if the worker\'s agent can steer, the message is steered into its running turn. The result\'s deliverNow says what happened: steered, delivered (worker was idle), queued until idle, unsupported, queued (agent cannot take mail mid-turn), verifying (steer handed off, being confirmed; never sent twice), or not queued. The project home (the user\'s own checkout) is for exceptional circumstances only: a message to it needs projectHomeReason, and is held for the user\'s approval unless you messaged it in the last 3 hours. Messages with images always need their own approval; their files are kept outside the user\'s checkout.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
@@ -2065,6 +2070,17 @@ export async function createControlMcp(
           replyToMessageId: z.string().trim().min(1).max(300).optional(),
           ...(coordinatorScope
             ? {
+                attachments: z
+                  .array(z.string().trim().min(1).max(1024))
+                  .min(1)
+                  .max(
+                    AGENT_MAIL_MAX_ATTACHMENTS,
+                    `A message can carry at most ${AGENT_MAIL_MAX_ATTACHMENTS} images.`,
+                  )
+                  .optional()
+                  .describe(
+                    `Images the user pasted into this conversation, by the path you were given with each one. They reach the recipient wherever it is: an agent tab, build pipeline worker, container, side agent or coordinator, on this node or another. PNG, JPEG, GIF or WebP, at most ${AGENT_MAIL_MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB each. Copied before sending: if a copy fails, no message is sent and you are told why; retry with the same requestId.`,
+                  ),
                 deliverNow: z
                   .boolean()
                   .optional()
@@ -2139,6 +2155,7 @@ export async function createControlMcp(
               ...(input.subject ? { subject: input.subject } : {}),
               body: input.body,
               ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+              ...(input.attachments ? { attachments: input.attachments } : {}),
             });
             if (!isRecord(sent)) throw new Error("Message send returned no result");
             const { coordinatorDelegationOpened: _opened, ...summary } = sent;
@@ -2158,6 +2175,7 @@ export async function createControlMcp(
               body: input.body,
               ...(deliverNow === true ? { deliverNow: true } : {}),
               ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+              ...(input.attachments ? { attachments: input.attachments } : {}),
             });
             if (!isRecord(sent)) throw new Error("Message send returned no result");
             const {

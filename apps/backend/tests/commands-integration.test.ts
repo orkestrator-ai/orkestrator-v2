@@ -1936,7 +1936,7 @@ exit 0
             `#!/bin/sh
 if [ "$1" = "exec" ]; then
   case "$*" in
-    *ORKESTRATOR_NAME_STATUS*) cat "$FAKE_CONTAINER_MUTATION_RESPONSE" ;;
+    *ORKESTRATOR_DIFF*) cat "$FAKE_CONTAINER_MUTATION_RESPONSE" ;;
   esac
   exit 0
 fi
@@ -2279,7 +2279,7 @@ exit 1
             // Status-script execs only: the container fetch policy may run its
             // own (separate) fetch exec in the background after the first scan.
             const statusExecs = async () =>
-              (await fs.readFile(logs.exec, "utf8")).split("ORKESTRATOR_NAME_STATUS").length - 1;
+              (await fs.readFile(logs.exec, "utf8")).split("ORKESTRATOR_DIFF").length - 1;
             const execsBefore = await statusExecs();
             const files = (await commands.get("get_git_status")?.(
               { containerId: environment.containerId, targetBranch: "main" },

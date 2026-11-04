@@ -765,7 +765,12 @@ function withRowId(row: NativeMessage, id: string): NativeMessage {
   }
   let renamed = byId.get(id);
   if (!renamed) {
-    renamed = { ...row, id };
+    renamed = {
+      ...row,
+      id,
+      earliestSourceMessageId: row.earliestSourceMessageId ?? row.id,
+      latestSourceMessageId: row.latestSourceMessageId ?? row.id,
+    };
     byId.set(id, renamed);
   }
   return renamed;
@@ -786,15 +791,23 @@ function assignCoalescedRowIds(
   byId: CoalescedRowAliases | undefined,
 ): void {
   const used = new Set<string>();
+  // A retained alias may name a source row that has reappeared across a
+  // visible boundary. Reserve source ids for their own group in that case.
+  const owners = new Map<string, number>();
   members.forEach((group, index) => {
-    if (group.length < 2) used.add(merged[index]!.id);
+    for (const member of group) owners.set(member.id, index);
+    if (!isToolOnlyAssistantMessage(merged[index]!)) used.add(merged[index]!.id);
   });
   members.forEach((group, index) => {
-    if (group.length < 2) return;
+    if (!isToolOnlyAssistantMessage(merged[index]!)) return;
     let id: string | undefined;
     for (const member of group) {
       const alias = byId ? byId.get(member.id) : coalescedRowAliases.get(member);
-      if (alias !== undefined && !used.has(alias)) {
+      if (
+        alias !== undefined &&
+        !used.has(alias) &&
+        (!owners.has(alias) || owners.get(alias) === index)
+      ) {
         id = alias;
         break;
       }

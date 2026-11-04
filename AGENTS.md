@@ -1478,6 +1478,13 @@ alive to supervise Vite, Electron, the backend, bridges, and their process trees
 mise run dev:test --profile agent-settings-dialog --fixture
 ```
 
+On Linux, a run with no terminal (an agent's shell) starts Electron headless, so
+no window opens on the host's desktop; `browserUrl` still serves the app. If your
+shell has a pseudo-terminal, pass `--headless`. For native-window QA, pass
+`--no-headless` and use a disposable display. The one-shot isolated runners are
+always headless. See
+[Headless Electron](docs/development/agent-testing.md#headless-electron).
+
 Startup is idempotent: running the same command for a live profile reports the
 existing instance instead of creating a second backend. In another command
 session, discover its state:
@@ -1546,7 +1553,9 @@ mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 Use the optional suites only when their layer is in scope:
 
 ```bash
-# Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
+# Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown.
+# These launch their own Electron and need a display; on a shared Linux host use a
+# disposable one (see "Electron specs and their display" in agent-testing.md).
 mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
 # Requires a profile started with --fixture-environments local,container

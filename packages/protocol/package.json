@@ -1,6 +1,6 @@
 {
   "name": "@orkestrator/protocol",
-  "version": "2.36.1",
+  "version": "2.36.2-beta",
   "private": true,
   "type": "module",
   "exports": {
@@ -12,6 +12,7 @@
     "./agent-handoff-frame": "./src/agent-handoff-frame.ts",
     "./agent-account-auto-switch": "./src/agent-account-auto-switch.ts",
     "./agent-usage-limits": "./src/agent-usage-limits.ts",
+    "./coordinator-account-switch-grant": "./src/coordinator-account-switch-grant.ts",
     "./agent-system-instructions": "./src/agent-system-instructions.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
@@ -21,6 +22,8 @@
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
     "./node/application-logging": "./src/node/application-logging.ts",
+    "./node/essential-log": "./src/node/essential-log.ts",
+    "./node/process-failure-log": "./src/node/process-failure-log.ts",
     "./node/log-policy": "./src/node/log-policy.ts",
     "./node/bridge-log-policy": "./src/node/bridge-log-policy.ts",
     "./logger": "./src/logger.ts",
@@ -192,6 +195,7 @@
     "./pr-merge-readiness": "./src/pr-merge-readiness.ts",
     "./pr-monitor": "./src/pr-monitor.ts",
     "./preview-access": "./src/preview-access.ts",
+    "./preview-tunnel-mux": "./src/preview-tunnel-mux.ts",
     "./preview-client-metrics": "./src/preview-client-metrics.ts",
     "./testing/preview-contract-fixtures": "./src/testing/preview-contract-fixtures.ts",
     "./node/preview-forward": "./src/node/preview-forward.ts",

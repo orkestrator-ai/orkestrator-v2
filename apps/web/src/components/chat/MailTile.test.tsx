@@ -49,6 +49,33 @@ describe("MailTile", () => {
     useEnvironmentStore.setState(initialEnvironments, true);
   });
 
+  test("shows attached images by name and size, collapsed and open, without a path", () => {
+    const { container } = render(
+      <MailTile
+        mail={mail({
+          attachments: [{ name: "shot.png", bytes: 2048 }, { name: "second.png" }],
+        })}
+        expansionKey="k"
+      />,
+    );
+    const list = screen.getByRole("list", { name: "Attached images" });
+    expect(list.textContent).toContain("shot.png");
+    expect(list.textContent).toContain("2.0 KiB");
+    expect(list.textContent).toContain("second.png");
+    expect(container.querySelectorAll("[data-mail-attachment]")).toHaveLength(2);
+    // Outside the clamped body, so a long message cannot clip it away.
+    expect(container.querySelector("[data-mail-body] [data-mail-attachments]")).toBeNull();
+    expect(container.textContent).not.toContain("mail-attachments/");
+
+    fireEvent.click(screen.getByRole("button", { name: /Claude 2 · worker/ }));
+    expect(screen.getByRole("list", { name: "Attached images" })).toBeTruthy();
+  });
+
+  test("a message with no images draws no attachment row", () => {
+    const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
+    expect(container.querySelector("[data-mail-attachments]")).toBeNull();
+  });
+
   test("starts collapsed with the body clamped to a few lines", () => {
     const { container } = render(
       <MailTile mail={mail()} expansionKey="k" timestampLabel="10:04" />,

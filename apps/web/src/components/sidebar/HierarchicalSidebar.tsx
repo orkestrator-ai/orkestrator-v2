@@ -1,3 +1,4 @@
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
@@ -16,6 +17,7 @@ import { projectTreeSortingStrategy } from "@/lib/sidebar-sorting";
 import { Button } from "@/components/ui/button";
 import { ArrowUpDown, Plus, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { ProjectHomeActivity } from "./ProjectHomeActivity";
+import { CompactRepositoryList } from "./CompactRepositoryList";
 import { ActivityEnvironmentList } from "./ActivityEnvironmentList";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { SidebarDragOverlay } from "./SidebarDragOverlay";
@@ -70,7 +72,7 @@ import {
 } from "@/components/federation/FederatedSidebarSections";
 import { useBoundCollapseSync } from "@/components/federation/useBoundCollapseSync";
 import { useMachineViews } from "@/components/federation/useMachineViews";
-import { ALL_MACHINES, filterMachines } from "@/lib/federation/aggregate";
+import { ALL_MACHINES, filterMachines, type MachineView } from "@/lib/federation/aggregate";
 import {
   isMachineShown,
   mergedProjectView,
@@ -78,6 +80,14 @@ import {
 } from "@/lib/federation/sidebar-layout";
 import { usePortalLayout } from "@/lib/portal/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import {
+  nextSidebarView,
+  sidebarGroupingOptions,
+  sidebarViewForChoice,
+  type SidebarView,
+} from "@/lib/federation/sidebar-grouping";
+import { onAppShortcut } from "@/lib/app-shortcuts";
+import { COMPACT_SIDEBAR_WIDTH_PX } from "@/lib/sidebar-width";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -99,6 +109,7 @@ import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLo
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   buildProjectTree,
+  flattenProjectTree,
   isProjectFolderCollapsed,
   listProjectFolderNames,
   normalizeProjectFolderName,
@@ -111,6 +122,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 const log = createLogger("web.sidebar");
 
 const NO_ENVIRONMENTS: Environment[] = [];
+const NO_MACHINES: MachineView[] = [];
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
 }));
@@ -328,7 +340,7 @@ export function HierarchicalSidebar() {
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
 
   const {
     projects,
@@ -387,6 +399,10 @@ export function HierarchicalSidebar() {
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
+  // The phone layout's overlay stays a full list, closest to compact when
+  // grouped by repository; the choice is kept for desktop widths.
+  const compactActive = machineGrouping === "compact" && !isMobile;
+  const listGrouping = machineGrouping === "compact" ? "repository" : machineGrouping;
   const openMachinePanel = openMachineWorkspace;
   const visibleMachines = useMemo(
     () =>
@@ -419,7 +435,7 @@ export function HierarchicalSidebar() {
           : "machine"
         : environmentSortMode === "activity"
           ? "activity"
-          : machineGrouping;
+          : listGrouping;
   const mergedShownIds = useMemo(
     () => new Set(visibleMachines.filter(isMachineShown).map((machine) => machine.connectionId)),
     [visibleMachines],
@@ -484,6 +500,7 @@ export function HierarchicalSidebar() {
   );
   const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
   const projectFolderNames = useMemo(() => listProjectFolderNames(projects), [projects]);
+  const compactLocalProjects = useMemo(() => flattenProjectTree(projectTree), [projectTree]);
   // Sortable ids and the rendered rows must be built from the same tree and the
   // same collapse state: a registered id with no visible row still resolves
   // drops, and would drop a project into a folder the user cannot see.
@@ -515,6 +532,40 @@ export function HierarchicalSidebar() {
   );
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
+
+  const applySidebarView = useCallback(
+    (view: SidebarView) => {
+      setMachineGrouping(view.grouping);
+      setEnvironmentSortMode(view.sortMode);
+    },
+    [setEnvironmentSortMode, setMachineGrouping],
+  );
+
+  // "By project" and "by repository" change nothing until another machine is shown.
+  const mergedModesAvailable = federation.enabled && remoteMachinesVisible.some(isMachineShown);
+  useEffect(
+    () =>
+      onAppShortcut("rotate-sidebar-grouping", () => {
+        const ui = useUIStore.getState();
+        if (!isMobile && !ui.sidebarOpen) ui.toggleSidebar();
+        const views = useMachineViewStore.getState();
+        const next = nextSidebarView(
+          {
+            grouping: views.grouping,
+            groupingBeforeCompact: views.groupingBeforeCompact,
+            sortMode: useUIStore.getState().environmentSortMode,
+          },
+          { mergedModes: mergedModesAvailable, compact: !isMobile },
+        );
+        if (next) applySidebarView(next);
+      }),
+    [applySidebarView, isMobile, mergedModesAvailable],
+  );
+
+  // Compact has no environment rows to act on.
+  useEffect(() => {
+    if (compactActive && isMultiSelectMode) clearMultiSelection();
+  }, [clearMultiSelection, compactActive, isMultiSelectMode]);
 
   // Handle Escape key to clear multi-selection
   useEffect(() => {
@@ -1197,14 +1248,116 @@ export function HierarchicalSidebar() {
     return home ? renderActivityHome(home) : null;
   };
 
+  const groupingOptions = sidebarGroupingOptions({
+    federated: federation.enabled,
+    sortMode: environmentSortMode,
+    compact: compactActive,
+  });
+  const groupingValue = groupingOptions.some((option) => option.value === machineGrouping)
+    ? machineGrouping
+    : "";
+  const sortMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-7 w-7",
+            !compactActive && environmentSortMode === "activity" && "bg-zinc-800 text-foreground",
+          )}
+          title={compactActive ? "Sidebar view" : "Sort environments"}
+          aria-label={
+            compactActive
+              ? "Sidebar view: Compact"
+              : `Sort environments: ${environmentSortMode === "project" ? "By project" : "By activity"}`
+          }
+        >
+          <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align={compactActive ? "start" : "end"} className="w-44">
+        {compactActive ? null : (
+          <>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">
+              Sort environments
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={environmentSortMode}
+              onValueChange={(value) => {
+                if (value === "project" || value === "activity") {
+                  setEnvironmentSortMode(value);
+                }
+              }}
+            >
+              <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="activity">By activity</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            {environmentSortMode === "activity" ? (
+              <>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Order
+                </DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={activitySortOrder}
+                  onValueChange={(value) => {
+                    if (value === "priority" || value === "newest" || value === "oldest") {
+                      setActivitySortOrder(value);
+                    }
+                  }}
+                >
+                  <DropdownMenuRadioItem value="priority">Priority order</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </>
+            ) : null}
+          </>
+        )}
+        <DropdownMenuLabel className="text-xs text-muted-foreground">
+          {federation.enabled && !compactActive && environmentSortMode === "project"
+            ? "Group machines"
+            : "Sidebar view"}
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={groupingValue}
+          onValueChange={(value) => {
+            const view = sidebarViewForChoice(value, {
+              grouping: machineGrouping,
+              groupingBeforeCompact: useMachineViewStore.getState().groupingBeforeCompact,
+              sortMode: environmentSortMode,
+            });
+            if (view) applySidebarView(view);
+          }}
+        >
+          {groupingOptions.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value}>
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      // Content stays one icon wide while the panel around it narrows.
+      style={compactActive ? { width: COMPACT_SIDEBAR_WIDTH_PX } : undefined}
+      data-sidebar-view={compactActive ? "compact" : undefined}
+    >
       {/* Header - switches between normal and multi-select mode */}
       <div
         data-sidebar-header
-        className="flex h-12 items-center justify-between border-b border-border/80 bg-chrome pl-3 pr-2"
+        className={cn(
+          "flex h-12 items-center border-b border-border/80 bg-chrome",
+          compactActive ? "justify-center" : "justify-between pl-3 pr-2",
+        )}
       >
-        {isMultiSelectMode ? (
+        {compactActive ? (
+          sortMenu
+        ) : isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
               {selectedEnvironmentIds.length} selected
@@ -1249,84 +1402,7 @@ export function HierarchicalSidebar() {
               <ServerConnectionSwitcher />
             )}
             <div className="flex items-center gap-1">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      "h-7 w-7",
-                      environmentSortMode === "activity" && "bg-zinc-800 text-foreground",
-                    )}
-                    title="Sort environments"
-                    aria-label={`Sort environments: ${environmentSortMode === "project" ? "By project" : "By activity"}`}
-                  >
-                    <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuLabel className="text-xs text-muted-foreground">
-                    Sort environments
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={environmentSortMode}
-                    onValueChange={(value) => {
-                      if (value === "project" || value === "activity") {
-                        setEnvironmentSortMode(value);
-                      }
-                    }}
-                  >
-                    <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="activity">By activity</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                  {environmentSortMode === "activity" ? (
-                    <>
-                      <DropdownMenuLabel className="text-xs text-muted-foreground">
-                        Order
-                      </DropdownMenuLabel>
-                      <DropdownMenuRadioGroup
-                        value={activitySortOrder}
-                        onValueChange={(value) => {
-                          if (value === "priority" || value === "newest" || value === "oldest") {
-                            setActivitySortOrder(value);
-                          }
-                        }}
-                      >
-                        <DropdownMenuRadioItem value="priority">
-                          Priority order
-                        </DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="newest">Newest first</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="oldest">Oldest first</DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                    </>
-                  ) : null}
-                  {federation.enabled && environmentSortMode === "project" ? (
-                    <>
-                      <DropdownMenuLabel className="text-xs text-muted-foreground">
-                        Group machines
-                      </DropdownMenuLabel>
-                      <DropdownMenuRadioGroup
-                        value={machineGrouping}
-                        onValueChange={(value) => {
-                          if (
-                            value === "machine" ||
-                            value === "project" ||
-                            value === "repository"
-                          ) {
-                            setMachineGrouping(value);
-                          }
-                        }}
-                      >
-                        <DropdownMenuRadioItem value="machine">By machine</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="repository">
-                          By repository
-                        </DropdownMenuRadioItem>
-                      </DropdownMenuRadioGroup>
-                    </>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {sortMenu}
               <Button
                 variant="ghost"
                 size="icon"
@@ -1392,64 +1468,76 @@ export function HierarchicalSidebar() {
         )}
       </div>
 
-      <ProjectSearchBar
-        projects={projects}
-        environments={sidebarEnvironments}
-        onSelectProject={handleSearchSelectProject}
-        onSelectEnvironment={handleSearchSelectEnvironment}
-        onSelectMachineProject={revealMachineProject}
-      />
+      {compactActive ? null : (
+        <ProjectSearchBar
+          projects={projects}
+          environments={sidebarEnvironments}
+          onSelectProject={handleSearchSelectProject}
+          onSelectEnvironment={handleSearchSelectEnvironment}
+          onSelectMachineProject={revealMachineProject}
+        />
+      )}
 
       {/* Projects List */}
-      <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
-        <div
-          data-testid="sidebar-list-content"
-          className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
-        >
-          {federatedMode === "activity" ? (
-            <FederatedActivityList
-              machines={visibleMachines}
-              order={activitySortOrder}
-              renderBoundRow={renderFederatedActivityRow}
-              boundActivity={boundDisplayedActivity}
-              renderBoundHome={renderFederatedActivityHome}
-              boundSelectedId={isMultiSelectMode ? null : selectedEnvironmentId}
-              onCreateBound={handleOpenCreateEnvDialog}
-              boundWaitingCount={waitingEnvironmentCount}
-            />
-          ) : federatedMode === "project" || federatedMode === "repository" ? (
-            <MergedProjectList
-              machines={machineViews}
-              shownIds={mergedShownIds}
-              mode={federatedMode}
-              renderBoundProject={renderMergedBoundProject}
-              onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
-              boundLoading={projectsLoading && projects.length === 0}
-              onAddProject={() => setShowAddProjectDialog(true)}
-            />
-          ) : federatedMode === "machine" && boundMachineView ? (
-            <MachineSectionList
-              machines={machineViews}
-              shown={visibleMachines}
-              renderBound={() => localTree}
-            />
-          ) : federatedMode === "machine" ? (
-            // This window's machine is not identified yet; its tree comes first.
-            <>
-              {localTree}
+      {compactActive ? (
+        <CompactRepositoryList
+          machines={federation.enabled && boundMachineView ? machineViews : NO_MACHINES}
+          localProjects={compactLocalProjects}
+          environments={allEnvironments}
+          loading={projectsLoading}
+          onAddProject={() => setShowAddProjectDialog(true)}
+        />
+      ) : (
+        <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">
+          <div
+            data-testid="sidebar-list-content"
+            className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
+          >
+            {federatedMode === "activity" ? (
+              <FederatedActivityList
+                machines={visibleMachines}
+                order={activitySortOrder}
+                renderBoundRow={renderFederatedActivityRow}
+                boundActivity={boundDisplayedActivity}
+                renderBoundHome={renderFederatedActivityHome}
+                boundSelectedId={isMultiSelectMode ? null : selectedEnvironmentId}
+                onCreateBound={handleOpenCreateEnvDialog}
+                boundWaitingCount={waitingEnvironmentCount}
+              />
+            ) : federatedMode === "project" || federatedMode === "repository" ? (
+              <MergedProjectList
+                machines={machineViews}
+                shownIds={mergedShownIds}
+                mode={federatedMode}
+                renderBoundProject={renderMergedBoundProject}
+                onBoundEnvironmentDragEnd={handleBoundEnvironmentDrop}
+                boundLoading={projectsLoading && projects.length === 0}
+                onAddProject={() => setShowAddProjectDialog(true)}
+              />
+            ) : federatedMode === "machine" && boundMachineView ? (
               <MachineSectionList
                 machines={machineViews}
-                shown={remoteMachinesVisible}
-                renderBound={() => null}
+                shown={visibleMachines}
+                renderBound={() => localTree}
               />
-            </>
-          ) : (
-            localTree
-          )}
+            ) : federatedMode === "machine" ? (
+              // This window's machine is not identified yet; its tree comes first.
+              <>
+                {localTree}
+                <MachineSectionList
+                  machines={machineViews}
+                  shown={remoteMachinesVisible}
+                  renderBound={() => null}
+                />
+              </>
+            ) : (
+              localTree
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
-      <SidebarBottomBar />
+      <SidebarBottomBar stacked={compactActive} />
 
       {/* Add Project Dialog */}
       <AddProjectDialog

@@ -290,6 +290,8 @@ describe("instrumented owners", () => {
     const service = new DiffStatsService({
       metrics,
       emit: () => undefined,
+      // The rerun has to start at once for this test to settle it.
+      localScanMinGapMs: 0,
       schedule: (callback) => {
         callbacks.push(callback);
         return callbacks.length;

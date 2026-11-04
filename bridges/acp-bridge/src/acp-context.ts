@@ -40,6 +40,7 @@ import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-row
 import type { AcpTurnUsage } from "./usage.js";
 import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
+import { JsonlLineFramer } from "./acp-jsonl-framer.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
@@ -212,24 +213,6 @@ export interface AcpToolSourceState {
   chargedBytes?: number;
 }
 
-export interface AcpReplayToolMetadata {
-  id: string;
-  title?: string;
-  toolName?: string;
-  toolArgs?: JsonObject;
-  contentOutputHash?: string;
-  rawOutputHash?: string;
-  retainedBytes: number;
-}
-
-export interface AcpToolReplayCollector {
-  capacity: number;
-  maximumBytes: number;
-  retainedBytes: number;
-  byId: Map<string, AcpReplayToolMetadata>;
-}
-
-/** An image an agent returned. Bytes travel only as a bounded data URL. */
 export interface BridgeImagePart {
   type: "image";
   content: string;
@@ -375,28 +358,12 @@ export interface SessionState {
   uncheckedTranscriptBytes: number;
   currentTurnOutput: string | null;
   /**
-   * Monotonic count of turns dispatched to the agent in this process. Cursor's
-   * tool replay is detached from the turn lifecycle, so it needs a way to tell
-   * that the session has moved on since it captured its targets. Deliberately
-   * in-memory: a restart kills every outstanding replay, so a persisted value
+   * Monotonic count of turns dispatched to the agent in this process, so a
+   * retry outside the turn lifecycle can tell that the session has moved on.
+   * Deliberately in-memory: a restart ends every such retry, so a persisted value
    * would only invite comparing sequences across two different processes.
    */
   promptSequence: number;
-  /** Coalesces best-effort Cursor metadata replays within one live session. */
-  cursorToolReplayTimer?: ReturnType<typeof setTimeout>;
-  cursorToolReplayRunning?: boolean;
-  /** Replay children that close must terminate before acknowledging removal. */
-  cursorToolReplayChildren?: Set<AcpProcess>;
-  /**
-   * The pass this session still owes. `live` runs mid-turn and may only touch
-   * settled calls; `final` runs once the turn is over and supersedes a pending
-   * `live` request, because it can enrich calls the live pass had to skip.
-   */
-  cursorToolReplayPending?: "live" | "final";
-  /** `promptSequence` the run counter below belongs to. */
-  cursorToolReplayTurn?: number;
-  /** Replays actually started for `cursorToolReplayTurn`, capping live passes. */
-  cursorToolReplayRuns?: number;
   /** Messages evicted from the front, so absolute indices stay stable. */
   droppedMessages: number;
   /** Parts evicted from retained messages over the lifetime of this window. */
@@ -751,8 +718,6 @@ export const clientSessionKeys = new Map<string, string>();
 export const sessionCreations = new Map<string, Promise<SessionState>>();
 export const sessionResumes = new Map<string, Promise<SessionState>>();
 export let anonymousSessionCreations = 0;
-export let activeCursorToolReplays = 0;
-export const cursorToolReplayProcesses = new Set<AcpProcess>();
 export let sessionListProbe: Promise<JsonObject[]> | null = null;
 export let persistenceTail = Promise.resolve();
 export let persistenceScheduled = false;
@@ -927,27 +892,6 @@ export const MAX_MODEL_ID_BYTES = 1_024;
 export const MAX_TOOL_NAME_BYTES = 256;
 export const MAX_TOOL_TITLE_BYTES = 4 * 1024;
 export const MAX_TOOL_PATH_BYTES = 16 * 1024;
-export const MAX_REPLAY_RECONCILE_TOOLS = 4_096;
-export const MAX_CURSOR_TOOL_REPLAY_PROCESSES = 8;
-/**
- * Debounce for a live pass. Long enough to coalesce a burst of tools that
- * settle together into one replay, short enough that a title still lands while
- * the user is watching the turn.
- */
-export const CURSOR_TOOL_REPLAY_DELAY_MS = 500;
-/**
- * Each replay spawns a child and streams the *whole* session back, so one pass
- * per settled tool would make a long turn quadratic in its tool count. Live
- * passes are capped per turn; the final pass is never capped, so a turn that
- * exhausts its budget still ends fully enriched. `0` disables live passes and
- * leaves only that final pass.
- */
-export const MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN = parseBoundedInteger(
-  process.env.ACP_MAX_LIVE_CURSOR_TOOL_REPLAYS,
-  8,
-  0,
-  64,
-);
 /** Bounds both the time and the retained memory of `diffFileLines`. */
 export const MAX_DIFF_EDIT_DISTANCE = 512;
 /**
@@ -1112,7 +1056,7 @@ export class AcpProcess {
   #closed = false;
   #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
   #terminationOutcome?: "resolved" | "rejected";
-  #stdoutBuffer = Buffer.alloc(0);
+  readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
   /**
    * The latest `available_commands_update` that arrived before a session
@@ -1143,7 +1087,7 @@ export class AcpProcess {
     // Provider-specific command-line policy belongs in the launcher record.
     // Any permission request the agent still emits routes through the
     // bridge's fail-closed approval flow. A child spawned without a policy
-    // (catalog probe, session list, replay) still runs under the process
+    // (catalog probe, session list) still runs under the process
     // authority, so a coordinator bridge never starts Grok with its web tools.
     const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
     this.clientMethodGrant = acpClientMethodGrant(policy);
@@ -1394,23 +1338,16 @@ export class AcpProcess {
 
   #acceptChunk(chunk: Buffer): void {
     if (this.#closed) return;
-    this.#stdoutBuffer = Buffer.concat([this.#stdoutBuffer, chunk]);
-    while (true) {
-      const newline = this.#stdoutBuffer.indexOf(0x0a);
-      if (newline < 0) break;
-      if (newline > MAX_LINE_BYTES) {
-        this.#close(new Error(`${provider} ACP emitted an oversized JSONL frame`));
-        void this.#terminateChild("rejected");
-        return;
-      }
-      const line = this.#stdoutBuffer.subarray(0, newline).toString("utf8");
-      this.#stdoutBuffer = this.#stdoutBuffer.subarray(newline + 1);
-      this.#acceptLine(line);
-    }
-    if (this.#stdoutBuffer.length > MAX_LINE_BYTES) {
-      this.#close(new Error(`${provider} ACP emitted an unterminated oversized JSONL frame`));
-      void this.#terminateChild("rejected");
-    }
+    const failure = this.#stdoutFramer.accept(chunk, (line) => this.#acceptLine(line));
+    if (!failure) return;
+    this.#close(
+      new Error(
+        failure === "oversized"
+          ? `${provider} ACP emitted an oversized JSONL frame`
+          : `${provider} ACP emitted an unterminated oversized JSONL frame`,
+      ),
+    );
+    void this.#terminateChild("rejected");
   }
 
   #acceptLine(line: string): void {
@@ -1811,10 +1748,6 @@ export function setSessionListProbe(value: Promise<JsonObject[]> | null): void {
 
 export function adjustAnonymousSessionCreations(delta: number): void {
   anonymousSessionCreations += delta;
-}
-
-export function adjustActiveCursorToolReplays(delta: number): void {
-  activeCursorToolReplays += delta;
 }
 
 export function setPersistenceScheduled(value: boolean): void {

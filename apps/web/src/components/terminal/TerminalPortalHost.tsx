@@ -3,9 +3,10 @@ import { createPortal } from "react-dom";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useConfigStore } from "@/stores";
 import { createPortalTargetKey, useTerminalPortalStore } from "@/stores/terminalPortalStore";
+import { createXtermTerminal } from "@/lib/terminal-xterm";
 import { PersistentTerminal } from "./PersistentTerminal";
+import { isTerminalTab } from "./terminal-tab-types";
 import type { TabInfo, PaneLeaf } from "@/types/paneLayout";
-import type { TerminalTabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -14,19 +15,6 @@ import {
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
-
-// Terminal tab types that need PersistentTerminal instances.
-// Using an allowlist ensures new non-terminal TabType variants don't accidentally spawn PTY sessions.
-const TERMINAL_TAB_TYPES: ReadonlySet<string> = new Set<TerminalTabType>([
-  "plain",
-  "claude",
-  "opencode",
-  "codex",
-  "cursor",
-  "grok",
-  "pi",
-  "root",
-]);
 
 // Default fallback for environments not yet in the store
 const DEFAULT_ROOT: PaneLeaf = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
@@ -97,7 +85,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
         // Only handle terminal tabs — native agent and file tabs are rendered
         // directly by PaneLeafContainer; creating PersistentTerminals for them
         // would spawn unnecessary PTY sessions and useAgentState polling.
-        if (TERMINAL_TAB_TYPES.has(tab.type)) {
+        if (isTerminalTab(tab)) {
           map.set(tab.id, { tab, paneId: leaf.id });
         }
       }
@@ -125,13 +113,16 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     for (const [tabId] of terminalTabsMap) {
       if (!store.hasTerminal(environmentId, tabId)) {
         log.debug("portal.terminal-created", () => ({ tabId, environmentId }));
-        store.createTerminal({
-          tabId,
-          containerId,
-          environmentId,
-          appearance: terminalAppearanceResolved,
-          scrollback: terminalScrollback,
-        });
+        store.createTerminal(
+          {
+            tabId,
+            containerId,
+            environmentId,
+            appearance: terminalAppearanceResolved,
+            scrollback: terminalScrollback,
+          },
+          createXtermTerminal,
+        );
       }
     }
 

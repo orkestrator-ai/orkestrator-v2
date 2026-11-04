@@ -3983,6 +3983,23 @@ describe("coalesceAdjacentToolMessages", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test("singleton aliases survive trimming but cannot take another row's source id", () => {
+    const aliases = new Map<string, string>();
+    const a = toolMessage("a", "2026-09-03T10:43:01.000Z");
+    const b = toolMessage("b", "2026-09-03T10:43:02.000Z");
+    const prose: NativeMessage = {
+      ...a,
+      id: "prose",
+      content: "Between",
+      parts: [{ type: "text", content: "Between" }],
+    };
+    coalesceAdjacentToolMessages([a, b], aliases);
+    expect(coalesceAdjacentToolMessages([{ ...b }], aliases)[0]!.id).toBe("a");
+    expect(
+      coalesceAdjacentToolMessages([{ ...b }, prose, { ...a }], aliases).map((row) => row.id),
+    ).toEqual(["b", "prose", "a"]);
+  });
+
   test("merges consecutive tool-only messages into one tool group", () => {
     const rows = normalizeNativeMessages([
       toolMessage("m1", "2026-09-03T10:43:01.000Z", ["Read", "Read"]),

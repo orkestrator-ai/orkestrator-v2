@@ -25,6 +25,7 @@ import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
 import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
+import { registerCoordinatorPipelineStepActions } from "./coordinator-pipeline-step-actions.js";
 import { registerCoordinatorGoalActions } from "./coordinator-goal-actions.js";
 import { registerCoordinatorSuborkActions } from "./coordinator-subork-actions.js";
 import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
@@ -111,6 +112,7 @@ export function registerCoordinatorCommands(
   registerCoordinatorReviewActions(register, dependencies);
   registerCoordinatorSurfaceActions(register, dependencies);
   registerCoordinatorWorkerTurnActions(register, dependencies);
+  registerCoordinatorPipelineStepActions(register);
   registerCoordinatorGoalActions(register, dependencies);
   registerCoordinatorSuborkActions(register, dependencies);
   registerCoordinatorGraphActions(register);

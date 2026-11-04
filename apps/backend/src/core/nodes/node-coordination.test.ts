@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
+import { createHash } from "node:crypto";
+import { access, utimes } from "node:fs/promises";
+
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerNodeCommands } from "../commands-registry-nodes.js";
@@ -44,6 +47,74 @@ function coordination(world: MailWorld, controllers: Array<{ id: string; name: s
   });
   return { instance, events };
 }
+
+test("receive-only lifecycle expires abandoned incoming batches on startup and maintenance", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const { instance } = coordination(world, []);
+  let maintenance: (() => void) | undefined;
+  const interval = globalThis.setInterval;
+  const clock = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    ms: number,
+  ) => {
+    if (ms === 30_000) maintenance = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval);
+  const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  const incoming = async (batch: string, commit = true) => {
+    const scope = { mailAttachments: batch };
+    const bytes = Buffer.from("incoming image bytes");
+    const upload = await instance.files.beginWrite({
+      scope,
+      path: "shot.png",
+      size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      overwrite: false,
+    });
+    await instance.files.appendWrite(upload.uploadId, bytes.toString("base64"));
+    if (commit) await instance.files.commitWrite(upload.uploadId);
+    const directory = await instance.files.root(scope);
+    await utimes(directory, old, old);
+    return { directory, uploadId: upload.uploadId };
+  };
+  const removed = async (directory: string) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (
+        await access(directory).then(
+          () => false,
+          () => true,
+        )
+      )
+        return;
+      await Bun.sleep(5);
+    }
+    expect(
+      await access(directory).then(
+        () => false,
+        () => true,
+      ),
+    ).toBe(true);
+  };
+  try {
+    const startup = await incoming("a".repeat(32));
+    const outbox = await incoming("outbox-" + "b".repeat(32));
+    const active = await incoming("c".repeat(32), false);
+    instance.start();
+    await removed(startup.directory);
+    await access(outbox.directory);
+    await access(active.directory);
+    const abandoned = await incoming("d".repeat(32));
+    maintenance!();
+    await removed(abandoned.directory);
+    await access(outbox.directory);
+    await access(active.directory);
+    await instance.files.abortWrite(active.uploadId);
+  } finally {
+    clock.mockRestore();
+    instance.dispose();
+  }
+});
 
 describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
   for (const policy of ["muted", "off", "hourly-limit"] as const) {
@@ -104,6 +175,11 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       toTabId: worker.tabId,
       body: "Please report your status.",
     });
+    // Admitted as ordinary mail waiting to wake the agent.
+    expect(delivered.placement).toBe("pending-inject");
+    // Storing the mail wakes the backend's drain in the background, so the
+    // stored placement races it. Settle the drain before reading it back.
+    await world.deliver();
     const incoming = await world.storage.getAgentMailMessage(
       worker.environmentId,
       worker.tabId,
@@ -120,8 +196,8 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     });
     expect(incoming.trust).toBe("same-project");
     expect(incoming.route).toBe("coordinator");
-    expect(incoming.placement).toBe("pending-inject");
-    expect(delivered.placement).toBe("pending-inject");
+    expect(incoming.placement).toBe("injected");
+    expect(world.received(worker)).toEqual([incoming.body]);
     // The command node's transcript names the recipient by environment and tab.
     const tabName = (await world.storage.getAgentMailMailbox(worker.environmentId, worker.tabId))
       .descriptor.displayName;
@@ -444,6 +520,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     });
     await instance.collector.collect("bk_leaf" as never);
     expect(acks).toEqual([7]);
+    // Storing the mail wakes the backend's drain in the background, so the
+    // stored placement races it. Settle the drain before reading it back.
+    await world.deliver();
     const mailbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId, {
       limit: 10,
     });
@@ -470,7 +549,8 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
       title: "Claude 2",
     });
     expect(message.trust).toBe("same-project");
-    expect(message.placement).toBe("pending-inject");
+    expect(message.placement).toBe("injected");
+    expect(world.received(main)).toEqual([message.body]);
   });
 
   test("a report from a leaf worker the coordinator is waiting on is held until the delegation settles", async () => {

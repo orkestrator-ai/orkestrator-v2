@@ -7,7 +7,6 @@ import {
   clientSessionKeys,
   sessions,
 } from "./acp-context.js";
-import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
 
 export type RetainingCloseOutcome = "closed" | "pending";
@@ -104,7 +103,6 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   // admission in between would let work start on a session that is leaving.
   state.closing = "fenced";
   denyPendingRequests(state);
-  cancelCursorToolMetadataReconcile(state);
   if (state.status === "running" || state.dispatching) {
     // Same retry suppression as `/cancel`: a retriable provider error must not
     // restart the turn this close just stopped.
@@ -143,7 +141,6 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   }
 
   if (state.child) children.add(state.child);
-  for (const child of state.cursorToolReplayChildren ?? []) children.add(child);
   for (const child of children) await child.close();
   if (Array.from(children).some((child) => !exited(child))) return "pending";
 

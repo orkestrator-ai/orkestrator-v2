@@ -13,6 +13,9 @@ const outputRoot = path.join(repositoryRoot, "output", "agent-testing", runId, "
 
 export default defineConfig({
   testDir: import.meta.dirname,
+  // These specs launch their own Electron and need a real window, so
+  // `dev:test --headless` does not apply; on Linux use a disposable display.
+  globalSetup: path.join(import.meta.dirname, "electron-display-setup.ts"),
   testMatch: [
     "renderer-permissions-electron.spec.ts",
     "application-menu-electron.spec.ts",
@@ -26,6 +29,7 @@ export default defineConfig({
     "design-canvas-electron.spec.ts",
     "workspace-realm-electron.spec.ts",
     "connection-outage-electron.spec.ts",
+    "local-gateway-transport-electron.spec.ts",
     "renderer-log-boundary-electron.spec.ts",
     "pull-request-pane-electron.spec.ts",
   ],

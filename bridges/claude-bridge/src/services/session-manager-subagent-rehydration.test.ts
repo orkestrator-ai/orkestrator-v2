@@ -193,6 +193,98 @@ describe("rehydrateSubagentParts", () => {
     expect(row.parts.some((part) => part.content === "Look around")).toBe(false);
   });
 
+  test("labels the call with the model its subagent's responses reported", async () => {
+    const messages = rootTranscript();
+    const call = () =>
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "toolu_agent");
+    expect(call()?.subagentModelId).toBeUndefined();
+    await rehydrateSubagentParts(
+      {
+        listSubagents: mock(async () => ["agent-1"]),
+        getSubagentMessages: mock(async () => subagent("toolu_agent", "one")),
+      },
+      "sdk-1",
+      "/w",
+      messages,
+    );
+    expect(call()?.subagentModelId).toBe("claude-test");
+  });
+
+  test.each([
+    ["<synthetic>", undefined],
+    [undefined, "<synthetic>"],
+    [null, ""],
+  ])("uses the latest real model before trailing invalid models %p and %p", async (first, last) => {
+    const messages = rootTranscript();
+    const response = (id: string, model: unknown): Record_ => ({
+      ...assistant(id, [{ type: "text", text: id }], "toolu_agent"),
+      message: { role: "assistant", model, content: [{ type: "text", text: id }] },
+    });
+    await rehydrateSubagentParts(
+      {
+        listSubagents: async () => ["agent-1"],
+        getSubagentMessages: async () => [
+          response("old", "claude-old"),
+          response("new", "  claude-new  "),
+          response("invalid-1", first),
+          response("invalid-2", last),
+          // A user record cannot attribute the child, even if it carries a model.
+          { ...response("user", "claude-user"), type: "user" },
+        ],
+      },
+      "sdk-1",
+      "/w",
+      messages,
+    );
+    expect(
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "toolu_agent")
+        ?.subagentModelId,
+    ).toBe("claude-new");
+  });
+
+  test("preserves an existing call model when the rollout reports another", async () => {
+    const messages = rootTranscript();
+    const call = messages
+      .flatMap((message) => message.parts)
+      .find((part) => part.toolUseId === "toolu_agent")!;
+    call.subagentModelId = "claude-live";
+    await rehydrateSubagentParts(
+      {
+        listSubagents: async () => ["agent-1"],
+        getSubagentMessages: async () => subagent("toolu_agent", "sub"),
+      },
+      "sdk-1",
+      "/w",
+      messages,
+    );
+    expect(call.subagentModelId).toBe("claude-live");
+    expect(
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "toolu_agent")
+        ?.subagentModelId,
+    ).toBe("claude-live");
+  });
+
+  test("leaves attribution absent when every response is synthetic or missing a model", async () => {
+    const messages = rootTranscript();
+    await rehydrateSubagentParts(
+      {
+        listSubagents: async () => ["agent-1"],
+        getSubagentMessages: async () =>
+          ["<synthetic>", undefined].map((model, index) => ({
+            ...assistant(`invalid-${index}`, [], "toolu_agent"),
+            message: { role: "assistant", model, content: [] },
+          })),
+      },
+      "sdk-1",
+      "/w",
+      messages,
+    );
+    expect(
+      messages.flatMap((message) => message.parts).find((part) => part.toolUseId === "toolu_agent")
+        ?.subagentModelId,
+    ).toBeUndefined();
+  });
+
   test("follows a nested subagent into its parent's parts", async () => {
     const messages = rootTranscript();
     const outer = subagent("toolu_agent", "outer");
@@ -205,9 +297,14 @@ describe("rehydrateSubagentParts", () => {
         "toolu_agent",
       ),
     );
+    const inner = subagent("toolu_inner", "inner").map((record) =>
+      record.type === "assistant"
+        ? { ...record, message: { ...(record.message as object), model: "claude-inner" } }
+        : record,
+    );
     const transcripts: Record<string, Record_[]> = {
       // Listed child first: placement must not depend on listing order.
-      inner: subagent("toolu_inner", "inner"),
+      inner,
       outer,
     };
     await rehydrateSubagentParts(
@@ -223,6 +320,12 @@ describe("rehydrateSubagentParts", () => {
       message.parts.some((part) => part.toolUseId === "toolu_agent"),
     )!;
     expect(row.parts.some((part) => part.parentTaskUseId === "toolu_inner")).toBe(true);
+    expect(row.parts.find((part) => part.toolUseId === "toolu_agent")?.subagentModelId).toBe(
+      "claude-test",
+    );
+    expect(row.parts.find((part) => part.toolUseId === "toolu_inner")?.subagentModelId).toBe(
+      "claude-inner",
+    );
   });
 
   test("leaves a row that already shows its subagent alone", async () => {
@@ -242,6 +345,13 @@ describe("rehydrateSubagentParts", () => {
       messages,
     );
     expect(row.parts.length).toBe(before);
+    expect(row.parts.find((part) => part.toolUseId === "toolu_agent")?.subagentModelId).toBe(
+      "claude-test",
+    );
+    expect(row.parts.at(-1)).toMatchObject({
+      content: "live step",
+      parentTaskUseId: "toolu_agent",
+    });
   });
 
   test("bounds the work and never throws", async () => {

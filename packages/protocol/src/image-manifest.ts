@@ -85,6 +85,12 @@ export const IMAGE_CAPABILITIES = {
    * slow safety read. Older images keep the per-tick poll.
    */
   "tmux-hook-signal": 1,
+  /**
+   * `orkestrator-git-credential` answers Git from the token file on every
+   * request, so an image's `~/.gitconfig` and `origin` never hold the token.
+   * An older image keeps the token-bearing `insteadOf` rewrite.
+   */
+  "github-git-credential": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

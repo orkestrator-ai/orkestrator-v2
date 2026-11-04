@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  /** Set by a production build of `apps/web`; see `vite-plugin-renderer-security.ts`. */
+  readonly ORKESTRATOR_DESIGN_FRAME_DOCUMENT?: string;
+}
+
 interface Window {
   __orkestratorClientPlatform?:
     "desktop-browser" | "ios-wkwebview" | "ipad-wkwebview" | "iphone-wkwebview";

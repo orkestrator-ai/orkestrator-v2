@@ -958,8 +958,9 @@ credential helpers are reset (`withheldGitHubCredentialEnvironment`).
   per-session environment.
 
 Withholding is defence in depth, never a boundary: SSH keys, a container's
-runtime credential file and Git's `insteadOf` rewrite stay readable, and a
-command can read an ancestor process's environment (`/proc/<pid>/environ` on
+runtime credential file and, on an image older than `github-git-credential`,
+Git's token-bearing `insteadOf` rewrite stay readable, and a command can read an
+ancestor process's environment (`/proc/<pid>/environ` on
 Linux). The graph remote-ref guard (item 209) is the backstop, and the remote
 axis stays advisory on every platform. How strongly each platform holds a policy is
 `agentPolicyEnforcement`

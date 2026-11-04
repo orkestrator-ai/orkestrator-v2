@@ -48,9 +48,9 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
-| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Set `ORKESTRATOR_EGRESS=in-container` for the in-container firewall |
+| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart. Point that command only at a disposable daemon. |
-| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; pinned to the in-container firewall), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
+| Live readiness faults | same command, `./tests/container-live-readiness.test.ts` | C09 faults (missing firewall, DNS, permissions, torn status write, restart during launch; on derived images that do not declare `egress-gateway`, so the firewall stays in the runtime), a gateway that cannot apply its firewall, C10, C22 host-service reply, C23 re-run |
 | Live rebuild faults | same command, `./tests/container-live-rebuild-faults.test.ts` | C15: daemon disconnect mid-copy (a `DOCKER_HOST` proxy in the test process), kill just before and after the commit write |
 | Live build pipeline code rewind | same command, `./tests/build-pipeline-code-rewind-docker.test.ts` | "Rewind code to here" on fake providers through `createPipelineEnvironmentGit` and `docker exec`: preview, backup ref, reset, restart and lease push; a paused container refused with a readable reason; a reset journaled before the container stopped finishing once it answers (to-do 0405, task 7) |
 | Live MCP delivery | same command, `./tests/mcp-overlay-live.test.ts` | Cursor `mcp.json` copy, container writer, environment overlay across stop/start and replacement, real rebuild re-staging (todo 0040) |
@@ -604,6 +604,34 @@ removed afterwards.
   runs these suites on `ubuntu-24.04` and `ubuntu-24.04-arm` for a pull
   request that changes them), rootless, IPv6-enabled daemons, a Docker daemon
   restart, and DNS rotation beyond the refresh the firewall suite runs.
+
+## Project seed files and gateway reach on Docker Desktop (2026-11-04)
+
+The security report's H3 check, and the reachability question behind accepting
+a leaked gateway session (`docs/architecture/remote-gateway.md`, Security notes).
+
+- **Host:** macOS on Apple Silicon, Docker Desktop, engine 29.9.2.
+- **Image:** `orkestrator-v2:dev-cc80206a42eb`, network policy 3.
+- **H3:** `apps/backend/tests/container-project-seed-docker.test.ts` passed with
+  `ORKESTRATOR_SEED_TEST_IMAGE` set: seed files arrive by `docker cp` with private
+  `node` ownership.
+- **Gateway reach:** a throwaway HTTP listener bound to the host's `127.0.0.1`
+  stood in for the gateway, called from inside a container through
+  `host.docker.internal`. A second listener was named in
+  `ORKESTRATOR_HOST_SERVICE_PORTS` as a positive control. The firewall ran inside
+  the container (`firewall-boot` `applied`), not in an egress gateway.
+
+  | Network mode | Gateway stand-in | Named service port | Peer the listener saw |
+  | --- | --- | --- | --- |
+  | `restricted` | Refused at once | Answered | `127.0.0.1` (named port) |
+  | `full` | Answered | Answered | `127.0.0.1` |
+
+  A container's `Host` was `host.docker.internal:<port>`. The peer is loopback on
+  this platform, so binding a session to its peer address would not separate a
+  container from the browser that signed in.
+- **Not covered:** a rootless daemon, Linux Engine, and a real gateway on a
+  Tailscale address
+  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
 
 ## Rootless Linux host (2026-10-25)
 
@@ -1187,3 +1215,117 @@ test's `change-to-scan` line is not a clean latency: it follows a writer
 whose close rang just before, so it likely waits out part of the 2 s hint
 gap (1.3 to 1.4 s on Desktop and Linux Engine alike). Use the profile sample's
 `latencyMs` for change-to-visible.
+
+## Rollout-cap retirement review qualification (2026-11-04)
+
+Worktree `orkestrator-v2-20261104-003145-f5f8c9e82488`, code at `718294df1`
+plus the live-start helper repair described below.
+The shared rootful daemon still had no free default address ranges; no shared
+networks were removed and its configuration was not changed. Instead, a
+private host rootless Engine 29.9.2 ran on Arch Linux kernel 7.1.8, using
+RootlessKit 2.3.5 (Docker's 29.0.1 rootless extras), VPNKit and builtin port
+forwarding. Its socket was `/tmp/ork-retire-f5f8-runtime/docker.sock`, its data
+root was private under `output/qualification-retirement/`, and its new bridge
+pool was `172.30.0.0/16`, split into /24s. Host loopback was disabled (the
+launcher default). This was a host daemon, not nested Docker-in-Docker.
+
+Image: `orkestrator-v2:dev-1e785cae5ca6`, transferred from the shared daemon
+without retagging it; id
+`sha256:811f06a968ba95efde1302a9b98def04143776e1ad926bf665f4186840107653`.
+This is the same complete review image used for the earlier manifest-selection
+check, with `egress-gateway=1`, `network-policy=3`, `staged-inputs=4`.
+The readiness suite derives its legacy fixtures by removing the manifest's
+`egress-gateway` capability; the base image still exercises gateway refusal.
+No agents or real credentials were involved.
+
+Commands below used
+`DOCKER_HOST=unix:///tmp/ork-retire-f5f8-runtime/docker.sock`, and the first two
+also used `RUN_LIVE_DOCKER_TESTS=1` and
+`ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-1e785cae5ca6`:
+
+```bash
+mise run test:logged -- --name live-readiness-in-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1 --test-name-pattern 'C09|C23'
+mise run test:logged -- --name rootless-gateway-firewall -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
+mise run test:logged -- --name rootless-default-loopback -- bun test --preload ./tests/setup-node.ts ./output/qualification-retirement/default-loopback.test.ts --parallel=1
+```
+
+- Readiness: **passed 7/7**, 2 unrelated cases filtered out, 192.4 s.
+  The missing firewall, gateway refusal, DNS failure, unwritable status,
+  torn status, restart-during-launch and firewall re-run assertions all ran
+  live against their derived images. This replaces the earlier address-pool
+  failure with passing evidence; summary:
+  `/tmp/orkestrator-test-run.u21N5t/summary.json`.
+- Firewall: **passed 2/2**, 33.9 s. The gateway branch asserts zero workload
+  capabilities, refused `orkroot` iptables/ipset tampering, published-port
+  access, fail-closed gateway restart and recovery through the backend start
+  path, allowlist updates, revocation and policy-3 tuples.
+- Default loopback: **passed 1/1**, 14.1 s. The local qualification fixture
+  binds an ephemeral host HTTP listener, calls the real
+  `ContainerHostReachabilityService`, asserts `dockerRootless: true`,
+  `status: blocked` and the `DISABLE_HOST_LOOPBACK=false` remediation, then
+  creates/boots a runtime through `createDockerContainer` and
+  `prepareEgressGatewayForStart` and asserts the runtime probe is refused,
+  unreachable or timed out. Its source is retained in the ignored output
+  directory, not added to the deterministic suite. The first attempted
+  invocation used the test preload outside `bun test` and failed before any
+  probe; the corrected test-runner invocation above passed.
+
+Successful logged summaries: `/tmp/orkestrator-test-run.AEX7FL/summary.json`
+(firewall), `/tmp/orkestrator-test-run.ULADKO/summary.json` (loopback). Passing
+raw logs are deleted by the logged runner.
+
+The same private daemon was then run with slirp4netns 1.3.3 (libslirp 4.9.1),
+first with default host loopback disabled. The firewall suite passed **2/2**
+again (32.8 s), and the default-loopback fixture passed **1/1** (5.4 s).
+This proves the tamper/restart checks and the blocked host-service diagnosis
+on the driver used by the previous rootless qualification too.
+
+With VPNKit and host loopback enabled, firewall still passed **2/2** (32.6 s),
+but the network suite failed **1/4** at host discovery (`blocked` rather than
+`reachable`), and C22's authenticated-reply test was incomplete for the same
+reason. Evidence: `/tmp/orkestrator-test-run.WU9abD` and
+`/tmp/orkestrator-test-run.y979v1`. The backend's RootlessKit fallback address
+`10.0.2.2` did not answer on that VPNKit setup. These are infrastructure/path
+limitations, not flakes, and no assertions were weakened. After changing the
+private daemon to slirp4netns with host loopback enabled, the exact failing
+commands were rerun (same environment and image, same socket):
+
+```bash
+mise run test:logged -- --name rootless-gateway-network-enabled -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-network.test.ts --parallel=1
+mise run test:logged -- --name rootless-host-service-enabled -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-readiness.test.ts --parallel=1 --test-name-pattern C22
+mise run test:logged -- --name rootless-gateway-firewall-enabled -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1
+```
+
+On slirp4netns with loopback enabled, C22's authenticated HTTP/MCP reply
+passed **1/1** (5.4 s) and the firewall suite passed **2/2** (32.0 s).
+The network suite's C22 passed too, but C26 hit a real RootlessKit automatic
+host-port collision (3 passed, 1 failed, 27.2 s;
+`/tmp/orkestrator-test-run.RACYKX`). Rerunning the unchanged owning file alone
+reproduced collisions in C24/C26 (1 passed, 3 failed, 12.6 s;
+`/tmp/orkestrator-test-run.ASpYSH`), so this was not classified as a flake.
+The live `container-live-start.ts` helper used bare `docker start` for the
+workload even though the gateway and production start path already use
+`startDockerContainer`. It now uses that same bounded automatic-port retry
+and network-repair helper. No retry budget or assertions were changed.
+The exact network-suite command above then **passed 4/4** (35.9 s), including
+host/sibling isolation, resource budgets, CPU-pressure isolation and bounded
+logs. The helper's `container-start.test.ts` owner, backend test typecheck,
+focused lint and formatting checks also passed.
+
+Decision: reuse production start recovery in the shared live fixture. An
+alternative is to select ports from a private range or retry entire tests;
+those could avoid host collisions but would stop exercising the production
+start behavior. Reuse keeps the fixture faithful and retains fixed-port
+failures as failures.
+
+All suite-created containers, volumes, networks and derived tags were removed
+by their existing owner-label cleanup. Content-free logged summaries are also
+copied under `output/qualification-retirement/` for local review; failing logs
+remain in the unique private runner directories named above. The private
+daemon was stopped, and its data root removed. The shared daemon and its
+networks were left unchanged.
+
+Limits: this does not qualify every rootless kernel, a rootless daemon restart
+with owned runtimes, or the entire replacement matrix. Those remain under todo
+0018 task 2; the prior rootless evidence is retained above. The existing readiness fault suite was rerun rather than replacing its
+assertions with a manifest-only check.

@@ -246,6 +246,19 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const useHostGitHubCredentials = hasExplicitGitHubCredentialSource
     ? global.useHostGitHubCredentials
     : !hasLegacyGitHubToken;
+  // Before containers had their own setting they received whatever the backend
+  // used. Keep that for an install being upgraded, so its pushes and pull
+  // requests keep working; only a new install starts without one. A value that
+  // is present but unknown shares nothing.
+  const containerGitHubCredential =
+    global.containerGitHubCredential === undefined
+      ? useHostGitHubCredentials
+        ? "host-cli"
+        : "pat"
+      : global.containerGitHubCredential === "host-cli" ||
+          global.containerGitHubCredential === "pat"
+        ? global.containerGitHubCredential
+        : "none";
   const normalizedEnabledAgentPlatforms = normalizeAgentPlatforms(
     global.enabledAgentPlatforms,
     LEGACY_ENABLED_AGENT_PLATFORMS,
@@ -357,6 +370,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.sshAgentSocketPath === sshAgentSocketPath &&
     global.defaultProjectsDirectory === defaultProjectsDirectory &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
+    global.containerGitHubCredential === containerGitHubCredential &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
@@ -392,6 +406,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       sshAgentSocketPath,
       defaultProjectsDirectory,
       useHostGitHubCredentials,
+      containerGitHubCredential,
       enabledAgentPlatforms,
       favoriteModels,
       openCodeModelProviders,

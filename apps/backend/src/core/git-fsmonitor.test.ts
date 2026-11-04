@@ -510,3 +510,16 @@ describe("working-tree status reads retry without fsmonitor after a timeout", ()
     ]);
   });
 });
+
+test("does not retry an output-close failure as a hung fsmonitor", async () => {
+  const failure = new CommandFailedError("lost output", {
+    timedOut: true,
+    outputCloseTimedOut: true,
+    exitCode: 0,
+  });
+  const run = mock(async (_args: string[]) => {
+    throw failure;
+  });
+  await expect(retryGitWithoutFsmonitorOnTimeout(["status"], run)).rejects.toBe(failure);
+  expect(run).toHaveBeenCalledTimes(1);
+});

@@ -204,3 +204,12 @@ that identifies a wait this fix did not remove. CI has not run the fix yet, CI i
 x86-64 and the local evidence is aarch64 and macOS, so that CI's misses have this
 cause is still an assumption. One green run proves little for a failure seen in about
 one run in ten.
+
+## Independent incoming mitigation (2026-11-04)
+
+The merged main branch independently reproduced five misses in 203 loaded runs,
+then recorded none in 435 runs with a 5 s post-exit Git pipe-close bound. Of
+those fixed runs, 22 took over 3 s (maximum 5,969 ms), showing the condition still
+occurred. Those results describe that earlier mitigation, not the final merged
+code. File capture supersedes it here; [report 0020](../../../reports/ci-shard-validation/0020-git-output-lost-after-exit.md)
+retains its investigation and the remaining runtime-trigger work.

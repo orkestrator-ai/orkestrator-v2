@@ -1881,8 +1881,8 @@ describe("CoordinatorPanel", () => {
     await screen.findByText("Clear failed once");
     fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
     await waitFor(() => {
-      expect(screen.queryByText("Clear failed once")).toBeNull();
-      expect(screen.queryByText("PR #420")).toBeNull();
+      expect(screen.queryByText("Clear failed once") === null).toBe(true);
+      expect(screen.queryByText("PR #420") === null).toBe(true);
     });
     expect(hideWork).toHaveBeenLastCalledWith("project-1", ["finished-follow"]);
   });

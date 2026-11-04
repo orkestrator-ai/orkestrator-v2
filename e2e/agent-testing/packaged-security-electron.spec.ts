@@ -3,12 +3,17 @@ import { expect, test } from "./electron-fixtures";
 import { chromium, type Browser } from "playwright";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
+  GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+  RENDERER_CONTENT_SECURITY_POLICY,
+} from "@orkestrator/protocol/renderer-content-security-policy";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { ownProcessGroup, stopProcessGroup, withCleanup } from "../process-cleanup";
@@ -42,6 +47,7 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
   ).toEqual([]);
   const scratch = await mkdtemp(path.join(os.tmpdir(), "orkestrator-package-security-"));
   let browser: Browser | undefined;
+  let policyBrowser: Browser | undefined;
   let child: ReturnType<typeof spawn> | undefined;
   let stopped = false;
   let requests = 0;
@@ -129,8 +135,190 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
         { timeout: 60_000 },
       )
       .toContain(renderer);
+    // Security report M6 and M7: the sandboxed CommonJS preload still exposes the
+    // bridge, the document carries the policy, and that policy refuses script.
+    const page = browser
+      .contexts()
+      .flatMap((c) => c.pages())
+      .find((p) => p.url() === renderer)!;
+    expect(
+      await page.evaluate(async () => {
+        const inline = document.createElement("script");
+        inline.textContent = "window.__inlineScriptRan = true";
+        document.head.append(inline);
+        // CDP's evaluate lifts the eval restriction for its synchronous scope.
+        await new Promise((resolve) => setTimeout(resolve));
+        let evalRan = true;
+        try {
+          new Function("return 1")();
+        } catch {
+          evalRan = false;
+        }
+        return {
+          bridge: typeof (window as unknown as { orkestrator?: { invoke?: unknown } }).orkestrator
+            ?.invoke,
+          nodeIntegration: typeof (window as unknown as { require?: unknown }).require,
+          policy: document
+            .querySelector('meta[http-equiv="Content-Security-Policy"]')
+            ?.getAttribute("content"),
+          inlineScriptRan: "__inlineScriptRan" in window,
+          evalRan,
+        };
+      }),
+    ).toEqual({
+      bridge: "function",
+      nodeIntegration: "undefined",
+      policy: RENDERER_CONTENT_SECURITY_POLICY,
+      inlineScriptRan: false,
+      evalRan: false,
+    });
+    // CSP file: 'self' must never make a sibling local script executable.
+    const outside = path.join(scratch, "outside-renderer.js");
+    await writeFile(outside, "window.__outsideRendererScriptRan = true");
+    expect(
+      await page.evaluate(async (src) => {
+        const script = document.createElement("script");
+        script.src = src;
+        const outcome = new Promise<string>((resolve) => {
+          script.onload = () => resolve("loaded");
+          script.onerror = () => resolve("blocked");
+        });
+        document.head.append(script);
+        const result = await outcome;
+        script.remove();
+        return { result, ran: "__outsideRendererScriptRan" in window };
+      }, pathToFileURL(outside).href),
+    ).toEqual({ result: "blocked", ran: false });
+
+    // Exercise the emitted worker, including its real Oniguruma WebAssembly engine.
+    const assets = await readdir(path.join(pkg.resources, "web/assets"));
+    const highlight = assets.find((name) => /^highlight\.worker-.*\.js$/.test(name));
+    expect(highlight).toBeDefined();
+    const highlighted = await page.evaluate(
+      async (src) => {
+        const worker = new Worker(src, { type: "module" });
+        try {
+          return await new Promise<{ ok: boolean; lines: Array<Array<{ s?: string }>> }>(
+            (resolve, reject) => {
+              const timer = setTimeout(
+                () => reject(new Error("Highlighter worker timed out")),
+                15000,
+              );
+              worker.onmessage = ({ data }) => {
+                clearTimeout(timer);
+                resolve(data);
+              };
+              worker.onerror = () => {
+                clearTimeout(timer);
+                reject(new Error("Highlighter worker failed"));
+              };
+              worker.postMessage({
+                id: 1,
+                lang: "typescript",
+                theme: "dark",
+                code: "const answer: number = 42;",
+              });
+            },
+          );
+        } finally {
+          worker.terminate();
+        }
+      },
+      new URL(`assets/${highlight}`, renderer).href,
+    );
+    expect(highlighted.ok).toBe(true);
+    expect(highlighted.lines.flat().some((token) => token.s)).toBe(true);
+
+    const editorWorker = assets.find((name) => /^editor\.worker-.*\.js$/.test(name));
+    expect(editorWorker).toBeDefined();
+    expect(
+      await page.evaluate(
+        async (src) => {
+          const worker = new Worker(src, { type: "module" });
+          try {
+            return await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("Monaco worker timed out")), 15000);
+              worker.onmessage = ({ data }) => {
+                if (data.type === 1 && data.seq === "1") {
+                  clearTimeout(timer);
+                  if (data.err) reject(new Error("Monaco initialization refused"));
+                  else resolve(true);
+                }
+              };
+              worker.onerror = () => {
+                clearTimeout(timer);
+                reject(new Error("Monaco worker failed"));
+              };
+              worker.postMessage("bootstrap");
+              worker.postMessage({
+                vsWorker: 1,
+                type: 0,
+                req: "1",
+                channel: "default",
+                method: "$initialize",
+                args: [1],
+              });
+            });
+          } finally {
+            worker.terminate();
+          }
+        },
+        new URL(`assets/${editorWorker}`, renderer).href,
+      ),
+    ).toBe(true);
+
+    // The emitted document executes its hash-pinned bootstrap in an opaque frame.
+    expect(
+      await page.evaluate(async (src) => {
+        const frame = document.createElement("iframe");
+        frame.sandbox.add("allow-scripts");
+        frame.src = src;
+        frame.dataset.securityProbe = "design";
+        frame.style.cssText =
+          "position:fixed;inset:16px;width:400px;height:150px;z-index:2147483647;background:white;color:black";
+        return await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            frame.remove();
+            reject(new Error("Design runtime timed out"));
+          }, 15000);
+          const receive = (event: MessageEvent) => {
+            if (event.source !== frame.contentWindow || event.data?.requestId !== "security-probe")
+              return;
+            clearTimeout(timer);
+            window.removeEventListener("message", receive);
+            resolve({ result: event.data.result, origin: event.origin });
+          };
+          window.addEventListener("message", receive);
+          frame.onload = () =>
+            frame.contentWindow!.postMessage(
+              {
+                channel: "orkestrator-design",
+                requestId: "security-probe",
+                operation: { op: "render", html: "<!doctype html><p>Packaged design runtime</p>" },
+              },
+              "*",
+            );
+          document.body.append(frame);
+        });
+      }, new URL("design-frame.html", renderer).href),
+    ).toEqual({ result: true, origin: "null" });
+    await expect(
+      page
+        .locator('iframe[data-security-probe="design"]')
+        .contentFrame()
+        .getByText("Packaged design runtime"),
+    ).toBeVisible();
+    const previewDir = path.join(root, "output/visual-previews");
+    await mkdir(previewDir, { recursive: true });
+    await page.locator('iframe[data-security-probe="design"]').screenshot({
+      path: path.join(previewDir, "renderer-security-packaged-design-runtime-visible.png"),
+    });
+    await page.locator('iframe[data-security-probe="design"]').evaluate((frame) => frame.remove());
+
+    expect(stderr).not.toContain("preload-failed");
     // file:// startup alone does not exercise the backend's HTTP renderer path.
     // Authenticate locally without putting the disposable token in any artifact.
+    let gatewayPolicy: string | null = null;
     await expect
       .poll(
         async () => {
@@ -144,6 +332,7 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
               redirect: "manual",
             });
             await response.arrayBuffer();
+            gatewayPolicy = response.headers.get("content-security-policy");
             return response.status;
           } catch {
             return 0;
@@ -152,6 +341,74 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
         { timeout: 60_000 },
       )
       .toBe(200);
+    expect(gatewayPolicy).toBe(GATEWAY_RENDERER_CONTENT_SECURITY_POLICY);
+    const { token: gatewayToken } = JSON.parse(
+      await readFile(path.join(profile.dataDir, "gateway-auth.json"), "utf8"),
+    );
+    const designPath = process.platform === "darwin" ? "DESIGN-FRAME.HTML" : "design-frame.html";
+    const designResponse = await fetch(`http://127.0.0.1:${gatewayPort}/${designPath}`, {
+      headers: { Authorization: `Bearer ${gatewayToken}` },
+    });
+    expect(designResponse.status).toBe(200);
+    expect(designResponse.headers.get("content-security-policy")).toBe(
+      GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+    );
+    // Replay the authenticated document and its actual policy without putting a
+    // bearer in browser requests or traces. No iframe sandbox attribute: the
+    // gateway header itself must make the document opaque.
+    const designBody = await designResponse.text();
+    const designUrl = "https://renderer-security.invalid/design-frame.html";
+    policyBrowser = await chromium.launch({ headless: true });
+    const policyPage = await policyBrowser.newPage();
+    await policyPage.route("https://renderer-security.invalid/", (route) =>
+      route.fulfill({
+        body: "<!doctype html><title>Gateway policy probe</title>",
+        contentType: "text/html",
+        headers: { "content-security-policy": GATEWAY_RENDERER_CONTENT_SECURITY_POLICY },
+      }),
+    );
+    await policyPage.goto("https://renderer-security.invalid/");
+    await policyPage.route(designUrl, (route) =>
+      route.fulfill({
+        body: designBody,
+        contentType: "text/html",
+        headers: { "content-security-policy": GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY },
+      }),
+    );
+    expect(
+      await policyPage.evaluate(async (src) => {
+        const frame = document.createElement("iframe");
+        frame.src = src;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("Gateway design bootstrap timed out")),
+            15000,
+          );
+          const receive = (event: MessageEvent) => {
+            if (event.source !== frame.contentWindow || event.data?.requestId !== "gateway-probe")
+              return;
+            clearTimeout(timer);
+            window.removeEventListener("message", receive);
+            frame.remove();
+            resolve({ origin: event.origin, result: event.data.result });
+          };
+          window.addEventListener("message", receive);
+          frame.onload = () =>
+            frame.contentWindow!.postMessage(
+              {
+                channel: "orkestrator-design",
+                requestId: "gateway-probe",
+                operation: { op: "render", html: "<p>Gateway design runtime</p>" },
+              },
+              "*",
+            );
+          document.body.append(frame);
+        });
+      }, designUrl),
+    ).toEqual({ origin: "null", result: true });
+    await policyBrowser.close();
+    policyBrowser = undefined;
+
     expect(requests).toBe(0);
     expect(stderr).toContain("dev-mode.ignored-packaged");
     expect(stderr).not.toContain("Debugger listening");
@@ -176,6 +433,7 @@ test("shipping binary has the L3 fuses and ignores hostile dev variables, NODE_O
     expect(inspectorOpen).toBe(false);
   }, [
     async () => {
+      await policyBrowser?.close();
       await browser?.close();
     },
     async () => {

@@ -402,7 +402,7 @@ describe("QueuedPromptStack without a queue manager", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /View queued prompts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /View queued prompts/ }) === null).toBe(true);
     expect(screen.getByText("1 queued").getAttribute("aria-hidden")).toBeNull();
   });
 });

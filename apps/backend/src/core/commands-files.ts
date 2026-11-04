@@ -1252,7 +1252,7 @@ export async function resolveRemoteWorktreeStartPoint(
   try {
     await runRemoteGit("fetch", ["origin", branch], { cwd: projectPath, timeoutMs: 120_000 });
   } catch (error) {
-    if (error instanceof CommandFailedError && error.timedOut) {
+    if (error instanceof CommandFailedError && error.timedOut && !error.outputCloseTimedOut) {
       throw new GitRemoteTimeoutError(error.message, { signal: error.signal });
     }
     throw error;
@@ -2361,9 +2361,37 @@ export async function readLocalFileAtBranch(
   }
 }
 
+/**
+ * Writes the token file, then points Git at it. An image with the
+ * `github-git-credential` capability gets its helper, which reads the file per
+ * request, so the token stays out of `~/.gitconfig`. An older image has no
+ * helper and keeps the token-bearing rewrite. Pass the helper's path for the
+ * former. `""` first drops any helper a copied host config names for GitHub.
+ */
 export function buildSyncContainerGitHubCredentialCommand(
   credentialFile = CONTAINER_GITHUB_CREDENTIAL_FILE,
+  gitCredentialHelper?: string,
 ): string {
+  const configureGit = gitCredentialHelper
+    ? `
+  git config --global --remove-section credential.https://github.com 2>/dev/null || true
+  git config --global --unset-all url.https://github.com/.insteadOf '^git@github\\.com:$' 2>/dev/null || true
+  if [ -n "$(cat "$credential_file")" ]; then
+    git config --global --add credential.https://github.com.helper ""
+    git config --global --add credential.https://github.com.helper ${quoteShell(gitCredentialHelper)}
+    git config --global --add url.https://github.com/.insteadOf "git@github.com:"
+  fi
+`
+    : `
+  token="$(cat "$credential_file")"
+  if [ -n "$token" ]; then
+    token_url="https://x-access-token:$token@github.com/"
+    git config --global --replace-all "url.$token_url.insteadOf" "https://github.com/"
+    git config --global --add "url.$token_url.insteadOf" "https://github.com"
+    git config --global --add "url.$token_url.insteadOf" "git@github.com:"
+  fi
+  unset token token_url
+`;
   return `
   set -e
   credential_file=${quoteShell(credentialFile)}
@@ -2386,26 +2414,43 @@ export function buildSyncContainerGitHubCredentialCommand(
       git config --global --remove-section "$section" 2>/dev/null || true
     done
 
-  token="$(cat "$credential_file")"
-  if [ -n "$token" ]; then
-    token_url="https://x-access-token:$token@github.com/"
-    git config --global --replace-all "url.$token_url.insteadOf" "https://github.com/"
-    git config --global --add "url.$token_url.insteadOf" "https://github.com"
-    git config --global --add "url.$token_url.insteadOf" "git@github.com:"
-  fi
-  unset token token_url
-`;
+  # A clone by an earlier image kept the token in origin, which a preserving
+  # rebuild carries over with the workspace.
+  origin_url="$(git -C /workspace remote get-url origin 2>/dev/null || true)"
+  case "$origin_url" in
+    https://x-access-token:*@github.com/*)
+      git -C /workspace remote set-url origin "https://github.com/\${origin_url#*@github.com/}" || true
+      ;;
+  esac
+  unset origin_url
+${configureGit}`;
 }
 
+export const CONTAINER_GIT_CREDENTIAL_HELPER = "/usr/local/bin/orkestrator-git-credential";
+
 export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHubCredentialCommand();
+const SYNC_CONTAINER_GITHUB_CREDENTIAL_HELPER_COMMAND = buildSyncContainerGitHubCredentialCommand(
+  CONTAINER_GITHUB_CREDENTIAL_FILE,
+  CONTAINER_GIT_CREDENTIAL_HELPER,
+);
 
 export async function syncContainerGitHubCredential(
   containerId: string,
   token: string | undefined,
+  options: { gitCredentialHelper: boolean },
 ): Promise<void> {
   await runCommand(
     "docker",
-    ["exec", "-i", containerId, "bash", "-lc", SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND],
+    [
+      "exec",
+      "-i",
+      containerId,
+      "bash",
+      "-lc",
+      options.gitCredentialHelper
+        ? SYNC_CONTAINER_GITHUB_CREDENTIAL_HELPER_COMMAND
+        : SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND,
+    ],
     {
       stdin: token ?? "",
       timeoutMs: 30_000,

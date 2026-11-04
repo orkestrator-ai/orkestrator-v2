@@ -493,6 +493,8 @@ export interface SessionState {
    * completed. Runtime-only, reset when a turn is dispatched.
    */
   turnAborted?: boolean;
+  /** Someone asked this turn to stop, so a failure it then reports is not one. Never persisted. */
+  turnCancelRequested?: boolean;
   /**
    * The current turn's last response failure, from an assistant message Pi
    * ended with `stopReason: "error"` (a provider error, or a run that threw,

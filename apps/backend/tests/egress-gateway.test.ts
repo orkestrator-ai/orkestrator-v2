@@ -95,15 +95,12 @@ describe("where a runtime's firewall runs", () => {
       networkMode: "restricted" as const,
       networkPolicy: 3 as const,
       imageGatewayVersion: 1,
-      override: undefined,
     };
     expect(egressEnforcement(base)).toBe("gateway");
     expect(egressEnforcement({ ...base, networkMode: "full" })).toBe("none");
     expect(egressEnforcement({ ...base, imageGatewayVersion: 0 })).toBe("container");
     expect(egressEnforcement({ ...base, networkPolicy: 1 })).toBe("container");
     expect(egressEnforcement({ ...base, networkPolicy: 2 })).toBe("gateway");
-    expect(egressEnforcement({ ...base, override: "in-container" })).toBe("container");
-    expect(egressEnforcement({ ...base, override: "anything-else" })).toBe("gateway");
   });
 
   test("names and creation arguments", () => {

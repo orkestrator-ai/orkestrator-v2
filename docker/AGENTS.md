@@ -14,6 +14,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
+| `orkestrator-git-credential.sh` | Git credential helper that reads the GitHub token file |
 | `verify-playwright.cjs` | Launches Chromium; run at build time and on demand       |
 | `verify-root-boundary.sh` | Build-time check that root uses nothing `node` can write |
 | `tests/root-boundary-smoke.sh` | Plants files as `node` in a built image; root must run none |

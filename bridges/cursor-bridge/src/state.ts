@@ -338,6 +338,8 @@ export interface SessionState {
   attaching?: Promise<SDKAgent>;
   /** Cancels the turn in flight. Never persisted. */
   cancelTurn?: () => Promise<void>;
+  /** Someone asked this turn to stop, so a failure it then reports is not one. Never persisted. */
+  turnCancelRequested?: boolean;
   /** Current SDK run, retained only while it can accept steering. */
   activeRun?: Run;
   /** In-flight re-attach of a run that survived a bridge restart. */

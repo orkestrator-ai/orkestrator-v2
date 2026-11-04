@@ -52,7 +52,8 @@ export class OrkestratorGateway {
 
   constructor(options: OrkestratorGatewayOptions) {
     this.context = new GatewayContext(options, {
-      gatewayCredentialMatches: (candidate) => this.auth.gatewayCredentialMatches(candidate),
+      gatewayCredentialMatches: (candidate, request) =>
+        this.auth.gatewayCredentialMatches(candidate, request),
       gatewayCredentialExpiresAt: (candidate) => this.auth.gatewayCredentialExpiresAt(candidate),
       requestCredentialMatches: (request) => this.auth.requestCredentialMatches(request),
       isOriginAllowed: (request, originValue) => this.auth.isOriginAllowed(request, originValue),

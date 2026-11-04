@@ -144,3 +144,19 @@ The test now reports its steps on any failure or deadline miss, and a passing ru
 - [Todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the runtime defect behind the stall, still in Bun
 - [0030 test suite and CI health](../../todo/cross-cutting/0030-test-suite-and-ci-health.md), task 1. The required-check ruleset is still unapplied (`gh api repos/orkestrator-ai/orkestrator-v2/rulesets` returned an empty list today), which is why #1636 could merge with a red gate. That stays with 0030 as a maintainer action.
 - [2922 full and isolated suite failures on main](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md), which owns the `bounded test diagnostics` failure.
+
+## Merge reconciliation (2026-11-04)
+
+The incoming branch independently bounded lost Git pipe closure at 5 s and
+recorded 0 failures in 435 loaded iterations, against 5 in 203 before. That
+mitigation is superseded here by file capture and the macOS exit watchdog; its
+observations remain useful history, not validation of the merged code. The
+incoming timer diagnostic is superseded by the bounded `onTestFinished` helper,
+which reports failed steps without leaving a timer after a suspended test.
+[0020](0020-git-output-lost-after-exit.md) retains the upstream-trigger work and
+the limits of retargeting. Incoming regression coverage for late Git and hook
+output uses the explicit `waitForDescendants` contract.
+
+The incoming branch also recorded deterministic `bounded test diagnostics`
+failures on `0bd2cea9`, `a06f16d7` and `a44641cb`, and rewrote those assertions.
+That work stays with [2922](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md).

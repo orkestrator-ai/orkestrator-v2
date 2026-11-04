@@ -67,7 +67,13 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
-Bounded tails, retrieval commands for all five bridges, and redaction on the way out exist. The deletion on relaunch is unchanged since the report.
+Every launch script moves the active bridge log to its `.prev.log` name, and each `get_*_server_log` accepts an optional `previous: true` under the existing bounds and redaction.
+
+### Assumptions and decisions
+
+The move is guarded with `if [ -s x.log ]; then mv -f x.log x.prev.log 2>/dev/null || rm -f x.log; fi`. This handles a first start with no log, preserves the prior non-empty crash log, and keeps a failed move from stopping a bridge launch. An empty active log does not displace the previous run's useful log.
+
+No web getters were added for Cursor, Grok, or Pi because their only planned consumer is the undecided diagnostics export; adding unused getters would leave dead code.
 
 ### Constraints and rationale
 

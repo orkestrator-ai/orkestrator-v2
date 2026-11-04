@@ -160,7 +160,8 @@ logger field. The `bridge` field identifies `claude`, `codex`, `cursor`, `pi`, o
 output keeps its level across [the bridge hop](logging.md#the-bridge-hop) and uses
 the existing application log sink and its rotation and retention. Docker output goes
 to the existing `/tmp/<provider>-bridge.log` files (`/tmp/grok-acp-bridge.log` for
-Grok), as JSON lines.
+Grok), as JSON lines. A relaunch keeps the run before it
+([container-lifecycle.md](container-lifecycle.md#the-previous-run)).
 
 ## Desktop startup failures
 

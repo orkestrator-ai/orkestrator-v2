@@ -31,6 +31,7 @@ import type { InteractionDeadline } from "@orkestrator/protocol/agent-interactio
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
@@ -73,6 +74,8 @@ import {
   type GrokMcpConfigStatus,
   type VendorMcpServerStatus,
 } from "./acp-mcp-inventory.js";
+
+const log = createLogger("bridge.acp");
 
 export type Provider = AgentPlatform;
 export type JsonObject = Record<string, unknown>;
@@ -1207,6 +1210,14 @@ export class AcpProcess {
     }
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
+      // Scalars only: agent stderr and exit errors can hold prompts or file contents.
+      log.warn("agent.exited", {
+        provider,
+        pid: this.child.pid ?? null,
+        code,
+        signal,
+        requested: this.#terminationOutcome === "resolved",
+      });
       this.#close(
         new Error(
           `${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`,

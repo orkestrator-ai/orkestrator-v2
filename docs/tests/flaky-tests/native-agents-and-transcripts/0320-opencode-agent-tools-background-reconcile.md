@@ -113,3 +113,9 @@ The unchanged complete owner passed alone in 3.4 s with `mise run test:logged --
 `mise run test:logged -- --name full-suite-2 -- mise run test` on the CI-repair branch (rebased on `ee6208bad`, default worker grants) repeated the count mismatch at commands-agent-tools.test.ts:195 (expected 0, received 1; 220.21 ms). Backend 13,591 pass / 2 fail (the other is case 3101); web 11,517 pass / 0 fail; root, bridges and Codex protocol passed. The branch does not touch the owner or its implementation.
 
 The unchanged owner passed alone three times in a row (2.0 s each) with `mise run test:logged -- --name oc-N -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-agent-tools.test.ts --parallel=1 --only-failures`. Status remains open.
+
+## Gateway login batch — 2026-11-04
+
+`mise run test` on the gateway login branch (based on `4e3caa079`, default worker grants, an iOS simulator build running at the same time) repeated the count mismatch at commands-agent-tools.test.ts:195 (expected 0, received 1; 224.80 ms). Backend 14,097 pass / 1 fail (this case); web 11,797, protocol 4,496, desktop 1,672, CLI 465, toolchain 126, web-public 41, root 3,529 and every bridge passed with no failures. The branch does not touch the owner or its implementation. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IsbJvf/`.
+
+The unchanged owner passed alone three times in a row (2.2 to 2.5 s) with `mise run test:logged -- --name opencode-agent-tools-N -- bun --cwd=apps/backend test src/core/commands-agent-tools.test.ts --only-failures --parallel=1`. Status remains open.

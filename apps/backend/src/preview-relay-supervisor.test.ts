@@ -704,6 +704,7 @@ describe("relay-backed preview services", () => {
       ports: {},
     });
     await harness.runtime.init();
+    await harness.runtime.updateSettings((current) => ({ ...current, relay: false }));
     const result = await harness.runtime.registry.register({
       environmentId: "a",
       label: "api",

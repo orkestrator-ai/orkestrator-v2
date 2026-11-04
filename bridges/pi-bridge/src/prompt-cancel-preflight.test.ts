@@ -17,6 +17,7 @@
  * Gates are released in `finally`; no sleeps are used.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -605,12 +606,16 @@ describe("the startup deadline", () => {
     const pi = preflightSession({ holdPreflight: true });
     const state = seed(pi.session);
     setStartupTimeoutForTests(20);
+    const logs = captureLogs();
     try {
       const response = await post(`/session/${state.id}/prompt`, {
         prompt: "too slow to start",
         requestId: "startup-late-accept",
       });
       expect(response.status).toBe(424);
+      expect(
+        logs.records().filter((record) => record.event === "turn.startup-timed-out"),
+      ).toMatchObject([{ level: "warn", area: "bridge.pi", fields: { sessionId: state.id } }]);
       expect(await response.json()).toEqual({
         accepted: false,
         outcome: "startup-timeout",
@@ -646,6 +651,7 @@ describe("the startup deadline", () => {
       expect(state.promptStartup).toBeUndefined();
       expect(state.cancelRequestedClaim).toBeUndefined();
     } finally {
+      logs.restore();
       setStartupTimeoutForTests();
       pi.settleAll();
       release(state);

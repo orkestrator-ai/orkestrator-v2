@@ -96,8 +96,8 @@ task to start it on Chromium's headless Ozone platform with the GPU off and
 both display variables removed; the browser suites drive the gateway, not that
 window. It applies only to agent-test profiles on Linux, and the Electron
 specs, which launch their own Electron rather than the profile's, are not
-covered by it. The design canvas Electron spec reads the same variable and
-launches its own Electron headless; the packaged-app spec is always headless on
+covered by it. The design canvas and service preview Electron specs read the
+same variable and launch their own Electron headless; the packaged-app spec is always headless on
 Linux (see [Packaged-app Electron spec](#packaged-app-electron-spec)):
 
 ```bash

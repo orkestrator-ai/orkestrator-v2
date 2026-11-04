@@ -17,6 +17,7 @@
  * publication are replaced.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { readFileSync } from "node:fs";
 import type { LocalAgentStore } from "@cursor/sdk";
 import { MAX_PROMPT_JOURNAL } from "./config.js";
@@ -76,7 +77,13 @@ describe("a send that rejects after it was called", () => {
     const state = await harness.createSession({ clientSessionKey: "tab-1" });
     const refused = attachFake(state, { failToStart: new Error("transport reset") });
 
+    const logs = captureLogs();
     const response = await prompt(state, "unknown-1");
+    logs.restore();
+    expect(logs.records().filter((record) => record.event === "turn.send-failed")).toMatchObject([
+      { level: "warn", area: "bridge.cursor", fields: { sessionId: state.id } },
+    ]);
+    expect(JSON.stringify(logs.records())).not.toContain("transport reset");
     expect(response.status).toBe(502);
     const body = (await response.json()) as { error: string; kind: string };
     expect(body.kind).toBe("dispatch-outcome-unknown");

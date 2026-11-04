@@ -542,7 +542,7 @@ one any more.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Egress gateway rollout cap, not a legacy path | A gateway-capable image's restricted runtime keeps its firewall inside, with `NET_ADMIN`, where a root terminal can change it | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)). Remove once the gateway has been qualified on Linux Engine and rootless |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -552,7 +552,7 @@ What still exists in the legacy shapes, and what handles it:
 | Resource | Handled by |
 | --- | --- |
 | Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
-| Current runtime with host mounts or policy 1 (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image |
+| Current runtime with host mounts, policy 1 or an in-container firewall (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy and `enforcement`. Any rebuild creates the new runtime from the current image |
 | Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
 | `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
 
@@ -1027,7 +1027,8 @@ the network namespace, and the runtime joins it (`--network
 container:<gateway id>`) with no added capability, so nothing in the runtime,
 `orkroot` terminals included, can change the rules. Before this, the
 firewall ran inside the runtime, which needed `NET_ADMIN`; that remains for
-older images and under the `ORKESTRATOR_EGRESS=in-container` rollout cap.
+older images, and for runtimes created under the removed
+`ORKESTRATOR_EGRESS=in-container` rollout cap, until they are rebuilt.
 The network status reports `enforcement` (`gateway`, `container`, `none`)
 and the Network section says whether a root terminal can change the rules.
 
@@ -1258,7 +1259,8 @@ not keep answering for a container that just ended. A memory update below curren
 | --- | --- | --- |
 | Container stdout/stderr | `local` driver, 10 MiB × 3 (new runtimes, when the daemon offers `local`) | `logDriverArguments` |
 | Bridge/server output | 5 MiB × 3 per file, lines cut at the file size | `orkestrator-log-writer` |
-| Startup failure tail | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
+| Previous run's bridge/server log | One file, up to 5 MiB, the active file at the last relaunch | `keepPreviousLogCommand` |
+| Startup failure tail, `get_*_server_log` | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
 | `get_container_logs` | ≤ 2,000 lines and 512 KiB | registry |
 | Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
@@ -1281,6 +1283,39 @@ output whatever `stdbuf` asks, and mawk exited when the file could not be
 opened. Only a line still waiting for its newline is held, and at most 64 KiB
 of it before it is split, so output without newlines stays bounded. An image
 built before the rewrite keeps the old behaviour until it is rebuilt.
+
+### The previous run
+
+A relaunch used to delete the bridge log, so the log that explained a crash went
+exactly when it was needed. Every launch script now runs `keepPreviousLogCommand`
+first, which moves the log to its `.prev.log` name:
+
+| Server | Active log | Previous run |
+| --- | --- | --- |
+| OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
+| Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
+| Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
+| Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
+| Grok | `/tmp/grok-acp-bridge.log` | `/tmp/grok-acp-bridge.prev.log` |
+| Pi | `/tmp/pi-bridge.log` | `/tmp/pi-bridge.prev.log` |
+
+- **It works on every image.** The move is launch-script shell, not image content,
+  so it applies at the next bridge start whichever image the container runs, with
+  or without the rotating writer.
+- **The new run's log starts clean,** so a startup failure's attached tail reads
+  only that attempt. A rename keeps the file's 0600 mode.
+- **Keeping output never stops a start.** The OpenCode script runs under `set -e`,
+  so a first start with no log and a move that fails must both leave status 0. A
+  failed move removes the log, as the relaunch always did.
+- **An empty log moves nothing,** so a run that wrote nothing cannot displace the
+  log of the crash before it. Otherwise only the last relaunch is kept: a run of
+  relaunches leaves one previous log, and rotated `.1` and `.2` files are not moved.
+
+`get_*_server_log` takes an optional `previous: true` to read that file, under the
+same 64 KiB and 200 line bounds and the same redaction. Only an explicit `true`
+selects it, a call without it reads the active log as before, and no previous log
+reads as empty. The web client's getters do not pass it, and it has none for Cursor,
+Grok or Pi; a diagnostics export is the likely first consumer.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,

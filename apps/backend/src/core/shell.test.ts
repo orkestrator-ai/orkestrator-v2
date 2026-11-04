@@ -630,6 +630,43 @@ posixOnly("AbortSignal cancels a command without waiting for its independent tim
   }
 });
 
+posixOnly("applies the overall deadline to a surviving git descendant", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
+  try {
+    const pidFile = path.join(tempDir, "descendant.pid");
+    const started = Date.now();
+    const failure = await runCommand(
+      "git",
+      ["-c", `alias.hold=!sleep 30 & echo $! > '${pidFile}'`, "hold"],
+      { timeoutMs: 300, waitForDescendants: true },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await waitUntilGone(Number((await readFile(pidFile, "utf8")).trim()))).toBe(true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+posixOnly("captures late git descendant output when explicitly requested", async () => {
+  const { stdout } = await runCommand(
+    "git",
+    ["-c", "alias.late=!(sleep 0.2; echo late) & exit 0", "late"],
+    {
+      waitForDescendants: true,
+    },
+  );
+  expect(stdout).toBe("late\n");
+});
+
+posixOnly("captures late non-git output when explicitly requested", async () => {
+  const { stdout } = await runCommand("sh", ["-c", "(sleep 0.3; echo late) & exit 0"], {
+    waitForDescendants: true,
+  });
+  expect(stdout).toBe("late\n");
+});
+
 describe("capture filesystem failures", () => {
   for (const stage of [
     "second open",
@@ -734,6 +771,42 @@ darwinOnly(
     } finally {
       kill.mockRestore();
       inspection.mockRestore();
+    }
+  },
+);
+
+posixOnly(
+  "worktree add captures a background post-checkout writer when explicitly requested",
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ork-shell-hook-"));
+    try {
+      const repo = path.join(root, "repo");
+      await runCommand("git", ["init", "-b", "main", repo]);
+      await runCommand("git", [
+        "-C",
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ]);
+      await writeFile(
+        path.join(repo, ".git", "hooks", "post-checkout"),
+        "#!/bin/sh\n(sleep 0.2; echo hook-finished) &\nexit 0\n",
+        { mode: 0o755 },
+      );
+      const result = await runCommand(
+        "git",
+        ["-C", repo, "worktree", "add", "-b", "feature", path.join(root, "tree")],
+        { waitForDescendants: true, timeoutMs: 5000 },
+      );
+      expect(result.stderr).toContain("hook-finished");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   },
 );

@@ -372,7 +372,9 @@ primitives above serialize their writes.
   their backups) returns up to 16 MiB of freed pages to the filesystem
   (`auto_vacuum = INCREMENTAL`, set when the database is created) and runs a
   truncating WAL checkpoint so old frames do not keep the content either.
-  `storageFilesContain(dataDir, marker)` checks this in tests.
+  `storageFilesContain(dataDir, marker)` checks this in tests. It never throws:
+  a checkpoint that fails or that a reader blocks is logged as `[storage]
+  scrub.checkpoint-failed`, throttled, and the next one retries.
 - The database file is 0600; SQLite gives `-wal` and `-shm` the same mode.
 
 ### Snapshots

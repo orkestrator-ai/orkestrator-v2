@@ -258,10 +258,11 @@ export class PreviewRuntime {
 
   /** Stored settings with environment overrides applied. */
   effectiveSettings(): PreviewSettings {
+    const transport = this.envFlag("ORKESTRATOR_PREVIEW_TRANSPORT") ?? this.settings.transport;
     return {
       ...this.settings,
-      transport: this.envFlag("ORKESTRATOR_PREVIEW_TRANSPORT") ?? this.settings.transport,
-      relay: this.envFlag("ORKESTRATOR_PREVIEW_RELAY") ?? this.settings.relay,
+      transport,
+      relay: transport && (this.envFlag("ORKESTRATOR_PREVIEW_RELAY") ?? this.settings.relay),
       publication: { ...this.settings.publication },
     };
   }

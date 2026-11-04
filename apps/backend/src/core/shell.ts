@@ -44,6 +44,8 @@ export type ExecBufferResult = {
 export class CommandFailedError extends Error {
   readonly stdout: string;
   readonly timedOut: boolean;
+  /** Compatibility classification for callers rejecting failed pipe captures. */
+  readonly outputCloseTimedOut: boolean;
   readonly executableMissing: boolean;
   /** The caller's abort signal stopped it. `timedOut` is also set, as callers expect. */
   readonly aborted: boolean;
@@ -57,6 +59,7 @@ export class CommandFailedError extends Error {
     details: {
       stdout?: string;
       timedOut?: boolean;
+      outputCloseTimedOut?: boolean;
       executableMissing?: boolean;
       aborted?: boolean;
       outputLimitExceeded?: boolean;
@@ -68,6 +71,7 @@ export class CommandFailedError extends Error {
     this.name = "CommandFailedError";
     this.stdout = details.stdout ?? "";
     this.timedOut = details.timedOut ?? false;
+    this.outputCloseTimedOut = details.outputCloseTimedOut ?? false;
     this.executableMissing = details.executableMissing ?? false;
     this.aborted = details.aborted ?? false;
     this.outputLimitExceeded = details.outputLimitExceeded ?? false;

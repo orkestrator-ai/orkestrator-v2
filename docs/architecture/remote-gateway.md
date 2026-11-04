@@ -218,6 +218,16 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
+Terminal input and resizes wait on one ordering tail per session, owned by the
+gateway rather than the socket, so a plain disconnect still delivers what was
+already accepted and a reconnect cannot overtake it. Revocation is the
+deliberate exception: credential rotation and gateway stop refuse everything
+still queued, including what a disconnected socket left behind, and so do
+session revocation and credential expiry on an open socket. The one operation
+already running in the backend cannot be recalled. A socket that disconnects
+before its own credential expires or is revoked is the remaining gap, tracked
+in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
+
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
 rollback. The terminal transport default has not changed. The evidence and the

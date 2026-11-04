@@ -94,6 +94,7 @@ type SocketState = {
   roundRobinCursor: number;
   flushScheduled: boolean;
   invalidChannelFrames: number;
+  pendingOperations: number;
 };
 
 export type TerminalWebSocketServerOptions = {
@@ -199,6 +200,8 @@ export class TerminalWebSocketGateway {
   private readonly sockets = new Set<SocketState>();
   private readonly upgradeSockets = new Set<Duplex>();
   private readonly sessionOperations = new Map<string, OperationSequence>();
+  /** Sockets with queued operations; a disconnected one has already left `sockets`. */
+  private readonly operationSockets = new Set<SocketState>();
   private pendingOperationCount = 0;
   private pendingOperationBytes = 0;
   private channelCount = 0;
@@ -309,7 +312,14 @@ export class TerminalWebSocketGateway {
 
   /** Revoke every credential latched by an existing or in-flight upgrade. */
   revokeConnections(): void {
-    for (const state of Array.from(this.sockets)) state.ws.terminate();
+    // Queued operations check this flag when their turn comes. A plain disconnect
+    // leaves it set on purpose so accepted input survives a reconnect; revocation
+    // refuses the whole queue, including one a closed socket left behind.
+    for (const state of this.operationSockets) state.authenticated = false;
+    for (const state of Array.from(this.sockets)) {
+      state.authenticated = false;
+      state.ws.terminate();
+    }
     for (const socket of Array.from(this.upgradeSockets)) socket.destroy();
     this.upgradeSockets.clear();
   }
@@ -331,6 +341,7 @@ export class TerminalWebSocketGateway {
       roundRobinCursor: 0,
       flushScheduled: false,
       invalidChannelFrames: 0,
+      pendingOperations: 0,
     };
     this.sockets.add(state);
     this.options.metrics?.recordTerminalWebSocketOpened();
@@ -993,6 +1004,8 @@ export class TerminalWebSocketGateway {
     sequence.bytes += options.bytes;
     this.pendingOperationCount += 1;
     this.pendingOperationBytes += options.bytes;
+    options.state.pendingOperations += 1;
+    this.operationSockets.add(options.state);
     const previous = sequence.tail;
     const next = previous
       .then(() => {
@@ -1031,6 +1044,8 @@ export class TerminalWebSocketGateway {
       sequence.bytes -= options.bytes;
       this.pendingOperationCount -= 1;
       this.pendingOperationBytes -= options.bytes;
+      options.state.pendingOperations -= 1;
+      if (options.state.pendingOperations === 0) this.operationSockets.delete(options.state);
       if (this.sessionOperations.get(options.sessionId) === sequence && sequence.count === 0) {
         this.sessionOperations.delete(options.sessionId);
       }
@@ -1163,6 +1178,7 @@ export class TerminalWebSocketGateway {
       () => {
         state.credentialExpiryTimer = null;
         if (!this.options.tokenMatches(request, suppliedToken)) {
+          state.authenticated = false;
           this.closeSocket(
             state,
             TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,

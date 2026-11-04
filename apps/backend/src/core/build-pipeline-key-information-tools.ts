@@ -43,6 +43,11 @@ function updateInputSchema() {
       .describe(
         "`problem` when the ticket fixes something wrong (the default); `objective` when it adds or changes something that was not broken.",
       ),
+    summary: text(limits.proseLength)
+      .optional()
+      .describe(
+        "One paragraph on the change as a whole, in plain language for a reader who does not know the code: what changed and why it matters. No file names, identifiers or jargon.",
+      ),
     statement: text(limits.proseLength)
       .optional()
       .describe("The problem being solved, or the objective being completed, in a few sentences."),
@@ -156,7 +161,7 @@ export async function registerKeyInformationTools(
     {
       title: "Read the pipeline's key information",
       description:
-        "Read the key information of the build pipeline you are working in: the problem or objective, context, solution, work done, decisions, what was not done, tests, review issues and verification results recorded so far. Read it before updating so you keep what earlier stages wrote.",
+        "Read the key information of the build pipeline you are working in: the summary, the problem or objective, context, solution, work done, decisions, what was not done, tests, review issues and verification results recorded so far. Read it before updating so you keep what earlier stages wrote.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,

@@ -37,12 +37,14 @@ import { APP_VERSION } from "./constants.js";
 import { isPidAlive } from "./local-server-reaper.js";
 import type { Project } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";
+import { sweepOrphanedProjectGitMirrors } from "./project-git-mirror.js";
 import { pathExists, runCommand } from "./shell.js";
 import { configuredWorktreeLocations, validateWorktreeLocation } from "./worktree-locations.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
 const log = createLogger("environment");
+const gitMirrorLog = createLogger("docker");
 
 export { MAX_ENVIRONMENT_CLEANUP_ATTEMPTS } from "./environment-cleanup-ledger.js";
 const RETRY_BASE_MS = 60_000;
@@ -744,7 +746,7 @@ function warnSweepFailureOnce(sweep: string, error: unknown): void {
 /**
  * Leftovers from before the cleanup ledger existed, whose ownership is still
  * provable: file-less workspace directories, orphaned environment branches,
- * and abandoned temp files. Runs as one admitted lifecycle operation so
+ * abandoned temp files, and the Git mirrors of removed projects. Runs as one admitted lifecycle operation so
  * shutdown neither starts it late nor waits on a long pass. Each sweep fails
  * alone and logs once per process; this never rejects.
  */
@@ -785,6 +787,18 @@ export async function sweepPreLedgerDiskState(
         if (removed > 0) log.info("temp-files.removed", { removed });
       } catch (error) {
         warnSweepFailureOnce("Abandoned temp file", error);
+      }
+      if (isCancelled()) return;
+      try {
+        const removed = await sweepOrphanedProjectGitMirrors(
+          context.storage.getDataDir(),
+          await context.storage.loadProjectIdsForCleanup(),
+          ORPHANED_STATE_MIN_AGE_MS,
+          () => (options.now ?? (() => new Date()))().getTime(),
+        );
+        if (removed > 0) gitMirrorLog.info("git-mirror.orphans-removed", { removed });
+      } catch (error) {
+        warnSweepFailureOnce("Orphaned Git mirror", error);
       }
     });
   } catch (error) {

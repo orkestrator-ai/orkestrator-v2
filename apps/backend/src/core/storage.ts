@@ -399,6 +399,10 @@ export class StorageService {
     return this.repos.projects.arrangeProjectsByIntent(...args);
   }
 
+  loadProjectIdsForCleanup(): Promise<Set<string>> {
+    return this.repos.projects.loadProjectIdsForCleanup();
+  }
+
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
     return this.repos.projects.loadEnvironmentIdsForCleanup();
   }

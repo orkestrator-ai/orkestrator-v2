@@ -1,3 +1,4 @@
+import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
@@ -3083,6 +3084,9 @@ export class OrkestratorBackend {
         if (!commandTermination.stopped)
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
       } finally {
+        // Even failed shutdown must retain ownership until every mirror writer settles.
+        this.environmentLifecycleTasks.beginShutdown(this.environmentLifecycleDrainTimeoutMs);
+        await stopProjectGitMirrorRefreshes(this.context.storage.getDataDir());
         await this.context.registryWriterLease?.release().catch(() => undefined);
         this.context.previews?.dispose();
         this.context.mcpManagement?.dispose();

@@ -70,6 +70,16 @@ function failNoticesFor(world: MailWorld, workers: MailActor[]) {
   }) as typeof world.storage.sendAgentMail);
 }
 
+/**
+ * What reached the coordinator's inbox. A drain can dispatch mid-assertion and
+ * leave the main busy, so tests with more than one message read this rather
+ * than what has been delivered so far.
+ */
+async function inboxBodies(world: MailWorld, main: MailActor): Promise<string> {
+  const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+  return inbox.messages.map((message) => message.body).join("\n");
+}
+
 async function runPasses(world: MailWorld, passes: number): Promise<void> {
   for (let pass = 0; pass < passes; pass += 1) await world.coordinator.deliverDelegationWakes();
 }
@@ -95,9 +105,8 @@ describe("one failing delegation", () => {
     // Once the fault clears the next pass finishes the job.
     spy.mockRestore();
     await world.coordinator.deliverDelegationWakes();
-    await world.finishTurn(main);
     expect((await delegation(world, failing)).wokenAt).toBeString();
-    expect(world.received(main).join("\n")).toContain(failing.environmentId);
+    expect(await inboxBodies(world, main)).toContain(failing.environmentId);
   });
 
   test("in one project does not stop another project's wakes", async () => {
@@ -185,8 +194,7 @@ describe("one failing delegation", () => {
     expect((await delegation(world, good)).state).toBe("completed");
     expect(release).toHaveBeenCalledTimes(1);
     release.mockRestore();
-    await world.deliver();
-    expect(world.received(main)[0]).toContain(good.environmentId);
+    expect(await inboxBodies(world, main)).toContain(good.environmentId);
   });
 
   test("does not stop a turn-end edge settling the worker's other tabs", async () => {
@@ -387,9 +395,9 @@ describe("a delegation that keeps failing", () => {
     expect((await delegation(world, worker)).wakeFailedAt).toBeString();
 
     await world.coordinator.reconcileWorkerDelegations();
-    await world.finishTurn(main);
-    await world.deliver();
-    expect(world.received(main).join("\n")).toContain("My report.");
+    const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+    const report = inbox.messages.find((message) => message.body === "My report.");
+    expect(report?.placement).not.toBe("inject-held");
   });
 
   test("with messaging off it is held, not retired, and delivered when it returns", async () => {
@@ -448,6 +456,96 @@ describe("a delegation that keeps failing", () => {
     const held = await delegation(world, worker);
     expect(held.wokenAt).toBeUndefined();
     expect(held.wakeFailedAt).toBeUndefined();
+  });
+});
+
+describe("a delegation closing during a pass", () => {
+  /** Hold the running pass inside its first send until `release` resolves. */
+  function holdFirstSend(world: MailWorld) {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const send = world.storage.sendAgentMail.bind(world.storage);
+    const spy = spyOn(world.storage, "sendAgentMail").mockImplementation((async (
+      ...args: Parameters<typeof send>
+    ) => {
+      entered.resolve();
+      await release.promise;
+      return send(...args);
+    }) as typeof world.storage.sendAgentMail);
+    return { entered, release, spy };
+  }
+
+  test("is delivered by the running pass's promise, not the next sweep", async () => {
+    const world = await create();
+    const main = await world.main();
+    const first = await world.addEnvironment("first", { launched: true });
+    const second = await world.addEnvironment("second", { launched: true });
+    await closeDelegation(world, first);
+    const { entered, release, spy } = holdFirstSend(world);
+
+    const running = world.coordinator.deliverDelegationWakes();
+    await entered.promise;
+    await closeDelegation(world, second);
+    const joined = world.coordinator.deliverDelegationWakes();
+    release.resolve();
+    await Promise.all([running, joined]);
+    spy.mockRestore();
+
+    expect((await delegation(world, first)).wokenAt).toBeString();
+    expect((await delegation(world, second)).wokenAt).toBeString();
+    expect(await inboxBodies(world, main)).toContain(second.environmentId);
+  });
+
+  test("any number of calls during a pass run one more pass", async () => {
+    const world = await create();
+    const first = await world.addEnvironment("first", { launched: true });
+    await closeDelegation(world, first);
+    const { entered, release, spy } = holdFirstSend(world);
+    const passes = spyOn(
+      world.coordinator as unknown as { deliverDelegationWakesOnce(): Promise<void> },
+      "deliverDelegationWakesOnce",
+    );
+
+    const running = world.coordinator.deliverDelegationWakes();
+    await entered.promise;
+    const joined = Array.from({ length: 5 }, () => world.coordinator.deliverDelegationWakes());
+    release.resolve();
+    await Promise.all([running, ...joined]);
+
+    expect(passes).toHaveBeenCalledTimes(2);
+    // The extra pass found nothing left, so the wake was not sent twice.
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    passes.mockRestore();
+  });
+
+  test("a call with nothing running starts a pass of its own", async () => {
+    const world = await create();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await closeDelegation(world, worker);
+    await world.coordinator.deliverDelegationWakes();
+    expect((await delegation(world, worker)).wokenAt).toBeString();
+
+    const next = await world.addEnvironment("next", { launched: true });
+    await closeDelegation(world, next);
+    await world.coordinator.deliverDelegationWakes();
+    expect((await delegation(world, next)).wokenAt).toBeString();
+  });
+
+  test("a pass that cannot read its list rejects its callers and frees the next call", async () => {
+    const world = await create();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await closeDelegation(world, worker);
+    const list = spyOn(
+      world.storage.coordinators,
+      "listUnwokenCoordinatorDelegations",
+    ).mockRejectedValueOnce(new Error("store busy"));
+
+    await expect(world.coordinator.deliverDelegationWakes()).rejects.toThrow("store busy");
+    list.mockRestore();
+
+    await world.coordinator.deliverDelegationWakes();
+    expect((await delegation(world, worker)).wokenAt).toBeString();
   });
 });
 

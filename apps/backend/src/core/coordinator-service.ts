@@ -188,6 +188,8 @@ function retainCoordinatorConversations(
 export class CoordinatorService {
   private readonly projectOperations = new Map<string, Promise<unknown>>();
   private delegationWakeDelivery: Promise<void> | null = null;
+  /** A call arrived during the running pass, which read its list before that call's close. */
+  private delegationWakeRerun = false;
   /** Status wakes for work this coordinator started; see `coordinator-status-wakes.ts`. */
   readonly statusWakes: CoordinatorStatusWakes;
   /** Pull requests its conversations showed; see `coordinator-pr-watches.ts`. */
@@ -1263,12 +1265,29 @@ export class CoordinatorService {
    * says less than the first.
    */
   deliverDelegationWakes(): Promise<void> {
-    if (this.delegationWakeDelivery) return this.delegationWakeDelivery;
-    const delivery = this.deliverDelegationWakesOnce().finally(() => {
+    if (this.delegationWakeDelivery) {
+      this.delegationWakeRerun = true;
+      return this.delegationWakeDelivery;
+    }
+    const delivery = this.runDelegationWakePasses().finally(() => {
       if (this.delegationWakeDelivery === delivery) this.delegationWakeDelivery = null;
     });
     this.delegationWakeDelivery = delivery;
     return delivery;
+  }
+
+  /**
+   * One pass, then one more for as long as calls keep arriving during it, so a
+   * worker closing during another's wake reports now rather than on the next
+   * sweep. Any number of calls in one pass share one extra pass and one promise,
+   * which can outlast the pass the caller joined: never await this while holding
+   * `withAgentMailWorkerAdmission`, since a pass can wait on what that lock guards.
+   */
+  private async runDelegationWakePasses(): Promise<void> {
+    do {
+      this.delegationWakeRerun = false;
+      await this.deliverDelegationWakesOnce();
+    } while (this.delegationWakeRerun);
   }
 
   private async deliverDelegationWakesOnce(): Promise<void> {

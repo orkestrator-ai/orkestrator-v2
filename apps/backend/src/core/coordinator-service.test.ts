@@ -2808,9 +2808,8 @@ describe("project coordinator", () => {
         return release(...args);
       };
 
-      await expect(fixture.coordinator.deliverDelegationWakes()).rejects.toThrow(
-        "disk unavailable",
-      );
+      // The failure stays with this delegation; the next pass retries it.
+      await fixture.coordinator.deliverDelegationWakes();
       let association = (
         await storage.coordinators.listCoordinatorWorkflowAssociations(fixture.projectId)
       ).find((item) => item.id === fixture.associationId);
@@ -2837,13 +2836,12 @@ describe("project coordinator", () => {
         throw new Error("mail store unavailable");
       };
 
-      await expect(
-        fixture.coordinator.settleWorkerDelegations({
-          environmentId: fixture.workerId,
-          tabId: "startup-agent",
-          state: "completed",
-        }),
-      ).rejects.toThrow("mail store unavailable");
+      // The failure stays with this delegation; the sweep tries it again.
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
       expect(
         (await storage.coordinators.listOpenCoordinatorDelegations()).map((item) => item.id),
       ).toEqual([fixture.associationId]);

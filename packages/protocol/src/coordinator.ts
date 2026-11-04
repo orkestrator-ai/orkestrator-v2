@@ -298,8 +298,8 @@ export interface CoordinatorDelegation {
    *
    * Waiting does not close a delegation, but once it has lasted past a short
    * debounce the coordinator gets one status notice for it (`notifiedAt`).
-   * Cleared when the worker is seen working again, so a later wait is a new
-   * episode with its own notice.
+   * Cleared when the worker is seen idle, working or stopped, so a later wait is
+   * a new episode with its own notice. An unreadable state does not clear it.
    */
   waiting?: { since: string; notifiedAt?: string };
   /**

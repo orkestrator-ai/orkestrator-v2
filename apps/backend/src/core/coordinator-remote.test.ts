@@ -103,6 +103,42 @@ async function delegationState(world: MailWorld, id: string) {
   return associations.find((entry) => entry.id === id)?.delegation;
 }
 
+describe("remote waiting episodes", () => {
+  async function waitingOnRemote() {
+    const fixture = await remoteWorld();
+    fixture.remote.tab = "waiting";
+    await fixture.world.coordinator.reconcileWorkflowNotifications();
+    expect((await delegationState(fixture.world, fixture.association.id))?.waiting).toBeDefined();
+    return fixture;
+  }
+
+  for (const [label, leave] of [
+    ["idle", (remote: FakeRemote) => (remote.tab = "idle")],
+    ["working", (remote: FakeRemote) => (remote.tab = "working")],
+    ["a stopped tab", (remote: FakeRemote) => (remote.tab = "stopped")],
+    ["a stopped environment", (remote: FakeRemote) => (remote.environment = "stopped")],
+  ] as const) {
+    test(`${label} ends the episode`, async () => {
+      const { world, remote, association } = await waitingOnRemote();
+      leave(remote);
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect((await delegationState(world, association.id))?.waiting).toBeUndefined();
+    });
+  }
+
+  for (const [label, unreadable] of [
+    ["an unreadable tab", (remote: FakeRemote) => (remote.tab = "unknown")],
+    ["an unreachable node", (remote: FakeRemote) => (remote.available = false)],
+  ] as const) {
+    test(`${label} does not end the episode`, async () => {
+      const { world, remote, association } = await waitingOnRemote();
+      unreadable(remote);
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect((await delegationState(world, association.id))?.waiting).toBeDefined();
+    });
+  }
+});
+
 describe("remote delegations", () => {
   test("close when the remote worker's turn ends, and wake the coordinator once", async () => {
     const { world, remote, main, association } = await remoteWorld();

@@ -496,6 +496,20 @@ export class CoordinatorService {
     return next;
   }
 
+  /**
+   * A workspace write that waits its turn behind create, ensure and assign, so
+   * it cannot land between their steps. Only the write: the snapshot that follows
+   * reconciles mail, and this must not hold the project's queue across that.
+   */
+  private mutateSerialized(
+    projectId: string,
+    mutate: Parameters<StorageService["coordinators"]["mutateCoordinatorWorkspace"]>[1],
+  ): Promise<CoordinatorWorkspace | null> {
+    return this.serialize(projectId, () =>
+      this.storage.coordinators.mutateCoordinatorWorkspace(projectId, mutate),
+    );
+  }
+
   async canonicalProjectPath(projectId: string): Promise<string> {
     return resolveProjectGitRoot(this.storage, projectId);
   }
@@ -769,52 +783,54 @@ export class CoordinatorService {
     conversationId: string | null,
   ): Promise<CoordinatorSnapshot> {
     const projectPath = await this.canonicalProjectPath(projectId);
-    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
-      projectId,
-      (current) => {
-        if (!current) throw new Error("Coordinator workspace was not found");
-        if (
-          conversationId !== null &&
-          !current.conversations.some((item) => item.id === conversationId && !item.closedAt)
-        ) {
-          throw new Error("Coordinator conversation was not found");
-        }
-        return {
-          ...current,
-          selectedConversationId: conversationId,
-          updatedAt: new Date().toISOString(),
-        };
-      },
-    );
+    const workspace = await this.mutateSerialized(projectId, (current) => {
+      if (!current) throw new Error("Coordinator workspace was not found");
+      if (
+        conversationId !== null &&
+        !current.conversations.some((item) => item.id === conversationId && !item.closedAt)
+      ) {
+        throw new Error("Coordinator conversation was not found");
+      }
+      return {
+        ...current,
+        selectedConversationId: conversationId,
+        updatedAt: new Date().toISOString(),
+      };
+    });
     if (!workspace) throw new Error("Coordinator workspace was not found");
     return this.snapshot(workspace, projectPath);
   }
 
   async closeConversation(projectId: string, conversationId: string): Promise<CoordinatorSnapshot> {
     const projectPath = await this.canonicalProjectPath(projectId);
-    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
-      projectId,
-      (current) => {
-        if (!current) throw new Error("Coordinator workspace was not found");
-        const target = current.conversations.find((item) => item.id === conversationId);
-        if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
-        const now = new Date().toISOString();
-        const conversations = current.conversations.map((item) =>
-          item.id === conversationId ? { ...item, closedAt: now } : item,
-        );
-        const remaining = conversations.filter((item) => !item.closedAt);
-        return {
-          ...current,
-          conversations,
-          selectedConversationId:
-            current.selectedConversationId === conversationId
-              ? (remaining.at(-1)?.id ?? null)
-              : current.selectedConversationId,
-          updatedAt: now,
-        };
-      },
-    );
+    const workspace = await this.mutateSerialized(projectId, (current) => {
+      if (!current) throw new Error("Coordinator workspace was not found");
+      const target = current.conversations.find((item) => item.id === conversationId);
+      if (!target || target.closedAt) throw new Error("Coordinator conversation was not found");
+      const now = new Date().toISOString();
+      const conversations = current.conversations.map((item) =>
+        item.id === conversationId ? { ...item, closedAt: now } : item,
+      );
+      const remaining = conversations.filter((item) => !item.closedAt);
+      return {
+        ...current,
+        conversations,
+        selectedConversationId:
+          current.selectedConversationId === conversationId
+            ? (remaining.at(-1)?.id ?? null)
+            : current.selectedConversationId,
+        updatedAt: now,
+      };
+    });
     if (!workspace) throw new Error("Coordinator workspace was not found");
+    // The mailbox closes with the conversation, so mail a wake pass places from
+    // here on waits to move to the next main rather than being injected here.
+    await this.storage.synchronizeAgentMailboxes().catch((error: unknown) => {
+      log.warn("mail.reconcile-failed", {
+        coordinatorId: workspace.id,
+        error: formatLogError(error, { stack: false }),
+      });
+    });
     return this.snapshot(workspace, projectPath);
   }
 
@@ -826,26 +842,23 @@ export class CoordinatorService {
         (platform) => coordinatorProviderQualification(platform, options).available,
       ),
     );
-    const workspace = await this.storage.coordinators.mutateCoordinatorWorkspace(
-      projectId,
-      (current) => {
-        if (!current) throw new Error("Coordinator workspace was not found");
-        const selected =
-          current.conversations.find((item) => item.id === current.selectedConversationId) ??
-          current.conversations.at(-1);
-        // An unassigned conversation has nothing to be unavailable: resuming it
-        // just returns the user to the composer, which is where the provider
-        // gate is applied.
-        if (!paused && selected?.agent && !allowedAgents.has(selected.agent)) {
-          throw new Error("The configured provider is unavailable for Coordinator");
-        }
-        return {
-          ...current,
-          lifecycleState: paused ? "paused" : "ready",
-          updatedAt: new Date().toISOString(),
-        };
-      },
-    );
+    const workspace = await this.mutateSerialized(projectId, (current) => {
+      if (!current) throw new Error("Coordinator workspace was not found");
+      const selected =
+        current.conversations.find((item) => item.id === current.selectedConversationId) ??
+        current.conversations.at(-1);
+      // An unassigned conversation has nothing to be unavailable: resuming it
+      // just returns the user to the composer, which is where the provider
+      // gate is applied.
+      if (!paused && selected?.agent && !allowedAgents.has(selected.agent)) {
+        throw new Error("The configured provider is unavailable for Coordinator");
+      }
+      return {
+        ...current,
+        lifecycleState: paused ? "paused" : "ready",
+        updatedAt: new Date().toISOString(),
+      };
+    });
     if (!workspace) throw new Error("Coordinator workspace was not found");
     return this.snapshot(workspace, projectPath);
   }
@@ -1583,6 +1596,13 @@ export class CoordinatorService {
           throw error;
         });
     }
+    // The send is not under `serialize`, so a slow one cannot block the user's
+    // close. If that close landed since `ensureMainConversation`, this stays
+    // unwoken: the next pass adopts it onto the next main, and
+    // `moveClosedCoordinatorMail` carries over what was just placed here.
+    const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(workspace.id);
+    if (!latest?.conversations.some((item) => item.id === conversation.id && !item.closedAt))
+      return;
     await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
   }
 

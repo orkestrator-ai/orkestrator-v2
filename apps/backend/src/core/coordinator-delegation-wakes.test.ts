@@ -551,6 +551,156 @@ describe("a delegation closing during a pass", () => {
   });
 });
 
+describe("a main closed while its wake is on the way", () => {
+  /** Close the main just before, or just after, the wake reaches the mail store. */
+  function closeDuringWake(
+    world: MailWorld,
+    main: MailActor,
+    method: "sendAgentMail" | "releaseDelegationHeldAgentMail",
+    when: "before" | "after",
+  ) {
+    const original = (world.storage[method] as (...args: unknown[]) => Promise<unknown>).bind(
+      world.storage,
+    );
+    let closed = false;
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      await world.coordinator.closeConversation(world.projectId, main.conversationId!);
+    };
+    return spyOn(world.storage, method).mockImplementation((async (...args: unknown[]) => {
+      if (when === "before") await close();
+      try {
+        return await original(...args);
+      } finally {
+        if (when === "after") await close();
+      }
+    }) as never);
+  }
+
+  for (const when of ["before", "after"] as const) {
+    test(`a notice sent ${when} the close reaches the next main once`, async () => {
+      const world = await create();
+      const main = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      await closeDelegation(world, worker);
+      // Mid-turn, so the drain leaves what is placed here waiting in the inbox.
+      world.startTurn(main);
+      const spy = closeDuringWake(world, main, "sendAgentMail", when);
+
+      await world.coordinator.deliverDelegationWakes();
+      spy.mockRestore();
+      expect((await delegation(world, worker)).wokenAt).toBeUndefined();
+
+      await world.coordinator.deliverDelegationWakes();
+      const woken = await delegation(world, worker);
+      expect(woken.wokenAt).toBeString();
+      expect(woken.wakeFailedAt).toBeUndefined();
+
+      const next = await world.main();
+      expect(next.conversationId).not.toBe(main.conversationId);
+      await world.deliver();
+      expect(world.received(next)).toHaveLength(1);
+      expect(world.received(next)[0]).toContain("without sending a report");
+      expect(world.wakes(main)).toBe(0);
+    });
+
+    test(`a report released ${when} the close reaches the next main`, async () => {
+      const world = await create();
+      const main = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      await world.send(worker, main, "The report.");
+      await closeDelegation(world, worker);
+      world.startTurn(main);
+      const spy = closeDuringWake(world, main, "releaseDelegationHeldAgentMail", when);
+
+      await world.coordinator.deliverDelegationWakes();
+      spy.mockRestore();
+      expect((await delegation(world, worker)).wokenAt).toBeUndefined();
+
+      await world.coordinator.deliverDelegationWakes();
+      expect((await delegation(world, worker)).wokenAt).toBeString();
+
+      const next = await world.main();
+      await world.deliver();
+      expect(world.received(next)).toEqual(["The report."]);
+      expect(world.wakes(main)).toBe(0);
+    });
+  }
+
+  test("a main still open is stamped as before", async () => {
+    const world = await create();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await closeDelegation(world, worker);
+    await world.coordinator.deliverDelegationWakes();
+    expect((await delegation(world, worker)).wokenAt).toBeString();
+  });
+});
+
+describe("close, select and pause on the project's queue", () => {
+  for (const operation of ["close", "select", "pause"] as const) {
+    test(`${operation} waits for a create already running`, async () => {
+      const world = await create();
+      const main = await world.main();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const prune = world.storage.coordinators.pruneCoordinatorAttachmentDirectories.bind(
+        world.storage.coordinators,
+      );
+      const spy = spyOn(
+        world.storage.coordinators,
+        "pruneCoordinatorAttachmentDirectories",
+      ).mockImplementation(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return prune(...args);
+      });
+      const creating = world.coordinator.createConversation(world.projectId);
+      await entered.promise;
+
+      const order: string[] = [];
+      const mutate = world.storage.coordinators.mutateCoordinatorWorkspace.bind(
+        world.storage.coordinators,
+      );
+      const mutateSpy = spyOn(
+        world.storage.coordinators,
+        "mutateCoordinatorWorkspace",
+      ).mockImplementation((...args) => {
+        order.push("write");
+        return mutate(...args);
+      });
+      const pending =
+        operation === "close"
+          ? world.coordinator.closeConversation(world.projectId, main.conversationId!)
+          : operation === "select"
+            ? world.coordinator.selectConversation(world.projectId, main.conversationId!)
+            : world.coordinator.setPaused(world.projectId, true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(order).toEqual([]);
+
+      release.resolve();
+      await creating;
+      await pending;
+      expect(order).toEqual(["write"]);
+      mutateSpy.mockRestore();
+      spy.mockRestore();
+    });
+  }
+
+  test("a close's refusal still reaches its caller, and frees the queue", async () => {
+    const world = await create();
+    await expect(
+      world.coordinator.closeConversation(world.projectId, "no-such-conversation"),
+    ).rejects.toThrow("Coordinator conversation was not found");
+    const main = await world.main();
+    const snapshot = await world.coordinator.selectConversation(
+      world.projectId,
+      main.conversationId!,
+    );
+    expect(snapshot.workspace.selectedConversationId).toBe(main.conversationId!);
+  });
+});
+
 test("a new service forgets the count: a restart only restarts it", async () => {
   const world = await create({ delegations: { wakeRetireMinMs: 0 } });
   const worker = await world.addEnvironment("worker", { launched: true });

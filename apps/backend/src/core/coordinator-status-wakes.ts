@@ -59,6 +59,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { StorageService } from "./storage.js";
 import { observeCoordinatorFeaturePlan } from "./coordinator-feature-plan-status.js";
@@ -81,6 +82,7 @@ import {
   waitingStatus,
   type CoordinatorWaitingBlocker,
 } from "./coordinator-waiting-status.js";
+import { isStatusBackfill } from "./coordinator-status-backfill.js";
 import { CoordinatorWorkerOutcomes } from "./coordinator-worker-outcomes.js";
 import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -105,13 +107,6 @@ export const COORDINATOR_WAITING_DEBOUNCE_MS = 20_000;
  * coalescing window, so it adds nothing a coordinator would notice.
  */
 const RESOURCE_CHANGE_DEBOUNCE_MS = 2_000;
-/**
- * A resource first seen in a non-terminal settled state that has not changed
- * for this long is recorded without a wake. That is a workflow from before
- * status wakes existed, sitting at `ready` for days; reporting it now would be
- * a surprise turn about old news.
- */
-const STATUS_BACKFILL_LIMIT_MS = 24 * 60 * 60 * 1_000;
 /**
  * A Resolve tab read idle this long after its launch, never seen working,
  * has finished: its turn was too short for any observation to catch it.
@@ -1265,12 +1260,14 @@ export class CoordinatorStatusWakes {
       await this.recordNotice(association.id, status.key);
       return;
     }
-    const updatedAt = Date.parse(text(persisted.updatedAt) ?? "");
     if (
-      !status.terminal &&
-      !association.statusNotice &&
-      Number.isFinite(updatedAt) &&
-      this.timers.now() - updatedAt > STATUS_BACKFILL_LIMIT_MS
+      isStatusBackfill({
+        now: this.timers.now(),
+        associationCreatedAt: association.createdAt,
+        resourceUpdatedAt: Date.parse(text(persisted.updatedAt) ?? ""),
+        terminal: status.terminal,
+        alreadyNoticed: association.statusNotice !== undefined,
+      })
     ) {
       await this.recordNotice(association.id, status.key);
       return;
@@ -1746,7 +1743,7 @@ export class CoordinatorStatusWakes {
    * Only tabs with an open delegation matter: a waiting episode starts with a
    * durable `since`, and the notice follows once it has lasted past the
    * debounce, so an approval answered within seconds never wakes anyone.
-   * Working again ends the episode.
+   * Any edge that leaves waiting ends the episode, so a later wait is a new one.
    */
   noteWorkerActivity(event: {
     environmentId: string;
@@ -1776,20 +1773,24 @@ export class CoordinatorStatusWakes {
             },
           );
           this.scheduleWaitingCheck(association.id);
-        } else if (event.state === "working" && association.delegation?.waiting) {
-          this.clearWaitingTimer(association.id);
-          await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
-            association.id,
-            (current) => {
-              if (!current.delegation?.waiting) return false;
-              const { waiting: _waiting, ...rest } = current.delegation;
-              current.delegation = rest;
-              return true;
-            },
-          );
+        } else if (event.state !== "unknown" && association.delegation?.waiting) {
+          await this.endWaitingEpisode(association.id);
         }
       }
     });
+  }
+
+  private async endWaitingEpisode(associationId: string): Promise<void> {
+    this.clearWaitingTimer(associationId);
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (!current.delegation?.waiting) return false;
+        const { waiting: _waiting, ...rest } = current.delegation;
+        current.delegation = rest;
+        return true;
+      },
+    );
   }
 
   private scheduleWaitingCheck(associationId: string): void {
@@ -1831,29 +1832,25 @@ export class CoordinatorStatusWakes {
     if (!delegation || delegation.state !== "running") return;
     const remote = association.nodeId ? this.remote : null;
     if (association.nodeId ? !remote : !this.options.workerActivity) return;
-    const activity: AgentActivityState | "unknown" = remote
+    const activity: AgentTabState = remote
       ? await remote
           .workerState(association.nodeId!, association.resourceId, delegation.workerTabId)
           .then((state) =>
-            state !== "unavailable" &&
-            (state.tab === "working" || state.tab === "waiting" || state.tab === "idle")
-              ? state.tab
-              : ("unknown" as const),
+            state === "unavailable"
+              ? ("unknown" as const)
+              : state.environment === "stopped"
+                ? ("stopped" as const)
+                : state.tab,
           )
           .catch(() => "unknown" as const)
-      : await this.options.workerActivity!(association.resourceId, delegation.workerTabId);
+      : delegation.waiting &&
+          (await this.storage.getEnvironment(association.resourceId))?.status === "stopped"
+        ? "stopped"
+        : await this.options.workerActivity!(association.resourceId, delegation.workerTabId);
     if (activity !== "waiting") {
-      if (delegation.waiting && activity === "working") {
-        this.clearWaitingTimer(association.id);
-        await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
-          association.id,
-          (current) => {
-            if (!current.delegation?.waiting) return false;
-            const { waiting: _waiting, ...rest } = current.delegation;
-            current.delegation = rest;
-            return true;
-          },
-        );
+      // An unreadable state must not end an episode and re-notify.
+      if (delegation.waiting && activity !== "unknown") {
+        await this.endWaitingEpisode(association.id);
       }
       return;
     }

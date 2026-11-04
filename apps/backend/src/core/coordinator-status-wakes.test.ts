@@ -13,6 +13,10 @@ import {
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
 import {
+  isStatusBackfill,
+  STATUS_BACKFILL_ASSOCIATION_AGE_MS,
+} from "./coordinator-status-backfill.js";
+import {
   buildPipelineStatus,
   COORDINATOR_STATUS_COALESCE_MS,
   COORDINATOR_WAITING_DEBOUNCE_MS,
@@ -825,6 +829,91 @@ describe("coordinator status wakes", () => {
     ]);
   });
 
+  describe("notices held while no main is open", () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const ready = {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+      reviewSession: { sessionKey: "review", status: "idle", completedAt: "2026-10-16T10:00:00Z" },
+    };
+
+    /** A review that reached `ready` while the project had no main open. */
+    async function readyWithMainClosed(context: WorldSetup) {
+      const { world } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("review-env");
+      const associationId = await associate(world, "multi-review", "review-1");
+      await world.coordinator.closeConversation(world.projectId, coordinator.conversationId!);
+      await saveReview(world, worker, "review-1", ready);
+      const notice = async () =>
+        (
+          await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
+        ).find((item) => item.id === associationId)!.statusNotice;
+      return { world, associationId, notice };
+    }
+
+    test("a review that settled days ago reaches the main opened since", async () => {
+      const context = await createWorld();
+      const { world, notice } = await readyWithMainClosed(context);
+
+      await world.coordinator.reconcileWorkflowNotifications();
+      await advance(context, 3 * DAY_MS);
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect(await notice()).toBeUndefined();
+
+      const opened = await world.coordinator.createConversation(world.projectId);
+      const main = opened.workspace.conversations.find(
+        (item) => item.role === "main" && !item.closedAt,
+      )!;
+      await world.coordinator.assignConversationAgent(world.projectId, main.id, "codex");
+      await settle(context);
+
+      expect(await notice()).toMatchObject({ key: expect.any(String) });
+      expect(world.received(await world.main()).join("\n")).toContain("ready to address");
+    });
+
+    test("work older than the association limit is still recorded without a wake", async () => {
+      const context = await createWorld();
+      const { world, associationId, notice } = await readyWithMainClosed(context);
+      await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        associationId,
+        (current) => {
+          current.createdAt = new Date(Date.now() - 20 * DAY_MS).toISOString();
+          return true;
+        },
+      );
+      await advance(context, 2 * DAY_MS);
+
+      await world.coordinator.reconcileWorkflowNotifications();
+
+      expect((await notice())?.key).toBeString();
+    });
+  });
+
+  test("the backfill rule needs an old association, an old state and no earlier notice", () => {
+    const now = Date.parse("2026-11-20T00:00:00Z");
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const rule = {
+      now,
+      associationCreatedAt: new Date(now - STATUS_BACKFILL_ASSOCIATION_AGE_MS - 1).toISOString(),
+      resourceUpdatedAt: now - DAY_MS - 1,
+      terminal: false,
+      alreadyNoticed: false,
+    };
+    expect(isStatusBackfill(rule)).toBe(true);
+    expect(
+      isStatusBackfill({
+        ...rule,
+        associationCreatedAt: new Date(now - STATUS_BACKFILL_ASSOCIATION_AGE_MS).toISOString(),
+      }),
+    ).toBe(false);
+    expect(isStatusBackfill({ ...rule, resourceUpdatedAt: now - DAY_MS })).toBe(false);
+    expect(isStatusBackfill({ ...rule, resourceUpdatedAt: Number.NaN })).toBe(false);
+    expect(isStatusBackfill({ ...rule, terminal: true })).toBe(false);
+    expect(isStatusBackfill({ ...rule, alreadyNoticed: true })).toBe(false);
+    expect(isStatusBackfill({ ...rule, associationCreatedAt: "not a date" })).toBe(false);
+  });
+
   test("legacy consolidation survives delayed result saves without duplicate wakes", async () => {
     const context = await createWorld();
     const { world } = context;
@@ -1052,7 +1141,16 @@ describe("coordinator status wakes", () => {
       consolidatedReport: READY_REPORT,
     });
     setSystemTime(new Date(timers.now()));
-    await associate(world, "multi-review", "review-old");
+    const associationId = await associate(world, "multi-review", "review-old");
+    await world.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        current.createdAt = new Date(
+          timers.now() - STATUS_BACKFILL_ASSOCIATION_AGE_MS - 1,
+        ).toISOString();
+        return true;
+      },
+    );
 
     await settle(context);
     expect(world.wakes(coordinator)).toBe(0);
@@ -1235,6 +1333,74 @@ describe("coordinator status wakes", () => {
       expect(
         world.carriers(coordinator)[0]!.map((carrier) => carrier.notice?.resource.environmentId),
       ).toEqual([first.environmentId, second.environmentId]);
+    });
+
+    /** A notified waiting episode on one worker, ready for the edge that ends it. */
+    async function notifiedEpisode(context: WorldSetup) {
+      const { world, activity } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      const key = `${worker.environmentId}:${worker.tabId}`;
+      activity.set(key, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(1);
+      await world.finishTurn(coordinator);
+      const marker = async () =>
+        (await world.storage.coordinators.listOpenCoordinatorDelegations())[0]!.delegation!.waiting;
+      expect((await marker())?.notifiedAt).toBeString();
+      return { world, activity, coordinator, worker, key, marker };
+    }
+
+    test("waiting to idle on an open delegation ends the episode, and a later wait is new", async () => {
+      const context = await createWorld();
+      const { world, activity, coordinator, worker, key, marker } = await notifiedEpisode(context);
+
+      activity.set(key, "idle");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "idle" });
+      expect(await marker()).toBeUndefined();
+
+      activity.set(key, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(2);
+    });
+
+    test("the sweep ends an episode on idle, whose edge was lost", async () => {
+      const context = await createWorld();
+      const { world, activity, key, marker } = await notifiedEpisode(context);
+
+      activity.set(key, "idle");
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect(await marker()).toBeUndefined();
+    });
+
+    test("an unreadable state does not end an episode or notify again", async () => {
+      const context = await createWorld();
+      const { world, activity, coordinator, worker, key, marker } = await notifiedEpisode(context);
+
+      activity.set(key, "unknown");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "unknown" });
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect((await marker())?.notifiedAt).toBeString();
+
+      activity.set(key, "waiting");
+      await settle(context);
+      expect(world.wakes(coordinator)).toBe(1);
+    });
+
+    test("a stopped environment ends the episode on the sweep", async () => {
+      const context = await createWorld();
+      const { world, worker, marker } = await notifiedEpisode(context);
+
+      // Mail waiting for it keeps the delegation open past the stop.
+      await world.setEnvironmentStatus(worker, "stopped");
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect(await marker()).toBeUndefined();
     });
 
     test("the sweep finds a waiting episode whose edge was lost to a restart", async () => {

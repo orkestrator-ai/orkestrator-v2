@@ -394,6 +394,65 @@ describe("two entries for one login", () => {
     expect(h.switchAccount).not.toHaveBeenCalled();
   });
 
+  test.each([true, false])(
+    "a stop on the active login's twin excludes the whole login (alternative=%s)",
+    async (hasAlternative) => {
+      const h = harness({
+        active: "a",
+        emails: SAME,
+        session: sessionOn("twin"),
+        accounts: {
+          a: usage({ used: 35, resetsInHours: 1 }),
+          twin: usage({ used: 100, resetsInHours: 3 }),
+          ...(hasAlternative ? { c: usage({ used: 5, resetsInHours: 90 }) } : {}),
+        },
+      });
+      expect(await h.stop()).toBe(hasAlternative ? "resend" : "stop");
+      expect(h.reads[0]).toEqual({ accountId: "twin", force: true });
+      expect(h.state.active).toBe(hasAlternative ? "c" : "a");
+      if (hasAlternative) {
+        expect(h.switchAccount).toHaveBeenCalledTimes(1);
+        expect(h.switchAccount.mock.calls[0]?.[1]).toBe("c");
+        expect(h.notices[0]?.reason).toBe("limit");
+      } else {
+        expect(h.switchAccount).not.toHaveBeenCalled();
+        expect(h.notices).toEqual([]);
+      }
+    },
+  );
+
+  test("a limit stop from another login can move a signed-out active entry to its twin", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      signedOut: ["a"],
+      session: sessionOn("c"),
+      accounts: {
+        a: usage({ used: 35, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 3 }),
+        c: usage({ used: 100, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop()).toBe("resend");
+    expect(h.reads[0]).toEqual({ accountId: "c", force: true });
+    expect(h.state.active).toBe("twin");
+    expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    expect(h.switchAccount.mock.calls[0]?.[2]).toEqual({
+      expectedActive: "a",
+      expectedIdentity: JSON.stringify({ email: SAME.twin }),
+      reason: "limit",
+    });
+    expect(h.notices).toEqual([
+      {
+        platform: "claude",
+        from: "a@example.com",
+        to: "twin@example.com",
+        reason: "limit",
+        at: inHours(0),
+      },
+    ]);
+  });
+
   test("signed out, the machine can still move to the twin", async () => {
     const h = harness({
       active: "a",

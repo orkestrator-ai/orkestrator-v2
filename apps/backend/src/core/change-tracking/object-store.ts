@@ -340,9 +340,21 @@ export class ObjectStore {
   private async publish(batch: StagedBatch): Promise<void> {
     const objects = Array.from(batch.objects);
     if (this.durable) {
-      await forEachBounded(objects, MAX_CONCURRENT_SYNCS, ([, object]) =>
-        this.sync(object.temp, "file"),
-      );
+      const failures: unknown[] = [];
+      await forEachBounded(objects, MAX_CONCURRENT_SYNCS, async ([id, object]) => {
+        try {
+          await this.sync(object.temp, "file");
+        } catch (error) {
+          // A later fsync can succeed after a writeback error without proving
+          // these bytes durable. Never let close publish this temporary again.
+          batch.objects.delete(id);
+          batch.bytes -= object.size;
+          await this.removeStaged(object);
+          failures.push(error);
+        }
+      });
+      // All syncs must settle before close can retry the healthy objects.
+      if (failures.length) throw failures[0];
     }
     for (let index = 0; index < objects.length; index += RENAMES_PER_LOCK_HOLD) {
       const chunk = objects.slice(index, index + RENAMES_PER_LOCK_HOLD);

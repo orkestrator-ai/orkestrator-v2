@@ -25,6 +25,7 @@ import {
   type CaptureResult,
 } from "./capture.js";
 import {
+  BATCH_MAX_BYTES,
   BATCH_MAX_OBJECTS,
   ObjectStore,
   objectId,
@@ -232,6 +233,27 @@ describe("a batch", () => {
     expect(tempFiles(store)).toEqual([]);
   });
 
+  test("flushes at the compressed byte bound below the object-count bound", async () => {
+    const { store, events } = recordingStore();
+    const batch = store.batch();
+    const ids: string[] = [];
+    // Incompressible inputs cross 64 MiB with four objects, far below 512.
+    const size = BATCH_MAX_BYTES / 4;
+    for (let index = 0; index < 3; index++)
+      ids.push((await batch.put("blob", randomBytes(size))).id);
+    expect(events).toEqual([]);
+    expect(tempFiles(store)).toHaveLength(3);
+    ids.push((await batch.put("blob", randomBytes(size))).id);
+    expect(events.filter((event) => event.kind === "file")).toHaveLength(4);
+    expect(tempFiles(store)).toEqual([]);
+    for (const id of ids) expect(await store.has(id)).toBe(true);
+    const tail = await batch.put("blob", encode("after byte flush\n"));
+    expect(await store.has(tail.id)).toBe(false);
+    await batch.close();
+    expect(await store.has(tail.id)).toBe(true);
+    expect(tempFiles(store)).toEqual([]);
+  });
+
   test("charges staged bytes against the hard budget and releases them on discard", async () => {
     let failing = true;
     const { store } = recordingStore({
@@ -418,16 +440,19 @@ describe("a capture's durability", () => {
     expect(result.manifest.entries[0]?.o).toBe(shared);
   });
 
-  test("a failed file sync fails the capture and leaves no name for that object", async () => {
+  test("a one-shot file sync failure is discarded while healthy objects survive close", async () => {
     const repo = repoWith({ "a.txt": "a\n", "b.txt": "b\n" });
     const victim = objectId("blob", encode("b\n"));
-    let failing = true;
+    let failures = 1;
+    let victimSyncs = 0;
     const store = new ObjectStore({
       root: temp("ork-write-store-"),
       durable: true,
       fsync: async (path) => {
-        if (failing && basename(path).startsWith(victim))
-          throw Object.assign(new Error("io"), { code: "EIO" });
+        if (basename(path).startsWith(victim)) {
+          victimSyncs++;
+          if (failures-- > 0) throw Object.assign(new Error("io"), { code: "EIO" });
+        }
       },
     });
     const executor = new HostCaptureExecutor(repo);
@@ -436,10 +461,13 @@ describe("a capture's durability", () => {
     expect(await store.has(victim)).toBe(false);
     expect(tempFiles(store)).toEqual([]);
 
-    failing = false;
+    expect(await store.get(victim)).toBeNull();
+    expect(victimSyncs).toBe(1);
+    expect(await store.has(objectId("blob", encode("a\n")))).toBe(true);
     const retried = captured(await captureWorktree({ executor, store }));
     expect(await store.get(victim)).not.toBeNull();
     expect(await store.get(retried.manifestId)).not.toBeNull();
+    expect(victimSyncs).toBe(2);
   });
 
   test("a failed directory sync fails the capture and is retried by the next flush", async () => {

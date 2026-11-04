@@ -1,6 +1,6 @@
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { CommandFailedError } from "./shell.js";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import {
   decideAutoMerge,
@@ -247,6 +247,66 @@ describe("PrAutoMergeController", () => {
       },
     ]);
   });
+
+  // `merge_environment_pr` refuses a pinned merge whose effects differ from
+  // the ones it would apply ("The pull request or merge effects changed").
+  test("keeps the branch of a project's home checkout", async () => {
+    const h = harness(environment({ projectHome: true }));
+    await h.controller.evaluate("env-1");
+    expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: false, cleanupAfterMerge: false });
+  });
+
+  test("carries a cleanup the user already requested", async () => {
+    const h = harness(environment({ cleanupAfterMergeRequestedAt: new Date().toISOString() }));
+    await h.controller.evaluate("env-1");
+    expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: true, cleanupAfterMerge: true });
+  });
+
+  test("completed cleanup neither records an error nor schedules another attempt", async () => {
+    const logs = captureLogs();
+    const h = harness(
+      environment({ cleanupAfterMergeRequestedAt: new Date().toISOString() }),
+      true,
+    );
+    const get = h.storage.getEnvironment;
+    h.storage.getEnvironment = async (id) => (h.invocations.length ? null : get(id));
+    const update = spyOn(h.storage, "updateEnvironment").mockImplementation(async () => {
+      throw new Error("Environment not found");
+    });
+    try {
+      await h.controller.evaluate("env-1");
+      expect(h.invocations).toHaveLength(1);
+      expect(update).not.toHaveBeenCalled();
+      expect(h.timers).toHaveLength(0);
+      expect(logs.records()).toHaveLength(0);
+    } finally {
+      update.mockRestore();
+      logs.restore();
+    }
+  });
+
+  for (const requested of [true, false]) {
+    test(`uses latest cleanup intent after preparation: ${requested}`, async () => {
+      const h = harness(
+        environment({
+          cleanupAfterMergeRequestedAt: requested ? null : new Date().toISOString(),
+        }),
+      );
+      const load = h.storage.loadConfig;
+      let reads = 0;
+      h.storage.loadConfig = async () => {
+        const config = await load();
+        if (++reads === 2)
+          h.set({
+            ...h.stored,
+            cleanupAfterMergeRequestedAt: requested ? new Date().toISOString() : null,
+          });
+        return config;
+      };
+      await h.controller.evaluate("env-1");
+      expect(h.invocations[0]?.args).toMatchObject({ cleanupAfterMerge: requested });
+    });
+  }
 
   test("follows the machine's check requirement for an unstable PR", async () => {
     const required = harness(environment({ prMergeability: "unstable" }));

@@ -206,6 +206,43 @@ function ToolbarTooltipTrigger({
   );
 }
 
+function AutoMergeErrorMessage({ message }: { message: string }) {
+  const contentRef = useRef<HTMLParagraphElement | null>(null);
+  return (
+    <ToolbarTooltipTrigger
+      tooltip={
+        <p ref={contentRef} className="max-h-64 max-w-96 overflow-y-auto wrap-anywhere">
+          Auto-merge: {message}
+        </p>
+      }
+    >
+      <span
+        role="status"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          const content = contentRef.current;
+          if (!content) return;
+          const offsets: Record<string, number> = {
+            ArrowDown: 40,
+            ArrowUp: -40,
+            PageDown: content.clientHeight,
+            PageUp: -content.clientHeight,
+            Home: -content.scrollHeight,
+            End: content.scrollHeight,
+          };
+          const offset = offsets[event.key];
+          if (offset === undefined) return;
+          event.preventDefault();
+          content.scrollTop += offset;
+        }}
+        className="line-clamp-2 max-w-64 rounded-sm text-xs text-destructive outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        Auto-merge: {message}
+      </span>
+    </ToolbarTooltipTrigger>
+  );
+}
+
 interface ActionBarProps {
   presentation?: "bar" | "grid";
 }
@@ -1211,15 +1248,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     <PullRequestCheckStatusAnnouncement checkSummary={checkSummary} />
                   )}
 
-                  {!isPRFinished && selectedEnvironment?.autoMergeError && (
-                    <span
-                      role="status"
-                      className="max-w-64 truncate text-xs text-destructive"
-                      title={selectedEnvironment.autoMergeError}
-                    >
-                      Auto-merge: {selectedEnvironment.autoMergeError}
-                    </span>
-                  )}
+                  {!isPRFinished &&
+                    selectedEnvironment?.autoMergeError &&
+                    (isGrid ? (
+                      // The grid has no tooltips and a phone has no hover, so
+                      // the whole message shows on its own row.
+                      <span
+                        role="status"
+                        className="order-last col-span-2 px-3 py-1 text-xs wrap-anywhere text-destructive"
+                      >
+                        Auto-merge: {selectedEnvironment.autoMergeError}
+                      </span>
+                    ) : (
+                      <AutoMergeErrorMessage message={selectedEnvironment.autoMergeError} />
+                    ))}
                   {!isPRFinished && (
                     <ToolbarTooltipTrigger
                       tooltip={

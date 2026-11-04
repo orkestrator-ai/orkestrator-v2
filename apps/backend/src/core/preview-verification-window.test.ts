@@ -246,6 +246,44 @@ describe("a new connection inside the verification window", () => {
     expect(registry.serviceSnapshot(serviceId)!.endpoint.endpointGeneration).toBe(generation + 1);
   });
 
+  for (const persistentFailure of [false, true]) {
+    test(`an unknown lookup cannot trust a pre-takeover resolve (persistent failure: ${persistentFailure})`, async () => {
+      const { registry, serviceId, generation } = await verifiedService();
+      let release!: () => void;
+      psGate = new Promise((resolve) => (release = resolve));
+      const running = registry.refresh(serviceId);
+      try {
+        for (let attempts = 0; psCalls === 0 && attempts < 100; attempts++) await Bun.sleep(1);
+        expect(psCalls).toBe(1);
+        // The running resolve already saw a's pid 300. Now b owns the port,
+        // but the connection's independent lookup cannot answer.
+        listeners[PORT] = [500];
+        lsofFailure = new CommandFailedError("slow", { timedOut: true });
+        const connection = Promise.allSettled([registry.acquireTarget(serviceId, generation)]);
+        for (let attempts = 0; lsofCalls < 2 && attempts < 100; attempts++) await Bun.sleep(1);
+        expect(lsofCalls).toBe(2);
+        if (!persistentFailure) lsofFailure = null;
+        psGate = null;
+        release();
+        await running;
+        const [result] = await connection;
+        expect(result!.status).toBe("rejected");
+        if (result!.status === "rejected")
+          expect(result.reason.message).toContain("generation-changed");
+        expect(lsofCalls).toBe(3);
+        expect(registry.serviceSnapshot(serviceId)!.endpoint).toMatchObject({
+          state: "unavailable",
+          listener: persistentFailure ? "unchecked" : "other-environment",
+          endpointGeneration: generation + 1,
+        });
+      } finally {
+        psGate = null;
+        release();
+        await running;
+      }
+    });
+  }
+
   test("taking a pooled connection opens nothing, so it looks nothing up", async () => {
     const { registry, serviceId, generation } = await verifiedService();
 

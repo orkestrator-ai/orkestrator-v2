@@ -1405,7 +1405,7 @@ export class PreviewServiceRegistry {
       // what was just seen unless its answer matches.
       await entry.job;
       entry = this.currentEntry(serviceId, generation);
-      if (listening === null || agrees()) return entry;
+      if (agrees()) return entry;
     }
     await this.resolveNow(serviceId);
     return this.currentEntry(serviceId, generation);

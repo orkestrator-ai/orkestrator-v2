@@ -12,7 +12,7 @@ Work that is already built has no file; the status table below records it.
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md) | Medium | No | The test now names its stalled step, and the wait on a superseded scan is removed for replacement-worktree retargets (10 misses in 300 local runs before, 0 in 600 after). The task to fix the stall stays open: the runtime defect (todo 4260) and other waits on a stuck child remain, and CI evidence is still needed. | An intermittent failure may still take down the gate, at a rate CI has not yet measured since the partial fix, with the shard itself working; a flake with a known owner rather than a shipped defect. |
+| 1 | [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md) | Medium | No | The test now names its stalled step, and the stall's cause is removed locally: `runCommand` no longer depends on the Bun events that get lost (0 misses and 0 stalled children in 300 Linux and 175 macOS runs). CI evidence is still needed, which is all that is left. | An intermittent failure may still take down the gate until CI confirms the fix, with the shard itself working; a flake with a known owner rather than a shipped defect. |
 
 ## Parallel running
 
@@ -41,4 +41,4 @@ These still follow the lane and conflict rules above.
 | Retain the run URL, tested SHA and shard results | Done | Recorded under Current state in [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md), including the red PR run at `142f846d`. |
 | Separate failures in the preparation's default suite | No action | The report makes no claim and asks for no repair. Those failures did not recur in the green runs above; the DOM-assertion scanner stays with todo 2922. |
 | Separate failures in the preparation's browser suite | No action | The report names no failure and CI's shards do not run that suite, so the current state was not determined here. |
-| Stable green on later runs (not a report item; found while checking) | Open | `a2bba9d8` is red on one test. A partial fix is in, the cause is not removed, and CI evidence is still needed: [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md). |
+| Stable green on later runs (not a report item; found while checking) | Open | `a2bba9d8` is red on one test. The local cause is removed, and CI evidence is still needed: [0010-backend-shard-diff-base-override-timeout.md](0010-backend-shard-diff-base-override-timeout.md). |

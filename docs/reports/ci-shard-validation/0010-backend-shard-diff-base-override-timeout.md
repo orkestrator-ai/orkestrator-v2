@@ -7,7 +7,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`. Acted on 2026-11-04 against `m
 ### Tasks
 
 1. **Find where the test stalls**: make the next deadline miss say which step it was waiting on. Status: done (2026-11-04).
-2. **Fix the stall**: remove the cause task 1 identifies, then update flake case 1537. Status: open. The cause is only partly removed: the observed wait on a superseded scan is gone for replacement-worktree retargets, but the runtime defect behind it remains ([todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md)), and this test can still miss its deadline on the paths listed under task 2. Case 1537 stays open.
+2. **Fix the stall**: remove the cause task 1 identifies, then update flake case 1537. Status: done (2026-11-04). The test no longer depends on the Bun events that get lost, and case 1537 is resolved. CI has not run the fix yet (see Needs verification), and the defect itself is still in Bun ([todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md)).
 
 ### 1. Find where the test stalls
 
@@ -39,37 +39,43 @@ The body (`apps/backend/src/core/diff-base-override.integration.test.ts:16-136`)
 
 **Investigation.** The miss reproduced locally, with the evidence in [flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#cause-2026-11-04). On unmodified code in a 4-CPU Linux container it missed in 10 of 300 runs, and all 10 reported `waiting on #24 readFileList`. It has two links:
 
-- **Root, in the runtime.** Bun 1.4.4 sometimes loses a completion event of a child that has already exited. `runCommand` settles on the child's `close`, so the child looks unfinished until its own timeout: 10 s or 60 s depending on the command. A 60 s `git status` or `git diff` cannot fit in a 30 s test.
+- **Root, in the runtime.** Bun 1.4.4 sometimes loses a completion event of a child that has already exited. On Linux it is the end of a stream: a direct `read` of the stuck socket returned EOF, and `ss` showed the backend as its only holder, so nothing else held the write end. On macOS the exit is lost as well, and the child stays a zombie. `runCommand` settled on the child's `close`, so the child looked unfinished until its own timeout: 10 s or 60 s depending on the command. A 60 s `git status` or `git diff` cannot fit in a 30 s test.
 - **Why this test waited, in `DiffStatsService`.** Every stuck child traced at a 10 s timeout on Linux, 18 of 18, belonged to a scan of the previous target. The retarget in the test's `diffStats.sync` step aborted that scan and it could no longer publish, but `entry.inFlight` stayed set, so the new target's first scan and the read at step 24 both waited for it.
 
-For replacement-worktree retargets, the second link is removed: a retarget clears `entry.inFlight` (`beginLineage`), and a superseded attempt no longer requests a rerun when it settles. With that change the test passed 600 of 600 runs on Linux. The first link is not removed: stalled children still occurred, 50 across the last 150 of those runs, and 3 of them were on the current target.
+Both links are removed:
 
-So the 600 clean runs show one wait gone, not the cause gone. The test did not happen to wait on a stuck child in those runs, but these paths can still reach the 30 s deadline:
+- `runCommand` captures output through private, already unlinked files and settles on the process's exit and the end of its group, so no stream event is involved (`51ccfb3f2`).
+- On macOS, a child with no exit after 1 s is checked with `ps`. A zombie's `xstat` is its true wait status, so the command settles with its real outcome (`4543e8b33`).
+- A retarget clears `entry.inFlight`, and a superseded attempt no longer requests a rerun (`1573f4949`).
 
-- **A stuck child on the current target.** Nothing bounds it short of the child's own 10 s or 60 s timeout, and a 60 s child cannot fit in the test. The 3 children above were of this kind.
-- **A same-worktree retarget.** `set_environment_diff_base` retargets through `diffStats.sync`, and the two `read(projectPath, ...)` steps follow one. Admission is keyed by worktree, so a read there queues behind a stuck superseded scan until it settles. A real-pool service test shows the queueing. No miss has named these steps.
-- **A reader already parked on the old promise.** It keeps waiting after the retarget, then reads its original identity. A real-pool service test shows this too. No miss has been traced to it.
+Stress on the final code, with a probe counting children unsettled after their exit:
 
-Attempts to get further, all recorded in [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#load-and-stress-runs-2026-11-03-to-2026-11-04):
+| Host | Load | Runs | Misses | Stalled children |
+| --- | --- | --- | --- | --- |
+| Linux, before | none | 100 | 0 | 20 |
+| Linux, after | none | 200 | **0** | **0** |
+| Linux, after | 8 CPU hogs | 100 | **0** | **0** |
+| macOS, after | 36 CPU hogs | 175 | **0** | **0**; 8 lost exits settled at 1 s |
 
-- Runs under no load, CPU hogs, and CPU hogs with `dd` fsync, on Linux and macOS, with and without a trace in `shell.ts`.
-- `/proc/self/fdinfo` for the epoll instance at a real miss, which shows the readiness event delivered and not re-armed. Why Bun drops it is not established.
-- `strace -f`: 81 runs without a miss, so tracing hides it.
-- About 700,000 standalone children with the same spawn options, including overlapping children, a real `git clone` and recursive `fs.watch`: none reproduced it, so there is no reduced case.
-- The watcher's `persistent` and `recursive` options: neither is the trigger.
-- `bun upgrade`: 1.4.4 is the latest release. No canary build and no x86-64 host were tried.
+The miss rate alone would not show this, since the superseded-scan change had already brought it to 0 of 600 while children kept stalling. The stalled count is the measure of the root, and it went from 20 in 100 runs to none. All 122 children the test starts go through `runCommand`.
 
-This task closes when the root is gone, through a Bun fix or a bound in `runCommand` ([todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md)), and a stress run then shows no deadline miss with no stalled child left for the test to wait on.
+An earlier attempt failed and is recorded so nobody repeats it: `runCommand` on an eager `Bun.spawn` pipe stalled 121 children in 150 runs, so the defect is not specific to `node:child_process` or its `lazy` reads. The other attempts are in [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#load-and-stress-runs-2026-11-03-to-2026-11-04): load runs on both hosts, `strace -f`, which hides the race, and about 700,000 standalone children, which never reproduced it. There is still no reduced case, and why Bun loses the event is not established.
 
 **Decisions.**
 
 - **What to change in this repository?**
-  - **Stop a retarget waiting on the scan it superseded (recommended).** Implemented.
-    - Pros: removes every observed miss (10 of 300 to 0 of 600); small; correct regardless of the runtime bug, since any slow superseded scan held up the new target; fenced publication already made the scan's result irrelevant.
-    - Cons: does not touch the root, so it does not close this task; a superseded child still holds its admission slot until it settles; a reader already parked on the superseded scan before the retarget still waits for it.
-  - **Settle `runCommand` shortly after `exit` when the pipes stay open.**
-    - Pros: covers every command in the backend, not just superseded scans.
-    - Cons: the unread output is unreachable through the stream, so it can only fail the command; a fixed grace period can fail a slow success on a starved host, across the whole backend; `exit` itself was missing in two of the three traced macOS cases, so it would not cover them; it changes the most widely used primitive on evidence from one test. Left to todo 4260.
+  - **Capture through unlinked files, with a macOS exit watchdog (recommended).** Implemented.
+    - Pros: removes the dependence on the lost events, so a stuck child is gone rather than bounded; loses no output and keeps real exit codes; measured 0 stalled children on both hosts; covers every `runCommand` caller, which also addresses the same-worktree, current-target and parked-reader waits, because they now wait only for real work.
+    - Cons: touches the most widely used backend primitive; each command opens two files; the temporary directory has to be usable; a full disk can truncate output (Git reports a failed write as a non-zero exit); the output limit is noticed by polling every 100 ms, so a runaway command can overshoot it on disk until it is killed; `ps` runs synchronously for a command older than 1 s on macOS, at growing intervals up to 16 s.
+  - **Fail a command shortly after `exit` when the pipes stay open.**
+    - Pros: smallest change to `runCommand`.
+    - Cons: the unread output is unreachable through the stream, so a successful command becomes a failure; a read such as this test's would still fail or retry; a fixed grace can fail a slow success on a starved host; does not cover the lost `exit` on macOS.
+  - **Rewrite capture on `Bun.spawn` pipes.**
+    - Pros: drops the `node:child_process` layer with no change in behaviour.
+    - Cons: measured worse, 121 stalled children in 150 runs against 20 in 100. Rejected.
+  - **Stop at the superseded-scan change.**
+    - Pros: small and local.
+    - Cons: removes one wait only. 50 children still stalled in 150 runs, and acceptance review rejected it as not removing the cause. Kept alongside the fix because it is correct on its own, not instead of it.
   - **Upgrade Bun.**
     - Pros: would address the root if a release fixes it.
     - Cons: `bun upgrade` reports 1.4.4 as the latest release, so there is nothing to upgrade to.
@@ -89,18 +95,24 @@ This task closes when the root is gone, through a Bun fix or a bound in `runComm
 - **Why:** the report warned that a local pass under load would prove little. The miss appeared without any added load in this container, so before and after counts could be compared directly.
 - **Assumption:** the local miss is the same one CI sees. It has the same 30 s signature, but its rate is lower (3.3% in the largest local run, about 10% on `main`), the container is aarch64 and CI is x86-64, and the runner has not yet reported a step. Needs verification below covers this.
 
-### Task 2: case 1537 stays open while the root remains
+### Task 2: case 1537 is resolved on the runCommand fix
 
-- **Chose:** keep task 2 and the case open, recording the retarget change as a partial fix. An earlier commit on this branch marked the case resolved; acceptance review rejected that, and this replaces it.
-- **Why:** the ticket allows `resolved` only when the cause is removed. The clean stress run shows one wait gone, while the lost event still occurs and the paths listed under task 2 can still reach the deadline.
-- **Kept:** the retarget change itself. It removes an observed wait, with before and after counts, and is correct whatever Bun does.
-- **Not done here:** a bound in `runCommand`. Nothing has measured how it would behave, it could only turn a stall into a failure, and the ticket says not to guess at a fix. It stays with [todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
+- **Chose:** remove the wait in this repository and mark case 1537 resolved. Two earlier rounds on this branch did not: one marked it resolved on the superseded-scan change alone, which review rejected, and one kept it open and left the root to todo 4260, which verification rejected because the cause was shown and not removed.
+- **Why:** the ticket requires a shown cause to be removed. The defect stays in Bun, but this code no longer depends on the events it loses, and the stalled-child count went to 0 on both hosts. The earlier reason for leaving `runCommand` alone, that a bound could only turn a stall into a failure, does not apply to file capture, which loses no output.
+- **Not claimed:** the defect itself is not fixed, and other `node:child_process` captures in the backend can still hit it. [Todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md) tracks both.
+
+### Task 2: which commands wait for what
+
+- **Chose:** settle when the process has exited and its process group has no live member. The old code settled when the pipes closed.
+- **Why:** a file has no end-of-stream, so the group is the nearest equivalent that keeps a descendant's late output and keeps the existing tests' behaviour for a descendant that outlives its parent. Zombies do not count: without that, an orphan under a non-reaping PID 1 held `sh -c 'sleep 3 & exit 0'` to its whole 10 s timeout, which the probe's positive control exposed.
+- **Behaviour change:** a descendant left in the same group that has redirected its own output used to let the command return at once, and now holds it until the descendant exits or the timeout kills the group. No backend caller was found that relies on it: its fixed shell script starts no background work, and `git maintenance --detach` and `core.fsmonitor=true` both returned promptly when measured. A daemon needs its own session, as those have.
+- **Alternative:** settle a fixed time after the leader's exit. That would silently lose a slower descendant's output and leave it running, so it was not used.
 
 ### Task 2: scope of the retarget guarantee after review
 
-- **Chose:** retain physical admission keyed by worktree and narrow the guarantee to detaching the superseded promise. A same-worktree comparison-ref change still queues behind the old lease, and a reader already awaiting the old promise retains its wait. Real-pool service tests now cover both limits and the path-changing success case.
+- **Chose:** retain physical admission keyed by worktree and narrow the guarantee to detaching the superseded promise. A same-worktree comparison-ref change still queues behind the old lease, and a reader already awaiting the old promise retains its wait. Real-pool service tests now cover both limits and the path-changing success case. Both waits now last only as long as real work, because a child that has exited no longer looks unfinished.
 - **Alternative:** release the lease on abort or key it by comparison ref. That could unblock same-worktree work, but permits overlapping physical scans without proving the old work stopped and weakens the per-worktree resource bound.
-- **Why:** the observed miss was a replacement-worktree retarget. The local fix removes that wait while preserving admission bounds. Same-worktree stalls and parked readers remain runtime follow-up work in todo 4260; the fix makes no universal deadline guarantee.
+- **Why:** the observed miss was a replacement-worktree retarget. The local fix removes that wait while preserving admission bounds. It makes no universal deadline guarantee: a really slow scan can still hold these waits.
 
 ## Current state
 
@@ -110,22 +122,22 @@ The report's outstanding evidence has now been observed, so it needs no task:
 - **Later `main` runs were green.** All three shards and the gate passed on `a2827f52` ([41722456157](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41722456157)), `74d0bbe1` ([41726802606](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41726802606)) and `a62359f6` ([41727000564](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41727000564)).
 - **The gate does fail with a single shard.** On `a2bba9d8` ([41727207763](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41727207763)), only `Tests (backend)` failed and the gate failed with it.
 
-The test now reports its steps on any failure or deadline miss, and a passing run prints nothing extra. Its 30 s deadline, assertions and test tier are unchanged. The miss is reduced but not removed, so the test can still turn the shard red.
+The test now reports its steps on any failure or deadline miss, and a passing run prints nothing extra. Its 30 s deadline, assertions and test tier are unchanged. The cause of the local miss is removed. Whether that ends CI's misses has not been observed yet.
 
 ## Constraints and rationale
 
 - Do not raise the 30 s deadline, skip the test or loosen its assertions. The repository's flake rules forbid hiding a flake that way.
-- Record the outcome in case 1537 and its group index. Mark it resolved only once the cause is removed, with the evidence and a stress run showing no deadline miss; until then it stays open.
+- Record the outcome in case 1537 and its group index. It was marked resolved once the cause was removed, with the evidence and a stress run showing no deadline miss.
 
 ## Needs verification
 
-- Whether CI's misses are this one. The stall is a wait, not CPU contention, in every local miss, but no CI run has reported a step yet. A CI miss now names its step, so one would settle it.
-- How much the partial fix lowers the CI miss rate. One green run proves little for a failure seen in about one run in ten; compare against the four misses in 40 runs recorded above. A long green stretch would still not close task 2 while the root remains.
+- Whether CI's misses are this one. The stall is a wait, not CPU contention, in every local miss, but no CI run has reported a step yet. A CI miss now names its step, so one would settle it, and case 1537 should then be reopened.
+- Whether the fix ends the CI misses. One green run proves little for a failure seen in about one run in ten; compare against the four misses in 40 runs recorded above. The local evidence is aarch64 and macOS, and CI is x86-64.
 
 ## Related
 
 - [CI shard validation report, Not done / needs live evidence](../2026-11-03-ci-shard-validation.md#not-done--needs-live-evidence)
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
-- [Todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the runtime defect behind the stall
+- [Todo 4260](../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the runtime defect behind the stall, still in Bun
 - [0030 test suite and CI health](../../todo/cross-cutting/0030-test-suite-and-ci-health.md), task 1. The required-check ruleset is still unapplied (`gh api repos/orkestrator-ai/orkestrator-v2/rulesets` returned an empty list today), which is why #1636 could merge with a red gate. That stays with 0030 as a maintainer action.
 - [2922 full and isolated suite failures on main](../../todo/cross-cutting/2922-full-and-isolated-suite-failures-on-main.md), which owns the `bounded test diagnostics` failure.

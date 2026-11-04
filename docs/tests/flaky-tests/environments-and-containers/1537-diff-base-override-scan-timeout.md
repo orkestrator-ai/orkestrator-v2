@@ -1,8 +1,9 @@
 # Diff-base override integration scan timeout
 
 - **ID:** 1537
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-10-31
+- **Resolved:** 2026-11-04, locally; no CI run has exercised the fix yet
 - **Test:** `saved/reset overrides retarget real scans and reverts; replacement drops an unpushed base`
 - **File:** `apps/backend/src/core/diff-base-override.integration.test.ts`
 
@@ -72,7 +73,7 @@ earlier steps left out here:
 The stall is a wait, not CPU contention. It has two links.
 
 **Bun 1.4.4 loses a completion event of a child that has already exited.**
-`runCommand` settles on the child's `close`, which needs the process exit and
+`runCommand` settled on the child's `close`, which needs the process exit and
 the end of both stdio streams. At a real deadline miss on Linux, the in-flight
 child was `git status` with its 60 s budget: exit code 0, exited 2 ms after
 spawn, stderr closed, and no stdout end for the remaining 29.8 s. Two more misses
@@ -87,8 +88,16 @@ the process is never still running:
 - macOS: the same stall, with `exit` missing as well in two of the three traced cases. `ps`
   showed the child as `Z <defunct>` for the whole 10 s, so nothing had reaped it.
 
+Direct evidence from a stall on Linux (2026-11-04): a `read` of the stuck socket
+returned 0, which is EOF, and `ss -xpn` showed the backend as its only holder with
+no peer left. So the kernel has reported the end of the stream, and no other
+process is holding the write end. Across 141 Linux stalls the exit event always
+arrived; the macOS stalls also lose `exit`.
+
 Why Bun drops the event is **not established**. The standalone scripts below
-never reproduced it, so there is no reduced case.
+never reproduced it, so there is no reduced case. It is not specific to
+`node:child_process`, which calls `Bun.spawn` with `lazy: true`: `runCommand`
+rewritten on an eager `Bun.spawn` pipe stalled more often, not less.
 
 **`DiffStatsService` made the new target wait for that child.** All 18 stuck
 children traced at a 10 s timeout on Linux were in a scan of the previous target
@@ -121,6 +130,21 @@ The owning file ran alone, `--parallel=1`, on a host with other work running.
 | **Partial fix**, probe | none | 150 | **0** | not observable: the test ends before the probe fires |
 | **Partial fix**, probe, process held 1.3 s after the test | none | 150 | **0** | **50**: 47 on the previous target, 3 on `replacement` |
 
+Stalled children compared across capture methods, same container, owning test only,
+process held 1.3 s after the test. A child counts as stalled when it is unsettled 1 s
+after its exit, or is a zombie with no exit event:
+
+| Capture | Load | Runs | Misses | Stalled children |
+| --- | --- | --- | --- | --- |
+| `node:child_process` pipes | none | 100 | 0 | 20 |
+| `Bun.spawn` eager pipes | none | 150 | 0 | 121 |
+| **Files**, first version, non-reaping PID 1 | none | 300 | **0** | **0** |
+| **Files**, final `4543e8b33`, reaping init | none | 200 | **0** | **0** |
+| **Files**, final `4543e8b33`, reaping init | 8 CPU hogs | 100 | **0** | **0** |
+
+As a positive control, the same probe flagged `sh -c 'sleep 3 & exit 0'`, whose group
+really is alive after 1 s, and the command settled at 3 s.
+
 macOS (18 cores, a scratch copy that always prints its timings):
 
 | Code | Load | Runs | Misses | Total ms, median / max | Note |
@@ -129,6 +153,13 @@ macOS (18 cores, a scratch copy that always prints its timings):
 | Unmodified | 36 CPU hogs | 175 | 0 | 1,017 / 11,288 | 4 runs had a 10.2 s `#24 readFileList`: a stuck 10 s `git rev-parse` plus the 100 ms kill grace |
 | Unmodified | 72 CPU hogs, 8 `dd` fsync | 12 | 0 | 5,548 / 11,347 | Time spread across steps, up to 5.8 s in `createRepository`: real contention, and no single stuck step |
 | **Partial fix** | 36 CPU hogs | 175 | **0** | 917 / 1,473 | `#24` at most 290 ms |
+
+The same hogs on macOS, counting stalled children (the worktree's real test with the probe):
+
+| Capture | Runs | Misses | Result |
+| --- | --- | --- | --- |
+| Files, no exit watchdog | 175 | 0 | 9 stalled children, all zombies with no exit event |
+| **Files and watchdog**, final `4543e8b33` | 175 | **0** | **0** unsettled after 2.5 s; 8 lost exits settled at the watchdog's first check, 1 s |
 
 Not reproduced, about 700,000 children in total, on Linux and macOS with
 `node:child_process` and the same spawn options: plain spawn loops, same-tick
@@ -139,45 +170,34 @@ miss, so tracing hides it. The `persistent` and `recursive` rows above show thos
 two options are not the trigger. The watcher-off row has too few runs, and too
 different a scan pattern, to blame the watcher.
 
-## Partial fix and what remains
+## Fix (2026-11-04)
 
-This case stays open: the cause is not removed, and the test can still miss its
-deadline.
+Resolved by removing the wait from `runCommand`, on commits `1573f4949`, `51ccfb3f2`
+and `4543e8b33`. The 30 s deadline, assertions and test tier are unchanged.
 
-Removed for replacement-worktree retargets: the second link. `beginLineage` clears `entry.inFlight`, and a superseded
-attempt no longer requests a rerun when it settles (`diff-stats-service.ts`, with
-tests in `apps/backend/tests/diff-stats-service.test.ts`). The 30 s deadline,
-assertions and test tier are unchanged.
+- **Lost end of stream.** Output goes to a private file, unlinked before the child
+  starts, and `runCommand` reads it synchronously after the process exits. No pipe
+  reader is involved, so the lost event has nothing to stall.
+- **Lost exit (macOS).** If a child has not reported an exit after 1 s, and then at
+  growing intervals, `runCommand` asks `ps` for its state. A zombie's `xstat` is its true
+  wait status, so the command settles with its real exit code or signal.
+- **A superseded scan.** `beginLineage` clears `entry.inFlight`, and a superseded
+  attempt no longer requests a rerun (`diff-stats-service.ts`), so a retarget to a new
+  worktree does not join work whose result would be thrown away.
 
-The guarantee is limited to detaching the old promise. The production admission
-pool keeps one physical scan per worktree: a same-path comparison-ref retarget
-still queues behind a stalled superseded scan, so its read can still miss the
-deadline. This test takes that path: `set_environment_diff_base` retargets through
-`diffStats.sync`, and both `read(projectPath, ...)` steps follow one. No miss has
-named those steps. A reader already awaiting the old promise also keeps waiting until
-it settles, then reads its original identity ad hoc. Service tests using a real
-`WorkAdmissionPool` cover both limits and a path-changing retarget. Releasing a
-lease on abort without proof that the physical work stopped would break the
-pool's resource bound; changing that is outside this replacement-worktree fix.
+All 122 children the test starts go through `runCommand`, so none still uses a Bun
+pipe reader. The two later limits of the superseded-scan change remain as ordinary
+behaviour: a same-worktree retarget still queues behind the old scan's admission
+lease, and a reader already parked on the old promise still waits for it. Each now
+waits only for work that is really running, not for a child that has already exited.
 
-Stress result for this partial fix: 0 misses in 600 Linux runs against 10 in 300 before, and at
-that rate the chance of no miss in the 300 runs without a probe alone is about
-0.004%.
+What this does not cover is in
+[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md): the
+defect is still in Bun, other `node:child_process` captures in the backend can still
+hit it, and a child whose exit Bun lost stays a zombie.
 
-Not removed: the first link, tracked in
-[todo 4260](../../../todo/cross-cutting/4260-bun-loses-child-process-events.md).
-Stalled children still occur, 3 of the 50 counted on the current target, and a stuck
-child this test does wait on would still miss the deadline. None did in those 600
-runs.
-
-**Resolve this case** only once the root is gone, through a Bun fix or a bound in
-`runCommand` (todo 4260), with a stress run showing no deadline miss. Green CI runs
-alone do not close it.
-
-**On a new deadline miss**, read the step its report names: `#24 readFileList`
-can mean either a stuck child on the current replacement target or a regression
-of the superseded-scan detachment. The step number alone cannot distinguish them.
-Use the shell trace documented above to identify which target owns the stalled
-child before concluding that the partial fix regressed. Any other step identifies
-a different wait to investigate for the remaining runtime defect. CI has not reported a step yet; local evidence is on aarch64
-and CI is x86-64.
+**Reopen this case** if the test misses its deadline again. The report names the step:
+that identifies a wait this fix did not remove. CI has not run the fix yet, CI is
+x86-64 and the local evidence is aarch64 and macOS, so that CI's misses have this
+cause is still an assumption. One green run proves little for a failure seen in about
+one run in ten.

@@ -288,9 +288,9 @@ export interface CoordinatorDelegation {
    */
   wokenAt?: string;
   /**
-   * Delivering the wake kept failing, so it was given up on and the coordinator
-   * was sent one notice, best effort. A mark on the wake, not on the work:
-   * `state` still says how the worker ended.
+   * Delivering the wake kept failing, so it was given up on once one notice to
+   * the coordinator was stored. A mark on the wake, not on the work: `state`
+   * still says how the worker ended.
    */
   wakeFailedAt?: string;
   /**

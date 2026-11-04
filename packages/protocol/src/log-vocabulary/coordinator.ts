@@ -17,7 +17,7 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "delegation.wake-retire-failed":
         "A wake that keeps failing could not be given up on; the next pass retries.",
       "delegation.wake-retire-notice-failed":
-        "The one notice for a retired wake could not be sent; the wake is retired anyway.",
+        "The one notice for a wake being retired could not be sent; the wake stays owed and the next pass retries.",
       "delegation.wake-retired":
         "A wake kept failing and was given up on; `kind` is the last failure.",
       "mail.reconcile-failed":

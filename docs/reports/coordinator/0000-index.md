@@ -9,6 +9,8 @@ file as a whole: the impact of leaving its remaining work undone
 ([rating a file](../../README.md#rating-a-file)). The items themselves live
 in the files. **Finished** is Yes only when every item in the file is done.
 Work that is already built has no file; the status table below records it.
+Batch C1's task-by-task outcome is in
+[its outcome record](../2026-11-04-coordinator-c1-wake-reliability-outcome.md).
 
 A batch file combines several reports as numbered parts and takes the rating of its most serious part. A number such as `0720` in this index names a part or a file, and the table below shows where it lives.
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -481,6 +481,26 @@ describe("coordinator messages to the project home", () => {
     const again = await send(message);
     expect(again).toMatchObject({ id: delivered!.id, projectHome: true });
     expect(await mailTo(homeId)).toHaveLength(priorMail.length + 1);
+
+    // Maintenance reads the effective setting rather than the 14-day default.
+    const config = await storage.loadConfig();
+    const configured = spyOn(storage, "loadConfig").mockResolvedValue({
+      ...config,
+      global: {
+        ...config.global,
+        agentMessaging: { ...config.global.agentMessaging!, retentionDays: 30 },
+      },
+    });
+    const age = new Date(Date.now() - 15 * 86_400_000);
+    await utimes(path.dirname(file), age, age);
+    try {
+      await coordination.files.sweepMailAttachments();
+      expect((await readFile(file)).length).toBe(9);
+    } finally {
+      configured.mockRestore();
+      const now = new Date();
+      await utimes(path.dirname(file), now, now);
+    }
 
     // The maintenance pass keeps a live project home's images, and removes
     // them once its record is gone (a removed project, an interrupted delete).

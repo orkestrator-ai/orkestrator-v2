@@ -35,11 +35,6 @@ const STALE_SPOOL_MS = 24 * 60 * 60 * 1_000;
 /** Images for a project home: kept outside the user's checkout, in the data directory. */
 const PROJECT_HOME_DIRECTORY = "project-home-mail-attachments";
 const ENVIRONMENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
-/**
- * A project home's images last as long as the mail that names them: once the
- * mail is past retention nothing points at the file any more.
- */
-const PROJECT_HOME_RETENTION_MS = AGENT_MAIL_DEFAULT_RETENTION_DAYS * 24 * 60 * 60 * 1_000;
 /** Bytes read to recognise an image: enough for the longest signature, in whole base64 groups. */
 const SIGNATURE_BYTES = 18;
 
@@ -348,7 +343,9 @@ export async function sweepProjectHomeMailAttachments(
   dataDir: string,
   isLiveProjectHome: (environmentId: string) => Promise<boolean>,
   now = Date.now(),
+  retentionDays = AGENT_MAIL_DEFAULT_RETENTION_DAYS,
 ): Promise<void> {
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1_000;
   const root = projectHomeRoot(dataDir);
   const homes = await fs.readdir(root).catch(() => [] as string[]);
   for (const home of homes) {
@@ -362,7 +359,7 @@ export async function sweepProjectHomeMailAttachments(
       batches.map(async (batch) => {
         const target = path.join(directory, batch);
         const stats = await fs.lstat(target).catch(() => null);
-        if (stats && now - stats.mtimeMs > PROJECT_HOME_RETENTION_MS) {
+        if (stats && now - stats.mtimeMs > retentionMs) {
           await fs.rm(target, { recursive: true, force: true });
         }
       }),

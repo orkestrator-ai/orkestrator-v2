@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -109,7 +109,20 @@ function privateDirectorySink(directory: string): AttachmentSink {
       }
     },
     write: async (file, data) => {
-      await fs.writeFile(pathOf(file.name), data, { flag: "wx", mode: 0o600 });
+      // A failed write must never expose a partial final file. Hard-linking
+      // the finished sibling publishes exclusively without replacing a winner.
+      const temporary = path.join(directory, `.mail-upload-${randomUUID()}`);
+      try {
+        await fs.writeFile(temporary, data, { flag: "wx", mode: 0o600 });
+        try {
+          await fs.link(temporary, pathOf(file.name));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          if (!(await alreadyHere(pathOf(file.name), file))) throw error;
+        }
+      } finally {
+        await fs.rm(temporary, { force: true });
+      }
     },
     release: () => undefined,
   };

@@ -3,7 +3,7 @@
  * store and real Git worktrees. A container is a temporary directory behind a
  * fake `docker exec` that runs the real writer script against it.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -391,6 +391,63 @@ describe("send_message with attachments, to a container", () => {
 });
 
 describe("send_message with attachments, between a coordinator and its side agents", () => {
+  test("a partial private write leaves no final file and the same send retries once", async () => {
+    const { world, paste, send, inbox } = await harness();
+    const side = await world.addSide();
+    const source = await paste();
+    const directory = world.storage.coordinators.coordinatorAttachmentDirectory(
+      world.coordinatorId,
+      side.conversationId!,
+    );
+    const original = fs.writeFile.bind(fs);
+    const write = spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (String(args[0]).includes(".mail-upload-")) {
+        await original(args[0], PNG.subarray(0, 3), args[2]);
+        throw new Error("injected partial write");
+      }
+      return original(...args);
+    });
+    const args = {
+      requestId: "partial",
+      toEnvironmentId: side.environmentId,
+      toTabId: side.tabId,
+      attachments: [source],
+    };
+    try {
+      await expect(send(args)).rejects.toThrow("injected partial write");
+      expect(await inbox(side)).toEqual([]);
+      expect(await fs.readdir(directory)).toEqual([]);
+    } finally {
+      write.mockRestore();
+    }
+    const sent = await send(args);
+    await send(args);
+    expect((await fs.readFile(sent.attachments[0].path)).equals(PNG)).toBe(true);
+    expect(await inbox(side)).toHaveLength(1);
+  });
+
+  test("concurrent sends of the same image share one intact private file", async () => {
+    const { world, paste, send, inbox } = await harness();
+    const side = await world.addSide();
+    const source = await paste();
+    const messages = await Promise.all(
+      ["one", "two"].map((requestId) =>
+        send({
+          requestId,
+          toEnvironmentId: side.environmentId,
+          toTabId: side.tabId,
+          attachments: [source],
+        }),
+      ),
+    );
+    expect(messages[0].attachments[0].path).toBe(messages[1].attachments[0].path);
+    expect((await fs.readFile(messages[0].attachments[0].path)).equals(PNG)).toBe(true);
+    expect(await fs.readdir(path.dirname(messages[0].attachments[0].path))).toEqual([
+      path.basename(source),
+    ]);
+    expect(await inbox(side)).toHaveLength(2);
+  });
+
   test("each lands in the other's own attachment directory", async () => {
     const { world, main, paste, send, inbox } = await harness();
     const side = await world.addSide();

@@ -112,6 +112,23 @@ Pointed the pinned Claude and Codex CLIs at a local scripted model, the pattern 
 
 Placed a project home's images in `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/` instead of `<checkout>/.orkestrator/mail-attachments/`, so the user's checkout is never written to. `deleteEnvironment` removes the directory with the project home, and the node maintenance pass (`NodeFiles.sweepMailAttachments`, every 30 seconds on every backend) removes it once the project home's record is gone, which covers a removed project, and drops batches older than mail retention. A failed record read keeps the files. Chose retention equal to mail retention because after that no message names the file. Covered by `mail-attachments.test.ts`, `coordinator-worker-mail.test.ts` (nothing in the checkout, not even ignored files; removed after the record goes) and `commands-environment-cleanup.test.ts` (removed on delete, checkout kept).
 
+### Task 4: configured retention and atomic private publication (review repair)
+
+The maintenance pass now reads the effective global mail retention instead of
+hard-coding 14 days. Private recipient copies finish in a unique sibling file
+and are published with an exclusive hard link: interrupted writes leave no
+partial final file, and a concurrent matching winner succeeds without overwrite.
+Regression tests cover short/long retention, partial-write retry, concurrent
+conversation copies and upward outbox retry.
+
+### Task 3: remaining live evidence (review repair)
+
+Still open: Cursor, Pi, Grok, Codex bridge app-server and an agent opening the
+image inside a real container. Existing scripted qualification covers only
+Claude and Codex CLI tools; it must not be presented as app-server or other
+provider evidence. This repair does not spend provider turns, as prohibited by
+the ticket, or claim that a filesystem/hash check qualifies an agent tool.
+
 ## Related
 
 - [`docs/architecture/coordinator.md`](../../architecture/coordinator.md#passing-a-pasted-image-on)

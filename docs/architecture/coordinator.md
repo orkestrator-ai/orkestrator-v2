@@ -925,7 +925,7 @@ Where a file lands:
 | --- | --- | --- |
 | Environment (worktree) | `<worktree>/.orkestrator/mail-attachments/<batch>/` | With the worktree |
 | Environment (container) | `/workspace/.orkestrator/mail-attachments/<batch>/` | With its storage |
-| Project home | `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/`, outside the user's checkout, copied only once the user approves the message | With the project home (environment deletion, or the next maintenance pass once its record is gone, as when the project is removed), or once past mail retention (14 days) |
+| Project home | `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/`, outside the user's checkout, copied only once the user approves the message | With the project home (environment deletion, or the next maintenance pass once its record is gone, as when the project is removed), or once past configured mail retention (14 days by default) |
 | Coordinator or side agent | That conversation's attachment directory, the root its read-only rules can read | With the conversation's retention or the project |
 
 `.orkestrator` is Git-excluded in every environment, and the copy first proves

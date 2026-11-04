@@ -225,6 +225,19 @@ describe("project home images", () => {
     expect((await fs.stat(root)).isDirectory()).toBe(true);
   });
 
+  test.each([1, 30])("the sweep honors %s-day configured mail retention", async (retentionDays) => {
+    const directory = projectHomeMailAttachmentDir(root, "env-1", batch);
+    await fs.mkdir(directory, { recursive: true });
+    const target = path.join(directory, "shot.png");
+    await fs.writeFile(target, PNG);
+    const now = Date.now();
+    const age = new Date(now - 15 * 24 * 60 * 60 * 1_000);
+    await fs.utimes(directory, age, age);
+    await sweepProjectHomeMailAttachments(root, async () => true, now, retentionDays);
+    if (retentionDays === 30) expect((await fs.readFile(target)).equals(PNG)).toBe(true);
+    else await expect(fs.stat(target)).rejects.toThrow();
+  });
+
   test("the sweep removes a gone project home and batches past mail retention", async () => {
     const old = projectHomeMailAttachmentDir(root, "env-1", batch);
     const fresh = projectHomeMailAttachmentDir(root, "env-1", later);

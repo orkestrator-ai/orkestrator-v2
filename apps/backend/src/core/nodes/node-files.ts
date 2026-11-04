@@ -1,3 +1,4 @@
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -100,13 +101,19 @@ export class NodeFiles {
     );
     // A project home whose record is gone (a removed project, a deletion that
     // stopped part-way) loses its images; a failed read keeps them.
-    await sweepProjectHomeMailAttachments(this.storage.getDataDir(), async (environmentId) => {
-      const environment = await this.storage.getEnvironment(environmentId).then(
-        (value) => value ?? null,
-        () => undefined,
-      );
-      return environment === undefined || isProjectHomeEnvironment(environment);
-    });
+    const config = await this.storage.loadConfig();
+    await sweepProjectHomeMailAttachments(
+      this.storage.getDataDir(),
+      async (environmentId) => {
+        const environment = await this.storage.getEnvironment(environmentId).then(
+          (value) => value ?? null,
+          () => undefined,
+        );
+        return environment === undefined || isProjectHomeEnvironment(environment);
+      },
+      Date.now(),
+      normalizeAgentMessagingSettings(config.global.agentMessaging).retentionDays,
+    );
   }
 
   /** The scope's root directory on this node. */

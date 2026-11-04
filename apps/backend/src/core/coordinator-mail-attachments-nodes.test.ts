@@ -474,6 +474,35 @@ describe("a command node's coordinator sending to a leaf", () => {
 });
 
 describe("a leaf's coordinator sending to the command node", () => {
+  test("an interrupted private publication stays queued and collects intact on retry", async () => {
+    const world = await link();
+    await world.sendUp({
+      requestId: "partial-up",
+      attachments: [await world.paste(world.leaf, world.leafMain)],
+    });
+    const original = fs.writeFile.bind(fs);
+    const write = spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (String(args[0]).includes(".mail-upload-")) {
+        await original(args[0], PNG.subarray(0, 3), args[2]);
+        throw new Error("injected partial write");
+      }
+      return original(...args);
+    });
+    try {
+      expect(await world.collect()).toBe(false);
+      expect(await world.inbox(world.command, world.commandMain)).toEqual([]);
+      expect(await world.leafCoordination.leafMail.pending("bk_cmd" as never)).toBe(1);
+    } finally {
+      write.mockRestore();
+    }
+    expect(await world.collect()).toBe(true);
+    await world.collect();
+    const messages = await world.inbox(world.command, world.commandMain);
+    expect(messages).toHaveLength(1);
+    expect((await fs.readFile(messages[0]!.attachments![0]!.path)).equals(PNG)).toBe(true);
+    expect(await world.leafCoordination.leafMail.pending("bk_cmd" as never)).toBe(0);
+  });
+
   test("waits in the outbox, then reaches the coordinator there, readable", async () => {
     const world = await link();
     const source = await world.paste(world.leaf, world.leafMain);

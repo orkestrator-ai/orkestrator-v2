@@ -240,3 +240,9 @@ does not establish a root cause for the still-open intermittent cases.
   aggregate artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lbuwN0`.
 - **Assessment:** recurrence of the aggregate-only startup timeout; no owning
   code, assertions, deadlines, or skips changed. Root cause remains unconfirmed.
+
+The exact original aggregate command was rerun after the model fixes. The
+bridge-startup owner passed; workspace instead failed the unrelated preview
+metrics (3571) and zsh completion (1250) cases. Root, bridges and protocol
+passed. The aggregate remains non-green; both newly failing owners passed
+unchanged when rerun alone.

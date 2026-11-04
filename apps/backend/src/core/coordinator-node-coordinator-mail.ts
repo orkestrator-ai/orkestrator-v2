@@ -1,4 +1,7 @@
-import { AGENT_MAIL_MAX_BODY_BYTES } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_BODY_BYTES,
+  type AgentMailAttachment,
+} from "@orkestrator/protocol/agent-mail";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
@@ -11,6 +14,9 @@ import type { CoordinatorNodeTarget } from "./commands-registry-coordinator-node
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { coordinatorCaller } from "./coordinator-action-scope.js";
+import { attachmentReferences, readCallerAttachments } from "./coordinator-mail-attachments.js";
+import type { MailAttachmentBatch } from "./mail-attachments.js";
+import { mailAttachmentBatchId, mailAttachmentFiles } from "./mail-attachments.js";
 
 /**
  * Mail between a command node's main coordinator and a leaf's main
@@ -52,6 +58,8 @@ export async function sendToNodeCoordinator(
     subject?: string;
     body: string;
     nodeParent?: { id: string; threadId: string; hopCount: number };
+    /** Already in that node's spool, for its `deliver_node_mail` to place. */
+    attachments?: MailAttachmentBatch;
   },
 ): Promise<JsonRecord> {
   if (!target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)) {
@@ -64,6 +72,7 @@ export async function sendToNodeCoordinator(
     toTabName?: string;
     placement?: string;
     placementReason?: string;
+    attachments?: AgentMailAttachment[];
   }>(
     "deliver_node_mail",
     {
@@ -75,6 +84,7 @@ export async function sendToNodeCoordinator(
       ...(input.subject ? { subject: input.subject } : {}),
       body: input.body,
       ...(input.nodeParent ? { nodeParent: input.nodeParent } : {}),
+      ...(input.attachments ? { attachments: input.attachments } : {}),
     },
     `mail:${input.coordinatorId}:${input.requestId}`,
   );
@@ -90,6 +100,7 @@ export async function sendToNodeCoordinator(
     ...(delivered?.toTabName ? { toTabName: delivered.toTabName } : {}),
     ...(delivered?.placement ? { placement: delivered.placement } : {}),
     ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
+    ...(delivered?.attachments?.length ? { attachments: delivered.attachments } : {}),
     // Not a worker: nothing to wait on but its answer.
     coordinatorDelegationOpened: false,
     ...(scheduled
@@ -192,7 +203,27 @@ export function registerCoordinatorCommandNodeMail(register: CommandRegistrar): 
         throw new Error("That message did not come from a command node's coordinator.");
       }
     }
+    // Kept in this node's spool until the command node has collected the mail,
+    // so a later deletion or a closed conversation cannot leave it hanging.
+    const images = await readCallerAttachments(
+      context,
+      caller,
+      attachmentReferences(args.attachments),
+    );
     const sent = await context.nodeCoordination.sendFromCoordinator({
+      ...(images.length
+        ? {
+            attachments: {
+              batch: mailAttachmentBatchId([
+                caller.coordinatorId,
+                caller.conversationId,
+                requestId,
+              ]),
+              files: mailAttachmentFiles(images),
+            },
+            own: images,
+          }
+        : {}),
       projectId: caller.projectId,
       coordinatorEnvironmentId: own.environmentId,
       coordinatorTabId: own.tabId,
@@ -212,6 +243,7 @@ export function registerCoordinatorCommandNodeMail(register: CommandRegistrar): 
       outboxSeq: sent.item.seq,
       toEnvironmentId: COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
       ...(replyToMessageId ? { replyToMessageId } : {}),
+      ...(images.length ? { attachments: images.map((file) => file.name) } : {}),
       placement: "node-outbox",
       coordinator: `command node ${name}`,
       deliveryHint: `queued for the coordinator on ${name}; delivered when it collects its mail with coordinator-mail support. Older command nodes leave it queued until updated.`,

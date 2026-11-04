@@ -33,6 +33,7 @@ import {
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { existsSync, promises as seedFs } from "node:fs";
 import { seedFilesDir } from "./nodes/index.js";
+import { removeProjectHomeMailAttachments } from "./mail-attachments.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -1771,6 +1772,9 @@ export async function deleteEnvironment(
         recursive: true,
         force: true,
       });
+      // A project home's mailed images live outside the user's checkout and
+      // go with the project home (docs/architecture/coordinator.md).
+      await removeProjectHomeMailAttachments(storage.getDataDir(), environmentId);
       // A coordinator following this worker's pull request still hears the
       // merge Merge and Cleanup just recorded, once the record is gone.
       const last = await storage.getEnvironment(environmentId).catch(() => null);

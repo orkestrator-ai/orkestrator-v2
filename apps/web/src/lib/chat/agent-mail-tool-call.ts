@@ -2,6 +2,7 @@ import {
   AGENT_MAIL_PLACEMENTS,
   ORKESTRATOR_MCP_SERVER_NAME,
   agentMailTranscriptTool,
+  normalizeAgentMailAttachments,
   AGENT_MAIL_TRUST_CLASSES,
   type AgentMailPlacement,
   type AgentMailTranscriptTool,
@@ -39,6 +40,8 @@ export interface AgentMailToolCall {
   from?: MailActor;
   trust?: AgentMailTrust;
   placement?: AgentMailPlacement;
+  /** The images it carried, by name: its paths are for the agents. */
+  attachments?: { name: string; bytes?: number }[];
 }
 
 type ToolPart = Pick<
@@ -151,10 +154,21 @@ export function agentMailToolCall(part: ToolPart): AgentMailToolCall | null {
     if (tool === "send_message" && !toEnvironmentId) return null;
     if (tool === "reply_message" && !text(args.messageId)) return null;
     const toTabId = text(args.toTabId);
+    // What the send recorded, once it answered; until then what the agent named.
+    const sent = normalizeAgentMailAttachments(message?.attachments);
+    const named = Array.isArray(args.attachments)
+      ? args.attachments.flatMap((entry) =>
+          typeof entry === "string" && entry.trim()
+            ? [{ name: entry.split(/[\\/]/).at(-1) ?? entry }]
+            : [],
+        )
+      : [];
+    const attachments = sent.length ? sent.map(({ name, bytes }) => ({ name, bytes })) : named;
     return {
       tool,
       direction: "out",
       body,
+      ...(attachments.length ? { attachments } : {}),
       ...(text(args.subject) ? { subject: text(args.subject) } : {}),
       ...(messageId ? { messageId } : {}),
       ...(resolvedTo
@@ -167,9 +181,13 @@ export function agentMailToolCall(part: ToolPart): AgentMailToolCall | null {
     };
   }
   if (!text(args.messageId)) return null;
+  const received = normalizeAgentMailAttachments(message?.attachments);
   return {
     tool,
     direction: "in",
+    ...(received.length
+      ? { attachments: received.map(({ name, bytes }) => ({ name, bytes })) }
+      : {}),
     messageId: messageId ?? text(args.messageId),
     ...(typeof message?.body === "string" ? { body: message.body } : {}),
     ...(text(message?.subject) ? { subject: text(message?.subject) } : {}),

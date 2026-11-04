@@ -22,6 +22,8 @@
  *   executor as typed), so while a handoff is pending one is refused, as is a
  *   goal being set or resumed.
  */
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import {
   AGENT_HANDOFF_PROVIDER_LABELS,
   parseAgentHandoffSnapshot,
@@ -116,6 +118,32 @@ export function pendingHandoffCommandRefusal(plan: CommandDispatchPlan): string 
   return goal.kind === "set" || goal.kind === "resume"
     ? AGENT_HANDOFF_PENDING_GOAL_MESSAGE
     : undefined;
+}
+
+/**
+ * Tell a coordinator where its pasted images are saved.
+ *
+ * A bridge turns an image attachment into inline image content, so the model
+ * sees the picture but no path, and `send_message`'s `attachments` needs one to
+ * pass the image on. The marked block goes to the provider only: transcripts
+ * remove it and draw the files (`extractMarkedAttachmentReferences`).
+ */
+export function coordinatorPromptWithAttachmentPaths(
+  prompt: string,
+  environmentId: string,
+  attachments: readonly { type: string; path: string; filename?: string }[] | undefined,
+): string {
+  if (!coordinatorIdFromRuntimeId(environmentId)) return prompt;
+  const images = attachments?.filter((attachment) => attachment.type === "image") ?? [];
+  if (images.length === 0) return prompt;
+  return buildInitialPromptWithAttachmentReferences(
+    prompt,
+    images.map((image) => ({
+      // Bare references resolve against the stored basename, not the paste label.
+      name: image.path.split(/[\\/]/).at(-1) ?? image.path,
+      path: image.path,
+    })),
+  );
 }
 
 /**

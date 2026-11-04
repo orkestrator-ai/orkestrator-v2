@@ -60,6 +60,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "node-coordinator-mail.older-node",
   /**
+   * A coordinator's mail with images was refused: the node does not advertise
+   * `node-mail-attachments`.
+   */
+  "node-mail-attachments.older-node",
+  /**
    * A command node's coordinator used ticket tools or a build with a `nodeId`
    * on a leaf that does not advertise `ticket-sync`.
    */

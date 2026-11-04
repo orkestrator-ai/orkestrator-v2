@@ -880,6 +880,108 @@ a request body cannot name a root of its own — and it is scoped to the one
 conversation. Deleting the project removes them with the rest of the coordinator
 runtime.
 
+A bridge turns an image attachment into inline image content, so the model sees
+the picture but no path. Each coordinator turn with an image therefore carries a
+marked block naming where it is saved
+(`coordinatorPromptWithAttachmentPaths`); it goes to the provider only, and
+transcripts remove it and draw the file.
+
+### Passing a pasted image on
+
+A coordinator is read-only, so it cannot save a pasted image somewhere another
+agent can read it. It names the image instead, and the backend does the copying
+(`coordinator-mail-attachments.ts`, `mail-attachments.ts`). There is no new write
+access, tool permission or sandbox change on the coordinator's side.
+
+- **`send_message` takes `attachments`**: the paths it was given (a bare file
+  name works too). It reaches anything `send_message` reaches, on any connected
+  node: agent tabs, build pipeline workers by address, containers, the project
+  home, side agents and coordinators. With a `nodeId` it goes across the node
+  link; a leaf's coordinator sends it upward through its outbox
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- **`transfer_files` takes `from: { nodeId, attachments: true }`**, with the same
+  checks and landing place and its normal receipt of sizes and hashes, for a
+  copy with no message. `toDirectory` is refused; a worker can copy the file out
+  of the Git-excluded folder if it belongs in the tree.
+- **Only this conversation's own files.** A reference must be a bare name or an
+  absolute path directly in the calling conversation's attachment directory.
+  Another conversation's file, `..`, a relative path, a symlink or a directory
+  is refused. The scope comes from the credential, never from the tool input.
+- **Images only, by content.** PNG, JPEG, GIF and WebP (what the paste flow
+  accepts), recognised from their bytes on the sending side and again on the
+  receiving side. At most 8 images a message, 8 MiB each, 32 MiB together
+  (`AGENT_MAIL_MAX_ATTACHMENTS` and its neighbours).
+- **The copy comes first.** A refused or failed copy means no message, and the
+  caller is told why, so a message never points at a missing file. A message
+  refused after its copy (a worker that has just ended, say) leaves the file in
+  the same ignored place, with nothing pointing at it.
+- **Retries are safe.** A message's files have one fixed place, derived from the
+  sender and `requestId`. A retry finds them, skips the copy and replays the
+  mail. The same `requestId` with another image is `idempotency-conflict`.
+
+Where a file lands:
+
+| Recipient | Location | Removed |
+| --- | --- | --- |
+| Environment (worktree) | `<worktree>/.orkestrator/mail-attachments/<batch>/` | With the worktree |
+| Environment (container) | `/workspace/.orkestrator/mail-attachments/<batch>/` | With its storage |
+| Project home | `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/`, outside the user's checkout, copied only once the user approves the message | With the project home (environment deletion, or the next maintenance pass once its record is gone, as when the project is removed), or once past configured mail retention (14 days by default) |
+| Coordinator or side agent | That conversation's attachment directory, the root its read-only rules can read | With the conversation's retention or the project |
+
+`.orkestrator` is Git-excluded in every environment, and the copy first proves
+that for the location (`ensureWorkspaceArtifactIsGitExcluded`) and fails if it
+cannot, so a sent image does not reach a commit or pull request through normal
+staging. The project home is the user's own checkout, which Orkestrator never
+cleans, so nothing is written into it: its images stay in the data directory
+(`projectHomeMailAttachmentDir`, `apps/backend/src/core/mail-attachments.ts`),
+where no repository can stage them. `deleteEnvironment` removes that directory
+with the project home, and every backend's 30-second node maintenance pass
+(`NodeFiles.sweepMailAttachments`) removes the directory of a project home whose
+record is gone and any batch older than mail retention, by which time no
+message names it. A failed record read keeps the files. A stopped container is refused rather than queued: there is nothing to
+write into until it starts.
+
+The message records each file as `attachments` (`AgentMailAttachment`: name,
+path on the recipient's filesystem, media type, size, hash). Its carrier and
+`read_message` give the recipient those paths, and the body stays the sender's
+own words. The mail tile shows each name and size, never the path. It draws no
+thumbnail, because the path is often on another machine or in a container the
+viewer cannot read from.
+
+Workers cannot send images: `send_message` on a worker's Agent Tools has no
+`attachments`, and every check here is about a coordinator conversation's own
+directory.
+
+How it is verified, with no provider turn:
+
+- `coordinator-mail-attachments.test.ts` and
+  `coordinator-mail-attachments-nodes.test.ts` run the real send commands, mail
+  store, transfer framework and Git worktrees, for every recipient kind and both
+  node directions; containers there are a fake `docker exec` running the real
+  writer script.
+- `coordinator-mail-attachments-docker.test.ts` sends into a real container
+  (opt-in: `ORKESTRATOR_TEST_DOCKER_IMAGE=orkestrator-v2:latest`; it runs with
+  `--network none`). It checks the image's `node` user can read the file, that
+  Git ignores it even after `git add -A`, and that a retry adds nothing.
+- `bun scripts/qa-coordinator-image-mail.ts` starts two real backends from
+  source, each blind to the other's files, links them over the real gateway and
+  runs every route with no agent
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- `coordinator-mail-attachments-read-live.test.ts` (slow tier) has the
+  recipient's own agent open the file. It sends through the real commands and
+  injection drain, then hands the exact delivered prompt to the pinned Claude
+  CLI and the pinned Codex CLI, each pointed at a scripted loopback model. The
+  model takes the path from the prompt it received and calls the CLI's own tool
+  (`Read`, `view_image`); the test checks the CLI returned the same bytes as
+  image content. It covers a worker in its worktree and a side agent in its
+  attachment directory, which is outside its working directory: Claude reads
+  there only because the bridge approves `Read` up front for every session,
+  read-only coordinators included (`session-manager-prompt-query.ts`). No
+  provider is called.
+- Not covered: Cursor, Pi and Grok recipients, and an agent reading inside a
+  container
+  ([todo 4420](../todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md)).
+
 ## Repository toolbar
 
 The toolbar shows the canonical path, branch, upstream freshness, ahead/behind
@@ -1226,8 +1328,10 @@ Every other coordinator action refuses the project home (see
   subjects or reply IDs are refused rather than silently dropped.
 - **Within 3 hours of a sent message** to that project home from this
   coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
-  sent at once and the tool result carries a `warning` that this is
-  discouraged.
+  sent at once if it carries text only, and the tool result carries a `warning`
+  that this is discouraged. Messages with images always need their own approval,
+  even within this window, before their files are given to the project home
+  (outside the checkout; see [Passing a pasted image on](#passing-a-pasted-image-on)).
 - **Otherwise the message is held** as a `message-project-home` node action
   request, shown in the same approval dialog as `request_environment_deletion`
   and `answer_worker_question` (`ProjectHomeMessageApprovalDialog`), with the

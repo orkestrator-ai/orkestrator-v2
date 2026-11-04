@@ -59,6 +59,12 @@ const endpointSchema = z.object({
     .boolean()
     .optional()
     .describe("The node's copy of this project instead of an environment."),
+  attachments: z
+    .boolean()
+    .optional()
+    .describe(
+      "As from: images the user pasted into this conversation, on this node, named in files. To message someone about one, attachments on send_message does this too.",
+    ),
 });
 
 export function registerNodeFileTools(
@@ -124,6 +130,8 @@ export function registerNodeFileTools(
     self: NodeStatus,
     destination = false,
   ) => {
+    if (input.attachments)
+      throw new Error("A conversation's attachments can only be the source of a transfer.");
     const project = await projectOn(input.nodeId, self);
     if (!project.projectId) throw new Error("That node has no copy of this project.");
     if (input.projectRoot) {
@@ -156,7 +164,7 @@ export function registerNodeFileTools(
     {
       title: "Transfer files between nodes",
       description:
-        "Copy files between environments (or project roots) on this node and connected nodes. Content moves backend to backend and is never shown to you; the result is a receipt with sizes and hashes. Existing files are kept unless overwrite is true.",
+        "Copy files between environments (or project roots) on this node and connected nodes. Content moves backend to backend and is never shown to you; the result is a receipt with sizes and hashes. Existing files are kept unless overwrite is true. from can also be this conversation's own pasted images (attachments: true, your own nodeId, each path or name in files): each lands in a Git-excluded folder of the environment, and the receipt's destination says where.",
       inputSchema: z.object({
         from: endpointSchema,
         to: endpointSchema,
@@ -168,6 +176,22 @@ export function registerNodeFileTools(
     },
     async (input) => {
       const self = await status();
+      if (input.from.attachments) {
+        if (input.from.nodeId !== self.nodeId) {
+          throw new Error("This conversation's attachments are on this node; use its nodeId.");
+        }
+        if (input.toDirectory) {
+          throw new Error(
+            "An attachment always lands in the environment's Git-excluded attachment folder, so it cannot reach a commit by accident. Omit toDirectory; a worker can copy it from there.",
+          );
+        }
+        const receipt = await invoke<JsonRecord>("transfer_coordinator_attachments", {
+          scope,
+          to: await endpoint(input.to, self, true),
+          files: input.files,
+        });
+        return result({ receipt });
+      }
       const receipt = await invoke<JsonRecord>("transfer_node_files", {
         from: await endpoint(input.from, self),
         to: await endpoint(input.to, self, true),

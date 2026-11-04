@@ -18,7 +18,20 @@ const request: NodeActionRequestView = {
   },
 };
 
+/** `?images=1` holds the same message with two pasted images. */
+const withImages = (): NodeActionRequestView =>
+  new URLSearchParams(window.location.search).has("images")
+    ? {
+        ...request,
+        projectHomeMessage: {
+          ...request.projectHomeMessage!,
+          attachments: ["clipboard-1.png", "clipboard-2.png"],
+        },
+      }
+    : request;
+
 export function ProjectHomeMessageApprovalFixture() {
+  const [shown] = useState(withImages);
   const [decision, setDecision] = useState<unknown>(null);
   const [settled, setSettled] = useState(false);
   useState(() => {
@@ -36,7 +49,7 @@ export function ProjectHomeMessageApprovalFixture() {
     <main>
       <pre data-testid="decision">{JSON.stringify(decision)}</pre>
       {!settled && (
-        <ProjectHomeMessageApprovalDialog request={request} onSettled={() => setSettled(true)} />
+        <ProjectHomeMessageApprovalDialog request={shown} onSettled={() => setSettled(true)} />
       )}
     </main>
   );

@@ -41,3 +41,20 @@ for (const [button, decision] of [
     await expect(dialog).toHaveCount(0);
   });
 }
+
+test("project home message with images says they stay out of the checkout", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/project-home-message-approval?images=1");
+  const images = page.getByTestId("project-home-message-attachments");
+  await expect(images).toContainText("kept outside your checkout");
+  await expect(images).toContainText("removed with the project home");
+  await expect(images).toContainText("clipboard-1.png, clipboard-2.png");
+  await expect(images).not.toContainText(".orkestrator");
+  await page.screenshot({
+    path: path.resolve(
+      "output/visual-previews",
+      `project-home-approval-images-after-${testInfo.project.name}.png`,
+    ),
+  });
+});

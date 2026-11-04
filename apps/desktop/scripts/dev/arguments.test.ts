@@ -122,10 +122,23 @@ describe("development CLI arguments", () => {
   });
 
   test("only dev:test runs Electron headless", () => {
-    expect(parseAgentTestArguments(["--fixture"]).headlessElectron).toBeUndefined();
-    expect(parseAgentTestArguments(["--headless-electron"]).headlessElectron).toBe(true);
-    expect(() => parseDevArguments(["--headless-electron"])).toThrow(
-      "only supported by mise run dev:test",
+    expect(parseAgentTestArguments(["--fixture"]).headless).toBeUndefined();
+    expect(parseAgentTestArguments(["--headless"]).headless).toBe(true);
+    expect(parseAgentTestArguments(["--no-headless"]).headless).toBe(false);
+    // The earlier spelling keeps working for scripts and notes that use it.
+    expect(parseAgentTestArguments(["--headless-electron"]).headless).toBe(true);
+    for (const flag of ["--headless", "--headless-electron", "--no-headless"]) {
+      expect(() => parseDevArguments([flag])).toThrow("only supported by mise run dev:test");
+    }
+  });
+
+  test("refuses contradictory headless flags in either order", () => {
+    expect(() => parseAgentTestArguments(["--headless", "--no-headless"])).toThrow(
+      "cannot be combined",
     );
+    expect(() => parseAgentTestArguments(["--no-headless", "--headless-electron"])).toThrow(
+      "cannot be combined",
+    );
+    expect(parseAgentTestArguments(["--headless", "--headless"]).headless).toBe(true);
   });
 });

@@ -141,7 +141,7 @@ import {
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { hideMachineOutputText } from "@orkestrator/protocol/structured-review-transcript";
 import {
-  createPeerMailNativeMessagesFromCarrier,
+  presentPeerMailCarrierRow,
   isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
@@ -170,7 +170,13 @@ import {
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
 import { queuedPromptControlRestore } from "./queued-prompt-controls";
-import { autoSteerNotice, shouldAutoSteer } from "./auto-steer";
+import {
+  autoSteerNotice,
+  queuedSteerNote,
+  shouldAutoSteer,
+  steerRefusalNote,
+  updateSteerRefusals,
+} from "./auto-steer";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
@@ -415,6 +421,9 @@ export function SharedNativeAgentController({
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
+  // Why steering left a queued prompt where it is, by queue item id, so its
+  // row keeps saying so while it waits for the turn to end.
+  const [steerRefusals, setSteerRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [queueEditPending, setQueueEditPending] = useState(false);
   // Reserve synchronously: events can arrive before React commits the disabled UI.
   const queueEditPendingRef = useRef(false);
@@ -746,7 +755,7 @@ export function SharedNativeAgentController({
         // One injected prompt can carry several batched messages; each one
         // becomes its own mail tile.
         if (message.role === "user" && isPeerMailCarrierContent(message.content)) {
-          return createPeerMailNativeMessagesFromCarrier(message);
+          return presentPeerMailCarrierRow(message) ?? [message];
         }
         // A goal turn is the loop's text, never something the user typed.
         return [createGoalTurnNativeMessage(message) ?? message];
@@ -1568,6 +1577,10 @@ export function SharedNativeAgentController({
       }),
     [projection?.queue?.items],
   );
+  // Bounded: an entry outlives its row only until newer refusals push it out.
+  const rememberSteerRefusal = useCallback((messageId: string, note: string | undefined) => {
+    setSteerRefusals((current) => updateSteerRefusals(current, messageId, note));
+  }, []);
   const stopBackgroundTaskFromCard = useCallback(
     async (taskId: string) => {
       try {
@@ -2318,7 +2331,9 @@ export function SharedNativeAgentController({
           }
           if (autoSteerId) {
             try {
-              const notice = autoSteerNotice(await steerQueued(autoSteerId), label);
+              const outcome = await steerQueued(autoSteerId);
+              rememberSteerRefusal(autoSteerId, steerRefusalNote(outcome, label));
+              const notice = autoSteerNotice(outcome, label);
               if (notice?.tone === "success") toast.success(notice.message);
               else if (notice) toast.info(notice.message);
             } catch (error) {
@@ -2408,6 +2423,7 @@ export function SharedNativeAgentController({
       adapter.capabilities.attachments,
       autoSteerEnabled,
       beforeSend,
+      rememberSteerRefusal,
       clearDraft,
       composer?.fastModeEnabled,
       composer?.selectedModeId,
@@ -3464,6 +3480,7 @@ export function SharedNativeAgentController({
             );
           }
           if (outcome.outcome === "applied") {
+            rememberSteerRefusal(message.id, undefined);
             toast.success(`Sent to the active ${label} turn`);
             return;
           }
@@ -3473,6 +3490,7 @@ export function SharedNativeAgentController({
             setQueueDialogOpen(false);
             return;
           }
+          rememberSteerRefusal(message.id, steerRefusalNote(outcome, label));
           throw new PromptQueueActionError(
             outcome.outcome === "rejected"
               ? `${nativeAgentSteerRejectionMessage(outcome)} The prompt was returned to the queue.`
@@ -3590,6 +3608,28 @@ export function SharedNativeAgentController({
       !nativeAsyncQuestionItemId(message.id) &&
       !(typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
     );
+  };
+  // Why a row offers no Steer while the turn runs. Annotation requests and
+  // question answers have their own cards, so they get no note here.
+  const queuedRowSteerNote = (message: { id: string }) => {
+    const queued = message as Record<string, unknown>;
+    if (
+      webAnnotationQueueOrigin(message) !== null ||
+      nativeAsyncQuestionItemId(message.id) ||
+      (typeof queued.requestId === "string" && nativeAsyncQuestionItemId(queued.requestId))
+    ) {
+      return undefined;
+    }
+    return queuedSteerNote({
+      running: isRunning,
+      providerSteers: projection?.capabilities?.actions?.steer === true,
+      parked: Boolean(recoverableDispatch),
+      steerable: canSteerQueuedPrompt(message),
+      attachmentCount: Array.isArray(queued.attachments) ? queued.attachments.length : 0,
+      command: queued.command !== undefined,
+      refusal: steerRefusals.get(message.id),
+      label,
+    });
   };
   // A provider's suggestion is its own text, but one that merely echoed a goal
   // turn must not be offered back as something to send.
@@ -4122,9 +4162,11 @@ export function SharedNativeAgentController({
                     // Annotation requests are frozen briefs, and removing one
                     // cancels it, so both stay behind the dialog.
                     const inline = !webAnnotationQueueOrigin(message);
+                    const note = queuedRowSteerNote(message);
                     return {
                       id: message.id,
                       text: message.text,
+                      ...(note ? { note } : {}),
                       onSteer:
                         steerQueuedPrompt && canSteerQueuedPrompt(message)
                           ? () => runInlineQueueAction(() => steerQueuedPrompt(message))
@@ -4218,6 +4260,7 @@ export function SharedNativeAgentController({
                 canSteer={canSteerQueuedPrompt}
                 renderMeta={(message) => {
                   const queued = message as Record<string, unknown>;
+                  const steerNote = queuedRowSteerNote(message);
                   const attachments = Array.isArray(queued.attachments)
                     ? queued.attachments.length
                     : 0;
@@ -4242,6 +4285,7 @@ export function SharedNativeAgentController({
                           {attachments} attachment{attachments === 1 ? "" : "s"}
                         </span>
                       ) : null}
+                      {steerNote ? <span>{steerNote}</span> : null}
                     </>
                   );
                 }}

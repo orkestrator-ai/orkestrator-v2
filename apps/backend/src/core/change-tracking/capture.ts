@@ -745,6 +745,9 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     const statCache = new Map<string, StatCacheEntry>();
     const newObjectIds: string[] = [];
     const needBytes: ReadRecord[] = [];
+    // Objects this pass wrote or proved present, for the closure check below.
+    const proven = new Set<string>();
+    const removedAtStart = request.store.removedObjects;
     let retainedBytes = 0;
     let metadataReused = 0;
 
@@ -762,6 +765,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
           return;
         }
         const written = await request.store.put("blob", record.bytes);
+        proven.add(written.id);
         if (written.id !== record.oid) unstable.push(record.pathId);
         retainedBytes += record.bytes.length;
         if (written.created) {
@@ -783,6 +787,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
         return;
       }
       if (await request.store.reuse(record.oid)) {
+        proven.add(record.oid);
         entries.push({
           p: record.pathId,
           m: record.mode,
@@ -940,9 +945,13 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     const written = await request.store.put("manifest", manifestBytes);
     if (written.created) newObjectIds.push(written.id);
 
-    // Closure: every referenced blob is readable from this store alone.
+    // Closure: every referenced blob is readable from this store alone. An
+    // object proven present in this pass needs no second look unless a sweep
+    // removed something since the pass began.
+    const nothingRemoved = request.store.removedObjects === removedAtStart;
     for (const entry of entries) {
       if (entry.m === "160000") continue;
+      if (nothingRemoved && proven.has(entry.o)) continue;
       if (!(await request.store.has(entry.o))) return unavailable("closure-incomplete");
     }
     request.store.syncDirectories(newObjectIds);

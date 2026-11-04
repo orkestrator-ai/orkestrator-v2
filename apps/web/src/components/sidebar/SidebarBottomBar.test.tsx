@@ -246,3 +246,17 @@ describe("SidebarBottomBar", () => {
     }
   });
 });
+
+test("stacked for the compact sidebar: every action, in a column", () => {
+  render(<SidebarBottomBar stacked />);
+  const bar = document.querySelector("[data-sidebar-bottom-bar]")!;
+  expect(bar.className).toContain("flex-col");
+  for (const name of [
+    "Global settings",
+    "Repository settings",
+    "Environment settings",
+    "Report a bug",
+  ]) {
+    expect(screen.getByRole("button", { name })).toBeTruthy();
+  }
+});

@@ -3,7 +3,7 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@/lib/native/events";
 import { exit, restart } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
@@ -11,7 +11,8 @@ import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
-import { ProjectLauncher, ProjectWorkspace } from "@/components/projects";
+import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
@@ -102,6 +103,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { CoordinatorAccountSwitchNotices } from "@/components/federation/CoordinatorAccountSwitchNotices";
 import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
 import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
@@ -111,6 +113,11 @@ import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.app");
+
+// Kanban, issues, pull requests and the coordinator: nothing there is needed until a project board opens.
+const LazyProjectWorkspace = lazy(async () => ({
+  default: (await import("@/components/projects/ProjectWorkspace")).ProjectWorkspace,
+}));
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -1278,11 +1285,15 @@ function ConnectedApp() {
                   )}
                   {showProjectBoard && selectedProjectId && (
                     <div className="absolute inset-0 z-20 bg-background">
-                      <ProjectWorkspace
-                        projectId={selectedProjectId}
-                        homeError={projectHomeActivation.error}
-                        onRetryHome={projectHomeActivation.retry}
-                      />
+                      <LazyLoadBoundary
+                        renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
+                      >
+                        <LazyProjectWorkspace
+                          projectId={selectedProjectId}
+                          homeError={projectHomeActivation.error}
+                          onRetryHome={projectHomeActivation.retry}
+                        />
+                      </LazyLoadBoundary>
                     </div>
                   )}
                 </div>
@@ -1308,7 +1319,7 @@ function ConnectedApp() {
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
               role="alert"
-              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-border bg-popover/95 px-4 py-3 text-sm text-popover-foreground shadow-xl backdrop-blur-sm"
             >
               <span>
                 Orkestrator could not check Docker availability. Container actions remain disabled
@@ -1722,6 +1733,7 @@ function ConnectedApp() {
             <SshPromptDialog />
             <FederationEffects />
             <NodeActionRequestsDialog />
+            <CoordinatorAccountSwitchNotices />
             <ProjectCopyDialog />
             <CommandHandoverDialog />
             {/* SSH prompts from this node's own tunnels to the nodes it commands. */}

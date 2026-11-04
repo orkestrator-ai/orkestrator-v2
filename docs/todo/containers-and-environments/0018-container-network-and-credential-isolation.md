@@ -1155,7 +1155,7 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).
-- [4220-disposable-docker-daemon-for-live-suites.md](4220-disposable-docker-daemon-for-live-suites.md):
+- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md):
   a repo-owned daemon for task 2's rootless restart.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Environment
   networks", "Agent tools reachability" and "Portable inputs".

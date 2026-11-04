@@ -81,7 +81,7 @@ function providerLabel(provider: AcpProvider): string {
   } catch {
     // Pure normalization tests and legacy persisted snapshots may not carry a
     // launch record. A missing label must not make their composer unreadable.
-    return provider === "grok" ? "Grok" : provider === "cursor" ? "Cursor" : provider;
+    return provider === "grok" ? "Grok" : provider;
   }
 }
 
@@ -98,12 +98,6 @@ function conversationModes(
     return builtIn ?? { id: id as AgentConversationMode, label: modeLabel(id) };
   });
 }
-
-const EMPTY_WIRE: AcpConfigWire = {
-  configOptions: [],
-  availableModeIds: {},
-  usesSetModel: false,
-};
 
 /**
  * Bound and deduplicate every catalogue the normalizer produces. The persisted

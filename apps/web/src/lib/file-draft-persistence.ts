@@ -8,6 +8,14 @@ import {
 
 const desktopClients = new WeakMap<DraftRevisionState, string>();
 
+function releaseDesktopClient(state: DraftRevisionState): void {
+  const clientId = desktopClients.get(state);
+  if (!clientId) return;
+  desktopClients.delete(state);
+  const host = typeof window !== "undefined" ? window.orkestratorDesktopHost : undefined;
+  void host?.api.invoke("desktop_file_draft_release", { clientId }).catch(() => undefined);
+}
+
 const writeChains = new Map<string, Promise<void>>();
 const defaultRevisionStates = new Map<string, DraftRevisionState>();
 const clientRevisionStates = new Map<string, DraftRevisionState>();
@@ -33,6 +41,8 @@ export function getFileDraftRevisionState(clientId: string): DraftRevisionState 
 }
 
 export function releaseFileDraftRevisionState(clientId: string): void {
+  const state = clientRevisionStates.get(clientId);
+  if (state) releaseDesktopClient(state);
   clientRevisionStates.delete(clientId);
 }
 
@@ -79,7 +89,7 @@ export async function loadFileDraft(
   await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
   const draft = await backend.getFileDraft(draftKey);
   const state = revisionStateFor(draftKey, revisionState);
-  desktopClients.delete(state);
+  releaseDesktopClient(state);
   state.revision = draft?.revision ?? 0;
   state.conflictRevision = null;
   return draft;
@@ -114,7 +124,7 @@ function desktopWrite(
       state.revision = saved?.revision ?? 0;
     })
     .catch((error: unknown) => {
-      desktopClients.delete(state);
+      if (desktopClients.get(state) === clientId) releaseDesktopClient(state);
       return recordFileConflict(draftKey, state, error);
     });
   writeChains.set(draftKey, write);
@@ -196,7 +206,7 @@ export function resolveFileDraftSaveConflict(
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
   if (state.conflictRevision !== null) {
-    desktopClients.delete(state);
+    releaseDesktopClient(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
@@ -211,7 +221,7 @@ export function resolveFileDraftDiscardConflict(
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
   if (state.conflictRevision !== null) {
-    desktopClients.delete(state);
+    releaseDesktopClient(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }

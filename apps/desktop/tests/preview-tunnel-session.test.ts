@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,10 +10,15 @@ import {
   parsePreviewTunnelClientFrame,
   PREVIEW_TUNNEL_PATH,
   PREVIEW_TUNNEL_SUBPROTOCOL,
+  PREVIEW_TUNNEL_CLOSE,
   type PreviewAttachmentDescriptor,
 } from "@orkestrator/protocol/preview-access";
 import { PREVIEW_TUNNEL_MUX } from "@orkestrator/protocol/preview-tunnel-mux";
-import { PREVIEW_LIMITS, previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
+import {
+  PREVIEW_LIMITS,
+  previewError,
+  previewErrorFromUnknown,
+} from "@orkestrator/protocol/preview-services";
 import {
   acceptPreviewWebSocket,
   type PreviewWebSocket,
@@ -24,7 +30,11 @@ import {
 } from "../../backend/src/core/preview-test-support";
 import { PreviewTunnelServer } from "../../backend/src/preview-tunnel-server";
 import { PreviewTunnelStream } from "../electron/preview-tunnel-client";
-import { PreviewTunnelConnector, PreviewTunnelMuxStream } from "../electron/preview-tunnel-session";
+import {
+  PreviewTunnelConnector,
+  PreviewTunnelMuxStream,
+  PreviewTunnelSession,
+} from "../electron/preview-tunnel-session";
 import {
   startPreviewFixture,
   type PreviewFixture,
@@ -148,6 +158,20 @@ describe("PreviewTunnelConnector (tunnel v2)", () => {
     await until(() => tunnel.stats().admission.active === 0);
   });
 
+  test("concurrent joiners all reject a failed connection and a later attempt recovers", async () => {
+    const att = await attachment();
+    const bad = { url, attachmentId: att.attachmentId, credential: "invalid" };
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => connector.open(bad, true)),
+    );
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    expect(upgrades).toBe(1);
+    await until(() => connector.stats().sessions === 0);
+    const recovered = await open(att);
+    expect(upgrades).toBe(2);
+    recovered.destroy();
+  });
+
   test("an upload larger than the window reaches the upstream intact", async () => {
     const att = await attachment();
     const stream = await open(att);
@@ -242,4 +266,111 @@ describe("PreviewTunnelConnector against a v1-only backend", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+});
+
+test.each(["generation-changed", "access-expired"] as const)(
+  "OPEN_FAILED %s retires a session while existing streams drain",
+  async (category) => {
+    const ws = new EventEmitter() as EventEmitter & {
+      isOpen: boolean;
+      send: () => boolean;
+      start: () => void;
+      ping: () => void;
+      close: (code: number) => void;
+    };
+    ws.isOpen = true;
+    ws.send = () => true;
+    ws.start = () => {};
+    ws.ping = () => {};
+    const closed: number[] = [];
+    ws.close = (code) => {
+      closed.push(code);
+      ws.isOpen = false;
+      ws.emit("close", code);
+    };
+    const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
+      attachmentId: "att_test",
+      credential: "credential",
+      idleMs: 30_000,
+      onClosed: () => {},
+    });
+    ws.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "ready",
+          serviceId: "service",
+          endpointGeneration: 1,
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        }),
+      ),
+      false,
+    );
+    await session.ready;
+    const active = session.openStream(undefined, performance.now());
+    ws.emit("message", Buffer.from(JSON.stringify({ type: "open-ok", stream: 1 })), false);
+    const stream = await active;
+    const pending = Array.from({ length: 31 }, () =>
+      session.openStream(undefined, performance.now()),
+    );
+    expect(session.size).toBe(32);
+    await expect(session.openStream(undefined, performance.now())).rejects.toThrow();
+    for (let i = 0; i < 31; i++)
+      ws.emit("message", Buffer.from(JSON.stringify({ type: "open-ok", stream: i + 2 })), false);
+    const extra = await Promise.all(pending);
+    for (const item of extra) item.destroy();
+    expect(session.size).toBe(1);
+    const refused = session.openStream(undefined, performance.now());
+    ws.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "open-failed", stream: 33, error: previewError(category) }),
+      ),
+      false,
+    );
+    await expect(refused).rejects.toThrow();
+    expect(session.canOpen).toBe(false);
+    expect(closed).toEqual([]);
+    stream.destroy();
+    expect(closed).toEqual([PREVIEW_TUNNEL_CLOSE.normal]);
+  },
+);
+
+test("Node pull-mode reads replenish a fully buffered receive window", async () => {
+  // Bun's stream implementation does not reproduce Node/Electron's _read timing.
+  const build = await Bun.build({
+    entrypoints: [new URL("../electron/preview-tunnel-session.ts", import.meta.url).pathname],
+    target: "node",
+  });
+  expect(build.success).toBe(true);
+  const script = await build.outputs[0]!.text();
+  const child = Bun.spawn(["node", "--input-type=module"], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  child.stdin.write(
+    script +
+      `
+{
+  const assert = (await import("node:assert/strict")).default;
+  const credits = [];
+  const session = { sendFrame: frame => credits.push(frame), cancel() {}, violation() { throw new Error("credit overflow"); } };
+  const stream = new PreviewTunnelMuxStream(session, 1, 0);
+  const windowBytes = 256 * 1024;
+  for (let i = 0; i < 4; i++) stream.receive(Buffer.alloc(windowBytes / 4));
+  assert.equal(stream.readableLength, windowBytes);
+  assert.equal(credits.length, 0);
+  assert.equal(stream.read().length, windowBytes);
+  assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes);
+  stream.receive(Buffer.alloc(windowBytes / 4));
+  assert.equal(stream.read().length, windowBytes / 4);
+  assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes * 1.25);
+  stream.destroy();
+}
+`,
+  );
+  child.stdin.end();
+  const stderr = await new Response(child.stderr).text();
+  expect(await child.exited, stderr).toBe(0);
 });

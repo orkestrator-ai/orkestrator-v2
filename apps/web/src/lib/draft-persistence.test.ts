@@ -1628,3 +1628,38 @@ test("direct desktop hands off both file revisions before the first response", a
     window.orkestratorDesktopHost = originalHost;
   }
 });
+
+test("direct desktop releases cursors on reload, disposal, and write failure", async () => {
+  const originalHost = window.orkestratorDesktopHost;
+  const invoke = mock(async (command: string) => {
+    if (command === "desktop_file_draft_write") return { revision: 1 };
+    return undefined;
+  });
+  window.orkestratorDesktopHost = {
+    api: { invoke },
+    baseUrl: "http://127.0.0.1",
+  } as unknown as NonNullable<Window["orkestratorDesktopHost"]>;
+  try {
+    const state = files.getFileDraftRevisionState("release-test");
+    await files.persistFileDraft("release", "file", "a", "b", state);
+    const first = invoke.mock.calls[0];
+    await files.loadFileDraft("release", "file", state);
+    expect(invoke.mock.calls[1]?.[0]).toBe("desktop_file_draft_release");
+    await files.persistFileDraft("release", "file", "a", "b", state);
+    files.releaseFileDraftRevisionState("release-test");
+    expect(invoke.mock.calls.map((call) => call[0])).toEqual([
+      "desktop_file_draft_write",
+      "desktop_file_draft_release",
+      "desktop_file_draft_write",
+      "desktop_file_draft_release",
+    ]);
+    expect(first).toBeDefined();
+    invoke.mockRejectedValueOnce(new Error("write failed"));
+    await expect(files.persistFileDraft("release", "file", "a", "b", state)).rejects.toThrow(
+      "write failed",
+    );
+    expect(invoke.mock.calls.at(-1)?.[0]).toBe("desktop_file_draft_release");
+  } finally {
+    window.orkestratorDesktopHost = originalHost;
+  }
+});

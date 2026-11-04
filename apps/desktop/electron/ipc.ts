@@ -308,6 +308,11 @@ export function registerMainIpc({
       args && typeof args === "object" && !Array.isArray(args)
         ? (args as Record<string, unknown>)
         : {};
+    if (command === "desktop_file_draft_release") {
+      if (!event.sender) throw new Error("Draft sender is unavailable");
+      fileDraftWrites.releaseClient(event.sender.id, safeArgs.clientId);
+      return;
+    }
     if (command === "desktop_file_draft_write") {
       const sender = event.sender;
       if (!sender) throw new Error("Draft sender is unavailable");

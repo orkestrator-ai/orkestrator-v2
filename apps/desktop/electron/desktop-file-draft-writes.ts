@@ -1,5 +1,5 @@
 type Invoker = { invoke(command: string, args: Record<string, unknown>): unknown };
-type Queue = { tail: Promise<unknown>; revision: unknown; count: number };
+type Queue = { tail: Promise<unknown>; revision: unknown; count: number; released?: boolean };
 
 /** Bounded, main-owned CAS chains. A failed revision fences every queued successor. */
 export class DesktopFileDraftWrites {
@@ -8,10 +8,26 @@ export class DesktopFileDraftWrites {
   private count = 0;
 
   releaseSender(senderId: number): void {
+    this.releaseMatching(senderId);
+  }
+
+  /** Fence a disposed renderer client; admitted writes finish before removal. */
+  releaseClient(senderId: number, clientId: unknown): void {
+    if (typeof clientId !== "string" || clientId.length > 100)
+      throw new Error("Invalid desktop draft client");
+    this.releaseMatching(senderId, clientId);
+  }
+
+  private releaseMatching(senderId: number, clientId?: string): void {
     for (const [key, queue] of Array.from(this.queues)) {
-      if (JSON.parse(key)[0] === senderId) {
-        void queue.tail.finally(() => this.queues.delete(key)).catch(() => undefined);
-      }
+      const [owner, client] = JSON.parse(key);
+      if (owner !== senderId || (clientId !== undefined && client !== clientId)) continue;
+      queue.released = true;
+      const remove = () => {
+        if (this.queues.get(key) === queue) this.queues.delete(key);
+      };
+      if (queue.count === 0) remove();
+      else void queue.tail.then(remove, remove);
     }
   }
 
@@ -38,6 +54,7 @@ export class DesktopFileDraftWrites {
       queue = { tail: Promise.resolve(), revision: expectedRevision, count: 0 };
       this.queues.set(key, queue);
     }
+    if (queue.released) return Promise.reject(new Error("Desktop draft client released"));
     const current = queue;
     current.count += 1;
     this.count += 1;
@@ -58,7 +75,7 @@ export class DesktopFileDraftWrites {
         this.bytes -= bytes;
         this.count -= 1;
         current.count -= 1;
-        // Keep the cursor until navigation/destruction: an IPC response may still
+        // Keep the cursor until explicit release/navigation: an IPC response may still
         // be in transit when the next write is admitted.
       })
       .catch(() => undefined);

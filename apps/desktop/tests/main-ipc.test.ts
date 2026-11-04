@@ -1249,3 +1249,36 @@ describe("main IPC registration", () => {
     expect(harness.appApi.exit).toHaveBeenCalledWith(0);
   });
 });
+
+test.each(["destroyed", "did-navigate", "explicit"])(
+  "draft IPC routes writes and releases cursors on %s",
+  async (eventName) => {
+    const backend = {
+      invoke: mock(async (_command: string, _args: Record<string, unknown>) => ({ revision: 7 })),
+    };
+    const harness = createHarness({ backend });
+    const listeners = new Map<string, () => void>();
+    const sender = {
+      id: 42,
+      on: (name: string, cb: () => void) => listeners.set(name, cb),
+      once: (name: string, cb: () => void) => listeners.set(name, cb),
+    };
+    const event = { senderFrame: { url: "file:///app/web/index.html" }, sender };
+    const handler = harness.handlers.get("orkestrator:invoke")!;
+    const args = {
+      command: "save_file_draft",
+      clientId: "editor",
+      draftKey: "file",
+      expectedRevision: 0,
+    };
+    await handler(event, "desktop_file_draft_write", args);
+    await handler(event, "desktop_file_draft_write", args);
+    expect(backend.invoke.mock.calls.map((call) => call[1].expectedRevision)).toEqual([0, 7]);
+    if (eventName === "explicit")
+      await handler(event, "desktop_file_draft_release", { clientId: "editor" });
+    else listeners.get(eventName)!();
+    await handler(event, "desktop_file_draft_write", args);
+    expect(backend.invoke.mock.calls.map((call) => call[1].expectedRevision)).toEqual([0, 7, 0]);
+    expect(backend.invoke.mock.calls.every((call) => call[0] === "save_file_draft")).toBe(true);
+  },
+);

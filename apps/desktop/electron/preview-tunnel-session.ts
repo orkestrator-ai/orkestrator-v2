@@ -144,6 +144,14 @@ export class PreviewTunnelMuxStream extends Duplex {
     this.session.sendFrame({ type: "credit", stream: this.id, bytes });
   }
 
+  override read(size?: number): Buffer | null {
+    const chunk = super.read(size) as Buffer | null;
+    // Node calls _read before removing buffered bytes. Check again afterwards
+    // so pull readers replenish the window even when no more pushes can arrive.
+    this.returnCredit();
+    return chunk;
+  }
+
   override _read(): void {
     this.returnCredit();
   }

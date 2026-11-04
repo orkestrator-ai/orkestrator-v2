@@ -61,6 +61,10 @@ export function useCoordinatorActiveTurn(
   const current = answer?.projectId === projectId ? answer : null;
   const read = useCoordinatedRead<CoordinatorCheckoutTurn | null>({
     key: { resource: "coordinator-checkout-turn", target: projectId },
+    // Rehydrates on every mount. A retained answer counts as fresh for as long as
+    // nothing polls, and a turn that started while the panel was away sends no
+    // further hint, so it would stay unseen for the whole turn.
+    retainOnDispose: false,
     demand: {
       intervalMs: current?.turn ? CHECKOUT_TURN_BUSY_POLL_MS : null,
       priority: "auxiliary",

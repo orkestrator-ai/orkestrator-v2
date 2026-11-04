@@ -512,6 +512,20 @@ describe("branch switch and Sync while any turn runs", () => {
     expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
   });
 
+  test("coming back to the panel sees a turn that started while it was away", async () => {
+    const away = render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
+    await screen.findByTestId("native-agent");
+    await waitFor(() => expect(gated()).toBe(false));
+    away.unmount();
+
+    // Started from the project home's own tab: nothing hints a panel that is not there.
+    getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(gated()).toBe(true));
+    expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
+  });
+
   test("a turn that ended behind another tab does not hold the controls", async () => {
     // Nothing rewrites this projection while its tab is not mounted, so it still
     // says running. The backend is the one that knows the turn is over.

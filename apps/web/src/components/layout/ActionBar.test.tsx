@@ -6934,6 +6934,44 @@ describe("ActionBar successful cleanup and merge actions", () => {
       expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
     });
 
+    test("dismisses confirmation when its target disappears from the store", () => {
+      withoutPr();
+      const { rerender } = render(<ActionBar />);
+      fireEvent.click(trashButton());
+      expect(screen.getByTestId("alert-dialog-content")).toBeTruthy();
+
+      // Another environment remains selected, but the original target is gone.
+      currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+      currentSelectedEnvironmentId = "env-2";
+      currentOtherEnvironments = [];
+      rerender(<ActionBar />);
+
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    });
+
+    test("disables deletion and explains why while a merge is in progress", async () => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        lifecycleOperation: "merging",
+      };
+      await withTooltipClocks(async ({ open }) => {
+        render(<ActionBar />);
+        const button = trashButton() as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        fireEvent.click(button);
+        expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+        expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+        fireEvent.mouseEnter(button.parentElement!);
+        await fireTooltipTimer(open);
+        expect(screen.getByText("Merge in progress...")).toBeTruthy();
+        expect(screen.queryByText("Delete this environment")).toBeNull();
+      });
+    });
+
     test("stays available beside an open PR", () => {
       currentEnvironment = { ...selectedEnvironment, prState: "open" };
       render(<ActionBar />);

@@ -223,9 +223,11 @@ gateway rather than the socket, so a plain disconnect still delivers what was
 already accepted and a reconnect cannot overtake it. Revocation is the
 deliberate exception: credential rotation and gateway stop refuse everything
 still queued, including what a disconnected socket left behind, and so do
-session revocation and credential expiry on an open socket. The one operation
-already running in the backend cannot be recalled. A socket that disconnects
-before its own credential expires or is revoked is the remaining gap, tracked
+browser-session revocation and credential expiry on an open socket. The one
+operation already running in the backend cannot be recalled. Two gaps remain:
+a disconnected socket loses its credential expiry/revocation watchers, and explicit client-grant revocation does not notify even an open
+socket. A revoked grant can continue admitting input and running queued work
+until its original expiry (up to 15 minutes). Both are tracked
 in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
 
 The default became `on` on 2026-11-01, after a live probe through Tailscale

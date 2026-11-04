@@ -2,6 +2,9 @@ import { configureLogger } from "@orkestrator/protocol/logger";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import { ClientGrantService } from "../src/core/nodes/client-grants";
+import type { BrowserSessionStore } from "../src/gateway-sessions";
 import {
   BROWSER_PREVIEW_SANDBOX_CSP,
   canStartDynamicCompression,
@@ -949,6 +952,133 @@ describe("gateway terminal WebSocket", () => {
     expect(gauges.operationSockets.size).toBe(0);
     terminalGateway.close();
   });
+
+  test("new credentials preserve same-session order after rotation refuses the old queue", async () => {
+    const { backend, operations, release } = blockingTerminalBackend();
+    const { gateway, info } = await startGateway({ backend, env: {} });
+    const { terminalWebSocket } = gateway as unknown as WireGaugeInternals;
+    const old = await openTerminalSocket(info);
+    try {
+      await queueBehindBlockedWrite(old, operations, terminalWebSocket);
+      const closed = new Promise<void>((resolve) => old.socket.once("close", () => resolve()));
+      const token = "replacement-token-123456";
+      await gateway.setToken(token);
+      await closed;
+      const fresh = await openTerminalSocket({ ...info, token });
+      try {
+        fresh.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "queued" }));
+        const subscribed = await nextTerminalControl(fresh.inbox, "subscribed");
+        if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+        fresh.socket.send(
+          encodeTerminalBinaryFrame({
+            type: TERMINAL_BINARY_FRAME_TYPE.input,
+            channelId: subscribed.channelId,
+            generation: 1,
+            revision: 1,
+            bytes: new TextEncoder().encode("new credential"),
+          }),
+        );
+        await waitUntil(
+          () => terminalWebSocket.pendingOperationCount === 4,
+          "New input was not queued",
+        );
+        expect(operations).toEqual(["terminal_write"]);
+        release();
+        expect(await nextTerminalControl(fresh.inbox, "operation-result")).toMatchObject({
+          ok: true,
+          operation: "input",
+        });
+        await waitUntil(
+          () => terminalWebSocket.pendingOperationCount === 0,
+          "Rotated queue did not drain",
+        );
+        expect(operations).toEqual(["terminal_write", "terminal_write"]);
+        expect(
+          backend.invoke.mock.calls
+            .filter(([command]) => command === "terminal_write")
+            .map(([, args]) => args.data),
+        ).toEqual(["held", "new credential"]);
+        expect(terminalWebSocket.operationSockets.size).toBe(0);
+        expect(terminalWebSocket.pendingOperationBytes).toBe(0);
+        expect(terminalWebSocket.sessionOperations.size).toBe(0);
+      } finally {
+        fresh.socket.terminate();
+      }
+    } finally {
+      release();
+      old.socket.terminate();
+    }
+  });
+
+  for (const cause of [
+    "browser session revocation",
+    "browser session expiry",
+    "client grant expiry",
+  ] as const) {
+    test(`refuses queued input and resize after real ${cause}`, async () => {
+      const { backend, operations, release } = blockingTerminalBackend();
+      // The grant service's injected clock keeps a real grant live while its
+      // deadline is already due on the timer clock. Advance only after enqueue.
+      let grantNow = Date.now() - 60_000;
+      const grants = new ClientGrantService(() => grantNow);
+      const issued = grants.issue({
+        controllerId: "terminal-test-controller" as BackendId,
+        label: "terminal test",
+        ttlMs: 30_000,
+      });
+      const { gateway, info } = await startGateway({
+        backend,
+        nodeHooks: {
+          isPortalOriginAllowed: () => false,
+          noteControllerContact: () => {},
+          authenticateGrant: (token) => grants.authenticate(token)?.expiresAt ?? null,
+        },
+      });
+      const { terminalWebSocket } = gateway as unknown as WireGaugeInternals;
+      const sessions = (gateway as unknown as { context: { browserSessions: BrowserSessionStore } })
+        .context.browserSessions;
+      const session = sessions.issue();
+      let sessionExpired = false;
+      if (cause === "browser session expiry") {
+        // Keep the real store's expiry timer re-arming until all operations are
+        // accepted. No short wall-clock race between handshake and enqueue.
+        Object.defineProperty(sessions.records.get(session)!, "expiresAt", {
+          get: () => (sessionExpired ? 0 : Date.now() + 1),
+        });
+      }
+      const terminal =
+        cause === "client grant expiry"
+          ? await openTerminalSocket({ ...info, token: issued.token })
+          : await openTerminalSocket(info, {
+              authenticate: false,
+              headers: {
+                Origin: new URL(info.url).origin,
+                Cookie: `orkestrator_gateway_auth=${session}`,
+              },
+            });
+      try {
+        if (cause !== "client grant expiry") await nextTerminalControl(terminal.inbox, "ready");
+        await queueBehindBlockedWrite(terminal, operations, terminalWebSocket);
+        const closed = new Promise<number>((resolve) => terminal.socket.once("close", resolve));
+        if (cause === "browser session revocation") sessions.revoke(session);
+        else if (cause === "browser session expiry") sessionExpired = true;
+        else grantNow = issued.grant.expiresAt;
+        expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+        release();
+        await waitUntil(
+          () => terminalWebSocket.pendingOperationCount === 0,
+          "Real credential queue did not drain",
+        );
+        expect(operations).toEqual(["terminal_write"]);
+        expect(wireGauges(gateway)).toEqual(ZERO_WIRE_GAUGES);
+        if (cause === "client grant expiry") expect(grants.authenticate(issued.token)).toBeNull();
+        else expect(sessions.has(session)).toBe(false);
+      } finally {
+        release();
+        terminal.socket.terminate();
+      }
+    });
+  }
 
   test("still runs the operations a plain disconnect left queued", async () => {
     const { backend, operations, release } = blockingTerminalBackend();

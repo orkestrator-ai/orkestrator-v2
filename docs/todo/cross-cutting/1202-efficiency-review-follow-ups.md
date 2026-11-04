@@ -37,7 +37,7 @@ governs, marked "Decided".
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
-12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open (DK-1, DK-2 and DK-5 done 2026-11-04 behind a setting that is off by default; DK-6 still applies and moved to [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
+12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
@@ -576,7 +576,15 @@ These count events and serialisations. Electron main's CPU, the baseline [0400](
 
 **DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. A region crop still crosses as a data URL. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
 
-**DK-6 (still applies, not fixed).** Re-checked: `openPreviewTunnel` still opens one WebSocket, with HELLO and OPEN, per upstream connection. The pool (`preview-transport-manager.ts`, in since 2026-09-23, so before the report) reuses an idle connection for 2 s and keeps up to six, which spares sequential requests but not parallel ones, upgrades, or requests after an idle gap. It is not an IPC cost: these sockets run from Electron main to the backend. Multiplexing means a new tunnel protocol with per-stream flow control and version negotiation, so it moved to [4500](4500-preview-tunnel-one-socket-per-connection.md). This does not meet the ticket's "fixed or no longer applies" criterion for DK-6, and the maintainer should decide on 4500.
+**DK-6 (fixed, 2026-11-04).** Re-checked first: `openPreviewTunnel` opened one WebSocket, with HELLO and OPEN, per upstream connection. The pool (`preview-transport-manager.ts`, in since 2026-09-23, so before the report) reused an idle connection for 2 s and kept up to six, which spared sequential requests but not parallel ones, upgrades, or requests after an idle gap. It is not an IPC cost: these sockets run from Electron main to the backend. Fixed as the report proposes, by multiplexing: tunnel v2 (`orkestrator.preview-tunnel.v2`, contract in `packages/protocol/src/preview-tunnel-mux.ts`) carries every upstream connection of an attachment as a stream on one authenticated WebSocket, with per-stream credit so a stopped reader stalls only its own stream. The desktop's `PreviewTunnelConnector` (`preview-tunnel-session.ts`) keeps that session; the backend's `preview-tunnel-mux-server.ts` serves it beside v1. Attachments advertise v2 (`multiplexSubprotocol`), so a desktop on an older backend keeps v1, and an older desktop on this backend still gets v1 (counted as `preview.tunnel-v1` in the [version-compatibility register](../../architecture/version-compatibility.md#register)). Details and decisions are in [4500](4500-preview-tunnel-one-socket-per-connection.md).
+
+| One page's burst of N parallel upstream connections | v1 (before) | v2 (after) |
+| --- | --- | --- |
+| WebSocket handshakes (TCP, TLS on HTTPS, upgrade) | N | 1 per attachment (a second session past 32 streams) |
+| HELLO and credential checks | N | 1 |
+| OPEN round trips | N, pipelined with HELLO | N, on the open socket |
+
+Counted by tests, not timed: `preview-transport-manager.test.ts` ("parallel connections share one authenticated tunnel socket": five parallel requests, one upgrade, five admitted upstreams; "against a backend without tunnel v2, each connection opens its own socket": three requests, three upgrades), `preview-tunnel-session.test.ts` and `preview-tunnel-mux-server.test.ts` (sharing, a stopped stream stalling at its window while another completes, uploads past the window, revocation, capacity, protocol violations, v1 fallback). `service-preview-electron.spec.ts` drove real Electron windows over v2 in disposable profiles. Page-load time over a remote route was not measured.
 
 **Decisions.**
 
@@ -1191,6 +1199,10 @@ Moved commands too, as 0400 recommends, since that is what removes the serialisa
 ### Task 12: one shared terminal stream, and a command sent as the page goes
 
 A gateway client with a `baseUrl` opens one fetch per terminal, which on a plain-HTTP listener would exhaust Chromium's six connections and stall commands, so `sharedTerminalStream` keeps them on one. Widening that stream reopens it, which costs each mounted terminal a snapshot read, as in a browser. A fetch ends with its page, unlike a command held by main, so `keepaliveOnPageHide` sets `keepalive` on commands sent during `pagehide` that fit its 64 KiB limit (a final pane layout write). A larger one is lost if the page goes first.
+
+### Task 12: DK-6 by multiplexing rather than a measurement first (2026-11-04)
+
+The ticket's criterion is "fixed with a test or recorded as no longer applying", and DK-6 still applied, so 4500's first recommendation (measure, then decide) could not meet it. Built the report's fix, tunnel v2. Raising `poolIdleMs` alone would not have helped parallel requests, which are the case the pool misses. Cost: a second protocol version to keep until the support window passes v1, registered in version-compatibility.md. Choices inside v2 are in 4500's Assumptions and decisions.
 
 ### Task 12: the setting
 

@@ -30,11 +30,13 @@ stays off until it is turned on.
 | Backend | `core/preview-readiness.ts` | TCP/TLS/HTTP readiness layers, bounded probing |
 | Backend | `core/preview-access.ts` | Scoped attachments, one-use grants, sessions, revocation |
 | Backend | `preview-tunnel-server.ts` | Desktop tunnel (`/__orkestrator/preview/tunnel`) |
+| Backend | `preview-tunnel-mux-server.ts` | Tunnel v2 sessions: many connections per socket |
 | Backend | `preview-publication.ts` | Private HTTPS origins, bootstrap host |
 | Backend | `preview-relay-supervisor.ts` | Optional in-container relay |
 | Backend | `core/commands-registry-previews.ts` | Trusted control commands |
 | Protocol | `packages/protocol/src/preview-*.ts` | Contracts, HTTP/1.1 and WebSocket codecs, header policy |
 | Desktop | `electron/preview-transport-manager.ts` | Per-service loopback ingress over the tunnel |
+| Desktop | `electron/preview-tunnel-session.ts` | Tunnel v2 sessions and streams, v1 fallback |
 | Desktop | `electron/preview-external-handoff.ts` | External-browser handoff without a credential in a URL |
 | Desktop | `electron/preview-external-forward.ts` | `localhost` forward for the user's own browser (remote backends without a private origin) |
 | Web | `lib/preview-link-external.ts` | Routes Cmd/Ctrl-clicked terminal and agent loopback links to a service |
@@ -188,11 +190,20 @@ legacy partition do not come with it.
 ### Desktop tunnel
 
 For each service it previews, Electron opens a loopback ingress
-(`127.0.0.1:<random>`). Each browser connection becomes one WebSocket to the
-backend using subprotocol `orkestrator.preview-tunnel.v1`. The WebSocket
+(`127.0.0.1:<random>`). Each browser connection becomes one stream on a
+WebSocket to the backend using subprotocol `orkestrator.preview-tunnel.v2`:
+one authenticated WebSocket per attachment carries every connection of that
+service (`preview-tunnel-session.ts`, `preview-tunnel-mux-server.ts`; the wire
+contract is in `packages/protocol/src/preview-tunnel-mux.ts`). The WebSocket
 authenticates with a scoped attachment credential in the first frame, never in
 a URL or header. The backend connects only to that service's current target.
 The client never names a host, port, or container.
+
+v2 is negotiated. A backend that speaks it advertises `multiplexSubprotocol`
+in the attachment's tunnel descriptor, and the desktop then offers v2 before
+v1. Against a backend that predates v2 (no advertisement), or one that answers
+v1 anyway, the desktop opens one `orkestrator.preview-tunnel.v1` WebSocket per
+connection, as before. Backends serve both.
 
 - The ingress accepts only requests carrying the per-listener
   `x-orkestrator-preview-ingress` header. Electron injects that header for the
@@ -486,18 +497,35 @@ sequenceDiagram
   M->>V: load http://127.0.0.1:p/<path> (webRequest adds S for this origin only)
   V->>I: GET /path + S + application Authorization/cookies
   I->>I: verify S, strip S, map Host/Origin to the private authority
-  I->>G: WS /__orkestrator/preview/tunnel (orkestrator.preview-tunnel.v1)
+  I->>G: WS /__orkestrator/preview/tunnel (offers v2, then v1), once per attachment
   I->>G: HELLO {attachmentId, credential}
   G->>A: authenticate (surface, expiry, revocation, generation)
-  I->>G: OPEN
+  G-->>I: READY
+  I->>G: OPEN {stream}, once per browser connection
   G->>U: TCP connect to the verified binding for that generation
-  G-->>I: OPEN_OK, then bounded binary frames both ways
+  G-->>I: OPEN_OK {stream}, then bounded binary frames tagged with the stream, both ways
 ```
 
 ### Connections through the tunnel
 
-Each upstream TCP connection is one outer WebSocket. Idle connections are
-pooled per service; nothing is replayed after a reconnect.
+Each upstream TCP connection is one stream. On v2, a service's streams share
+one outer WebSocket per attachment (up to 32; more open a second session), so
+a page's first burst of parallel requests pays one WebSocket handshake and one
+HELLO, and each further connection costs one OPEN round trip. A session with
+no streams closes after 30 seconds. On v1 each connection is its own
+WebSocket. Idle connections are pooled per service on both; nothing is
+replayed after a reconnect.
+
+Each stream holds its own admission slot (the "Tunnels" limit below counts
+upstream connections on both versions); a v2 session also holds one slot of a
+separate session budget with the same limits. Flow control is per stream: each
+direction may have 256 KiB sent and not yet credited, and the receiver returns
+credit once its consumer has taken the bytes. A stream whose reader stopped
+(paused media) therefore stalls at its window without stalling the other
+streams on the socket. An `OPEN` refused for capacity fails that stream only.
+Revocation, lease expiry and shutdown close the WebSocket and every stream on
+it. A new attachment retires the old one's sessions: they take no new streams
+and close once their current ones end.
 
 A connection refused with `access-expired` or `generation-changed` is retried
 before any application bytes are sent. If a reused replacement is also refused,
@@ -516,7 +544,7 @@ after its attachment was replaced follows the same rule.
 | --- | --- | --- |
 | Definition, endpoint generation, readiness | Backend `PreviewServiceRegistry` | Definitions persist; runtime state is rebuilt on restart under a new epoch |
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
-| Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
+| Tunnel sockets, streams and upstream TCP | Backend `PreviewTunnelServer` | Closing a stream's upstream releases the stream; closing the socket closes every stream on it; revocation closes everything tracked for the attachment |
 | Idle upstream connections (private origins) | Backend `PreviewUpstreamPool`, per attachment | Revocation, expiry or generation change of the attachment, registry revocation of the service, 2 s idle, publication shutdown |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
 | Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
@@ -663,11 +691,11 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 | Resource | Limit |
 | --- | --- |
 | Service definitions | 32 per environment, 1,024 per backend |
-| Tunnels | 16 per service, 128 per backend, 32 pending handshakes |
+| Tunnels (upstream connections) | 16 per service, 128 per backend, 32 pending handshakes; v2 sessions have the same per-service and per-backend budget, and carry at most 32 streams each |
 | HTTP requests (publication) | 32 active per service, 128 per backend |
 | Upgrades (publication) | 8 per service, 128 per backend |
 | Idle upstream connections (publication) | 8 per access, 64 per backend, 2 s idle |
-| Tunnel queues | 256 KiB per direction, 64 MiB aggregate |
+| Tunnel queues | 256 KiB per direction, 64 MiB aggregate; on v2 also 256 KiB of uncredited data per stream and direction |
 | Headers | 32 KiB, 100 fields; 30 s to first response header |
 | Idle body | 60 s |
 | Upload / download | 128 MiB / 512 MiB per request |
@@ -677,7 +705,9 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 When a limit is exceeded, the request fails with `capacity-exceeded`: HTTP 503
 with `x-orkestrator-preview-error`, or tunnel close code 4429.
 
-A full tunnel queue is backpressure, not a failure. When the queue toward the
+A full tunnel queue is backpressure, not a failure. On v2 a stream out of
+credit pauses its own upstream the same way, and the shared socket is never
+paused, so the backend's pings are always read. When the queue toward the
 client reaches 256 KiB, the backend pauses the upstream and returns the rest of
 the current read to the upstream's buffer. It resumes once the queue drains,
 so the queue never exceeds the limit by more than one frame. Liveness is

@@ -1,5 +1,8 @@
 import { describe, expect, mock, spyOn, test, setDefaultTimeout } from "bun:test";
 
+import * as dockerImage from "../src/core/docker-image";
+import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
+import * as githubCredential from "../src/core/container-github-credential";
 import * as shell from "../src/core/shell";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -1054,11 +1057,23 @@ exit 0
         branch: "feature/container-create",
         networkAccessMode: "full",
       });
-      const { context } = createContext(environment);
+      const { context } = createContext(environment, {
+        globalConfig: { containerGitHubCredential: "host-cli" },
+      });
+      // Storage returns snapshots in production, not the mutable fixture record.
+      context.storage.getEnvironment = mock(async (id: string) =>
+        id === environment.id ? structuredClone(environment) : null,
+      );
+      const manifest = spyOn(dockerImage, "readImageManifest").mockResolvedValue({
+        kind: "manifest",
+        manifest: { capabilities: { "github-git-credential": 1 } } as ImageManifest,
+      });
+      const sync = spyOn(githubCredential, "syncRuntimeGitHubCredential");
       const commands = createCommandRegistry();
 
-      await withFakeGh(
-        `#!/bin/sh
+      try {
+        await withFakeGh(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
   printf 'host-gh-token\\n'
@@ -1066,11 +1081,15 @@ if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
 fi
 exit 1
 `,
-        async (ghLog) => {
-          await withFakeDocker(
-            `#!/bin/sh
+          async (ghLog) => {
+            await withFakeDocker(
+              `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 ${ownedContainerInspect()}
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf 'sha256:${"a".repeat(64)}\\t[]\\tarm64\\n'
+  exit 0
+fi
 case "$1" in
   create) printf 'container-created\\n'; exit 0 ;;
   start) exit 0 ;;
@@ -1097,57 +1116,70 @@ case "$1" in
 esac
 exit 0
 `,
-            async (logs) => {
-              let result: unknown;
-              try {
-                result = await commands.get("start_environment")?.(
-                  { environmentId: environment.id },
-                  context,
-                );
-              } catch (error) {
-                const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
-                const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
-                throw new Error(
-                  `${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`,
-                );
-              }
-              expect(result).toEqual(
-                expect.objectContaining({
-                  setupStarted: true,
-                  setupSessionId: `${environment.id}:setup`,
-                  environment: expect.objectContaining({
-                    id: environment.id,
-                    status: "running",
+              async (logs) => {
+                let result: unknown;
+                try {
+                  result = await commands.get("start_environment")?.(
+                    { environmentId: environment.id },
+                    context,
+                  );
+                } catch (error) {
+                  const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
+                  const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+                  throw new Error(
+                    `${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`,
+                  );
+                }
+                expect(result).toEqual(
+                  expect.objectContaining({
+                    setupStarted: true,
+                    setupSessionId: `${environment.id}:setup`,
+                    environment: expect.objectContaining({
+                      id: environment.id,
+                      status: "running",
+                    }),
                   }),
-                }),
-              );
-              await waitForPtyProcessCount(1);
-              expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain(
-                "/usr/local/bin/workspace-setup.sh",
-              );
-              ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+                );
+                await waitForPtyProcessCount(1);
+                expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain(
+                  "/usr/local/bin/workspace-setup.sh",
+                );
+                ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
 
-              const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
-              expect(ghCalls).toContain("auth token --hostname github.com");
+                const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+                expect(ghCalls).toContain("auth token --hostname github.com");
 
-              const dockerCalls = await fs.readFile(logs.all, "utf8");
-              expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
-              expect(dockerCalls).not.toContain("-e GH_TOKEN");
-              expect(dockerCalls).not.toContain("host-gh-token");
-              expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("host-gh-token");
-              expect(environment.containerId).toBe("container-created");
+                const dockerCalls = await fs.readFile(logs.all, "utf8");
+                expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+                expect(dockerCalls).not.toContain("-e GH_TOKEN");
+                expect(dockerCalls).not.toContain("host-gh-token");
+                expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("host-gh-token");
+                expect(environment.containerId).toBe("container-created");
+                expect(sync.mock.calls.at(-1)?.[0]?.containerId).toBe("container-created");
+                expect(sync.mock.calls.at(-1)?.[0]?.containerLifecycle?.runtime).toEqual(
+                  environment.containerLifecycle?.runtime,
+                );
+                expect(sync.mock.calls.at(-1)?.[0]?.containerLifecycle?.runtime?.imageId).toBe(
+                  `sha256:${"a".repeat(64)}`,
+                );
+                expect(dockerCalls).toContain("/usr/local/bin/orkestrator-git-credential");
+                expect(dockerCalls).not.toContain("token_url=");
 
-              const execCalls = await fs.readFile(logs.exec, "utf8");
-              expect(execCalls).toMatch(
-                /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-created sh -c/,
-              );
-              expect(execCalls).toContain(
-                "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
-              );
-            },
-          );
-        },
-      );
+                const execCalls = await fs.readFile(logs.exec, "utf8");
+                expect(execCalls).toMatch(
+                  /exec --env PATH=\/usr\/sbin:\/usr\/bin:\/sbin:\/bin --user root container-created sh -c/,
+                );
+                expect(execCalls).toContain(
+                  "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
+                );
+              },
+            );
+          },
+        );
+      } finally {
+        sync.mockRestore();
+        manifest.mockRestore();
+      }
     },
     ASYNC_TEST_BUDGET_MS,
   );

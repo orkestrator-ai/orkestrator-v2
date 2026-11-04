@@ -1,3 +1,4 @@
+import { assertExecutionPolicyNotWidened } from "@orkestrator/protocol/execution-policy-narrowing";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import {
   AGENT_MAIL_TOOL_NAMES,
@@ -124,6 +125,7 @@ import {
   ACP_FILE_MUTATION_DENIALS,
   ACP_SHELL_DENIALS,
   effectiveTurnExecutionPolicy,
+  liveExecutionPolicy,
 } from "./acp-policy.js";
 import { sessionInstructionsMeta } from "./acp-provider-config.js";
 import { sessionInstructions } from "./acp-session-instructions.js";
@@ -266,6 +268,24 @@ export async function adoptAcpSession(
   return signal ? raceAbort(operation, signal) : operation;
 }
 
+/**
+ * Take a policy a request sent. The caller has already refused a wider one and
+ * a turn in flight, with no await since. A child takes its policy when it
+ * spawns, so a real change closes it and the next use spawns under the new one.
+ */
+async function replaceSessionPolicy(
+  state: SessionState,
+  policy: NonNullable<AcpSpawnOptions["policy"]>,
+): Promise<void> {
+  state.policyPending = false;
+  if (JSON.stringify(state.policy) === JSON.stringify(policy)) return;
+  const previous = state.child;
+  state.child = null;
+  clearApprovals(state);
+  state.policy = policy;
+  await previous?.close();
+}
+
 export async function resumeExistingSession(
   state: SessionState,
   signal?: AbortSignal,
@@ -276,19 +296,15 @@ export async function resumeExistingSession(
   // A closing session is about to leave the registry; resuming it here would
   // hand the caller an id that answers `missing` a moment later.
   if (state.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
+  // Narrow-only (H4): the agent this bridge runs can read the bridge token.
+  if (policy) assertExecutionPolicyNotWidened(liveExecutionPolicy(state), policy);
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
   if (agentMcp) state.agentMcp = agentMcp;
   state.dispatching = true;
   try {
-    if (policy && JSON.stringify(state.policy) !== JSON.stringify(policy)) {
-      const previous = state.child;
-      state.child = null;
-      clearApprovals(state);
-      state.policy = policy;
-      await previous?.close();
-    }
+    if (policy) await replaceSessionPolicy(state, policy);
     await ensureSessionProcess(state, signal);
     if (patch) await applyComposerPatch(state, patch, signal);
     return state;
@@ -413,6 +429,20 @@ export async function createSession(
       const existing = sessions.get(existingId);
       if (existing) {
         if (existing.closing) throw new HttpError(409, SESSION_CLOSING_ERROR);
+        // Narrow-only (H4), as on resume. A retry under the same policy changes
+        // nothing, and a real change cannot close a child mid-turn.
+        const policy = spawnOptions.policy;
+        if (policy) {
+          assertExecutionPolicyNotWidened(liveExecutionPolicy(existing), policy);
+          if (
+            JSON.stringify(existing.policy) !== JSON.stringify(policy) &&
+            (existing.status === "running" || existing.dispatching)
+          ) {
+            throw new HttpError(409, "Session is already running");
+          }
+          await replaceSessionPolicy(existing, policy);
+          schedulePersist();
+        }
         // Creation is idempotent by client key, so a retry under a different
         // review boundary must move the session rather than silently keep the
         // looser one. A boundary that did not change closes nothing, and one
@@ -432,7 +462,10 @@ export async function createSession(
       }
     }
     const pending = sessionCreations.get(clientSessionKey);
-    if (pending) return pending;
+    if (pending) {
+      await pending;
+      return createSession(clientSessionKey, signal, spawnOptions);
+    }
   }
   if (activeSessionReservations() >= MAX_SESSIONS)
     throw new HttpError(429, "ACP session limit reached");

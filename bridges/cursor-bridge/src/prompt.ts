@@ -7,6 +7,7 @@
  * outcome a previous bridge process could not record.
  */
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { readRepositoryInstructions } from "@orkestrator/protocol/node/repository-instructions";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -60,6 +61,8 @@ import {
   nonBlank,
   turnTokenTotal,
 } from "./state.js";
+
+const log = createLogger("bridge.cursor");
 
 export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";
 
@@ -297,7 +300,9 @@ async function followStartedRun(
   // Share only an in-flight cancellation. A later hard abort must reach the
   // provider again if the first cancellation did not stop the run.
   let cancelling: Promise<void> | undefined;
+  state.turnCancelRequested = undefined;
   state.cancelTurn = () => {
+    state.turnCancelRequested = true;
     if (!cancelling) {
       const attempt = (async () => {
         await (diagnostics ? diagnostics.cancel(run, "user") : run.cancel().catch(() => undefined));
@@ -468,6 +473,7 @@ export async function followRun(
             )
           : undefined;
       if (!turnStillOwned(state, promptSequence)) return await closedTurnStopped();
+      log.warn("turn.timed-out", { sessionId: state.id });
       state.error = error.message;
       state.revision += 1;
       schedulePersist();
@@ -574,6 +580,13 @@ function failTurn(
   result?: TerminalRunResult,
   streamed: StreamedUsage = {},
 ): void {
+  // Cancelling can reject the run; a turn someone stopped has not failed.
+  if (state.turnCancelRequested !== true) {
+    log.warn("turn.failed", {
+      sessionId: state.id,
+      error: formatLogError(error, { message: false }),
+    });
+  }
   settleBackgroundChildren(state);
   settleAbandonedToolParts(state);
   // Only a terminal result from the SDK says the run itself stopped.

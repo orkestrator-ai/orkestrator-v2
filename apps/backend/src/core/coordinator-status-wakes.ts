@@ -1487,6 +1487,8 @@ export class CoordinatorStatusWakes {
    * Keep a worker's last PR reading on its follows just before the worker's
    * record is deleted, so a merge observed by the write path (Merge and
    * Cleanup deletes right after persisting `merged`) is still reported once.
+   * A follow that already ended on that PR keeps it too: the Work panel has no
+   * other reading of the PR once the worker is gone.
    */
   async captureFinalPullRequest(environment: Environment): Promise<void> {
     const prState =
@@ -1502,14 +1504,15 @@ export class CoordinatorStatusWakes {
         association.kind === "pull-request" &&
         !association.nodeId &&
         association.resourceId === environment.id &&
-        !association.pending &&
-        !association.terminalNotifiedAt,
+        !association.pending,
     );
     for (const association of follows) {
       await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
         association.id,
         (current) => {
-          if (!current.pullRequest || current.terminalNotifiedAt) return false;
+          if (!current.pullRequest) return false;
+          if (current.terminalNotifiedAt && current.pullRequest.prUrl !== environment.prUrl)
+            return false;
           current.pullRequest = {
             ...current.pullRequest,
             final: { prUrl: environment.prUrl ?? null, prState, name: environment.name, at },
@@ -1520,7 +1523,8 @@ export class CoordinatorStatusWakes {
     }
     // The outcome watches of the coordinators that own the worker hear the deletion.
     const watched = await this.outcomes.captureDeleted(environment);
-    if (follows.length > 0 || watched) this.notePullRequestChange(environment.id);
+    if (follows.some((association) => !association.terminalNotifiedAt) || watched)
+      this.notePullRequestChange(environment.id);
   }
 
   /**

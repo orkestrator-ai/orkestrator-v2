@@ -228,6 +228,16 @@ function deferred<T>() {
 
 let autoSaveClock: ReturnType<typeof installControlledTimeout>;
 
+async function chooseContainerCredential(name: string) {
+  const select = screen.getByRole("combobox", { name: "GitHub access for containers" });
+  fireEvent.keyDown(select, { key: "ArrowDown" });
+  await screen.findByRole("listbox");
+  const option = screen.getByRole("option", { name });
+  fireEvent.pointerDown(option, { pointerType: "mouse" });
+  fireEvent.pointerUp(option, { pointerType: "mouse" });
+  await waitFor(() => expect(select.textContent).toContain(name));
+}
+
 async function flushAutoSave() {
   await act(async () => {
     await Promise.resolve();
@@ -2105,7 +2115,8 @@ describe("GlobalSettings", () => {
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
+    // The backend's source does not change what containers hold.
+    expect(mockPropagateGithubCredentialsToContainers).not.toHaveBeenCalled();
   });
 
   test("keeps persisted settings and the PAT edit retryable when token storage fails", async () => {
@@ -2151,6 +2162,43 @@ describe("GlobalSettings", () => {
     }
   });
 
+  test("warns about the host token's reach only while containers share it", async () => {
+    render(<GlobalSettings activeSection="version-control" />);
+    expect(
+      screen.getByRole("combobox", { name: "GitHub access for containers" }).textContent,
+    ).toContain("No GitHub access");
+    expect(screen.queryByRole("note")).toBeNull();
+
+    await chooseContainerCredential("Share host GitHub CLI token");
+    expect(screen.getByRole("note").textContent).toContain("read this token in every container");
+    await flushAutoSave();
+
+    await waitFor(() =>
+      expect(mockPatchGlobalConfig).toHaveBeenCalledWith(
+        { containerGitHubCredential: "host-cli" },
+        expect.anything(),
+      ),
+    );
+    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
+
+    await chooseContainerCredential("No GitHub access");
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  test("offers the token field for containers while the backend keeps the host login", async () => {
+    render(<GlobalSettings activeSection="version-control" />);
+    expect(screen.queryByLabelText("GitHub token")).toBeNull();
+
+    await chooseContainerCredential("Personal access token");
+
+    expect(screen.getByLabelText("GitHub token")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("switch", { name: "Use host GitHub CLI credentials" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+  });
+
   test("switches from a configured PAT to host credentials without replacing the PAT", async () => {
     useConfigStore.setState((state) => ({
       config: {
@@ -2178,7 +2226,8 @@ describe("GlobalSettings", () => {
       ),
     );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
-    expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith(undefined);
+    // The backend's source does not change what containers hold.
+    expect(mockPropagateGithubCredentialsToContainers).not.toHaveBeenCalled();
   });
 
   test("shows the client and backend versions on the debug tab", async () => {
@@ -2761,7 +2810,7 @@ describe("GlobalSettings", () => {
     });
     render(<GlobalSettings activeSection="version-control" />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
     const token = screen.getByLabelText("GitHub token");
     fireEvent.change(token, { target: { value: "new-token" } });
     fireEvent.blur(token);
@@ -2780,7 +2829,7 @@ describe("GlobalSettings", () => {
     );
     render(<GlobalSettings activeSection="version-control" />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
     await flushAutoSave();
 
     await waitFor(() =>
@@ -2789,7 +2838,7 @@ describe("GlobalSettings", () => {
     expect(mockToastError).toHaveBeenCalledWith("Settings saved, but containers were not updated", {
       description: "container unavailable",
     });
-    expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
+    expect(useConfigStore.getState().config.global.containerGitHubCredential).toBe("pat");
   });
 
   test("reports partial GitHub credential propagation failures with affected containers", async () => {
@@ -2799,7 +2848,7 @@ describe("GlobalSettings", () => {
     });
     render(<GlobalSettings activeSection="version-control" />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
     await flushAutoSave();
 
     await waitFor(() =>
@@ -2824,7 +2873,7 @@ describe("GlobalSettings", () => {
       ],
     });
     render(<GlobalSettings activeSection="version-control" />);
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
     await flushAutoSave();
 
     await waitFor(() =>
@@ -2852,7 +2901,7 @@ describe("GlobalSettings", () => {
     });
     render(<GlobalSettings activeSection="version-control" />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
     await flushAutoSave();
 
     await waitFor(() =>
@@ -3115,7 +3164,7 @@ describe("GlobalSettings", () => {
       failed: [["environment-1", "container unavailable"]],
     });
     render(<GlobalSettings activeSection="version-control" />);
-    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    await chooseContainerCredential("Personal access token");
 
     // The source change propagates once; each failure keeps the form dirty and
     // re-arms the debounce until the bounded retries are spent.

@@ -4,6 +4,7 @@ import {
   parseParentPid,
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
+import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
@@ -22,7 +23,7 @@ import {
 import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
 import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.acp");
 
@@ -44,7 +45,19 @@ export const server = createServer((request, response) => {
         json(response, 401, { error: error.message, kind: "authentication-required" });
         return;
       }
+      if (error instanceof PolicyWideningRefusedError) {
+        log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+        json(response, 403, error.refusal());
+        return;
+      }
       const status = error instanceof HttpError ? error.status : 500;
+      // A client that hung up aborted this route; nobody is waiting on the answer.
+      if (status === 500 && !controller.signal.aborted) {
+        log.warn("http.route-failed", {
+          method: request.method,
+          error: formatLogError(error, { message: false }),
+        });
+      }
       json(response, status, { error: error instanceof Error ? error.message : String(error) });
     })
     .finally(stopWatchingClient);

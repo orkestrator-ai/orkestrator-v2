@@ -814,6 +814,8 @@ describe("backend setup wrappers", () => {
     await backendWrappers.retryBuildPipelineCompletionComment("pipeline-1");
     await backendWrappers.sendBuildPipelineMessage("pipeline-1", "ship it");
     await backendWrappers.steerBuildPipeline("pipeline-1", "use the helper");
+    await backendWrappers.steerQueuedBuildPipelineMessage("pipeline-1", "message-1");
+    await backendWrappers.removeQueuedBuildPipelineMessage("pipeline-1", "message-2");
     await backendWrappers.retryBuildPipelineStage("pipeline-1");
     await backendWrappers.restartBuildPipelineStep("pipeline-1", "review-session");
     await backendWrappers.skipBuildPipelineStep("pipeline-1", "verify-session");
@@ -844,6 +846,11 @@ describe("backend setup wrappers", () => {
         },
       ],
       ["steer_build_pipeline", { pipelineId: "pipeline-1", text: "use the helper" }],
+      ["steer_queued_build_pipeline_message", { pipelineId: "pipeline-1", messageId: "message-1" }],
+      [
+        "remove_queued_build_pipeline_message",
+        { pipelineId: "pipeline-1", messageId: "message-2" },
+      ],
       ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
       ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
       ["skip_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "verify-session" }],

@@ -281,6 +281,7 @@ function restoreSession(entry: unknown): SessionState | undefined {
   state.readOnly = entry.readOnly === true;
   state.id = entry.id;
   if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
+  state.policyPending = true;
   if (nonBlank(entry.sessionFile)) state.sessionFile = entry.sessionFile;
   if (nonBlank(entry.piSessionId)) state.piSessionId = entry.piSessionId;
   state.status = entry.status === "error" ? "error" : "idle";

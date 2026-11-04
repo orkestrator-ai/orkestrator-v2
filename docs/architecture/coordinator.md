@@ -398,12 +398,13 @@ conversation is mounted.
 
 ## Activity indicator
 
-While a coordinator works, its icons carry the same spinner an environment
-row's marker draws: the **Coordinator** tab in the project navigation, and the
-leading icon of the project's sidebar heading (the coordinator's own icon when
-the project has none, shown only while it is active). A conversation waiting
-on the user pulses yellow instead; working outranks waiting across a project's
-open conversations, main and side agents alike.
+While a coordinator works, it shows the same spinner an environment row's
+marker draws: around the whole **Coordinator** tab in the project navigation,
+and around the leading icon of the project's sidebar heading (the coordinator's
+own icon when the project has none, shown only while it is active). A
+conversation waiting on the user pulses yellow on those same icons instead;
+working outranks waiting across a project's open conversations, main and side
+agents alike.
 
 The state comes from the backend's activity observer, the same observation
 mail delivery and the environment markers read
@@ -1036,11 +1037,35 @@ completion or outcome, a PR's merge or close as last recorded. A failed build,
 review or run is listed under Needs you but expires by the same rule. The panel
 re-evaluates expiry every minute.
 
+**Followed PRs after their worker is gone.** A row reads a live reading of its
+URL first, then what the follow recorded: its `merged:` or `closed:` status
+notice (`pullRequestStateFromNotice`), then the final reading
+`captureFinalPullRequest` kept at deletion, which it now also keeps on a follow
+that already ended on that URL. A follow that ended with neither, or whose last
+reading was `open`, is Finished as "PR · no longer followed": nothing watches
+it any more, so the panel claims no outcome. A live follow with a URL and no
+reading is still Running as "PR · status unavailable".
+
+**Folding and clearing.** Each section folds from its heading; the choice is
+`collapsedWorkBuckets` in the persisted `uiStore`, so it holds per device across
+projects and reloads, and every section starts unfolded. **Clear** on the
+Finished heading (`hide_coordinator_work`) sets `workHiddenAt` on the records
+behind those rows and answers with a fresh snapshot. It hides rows and removes
+nothing: retention, replay, mail routing and status wakes never read the field.
+A row is hidden only while it is finished, has no open pull request and every
+record behind it is marked, so work that resumes, a later request naming the
+same worker, or a PR that reopens lists it again. Clear skips finished rows
+whose pull request is open, which is what keeps them listed in the first place.
+Right-clicking one of the rows Clear would take offers **Clear** for that row
+alone; every other row has no such menu.
+An older node answers "Unknown backend command", shown as the panel's error.
+
 **Freshness.** Nothing here is persisted and nothing reads the coordinator's
 conversation, so rows move while the coordinator is idle. The sources are the
 stores the app already keeps current from backend snapshots and resource
 events: the coordinator snapshot (whose delegation waiting episodes announce a
-`coordinator` change), environments, build pipelines and Multi Reviews
+`coordinator` change, as do a follow ending, a final PR reading being kept and
+a clear), environments, build pipelines and Multi Reviews
 (hydrated app-wide; missing records are retried on resource changes, resync and safety checks), the PR monitor, the
 project's tickets, and the command node's summaries of other machines. Graph
 runs are read on demand (`graph_run_get`) when the panel mounts, when a

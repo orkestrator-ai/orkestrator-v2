@@ -96,6 +96,13 @@ drive the gateway, not that window. `headless-profile.spec.ts` checks this on ea
 isolated browser run on Linux: it reads `/proc` for the profile's Electron tree (no
 display variables, the headless switches on the launcher's child) and loads the app.
 
+Electron specs launch their own Electron rather than the profile's, so the
+profile's headless setting does not apply to them. The design canvas and service
+preview Electron specs support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
+on Linux; the packaged-app specs are always headless on Linux. See
+[Electron specs and their display](#electron-specs-and-their-display) and
+[Packaged-app Electron spec](#packaged-app-electron-spec).
+
 On Linux, Chromium aborts in-flight requests, including loopback ones, with
 `net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,
 and Docker adds or removes a bridge or veth for every network and container it

@@ -379,7 +379,7 @@ describe("session creation", () => {
     expect(await response.json()).toEqual({ error: "policy is required" });
   });
 
-  test("rejects a second resume of the same agent under a different policy", async () => {
+  test("refuses a second resume of the same agent under a different policy id", async () => {
     const existing = await createSession();
     existing.agentId = "cursor-shared-agent";
     const denied = await call("/session/resume", {
@@ -396,10 +396,12 @@ describe("session creation", () => {
         },
       }),
     });
-    expect(denied.status).toBe(409);
-    expect(await denied.json()).toEqual({
-      error: "Cursor session is already adopted under a different execution policy",
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      code: "policy-widening-refused",
+      widened: ["id"],
     });
+    expect(existing.policy?.id).toBe("interactive-host");
   });
 });
 

@@ -17,6 +17,7 @@ export default defineConfig({
   // `dev:test --headless` does not apply; on Linux use a disposable display.
   globalSetup: path.join(import.meta.dirname, "electron-display-setup.ts"),
   testMatch: [
+    "renderer-permissions-electron.spec.ts",
     "application-menu-electron.spec.ts",
     "electron-main.spec.ts",
     "electron-cleanup.spec.ts",

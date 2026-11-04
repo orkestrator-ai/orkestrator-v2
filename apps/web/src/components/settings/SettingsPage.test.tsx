@@ -57,6 +57,7 @@ test("scope banners name the owner of each section in a leaf window", () => {
     view.unmount();
   }
   for (const section of [
+    "general",
     "defaults",
     "terminal",
     "previews",

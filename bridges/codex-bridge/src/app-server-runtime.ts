@@ -302,6 +302,12 @@ export class AppServerRuntime {
     return this.sessions.setSessionTitle(...args);
   }
 
+  assertPromptPolicyNotWidened(
+    ...args: Parameters<CodexRuntimeSessions["assertPromptPolicyNotWidened"]>
+  ): void {
+    this.sessions.assertPromptPolicyNotWidened(...args);
+  }
+
   updateConfig(
     ...args: Parameters<CodexRuntimeSessions["updateConfig"]>
   ): ReturnType<CodexRuntimeSessions["updateConfig"]> {

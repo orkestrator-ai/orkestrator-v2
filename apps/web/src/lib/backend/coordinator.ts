@@ -73,6 +73,12 @@ export const closeCoordinatorConversation = (
 ): Promise<CoordinatorSnapshot> =>
   invoke("close_coordinator_conversation", { projectId, conversationId });
 
+/** Hide finished rows from the Work panel. Older backends answer "Unknown backend command". */
+export const hideCoordinatorWork = (
+  projectId: string,
+  associationIds: readonly string[],
+): Promise<CoordinatorSnapshot> => invoke("hide_coordinator_work", { projectId, associationIds });
+
 export const pauseProjectCoordinator = (projectId: string): Promise<CoordinatorSnapshot> =>
   invoke("pause_project_coordinator", { projectId });
 

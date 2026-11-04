@@ -5,6 +5,13 @@ export interface SegmentedSelectorOption<T extends string> {
   value: T;
   label: ReactNode;
   icon?: ReactNode;
+  /**
+   * Painted over the option's button, which positions it. It must be
+   * out of flow and take no pointer events or focus; the selector only hosts it.
+   */
+  overlay?: ReactNode;
+  /** Classes for this option's button alone, applied after `buttonClassName`. */
+  className?: string;
   disabled?: boolean;
   panelId?: string;
 }
@@ -83,11 +90,14 @@ export function SegmentedSelector<T extends string>({
               selected
                 ? "bg-primary font-bold text-primary-foreground shadow-sm"
                 : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+              option.overlay && "relative",
               buttonClassName,
+              option.className,
             )}
           >
             {option.icon}
             <span className="truncate">{option.label}</span>
+            {option.overlay}
           </button>
         );
       })}

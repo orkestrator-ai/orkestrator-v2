@@ -256,6 +256,14 @@ export interface ActiveSubagentDescriptor {
 export interface SessionState {
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  /**
+   * `policy` is not live yet: a copy restored from disk, or the fallback for a
+   * session no request gave a policy. It stays in force, but the next policy a
+   * request sends replaces it whatever it is, which is how a wider policy
+   * reaches a session after a bridge restart (H4). Set false once a request
+   * sets a policy or a prompt starts under this one. Never persisted.
+   */
+  policyPending?: boolean;
   /** Per-turn review boundary; changing it reattaches the same SDK conversation. */
   readOnly?: boolean;
   clientSessionKey?: string;
@@ -330,6 +338,8 @@ export interface SessionState {
   attaching?: Promise<SDKAgent>;
   /** Cancels the turn in flight. Never persisted. */
   cancelTurn?: () => Promise<void>;
+  /** Someone asked this turn to stop, so a failure it then reports is not one. Never persisted. */
+  turnCancelRequested?: boolean;
   /** Current SDK run, retained only while it can accept steering. */
   activeRun?: Run;
   /** In-flight re-attach of a run that survived a bridge restart. */

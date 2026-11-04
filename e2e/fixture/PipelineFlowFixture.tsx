@@ -14,6 +14,7 @@ import { MultiReviewTab } from "../../apps/web/src/components/review/MultiReview
 import { BUILD_PIPELINE_VERSION } from "../../apps/web/src/stores/buildPipelineStore";
 import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
 import { useBuildPipelineStore } from "../../apps/web/src/stores/buildPipelineStore";
+import { useConfigStore } from "../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { useKanbanStore } from "../../apps/web/src/stores/kanbanStore";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
@@ -39,6 +40,10 @@ import type { Environment } from "../../apps/web/src/types";
  * - `code-rewind`: a finished single-review pipeline whose Build wrote the
  *   package plan and recorded the commit it started from, for "Rewind code to
  *   here" and "Prepare package again".
+ *
+ * `&restore=1` reloads the last saved snapshot into the review pass, or into the
+ * build tab with `&view=build`. `&autoSteer=1` turns the Auto-steer setting on. `&steer=refused` makes the
+ * backend refuse every steer, leaving the message queued.
  *
  * Every backend command lands in `window.__pipelineCommands`, and every tab the
  * graph asks to open in `window.__openedTabs`.
@@ -537,6 +542,55 @@ function installBackend(pipeline: BuildPipeline) {
           } as T;
         case "restart_build_pipeline_step":
           return next({});
+        case "send_build_pipeline_message":
+          return next({
+            pendingUserMessages: [
+              ...(current.pendingUserMessages ?? []),
+              {
+                id: `queued-${current.backendRevision}`,
+                text: String(args?.text),
+                createdAt: at(1800),
+              },
+            ],
+          });
+        case "steer_queued_build_pipeline_message": {
+          if (new URLSearchParams(window.location.search).get("steer") === "refused") {
+            return {
+              pipeline: next({}),
+              delivery: "queued",
+              notice: "This turn cannot accept more steering.",
+            } as T;
+          }
+          const uncertain = new URLSearchParams(window.location.search).get("steer") === "unknown";
+          const message = current.pendingUserMessages?.find(
+            (entry) => entry.id === args?.messageId,
+          );
+          return {
+            pipeline: next({
+              ...(uncertain && message
+                ? {
+                    pendingUserSteers: [
+                      ...(current.pendingUserSteers ?? []),
+                      { ...message, requestId: "fixture-steer" },
+                    ],
+                  }
+                : {}),
+              pendingUserMessages: current.pendingUserMessages?.filter(
+                (message) => message.id !== args?.messageId,
+              ),
+            }),
+            delivery: uncertain ? "unconfirmed" : "steered",
+          } as T;
+        }
+        case "remove_queued_build_pipeline_message":
+          return {
+            pipeline: next({
+              pendingUserMessages: current.pendingUserMessages?.filter(
+                (message) => message.id !== args?.messageId,
+              ),
+            }),
+            removed: true,
+          } as T;
         case "preview_build_pipeline_code_rewind":
           return {
             pipelineId: current.id,
@@ -682,6 +736,12 @@ function seed(): BuildPipeline {
     } as unknown as Window["orkestratorPortal"];
   }
   installBackend(pipeline);
+  if (params.has("autoSteer")) {
+    const { config } = useConfigStore.getState();
+    useConfigStore.setState({
+      config: { ...config, global: { ...config.global, autoSteer: true } },
+    });
+  }
   useKanbanStore.setState({
     tasks:
       params.get("scenario") === "images"
@@ -833,11 +893,12 @@ function BuildPaneControls({ pipeline }: { pipeline: BuildPipeline }) {
 
 export function PipelineFlowFixture() {
   const [pipeline] = useState(seed);
-  const [review, setReview] = useState<CreateTabOptions | null>(() =>
-    new URLSearchParams(window.location.search).has("restore")
+  const [review, setReview] = useState<CreateTabOptions | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("restore") && params.get("view") !== "build"
       ? { multiReviewId: pipeline.id, multiReviewPipelinePass: "review-pass-1" }
-      : null,
-  );
+      : null;
+  });
   const [visible, setVisible] = useState(true);
   return (
     <TerminalProvider>

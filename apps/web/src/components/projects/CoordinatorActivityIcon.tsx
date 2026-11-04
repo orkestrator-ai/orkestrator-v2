@@ -3,6 +3,9 @@ import type { CoordinatorActivityState } from "@orkestrator/protocol/coordinator
 import { useTimelineSyncedAnimations } from "@/hooks/useTimelineSyncedAnimations";
 import { cn } from "@/lib/utils";
 
+const RING_BASE_CLASSES =
+  "pointer-events-none absolute inset-0 transition-colors forced-colors:animate-none forced-colors:border-2 forced-colors:border-[CanvasText] forced-colors:bg-transparent";
+
 // The same ring and halo an environment row's marker draws around its dot.
 const RING_CLASSES: Record<CoordinatorActivityState | "idle", string> = {
   idle: "hidden",
@@ -40,12 +43,43 @@ export function CoordinatorActivityIcon({
         ref={ringRef}
         data-testid="coordinator-activity-ring"
         aria-hidden="true"
-        className={cn(
-          "pointer-events-none absolute inset-0 rounded-[5px] transition-colors forced-colors:animate-none forced-colors:border-2 forced-colors:border-[CanvasText] forced-colors:bg-transparent",
-          RING_CLASSES[shown],
-        )}
+        className={cn(RING_BASE_CLASSES, "rounded-[5px]", RING_CLASSES[shown])}
       />
       <span className="relative z-10 inline-flex">{children}</span>
+    </span>
+  );
+}
+
+/**
+ * The working spinner around a whole tab rather than an icon, for a positioned
+ * parent whose corners it inherits. It stays inside the parent's edges, so a
+ * scrolling container or a neighbour cannot clip it and it changes no layout.
+ * It takes its colour from the tab's text, which already contrasts with the
+ * tab's fill, and sits 1px in so that fill shows on both sides of it: at the very
+ * edge, white on a blue tab would melt into a pale bar. The parent's 2px inset
+ * focus ring would sit underneath it, so a focused parent moves it inside that
+ * ring and leaves a 1px gap, or the two would read as one thick band.
+ */
+export function CoordinatorWorkingOutline() {
+  const ringRef = useRef<HTMLSpanElement>(null);
+  useTimelineSyncedAnimations(ringRef, "working");
+  return (
+    <span
+      data-testid="coordinator-working-outline"
+      data-shape="square"
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-px rounded-[inherit] [:focus-visible>&]:inset-[3px]"
+    >
+      <span
+        ref={ringRef}
+        data-testid="coordinator-working-outline-ring"
+        className={cn(
+          RING_BASE_CLASSES,
+          "rounded-[inherit]",
+          RING_CLASSES.working,
+          "environment-working-spinner-text-colored",
+        )}
+      />
     </span>
   );
 }

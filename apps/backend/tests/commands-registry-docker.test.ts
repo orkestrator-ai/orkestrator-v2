@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
+import { CONTAINER_GIT_CREDENTIAL_HELPER } from "../src/core/commands-files";
+import { syncRuntimeGitHubCredential } from "../src/core/container-github-credential";
+import type { readImageManifest } from "../src/core/docker-image";
 import type { AppConfig } from "../src/core/models";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -52,7 +57,12 @@ exit 1
       async () =>
         ({
           version: "1.0.0",
-          global: { useHostGitHubCredentials: false, githubToken: "", ...globalConfig },
+          global: {
+            useHostGitHubCredentials: false,
+            containerGitHubCredential: "pat",
+            githubToken: "",
+            ...globalConfig,
+          },
           repositories: {},
         }) as AppConfig,
     );
@@ -71,6 +81,7 @@ exit 1
     const { context } = createContext(environment, {
       globalConfig: {
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
         githubToken: "configured-pat",
       },
     });
@@ -356,6 +367,61 @@ exit 0
     );
   });
 
+  test.each([
+    ["an image with the helper", { "github-git-credential": 1 }, true],
+    ["an older image", {}, false],
+    ["an unreadable image", null, false],
+  ] as const)(
+    "delivers the GitHub credential the way %s supports",
+    async (_label, caps, helper) => {
+      const environment = createEnvironment({
+        id: "env-container",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+        containerLifecycle: {
+          ...emptyContainerLifecycle(),
+          runtime: {
+            containerId: "container-1",
+            runtimeGeneration: 1,
+            owner: "test-owner",
+            imageId: "sha256:image",
+          },
+        },
+      });
+      const { context } = createContext(environment);
+      const readManifest = mock(async () =>
+        caps === null
+          ? { kind: "unavailable" as const }
+          : { kind: "manifest" as const, manifest: { capabilities: caps } as ImageManifest },
+      ) as unknown as typeof readImageManifest;
+
+      await withFakeDocker(
+        `#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  cat > "$FAKE_DOCKER_EXEC_LOG.stdin"
+fi
+exit 0
+`,
+        async (logs) => {
+          await syncRuntimeGitHubCredential(
+            environment,
+            "container-1",
+            "token-value",
+            context,
+            readManifest,
+          );
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog.includes(CONTAINER_GIT_CREDENTIAL_HELPER)).toBe(helper);
+          expect(execLog.includes("token_url=")).toBe(!helper);
+          expect(execLog).not.toContain("token-value");
+          expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("token-value");
+        },
+      );
+    },
+  );
+
   test("persists the selected GitHub credential through stdin and container git config", async () => {
     const environment = createEnvironment({
       id: "env-container",
@@ -366,6 +432,7 @@ exit 0
     const { context } = createContext(environment, {
       globalConfig: {
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
         githubToken: "token-value",
       },
     });
@@ -461,6 +528,7 @@ exit 0
         version: "1.0.0",
         global: {
           useHostGitHubCredentials: false,
+          containerGitHubCredential: "pat",
           githubToken: "rotated-token",
         },
         repositories: {},
@@ -661,6 +729,7 @@ exit 1
     const { context } = createContext(createEnvironment(), {
       globalConfig: {
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
         githubToken: "secret-token",
       },
     });
@@ -696,6 +765,7 @@ exit 1
     const { context } = createContext(environment, {
       globalConfig: {
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
         githubToken: "secret-token-123",
       },
     });

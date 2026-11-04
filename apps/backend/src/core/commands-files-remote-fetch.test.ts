@@ -263,3 +263,19 @@ describe("remote fetch failure outcomes", () => {
     });
   });
 });
+
+test("preserves an exit-zero fetch output-close failure", async () => {
+  const failure = new CommandFailedError("output transport lost", {
+    timedOut: true,
+    outputCloseTimedOut: true,
+    exitCode: 0,
+  });
+  const run = spyOn(shell, "runCommand").mockRejectedValue(failure);
+  try {
+    await expect(resolveRemoteWorktreeStartPoint("/unused", "main")).rejects.toBe(failure);
+    expect(failure.exitCode).toBe(0);
+    expect(failure).not.toBeInstanceOf(GitRemoteTimeoutError);
+  } finally {
+    run.mockRestore();
+  }
+});

@@ -48,7 +48,7 @@ describe("toolchain bootstrap window", () => {
     expect(windowOptions?.webPreferences).toMatchObject({
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     });
     if (process.platform === "linux") {
       expect(windowOptions).toMatchObject({ width: 650, height: 600, resizable: true });
@@ -221,7 +221,7 @@ describe("toolchain bootstrap window", () => {
         preload: "/app/electron/toolchain-bootstrap-preload.js",
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
     expect(window.options).not.toHaveProperty("minWidth");

@@ -603,6 +603,7 @@ function restoreSession(entry: unknown, fileBytes: number): SessionState | undef
   );
   state.id = entry.id;
   if (isNativeAgentExecutionPolicy(entry.policy)) state.policy = entry.policy;
+  state.policyPending = true;
   if (typeof entry.readOnly === "boolean") state.readOnly = entry.readOnly;
   if (nonBlank(entry.agentId)) state.agentId = entry.agentId;
   if (entry.configResumePending === true) state.configResumePending = true;

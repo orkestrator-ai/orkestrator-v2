@@ -116,7 +116,10 @@ import {
   forkSession,
   hydrateSessionComposer,
   isSessionClosed,
+  SessionBusyError,
   SessionClosingError,
+  liveExecutionPolicy,
+  resolvePiExecutionPolicy,
   defaultModelIds,
   listResumableSessions,
   markSessionClosed,
@@ -150,7 +153,11 @@ import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  assertExecutionPolicyNotWidened,
+  PolicyWideningRefusedError,
+} from "@orkestrator/protocol/execution-policy-narrowing";
 
 const log = createLogger("bridge.pi");
 
@@ -273,6 +280,11 @@ export async function route(
     return await routeSession(request, response, url, clientSignal);
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
+    if (error instanceof PolicyWideningRefusedError) {
+      log.warn("session.policy-widening-refused", { widened: error.widened.join(",") });
+      return json(response, 403, error.refusal());
+    }
+    if (error instanceof SessionBusyError) return json(response, 409, { error: error.message });
     // `kind` separates a missing provider login from a bad bridge token, which
     // is also a 401; the backend shows the former's message as written.
     if (error instanceof CredentialError) {
@@ -449,7 +461,13 @@ async function routeGlobal(
       parseComposerPatch(body),
       isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined,
     ).catch((error) => {
-      if (error instanceof SessionClosingError) throw error;
+      if (
+        error instanceof SessionClosingError ||
+        error instanceof SessionBusyError ||
+        error instanceof PolicyWideningRefusedError
+      ) {
+        throw error;
+      }
       throw new HttpError(400, errorText(error));
     });
     storeAgentMcp(state, body.agentMcp);
@@ -1261,6 +1279,14 @@ async function handleAdmittedPrompt(
   admission: PromptAdmission,
 ): Promise<void> {
   const body = await readJson(request);
+  // A prompt never changes a session's policy. One naming a wider policy is
+  // refused rather than run under less than its caller asked for (H4).
+  if (isNativeAgentExecutionPolicy(body.policy)) {
+    assertExecutionPolicyNotWidened(
+      liveExecutionPolicy(state),
+      resolvePiExecutionPolicy(body.policy),
+    );
+  }
   const commandFields = readBridgePromptCommandFields(body);
   if (!commandFields.ok) throw new HttpError(400, commandFields.error);
   const { allowProviderCommands, command } = commandFields;
@@ -1312,6 +1338,8 @@ async function handleAdmittedPrompt(
     }
     return json(response, 202, { accepted: true, duplicate: true });
   }
+  // This turn runs under the policy held now, which makes it live.
+  state.policyPending = false;
 
   // A selected command is checked against this session's own registry before
   // anything is journaled. A mismatch is refused (422), never sent on as text.
@@ -1607,6 +1635,12 @@ async function handleAdmittedPrompt(
         outcome: "startup-timeout",
         error: error.message,
         ...(requestId ? { requestId } : {}),
+      });
+    }
+    if (error instanceof PromptRefusedError && !cancelRequestedFor(state, claim)) {
+      log.warn("turn.refused", {
+        sessionId: state.id,
+        error: formatLogError(error, { message: false }),
       });
     }
     // Pi refused the prompt before the run started, so nothing ran. Roll the

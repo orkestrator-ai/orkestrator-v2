@@ -19,7 +19,12 @@ import {
 import { closeElectronWithin } from "./design-electron-cleanup";
 import { recordElectronDiagnostics } from "./electron-diagnostics";
 import { expect, test } from "./electron-fixtures";
-import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
+import {
+  ELECTRON_TEST_SWITCHES,
+  HEADLESS_ELECTRON_SWITCHES,
+  headlessElectronRequested,
+  withoutDisplay,
+} from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 export const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -83,17 +88,22 @@ export async function launchElectron(current: {
   profilePath: string;
   rendererUrl: string;
 }): Promise<{ app: ElectronApplication; window: Page; windowId: number }> {
+  const headless = headlessElectronRequested();
   const app = await electron.launch({
     executablePath: electronExecutable,
     // The shared switches include turning off background throttling (flake 0620).
-    args: [...ELECTRON_TEST_SWITCHES, path.join(packageRoot, "dist", "electron", "main.js")],
+    args: [
+      ...ELECTRON_TEST_SWITCHES,
+      ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+      path.join(packageRoot, "dist", "electron", "main.js"),
+    ],
     cwd: repositoryRoot,
     env: {
-      ...process.env,
+      ...(headless ? withoutDisplay(process.env) : process.env),
       ELECTRON_DEV: "1",
       VITE_DEV_SERVER_URL: current.rendererUrl,
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
-      // The rollout gate under test: the desktop tunnel, off by default.
+      // Pinned so a saved setting on the profile cannot turn the tunnel off.
       ORKESTRATOR_PREVIEW_TRANSPORT: "1",
       // Never contend for the fixed control-MCP port an installed app may own.
       ORKESTRATOR_CONTROL_MCP_PORT: "0",

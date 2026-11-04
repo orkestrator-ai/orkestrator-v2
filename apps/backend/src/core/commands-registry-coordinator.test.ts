@@ -19,7 +19,8 @@ import {
 import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { seedStore } from "./storage-test-support.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
+import { seedStore, readStoredValue } from "./storage-test-support.js";
 import { multiReviewInputWithDefaults } from "./coordinator-launch-defaults.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { __testing as __seedTesting } from "./host-model-catalog-seed.js";
@@ -1224,5 +1225,88 @@ describe("coordinator command registry", () => {
     expect(stopProjection).not.toHaveBeenCalled();
     expect(stopCodex).not.toHaveBeenCalled();
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
+  });
+
+  test("hide_coordinator_work marks this project's records only, and keeps them", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const other = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const elsewhere = await coordinator.ensure(other.id);
+    const follow = (projectId: string, coordinatorId: string, requestId: string) =>
+      storage.coordinators.followCoordinatorPullRequest({
+        projectId,
+        coordinatorId,
+        environmentId: "gone-env",
+        requestId,
+        source: "create-pr",
+        prUrl: "https://github.com/o/r/pull/1",
+      });
+    const mine = await follow(project.id, snapshot.workspace.id, "mine");
+    const theirs = await follow(other.id, elsewhere.workspace.id, "theirs");
+    const announced: string[] = [];
+    storage.addResourceChangeListener((change) => {
+      if (change.resource === "coordinator") announced.push(change.id);
+    });
+
+    const next = (await commands.get("hide_coordinator_work")!(
+      { projectId: project.id, associationIds: [mine.id, theirs.id] },
+      context,
+    )) as Awaited<ReturnType<CoordinatorService["get"]>>;
+
+    expect(next?.workflows.find((item) => item.id === mine.id)?.workHiddenAt).toEqual(
+      expect.any(String),
+    );
+    expect(announced).toContain(project.id);
+    expect(announced).not.toContain(other.id);
+    const [untouched] = await storage.coordinators.listCoordinatorWorkflowAssociations(other.id);
+    expect(untouched?.id).toBe(theirs.id);
+    expect(untouched?.workHiddenAt).toBeUndefined();
+
+    const stored = () => readStoredValue(root + "/data", "coordinators.json");
+    const before = stored();
+    const announcedBefore = announced.length;
+    for (const associationIds of [
+      [],
+      [mine.id],
+      Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS).fill(mine.id),
+    ]) {
+      await commands.get("hide_coordinator_work")!(
+        { projectId: project.id, associationIds },
+        context,
+      );
+      expect(stored()).toEqual(before);
+      expect(announced).toHaveLength(announcedBefore);
+    }
+    await expect(
+      commands.get("hide_coordinator_work")!(
+        {
+          projectId: project.id,
+          associationIds: Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1).fill(mine.id),
+        },
+        context,
+      ),
+    ).rejects.toThrow("bounded list");
+
+    announced.length = 0;
+    await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
+    expect(announced).toEqual([project.id]);
+    await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
+    expect(announced).toEqual([project.id]);
+    await storage.coordinators.updateCoordinatorWorkflowAssociation(mine.id, (current) => {
+      current.pullRequest!.final = {
+        prUrl: current.pullRequest!.prUrl!,
+        prState: "merged",
+        at: new Date().toISOString(),
+      };
+      return true;
+    });
+    expect(announced).toEqual([project.id, project.id]);
+
+    await expect(
+      commands.get("hide_coordinator_work")!(
+        { projectId: project.id, associationIds: "everything" },
+        context,
+      ),
+    ).rejects.toThrow("associationIds");
   });
 });

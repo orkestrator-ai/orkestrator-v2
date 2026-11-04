@@ -117,7 +117,13 @@ export function CoordinatorActivityFixture() {
             </div>
           </aside>
           <main className="flex min-w-0 flex-1 flex-col">
-            <ActionBar presentation="bar" />
+            <ActionBar
+              presentation={
+                new URLSearchParams(window.location.search).get("presentation") === "grid"
+                  ? "grid"
+                  : "bar"
+              }
+            />
             <div className="flex gap-2 p-4">
               <button onClick={() => setFirst(null)}>Coordinator idle</button>
               <button onClick={() => setFirst("working")}>Coordinator working</button>

@@ -15,6 +15,7 @@ import type {
 import type {
   BuildPipeline as BackendBuildPipeline,
   BuildPipelineCodeRewindPreview,
+  PipelineQueuedSteerDelivery,
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
@@ -959,6 +960,37 @@ export async function steerBuildPipeline(
   return invoke<{ pipeline: BackendBuildPipeline; delivery: "steered" | "queued" }>(
     "steer_build_pipeline",
     { pipelineId, text },
+  );
+}
+
+/**
+ * Moves one queued message into the turn the pipeline agent is running now.
+ * `notice` is the agent's reason when it refused, or the warning when delivery
+ * could not be confirmed.
+ */
+export async function steerQueuedBuildPipelineMessage(
+  pipelineId: string,
+  messageId: string,
+): Promise<{
+  pipeline: BackendBuildPipeline;
+  delivery: PipelineQueuedSteerDelivery;
+  notice?: string;
+}> {
+  return invoke<{
+    pipeline: BackendBuildPipeline;
+    delivery: PipelineQueuedSteerDelivery;
+    notice?: string;
+  }>("steer_queued_build_pipeline_message", { pipelineId, messageId });
+}
+
+/** `removed` is false when the message had already left the queue as the next turn. */
+export async function removeQueuedBuildPipelineMessage(
+  pipelineId: string,
+  messageId: string,
+): Promise<{ pipeline: BackendBuildPipeline; removed: boolean }> {
+  return invoke<{ pipeline: BackendBuildPipeline; removed: boolean }>(
+    "remove_queued_build_pipeline_message",
+    { pipelineId, messageId },
   );
 }
 

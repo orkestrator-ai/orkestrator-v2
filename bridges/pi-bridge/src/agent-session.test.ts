@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DefaultResourceLoader,
+  SessionManager,
   SettingsManager,
   type AgentSession,
   type LoadExtensionsResult,
@@ -804,6 +806,107 @@ describe("Pi SDK lifecycle", () => {
     const fresh = sessionManagerFor(fallbackState);
     expect(fallbackState.sessionFile).toBeUndefined();
     expect(fresh.getSessionId()).not.toBe("persisted-session");
+  });
+
+  test("a failed reopen warns without its message, and still starts a fresh session", async () => {
+    const sentinel = join(sessionDirectory, "SENTINEL-SESSION-FILE.jsonl");
+    await writeFile(sentinel, `${JSON.stringify({ type: "not-a-session" })}\n`, "utf8");
+    const state = newSessionState();
+    state.sessionFile = sentinel;
+    const logs = captureLogs();
+    const open = spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error(`cannot open ${sentinel}`);
+    });
+    try {
+      const fresh = sessionManagerFor(state);
+      expect(state.sessionFile).toBeUndefined();
+      expect(fresh.getSessionId()).toBeTruthy();
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.pi",
+          event: "session.resume-fell-back",
+          fields: { sessionId: state.id, error: { name: "Error" } },
+        },
+      ]);
+      expect(JSON.stringify(records)).not.toContain("SENTINEL-SESSION-FILE");
+      expect(JSON.stringify(records)).not.toContain("cannot open");
+    } finally {
+      open.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test.each(["missing", "empty"])("an unused session with a %s file stays quiet", async (kind) => {
+    const sessionFile = join(sessionDirectory, `unused-${kind}.jsonl`);
+    if (kind === "empty") await writeFile(sessionFile, "");
+    const state = newSessionState();
+    state.sessionFile = sessionFile;
+    const logs = captureLogs();
+    try {
+      expect(sessionManagerFor(state).getSessionFile()).toBe(sessionFile);
+      expect(logs.records()).toEqual([]);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test.each(["missing", "empty"])("a %s resume file warns with the real SDK", async (kind) => {
+    const sessionFile = join(sessionDirectory, `SENTINEL-${kind}.jsonl`);
+    if (kind === "empty") await writeFile(sessionFile, "");
+    const state = newSessionState();
+    state.sessionFile = sessionFile;
+    state.messages.push({
+      id: "prior-message",
+      role: "user",
+      content: "prior conversation",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    });
+    const logs = captureLogs();
+    try {
+      const fresh = sessionManagerFor(state);
+      expect(fresh.getSessionId()).toBeTruthy();
+      expect(fresh.getSessionFile()).toBe(sessionFile);
+      expect(state.sessionFile).toBe(sessionFile);
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.pi",
+          event: "session.resume-fell-back",
+          fields: { sessionId: state.id },
+        },
+      ]);
+      expect(JSON.stringify(logs.records())).not.toContain(sessionDirectory);
+      expect(JSON.stringify(logs.records())).not.toContain("SENTINEL");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a session that reopens writes nothing", async () => {
+    const validFile = join(sessionDirectory, "reopens.jsonl");
+    await writeFile(
+      validFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "reopens",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: workingDirectory,
+      })}\n`,
+      "utf8",
+    );
+    const state = newSessionState();
+    state.sessionFile = validFile;
+    const logs = captureLogs();
+    try {
+      expect(sessionManagerFor(state).getSessionId()).toBe("reopens");
+      expect(logs.records()).toEqual([]);
+    } finally {
+      logs.restore();
+    }
   });
 
   test("forks at the newest user entry and preserves the composer selection", async () => {

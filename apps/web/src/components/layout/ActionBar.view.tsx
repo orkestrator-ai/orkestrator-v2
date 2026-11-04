@@ -68,7 +68,10 @@ import {
 } from "@/components/icons/AgentIcons";
 import type { ProjectBoardTab } from "@/stores";
 import { useCoordinatorActivity } from "@/stores/coordinatorActivityStore";
-import { CoordinatorActivityIcon } from "@/components/projects/CoordinatorActivityIcon";
+import {
+  CoordinatorActivityIcon,
+  CoordinatorWorkingOutline,
+} from "@/components/projects/CoordinatorActivityIcon";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
 import {
@@ -77,6 +80,7 @@ import {
   StackedEyes,
 } from "@/components/review/MultiReviewLaunchDialog";
 import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
+import { LocalEnvironmentDeleteDialog } from "@/components/environments/LocalEnvironmentDeleteDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
@@ -294,6 +298,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isPRClosed,
     isPRFinished,
     isSelectedEnvironmentDeleting,
+    isSelectedEnvironmentDeleteInFlight,
+    deleteTarget,
+    setDeleteTargetId,
+    handleConfirmDelete,
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
@@ -547,6 +555,31 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   );
 
   /*
+   * Placed like the Create PR control above. The same as a row's Delete, so it
+   * opens that confirmation. A finished PR already offers Clean Up, whose dialog
+   * describes that state; the project home's page would read it as deleting the
+   * project.
+   */
+  const deleteEnvironmentControl =
+    selectedEnvironment && !selectedEnvironment.projectHome && !isPRFinished ? (
+      <ToolbarTooltipTrigger
+        tooltip={isMerging ? "Merge in progress..." : "Delete this environment"}
+      >
+        <Button
+          variant={isGrid ? "ghost" : "destructive"}
+          size="icon-sm"
+          className={cn(isGrid && "text-destructive hover:text-destructive")}
+          onClick={() => setDeleteTargetId(selectedEnvironment.id)}
+          disabled={isMerging || isSelectedEnvironmentDeleteInFlight}
+          aria-label="Delete environment"
+        >
+          <Trash2 className="h-4 w-4" />
+          {isGrid && <span className="truncate text-xs">Delete environment</span>}
+        </Button>
+      </ToolbarTooltipTrigger>
+    ) : null;
+
+  /*
    * The project page's tabs. The desktop toolbar gives them a row of their own
    * beneath the environment controls, which act on the project home; the grid
    * (mobile) toolbar keeps them in sequence with its other controls.
@@ -585,11 +618,19 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             {
               value: "coordinator",
               label: "Coordinator",
+              // Working circles the whole tab; waiting stays a halo on the icon.
               icon: (
-                <CoordinatorActivityIcon state={coordinatorActivity}>
+                <CoordinatorActivityIcon
+                  state={coordinatorActivity === "waiting" ? "waiting" : null}
+                >
                   <MessagesSquare className="size-3.5" />
                 </CoordinatorActivityIcon>
               ),
+              overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
+              // The default ring is the selected fill's blue, and forced colours
+              // drop box-shadows, so either would leave this tab's focus unseen.
+              className:
+                "focus-visible:ring-current forced-colors:focus-visible:outline-2 forced-colors:focus-visible:-outline-offset-2 forced-colors:focus-visible:outline-solid forced-colors:focus-visible:outline-[Highlight]",
               panelId: "project-panel-coordinator",
             },
             {
@@ -632,6 +673,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             value: ProjectBoardTab;
             label: string;
             icon: ReactNode;
+            overlay?: ReactNode;
+            className?: string;
             panelId: string;
           }>
         }
@@ -1441,12 +1484,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   )}
                 </>
               )}
+
+              {isGrid && deleteEnvironmentControl}
             </div>
 
             {/* Spacer to push right side content to the end */}
             <div className={cn("min-w-4 flex-1", isGrid && "hidden")} />
 
-            {/* Right side: Create PR and the Files toggle (the grid adds the project tabs) */}
+            {/* Right side: Create PR, Delete and the Files toggle (the grid adds the project tabs) */}
             <div
               className={cn(
                 isGrid ? "col-span-2 grid grid-cols-2 gap-2" : "flex shrink-0 items-center gap-2",
@@ -1461,6 +1506,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               ) : null}
 
               {!isGrid && selectedEnvironment && !hasPR && createPrControl}
+              {!isGrid && deleteEnvironmentControl}
 
               {(isGrid || canToggleFilesPanel) && (
                 <ToolbarTooltipTrigger
@@ -1660,6 +1706,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {deleteTarget && (
+        <LocalEnvironmentDeleteDialog
+          environment={deleteTarget}
+          onCancel={() => setDeleteTargetId(null)}
+          onConfirm={() => void handleConfirmDelete()}
+        />
+      )}
 
       {/* Cleanup Environment Confirmation Dialog */}
       <AlertDialog

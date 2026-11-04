@@ -141,9 +141,64 @@ test("a different selected backend never changes this window's web server", asyn
 });
 
 for (const machine of ["leaf", "other", null]) {
-  test(`Auto-steer visibility for ${machine ?? "command node"}`, async () => {
+  test(`Auto-steer can be changed with ${machine ?? "command node"} selected`, async () => {
+    const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
+      async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),
+    );
     mount("general", machine);
-    await screen.findByLabelText("Default projects folder");
-    expect(Boolean(screen.queryByRole("switch", { name: "Auto-steer" }))).toBe(machine === "leaf");
+    fireEvent.click(await screen.findByRole("switch", { name: "Auto-steer" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({ autoSteer: true }, { unset: [], machine }),
+    );
   });
 }
+
+for (const inherited of [false, true]) {
+  test(`a direct leaf window adopts inherited Auto-steer ${inherited} after one masked save`, async () => {
+    delete window.orkestratorWorkspaceTarget;
+    useConfigStore.setState({
+      config: { ...initial, global: { ...initial.global, autoSteer: inherited } },
+    });
+    const save = spyOn(backend, "patchGlobalConfig").mockResolvedValue({
+      ...initial,
+      global: { ...initial.global, autoSteer: inherited },
+    });
+    render(<GlobalSettings activeSection="general" />);
+    const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe(String(!inherited));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe(String(inherited)));
+    // Wait past a second debounce, and unmount to cover the close-time flush.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    cleanup();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(inherited ? {} : { autoSteer: true }, {
+      unset: inherited ? ["autoSteer"] : [],
+      machine: undefined,
+    });
+  });
+}
+
+test("an Auto-steer edit made during a save survives the earlier response", async () => {
+  delete window.orkestratorWorkspaceTarget;
+  useConfigStore.setState({
+    config: { ...initial, global: { ...initial.global, autoSteer: false } },
+  });
+  let finishSave!: (config: typeof initial) => void;
+  const pending = new Promise<typeof initial>((resolve) => {
+    finishSave = resolve;
+  });
+  const save = spyOn(backend, "patchGlobalConfig")
+    .mockImplementationOnce(() => pending)
+    .mockResolvedValue({ ...initial, global: { ...initial.global, autoSteer: false } });
+  render(<GlobalSettings activeSection="general" />);
+  const toggle = await screen.findByRole("switch", { name: "Auto-steer" });
+  fireEvent.click(toggle);
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  fireEvent.click(toggle);
+  finishSave({ ...initial, global: { ...initial.global, autoSteer: true } });
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  expect(save).toHaveBeenLastCalledWith({}, { unset: ["autoSteer"], machine: undefined });
+});

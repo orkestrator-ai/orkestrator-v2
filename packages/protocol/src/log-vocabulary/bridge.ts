@@ -43,7 +43,13 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "evidence.record-failed": "Change evidence could not be recorded; the read loop carries on.",
       "evidence.shell-record-failed": "A shell observation could not be recorded.",
       "evidence.turn-record-failed": "Turn change evidence could not be recorded.",
+      "agent.exited":
+        "An ACP agent process exited, with its `code` and `signal`, always at `warn`. `requested` is true when the bridge closed it normally, false for an unrequested or fault-driven exit.",
+      "http.route-failed":
+        "An HTTP route answered 500; its error message is not logged because it can hold content.",
       "server.listening": "The HTTP server is listening.",
+      "session.policy-widening-refused":
+        "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "state.composer-reset": "A saved composer state was malformed and was reset.",
       "state.discarded": "Saved bridge state could not be used and was discarded.",
       "state.persist-failed": "Saving bridge state failed; a later write retries.",
@@ -106,7 +112,7 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "session.delete-failed": "Deleting a session failed.",
       "session.fork-failed": "Forking a session failed.",
       "session.policy-widening-refused":
-        "A config request tried to widen a live session's execution policy and was refused; widened names the axes.",
+        "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "session.rename-failed": "Renaming a session failed.",
       "session.resolve-failed":
         "A session could not be found or loaded for a request; action names the request.",
@@ -206,6 +212,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "server-request.handoff-failed": "Handing a server request to the router threw.",
       "session.config-apply-failed":
         "Applying session configuration failed; the route answers unavailable.",
+      "session.policy-widening-refused":
+        "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "sse.closed": "An event stream was closed by the bridge; the client reconnects and replays.",
       "sse.keepalive-failed": "An event stream keepalive failed.",
       "sse.observer-failed": "An event stream observer failed; it reconnects.",
@@ -240,6 +248,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "agent.archive-failed": "Archiving or unarchiving an agent failed.",
       "http.route-failed":
         "An HTTP route failed unexpectedly; its error is not logged because it can hold content.",
+      "session.policy-widening-refused":
+        "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "startup.closes-failed": "Finishing closes a previous process left behind failed at startup.",
       "startup.closes-incomplete":
         "Some closes a previous process left behind did not finish at startup; a retried close finishes them.",
@@ -248,6 +258,16 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "state.publication-recovered": "Saving bridge state recovered.",
       "state.transcripts-shortened":
         "The state file reached its limit, so some sessions were saved with a shortened transcript copy.",
+      "session.resume-fell-back":
+        "A saved conversation could not be resumed, so a new one started; its error message is not logged because it can hold content.",
+      "turn.failed":
+        "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
+      "turn.recovery-failed":
+        "A run recovered after a bridge restart ended in failure, or could not be followed. A cancelled run is not a failure.",
+      "turn.send-failed":
+        "Sending a prompt to Cursor failed, so whether its run started is unknown; its error message is not logged because it can hold content.",
+      "turn.timed-out":
+        "A turn outlived its time budget, so its run was asked to cancel; `turn.failed` follows if it never stops.",
     },
   },
   "bridge.pi": {
@@ -255,10 +275,20 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
     events: {
       "http.route-failed":
         "An HTTP route failed unexpectedly; its error is not logged because it can hold content.",
+      "session.policy-widening-refused":
+        "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
       "state.over-budget":
         "The state file stayed over budget after shedding transcripts, so the write was skipped.",
       "state.transcripts-shed":
         "The state file was over budget, so some sessions were saved without their transcript.",
+      "session.resume-fell-back":
+        "A saved conversation could not be reopened, so a new one started; its error message is not logged because it can hold content.",
+      "turn.failed":
+        "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
+      "turn.refused":
+        "Pi refused a prompt before starting a run, so nothing ran; its error message is not logged because it can hold content.",
+      "turn.startup-timed-out":
+        "Pi did not start a turn within its startup deadline, so the prompt was abandoned.",
     },
   },
 });

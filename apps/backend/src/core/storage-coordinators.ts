@@ -833,13 +833,47 @@ export class CoordinatorsRepository {
       const association = store.workflows.find((item) => item.id === associationId);
       if (!association) return null;
       const waitingBefore = association.delegation?.waiting?.since;
+      const finalBefore = association.pullRequest?.final;
       if (!mutate(association)) return association;
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      if (association.delegation?.waiting?.since !== waitingBefore) {
+      if (
+        association.delegation?.waiting?.since !== waitingBefore ||
+        association.pullRequest?.final !== finalBefore
+      ) {
         this.context.changes.announce("coordinator", association.projectId, association.projectId);
       }
       return association;
+    });
+  }
+
+  /**
+   * Hide finished rows from the Work panel. The records stay: retention,
+   * replay and mail routing still read them. Returns how many changed.
+   */
+  async hideCoordinatorWork(
+    projectId: string,
+    associationIds: ReadonlySet<string>,
+  ): Promise<number> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const at = new Date().toISOString();
+      let hidden = 0;
+      for (const association of store.workflows) {
+        if (
+          association.projectId !== projectId ||
+          association.workHiddenAt ||
+          !associationIds.has(association.id)
+        )
+          continue;
+        association.workHiddenAt = at;
+        hidden += 1;
+      }
+      if (hidden === 0) return 0;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", projectId, projectId);
+      return hidden;
     });
   }
 
@@ -1017,6 +1051,8 @@ export class CoordinatorsRepository {
       association.terminalNotifiedAt = new Date().toISOString();
       store.revision += 1;
       await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      // The Work panel moves a followed pull request's row to Finished on this.
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
     });
   }
 
@@ -1193,6 +1229,7 @@ export type CoordinatorsStorage = Pick<
   | "markCoordinatorDelegationWoken"
   | "updateCoordinatorWorkflowAssociation"
   | "updateCoordinatorWorkflowAssociations"
+  | "hideCoordinatorWork"
   | "followCoordinatorPullRequest"
   | "markCoordinatorWorkflowNotified"
   | "adoptCoordinatorWorkflowAssociation"

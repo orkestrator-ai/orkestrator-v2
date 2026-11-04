@@ -1,5 +1,6 @@
 import { publicInteractionKinds } from "./public.js";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
@@ -2536,10 +2537,16 @@ describe("steering", () => {
     expect(await steer.json()).toEqual({ outcome: "idle" });
     expect(steerCalls).toBe(0);
 
+    const logs = captureLogs();
     rejectFirstRun(new Error("preflight rejected"));
     const refused = await firstPrompt;
+    logs.restore();
     expect(refused.status).toBe(422);
     expect(await refused.json()).toEqual({ error: "preflight rejected", kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toMatchObject([
+      { level: "warn", area: "bridge.pi", fields: { sessionId: state.id } },
+    ]);
+    expect(JSON.stringify(logs.records())).not.toContain("preflight rejected");
     expect(state.pendingSteerDeliveries).toEqual([]);
     expect(state.steerJournal.size).toBe(0);
 
@@ -2550,6 +2557,36 @@ describe("steering", () => {
     expect(secondPrompt.status).toBe(202);
     expect(steerCalls).toBe(0);
   });
+});
+
+test("a preflight refusal after cancellation does not warn", async () => {
+  const state = seedSession();
+  let rejectRun!: (error: Error) => void;
+  const run = new Promise<void>((_resolve, reject) => {
+    rejectRun = reject;
+  });
+  state.session = fakeAgentSession({ prompt: () => run, abort: async () => undefined });
+  const logs = captureLogs();
+  const prompt = call(`/session/${state.id}/prompt`, {
+    method: "POST",
+    body: JSON.stringify({ prompt: "cancel in preflight", requestId: "cancel-refused" }),
+  });
+  try {
+    await waitFor(() => state.dispatching && state.status === "running");
+    const cancel = await call(`/session/${state.id}/cancel`, { method: "POST" });
+    expect(cancel.status).toBe(202);
+    expect(await cancel.json()).toMatchObject({ cancelled: false, pending: true });
+    rejectRun(new Error("SENTINEL-PREFLIGHT-REFUSAL"));
+    const response = await prompt;
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toEqual([]);
+    expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-PREFLIGHT-REFUSAL");
+  } finally {
+    rejectRun(new Error("test cleanup"));
+    await prompt;
+    logs.restore();
+  }
 });
 
 describe("provider-owned follow-ups", () => {

@@ -31,6 +31,7 @@ import type { InteractionDeadline } from "@orkestrator/protocol/agent-interactio
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { PARENT_WATCH_INTERVAL_MS } from "@orkestrator/protocol/parent-watchdog";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
+import { createLogger } from "@orkestrator/protocol/logger";
 import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
   ORKESTRATOR_ARTIFACT_MCP_SERVER_NAME,
@@ -73,6 +74,8 @@ import {
   type GrokMcpConfigStatus,
   type VendorMcpServerStatus,
 } from "./acp-mcp-inventory.js";
+
+const log = createLogger("bridge.acp");
 
 export type Provider = AgentPlatform;
 export type JsonObject = Record<string, unknown>;
@@ -573,6 +576,13 @@ export interface SessionState {
    */
   health: RuntimeHealthRecorder;
   policy?: NativeAgentExecutionPolicy;
+  /**
+   * `policy` is not live yet: a copy restored from disk. It stays in force, but
+   * the next policy a request sends replaces it whatever it is, which is how a
+   * wider policy reaches a session after a bridge restart (H4). Set false once a
+   * request sets a policy or a prompt starts under this one. Never persisted.
+   */
+  policyPending?: boolean;
   /** Per-turn review boundary; changing it restarts the child on the same ACP session. */
   readOnly?: boolean;
 }
@@ -1200,6 +1210,14 @@ export class AcpProcess {
     }
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
+      // Scalars only: agent stderr and exit errors can hold prompts or file contents.
+      log.warn("agent.exited", {
+        provider,
+        pid: this.child.pid ?? null,
+        code,
+        signal,
+        requested: this.#terminationOutcome === "resolved",
+      });
       this.#close(
         new Error(
           `${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`,

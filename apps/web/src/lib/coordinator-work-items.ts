@@ -21,7 +21,10 @@ import {
   type BuildPhase,
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
-import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
+import {
+  pullRequestStateFromNotice,
+  type CoordinatorWorkflowAssociation,
+} from "@orkestrator/protocol/coordinator";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { NodeEnvironmentSummary, NodeSummary } from "@orkestrator/protocol/node-summaries";
@@ -66,6 +69,8 @@ export type CoordinatorWorkTarget =
 export interface CoordinatorWorkItem {
   /** Stable row key. */
   key: string;
+  /** The records behind this row, which "Clear finished" marks. */
+  associationIds: string[];
   kind: CoordinatorWorkKind;
   bucket: CoordinatorWorkBucket;
   name: string;
@@ -428,6 +433,7 @@ function workerItem(
 
   return {
     key: `worker:${first.nodeId ?? ""}:${environmentId}`,
+    associationIds: associations.map((association) => association.id),
     kind: "worker",
     bucket,
     name,
@@ -443,7 +449,7 @@ function workerItem(
 }
 
 function missingItem(
-  base: Pick<CoordinatorWorkItem, "key" | "kind" | "name" | "openDelegations">,
+  base: Pick<CoordinatorWorkItem, "key" | "associationIds" | "kind" | "name" | "openDelegations">,
   createdAt: number,
 ): CoordinatorWorkItem {
   return {
@@ -482,6 +488,7 @@ function buildItem(
   const name = pipeline?.taskTitle || association.workerOutcome?.name || "Build";
   const base = {
     key: `build:${nodeId ?? ""}:${association.resourceId}`,
+    associationIds: [association.id],
     kind: "build" as const,
     name,
     ...(remote ? { machine: remote.machine } : {}),
@@ -600,6 +607,7 @@ function reviewItem(
   const name = reviewedName ? `Multi Review of ${reviewedName}` : "Multi Review";
   const base = {
     key: `review:${nodeId ?? ""}:${association.resourceId}`,
+    associationIds: [association.id],
     kind: "review" as const,
     name,
     ...(remote ? { machine: remote.machine } : {}),
@@ -714,6 +722,7 @@ function graphRunItem(
   const remote = nodeId ? nodeLookup(sources, nodeId, run?.environmentId ?? undefined) : undefined;
   const base = {
     key: `graph-run:${nodeId ?? ""}:${association.resourceId}`,
+    associationIds: [association.id],
     kind: "graph-run" as const,
     ...(remote ? { machine: remote.machine } : {}),
     openDelegations: 0,
@@ -830,7 +839,10 @@ function pullRequestItem(
   const follow =
     associations.map((association) => association.pullRequest).find((item) => item?.prUrl) ??
     first.pullRequest;
-  const final = associations.map((a) => a.pullRequest?.final).find(Boolean);
+  const final = associations
+    .map((a) => a.pullRequest?.final)
+    .filter((item) => item !== undefined)
+    .sort((a, b) => (time(b.at) ?? 0) - (time(a.at) ?? 0))[0];
   const remote = nodeId ? nodeLookup(sources, nodeId, environmentId) : undefined;
   const local = nodeId ? undefined : sources.environments.get(environmentId);
   const currentReading = nodeId
@@ -845,7 +857,28 @@ function pullRequestItem(
     : prReadingFor(sources, environmentId);
   const url = follow?.prUrl ?? final?.prUrl ?? currentReading?.prUrl ?? local?.prUrl ?? null;
   const reading = currentReading?.prUrl === url ? currentReading : undefined;
-  const prState = reading?.prState ?? final?.prState ?? null;
+  // A new follow supersedes the previous episode, including when it has
+  // not observed a state yet. Later notices and deletion readings then win
+  // by observation time, independently of association store order.
+  const evidence = associations.flatMap((association) => {
+    const notice = pullRequestStateFromNotice(association.statusNotice?.key);
+    const captured = association.pullRequest?.final;
+    return [
+      { at: time(association.createdAt) ?? 0, state: null, priority: 0 },
+      ...(notice
+        ? [{ at: time(association.statusNotice?.notifiedAt) ?? 0, state: notice, priority: 1 }]
+        : []),
+      ...(captured?.prUrl === url && captured.prState !== null
+        ? [{ at: time(captured.at) ?? 0, state: captured.prState, priority: 2 }]
+        : []),
+    ];
+  });
+  const recorded = evidence.sort((a, b) => b.at - a.at || b.priority - a.priority)[0]?.state;
+  const followEnded = associations.every((association) => association.terminalNotifiedAt);
+  // Nothing watches an ended follow, so its last "open" may be long out of date.
+  const prState =
+    reading?.prState ?? (followEnded && recorded === "open" ? null : recorded) ?? null;
+  const noLongerFollowed = followEnded && !prState;
   const environmentName =
     local?.name ?? remote?.environment?.name ?? final?.name ?? first.workerOutcome?.name;
   const number = prNumber(url);
@@ -858,23 +891,43 @@ function pullRequestItem(
     hasMergeConflicts: reading?.hasMergeConflicts ?? null,
     checkSummary: reading?.checkSummary ?? null,
   });
-  const finished = prState === "merged" || prState === "closed";
+  const finished = prState === "merged" || prState === "closed" || noLongerFollowed;
+  // Deletion observes the outcome; it does not finish an already-ended
+  // follow again. Only use that observation time when no end was recorded.
   const finishedAt = finished
     ? (latest(
-        time(final?.at),
-        ...associations.map((association) => time(association.statusNotice?.notifiedAt)),
-      ) ?? createdAt)
+        ...associations.map((association) =>
+          pullRequestStateFromNotice(association.statusNotice?.key)
+            ? time(association.statusNotice?.notifiedAt)
+            : undefined,
+        ),
+        ...associations.map((association) => time(association.terminalNotifiedAt)),
+      ) ??
+      time(final?.at) ??
+      createdAt)
     : undefined;
   return {
     key: `pull-request:${nodeId ?? ""}:${environmentId}:${url ?? first.id}`,
+    associationIds: associations.map((association) => association.id),
     kind: "pull-request",
     bucket: finished ? "finished" : "running",
     name,
     ...(remote ? { machine: remote.machine } : {}),
-    stage:
-      url && !prState ? "PR · status unavailable" : url || prState ? stage : "PR · being opened",
+    stage: noLongerFollowed
+      ? "PR · no longer followed"
+      : url && !prState
+        ? "PR · status unavailable"
+        : url || prState
+          ? stage
+          : "PR · being opened",
     target: url ? { type: "pull-request", url } : null,
-    ...(url ? {} : { unavailableReason: "The pull request has not been opened yet." }),
+    ...(url
+      ? {}
+      : {
+          unavailableReason: noLongerFollowed
+            ? "No pull request was recorded."
+            : "The pull request has not been opened yet.",
+        }),
     openDelegations: 0,
     ...(finishedAt !== undefined ? { finishedAt } : {}),
     prOpen: prState === "open",
@@ -891,9 +944,19 @@ export function isWorkItemExpired(item: CoordinatorWorkItem, now: number): boole
   return now >= item.finishedAt + FINISHED_WORK_RETENTION_MS;
 }
 
+/** Finished rows "Clear finished" takes; work with an open pull request stays listed. */
+export function isClearableWorkItem(item: CoordinatorWorkItem): boolean {
+  return item.bucket === "finished" && !item.prOpen;
+}
+
 /** Every row the Work panel shows, ordered: needs you, running, finished; newest first in each. */
 export function deriveCoordinatorWorkItems(sources: CoordinatorWorkSources): CoordinatorWorkItem[] {
   const associations = coordinatorWorkAssociations(sources.workflows, sources.coordinatorId);
+  const hidden = new Set(
+    associations
+      .filter((association) => association.workHiddenAt)
+      .map((association) => association.id),
+  );
   // One row per worker environment and per followed PR, however many
   // delegations or follow records name it.
   const grouped = new Map<string, CoordinatorWorkflowAssociation[]>();
@@ -918,8 +981,11 @@ export function deriveCoordinatorWorkItems(sources: CoordinatorWorkSources): Coo
     );
   }
   const order = new Map(COORDINATOR_WORK_BUCKETS.map((bucket, index) => [bucket, index]));
+  // A cleared row comes back if its work resumes or a later request names it.
+  const cleared = (item: CoordinatorWorkItem) =>
+    isClearableWorkItem(item) && item.associationIds.every((id) => hidden.has(id));
   return items
-    .filter((item) => !isWorkItemExpired(item, sources.now))
+    .filter((item) => !isWorkItemExpired(item, sources.now) && !cleared(item))
     .sort(
       (a, b) =>
         order.get(a.bucket)! - order.get(b.bucket)! ||

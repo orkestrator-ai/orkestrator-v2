@@ -103,6 +103,14 @@ export interface BridgeSession {
   /** Null until the first prompt materializes a Codex thread. */
   threadId: string | null;
   config: EngineTurnConfig;
+  /**
+   * `config.policy` is a copy restored from disk, not live yet. It stays in
+   * force, but the next policy a request sends replaces it whatever it is, which
+   * is how a wider policy reaches a session after a bridge restart (H4). Set
+   * false once a request sets a policy or a prompt starts under this one. Never
+   * persisted.
+   */
+  policyPending?: boolean;
   /** Guards provider-side configuration updates against a newer user edit. */
   configurationRevision: number;
   title?: string;
@@ -291,6 +299,13 @@ export class OverlappingTurnError extends Error {
     super(`A turn is already running on thread ${threadId}`);
     this.name = "OverlappingTurnError";
   }
+}
+
+/** What a request's policy is compared against: nothing until the session has a live one. */
+export function liveCodexPolicy(
+  session: Pick<BridgeSession, "config" | "policyPending">,
+): EngineTurnConfig["policy"] {
+  return session.policyPending ? undefined : session.config.policy;
 }
 
 export interface ThreadRegistryOptions {

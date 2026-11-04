@@ -8,7 +8,10 @@
 import { mock } from "bun:test";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import type { BuildPipelineCodeRewindPreview } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPipelineCodeRewindPreview,
+  PipelineQueuedSteerDelivery,
+} from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { restoreMatchMedia } from "../../../../../tests/mocks/match-media";
@@ -95,6 +98,42 @@ export const steerPipelineMock = mock(
     delivery: "steered",
   }),
 );
+export const steerQueuedMock = mock(
+  async (
+    pipelineId: string,
+    messageId: string,
+  ): Promise<{
+    pipeline: BuildPipeline;
+    delivery: PipelineQueuedSteerDelivery;
+    notice?: string;
+  }> => {
+    const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    return {
+      pipeline: {
+        ...current,
+        pendingUserMessages: current.pendingUserMessages?.filter(({ id }) => id !== messageId),
+        backendRevision: current.backendRevision + 1,
+      },
+      delivery: "steered",
+    };
+  },
+);
+export const removeQueuedMock = mock(
+  async (
+    pipelineId: string,
+    messageId: string,
+  ): Promise<{ pipeline: BuildPipeline; removed: boolean }> => {
+    const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    return {
+      pipeline: {
+        ...current,
+        pendingUserMessages: current.pendingUserMessages?.filter(({ id }) => id !== messageId),
+        backendRevision: current.backendRevision + 1,
+      },
+      removed: true,
+    };
+  },
+);
 export const restartCurrentStepMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   backendRevision: 13,
@@ -162,6 +201,8 @@ mock.module("@/lib/backend", () => ({
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
   steerBuildPipeline: steerPipelineMock,
+  steerQueuedBuildPipelineMessage: steerQueuedMock,
+  removeQueuedBuildPipelineMessage: removeQueuedMock,
   restartBuildPipelineCurrentStep: restartCurrentStepMock,
   retryBuildPipelineStage: retryStageMock,
   restartBuildPipelineStep: restartStepMock,

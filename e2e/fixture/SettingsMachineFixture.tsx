@@ -9,6 +9,7 @@ import type { AppConfig, GlobalConfig } from "../../apps/web/src/types";
 
 function install() {
   const base = useConfigStore.getState().config;
+  const directLeaf = new URLSearchParams(window.location.search).has("direct-leaf");
   const read = (owner: string): AppConfig =>
     JSON.parse(
       localStorage.getItem(`settings-machine:${owner}`) ??
@@ -74,7 +75,14 @@ function install() {
         for (const key of (args.unset as string[] | undefined) ?? []) {
           delete (global as unknown as Record<string, unknown>)[key];
         }
+        // A leaf opened directly saves locally, then receives the inherited
+        // command-node value in the effective config returned by the backend.
+        if (directLeaf && owner === "leaf") delete global.autoSteer;
         const saved = { ...current, global };
+        if (directLeaf) {
+          const key = "settings-machine:patch-count";
+          localStorage.setItem(key, String(Number(localStorage.getItem(key) ?? 0) + 1));
+        }
         localStorage.setItem(`settings-machine:${owner}`, JSON.stringify(saved));
         return saved;
       }
@@ -118,7 +126,12 @@ function install() {
           }
         : answer("command", command, args)) as T,
   };
-  window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  if (directLeaf) {
+    delete window.orkestratorWorkspaceTarget;
+    delete window.orkestratorPortal;
+  } else {
+    window.orkestratorWorkspaceTarget = { nodeId: "leaf", nodeName: "Leaf", path: "direct" };
+  }
   useRemoteWorkspaceStore.setState({ active: null });
   useAccountMachineStore.getState().choose(undefined);
   return true;

@@ -652,6 +652,8 @@ export class CodexRuntimePrompt {
               (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? 0 : undefined),
             )
           : undefined;
+        // Only an actual dispatch makes the restored policy live.
+        session.policyPending = false;
         return this.ctx.options.engine.startTurn({
           handle: context!.engineHandle,
           input: engineInput,

@@ -1,4 +1,9 @@
 import type { GatewayContext } from "./gateway-context.js";
+import {
+  DESIGN_FRAME_DOCUMENT,
+  GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
+  GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
+} from "@orkestrator/protocol/renderer-content-security-policy";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import http, {
@@ -69,6 +74,14 @@ import {
 } from "./gateway-proxy-etag.js";
 
 const log = createLogger("gateway");
+
+/** Only the renderer's own documents carry a policy; a worker script has its own. */
+function staticDocumentContentSecurityPolicy(root: string, filePath: string): string | null {
+  const relativePath = path.relative(root, filePath).toLowerCase();
+  if (relativePath === "index.html") return GATEWAY_RENDERER_CONTENT_SECURITY_POLICY;
+  if (relativePath === DESIGN_FRAME_DOCUMENT) return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
+  return null;
+}
 
 export function createSseGzipCompressor(): Gzip {
   // No `finishFlush`: a proxied stream can end cleanly when its upstream does,
@@ -841,7 +854,9 @@ export class GatewayProxy {
       // is false, and would make the status depend on unrelated load.
     }
 
+    const contentSecurityPolicy = staticDocumentContentSecurityPolicy(root, filePath);
     const headers: OutgoingHttpHeaders = {
+      ...(contentSecurityPolicy ? { "content-security-policy": contentSecurityPolicy } : {}),
       "cache-control": cacheControl,
       "content-type": contentType,
       "last-modified": lastModified,

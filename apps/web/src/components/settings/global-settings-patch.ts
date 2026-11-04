@@ -33,6 +33,7 @@ export interface CoreFieldsSnapshot {
   envFilePatterns: string[];
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
+  containerGitHubCredential: NonNullable<GlobalConfig["containerGitHubCredential"]>;
   sshAgentSocketPath: string;
   autoMergeRequireChecks: boolean;
   autoSteer: boolean;
@@ -75,6 +76,7 @@ const STORED_AS_IS = [
   "envFilePatterns",
   "allowedDomains",
   "useHostGitHubCredentials",
+  "containerGitHubCredential",
   "autoMergeRequireChecks",
   "useHostClaudeCredentials",
   "preferredEditor",

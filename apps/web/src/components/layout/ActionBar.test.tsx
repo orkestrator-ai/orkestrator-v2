@@ -27,6 +27,7 @@ import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
+import { useCoordinatorActivityStore } from "@/stores/coordinatorActivityStore";
 import { useMergePrRequestStore } from "@/stores/mergePrRequestStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ProjectBoardTab } from "@/stores";
@@ -1404,6 +1405,66 @@ describe("ActionBar grid presentation", () => {
     expect(hideFiles.className).toContain("bg-elevated");
     expect(hideFiles.className).toContain("text-foreground");
     expect(hideFiles.className).not.toContain("text-blue");
+  });
+});
+
+describe("ActionBar coordinator tab activity", () => {
+  afterEach(() => {
+    cleanup();
+    useCoordinatorActivityStore.getState().reset();
+  });
+
+  const renderTab = (state?: "working" | "waiting") => {
+    useCoordinatorActivityStore.setState({
+      projects: new Map(state ? [[selectedProject.id, state]] : []),
+    });
+    render(<ActionBar presentation="grid" />);
+    const tab = screen.getByRole("button", { name: "Coordinator" });
+    return {
+      outline: tab.querySelector('[data-testid="coordinator-working-outline"]'),
+      icon: tab.querySelector('[data-testid="coordinator-activity-icon"]')!,
+      iconRing: tab.querySelector('[data-testid="coordinator-activity-ring"]')!,
+      tab,
+    };
+  };
+
+  test("while working the spinner is on the tab and the icon has no ring", () => {
+    const { outline, icon, iconRing, tab } = renderTab("working");
+    expect(outline?.parentElement === tab).toBe(true);
+    expect(tab.className).toContain("relative");
+    expect(icon.getAttribute("data-state")).toBe("idle");
+    expect(iconRing.className).toContain("hidden");
+    expect(iconRing.className).not.toContain("environment-working-spinner");
+  });
+
+  test("while waiting the halo stays on the icon", () => {
+    const { outline, icon, iconRing, tab } = renderTab("waiting");
+    expect(outline === null).toBe(true);
+    expect(tab.className).not.toContain("relative");
+    expect(icon.getAttribute("data-state")).toBe("waiting");
+    expect(iconRing.className).toContain("animate-pulse");
+  });
+
+  test("idle shows nothing, and only the coordinator tab ever hosts the outline", () => {
+    const { outline, icon, iconRing } = renderTab();
+    expect(outline === null).toBe(true);
+    expect(icon.getAttribute("data-state")).toBe("idle");
+    expect(iconRing.className).toContain("hidden");
+    cleanup();
+
+    renderTab("working");
+    expect(screen.getAllByTestId("coordinator-working-outline")).toHaveLength(1);
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+    expect(kanban.className).not.toContain("relative");
+  });
+
+  test("the coordinator tab alone takes its focus ring from its text", () => {
+    const { tab } = renderTab("working");
+    expect(tab.className).toContain("focus-visible:ring-current");
+    expect(tab.className).not.toContain("focus-visible:ring-ring/60");
+    const kanban = screen.getByRole("button", { name: "Kanban" });
+    expect(kanban.className).toContain("focus-visible:ring-ring/60");
+    expect(kanban.className).not.toContain("focus-visible:ring-current");
   });
 });
 
@@ -6802,6 +6863,168 @@ describe("ActionBar successful cleanup and merge actions", () => {
     await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
     expect(selectProjectMock).not.toHaveBeenCalled();
     expect(currentSelectedEnvironmentId).toBe("env-2");
+  });
+
+  describe("the red trash button", () => {
+    const trashButton = () => screen.getByRole("button", { name: "Delete environment" });
+    const queryTrashButton = () => screen.queryByRole("button", { name: "Delete environment" });
+    const withoutPr = () => {
+      currentEnvironment = { ...selectedEnvironment, prUrl: null, prState: null };
+    };
+
+    test("sits to the right of Create PR, before the file panel toggle", () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      const button = trashButton();
+      expect(button.getAttribute("data-variant")).toBe("destructive");
+      const createPr = screen.getByRole("button", { name: "Create PR" });
+      const filePanel = screen.getByRole("button", { name: "Show file panel" });
+      expect(
+        createPr.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        button.compareDocumentPosition(filePanel) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    test("asks with the row's confirmation before deleting", async () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+
+      const dialog = screen.getByTestId("alert-dialog-content");
+      expect(dialog.textContent).toContain("Are you sure you want to delete feature-env?");
+      expect(dialog.textContent).toContain("It will be stopped before deletion.");
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+    });
+
+    test("cancelling keeps the environment", () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    });
+
+    test("keeps the confirmation on the environment it was opened for", async () => {
+      withoutPr();
+      currentOtherEnvironments = [{ ...selectedEnvironment, id: "env-2", name: "second-env" }];
+      const { rerender } = render(<ActionBar />);
+      fireEvent.click(trashButton());
+
+      currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+      currentOtherEnvironments = [{ ...selectedEnvironment, prUrl: null, prState: null }];
+      currentSelectedEnvironmentId = "env-2";
+      rerender(<ActionBar />);
+
+      expect(screen.getByTestId("alert-dialog-content").textContent).toContain("feature-env");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+      expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("dismisses confirmation when its target disappears from the store", () => {
+      withoutPr();
+      const { rerender } = render(<ActionBar />);
+      fireEvent.click(trashButton());
+      expect(screen.getByTestId("alert-dialog-content")).toBeTruthy();
+
+      // Another environment remains selected, but the original target is gone.
+      currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+      currentSelectedEnvironmentId = "env-2";
+      currentOtherEnvironments = [];
+      rerender(<ActionBar />);
+
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    });
+
+    test("disables deletion and explains why while a merge is in progress", async () => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        lifecycleOperation: "merging",
+      };
+      await withTooltipClocks(async ({ open }) => {
+        render(<ActionBar />);
+        const button = trashButton() as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        fireEvent.click(button);
+        expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+        expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+        fireEvent.mouseEnter(button.parentElement!);
+        await fireTooltipTimer(open);
+        expect(screen.getByText("Merge in progress...")).toBeTruthy();
+        expect(screen.queryByText("Delete this environment")).toBeNull();
+      });
+    });
+
+    test("stays available beside an open PR", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      render(<ActionBar />);
+
+      expect((trashButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    test("gives way to Clean Up once the PR is finished", () => {
+      render(<ActionBar />);
+
+      expect(screen.getByRole("button", { name: "Clean Up" })).toBeTruthy();
+      expect(queryTrashButton() === null).toBe(true);
+    });
+
+    test("is not offered on the project home", () => {
+      withoutPr();
+      currentEnvironment = { ...currentEnvironment, projectHome: true };
+      render(<ActionBar />);
+
+      expect(queryTrashButton() === null).toBe(true);
+    });
+
+    test("is disabled while this window is already deleting the environment", () => {
+      withoutPr();
+      currentDeletingEnvironments.add("env-1");
+      render(<ActionBar />);
+
+      expect((trashButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    test("is a labelled tile in the mobile toolbar", async () => {
+      withoutPr();
+      render(<ActionBar presentation="grid" />);
+
+      const button = trashButton();
+      expect(button.textContent).toContain("Delete environment");
+      fireEvent.click(button);
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    });
+
+    test("swallows a failed deletion, which deleteEnvironment already reported", async () => {
+      withoutPr();
+      deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+      expect(queryTrashButton() !== null).toBe(true);
+    });
   });
 
   describe("a row's Merge PR menu item", () => {

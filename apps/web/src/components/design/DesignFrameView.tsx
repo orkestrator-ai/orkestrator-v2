@@ -1,4 +1,3 @@
-import { createUuid } from "@/lib/uuid";
 import {
   memo,
   useEffect,
@@ -11,7 +10,6 @@ import {
 import { AlertTriangle, Loader2, MoreHorizontal, ShieldAlert } from "lucide-react";
 import type { DesignElement, DesignFrame } from "@orkestrator/protocol/design-canvas";
 import type { DesignFailure, DesignFrameMeta } from "@orkestrator/protocol/design-operations";
-import { designBootstrap } from "@orkestrator/protocol/design-runtime";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { nextGestureId, useDesignCanvasActions, type GeometryPatch } from "./design-canvas-context";
 import type { DesignSelection } from "./design-selection";
+import { designFrameSource } from "./design-frame-source";
 import { clampCoordinate, clampDimension } from "./design-viewport";
 import { DesignFrameBridge } from "./frame-bridge";
 
@@ -101,7 +100,7 @@ export const DesignFrameView = memo(function DesignFrameView({
   const iframe = useRef<HTMLIFrameElement>(null);
   const [bridge, setBridge] = useState<DesignFrameBridge | null>(null);
   const [rendered, setRendered] = useState<string | null>(null);
-  const html = useMemo(() => designBootstrap(createUuid()), []);
+  const frameSource = useMemo(() => designFrameSource(), []);
   const contentKey = meta?.contentId ?? `revision:${frame.revision}`;
   const drag = useRef<Drag | null>(null);
   const raf = useRef(0);
@@ -390,7 +389,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           title={frame.name}
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
-          srcDoc={html}
+          {...frameSource}
           tabIndex={mode === "preview" ? 0 : -1}
           className={`h-full w-full border-0 bg-white shadow-xl ${mode === "preview" ? "" : "pointer-events-none"}`}
           onLoad={() => {

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { NativeAgentExecutionPolicy } from "./native-agent.js";
 
-import { executionPolicyWidenings } from "./execution-policy-narrowing.js";
+import {
+  assertExecutionPolicyNotWidened,
+  executionPolicyWidenings,
+  policyWideningRefusal,
+  PolicyWideningRefusedError,
+} from "./execution-policy-narrowing.js";
 
 const ask: NativeAgentExecutionPolicy = {
   id: "interactive-container",
@@ -142,5 +147,32 @@ describe("executionPolicyWidenings", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("assertExecutionPolicyNotWidened", () => {
+  test("passes a same or narrower policy, and any policy on a session with none", () => {
+    expect(() => assertExecutionPolicyNotWidened(ask, structuredClone(ask))).not.toThrow();
+    expect(() =>
+      assertExecutionPolicyNotWidened(ask, variant({ approvals: "deny" })),
+    ).not.toThrow();
+    expect(() => assertExecutionPolicyNotWidened(undefined, ask)).not.toThrow();
+  });
+
+  test("throws the refusal naming the widened axes", () => {
+    let thrown: unknown;
+    try {
+      assertExecutionPolicyNotWidened(ask, variant({ approvals: "auto-approve", sandbox: "none" }));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PolicyWideningRefusedError);
+    expect((thrown as PolicyWideningRefusedError).refusal()).toEqual(
+      policyWideningRefusal(["approvals", "sandbox"]),
+    );
+    expect(policyWideningRefusal(["sandbox"])).toMatchObject({
+      code: "policy-widening-refused",
+      widened: ["sandbox"],
+    });
   });
 });

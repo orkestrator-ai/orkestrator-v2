@@ -2,6 +2,7 @@ import {
   boundedBackgroundLaunch,
   boundedTailCommand,
   boundDiagnosticTail,
+  keepPreviousLogCommand,
   bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
@@ -109,7 +110,6 @@ import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js
 import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
-  EGRESS_OVERRIDE_ENV,
   createEgressGateway,
   egressEnforcement,
   egressGatewayName,
@@ -286,7 +286,6 @@ export async function createDockerContainer(
     networkMode: environment.networkAccessMode === "full" ? "full" : "restricted",
     networkPolicy,
     imageGatewayVersion: imageCapabilitySet?.["egress-gateway"] ?? 0,
-    override: process.env[EGRESS_OVERRIDE_ENV],
   });
   const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
   // Rootless: host-gateway is inside RootlessKit's namespace. Name its host
@@ -847,7 +846,7 @@ export async function startContainerOpenCodeServer(
     `
     set -e
     cd /workspace
-    rm -f /tmp/opencode-serve.log
+    ${keepPreviousLogCommand("/tmp/opencode-serve.log")}
     umask 077
     mkdir -p /home/node/.config/opencode/plugins /tmp/orkestrator-ai
     printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)} > ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
@@ -945,7 +944,7 @@ export async function startContainerClaudeServer(
       "claude",
       `
       cd /workspace
-      rm -f /tmp/claude-bridge.log
+      ${keepPreviousLogCommand("/tmp/claude-bridge.log")}
       umask 077
       mkdir -p /tmp/orkestrator-ai
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token

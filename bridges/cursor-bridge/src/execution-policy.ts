@@ -75,6 +75,13 @@ export function resolveCursorExecutionPolicy(
   };
 }
 
+/** What a request's policy is compared against: nothing until the session has a live one. */
+export function liveExecutionPolicy(
+  state: Pick<SessionState, "policy" | "policyPending">,
+): NativeAgentExecutionPolicy | undefined {
+  return state.policyPending ? undefined : state.policy;
+}
+
 /**
  * The policy a session's agent is built under: the read-only coordinator
  * policy while `readOnly` is set, the session's own otherwise. Shared by

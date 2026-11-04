@@ -630,7 +630,10 @@ describe("BuildChatTab agent messaging", () => {
     );
     await waitFor(() => expect(box.value).toBe(""));
     // The authoritative reply is installed, so the queue depth is visible.
-    await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 queued")).toBeTruthy());
+    expect(screen.getByTestId("compose-queue-item").textContent).toContain(
+      "also update the README",
+    );
   });
 
   test("sends /steer to the live turn instead of the idle queue", async () => {
@@ -647,7 +650,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
     await waitFor(() => expect(box.value).toBe(""));
     expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
-    expect(screen.queryByText(/message queued/) === null).toBe(true);
+    expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true);
   });
 
   test("reports queued steering without claiming the running agent is idle", async () => {
@@ -671,7 +674,7 @@ describe("BuildChatTab agent messaging", () => {
       ),
     );
     expect(mockToastSuccess).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 queued")).toBeTruthy());
     expect(box.value).toBe("");
   });
 
@@ -1009,8 +1012,11 @@ describe("BuildChatTab agent messaging", () => {
     });
     renderTab();
 
-    expect(screen.getByText(/2 messages queued/)).toBeTruthy();
-    expect(screen.queryByText(/1 message queued/) === null).toBe(true);
+    expect(screen.getByText("2 queued")).toBeTruthy();
+    expect(screen.getAllByTestId("compose-queue-item").map((row) => row.textContent)).toEqual([
+      "one",
+      "two",
+    ]);
   });
 
   test("disables the send button and shows progress while a send is in flight", async () => {

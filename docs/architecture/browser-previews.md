@@ -9,10 +9,17 @@ application port in one environment. It does not preview a host port. The tab
 follows the service when a container is recreated or its host binding changes,
 and it never follows a reused port to another application.
 
-Every new transport ships **disabled by default**. The service registry,
-service tabs and terminal-link intents are always on; with every transport
-off, a desktop service tab loads the service's current host port over the
-legacy gateway loopback route ("compatibility" mode).
+The desktop tunnel and the container relay are **on by default**; private
+origins need an operator's domain and certificate, so they stay off. The
+service registry, service tabs and terminal-link intents are always on; with
+the transport turned off, a desktop service tab loads the service's current
+host port over the legacy gateway loopback route ("compatibility" mode), which
+needs a published port.
+
+The defaults apply only to a backend with no saved preview settings. Saved
+settings keep their values, because a saved off cannot be told apart from a
+deliberate one, so an install that ever saved these settings with the switch off
+stays off until it is turned on.
 
 ## Components
 
@@ -168,6 +175,15 @@ same endpoint generation, keeping the path, query and fragment
 (`legacyUrlServiceMatch` in `apps/web/src/lib/preview-service-entry.ts`).
 Ownership is never inferred from the port alone or from the active
 environment, so ambiguous tabs get no offer.
+
+On the desktop with the tunnel available, a matching tab converts by itself when
+it becomes active, so stored legacy tabs migrate without a click. Web clients
+and desktops with the tunnel off keep the button: a web client's service tab
+needs publication, and a tunnel-less conversion would load the same route. A
+`localhost` URL never matches, because the snapshot does not establish which
+address family the legacy view used, so those tabs stay URL tabs. A migrated tab
+moves to the service's own partition, so its cookies and storage from the shared
+legacy partition do not come with it.
 
 ### Desktop tunnel
 
@@ -389,7 +405,7 @@ Tailscale Serve) listens on a different port than `port`.
 
 ### Optional container relay
 
-When the relay is enabled, a container service whose port is **not published**
+While the relay is on (the default), a container service whose port is **not published**
 resolves to `container-relay` instead of `target-unmapped`. The backend runs
 one relay per owned container through `docker exec -i -u node`, preferring
 `node` and falling back to `bun`. The relay:
@@ -478,8 +494,21 @@ sequenceDiagram
   G-->>I: OPEN_OK, then bounded binary frames both ways
 ```
 
+### Connections through the tunnel
+
 Each upstream TCP connection is one outer WebSocket. Idle connections are
 pooled per service; nothing is replayed after a reconnect.
+
+A connection refused with `access-expired` or `generation-changed` is retried
+before any application bytes are sent. If a reused replacement is also refused,
+one further recovery is allowed; the final open is never retried. One revocation
+causes one reattach, however many connections it refused:
+`PreviewTransportManager` reattaches only if the attachment the connection was
+refused on is still current. If that attachment has been replaced, the
+connection retries on the current one with no backend call; if an attach is in
+flight, it joins that attach. A reattach releases the attachment it replaces, so
+a second one would refuse the connections opening on the first. A renewal refused
+after its attachment was replaced follows the same rule.
 
 ### Resource ownership
 
@@ -556,8 +585,8 @@ stored in the `preview-settings` store:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `transport` | off | **Kill switch for new access.** Off: no new attachments of any kind; existing access continues until revoked or expired. |
-| `relay` | off | Enables the container relay; turning it off stops all relays and re-resolves services |
+| `transport` | on | **Kill switch for new access.** Off: no new attachments of any kind; existing access continues until revoked or expired. |
+| `relay` | on | Enables the container relay; turning it off stops all relays and re-resolves services |
 | `publication.enabled` + fields | off | Private HTTPS origins |
 | `publication.upstreamCaFile` | none | Extra CA for HTTPS upstreams (added to, never replacing, system roots) |
 
@@ -574,11 +603,13 @@ token also revokes all preview access.
 ### Rollback
 
 1. Turn **transport** off. Capabilities now report the reason and no new access
-   is issued.
+   is issued. Turn the **relay** off with it: compatibility mode needs a host
+   port, and a service the relay resolves has none, so its tab has nothing to
+   load until it re-resolves as unmapped and offers **Publish port (auto)**.
 2. **Revoke all.** Open tunnels close with 4410 and sessions stop working.
 3. Service definitions, applications, and layouts are kept. The legacy gateway
    route keeps working for old clients.
-4. Turn off publication or the relay if needed. This affects only
+4. Turn off publication if needed. This and the relay switch affect only
    Orkestrator's own listener and relay processes, not Tailscale settings.
 5. Re-enable when ready. Clients get fresh access to the same `serviceId`.
    Nothing that was in flight is replayed.

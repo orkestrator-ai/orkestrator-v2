@@ -36,6 +36,31 @@ describe("defaultConfig", () => {
       ).toBeUndefined();
     });
   });
+  test.each(["none", "pat"] as const)(
+    "preserves container credential choice %s across older-client saves and unsets",
+    async (choice) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const initial = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...initial.global,
+          useHostGitHubCredentials: true,
+          githubToken: "test-pat",
+          containerGitHubCredential: choice,
+        });
+        for (const operation of ["update", "save", "unset"] as const) {
+          const incoming = structuredClone(await storage.loadConfig());
+          delete incoming.global.containerGitHubCredential;
+          if (operation === "update") await storage.updateGlobalConfig(incoming.global);
+          else if (operation === "save") await storage.saveConfig(incoming);
+          else await storage.patchGlobalConfig({}, { unset: ["containerGitHubCredential"] });
+          const restarted = new StorageService(dataDir);
+          await restarted.init();
+          expect((await restarted.loadConfig()).global.containerGitHubCredential).toBe(choice);
+        }
+      });
+    },
+  );
+
   test("returns the current default model selection", () => {
     const platforms = defaultConfig().global.agentSettings?.platforms;
     // Unset: OpenCode's connected, allowlisted default, which no fixed id matches
@@ -72,6 +97,13 @@ describe("defaultConfig", () => {
     expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>().toEqualTypeOf<
       boolean | undefined
     >();
+  });
+
+  test("gives a new install's containers no GitHub credential", async () => {
+    expect(defaultConfig().global.containerGitHubCredential).toBe("none");
+    await withTemporaryStorage(async (storage) => {
+      expect((await storage.loadConfig()).global.containerGitHubCredential).toBe("none");
+    });
   });
 
   test("allows five concurrent Codex subagent threads by default", () => {
@@ -730,6 +762,47 @@ describe("GitHub credential source config migration", () => {
       const loaded = await storage.loadConfig();
       expect(loaded.global.useHostGitHubCredentials).toBe(expected);
       expect(loaded.global.githubToken).toBe(githubToken);
+    });
+  });
+});
+
+describe("container GitHub credential config migration", () => {
+  test.each([
+    ["an upgrade using the host login keeps sharing it", true, undefined, undefined, "host-cli"],
+    ["an upgrade using a PAT keeps it", false, "stored-pat", undefined, "pat"],
+    ["an older config with only a PAT keeps it", undefined, "stored-pat", undefined, "pat"],
+    [
+      "an older config with neither keeps the host login",
+      undefined,
+      undefined,
+      undefined,
+      "host-cli",
+    ],
+    ["an explicit choice is never migrated", true, undefined, "none", "none"],
+    ["a PAT choice is independent of the backend", true, "stored-pat", "pat", "pat"],
+    ["an unknown value shares nothing", true, undefined, "everything", "none"],
+  ] as const)("%s", async (_label, useHost, githubToken, stored, expected) => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const config = defaultConfig();
+      delete config.global.containerGitHubCredential;
+      delete config.global.useHostGitHubCredentials;
+      if (useHost !== undefined) config.global.useHostGitHubCredentials = useHost;
+      if (githubToken !== undefined) config.global.githubToken = githubToken;
+      const raw = { ...config, global: { ...config.global, containerGitHubCredential: stored } };
+      await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(raw)}\n`, "utf8");
+
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.containerGitHubCredential).toBe(expected);
+      // The answer is recorded, so a later backend switch cannot move it.
+      await storage.saveConfig({
+        ...loaded,
+        global: {
+          ...loaded.global,
+          useHostGitHubCredentials: !loaded.global.useHostGitHubCredentials,
+        },
+      });
+      const saved = await storage.loadConfig();
+      expect(saved.global.containerGitHubCredential).toBe(expected);
     });
   });
 });

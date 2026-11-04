@@ -13,6 +13,7 @@ import {
 } from "./shell.js";
 
 const posixOnly = process.platform === "win32" ? test.skip : test;
+const darwinOnly = process.platform === "darwin" ? test : test.skip;
 
 function isRunning(pid: number): boolean {
   try {
@@ -510,6 +511,58 @@ describe("runCommand capture", () => {
       expect(result).toEqual({ stdout: `out ${index}\n`, stderr: `err ${index}\n` });
     });
   });
+
+  // Bun can lose a macOS child's exit and leave it a zombie (flake case 1537). This
+  // keeps `exited` pending and answers `ps` as that zombie would. The timer is scaled.
+  for (const [status, expectedCode] of [
+    ["0", 0],
+    ["300", 3],
+  ] as const) {
+    darwinOnly(`settles a lost exit from the zombie's status (${status})`, async () => {
+      const realSpawn = Bun.spawn;
+      const realSpawnSync = Bun.spawnSync;
+      const realSetTimeout = globalThis.setTimeout;
+      const spawned = spyOn(Bun, "spawn").mockImplementation(
+        ((...launch: [string[], object]) =>
+          new Proxy(realSpawn(...launch), {
+            get(target, key) {
+              if (key === "exited") return new Promise(() => undefined);
+              const value = Reflect.get(target, key) as unknown;
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          })) as unknown as typeof Bun.spawn,
+      );
+      const spawnedSync = spyOn(Bun, "spawnSync").mockImplementation(((
+        command: string[],
+        ...rest: []
+      ) =>
+        command.includes("stat=,xstat=")
+          ? { stdout: Buffer.from(`Z ${status}\n`), success: true }
+          : realSpawnSync(command, ...rest)) as unknown as typeof Bun.spawnSync);
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: Parameters<typeof setTimeout>[0],
+        delay: Parameters<typeof setTimeout>[1],
+        ...args: unknown[]
+      ) => realSetTimeout(callback, delay === 1_000 ? 1 : delay, ...args)) as typeof setTimeout);
+      try {
+        const outcome = await runCommand("sh", ["-c", "echo captured"]).catch(
+          (error: unknown) => error,
+        );
+        if (expectedCode === 0) {
+          expect(outcome).toEqual({ stdout: "captured\n", stderr: "" });
+        } else {
+          expect(outcome).toBeInstanceOf(CommandFailedError);
+          expect((outcome as CommandFailedError).exitCode).toBe(expectedCode);
+          expect((outcome as CommandFailedError).timedOut).toBe(false);
+          expect((outcome as CommandFailedError).stdout).toBe("captured\n");
+        }
+      } finally {
+        timer.mockRestore();
+        spawnedSync.mockRestore();
+        spawned.mockRestore();
+      }
+    });
+  }
 
   posixOnly("gives a command with no payload a closed pipe, not /dev/null", async () => {
     const { stdout } = await runCommand("sh", [

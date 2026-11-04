@@ -22,6 +22,7 @@ import {
   writeConfinedFile,
 } from "./path-safety.js";
 import { recurringWorkMetrics, spawnWorkUnit } from "./recurring-work-metrics.js";
+import { groupHasLiveMember, readZombieExit, type CommandExit } from "./shell-process-state.js";
 
 export type ExecResult = {
   stdout: string;
@@ -226,7 +227,10 @@ const MAX_COMMAND_OUTPUT_BYTES = 50 * 1024 * 1024;
 const COMMAND_KILL_GRACE_MS = 100;
 /** A file has no back-pressure, so a runaway command is noticed by looking. */
 const COMMAND_OUTPUT_CHECK_MS = 100;
-const COMMAND_GROUP_POLL_MS = 10;
+const COMMAND_GROUP_POLL_MS = 5;
+const COMMAND_GROUP_POLL_MAX_MS = 200;
+const COMMAND_EXIT_WATCH_MS = 1_000;
+const COMMAND_EXIT_WATCH_MAX_MS = 16_000;
 
 /**
  * Opens a private, already unlinked file for one stream of a command.
@@ -314,15 +318,18 @@ function signalCommand(child: CapturedChild, signal: NodeJS.Signals): void {
   }
 }
 
-/** Whether anything is left of the command's group. An unknown answer counts as yes. */
+/**
+ * Whether anything still runs in the command's group. The signal is the common
+ * path: only a group that still exists is worth enumerating for live members.
+ */
 function commandGroupAlive(child: CapturedChild): boolean {
   if (process.platform === "win32") return false;
   try {
     process.kill(-child.pid, 0);
-    return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
   }
+  return groupHasLiveMember(child.pid);
 }
 
 function executeCommandBytes(
@@ -363,6 +370,8 @@ function executeCommandBytes(
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let groupTimer: ReturnType<typeof setTimeout> | undefined;
     let limitTimer: ReturnType<typeof setInterval> | undefined;
+    let exitWatchTimer: ReturnType<typeof setTimeout> | undefined;
+    let commandExit: CommandExit | undefined;
 
     /** Ends the command's capture and returns what it wrote. Runs exactly once. */
     const finishCapture = (): ExecBufferResult => {
@@ -370,6 +379,7 @@ function executeCommandBytes(
       clearTimeout(timeoutTimer);
       clearTimeout(groupTimer);
       clearInterval(limitTimer);
+      clearTimeout(exitWatchTimer);
       options.signal?.removeEventListener("abort", abort);
       try {
         return { stdout: readCaptureFile(stdoutFd), stderr: readCaptureFile(stderrFd) };
@@ -409,11 +419,11 @@ function executeCommandBytes(
     }, COMMAND_OUTPUT_CHECK_MS);
     const settleOnExit = () => {
       if (settled || timedOut || failIfOverLimit()) return;
-      if (child.exitCode !== 0 || child.signalCode !== null) {
+      if (commandExit?.code !== 0 || commandExit.signal !== null) {
         fail(
           Object.assign(new Error(`Command failed: ${[command, ...args].join(" ")}`), {
-            code: child.exitCode,
-            signal: child.signalCode,
+            code: commandExit?.code,
+            signal: commandExit?.signal,
           }),
         );
         return;
@@ -421,16 +431,40 @@ function executeCommandBytes(
       resolve(finishCapture());
     };
     // Settle once the group is gone: a descendant can outlive the leader, and its
-    // output belongs to this command.
-    const awaitGroupExit = () => {
+    // output belongs to this command. One that has to stay running after the
+    // command has returned needs a session of its own.
+    const awaitGroupExit = (delayMs: number) => {
       if (settled || timedOut) return;
       if (commandGroupAlive(child)) {
-        groupTimer = setTimeout(awaitGroupExit, COMMAND_GROUP_POLL_MS);
+        groupTimer = setTimeout(
+          awaitGroupExit,
+          delayMs,
+          Math.min(delayMs * 2, COMMAND_GROUP_POLL_MAX_MS),
+        );
         return;
       }
       settleOnExit();
     };
-    void child.exited.then(awaitGroupExit);
+    const onCommandExit = (exit: CommandExit) => {
+      if (commandExit) return;
+      commandExit = exit;
+      clearTimeout(exitWatchTimer);
+      awaitGroupExit(COMMAND_GROUP_POLL_MS);
+    };
+    void child.exited.then(() =>
+      onCommandExit({ code: child.exitCode, signal: child.signalCode as NodeJS.Signals | null }),
+    );
+    // On macOS Bun can lose the exit itself, and the child waits as a zombie that
+    // nothing will reap. Its status is still readable, so ask once it has had time.
+    const watchForLostExit = (delayMs: number) => {
+      exitWatchTimer = setTimeout(() => {
+        if (settled || timedOut || commandExit) return;
+        const exit = readZombieExit(child.pid);
+        if (exit) onCommandExit(exit);
+        else watchForLostExit(Math.min(delayMs * 2, COMMAND_EXIT_WATCH_MAX_MS));
+      }, delayMs);
+    };
+    if (process.platform === "darwin") watchForLostExit(COMMAND_EXIT_WATCH_MS);
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;

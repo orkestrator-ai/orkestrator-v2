@@ -306,12 +306,15 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     };
     const runInTerminal = async (line: string) => {
       await focusTerminal();
+      // Control+C first: Escape, which opening an environment presses, would
+      // otherwise combine with the first typed character at the shell's prompt.
+      await window.keyboard.press("Control+C");
       await window.keyboard.insertText(line);
       await window.keyboard.press("Enter");
     };
 
     await openEnvironment(target.name);
-    await runInTerminal("echo READY");
+    await runInTerminal("echo READY-$((40+2))");
     const mainState = () =>
       electronApp.evaluate(
         () => (globalThis as unknown as { __transport: MainTransport }).__transport,
@@ -330,7 +333,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       visibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
-    await expect.poll(output, { timeout: 30_000 }).toContain("READY");
+    await expect.poll(output, { timeout: 30_000 }).toContain("READY-42");
     await window.evaluate((session) => {
       const state = globalThis as typeof globalThis & {
         __frames?: { count: number; desynced: number };
@@ -438,22 +441,22 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       await expect(invoke("get_config")).resolves.toBeTruthy();
 
       const afterDrop = (await frames()).count;
-      await runInTerminal("echo AFTER-RECONNECT");
-      await expect.poll(output, { timeout: 30_000 }).toContain("AFTER-RECONNECT");
+      await runInTerminal("echo AFTER-RECONNECT-$((40+2))");
+      await expect.poll(output, { timeout: 30_000 }).toContain("AFTER-RECONNECT-42");
       await expect
         .poll(async () => (await frames()).count, { timeout: 30_000 })
         .toBeGreaterThan(afterDrop);
     }
 
     // Inactive path: output arrives while another environment is showing.
-    await runInTerminal("sleep 2; echo BACKGROUND-DONE");
+    await runInTerminal("sleep 2; echo BACKGROUND-$((40+2))");
     await openEnvironment(other.name);
     await expect(window.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
-    await expect.poll(output, { timeout: 30_000 }).toContain("BACKGROUND-DONE");
+    await expect.poll(output, { timeout: 30_000 }).toContain("BACKGROUND-42");
     await openEnvironment(target.name);
     await focusTerminal();
-    await runInTerminal("echo BACK-ACTIVE");
-    await expect.poll(output, { timeout: 30_000 }).toContain("BACK-ACTIVE");
+    await runInTerminal("echo BACK-ACTIVE-$((40+2))");
+    await expect.poll(output, { timeout: 30_000 }).toContain("BACK-ACTIVE-42");
 
     // A reload rehydrates from the backend, on the same transport.
     await window.reload();
@@ -463,7 +466,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await expect
       .poll(() => window.evaluate(() => "orkestratorDesktopHost" in window))
       .toBe(mode === "gateway");
-    expect(await output()).toContain("BACK-ACTIVE");
+    expect(await output()).toContain("BACK-ACTIVE-42");
     await window.screenshot({
       path: path.join(previewDir, `local-transport-${mode}-after-reload.png`),
     });
@@ -482,9 +485,9 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         name: "Use the direct transport for new windows",
       });
       await expect(toggle).toHaveAttribute("aria-checked", "false");
+      await window.screenshot({ path: path.join(previewDir, "local-transport-setting-off.png") });
       await toggle.click();
       await expect(toggle).toHaveAttribute("aria-checked", "true");
-      await window.screenshot({ path: path.join(previewDir, "local-transport-setting.png") });
       await expect
         .poll(async () => {
           const config = JSON.parse(
@@ -493,6 +496,14 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
           return config.global.localWindowGatewayTransport;
         })
         .toBe(true);
+      await window.screenshot({ path: path.join(previewDir, "local-transport-setting-on.png") });
+      await electronApp.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]!.setSize(800, 600);
+      });
+      await toggle.scrollIntoViewIfNeeded();
+      await window.screenshot({
+        path: path.join(previewDir, "local-transport-setting-on-narrow.png"),
+      });
 
       const opened = electronApp.waitForEvent("window", {
         predicate: (page) => page.url().startsWith(rendererUrl),

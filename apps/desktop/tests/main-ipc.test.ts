@@ -160,7 +160,7 @@ function createHarness(
     getCaptureStatus: mock(async () => ({ status: "inactive" as const })),
     cancelCapture: mock(async () => undefined),
     listPendingCaptures: mock(async () => []),
-    readPendingCapture: mock(async () => null),
+    readPendingCaptureWire: mock(async () => null),
     replacePendingCaptureImage: mock(async () => ({}) as never),
     acknowledgePendingCapture: mock(async () => undefined),
     discardPendingCapture: mock(async () => undefined),
@@ -720,7 +720,7 @@ describe("main IPC registration", () => {
     expect(previews.getCaptureStatus).toHaveBeenCalledWith("browser-1");
     expect(previews.cancelCapture).toHaveBeenCalledWith("browser-1");
     expect(previews.listPendingCaptures).toHaveBeenCalledTimes(1);
-    expect(previews.readPendingCapture).toHaveBeenCalledWith(CAPTURE_ID);
+    expect(previews.readPendingCaptureWire).toHaveBeenCalledWith(CAPTURE_ID);
     expect(previews.replacePendingCaptureImage).toHaveBeenCalledWith(CAPTURE_ID, {
       imageDataUrl: null,
       manualRegions: 3,
@@ -865,7 +865,7 @@ describe("main IPC registration", () => {
     for (const method of [
       "startCapture",
       "getCaptureStatus",
-      "readPendingCapture",
+      "readPendingCaptureWire",
       "discardPendingCapture",
       "replacePendingCaptureImage",
       "acknowledgePendingCapture",

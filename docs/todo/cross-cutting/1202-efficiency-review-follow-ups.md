@@ -37,7 +37,7 @@ governs, marked "Decided".
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
-12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
+12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open (DK-1, DK-2 and DK-5 done 2026-11-04 behind a setting that is off by default; DK-6 still applies and moved to [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
@@ -548,6 +548,35 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 **Context.** Decided 2026-11-01: local windows use the direct gateway transport with a per-window rollback switch, starting with filtered SSE and not tied to the terminal WebSocket. Local desktop traffic is unaffected by the `on` compression default: `backend-process.ts` calls control-only routes, and the control listener never compresses (inferred from code, not tested).
 
 **Investigation.** `backend-process.ts` opens `/__orkestrator/events` with only a cursor (confirmed 2026-11-01). The browser path filters terminal output (`web-gateway.ts`). `installRemoteGatewayRequestAuth` already exists for remote windows. DK-5 and DK-6 are smaller IPC costs.
+
+Re-checked and built 2026-11-04 on branch `desktop-window-transport-e6e965c2f004-r1` (based on `main` at `96ee1eb3e`). All four items still held as the report describes. How it works now is in [remote-gateway.md](../../architecture/remote-gateway.md).
+
+**Before and after.** `e2e/agent-testing/local-gateway-transport-electron.spec.ts` drives a real Electron window in a disposable agent-test profile and writes these counts to `output/agent-testing/local-transport-counts/`. The load is one window and one local terminal printing 300 lines, one every 10 ms or more (`seq` with `sleep 0.01`). The table is one run, and counts are for that load only. Across repeated runs the relay stayed within 302–304 events and 13–15 commands, and the gateway within 303–304 frames and 13–14 commands.
+
+| Measured during the load | Relay (setting off) | Gateway (setting on) |
+| --- | --- | --- |
+| Backend events main relayed to the window (`orkestrator:event`) | 304 | 0 |
+| Of those, terminal output | 304 | 0 |
+| Bytes main read from its own event stream | 53,080 | 0 |
+| Main's event stream query | none | `excludeEvents=terminal-output-` |
+| Terminal frames the page received | 304 | 303 |
+| Commands through main | 14 | 0 |
+| Commands the page sent itself | 0 | 14 |
+
+| Per `invoke`, from the code path | Relay | Gateway |
+| --- | --- | --- |
+| Renderer to main, structured clone | 1 | 0 |
+| `JSON.stringify` | 1, in main | 1, in the renderer |
+| `response.json()` | 1, in main | 1, in the renderer |
+| Main to renderer, structured clone | 1 | 0 |
+| **Serialisations per invoke** | **4** | **2** |
+| Crossings of the context bridge (copied, on top of the above) | 2 | 0 |
+
+These count events and serialisations. Electron main's CPU, the baseline [0400](../../reports/efficiency-logging-database/0400-e26-local-desktop-transport.md) recommends, was not measured.
+
+**DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. A region crop still crosses as a data URL. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
+
+**DK-6 (still applies, not fixed).** Re-checked: `openPreviewTunnel` still opens one WebSocket, with HELLO and OPEN, per upstream connection. The pool (`preview-transport-manager.ts`, in since 2026-09-23, so before the report) reuses an idle connection for 2 s and keeps up to six, which spares sequential requests but not parallel ones, upgrades, or requests after an idle gap. It is not an IPC cost: these sockets run from Electron main to the backend. Multiplexing means a new tunnel protocol with per-stream flow control and version negotiation, so it moved to [4500](4500-preview-tunnel-one-socket-per-connection.md). This does not meet the ticket's "fixed or no longer applies" criterion for DK-6, and the maintainer should decide on 4500.
 
 **Decisions.**
 
@@ -1151,6 +1180,22 @@ its cache or with a delta the public page cannot express. It would also make
 `unchanged` depend on cache state rather than on the transcript. The provider
 read on each poll stays, and reducing it belongs with task 4.
 
+### Task 12: a renderer-side composition rather than a preload-side stream (DK-1, DK-2)
+
+Chose to compose `window.orkestrator` in the renderer from a preload host and the existing gateway client. Running the stream in the preload needs no renderer change, but each event and command would still be copied across the context bridge, and it would duplicate the gateway client's reconnect and terminal recovery. Cost: the preload exposes `orkestratorDesktopHost` instead of `orkestrator` for these windows, and `waitForDesktopConnection` has to look at both.
+
+### Task 12: commands move with events (DK-2)
+
+Moved commands too, as 0400 recommends, since that is what removes the serialisations. Terminal input ordering is preserved by the gateway client's own `TerminalInputSequencer`, the one browser clients use, which passes the shared terminal input contract in `web-gateway-local-desktop.test.ts`. Its ambiguous-send fence now lives in the page, so a reload clears it, as it does in a browser tab. Under the relay it lived in main and survived a reload.
+
+### Task 12: one shared terminal stream, and a command sent as the page goes
+
+A gateway client with a `baseUrl` opens one fetch per terminal, which on a plain-HTTP listener would exhaust Chromium's six connections and stall commands, so `sharedTerminalStream` keeps them on one. Widening that stream reopens it, which costs each mounted terminal a snapshot read, as in a browser. A fetch ends with its page, unlike a command held by main, so `keepaliveOnPageHide` sets `keepalive` on commands sent during `pagehide` that fit its 64 KiB limit (a final pane layout write). A larger one is lost if the page goes first.
+
+### Task 12: the setting
+
+Read per window at creation from `config.json`, off by default, on Settings → Experimental for a local desktop window only, as the ticket decides. The switch is not offered in a browser or on a remote window, where it would edit a config this app does not read.
+
 ## Current state
 
 Done on 2026-11-01 (see each task's Context): ST-7, ST-8, WEB-2 (partly),
@@ -1170,6 +1215,7 @@ browser and real-stack suites were not run.
 
 ## Needs verification
 
+- Task 12 on a packaged `file://` window: the Electron spec uses the dev renderer, so the packaged Content Security Policy and origin are unexercised on the new transport (read from code: `connect-src` allows `http:`, and main rewrites `Origin`). Tracked in [4501](4501-local-window-transport-default.md).
 - Before-and-after numbers for every landed item (task 1).
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.

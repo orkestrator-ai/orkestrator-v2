@@ -13,7 +13,7 @@ import type {
   BrowserPreviewResponsiveSetResult,
   BrowserPreviewShowOnPageInput,
   BrowserPreviewShowOnPageResult,
-  BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewPinsInput,
   BrowserPreviewSelectionStatus,
@@ -99,7 +99,7 @@ export type BrowserPreviewController = {
   getCaptureStatus(tabId: string): Promise<BrowserPreviewSelectionStatus>;
   cancelCapture(tabId: string): Promise<void>;
   listPendingCaptures(): Promise<BrowserPreviewPendingCaptureDescriptor[]>;
-  readPendingCapture(captureId: string): Promise<BrowserPreviewPendingCapture | null>;
+  readPendingCaptureWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null>;
   replacePendingCaptureImage(
     captureId: string,
     input: BrowserPreviewReplaceImageInput,
@@ -546,7 +546,7 @@ export function registerMainIpc({
     previews(event).listPendingCaptures(),
   );
   handle("orkestrator:browser-preview:capture-pending-read", (event, id: unknown) =>
-    previews(event).readPendingCapture(captureId(id)),
+    previews(event).readPendingCaptureWire(captureId(id)),
   );
   handle(
     "orkestrator:browser-preview:capture-pending-replace-image",

@@ -1,6 +1,7 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
   BrowserPreviewCaptureApi,
+  BrowserPreviewPendingCaptureWire,
   BrowserPreviewServiceTarget,
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
@@ -171,6 +172,29 @@ export function exposeDesktopApi(
   else contextBridge.exposeInMainWorld("orkestrator", api);
 }
 
+const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
+/** `String.fromCharCode` takes its bytes as arguments, so bound how many at once. */
+const BINARY_STRING_CHUNK_BYTES = 0x8000;
+
+function pngBytesToDataUrl(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += BINARY_STRING_CHUNK_BYTES) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + BINARY_STRING_CHUNK_BYTES));
+  }
+  return `${PNG_DATA_URL_PREFIX}${btoa(binary)}`;
+}
+
+/** Bytes for a well-formed PNG data URL; anything else is main's to refuse. */
+function pngDataUrlToBytes(value: string): Uint8Array | null {
+  if (!value.startsWith(PNG_DATA_URL_PREFIX)) return null;
+  try {
+    const binary = atob(value.slice(PNG_DATA_URL_PREFIX.length));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
 /** `window.orkestrator.browserPreview.capture`, exactly `BrowserPreviewCaptureApi`. */
 export function createBrowserPreviewCaptureApi(
   ipcRenderer: IpcRendererLike,
@@ -183,14 +207,24 @@ export function createBrowserPreviewCaptureApi(
       ipcRenderer.invoke("orkestrator:browser-preview:capture-cancel", tabId),
     listPendingCaptures: () =>
       ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-list"),
-    readPendingCapture: (captureId) =>
-      ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-read", captureId),
-    replacePendingCaptureImage: (captureId, input) =>
-      ipcRenderer.invoke(
+    // The PNG crosses IPC as bytes; this API's data URLs are made on this side.
+    readPendingCapture: async (captureId) => {
+      const pending = await ipcRenderer.invoke<BrowserPreviewPendingCaptureWire | null>(
+        "orkestrator:browser-preview:capture-pending-read",
+        captureId,
+      );
+      if (!pending) return null;
+      const { imageBytes, ...rest } = pending;
+      return { ...rest, imageDataUrl: imageBytes ? pngBytesToDataUrl(imageBytes) : null };
+    },
+    replacePendingCaptureImage: (captureId, input) => {
+      const imageBytes = input.imageDataUrl ? pngDataUrlToBytes(input.imageDataUrl) : null;
+      return ipcRenderer.invoke(
         "orkestrator:browser-preview:capture-pending-replace-image",
         captureId,
-        input,
-      ),
+        imageBytes ? { ...input, imageDataUrl: null, imageBytes } : input,
+      );
+    },
     acknowledgePendingCapture: (ack) =>
       ipcRenderer.invoke("orkestrator:browser-preview:capture-pending-ack", ack),
     discardPendingCapture: (captureId) =>

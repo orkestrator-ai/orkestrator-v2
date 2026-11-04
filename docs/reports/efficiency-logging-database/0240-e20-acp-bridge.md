@@ -20,7 +20,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Remove the Cursor branches from the ACP bridge**: delete the replay and repoint its test harness. Status: open.
+1. **Remove the Cursor branches from the ACP bridge**: delete the replay and repoint its test harness. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 #### 1. Remove the Cursor branches from the ACP bridge
 
@@ -56,7 +56,7 @@ The tests are the catch. `acp-test-harness.ts:246` defaults to `ACP_PROVIDER: "c
 
 #### Tasks
 
-1. **Frame stdout with a chunk list and scan offset**: stop copying and rescanning the buffer on each chunk. Status: open.
+1. **Frame stdout with a chunk list and scan offset**: stop copying and rescanning the buffer on each chunk. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 #### 1. Frame stdout with a chunk list and scan offset
 

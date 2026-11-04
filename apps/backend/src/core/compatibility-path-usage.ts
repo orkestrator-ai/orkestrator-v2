@@ -41,6 +41,8 @@ export const COMPATIBILITY_PATH_IDS = [
   "mcp-report.older-bridge-outcome",
   /** A request used the legacy `/__orkestrator/browser/loopback/<port>/` preview route. */
   "preview.legacy-loopback-route",
+  /** A desktop opened a v1 preview tunnel socket: it predates tunnel v2. */
+  "preview.tunnel-v1",
   /**
    * Verify read an Address session's last assistant text because the session
    * has no typed `fix-result` marker: it started before the typed handoff.

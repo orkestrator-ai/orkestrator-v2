@@ -269,6 +269,64 @@ describe("LoopbackListenerOwnership", () => {
     );
   });
 
+  test("a port lookup reports the sorted pids without listing processes", async () => {
+    const host = fakeHost({ listeners: { 3000: [500, 300] } });
+    const checker = ownership(host, []);
+    expect(await checker.listenerPids(3000, "ipv4")).toEqual([300, 500]);
+    expect(host.calls.map((call) => call.command)).toEqual(["lsof"]);
+    expect(await checker.listenerPids(3001, "ipv4")).toEqual([]);
+  });
+
+  test("concurrent port lookups of one port and family share a command", async () => {
+    const host = fakeHost({ listeners: { 3000: [300] } });
+    const checker = ownership(host, []);
+    const results = await Promise.all([
+      checker.listenerPids(3000, "ipv4"),
+      checker.listenerPids(3000, "ipv4"),
+    ]);
+    expect(results).toEqual([[300], [300]]);
+    expect(host.calls).toHaveLength(1);
+    await checker.listenerPids(3000, "ipv4");
+    await checker.listenerPids(3000, "ipv6");
+    expect(host.calls).toHaveLength(3);
+  });
+
+  test("a port lookup that cannot tell says so instead of reporting nobody", async () => {
+    const missing = new CommandFailedError("not found", { executableMissing: true });
+    const lookup = (host: ReturnType<typeof fakeHost>, platform: NodeJS.Platform = "darwin") =>
+      ownership(host, [], platform).listenerPids(3000, "ipv4");
+    expect(await lookup(fakeHost({ lsofError: missing }))).toBeNull();
+    expect(
+      await lookup(fakeHost({ lsofError: new CommandFailedError("slow", { timedOut: true }) })),
+    ).toBeNull();
+    expect(await lookup(fakeHost({ listeners: { 3000: [300] } }), "win32")).toBeNull();
+    // A listener ss cannot name a process for could be anyone's.
+    expect(
+      await lookup(
+        fakeHost({ lsofError: missing, ss: "LISTEN 0 511 127.0.0.1:3000 0.0.0.0:*\n" }),
+        "linux",
+      ),
+    ).toBeNull();
+    expect(
+      await lookup(
+        fakeHost({
+          lsofError: missing,
+          ss: 'LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=300,fd=18))\n',
+        }),
+        "linux",
+      ),
+    ).toEqual([300]);
+  });
+
+  test("an attributed listener reports the pids a later lookup compares with", async () => {
+    const host = fakeHost({ listeners: { 3000: [300, 200] } });
+    const checker = ownership(host, [{ environmentId: "a", pid: 100 }]);
+    expect(await checker.attribute("a", 3000, "ipv4")).toMatchObject({
+      attribution: "this-environment",
+      listenerPids: [200, 300],
+    });
+  });
+
   test("the process key changes when the listener restarts", async () => {
     const roots = [{ environmentId: "a", pid: 100 }];
     const first = await ownership(fakeHost({ listeners: { 3000: [300] } }), roots).attribute(

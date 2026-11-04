@@ -1,4 +1,4 @@
-import { useId, useRef, type ReactNode, type Ref } from "react";
+import { useContext, useId, useRef, type ReactNode, type Ref } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import {
   ChevronRight,
@@ -27,6 +27,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
+import { RepositoryMemberContext } from "@/contexts/RepositoryMemberContext";
 import { cn } from "@/lib/utils";
 
 /** What a project's context menu can do. Optional entries appear only where they apply. */
@@ -125,6 +126,10 @@ export function ProjectGroupHeader({
     ) : null);
   const coordinatorLabel = coordinatorActivityLabel(coordinatorActivity);
   const coordinatorDescriptionId = useId();
+  const repositoryMember = useContext(RepositoryMemberContext);
+  const activityIcon = leadingIcon && (
+    <CoordinatorActivityIcon state={coordinatorActivity}>{leadingIcon}</CoordinatorActivityIcon>
+  );
   return (
     <div
       ref={rowRef}
@@ -156,6 +161,10 @@ export function ProjectGroupHeader({
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground",
               sortable && "cursor-grab active:cursor-grabbing",
+              // The label starts 8 px past a 14 px icon centred in the slot
+              // below, whether or not there is an icon: a coordinator's icon
+              // appearing on a row without one must not move the text.
+              repositoryMember && "relative pl-[39px]",
             )}
             onClick={(event) => {
               event.stopPropagation();
@@ -166,10 +175,14 @@ export function ProjectGroupHeader({
             onFocus={tooltip.show}
             onBlur={tooltip.hide}
           >
-            {leadingIcon && (
-              <CoordinatorActivityIcon state={coordinatorActivity}>
-                {leadingIcon}
-              </CoordinatorActivityIcon>
+            {repositoryMember && activityIcon ? (
+              // As wide as the group's 32 px icon and at the same left edge, so
+              // the two share a centre line.
+              <span className="absolute inset-y-0 left-2 flex w-8 items-center justify-center">
+                {activityIcon}
+              </span>
+            ) : (
+              activityIcon
             )}
             <span className={cn("truncate font-medium", labelClassName)}>{label}</span>
             {card.environmentCount > 0 && (

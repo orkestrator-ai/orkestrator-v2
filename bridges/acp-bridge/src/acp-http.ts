@@ -94,10 +94,7 @@ import {
 import { listNormalizedModels } from "./acp-persistence.js";
 import { persistState } from "./acp-persist-writer.js";
 import { closeSessionRetaining, denyPendingRequests } from "./acp-session-close.js";
-import {
-  cancelCursorToolMetadataReconcile,
-  scheduleCursorToolMetadataReconcile,
-} from "./acp-tools.js";
+import {} from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason, turnTerminalError } from "./acp-prompt.js";
 import { sessionActivityObservation } from "./acp-activity.js";
@@ -993,14 +990,6 @@ export async function route(
         }
         state.revision += 1;
         schedulePersist();
-        // The final pass is the safety net for every title a live pass could not
-        // reach: one Cursor had not yet indexed, one skipped because a sibling
-        // was still in flight, and one dropped because the turn spent its live
-        // budget. It remains outside the authoritative turn lifecycle: a slow or
-        // incompatible replay cannot keep the session working, block the next
-        // prompt, or make completion ambiguous. The per-session scheduler also
-        // prevents this pass from racing an in-flight live enrichment.
-        scheduleCursorToolMetadataReconcile(state, { final: true });
       },
       (error: unknown) => {
         state.status = "error";
@@ -1012,11 +1001,6 @@ export async function route(
         state.completedAttemptUsage = undefined;
         state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
-        // A turn that failed gets no final pass, so a live timer armed moments
-        // before the failure has nothing left to complete. Drop it here for the
-        // same reason `DELETE` and `shutdown` do: enrichment is display-only
-        // background work, and nothing should outlive the turn that asked for it.
-        cancelCursorToolMetadataReconcile(state);
         reconcileStaleToolParts(state, true);
         settleCommandChangeWindows(state);
         endAcpTurnEvidence(state, "failed");
@@ -1078,7 +1062,6 @@ export async function route(
         : json(response, 503, { error: "Session close did not complete" });
     }
     denyPendingRequests(state);
-    cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);
     if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);

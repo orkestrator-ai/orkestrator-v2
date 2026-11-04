@@ -103,6 +103,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { CoordinatorAccountSwitchNotices } from "@/components/federation/CoordinatorAccountSwitchNotices";
 import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
 import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
@@ -1318,7 +1319,7 @@ function ConnectedApp() {
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
               role="alert"
-              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-border bg-popover/95 px-4 py-3 text-sm text-popover-foreground shadow-xl backdrop-blur-sm"
             >
               <span>
                 Orkestrator could not check Docker availability. Container actions remain disabled
@@ -1732,6 +1733,7 @@ function ConnectedApp() {
             <SshPromptDialog />
             <FederationEffects />
             <NodeActionRequestsDialog />
+            <CoordinatorAccountSwitchNotices />
             <ProjectCopyDialog />
             <CommandHandoverDialog />
             {/* SSH prompts from this node's own tunnels to the nodes it commands. */}

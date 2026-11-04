@@ -9,6 +9,7 @@ import type {
   ProjectGitSwitchConfirmation,
   ProjectGitSwitchOptions,
 } from "@orkestrator/protocol/coordinator";
+import { canFastForwardUpstream } from "@orkestrator/protocol/coordinator-upstream-merge";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { runGitWithFsmonitorFallback } from "./git-fsmonitor.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
@@ -113,6 +114,12 @@ export type CheckoutChanges = {
   files: string[];
 };
 
+/** What `fastForwardToFetchedUpstream` did. */
+export type FetchedUpstreamFastForward =
+  | { outcome: "fast-forwarded"; status: ProjectGitStatus }
+  | { outcome: "not-behind" | "blocked"; status: ProjectGitStatus }
+  | { outcome: "busy"; status: null };
+
 export type ProjectBaseContainment = { contained: true } | { contained: false; reason: string };
 
 async function readCommit(root: string, ref: string): Promise<string | null> {
@@ -134,12 +141,14 @@ import { resolveProjectGitRoot } from "./project-git-root.js";
 export class ProjectGitService {
   private readonly operations = new Map<string, Promise<unknown>>();
   private readonly mergeSyncs = new Map<string, Promise<ProjectGitStatus>>();
+  private readonly fetchedFastForwards = new Map<string, Promise<FetchedUpstreamFastForward>>();
   private readonly activeMutations = new Set<string>();
   private readonly pendingTurns = new Map<string, number>();
   private readonly fetches = new Map<
     string,
     { force: boolean; promise: Promise<ProjectGitStatus> }
   >();
+  private readonly fetching = new Set<string>();
   private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
   private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
   private readonly confirmations = new Map<
@@ -542,7 +551,7 @@ export class ProjectGitService {
       mergeInProgress,
       rebaseInProgress,
       sequencerInProgress,
-      operationState: "idle",
+      operationState: this.fetching.has(projectId) ? "fetching" : "idle",
       repositoryOperationBlockedReason: blockedReason,
       branches,
       lastError: previous?.lastError ?? null,
@@ -708,7 +717,7 @@ export class ProjectGitService {
     }
     const operation = (async () => {
       const root = await this.root(projectId);
-      return this.serialize(root, async () => {
+      const prepared = await this.serialize(root, async () => {
         const before = await this.readStatus(
           projectId,
           root,
@@ -720,7 +729,7 @@ export class ProjectGitService {
           before.fetchedAt &&
           Date.now() - Date.parse(before.fetchedAt) < FETCH_COOLDOWN_MS
         ) {
-          return before;
+          return { status: before };
         }
         const configuredRemotes = before.remote
           ? [before.remote]
@@ -734,39 +743,52 @@ export class ProjectGitService {
               .map((remote) => remote.trim())
               .filter(Boolean);
         if (configuredRemotes.length === 0) {
-          return this.persist(projectId, {
-            ...before,
-            remoteState: "unknown",
-            // A repository without remotes is a valid local-only state, so do
-            // not retain an error that makes the checkout look broken.
-            lastError: null,
-          });
+          return {
+            status: await this.persist(projectId, {
+              ...before,
+              remoteState: "unknown",
+              // A repository without remotes is a valid local-only state, so do
+              // not retain an error that makes the checkout look broken.
+              lastError: null,
+            }),
+          };
         }
+        this.fetching.add(projectId);
         await this.operationState(projectId, "fetching");
-        try {
-          await runRemoteGit(
-            "fetch",
-            before.remote ? ["--prune", before.remote] : ["--prune", "--all"],
-            {
-              cwd: root,
-              timeoutMs: 60_000,
-            },
-          );
-          const refreshed = await this.readStatus(projectId, root, before);
-          refreshed.remoteState = "fresh";
-          refreshed.fetchedAt = new Date().toISOString();
-          refreshed.lastError = null;
-          return this.persist(projectId, refreshed);
-        } catch (error) {
-          return this.persist(projectId, {
-            ...before,
-            operationState: "idle",
-            remoteState: "stale",
-            lastError: gitError("fetch", error),
-          });
-        }
+        return { remote: before.remote };
+      });
+      if ("status" in prepared) return prepared.status!;
+      let fetchError: ProjectGitStatus["lastError"] = null;
+      try {
+        await runRemoteGit(
+          "fetch",
+          prepared.remote ? ["--prune", prepared.remote] : ["--prune", "--all"],
+          {
+            cwd: root,
+            timeoutMs: 60_000,
+          },
+        );
+      } catch (error) {
+        fetchError = gitError("fetch", error);
+      }
+      // Network I/O moves only remote refs. Publish against the current
+      // checkout under the same lock as local fast-forwards, never its old head.
+      return this.serialize(root, async () => {
+        this.fetching.delete(projectId);
+        const current = (await this.storage.coordinators.getCoordinatorWorkspace(projectId))
+          ?.repositoryStatus;
+        const refreshed = await this.readStatus(projectId, root, current).catch((error) => {
+          if (!current) throw error;
+          fetchError ??= gitError("fetch", error);
+          return { ...current, revision: current.revision + 1, operationState: "idle" as const };
+        });
+        refreshed.remoteState = fetchError ? "stale" : "fresh";
+        if (!fetchError) refreshed.fetchedAt = new Date().toISOString();
+        refreshed.lastError = fetchError;
+        return this.persist(projectId, refreshed);
       });
     })().finally(() => {
+      this.fetching.delete(projectId);
       if (this.fetches.get(projectId)?.promise === operation) this.fetches.delete(projectId);
     });
     this.fetches.set(projectId, { force, promise: operation });
@@ -965,7 +987,10 @@ export class ProjectGitService {
 
   /** User operations wait for an unattended merge sync, then recheck admission. */
   async waitForMergeSync(projectId: string): Promise<void> {
-    await this.mergeSyncs.get(projectId)?.catch(() => undefined);
+    await Promise.all([
+      this.mergeSyncs.get(projectId)?.catch(() => undefined),
+      this.fetchedFastForwards.get(projectId)?.catch(() => undefined),
+    ]);
   }
 
   async beginTurnAfterMergeSync(projectId: string): Promise<() => void> {
@@ -983,6 +1008,83 @@ export class ProjectGitService {
       () => this.mergeSyncs.delete(projectId),
     );
     return sync;
+  }
+
+  /**
+   * Fast-forwards the checkout to the upstream commit it has already fetched,
+   * without the network: what a coordinator message does when a fresh fetch
+   * is slow or fails. The same rule as a sync (a clean checkout, no local
+   * commits, no unfinished operation, no running or starting turn), and turn
+   * admission waits for it like a merge sync.
+   *
+   * Shares the checkout queue with status publication and other mutations.
+   * Fetch network I/O runs outside that queue and only moves remote refs;
+   * this merges the exact commit read by its initial status.
+   */
+  fastForwardToFetchedUpstream(projectId: string): Promise<FetchedUpstreamFastForward> {
+    if (
+      this.activeMutations.has(projectId) ||
+      (this.pendingTurns.get(projectId) ?? 0) > 0 ||
+      this.mergeSyncs.has(projectId) ||
+      this.fetchedFastForwards.has(projectId)
+    ) {
+      return Promise.resolve({ outcome: "busy", status: null });
+    }
+    // Claimed synchronously, as a merge sync is, so a turn that starts now
+    // waits for it rather than racing it.
+    this.activeMutations.add(projectId);
+    const run = this.root(projectId)
+      .then((root) => this.serialize(root, () => this.fastForwardToFetchedUpstreamOnce(projectId)))
+      .finally(() => {
+        this.activeMutations.delete(projectId);
+        this.fetchedFastForwards.delete(projectId);
+      });
+    this.fetchedFastForwards.set(projectId, run);
+    return run;
+  }
+
+  private async fastForwardToFetchedUpstreamOnce(
+    projectId: string,
+  ): Promise<FetchedUpstreamFastForward> {
+    if (await this.hasActiveCoordinatorTurns(projectId)) return { outcome: "busy", status: null };
+    const root = await this.root(projectId);
+    const before = await this.readStatus(
+      projectId,
+      root,
+      (await this.storage.coordinators.getCoordinatorWorkspace(projectId))?.repositoryStatus,
+    );
+    if (!canFastForwardUpstream(before) || !before.upstreamCommit) {
+      const status = await this.persist(projectId, before);
+      return {
+        outcome: before.upstream && (before.behind ?? 0) > 0 ? "blocked" : "not-behind",
+        status,
+      };
+    }
+    if (!COMMIT_ID.test(before.upstreamCommit)) {
+      throw new Error("The upstream commit could not be read");
+    }
+    await this.operationState(projectId, this.fetching.has(projectId) ? "fetching" : "syncing");
+    try {
+      // The exact commit just checked, not `@{upstream}`, which the slow
+      // fetch may move while this runs.
+      await runCommand("git", ["merge", "--ff-only", "--no-stat", before.upstreamCommit], {
+        cwd: root,
+        timeoutMs: 30_000,
+      });
+    } catch (error) {
+      const refreshed = await this.readStatus(projectId, root, before).catch(() => before);
+      refreshed.operationState = this.fetching.has(projectId) ? "fetching" : "idle";
+      refreshed.lastError = gitError("sync", error);
+      await this.persist(projectId, refreshed);
+      throw new Error(refreshed.lastError.message);
+    }
+    const refreshed = await this.readStatus(projectId, root, before);
+    // A failed or unfinished fetch is still news; an earlier sync failure is not.
+    if (refreshed.lastError?.operation !== "fetch") refreshed.lastError = null;
+    return {
+      outcome: "fast-forwarded",
+      status: await this.persist(projectId, refreshed, "upstream"),
+    };
   }
 
   async sync(projectId: string): Promise<ProjectGitStatus> {

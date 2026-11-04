@@ -25,6 +25,7 @@
 import { decideUpstreamMergeOffer } from "@orkestrator/protocol/coordinator-upstream-merge";
 import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { FetchedUpstreamFastForward } from "./project-git-service.js";
 
 const log = createLogger("coordinator");
 
@@ -34,6 +35,7 @@ export interface ProjectCheckoutGit {
   fetch(projectId: string, force?: boolean): Promise<ProjectGitStatus>;
   sync(projectId: string): Promise<ProjectGitStatus>;
   syncAfterMerge?(projectId: string): Promise<ProjectGitStatus>;
+  fastForwardToFetchedUpstream?(projectId: string): Promise<FetchedUpstreamFastForward>;
 }
 
 export type ProjectCheckoutFollowOutcome =

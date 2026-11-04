@@ -80,7 +80,12 @@ export interface JsonlRpcClientOptions {
    * Enqueue-only. Called synchronously from the read loop; must not do work.
    * `threadId` is null for connection-scoped notifications.
    */
-  onNotification: (notification: InboundNotification, threadId: string | null) => void;
+  /** `lineBytes` is the size of the line it was parsed from, for the queue's byte bound. */
+  onNotification: (
+    notification: InboundNotification,
+    threadId: string | null,
+    lineBytes: number,
+  ) => void;
   /** Fire-and-forget. The router owns responding within its own timeout. */
   onServerRequest: (request: InboundServerRequest) => void;
   onProtocolViolation?: (detail: string, preview: string) => void;
@@ -243,7 +248,12 @@ export class JsonlRpcClient {
     let scanExhausted = false;
     try {
       let newlineIndex: number;
-      while ((newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0) {
+      // Overflow recovery closes this client synchronously; never apply lines
+      // after the dropped gap, even if they arrived in the same stdout chunk.
+      while (
+        !this.closed &&
+        (newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0
+      ) {
         // Slice off `\r` too so CRLF framing does not corrupt the JSON tail.
         const raw = this.buffer.slice(lineStart, newlineIndex).replace(/\r$/, "");
         lineStart = newlineIndex + 1;
@@ -329,7 +339,11 @@ export class JsonlRpcClient {
       case "notification": {
         this.metrics.notificationsReceived += 1;
         try {
-          this.options.onNotification(message, extractThreadId(message.params));
+          this.options.onNotification(
+            message,
+            extractThreadId(message.params),
+            Buffer.byteLength(line, "utf8"),
+          );
         } catch (error) {
           log.error("notification.enqueue-failed", { error: formatLogError(error) });
         }
@@ -537,16 +551,64 @@ export class JsonlRpcClient {
   }
 }
 
+/** Far above what one stdout chunk can hold; only a stuck consumer gets here. */
+export const DEFAULT_NOTIFICATION_QUEUE_MAX_DEPTH = 100_000;
+/** Room for several lines at the 64 MiB inbound limit. */
+export const DEFAULT_NOTIFICATION_QUEUE_MAX_BYTES = 256 * 1024 * 1024;
+/** How many finished slots a key's array may keep before they are cut off. */
+const SERIAL_QUEUE_COMPACT_AFTER = 1_024;
+
+export interface SerialQueueOptions {
+  maxDepth?: number;
+  maxBytes?: number;
+  /**
+   * Runs synchronously inside `run`, so on the transport's read loop: it must
+   * not await. The task that overflowed and everything not yet started are
+   * already gone when it is called.
+   */
+  onOverflow?: (overflow: { depth: number; bytes: number }) => void;
+}
+
+interface SerialQueueEntry {
+  task: () => Promise<void> | void;
+  bytes: number;
+}
+
+interface SerialKeyQueue {
+  tasks: (SerialQueueEntry | undefined)[];
+  head: number;
+  enqueued: number;
+  finished: number;
+  /** In order of `target`, because `enqueued` only grows. */
+  waiters: { target: number; resolve: () => void }[];
+}
+
 /**
  * Serial, per-key queue for notification processing.
  *
  * Ordering is guaranteed within a thread and independent across threads, so an
  * expensive rebuild on one thread cannot delay or reorder another's events.
+ *
+ * Each key's tasks sit in an array drained in one microtask, so a synchronous
+ * task allocates no promise. The read loop cannot wait for a slow consumer, so
+ * the backlog goes here, and it is bounded: a queue over its count or byte limit
+ * drops what has not started and reports it, because dropping one notification
+ * and carrying on would silently corrupt a turn.
  */
 export class SerialQueue {
-  private readonly chains = new Map<string, Promise<void>>();
+  private readonly queues = new Map<string, SerialKeyQueue>();
+  private readonly maxDepth: number;
+  private readonly maxBytes: number;
+  private readonly onOverflow: SerialQueueOptions["onOverflow"];
   private depth = 0;
+  private bytes = 0;
   private maxObservedDepth = 0;
+
+  constructor(options: SerialQueueOptions = {}) {
+    this.maxDepth = options.maxDepth ?? DEFAULT_NOTIFICATION_QUEUE_MAX_DEPTH;
+    this.maxBytes = options.maxBytes ?? DEFAULT_NOTIFICATION_QUEUE_MAX_BYTES;
+    this.onOverflow = options.onOverflow;
+  }
 
   get pendingDepth(): number {
     return this.depth;
@@ -556,35 +618,98 @@ export class SerialQueue {
     return this.maxObservedDepth;
   }
 
-  run(key: string, task: () => Promise<void> | void): void {
+  /** `bytes` is what the task keeps alive until it runs. */
+  run(key: string, task: () => Promise<void> | void, bytes = 0): void {
+    if (this.depth >= this.maxDepth || this.bytes + bytes > this.maxBytes) {
+      const overflow = { depth: this.depth, bytes: this.bytes };
+      log.error("queue.overflow", overflow);
+      this.clear();
+      this.onOverflow?.(overflow);
+      return;
+    }
     this.depth += 1;
+    this.bytes += bytes;
     this.maxObservedDepth = Math.max(this.maxObservedDepth, this.depth);
-    const previous = this.chains.get(key) ?? Promise.resolve();
-    const next = previous
-      .then(() => task())
-      .catch((error: unknown) => {
-        log.error("queue.task-failed", { key, error: formatLogError(error) });
-      })
-      .finally(() => {
-        this.depth -= 1;
-        // Only clear when this task was the tail, or we would drop a queued
-        // successor that is still waiting behind us.
-        if (this.chains.get(key) === next) this.chains.delete(key);
-      });
-    this.chains.set(key, next);
+    let queue = this.queues.get(key);
+    if (!queue) {
+      queue = { tasks: [], head: 0, enqueued: 0, finished: 0, waiters: [] };
+      this.queues.set(key, queue);
+      const started = queue;
+      queueMicrotask(() => this.pump(key, started));
+    }
+    queue.tasks.push({ task, bytes });
+    queue.enqueued += 1;
   }
 
   /** Resolves once everything currently queued for `key` has drained. */
-  async drain(key: string): Promise<void> {
-    await (this.chains.get(key) ?? Promise.resolve());
+  drain(key: string): Promise<void> {
+    const queue = this.queues.get(key);
+    if (!queue) return Promise.resolve();
+    return new Promise((resolve) => {
+      queue.waiters.push({ target: queue.enqueued, resolve });
+    });
   }
 
   async drainAll(): Promise<void> {
-    await Promise.all(this.chains.values());
+    await Promise.all(Array.from(this.queues.keys(), (key) => this.drain(key)));
   }
 
+  /**
+   * Forgets every key and drops what has not started. A task already running
+   * finishes, but no longer counts, and a later `run` does not wait for it.
+   */
   clear(): void {
-    this.chains.clear();
+    for (const queue of this.queues.values()) {
+      for (const waiter of queue.waiters) waiter.resolve();
+    }
+    this.queues.clear();
     this.depth = 0;
+    this.bytes = 0;
+  }
+
+  private pump(key: string, queue: SerialKeyQueue): void {
+    while (this.queues.get(key) === queue && queue.head < queue.tasks.length) {
+      const entry = queue.tasks[queue.head]!;
+      queue.tasks[queue.head] = undefined;
+      queue.head += 1;
+      if (queue.head >= SERIAL_QUEUE_COMPACT_AFTER && queue.head * 2 >= queue.tasks.length) {
+        queue.tasks.splice(0, queue.head);
+        queue.head = 0;
+      }
+      let running: Promise<void> | void = undefined;
+      try {
+        running = entry.task();
+      } catch (error) {
+        this.reportTaskFailure(key, error);
+      }
+      if (running) {
+        running
+          .catch((error: unknown) => this.reportTaskFailure(key, error))
+          .then(() => {
+            this.finish(key, queue, entry);
+            this.pump(key, queue);
+          });
+        return;
+      }
+      this.finish(key, queue, entry);
+    }
+    if (this.queues.get(key) === queue) this.queues.delete(key);
+  }
+
+  private finish(key: string, queue: SerialKeyQueue, entry: SerialQueueEntry): void {
+    if (this.queues.get(key) !== queue) return;
+    this.depth -= 1;
+    this.bytes -= entry.bytes;
+    queue.finished += 1;
+    let resolved = 0;
+    while (resolved < queue.waiters.length && queue.waiters[resolved]!.target <= queue.finished) {
+      queue.waiters[resolved]!.resolve();
+      resolved += 1;
+    }
+    if (resolved > 0) queue.waiters.splice(0, resolved);
+  }
+
+  private reportTaskFailure(key: string, error: unknown): void {
+    log.error("queue.task-failed", { key, error: formatLogError(error) });
   }
 }

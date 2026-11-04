@@ -46,11 +46,15 @@ export function AgentMailBody({ body, onRendered }: { body: string; onRendered?:
   return (
     <LazyLoadBoundary
       loadingFallback={plainBody}
-      renderError={({ onReload }) => (
+      renderError={({ isModuleLoadError, onReload, onRetry }) => (
         <>
           {plainBody}
-          <button type="button" className="text-xs underline" onClick={onReload}>
-            Reload Markdown
+          <button
+            type="button"
+            className="text-xs underline"
+            onClick={isModuleLoadError ? onReload : onRetry}
+          >
+            {isModuleLoadError ? "Reload application" : "Retry formatting"}
           </button>
         </>
       )}

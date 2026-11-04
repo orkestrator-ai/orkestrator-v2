@@ -583,6 +583,31 @@ describe("a stop nothing here will resend still gets reported", () => {
     expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
   });
 
+  test.each(["coordinator", "grok"])("%s immediate refusal is noticed once", async (kind) => {
+    const h = harness({
+      reports: true,
+      outcome: { outcome: "failed", error: "USAGE_EXHAUSTED" },
+      session: sessionWith(
+        kind === "grok"
+          ? ({ agent: "grok" } as never)
+          : ({
+              origin: "coordinator",
+              environmentId: "coordinator:c1:conversation-1",
+            } as never),
+      ),
+    });
+    h.state.session.dispatchedRequestIds = [];
+    h.resend.noteActivity(h.state.session, "idle", undefined);
+    await h.settle();
+    expect(h.noteUnresentStop).not.toHaveBeenCalled();
+    h.state.session.dispatchedRequestIds = ["immediate-refusal"];
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
+  });
+
   test("a tab on a provider without accounts", async () => {
     const h = harness({
       reports: true,

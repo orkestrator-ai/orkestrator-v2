@@ -143,7 +143,7 @@ export interface NodeCoordinatorNotices {
   deliverFromLeaf(
     item: OutboxItem,
     node: { nodeId: string; name: string },
-  ): Promise<"delivered" | "declined">;
+  ): Promise<"delivered" | "declined" | "deferred">;
   /** A notice this node queued that its own coordinator should take after all. */
   takeBack(item: OutboxItem): Promise<void>;
 }

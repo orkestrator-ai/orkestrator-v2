@@ -182,10 +182,6 @@ export class NativeAgentUsageLimitResend {
     if (!stops) return;
     const turnEnded = isAgentTurnEndTransition({ previousState: previous, state });
     if (turnEnded && isAgentAccountPlatform(session.agent)) stops.noteTurnEnded(session.agent);
-    if (!this.appliesTo(session)) {
-      if (turnEnded && this.noticeOnly(session)) this.reportNoticeOnlyStop(session);
-      return;
-    }
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (requestId && this.turnsSeen.get(session.key)?.requestId !== requestId) {
       if (!this.turnsSeen.has(session.key) && this.turnsSeen.size >= MAX_TRACKED_SESSIONS) {
@@ -199,16 +195,20 @@ export class NativeAgentUsageLimitResend {
       return;
     }
     const seen = this.seenRequests.get(session.key);
-    if (requestId) {
-      if (!seen && this.seenRequests.size >= MAX_TRACKED_SESSIONS) {
+    {
+      if (seen === undefined && this.seenRequests.size >= MAX_TRACKED_SESSIONS) {
         const oldest = this.seenRequests.keys().next().value;
         if (oldest !== undefined) this.seenRequests.delete(oldest);
       }
-      this.seenRequests.set(session.key, requestId);
+      this.seenRequests.set(session.key, requestId ?? "");
     }
     // A first observation is a restart or an adopted session, not a turn ending
     // here. Its stop, whatever it was, stays stopped.
     const newRequest = previous !== undefined && seen !== undefined && requestId !== seen;
+    if (!this.appliesTo(session)) {
+      if ((turnEnded || newRequest) && this.noticeOnly(session)) this.reportNoticeOnlyStop(session);
+      return;
+    }
     if (requestId && (turnEnded || newRequest)) {
       if (!this.candidates.has(session.key) && this.candidates.size >= MAX_TRACKED_SESSIONS) {
         const oldest = this.candidates.keys().next().value;

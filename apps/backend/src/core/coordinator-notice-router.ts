@@ -280,7 +280,7 @@ export class CoordinatorNoticeRouter {
   private async deliverFromLeaf(
     item: OutboxItem,
     node: { nodeId: string; name: string },
-  ): Promise<"delivered" | "declined"> {
+  ): Promise<"delivered" | "declined" | "deferred"> {
     const notice = parseUpwardCoordinatorNotice(item.coordinatorNotice);
     // Nothing a newer leaf sent is understood here, so its own coordinator takes it.
     if (!notice) return "declined";
@@ -304,8 +304,7 @@ export class CoordinatorNoticeRouter {
       );
       return "delivered";
     }
-    await this.deliverRelayed(item, notice, node, projectId);
-    return "delivered";
+    return this.deliverRelayed(item, notice, node, projectId);
   }
 
   /**
@@ -317,10 +316,10 @@ export class CoordinatorNoticeRouter {
     notice: Extract<UpwardCoordinatorNotice, { kind: "repository" }>,
     node: { nodeId: string; name: string },
     projectId: string,
-  ): Promise<void> {
+  ): Promise<"delivered" | "deferred"> {
     const target = await this.mainFor(projectId, notice.createSession);
     // Older state with nobody to read it: it stays on the leaf until someone can.
-    if (!target) throw new Error("No main coordinator is open for that notice yet.");
+    if (!target) return "deferred";
     try {
       await this.storage.sendAgentMail(
         {
@@ -350,9 +349,11 @@ export class CoordinatorNoticeRouter {
         },
       );
     } catch (error) {
-      if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+      if (error instanceof AgentMailError && error.code === "idempotency-conflict")
+        return "delivered";
       throw error;
     }
+    return "delivered";
   }
 
   /** This node's coordinator takes a notice no command node will. */

@@ -144,6 +144,7 @@ function harness(options: {
     });
   return {
     switcher,
+    summaries,
     state,
     reads,
     notices,
@@ -833,7 +834,8 @@ describe("a stop reported for the coordinators", () => {
     ]);
   });
 
-  test("a report that fails does not change what the turn does", async () => {
+  test("a failed report retries once without changing the stop decision", async () => {
+    let attempts = 0;
     const switcher = new AgentAccountAutoSwitcher({
       settings: async () => ({}),
       snapshot: async () => ({}) as never,
@@ -843,7 +845,7 @@ describe("a stop reported for the coordinators", () => {
       bridgeBusy: async () => false,
       notify: () => undefined,
       onLimitStop: () => {
-        throw new Error("mail is down");
+        if (++attempts === 1) throw new Error("mail is down");
       },
     });
     expect(
@@ -855,6 +857,15 @@ describe("a stop reported for the coordinators", () => {
         resends: 0,
       }),
     ).toBe("stop");
+    for (let i = 0; i < 2; i++)
+      await switcher.handleLimitStop({
+        platform: "claude",
+        environmentId: "env-1",
+        requestId: "request-1",
+        error: LIMIT_ERROR,
+        resends: 0,
+      });
+    expect(attempts).toBe(2);
   });
 });
 
@@ -934,4 +945,22 @@ describe("moving off a limited account for a coordinator", () => {
       reason: "switch-refused",
     });
   });
+});
+
+test("expired and identity-mismatched reset proofs are omitted from stop reports", async () => {
+  for (const changedIdentity of [false, true]) {
+    const h = harness({ accounts: { a: usage({ used: 100 }), b: usage({ used: 0 }) } });
+    await h.stop();
+    h.state.active = "a";
+    if (changedIdentity) {
+      h.summaries[0]!.identity.email = "other@example.com";
+    } else h.advance(8 * 24 * 60 * 60_000);
+    await h.switcher.noteUnresentStop({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId: "later",
+      error: LIMIT_ERROR,
+    });
+    expect(h.reports.at(-1)?.resetsAt).toBeUndefined();
+  }
 });

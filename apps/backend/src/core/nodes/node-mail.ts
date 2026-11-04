@@ -1,3 +1,4 @@
+import { createLogger } from "@orkestrator/protocol/logger";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
@@ -495,6 +496,7 @@ export class LeafNodeMail {
       const now = this.now();
       const attached = this.context.attachedControllers();
       const taken: Array<{ controllerId: BackendId; item: OutboxItem }> = [];
+      let retired = false;
       const outboxes = { ...state.outbox };
       for (const [controllerId, outbox] of Object.entries(state.outbox)) {
         const controller = attached.find((entry) => entry.controllerId === controllerId);
@@ -502,19 +504,35 @@ export class LeafNodeMail {
         const silent = Number.isFinite(lastContact) && now - lastContact >= NOTICE_HOLD_MAX_MS;
         outboxes[controllerId] = {
           ...outbox,
-          items: outbox.items.map((item) => {
-            if (!item.coordinatorNotice) return item;
-            const expired = silent && now - Date.parse(item.createdAt) >= NOTICE_HOLD_MAX_MS;
-            if (item.handedBack || (!item.collected && (!controller || expired))) {
-              const claimed = { ...item, handedBack: true as const };
-              taken.push({ controllerId: controllerId as BackendId, item: claimed });
-              return claimed;
-            }
-            return item;
-          }),
+          items: outbox.items
+            .filter((item) => {
+              // A collected item may already have been delivered: never reroute it.
+              // Once its controller detaches, retire that ambiguous ownership explicitly.
+              if (item.coordinatorNotice && item.collected && !controller && !item.handedBack) {
+                retired = true;
+                createLogger("nodes").warn("notice.collected-retired", {
+                  error: "collected-notice-controller-detached",
+                });
+                return false;
+              }
+              return true;
+            })
+            .map((item) => {
+              if (!item.coordinatorNotice) return item;
+              const expired = silent && now - Date.parse(item.createdAt) >= NOTICE_HOLD_MAX_MS;
+              if (item.handedBack || (!item.collected && (!controller || expired))) {
+                const claimed = { ...item, handedBack: true as const };
+                taken.push({ controllerId: controllerId as BackendId, item: claimed });
+                return claimed;
+              }
+              return item;
+            }),
         };
       }
-      return { next: taken.length ? { ...state, outbox: outboxes } : null, result: taken };
+      return {
+        next: taken.length || retired ? { ...state, outbox: outboxes } : null,
+        result: taken,
+      };
     });
   }
 

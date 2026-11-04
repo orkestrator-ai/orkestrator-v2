@@ -1,4 +1,5 @@
 import type { UsageLimitStop } from "@orkestrator/protocol/coordinator-notices";
+import type { UsageLimitStopReport } from "./agent-accounts-auto-switch.js";
 import type { StorageContext } from "./storage-context.js";
 
 /**
@@ -28,6 +29,7 @@ export interface UsageLimitNoticeLedger {
   /** Stops this machine has already raised, by stop id, oldest first. */
   raised: Record<string, string>;
   groups: UsageLimitNoticeGroup[];
+  pendingReports?: Record<string, UsageLimitStopReport>;
 }
 
 export function emptyUsageLimitNoticeLedger(): UsageLimitNoticeLedger {
@@ -41,6 +43,7 @@ function parseLedger(value: unknown): UsageLimitNoticeLedger {
     version: 1,
     raised: root.raised && typeof root.raised === "object" ? root.raised : {},
     groups: Array.isArray(root.groups) ? root.groups : [],
+    pendingReports: root.pendingReports ?? {},
   };
 }
 

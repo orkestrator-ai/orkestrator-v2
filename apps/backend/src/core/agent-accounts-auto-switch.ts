@@ -328,9 +328,14 @@ export class AgentAccountAutoSwitcher {
       if (oldest !== undefined) this.reportedStops.delete(oldest);
     }
     this.reportedStops.add(input.requestId);
-    const resetsAt = account
-      ? this.confirmed.get(`${input.platform}:${account.id}`)?.resetsAt
-      : undefined;
+    const proof = account ? this.confirmed.get(`${input.platform}:${account.id}`) : undefined;
+    const resetsAt =
+      proof &&
+      proof.identity === JSON.stringify(account?.identity) &&
+      proof.resetsAt !== undefined &&
+      proof.resetsAt > this.now()
+        ? proof.resetsAt
+        : undefined;
     try {
       await this.deps.onLimitStop?.({
         platform: input.platform,
@@ -343,6 +348,7 @@ export class AgentAccountAutoSwitcher {
         ...(input.session ? { session: input.session } : {}),
       });
     } catch {
+      this.reportedStops.delete(input.requestId);
       // What the turn does next never depends on who could be told.
       log.warn("limit-stop-notice.failed", { platform: input.platform });
     }

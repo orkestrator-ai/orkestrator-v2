@@ -1680,10 +1680,11 @@ export async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveContainerGitHubToken(config.global);
+      const credentialEnvironmentId = environment.id;
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
         async () => {
-          const current = await storage.getEnvironment(environment.id);
+          const current = await storage.getEnvironment(credentialEnvironmentId);
           await syncRuntimeGitHubCredential(current, containerId, githubToken, context);
         },
       );

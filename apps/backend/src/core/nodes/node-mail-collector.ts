@@ -65,7 +65,7 @@ export interface CollectorDeps {
     deliver(
       item: OutboxItem,
       node: { nodeId: string; name: string },
-    ): Promise<"delivered" | "declined">;
+    ): Promise<"delivered" | "declined" | "deferred">;
   };
 }
 
@@ -153,6 +153,7 @@ export class NodeMailCollector {
     let after = 0;
     let failed = false;
     let deliveredPrefix = 0;
+    let deferred = false;
     // An older leaf refuses keys it does not know, so this goes only to one that says it takes it.
     const notices = link.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices]
       ? this.deps.notices
@@ -176,9 +177,15 @@ export class NodeMailCollector {
           if (item.coordinatorNotice) {
             if (!notices) throw new Error("This node does not take coordinator notices.");
             const outcome = await notices.deliver(item, { nodeId, name });
+            if (outcome === "deferred") {
+              this.retry(nodeId);
+              // Do not acknowledge this item or advance the contiguous prefix across it.
+              deferred = true;
+              continue;
+            }
             if (outcome === "declined") declined.push(item.seq);
             else delivered.push(item.seq);
-            if (!failed) deliveredPrefix = item.seq;
+            if (!failed && !deferred) deliveredPrefix = item.seq;
             continue;
           }
           await this.deps.deliver({
@@ -205,7 +212,7 @@ export class NodeMailCollector {
             },
           });
           delivered.push(item.seq);
-          if (!failed) deliveredPrefix = item.seq;
+          if (!failed && !deferred) deliveredPrefix = item.seq;
         } catch (error) {
           log.warn("mail.delivery-deferred", { error: formatLogError(error, { message: false }) });
           failed = true;

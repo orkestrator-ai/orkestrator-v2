@@ -249,16 +249,16 @@ function stopLine(stop: UsageLimitStop): string {
     coordinator: "coordinator",
   }[stop.sessionKind];
   const place = stop.environmentName
-    ? `environment ${JSON.stringify(stop.environmentName)} (${stop.environmentId})`
-    : `environment ${stop.environmentId}`;
+    ? `environment ${JSON.stringify(stop.environmentName)} (${JSON.stringify(stop.environmentId)})`
+    : `environment ${JSON.stringify(stop.environmentId)}`;
   const next = {
     resend: "it will resend on the account the machine moved to",
     wait: "it is waiting, and resends if the wait clears, otherwise stays stopped",
     stop: "it stays stopped until something sends it again",
   }[stop.next];
   return (
-    `- ${kind} ${JSON.stringify(stop.session)}${stop.tabId ? ` (tab ${stop.tabId})` : ""} in ${place}, ` +
-    `on ${JSON.stringify(stop.machine)}${stop.nodeId ? ` (nodeId ${stop.nodeId})` : ""}, ` +
+    `- ${kind} ${JSON.stringify(stop.session)}${stop.tabId ? ` (tab ${JSON.stringify(stop.tabId)})` : ""} in ${place}, ` +
+    `on ${JSON.stringify(stop.machine)}${stop.nodeId ? ` (nodeId ${JSON.stringify(stop.nodeId)})` : ""}, ` +
     `repository ${JSON.stringify(stop.repository)}: ${next}.`
   );
 }
@@ -280,9 +280,9 @@ export function usageLimitStopNoticeText(input: {
   const count = input.stops.length;
   const sessions = count === 1 ? "A session" : `${count} sessions`;
   const lines = [
-    `${sessions} stopped on a usage limit on ${first.account.platform} account ${JSON.stringify(account)}. ` +
+    `${sessions} stopped on a usage limit on ${JSON.stringify(first.account.platform)} account ${JSON.stringify(account)}. ` +
       (resets
-        ? `It resets at ${resets}.`
+        ? `It resets at ${JSON.stringify(resets)}.`
         : hint
           ? `The provider says it resets ${JSON.stringify(hint)}.`
           : "The reset time is not known."),
@@ -307,7 +307,10 @@ export function usageLimitStopNoticeText(input: {
       "get_usage_limits and list_provider_accounts show the current state.",
   );
   return {
-    subject: `${sessions} stopped on the ${first.account.platform} limit`.slice(0, 200),
+    subject: `${sessions} stopped on the ${JSON.stringify(first.account.platform)} limit`.slice(
+      0,
+      200,
+    ),
     body: lines.join("\n"),
   };
 }

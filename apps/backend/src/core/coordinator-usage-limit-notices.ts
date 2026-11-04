@@ -18,7 +18,11 @@
  * fails on a limit ends there rather than raising another wake.
  */
 import { createHash } from "node:crypto";
-import { AgentMailError, normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_BODY_BYTES,
+  AgentMailError,
+  normalizeAgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
 import {
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
@@ -139,6 +143,14 @@ export class CoordinatorUsageLimitNotices {
       return ledger.groups.filter((group) => unsent(group).length > 0);
     });
     for (const group of groups) this.schedule(group.id, group.flushAt);
+    const reports = this.deps.storage.coordinatorNotices.updateUsageLimitNoticeLedger((ledger) =>
+      Object.values(ledger.pendingReports ?? {}),
+    );
+    for (const report of reports) {
+      void this.noteStop(report).catch((error: unknown) => {
+        log.warn("limit-stop.notice-failed", { error: formatLogError(error) });
+      });
+    }
   }
 
   stop(): void {
@@ -154,14 +166,45 @@ export class CoordinatorUsageLimitNotices {
 
   /** The machine where the session stopped: raise it once, and route it. */
   async noteStop(report: UsageLimitStopReport): Promise<void> {
+    try {
+      await this.processStop(report);
+    } catch (error) {
+      const key = `report:${stopId(report.environmentId, report.requestId)}`;
+      if (!this.stopped && !this.timers.has(key) && this.timers.size < MAX_RAISED) {
+        const timer = setTimeout(() => {
+          this.timers.delete(key);
+          void this.noteStop(report).catch((retryError: unknown) => {
+            log.warn("limit-stop.notice-failed", { error: formatLogError(retryError) });
+          });
+        }, FLUSH_RETRY_MS);
+        timer.unref?.();
+        this.timers.set(key, timer);
+      }
+      throw error;
+    }
+  }
+
+  private async processStop(report: UsageLimitStopReport): Promise<void> {
     const id = stopId(report.environmentId, report.requestId);
     const { storage, router } = this.deps;
     const seen = storage.coordinatorNotices.updateUsageLimitNoticeLedger(
       (ledger) => ledger.raised[id] !== undefined,
     );
     if (seen) return;
+    storage.coordinatorNotices.updateUsageLimitNoticeLedger((ledger) => {
+      ledger.pendingReports ??= {};
+      if (!ledger.pendingReports[id] && Object.keys(ledger.pendingReports).length >= MAX_RAISED) {
+        throw new Error("Usage-limit report queue is full.");
+      }
+      ledger.pendingReports[id] = report;
+    });
     const place = await this.placeOf(report);
-    if (!place) return;
+    if (!place) {
+      storage.coordinatorNotices.updateUsageLimitNoticeLedger((ledger) => {
+        delete ledger.pendingReports?.[id];
+      });
+      return;
+    }
     const machine = await this.deps.machine();
     const email = report.account?.identity.email;
     const account = {
@@ -212,6 +255,7 @@ export class CoordinatorUsageLimitNotices {
     if (!queued) await this.takeBack(stop, place.projectId);
     storage.coordinatorNotices.updateUsageLimitNoticeLedger((ledger) => {
       ledger.raised[id] = stop.at;
+      delete ledger.pendingReports?.[id];
       pruneLedger(ledger, this.now());
     });
   }
@@ -249,16 +293,16 @@ export class CoordinatorUsageLimitNotices {
       if (ledger.groups.some((entry) => entry.stops.some((known) => known.id === stop.id))) {
         return null;
       }
-      const open = ledger.groups.find(
+      const matching = ledger.groups.filter(
         (entry) =>
           entry.projectId === projectId &&
           entry.accountKey === stop.account.key &&
           entry.windowEndsAt > now &&
           (entry.resetsAt === undefined ||
             reset === undefined ||
-            Math.abs(entry.resetsAt - reset) <= RESET_TOLERANCE_MS) &&
-          entry.stops.length < MAX_STOPS_PER_GROUP,
+            Math.abs(entry.resetsAt - reset) <= RESET_TOLERANCE_MS),
       );
+      const open = matching.find((entry) => entry.stops.length < MAX_STOPS_PER_GROUP);
       const flushAt = now + (this.deps.coalesceMs ?? USAGE_LIMIT_NOTICE_COALESCE_MS);
       if (open) {
         open.stops.push(stop);
@@ -270,7 +314,7 @@ export class CoordinatorUsageLimitNotices {
         return open;
       }
       const created: UsageLimitNoticeGroup = {
-        id: groupId(projectId, stop.account.key, now),
+        id: groupId(projectId, stop.account.key, now) + `-${ledger.groups.length}`,
         projectId,
         accountKey: stop.account.key,
         ...(reset !== undefined ? { resetsAt: reset } : {}),
@@ -278,7 +322,7 @@ export class CoordinatorUsageLimitNotices {
         flushAt,
         stops: [stop],
         sentStopIds: [],
-        flushes: 0,
+        flushes: matching.length ? 1 : 0,
       };
       ledger.groups.push(created);
       return created;
@@ -321,12 +365,49 @@ export class CoordinatorUsageLimitNotices {
     });
   }
 
+  /** Leave room for account-move text while bounding the fully encoded mail body. */
+  private boundedBatch(stops: UsageLimitStop[]): UsageLimitStop[] {
+    const batch: UsageLimitStop[] = [];
+    for (const stop of stops) {
+      const candidate = [...batch, stop];
+      const text = usageLimitStopNoticeText({
+        stops: candidate,
+        coordinator: { kind: "unaffected" },
+        followUp: true,
+      });
+      if (Buffer.byteLength(text.body, "utf8") > AGENT_MAIL_MAX_BODY_BYTES - 8192) {
+        if (!batch.length) throw new Error("A usage-limit stop exceeds the mail budget.");
+        break;
+      }
+      batch.push(stop);
+    }
+    return batch;
+  }
+
   /** Send a window's unsent stops. Only the window's first message can wake. */
   private async flush(id: string): Promise<void> {
     const claimed = this.update(id, (group) => {
+      // Older backends may have claimed an oversized batch that mail could never accept.
+      // Only split provably unsendable batches; all other retries keep their exact IDs.
+      if (group.sending) {
+        const prior = group.stops.filter((stop) => group.sending!.stopIds.includes(stop.id));
+        if (
+          prior.length &&
+          Buffer.byteLength(
+            usageLimitStopNoticeText({
+              stops: prior,
+              coordinator: { kind: "unaffected" },
+              followUp: false,
+            }).body,
+            "utf8",
+          ) > AGENT_MAIL_MAX_BODY_BYTES
+        ) {
+          group.sending.stopIds = this.boundedBatch(prior).map((stop) => stop.id);
+        }
+      }
       const sending = group.sending ?? {
         index: group.flushes,
-        stopIds: unsent(group).map((stop) => stop.id),
+        stopIds: this.boundedBatch(unsent(group)).map((stop) => stop.id),
       };
       group.sending = sending;
       return structuredClone({ group, sending });
@@ -355,9 +436,10 @@ export class CoordinatorUsageLimitNotices {
       });
       return;
     }
-    const coordinator = first
-      ? await this.coordinatorSituation(group, target.main, target.workspace.id)
-      : ({ kind: "unaffected" } as const);
+    const coordinator =
+      first && !quiet && windowOpen
+        ? await this.coordinatorSituation(group, target.main, target.workspace.id)
+        : ({ kind: "unaffected" } as const);
     const { subject, body } = usageLimitStopNoticeText({
       stops,
       coordinator,
@@ -368,7 +450,7 @@ export class CoordinatorUsageLimitNotices {
         ? USAGE_LIMIT_NOTICE_KEPT_REASON
         : quiet
           ? USAGE_LIMIT_NOTICE_QUIET_REASON
-          : !first
+          : !first || !windowOpen
             ? USAGE_LIMIT_NOTICE_COALESCED_REASON
             : undefined;
     const lead = stops[0]!;

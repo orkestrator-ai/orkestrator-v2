@@ -1,3 +1,4 @@
+import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
@@ -41,13 +42,11 @@ import {
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
-import { usageLimitAccountKey } from "@orkestrator/protocol/coordinator-notices";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
-  isAgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -74,7 +73,7 @@ import {
   bridgeRemoteAutoSwitchNotices,
   mailAutoSwitchNotice,
 } from "./agent-accounts-auto-switch-notices.js";
-import { coordinatorSessionAccount, readSessionAgentAccount } from "./agent-accounts-session.js";
+import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
@@ -936,38 +935,14 @@ export class OrkestratorBackend {
         key: await this.nodes.selfIdentity(),
         name: (await this.nodes.selfProfile()).displayName,
       }),
-      coordinatorAccountKey: async (environmentId, agent) => {
-        const session = await readSessionAgentAccount(context, environmentId, agent);
-        const account = coordinatorSessionAccount(
-          session,
-          session?.running === true &&
-            (await this.nativeAgents.hasObservedLiveWork(environmentId, session.platform)),
-        );
-        if (session?.source !== "account" || !account) return null;
-        return usageLimitAccountKey({
-          platform: agent,
-          machineKey: await this.nodes.selfIdentity(),
-          email: account.identity.email,
-          accountId: account.id,
-        });
-      },
-      moveOff: async (platform, accountKey, moveOptions) => {
-        if (!isAgentAccountPlatform(platform)) {
-          return { moved: false, reason: "no-account-with-headroom" };
-        }
-        const machineKey = await this.nodes.selfIdentity();
-        return this.accountAutoSwitch.moveOffLimitedAccount(
-          platform,
-          (account) =>
-            usageLimitAccountKey({
-              platform,
-              machineKey,
-              email: account.identity.email,
-              accountId: account.id,
-            }) === accountKey,
-          moveOptions,
-        );
-      },
+      ...usageLimitAccountRouting({
+        readSession: (environmentId, agent) =>
+          readSessionAgentAccount(context, environmentId, agent),
+        hasLiveWork: (environmentId, platform) =>
+          this.nativeAgents.hasObservedLiveWork(environmentId, platform),
+        machineKey: () => this.nodes.selfIdentity(),
+        switcher: this.accountAutoSwitch,
+      }),
     });
     this.coordinators.noticeRouter.setUsageLimitStops(this.usageLimitNotices);
     this.nativeAgents = new NativeAgentService(

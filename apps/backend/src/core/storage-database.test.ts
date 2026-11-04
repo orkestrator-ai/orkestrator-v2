@@ -795,6 +795,46 @@ describe("StorageDatabase failure logging", () => {
     }
   });
 
+  test("a heartbeat cannot report recovery after another connection reclaims the lease", async () => {
+    const directory = await dataDir();
+    const first = database(directory);
+    const second = database(directory);
+    jest.useFakeTimers();
+    const logs = captureLogs();
+    const releaseFirst = await first.acquireLease("reclaimed-heartbeat", "test");
+    const realQuery = first.db.query.bind(first.db);
+    const failHeartbeats = spyOn(first.db, "query").mockImplementation(((sql: string) => {
+      if (sql.startsWith("UPDATE leases")) throw failure();
+      return realQuery(sql);
+    }) as typeof first.db.query);
+    let releaseSecond: (() => Promise<void>) | undefined;
+    try {
+      jest.advanceTimersByTime(5_000);
+      // Offset the new holder's timer so this assertion observes only the
+      // original holder's next beat, not a successful renewal by its successor.
+      jest.advanceTimersByTime(1);
+      second.db.query("UPDATE leases SET heartbeat_at = 0").run();
+      releaseSecond = await second.acquireLease("reclaimed-heartbeat", "test");
+      failHeartbeats.mockRestore();
+      jest.advanceTimersByTime(4_999);
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          event: "lease.heartbeat-failed",
+          fields: { scope: "reclaimed-heartbeat" },
+        },
+      ]);
+      await releaseFirst();
+      expect(second.db.query("SELECT name FROM leases").all()).toHaveLength(1);
+    } finally {
+      failHeartbeats.mockRestore();
+      await releaseFirst();
+      await releaseSecond?.();
+      jest.useRealTimers();
+      logs.restore();
+    }
+  });
+
   test("a failed lease heartbeat is logged once per lease, and recovers on the next beat", async () => {
     const db = database(await dataDir());
     jest.useFakeTimers();

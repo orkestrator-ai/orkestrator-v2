@@ -362,7 +362,12 @@ export async function dispatchPrompt(
     })();
     cancelling = operation;
     operation.catch(() => {
-      if (cancelling === operation) cancelling = undefined;
+      if (cancelling === operation) {
+        cancelling = undefined;
+        if (reason === "user" && state.cancelTurn === cancelTurn) {
+          state.turnCancelRequested = undefined;
+        }
+      }
     });
     return operation;
   };

@@ -443,6 +443,28 @@ describe("dispatchPrompt", () => {
       expect(turnLines()).toEqual([]);
     });
 
+    test("a rejected user abort does not silence a later provider failure", async () => {
+      const state = runningState();
+      let abortAttempts = 0;
+      const stub = stubSession({
+        onAbort: () => {
+          if (++abortAttempts === 1) throw new Error(`abort refused ${SENTINEL}`);
+        },
+      });
+      const handle = await dispatchPrompt(
+        state,
+        stub.session,
+        input({ requestId: "abort-rejected" }),
+      );
+      await expect(state.cancelTurn?.()).rejects.toThrow("abort refused");
+      expect(state.turnCancelRequested).toBeUndefined();
+      stub.fail(new Error(`provider failed ${SENTINEL}`));
+      await handle.completion;
+      expect(state.status).toBe("error");
+      expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
+    });
+
     test("a turn Pi itself aborted logs nothing", async () => {
       const state = runningState();
       const stub = stubSession();

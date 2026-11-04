@@ -838,11 +838,32 @@ describe("Pi SDK lifecycle", () => {
     }
   });
 
+  test.each(["missing", "empty"])("an unused session with a %s file stays quiet", async (kind) => {
+    const sessionFile = join(sessionDirectory, `unused-${kind}.jsonl`);
+    if (kind === "empty") await writeFile(sessionFile, "");
+    const state = newSessionState();
+    state.sessionFile = sessionFile;
+    const logs = captureLogs();
+    try {
+      expect(sessionManagerFor(state).getSessionFile()).toBe(sessionFile);
+      expect(logs.records()).toEqual([]);
+    } finally {
+      logs.restore();
+    }
+  });
+
   test.each(["missing", "empty"])("a %s resume file warns with the real SDK", async (kind) => {
     const sessionFile = join(sessionDirectory, `SENTINEL-${kind}.jsonl`);
     if (kind === "empty") await writeFile(sessionFile, "");
     const state = newSessionState();
     state.sessionFile = sessionFile;
+    state.messages.push({
+      id: "prior-message",
+      role: "user",
+      content: "prior conversation",
+      parts: [],
+      createdAt: new Date().toISOString(),
+    });
     const logs = captureLogs();
     try {
       const fresh = sessionManagerFor(state);

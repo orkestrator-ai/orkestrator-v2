@@ -1322,10 +1322,10 @@ export class StorageDatabase {
     const heartbeat = setInterval(() => {
       if (this.closed) return;
       try {
-        this.db
+        const renewed = this.db
           .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
           .run(Date.now(), name, owner);
-        log.recovered("lease.heartbeat-failed", name);
+        if (renewed.changes > 0) log.recovered("lease.heartbeat-failed", name);
       } catch (error) {
         // A missed heartbeat only shortens the lease; the next one retries.
         log.throttled("warn", "lease.heartbeat-failed", {

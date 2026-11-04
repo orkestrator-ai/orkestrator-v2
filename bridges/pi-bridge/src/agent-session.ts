@@ -1086,10 +1086,11 @@ export function sessionManagerFor(state: SessionState): SessionManager {
   if (state.sessionFile) {
     try {
       // Pi opens a missing or empty file as a fresh session without throwing.
-      // Retain that behavior, but report the lost context just as on open errors.
+      // An unused session has a path before Pi writes its first conversation.
+      // Report lost context only when the bridge has evidence of prior activity.
       const hasHistory = (statSync(state.sessionFile, { throwIfNoEntry: false })?.size ?? 0) > 0;
       const manager = SessionManager.open(state.sessionFile, directory, workingDirectory);
-      if (!hasHistory) {
+      if (!hasHistory && (state.messages.length > 0 || state.promptSequence > 0)) {
         log.warn("session.resume-fell-back", { sessionId: state.id });
       }
       return manager;

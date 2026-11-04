@@ -1058,19 +1058,44 @@ describe("terminal run usage", () => {
       expect(turnLines()).toEqual([]);
     });
 
-    test("a cancel that makes the run reject is still not a failure", async () => {
+    test("installed cancellation suppresses its rejected wait but not the next dispatch", async () => {
       const state = runningSession();
-      state.turnCancelRequested = true;
-      await followRun(
-        state,
-        runWith(async () => {
-          throw new Error("the run was aborted");
-        }),
-        state.promptSequence,
-        { prompt: "x", images: [] },
-      );
-
+      state.loadsProjectRules = true;
+      let rejectWait!: (error: unknown) => void;
+      const waiting = new Promise<{ status: string }>((_resolve, reject) => {
+        rejectWait = reject;
+      });
+      const firstRun = {
+        ...runWith(() => waiting),
+        id: "cancelled-run",
+        onDidChangeStatus: () => () => undefined,
+        cancel: async () => {
+          rejectWait(new Error("the run was aborted"));
+        },
+      };
+      const firstAgent = { send: async () => firstRun } as unknown as SDKAgent;
+      const first = await dispatchPrompt(state, firstAgent, { prompt: "first", images: [] });
+      expect(state.cancelTurn).toBeDefined();
+      await state.cancelTurn?.();
+      await first.completion;
       expect(turnLines()).toEqual([]);
+
+      state.status = "running";
+      state.promptSequence += 1;
+      const secondRun = {
+        ...runWith(async () => {
+          throw new Error(`provider failed ${SENTINEL}`);
+        }),
+        id: "failed-run",
+        onDidChangeStatus: () => () => undefined,
+      };
+      const secondAgent = { send: async () => secondRun } as unknown as SDKAgent;
+      const second = await dispatchPrompt(state, secondAgent, { prompt: "second", images: [] });
+      await second.completion;
+      expect(state.turnCancelRequested).toBeUndefined();
+      expect(state.status).toBe("error");
+      expect(turnLines()).toMatchObject([{ level: "warn", event: "turn.failed" }]);
+      expect(JSON.stringify(logs.records())).not.toContain(SENTINEL);
     });
   });
 

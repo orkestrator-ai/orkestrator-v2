@@ -7,9 +7,9 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 ### Tasks
 
-1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: open.
-2. **Live container run**: a containerized worker opens a mailed image inside a real container. Status: open.
-3. **Reading it on every coordinator provider**: a coordinator on Cursor, Pi and Grok opens a mailed image from its own attachment directory with its own read tool. Status: open (depends on 1).
+1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: done (transport and placement on two real backends; an agent opening it is task 3).
+2. **Live container run**: a containerized worker opens a mailed image inside a real container. Status: done (real container, read as the agent's user; no agent turn).
+3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (needs billed turns).
 4. **Clearing images from the project home**: mailed images stay in the user's own checkout until someone removes them. Status: open.
 
 ### 1. Live two-node run
@@ -18,7 +18,7 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 **Context.** `send_coordinator_node_mail` pushes the batch with the transfer framework, and `deliver_node_mail` places it before storing the mail. Upward, `send_coordinator_command_node_mail` spools the batch for the outbox and the collector fetches it (`coordinator-mail-attachments.ts`, `nodes/node-coordination.ts`). Tests: `coordinator-mail-attachments-nodes.test.ts`.
 
-**Investigation.** Not run live. The build ran with no billed provider turns, and a recipient agent opening the image is a billed turn. The transport itself needs no agent, but real link behaviour on an 8 MiB image (chunking, link timeouts, reconnect during a transfer) has not been observed.
+**Investigation.** The transport needs no agent, so it was run on two real backends started from source (`scripts/qa-coordinator-image-mail.ts`, 27/27 checks). One is a command node; the other is a leaf it attaches over the real gateway. Not observed: an 8 MiB image on a slow or SSH-forwarded link, and a reconnect during a transfer. A recipient agent opening the image is a billed turn, which is task 3.
 
 **Decisions.**
 
@@ -36,14 +36,17 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 **Context.** `containerEnvironmentSink` writes with `CONTAINER_PINNED_ATTACHMENT_WRITE`, the writer initial-prompt attachments and external file copies already use in containers. A recipient agent reads `/workspace/.orkestrator/mail-attachments/<batch>/<name>`.
 
-**Investigation.** Not run against real Docker. The writer runs as the image's default user, as the existing attachment writes do, and the file is mode `0644`.
+**Investigation.** `coordinator-mail-attachments-docker.test.ts` runs the real send against a real `orkestrator-v2:latest` container (`--network none`, opt-in through `ORKESTRATOR_TEST_DOCKER_IMAGE`). The image is written as the image's default user, `node`, which is also the agent's user, with mode `0644`. `sha256sum` as `node` reads it back. Git ignores it even after `git add -A`, and a retry leaves one file and one message. Not covered: an Orkestrator-created container with its egress gateway, and an agent's own read tool.
 
 **Decisions.**
 
 - **How to prove it?**
-  - **Add a case to `mise run test:agent:docker` that sends an image and reads it back with `docker exec` (recommended).**
-    - Pros: no provider turn; runs with the existing opt-in Docker suite.
-    - Cons: does not show an agent opening it, only that the agent's user can.
+  - **Add a case to `mise run test:agent:docker` that sends an image and reads it back with `docker exec`.**
+    - Pros: no provider turn; runs in a container Orkestrator itself created.
+    - Cons: that suite needs a full `dev:test` profile and builds a workspace image; does not show an agent opening it.
+  - **An opt-in backend test against a plain container of the image (recommended; done).**
+    - Pros: no provider turn, no profile, no network or firewall change; the same `docker exec` writer and Git proof.
+    - Cons: the container is not one Orkestrator created, so its entrypoint and egress gateway are not involved.
   - **A billed turn in the live coordinator suite.**
     - Pros: end to end, including the agent's own read tool.
     - Cons: billed, and adds little over the file-level check.
@@ -83,6 +86,16 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
   - **Prune batches older than the mail retention window.**
     - Pros: bounded.
     - Cons: another sweep writing inside the user's own checkout.
+
+## Assumptions and decisions
+
+### Task 1: run the transport on two real backends, without the UI
+
+Chose a script, `scripts/qa-coordinator-image-mail.ts`, over two `dev:test` profiles. It follows `qa-command-nodes.ts` and shares its harness (`qa-command-nodes-support.ts`). It needs no Electron and no browser, which on beelink would open on the user's desktop, and it uses no fixed port and no real data directory. It calls the same backend commands the Control MCP tools call, with the coordinator's scope. The MCP layer on top is covered by `control-mcp-server-messaging.test.ts` and `control-mcp-node-files.test.ts`. Each backend runs with an isolated `HOME` and no toolchain, so the agent tabs the script creates can make no provider request.
+
+### Task 2: a plain container, not the Docker agent suite
+
+Chose an opt-in backend test with `--network none` over a `test:agent:docker` case. It touches no Docker network or firewall, which this build was not allowed to change, and it still runs the real `docker exec` writer and the Git-exclusion proof inside the container.
 
 ## Related
 

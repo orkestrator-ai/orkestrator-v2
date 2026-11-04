@@ -687,6 +687,27 @@ size and hash, with no content in a log or receipt.
   `transfer_files` follows the same path as the down direction, with the normal
   receipt and no mail.
 
+`bun scripts/qa-coordinator-image-mail.ts` checks this on the real stack. It
+starts a command node and a leaf from source, each with a temporary data
+directory, an ephemeral loopback port, a private token and an isolated `HOME`,
+and has the command node attach the leaf over its gateway. No agent runs: each
+coordinator is created with no session and an image is pasted through
+`write_coordinator_attachment`. It then checks that:
+
+- a worker's agent tab on the same node, a side agent, a worker on the leaf and
+  the leaf's coordinator each receive the image, and the leaf's coordinator's
+  image reaches the command node's coordinator through the outbox;
+- the leaf drops its outbox copy once the command node has collected the mail;
+- `transfer_files` from attachments returns a completed receipt;
+- a retry adds nothing, the copy is Git-excluded, and deleting the worker
+  removes it;
+- every refusal leaves no message: another conversation's file, traversal, a
+  symlink, a non-image, too many images or too large an image, and a
+  disconnected node.
+
+The script shares its harness with `qa-command-nodes.ts`
+(`scripts/qa-command-nodes-support.ts`).
+
 ## Tickets across nodes
 
 A project's Kanban board is shared with every leaf that has a copy of the

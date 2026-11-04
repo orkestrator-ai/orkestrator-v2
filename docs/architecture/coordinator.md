@@ -945,6 +945,24 @@ Workers cannot send images: `send_message` on a worker's Agent Tools has no
 `attachments`, and every check here is about a coordinator conversation's own
 directory.
 
+How it is verified, with no provider turn:
+
+- `coordinator-mail-attachments.test.ts` and
+  `coordinator-mail-attachments-nodes.test.ts` run the real send commands, mail
+  store, transfer framework and Git worktrees, for every recipient kind and both
+  node directions; containers there are a fake `docker exec` running the real
+  writer script.
+- `coordinator-mail-attachments-docker.test.ts` sends into a real container
+  (opt-in: `ORKESTRATOR_TEST_DOCKER_IMAGE=orkestrator-v2:latest`; it runs with
+  `--network none`). It checks the image's `node` user can read the file, that
+  Git ignores it even after `git add -A`, and that a retry adds nothing.
+- `bun scripts/qa-coordinator-image-mail.ts` starts two real backends from
+  source, links them over the real gateway and runs every route with no agent
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- Not covered: an agent's own read tool opening the file. Each check would be a
+  billed turn
+  ([todo 4420](../todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md)).
+
 ## Repository toolbar
 
 The toolbar shows the canonical path, branch, upstream freshness, ahead/behind

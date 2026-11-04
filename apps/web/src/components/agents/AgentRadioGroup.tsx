@@ -91,7 +91,7 @@ export function AgentRadioGroup({ value, onChange, label, descriptions }: AgentR
             <label
               htmlFor={id}
               className={cn(
-                "flex cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors peer-focus-visible:border-ring",
+                "flex cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors focus-hairline-peer",
                 description && "min-h-20",
                 selected
                   ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"

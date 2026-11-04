@@ -1,3 +1,4 @@
+import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
@@ -2033,6 +2034,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/remember-rule-panel") return <RememberRulePanelFixture />;
+  if (window.location.pathname === "/focus-visibility") return <FocusVisibilityFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
   if (window.location.pathname === "/markdown-editor-diagram")

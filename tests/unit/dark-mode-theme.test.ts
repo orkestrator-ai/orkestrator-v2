@@ -42,7 +42,7 @@ describe("forced dark mode theming", () => {
       "--color-accent-foreground": "#f2f4f8",
       "--color-destructive": "#e5534b",
       "--color-destructive-foreground": "#ffffff",
-      "--color-ring": "color-mix(in srgb, var(--color-primary) 65%, var(--color-zinc-900))",
+      "--color-ring": "#3b82f6",
       // Named shell surfaces. `elevated` in particular is the control surface
       // that survives the central panel's terminal-background override, so a
       // rename here silently flattens every button onto its own background.
@@ -138,6 +138,25 @@ describe("forced dark mode theming", () => {
       (file) => !/\.test\.tsx?$/.test(file) && ownFocusStyle.test(read(file)),
     );
     expect(offenders).toEqual([]);
+  });
+
+  test("focus overrides transparent graph outlines and separates selection borders", () => {
+    const css = read("apps/web/src/index.css");
+    expect(css).toMatch(
+      /&:focus-visible\s*\{[^}]*outline-color: var\(--focus-hairline-color, var\(--color-ring\)\)/s,
+    );
+    expect(css).toContain("outline-offset: var(--focus-hairline-offset, -2px)");
+    for (const file of ["agents/AgentRadioGroup.tsx", "build/BuildLaunchDialog.tsx"]) {
+      const source = read(`apps/web/src/components/${file}`);
+      expect(source).toContain("focus-hairline-peer");
+      expect(source).not.toContain("peer-focus-visible:border-ring");
+    }
+    const annotations = read("apps/web/src/components/chat/TranscriptAnnotationLayer.tsx");
+    for (const classes of annotations.matchAll(/className="([^"]*bg-blue-[56]00[^"]*)"/g)) {
+      if (classes[1]?.includes("focus-hairline")) {
+        expect(classes[1]).toContain("focus-hairline-outset");
+      }
+    }
   });
 
   test("native scrollbar tracks inherit the panel surface", () => {

@@ -123,3 +123,34 @@ Inside the namespace the process is uid 0 in its own user namespace, which
 Playwright's default (`chromiumSandbox: false`) already tolerates. It is not a
 fix for suites that reach Docker or the network. No product or test code was
 changed for this.
+
+## 2026-11-04: subork review validation, component and Electron suites
+
+Branch `subork-agent-command-19d44fc3d0c3-r1` on beelink, beside other
+pipelines' Docker work.
+
+- `e2e/SuborkGroup.spec.ts` had intermittent blank starts in its full-file
+  runs (8 passed, 2 failed in the last of them), with
+  `net::ERR_NETWORK_CHANGED` on fixture module imports in the trace. Rerun on
+  its own port (`ORKESTRATOR_E2E_PORT=1478`, `--repeat-each=5`) it passed all
+  50 cases (31.0 s); inside `unshare -rn` (port 1479, `--repeat-each=3`) it
+  passed all 30 (20.0 s).
+- `mise run test:agent:electron` (review validation for commit `fe32ed945`)
+  failed 16 of 62 cases (23 passed, 1 skipped, 22 did not run; 18.5 min).
+  Thirteen failed at the first `toHaveTitle` with the window still titled
+  `Orkestrator AI`; each one's `electron-diagnostics` attachment holds 56–139
+  `net::ERR_NETWORK_CHANGED` lines and
+  `renderer.load-failed ... Failed to fetch dynamically imported module
+  .../src/renderer-entry.tsx`. `connection-outage-electron.spec.ts` failed at
+  the same title check. The branch changes nothing under `apps/desktop/` or
+  `e2e/agent-testing/`. The two remaining failures were native-view
+  assertions (`web-annotations-electron.spec.ts`, open case 1400, and
+  `service-preview-electron.spec.ts` "a crashed service renderer reports the
+  failure and recovers on reload") and are not attributed to this case.
+- `ip monitor link address route` for 30 s in the same session showed a
+  Docker veth created and removed at interface index 7009; the journal held
+  1,886 veth and bridge lines between 03:40 and 04:05 UTC, the window of the
+  Electron run.
+- The Electron suite was not rerun: those specs open windows on the host
+  display, which on beelink is the user's live desktop. Follow-up is task 5
+  of [to-do 4340](../../../todo/agent-engines/4340-suborks-live-qualification.md).

@@ -10,6 +10,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 2. **Plain-text form**: check that models call `ask_agents` when asked in plain words. Status: open.
 3. **Container run**: repeat one sweep in a container environment. Status: open.
 4. **Backend restart with real turns**: kill the backend mid-subork and confirm delivery. Status: open.
+5. **Electron agent suite on a quiet host**: rerun `test:agent:electron` for this branch where Docker is not churning the host's interfaces. Status: open.
 
 ### 1. Live six-provider sweep
 
@@ -54,6 +55,18 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 **Investigation.** Not run.
 
 **Decisions.** No material choice: follow `goals-restart-live.spec.ts`.
+
+### 5. Electron agent suite on a quiet host
+
+**Problem.** The review validation's `mise run test:agent:electron` run for this branch (commit `fe32ed945`) failed 16 of 62 cases, so no green Electron result exists for it.
+
+**Context.** The branch changes no file under `apps/desktop/` or `e2e/agent-testing/`. Thirteen of the sixteen failures stopped at the first title check with the window still titled `Orkestrator AI`, and their Electron diagnostics hold 56 to 139 `net::ERR_NETWORK_CHANGED` lines ending in `renderer.load-failed ... Failed to fetch dynamically imported module .../src/renderer-entry.tsx`. That is flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md): other builds' containers adding and removing veths and bridges on beelink. The connection-outage case failed at the same title check. The other two are native-view assertions: `web-annotations-electron.spec.ts` is open flake 1400, and `service-preview-electron.spec.ts` "a crashed service renderer reports the failure and recovers on reload" (view not visible) has no case of its own.
+
+**Investigation.** The run was not repeated. Most of these specs open a window on the host display, which on beelink is the user's live desktop. `ip monitor` during this round showed a Docker veth being created and torn down within 30 s, at interface index 7009.
+
+**Decisions.** Where to rerun it:
+- On a host with no concurrent Docker work, or on macOS with Docker Desktop (recommended). Pros: removes the 2340 cause without changing any test. Cons: needs a quiet window on a host whose desktop may be used.
+- Add headless launch to every Electron spec, as `design-canvas-electron.spec.ts` has. Pros: avoids the live desktop on beelink. Cons: unrelated test work, and it does not by itself avoid network churn.
 
 ## Related
 

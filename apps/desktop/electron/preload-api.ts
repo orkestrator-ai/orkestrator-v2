@@ -42,11 +42,22 @@ export type IpcRendererLike = {
  * and keep only the handler's own message (the browser gateway already sends
  * just that).
  */
-const REMOTE_METHOD_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+const REMOTE_METHOD_ERROR_PREFIX =
+  /^Error invoking remote method '[^']*': (?:(?:[A-Za-z_$][\w$]*Error|Error): )?/;
 
 function readableInvokeError(error: unknown): unknown {
   if (!(error instanceof Error) || !REMOTE_METHOD_ERROR_PREFIX.test(error.message)) return error;
-  return new Error(error.message.replace(REMOTE_METHOD_ERROR_PREFIX, ""));
+  const readable = new Error(error.message.replace(REMOTE_METHOD_ERROR_PREFIX, ""), {
+    cause: error,
+  });
+  // Keep IPC diagnostics available locally. Electron/contextBridge may serialize
+  // only the message, so preserving fields here cannot restore upstream losses.
+  const diagnostics: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(error);
+  delete diagnostics.message;
+  delete diagnostics.stack;
+  delete diagnostics.cause;
+  Object.defineProperties(readable, diagnostics);
+  return readable;
 }
 
 function withReadableInvokeErrors(ipcRenderer: IpcRendererLike): IpcRendererLike {

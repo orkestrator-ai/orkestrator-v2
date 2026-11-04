@@ -139,6 +139,75 @@ test.beforeAll(() => {
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
 });
 
+test("real invoke rejections keep only the handler message across the context bridge", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-preload-errors-"));
+  let app: ElectronApplication | null = null;
+  try {
+    const main = path.join(root, "main.cjs");
+    const preload = path.join(packageRoot, "dist/electron/preload.js");
+    // Load the production preload in a sandboxed window, with real IPC but no
+    // backend or credentials. Only the two synchronous bootstrap reads are stubbed.
+    await writeFile(
+      main,
+      `
+      const { app, BrowserWindow, ipcMain } = require("electron");
+      app.setPath("userData", ${JSON.stringify(path.join(root, "data"))});
+      ipcMain.on("orkestrator:connections:gateway-sync", event => { event.returnValue = null; });
+      ipcMain.on("orkestrator:connections:list-sync", event => { event.returnValue = null; });
+      ipcMain.handle("orkestrator:invoke", (_event, kind) => {
+        if (kind === "plain") throw new Error("handler failed");
+        if (kind === "type") throw new TypeError("fetch failed");
+        if (kind === "range") throw new RangeError("outside bounds");
+        return "ok";
+      });
+      app.whenReady().then(() => {
+        const window = new BrowserWindow({ show: false, webPreferences: {
+          preload: ${JSON.stringify(preload)}, sandbox: true, contextIsolation: true, nodeIntegration: false
+        }});
+        window.loadURL("about:blank");
+      });
+    `,
+    );
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined && key !== "ELECTRON_RUN_AS_NODE") env[key] = value;
+    }
+    app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [...ELECTRON_TEST_SWITCHES, main],
+      cwd: root,
+      env,
+    });
+    recordElectronDiagnostics(app);
+    const window = await app.firstWindow();
+    const results = await window.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { orkestrator: OrkestratorElectronApi })
+        .orkestrator;
+      const errors = [];
+      for (const kind of ["plain", "type", "range"]) {
+        try {
+          await api.invoke(kind);
+          errors.push({ message: "unexpected success", isError: false });
+        } catch (error) {
+          errors.push({ message: (error as Error).message, isError: error instanceof Error });
+        }
+      }
+      return { errors, success: await api.invoke("success") };
+    });
+    expect(results).toEqual({
+      errors: [
+        { message: "handler failed", isError: true },
+        { message: "fetch failed", isError: true },
+        { message: "outside bounds", isError: true },
+      ],
+      success: "ok",
+    });
+  } finally {
+    if (app) await closeElectronWithin(app);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 type DesktopRecoveryScenario = "close" | "restart" | "remote" | "planned" | "renderer";
 
 async function testIndependentWindows(

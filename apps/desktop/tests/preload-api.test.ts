@@ -206,6 +206,54 @@ describe("preload API factory", () => {
     );
   });
 
+  test.each(["TypeError", "RangeError", "NetworkError"])(
+    "strips a wrapped %s while preserving the handler message",
+    async (name) => {
+      const original = new Error(
+        `Error invoking remote method 'orkestrator:invoke': ${name}: fetch failed: offline`,
+      );
+      const ipc = {
+        invoke: async () => {
+          throw original;
+        },
+        on: () => undefined,
+      } as IpcRendererLike;
+      await expect(createOrkestratorElectronApi(ipc).invoke("get_projects")).rejects.toMatchObject({
+        message: "fetch failed: offline",
+      });
+    },
+  );
+
+  test("retains the original rejection and its custom diagnostics without mutating it", async () => {
+    const original = new Error(
+      "Error invoking remote method 'orkestrator:invoke': TypeError: fetch failed",
+      {
+        cause: new Error("socket closed"),
+      },
+    );
+    Object.defineProperty(original, "code", { value: "ECONNRESET", enumerable: false });
+    const ipc = {
+      invoke: async () => {
+        throw original;
+      },
+      on: () => undefined,
+    } as IpcRendererLike;
+    const rejection = await createOrkestratorElectronApi(ipc)
+      .invoke("get_projects")
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    const readable = rejection as Error & { code: string };
+    expect(readable.message).toBe("fetch failed");
+    expect(readable.cause).toBe(original);
+    expect((readable.cause as Error).stack).toBe(original.stack);
+    expect((readable.cause as Error).cause).toBe(original.cause);
+    expect(readable.code).toBe("ECONNRESET");
+    expect(Object.getOwnPropertyDescriptor(readable, "code")).toEqual(
+      Object.getOwnPropertyDescriptor(original, "code"),
+    );
+    expect(original.message).toContain("Error invoking remote method");
+  });
+
   test("leaves errors without the remote-method wrapper untouched", async () => {
     const original = new TypeError("fetch failed");
     const ipc = {

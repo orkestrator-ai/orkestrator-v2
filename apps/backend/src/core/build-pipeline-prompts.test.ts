@@ -574,6 +574,7 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("create worktrees or install dependencies");
     expect(prompt).toContain("Do not edit source files or create commits");
     expect(prompt).toContain("If relevant work is uncommitted");
+    expect(prompt).toContain("A criterion you could not establish here is not an unmet one.");
     expect(prompt).toContain("commentary or update channel");
     expect(prompt).toContain("using ordinary prose sentences");
     expect(prompt).toContain("Do not use the final-response channel for an update");

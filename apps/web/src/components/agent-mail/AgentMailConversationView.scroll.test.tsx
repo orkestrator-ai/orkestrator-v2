@@ -6,16 +6,24 @@ import { Sheet } from "@/components/ui/sheet";
 import type { AgentMailConversation } from "@orkestrator/protocol/agent-mail";
 const backendSnapshot = { ...backend };
 const markdownSnapshot = { ...markdown };
-const thread = {
+const thread: AgentMailConversation = {
   revision: 1,
   key: "pair",
   total: 1,
   participants: [
     { key: "user", kind: "user", displayName: "You", agent: null, canReceive: false },
-    { key: "env\0tab", kind: "tab", displayName: "Agent", agent: "codex", canReceive: false },
+    { key: "env\0tab", kind: "agent", displayName: "Agent", agent: "codex", canReceive: false },
   ],
   messages: [
     {
+      version: 1,
+      threadId: "thread",
+      requestId: "request",
+      toIncarnationId: "incarnation",
+      bodyBytes: 12,
+      injectDepth: 0,
+      threadDepth: 0,
+      revision: 1,
       id: "latest",
       from: { kind: "user" },
       body: "Tall message",
@@ -27,7 +35,7 @@ const thread = {
       userSeenAt: "seen",
     },
   ],
-} as AgentMailConversation;
+};
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
   getAgentMailConversation: async () => thread,

@@ -570,6 +570,51 @@ describe("a leaf's coordinator sending to the command node", () => {
     ).toBe(true);
   });
 
+  test("a send the outbox refuses leaves no copy behind", async () => {
+    const world = await link();
+    // At the byte limit for images waiting on this command node.
+    await world.leaf.storage.nodes.mutateNodeMail(() => ({
+      next: {
+        version: 1,
+        origins: {},
+        threads: {},
+        outbox: {
+          bk_cmd: {
+            nextSeq: 2,
+            items: [
+              {
+                seq: 1,
+                createdAt: "2026-11-04T00:00:00.000Z",
+                requestId: "earlier",
+                fromEnvironmentId: "e",
+                fromTabId: "t",
+                body: "x",
+                bytes: 1,
+                attachments: {
+                  batch: "0".repeat(32),
+                  files: Array.from({ length: 33 }, (_, index) => ({
+                    name: `${index}.png`,
+                    mediaType: "image/png",
+                    bytes: 8 * 1024 * 1024,
+                    sha256: "a".repeat(64),
+                  })),
+                },
+              },
+            ],
+          },
+        },
+      },
+      result: undefined,
+    }));
+    await expect(
+      world.sendUp({
+        requestId: "up-1",
+        attachments: [await world.paste(world.leaf, world.leafMain)],
+      }),
+    ).rejects.toThrow(/at the limit/);
+    await spoolEmpties(world.leaf);
+  });
+
   test("a leaf's side agent still cannot send upward", async () => {
     const world = await link();
     const side = await world.leaf.addSide();

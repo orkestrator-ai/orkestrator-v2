@@ -636,51 +636,62 @@ export class NodeCoordination {
     if (parent && (parent.hopCount ?? 0) >= AGENT_MAIL_MAX_THREAD_HOPS)
       throw new Error("Thread hop limit reached");
     // A retry finds its request queued, or already delivered, and copies nothing.
-    if (
-      input.attachments &&
-      input.own &&
-      !(await this.leafMail.knownRequest(destination.controllerId, {
+    const spooled =
+      input.attachments && input.own
+        ? !(await this.leafMail.knownRequest(destination.controllerId, {
+            requestId: input.requestId,
+            fromEnvironmentId: input.coordinatorEnvironmentId,
+            fromTabId: input.coordinatorTabId,
+          }))
+        : false;
+    if (spooled) {
+      await stageMailAttachments(
+        this.options.storage.getDataDir(),
+        outboxMailAttachmentBatch(input.attachments!.batch),
+        input.own!,
+      );
+    }
+    const item = await this.leafMail
+      .enqueue(destination.controllerId, {
         requestId: input.requestId,
         fromEnvironmentId: input.coordinatorEnvironmentId,
         fromTabId: input.coordinatorTabId,
-      }))
-    ) {
-      await stageMailAttachments(
-        this.options.storage.getDataDir(),
-        outboxMailAttachmentBatch(input.attachments.batch),
-        input.own,
-      );
-    }
-    const item = await this.leafMail.enqueue(destination.controllerId, {
-      requestId: input.requestId,
-      fromEnvironmentId: input.coordinatorEnvironmentId,
-      fromTabId: input.coordinatorTabId,
-      fromEnvironmentName: "Coordinator",
-      ...(tabName ? { fromTabName: tabName } : {}),
-      ...(hint ? { repositoryHint: hint } : {}),
-      ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
-        ? {
-            toCoordinator: {
-              environmentId: mailbox.coordinatorEnvironmentId,
-              tabId: mailbox.coordinatorTabId,
-            },
-          }
-        : {}),
-      ...(input.subject ? { subject: input.subject } : {}),
-      body: input.body,
-      fromCoordinator: true,
-      ...(parent
-        ? {
-            nodeParent: {
-              id: parent.id,
-              threadId: parent.threadId,
-              hopCount: parent.hopCount ?? 0,
-            },
-          }
-        : {}),
-      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-    });
+        fromEnvironmentName: "Coordinator",
+        ...(tabName ? { fromTabName: tabName } : {}),
+        ...(hint ? { repositoryHint: hint } : {}),
+        ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
+          ? {
+              toCoordinator: {
+                environmentId: mailbox.coordinatorEnvironmentId,
+                tabId: mailbox.coordinatorTabId,
+              },
+            }
+          : {}),
+        ...(input.subject ? { subject: input.subject } : {}),
+        body: input.body,
+        fromCoordinator: true,
+        ...(parent
+          ? {
+              nodeParent: {
+                id: parent.id,
+                threadId: parent.threadId,
+                hopCount: parent.hopCount ?? 0,
+              },
+            }
+          : {}),
+        ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      })
+      .catch(async (error: unknown) => {
+        // Refused, so nothing will ever collect or acknowledge this copy.
+        if (spooled) {
+          await removeMailAttachmentBatch(
+            this.options.storage.getDataDir(),
+            outboxMailAttachmentBatch(input.attachments!.batch),
+          ).catch(() => undefined);
+        }
+        throw error;
+      });
     return {
       item,
       controllerId: destination.controllerId,

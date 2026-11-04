@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores/configStore";
 import { AccountMachineProvider } from "./account-machine";
@@ -139,7 +140,7 @@ test("a backend older than the event log shows no line for it", async () => {
   } as never);
   mount("debug");
   await screen.findByText(/across 2 files/);
-  expect(screen.queryByText(/not removed by clean up/)).toBeNull();
+  expectDomAbsent(screen.queryByText(/not removed by clean up/));
 });
 
 test("a different selected backend never changes this window's web server", async () => {

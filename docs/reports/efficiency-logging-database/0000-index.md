@@ -1,6 +1,6 @@
 # Efficiency, logging and database: outstanding work
 
-What is left to do from the [efficiency review](../2026-10-27-efficiency.md) and the [logging and database efficiency review](../2026-10-29-logging-and-database-efficiency.md), combined. Files 0100 to 0699 come from the efficiency review and 0700 onwards from the logging and database review. Efficiency finding DK-18 and recommendation R7 are the same work, so they share one file.
+What is left to do from the [efficiency review](../2026-10-27-efficiency.md) and the [logging and database efficiency review](../2026-10-29-logging-and-database-efficiency.md), combined. Numbers 0100 to 0699 come from the efficiency review and 0700 onwards from the logging and database review. Efficiency finding DK-18 and recommendation R7 are the same work, so they share one file.
 
 Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
@@ -10,101 +10,149 @@ file as a whole: the impact of leaving its remaining work undone
 in the files. **Finished** is Yes only when every item in the file is done.
 Work that is already built has no file; the status table below records it.
 
+A batch file combines several reports as numbered parts and takes the rating of its most serious part. A number such as `0720` in this index names a part or a file, and the table below shows where it lives.
+
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0400-dk-1-dk-2-local-desktop-transport.md](0400-dk-1-dk-2-local-desktop-transport.md) | High | No | DK-1, DK-2: Local desktop windows relay every event and invoke through Electron main | Every terminal byte on a local desktop run is parsed in Electron main and cloned to each window, which wastes compute continuously. |
-| 2 | [0410-web-1-live-agent-view-polling.md](0410-web-1-live-agent-view-polling.md) | High | No | WEB-1: Live agent views poll transcript, state and discovery together | Every visible running agent tab sends three requests every 500 ms in normal use. |
-| 3 | [0420-st-16-local-scan-minimum-gap.md](0420-st-16-local-scan-minimum-gap.md) | High | No | ST-16: Local diff scans have no minimum gap under constant writes | Any install or build in a local environment runs git scans back to back with no spacing. |
-| 4 | [0700-r14-bound-measurement-file-rows.md](0700-r14-bound-measurement-file-rows.md) | High | No | R14 (D1): a cap on net measurement file rows, and readers past it. | Unbounded rows were about 90% of the database on the machine sampled and raise disk and write cost on every run. |
-| 5 | [0710-r15-prune-superseded-measurements.md](0710-r15-prune-superseded-measurements.md) | High | No | R15 (D2): prompt pruning, skipping no-change publishes, provisional spacing. | The insert-then-delete cycle wastes significant disk writes during normal agent work. |
-| 6 | [0720-r6-silent-failure-logging.md](0720-r6-silent-failure-logging.md) | High | No | R6's specific fixes (L4): writer lease, bridge exit, resume fallback, ACP, turn failures, storage swallows. | Users hit silently stopped schedules and agents that forget their conversation, with nothing recording why. |
-| 7 | [0730-r16-ledger-retention.md](0730-r16-ledger-retention.md) | High | No | R16 (D4): purge on environment deletion and age-based ledger retention. | The ledger grows for every user with no bound, and deleting an environment leaves its history and evidence bodies behind. |
-| 8 | [0100-gw-6-terminal-flush-watermark.md](0100-gw-6-terminal-flush-watermark.md) | Medium | No | GW-6: Terminal WebSocket flush ignores the socket buffer and desyncs quiet channels | A noisy terminal can force a quiet one to resync, a functional gap limited to the opt-in terminal WebSocket. |
-| 9 | [0110-tx-8-tool-detail-miss-recovery.md](0110-tx-8-tool-detail-miss-recovery.md) | Medium | No | TX-8: A tool-detail cache miss cannot recreate remote references | An evicted summary-backed tool detail fails after a costly raw read, a functional gap that needs a cache eviction to appear. |
-| 10 | [0120-gw-3-bearer-terminal-streams.md](0120-gw-3-bearer-terminal-streams.md) | Medium | No | GW-3: Bearer-token web clients open one event stream per terminal | Several terminals on a bearer client can starve `/invoke` on HTTP/1.1, a functional gap for that client type only. |
-| 11 | [0130-br-10-pi-session-list.md](0130-br-10-pi-session-list.md) | Medium | No | BR-10: Pi session list parses every file on each call and hides a timeout | A large Pi history times out and shows an empty list with no error, a functional gap on an infrequent path. |
-| 12 | [0140-br-13-serial-queue-bound.md](0140-br-13-serial-queue-bound.md) | Medium | No | BR-13: Codex notification queue has no count bound and allocates per notification | The queue has no count bound, so the fix removes a real risk and restores a stated invariant. |
-| 13 | [0430-st-3-object-reuse-and-closure-stats.md](0430-st-3-object-reuse-and-closure-stats.md) | Medium | No | ST-3: Warm captures pay one `utimes` and one `stat` per reused object | It is the largest remaining warm-capture cost seen in one profile, but runs on a bounded path and has no clean measurement. |
-| 14 | [0440-st-14-git-scan-processes.md](0440-st-14-git-scan-processes.md) | Medium | No | ST-14: Each diff scan spawns several git processes | Each scan repeats git processes, a real but per-scan cost that the recurring-work metrics have not yet confirmed. |
-| 15 | [0450-st-15-untracked-file-count-cache.md](0450-st-15-untracked-file-count-cache.md) | Medium | No | ST-15: Untracked files are re-read on every scan | Scans re-read every untracked file, which costs real time only in worktrees with many of them. |
-| 16 | [0460-st-18-git-scope-demand-expiry.md](0460-st-18-git-scope-demand-expiry.md) | Medium | No | ST-18: Git-scope demand never expires | One look at a scope view adds recomputation, with container execs, for the rest of the environment's life. |
-| 17 | [0470-st-10-whole-value-store-writes.md](0470-st-10-whole-value-store-writes.md) | Medium | No | ST-10 (rest): One-field environment, session and project changes rewrite the whole store | Whole-store environment writes are a refactor that removes a real scaling cost, and nothing is broken today. |
-| 18 | [0480-st-6-object-store-event-loop-blocking.md](0480-st-6-object-store-event-loop-blocking.md) | Medium | No | ST-6: Object store runs zlib and fsync synchronously on the event loop | A large blob can stall every backend request while it compresses, though only on first write. |
-| 19 | [0490-dk-14-agent-home-input-copies.md](0490-dk-14-agent-home-input-copies.md) | Medium | No | DK-14: Agent-home inputs are copied in full per environment and again on every start | Every container start copies inputs again, at a size nobody has measured. |
-| 20 | [0500-dk-13-shared-clone-mirror.md](0500-dk-13-shared-clone-mirror.md) | Medium | No | DK-13: Each environment clones from the remote again | Each new container environment clones again, which costs most for large repositories and has an open question on blobless fetches. |
-| 21 | [0510-web-6-live-head-merge-serialisation.md](0510-web-6-live-head-merge-serialisation.md) | Medium | No | WEB-6: The live-head merge serialises parts with no identity shortcut | Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
-| 22 | [0520-web-9-startup-bundle.md](0520-web-9-startup-bundle.md) | Medium | No | WEB-9: Heavy chat code is in the startup closure | Every launch loads heavy chat code, but the sizes come from one older build. |
-| 23 | [0740-r6-docker-bridge-log-rotation.md](0740-r6-docker-bridge-log-rotation.md) | Medium | No | R6 and L4: keep the previous Docker bridge log across a relaunch and make it readable. | It loses the evidence for a crash but no user data, and it affects container bridges only. |
-| 24 | [0750-r6-essential-event-log.md](0750-r6-essential-event-log.md) | Medium | No | R6's always-on tier and control, plus L4's uncaught exception gap. | First-occurrence evidence is a missing measurement rather than a defect in shipped behaviour. |
-| 25 | [0760-r17-ledger-out-of-hourly-snapshots.md](0760-r17-ledger-out-of-hourly-snapshots.md) | Medium | No | R17 (D3): the ledger leaves hourly snapshots. | Disk is already capped at 16 GiB and the copy runs off the event loop, and the cost shrinks with R14 and R15. |
-| 26 | [0770-r9-codex-raw-event-logging.md](0770-r9-codex-raw-event-logging.md) | Medium | No | R9 (L8): remove the no-op toggle. | A default-on setting tells users something false, though nothing is captured today. |
-| 27 | [0780-r11-export-diagnostics.md](0780-r11-export-diagnostics.md) | Medium | No | R11 (M2, L7) and its control: a local diagnostics bundle. | It is a functional gap in supportability, and the Bug button and `--fix` remain as workarounds. |
-| 28 | [0790-r8-renderer-diagnostics.md](0790-r8-renderer-diagnostics.md) | Medium | No | R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring. | Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 29 | [0800-r18-scrub-checkpoint-stall.md](0800-r18-scrub-checkpoint-stall.md) | Medium | No | R18's checkpoint item (D6).: Stop the scrub checkpoint stalling the event loop during a backup | A possible 10 s event-loop stall is a real risk to remove, though it has not been reproduced. |
-| 30 | [0810-r19-database-observability.md](0810-r19-database-observability.md) | Medium | No | R19 (M6): database size, waits, top tables and a panel. | It is a missing measurement, and the retention report is computed and thrown away. |
-| 31 | [0820-r12-rolling-health-summary.md](0820-r12-rolling-health-summary.md) | Medium | No | R12 (M1): a rolling health row and a clean shutdown marker. | Leaks and restart causes cannot be answered afterwards, which is a missing measurement. |
-| 32 | [0830-r10-vendor-debug-environment.md](0830-r10-vendor-debug-environment.md) | Medium | No | R10's environment item and L10: filter inherited vendor debug variables. | Vendor debug output can carry content into a saved log, though it takes a stray shell variable to happen. |
-| 33 | [0840-d4-project-removal-orphans.md](0840-d4-project-removal-orphans.md) | Medium | No | D4's last sentence, which no recommendation covers: Kanban, notes, plans and completion comments survive project removal. | Content stays on disk with nothing able to reach it, a functional gap with a small privacy cost and no size cost. |
-| 34 | [0150-tx-2-tx-15-post-dispatch-raw-reads.md](0150-tx-2-tx-15-post-dispatch-raw-reads.md) | Low | No | TX-2, TX-15: Dispatches and control changes trigger an unlimited raw transcript read | The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 35 | [0160-tx-1-delta-base-ring.md](0160-tx-1-delta-base-ring.md) | Low | No | TX-1: A transcript delta can only be built from the newest cached view | The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 36 | [0170-gw-1-native-session-read-round.md](0170-gw-1-native-session-read-round.md) | Low | No | GW-1: Native session views send three requests per tick and there is no combined read | The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 37 | [0180-tx-5-session-state-conditional-read.md](0180-tx-5-session-state-conditional-read.md) | Low | No | TX-5: Session-state reads have no conditional path from the bridge | An optimisation the maintainer gated on a baseline, so it waits for that measurement. |
-| 38 | [0190-tx-6-bridge-transcript-delta.md](0190-tx-6-bridge-transcript-delta.md) | Low | No | TX-6: Bridge transcript windows are always sent whole | An optimisation the maintainer gated on a baseline, and its cost is local CPU rather than remote bandwidth. |
-| 39 | [0200-tx-18-messages-fallback-limit.md](0200-tx-18-messages-fallback-limit.md) | Low | No | TX-18: The `/messages` fallback ignores the limit it has in scope | A small saving on a compatibility fallback that only older bridges and non-resident sessions reach. |
-| 40 | [0210-tx-3-legacy-commit-fingerprint.md](0210-tx-3-legacy-commit-fingerprint.md) | Low | No | TX-3: The legacy commit re-serialises the whole projection to fingerprint it | A contained optimisation with no behaviour change and no measured cost. |
-| 41 | [0220-tx-9-tx-13-memoised-fingerprints.md](0220-tx-9-tx-13-memoised-fingerprints.md) | Low | No | TX-9, TX-13: Memoise row fingerprints and hash them for the view token | A contained optimisation of hashing that has no measured cost. |
-| 42 | [0230-tx-4-lease-held-session-loads.md](0230-tx-4-lease-held-session-loads.md) | Low | No | TX-4 (remainder): Native session mutations still decode the whole store inside the lease | The read path this finding was about is fixed, and what remains is an unmeasured cost on mutations. |
-| 43 | [0240-br-1-acp-persist-fragments.md](0240-br-1-acp-persist-fragments.md) | Low | No | BR-1 (remainder): ACP still serialises every session on each state write | The write rate is already down to once a second, so the remaining cache should wait for a measurement. |
-| 44 | [0250-br-7-codex-running-tool-cards.md](0250-br-7-codex-running-tool-cards.md) | Low | No | BR-7: Codex re-renders and re-sends running tool cards every publish tick | A CPU optimisation with low wire cost and no measured impact. |
-| 45 | [0260-br-12-acp-stdout-framing.md](0260-br-12-acp-stdout-framing.md) | Low | No | BR-12: ACP stdout framing is quadratic for large frames | The quadratic cost applies only to large frames and is capped by the 4 MiB line limit. |
-| 46 | [0270-br-16-acp-cursor-replay.md](0270-br-16-acp-cursor-replay.md) | Low | No | BR-16: ACP's Cursor replay looks like dead code | This is removal of code no production launch reaches, so leaving it costs only maintenance. |
-| 47 | [0280-gw-5-event-frame-encoding.md](0280-gw-5-event-frame-encoding.md) | Low | No | GW-5: Events are measured and encoded again for each subscriber | A small per-subscriber cost that should wait for a profile. |
-| 48 | [0290-gw-12-replay-cursor-frames.md](0290-gw-12-replay-cursor-frames.md) | Low | No | GW-12: Scoped stream replay writes one cursor frame per skipped event | Extra small frames on reconnect for filtered clients, with no user-visible failure beyond an occasional needless reconcile. |
-| 49 | [0300-gw-14-replay-window-lookup.md](0300-gw-14-replay-window-lookup.md) | Low | No | GW-14: Replay lookup is a linear filter and an oversized event is invisible | A linear scan over a bounded window plus a missing metric for a rare event. |
-| 50 | [0310-gw-15-static-fallback-304.md](0310-gw-15-static-fallback-304.md) | Low | No | GW-15: Static fallback compression runs before the 304 check | Wasted compression only for revalidated static files that have no precompressed sibling. |
-| 51 | [0320-tx-7-head-row-recovery.md](0320-tx-7-head-row-recovery.md) | Low | No | TX-7: Head-row recovery re-reads the raw transcript on each streaming revision | The trigger is narrow, needing a part-trimmed head or a cached summary, and its frequency is unmeasured. |
-| 52 | [0330-tx-11-patch-digest-cost.md](0330-tx-11-patch-digest-cost.md) | Low | No | TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop | An unmeasured CPU optimisation in patch building. |
-| 53 | [0340-tx-12-update-serialiser.md](0340-tx-12-update-serialiser.md) | Low | No | TX-12: Already-encoded rows are stringified again on the way out | An unmeasured saving bounded by the size of one transcript window. |
-| 54 | [0345-tx-14-display-tail-serialisation.md](0345-tx-14-display-tail-serialisation.md) | Low | No | TX-14: Restart-preview checkpoints are serialised three times and cloned | Repeated serialisation of a byte-bounded checkpoint, with no measured cost. |
-| 55 | [0350-tx-16-inline-tool-body-hash.md](0350-tx-16-inline-tool-body-hash.md) | Low | No | TX-16: Inline tool bodies are re-hashed whenever their row misses the cache | An unmeasured cost limited to raw reads and inline-body providers. |
-| 56 | [0355-br-14-pi-persistence-encoding.md](0355-br-14-pi-persistence-encoding.md) | Low | No | BR-14: Pi persistence serialises every session on each write | It runs only at turn and request edges, and bursts are coalesced. |
-| 57 | [0360-br-15-sse-replay-rings.md](0360-br-15-sse-replay-rings.md) | Low | No | BR-15 (remainder): Two SSE replay rings with uneven quality | Duplicate ring code whose backend subscriber only receives small observation frames. |
-| 58 | [0365-gw-10-preview-rewrite-passes.md](0365-gw-10-preview-rewrite-passes.md) | Low | No | GW-10: The preview body rewrite makes many full regex passes | GW-9 already removed this work from reloads, and the legacy route is a fallback. |
-| 59 | [0370-gw-11-relayed-node-events.md](0370-gw-11-relayed-node-events.md) | Low | No | GW-11: Relayed federation events share one name and the main replay window | It affects federation users only, and the worst outcome is a needless reconcile. |
-| 60 | [0375-gw-16-small-per-chunk-costs.md](0375-gw-16-small-per-chunk-costs.md) | Low | No | GW-16: Small per-chunk and per-frame gateway costs | Small allocations and small frames with no user-visible effect. |
-| 61 | [0380-tx-17-small-linear-scans.md](0380-tx-17-small-linear-scans.md) | Low | No | TX-17: Small linear scans in the transcript projection | Single passes over a bounded window that may not need any change. |
-| 62 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 63 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 64 | [0530-st-5-manifest-cache-and-lookup.md](0530-st-5-manifest-cache-and-lookup.md) | Low | No | ST-5: Manifests are re-parsed for every diff page and searched linearly | It is a user-driven diff-page optimisation that should wait for a measurement on large trees. |
-| 65 | [0540-st-19-active-turns-and-boundary-growth.md](0540-st-19-active-turns-and-boundary-growth.md) | Low | No | ST-19 (rest): `activeTurns()` scans every turn boundary, and the rows are never removed | Measurement pruning has landed, leaving a small query change and a slow-growing table. |
-| 66 | [0550-st-20-retention-walks.md](0550-st-20-retention-walks.md) | Low | No | ST-20: Hourly retention walks the object store repeatedly | An hourly walk has a bounded impact and should wait for a measurement. |
-| 67 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 68 | [0570-st-17-recursive-worktree-watch.md](0570-st-17-recursive-worktree-watch.md) | Low | No | ST-17: Recursive `fs.watch` covers the whole worktree, `node_modules` included | The impact depends on Bun's watcher, which nobody has inspected, so it should wait for a measurement. |
-| 69 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 70 | [0590-web-2-native-session-store-subscriptions.md](0590-web-2-native-session-store-subscriptions.md) | Low | No | WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount | Unchanged polls no longer re-render, so the remaining benefit needs a Profiler run to show. |
-| 71 | [0600-web-10-find-reindexing.md](0600-web-10-find-reindexing.md) | Low | No | WEB-10: With find open, the whole transcript is re-indexed on every update | The cost exists only while find is open on a long transcript. |
-| 72 | [0610-web-11-terminal-socket-visibility-rebuild.md](0610-web-11-terminal-socket-visibility-rebuild.md) | Low | No | WEB-11: The terminal WebSocket rebuilds every channel on every visibility change | It affects only the opt-in terminal WebSocket transport. |
-| 73 | [0620-web-12-environment-list-refetch.md](0620-web-12-environment-list-refetch.md) | Low | No | WEB-12: One environment change refetches the project's whole environment list | Bursts already collapse to one project read, so this should wait for a measurement. |
-| 74 | [0630-web-13-expanded-folder-reloads.md](0630-web-13-expanded-folder-reloads.md) | Low | No | WEB-13: Expanded truncated folders are re-read every 5 s without a digest | It is a small read that runs only with the All files tab open and visible. |
-| 75 | [0640-web-14-projection-store-map-copies.md](0640-web-14-projection-store-map-copies.md) | Low | No | WEB-14: Projection store writes copy four Maps even when one changes | Copying Maps of at most 128 entries is cheap and may never show in a profile. |
-| 76 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 77 | [0660-web-18-polls-while-hidden.md](0660-web-18-polls-while-hidden.md) | Low | No | WEB-18: Some renderer polls keep running while the window is hidden | These are slow or dialog-bound polls whose hidden-window cost may already be throttled. |
-| 78 | [0670-web-19-streaming-markdown-render.md](0670-web-19-streaming-markdown-render.md) | Low | No | WEB-19: Streaming markdown rebuilds the whole message's tree per update | The parse is already incremental, so the remaining render cost should wait for a Profiler run. |
-| 79 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 80 | [0690-bg-14-tmux-transcript-reopen.md](0690-bg-14-tmux-transcript-reopen.md) | Low | No | BG-14: Reopening a tmux tab replays its whole transcript | It is an occasional reopen read with no measured size. |
-| 81 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 82 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 83 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 84 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
-| 85 | [0850-r10-docker-log-bounds.md](0850-r10-docker-log-bounds.md) | Low | No | R10's disk items (L9): the no-perl fallback, dropped-write markers and the driver fallback. | It reaches only unusual images and daemons, with no evidence any is in use. |
-| 86 | [0860-r7-relay-and-file-writer.md](0860-r7-relay-and-file-writer.md) | Low | No | R7's remainder (L6) and DK-18: batching, line bound and skipping the relay. | These are optimisations that should wait for a measurement, since the sampled volume was fine. |
-| 87 | [0870-r20-read-path-leftovers.md](0870-r20-read-path-leftovers.md) | Low | No | R20's remainder (D7, D8): blob length, read-only leases and the usage prune. | Small costs, and the overflow read has not been timed. |
-| 88 | [0880-r13-metric-primitives.md](0880-r13-metric-primitives.md) | Low | No | R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives. | It is cleanup with no user-visible effect. |
-| 89 | [0890-controls-presets-and-auto-revert.md](0890-controls-presets-and-auto-revert.md) | Low | No | User controls: presets, auto-revert and privacy text. | These are optional extensions to controls that already work. |
-| 90 | [0900-controls-log-cli-flags.md](0900-controls-log-cli-flags.md) | Low | No | User controls: `--log-level` and `--log-category`. | `ORKESTRATOR_LOG_LEVEL` already provides the ability. |
-| 91 | [0910-r18-sqlite-maintenance.md](0910-r18-sqlite-maintenance.md) | Low | No | R18's maintenance items (D5): `optimize`, `foreign_keys`, cache sizes. | These are optimisations that should wait for a measurement, and hygiene. |
-| 92 | [0920-r18-durability-tiers.md](0920-r18-durability-tiers.md) | Low | No | R18's tiers (D5).: Tier `synchronous` and `secure_delete` by data | A maintainer deferred this on 2026-11-01 until a measurement shows fsync cost. |
-| 93 | [0930-l10-logging-hygiene.md](0930-l10-logging-hygiene.md) | Low | No | L10 and M2 leftovers that no recommendation covers. | Dead code and wrong comments only. |
+| 1 | [0400-e26-local-desktop-transport.md](0400-e26-local-desktop-transport.md) | High | No | **E26, Local desktop transport.**<br>`0400`: DK-1, DK-2: Local desktop windows relay every event and invoke through Electron main<br>`0860`: R7's remainder (L6) and DK-18: batching, line bound and skipping the relay. | From `0400`: Every terminal byte on a local desktop run is parsed in Electron main and cloned to each window, which wastes compute continuously. |
+| 2 | [0170-e8-agent-tab-polling.md](0170-e8-agent-tab-polling.md) | High | No | **E8, Agent tab polling.**<br>GW-1, WEB-1: Live agent views send three requests per tick, and there is no combined read | Every visible running agent tab sends three requests every 500 ms in normal use. |
+| 3 | [0420-e7-diff-scans.md](0420-e7-diff-scans.md) | High | No | **E7, Diff scans.**<br>`0420`: ST-16: Local diff scans have no minimum gap under constant writes<br>`0440`: ST-14: Each diff scan spawns several git processes<br>`0450`: ST-15: Untracked files are re-read on every scan<br>`0460`: ST-18: Git-scope demand never expires<br>`0570`: ST-17: Recursive `fs.watch` covers the whole worktree, `node_modules` included | From `0420`: Any install or build in a local environment runs git scans back to back with no spacing. |
+| 4 | [0700-e2-measurement-rows.md](0700-e2-measurement-rows.md) | High | No | **E2, Measurement rows.**<br>`0700`: R14 (D1): a cap on net measurement file rows, and readers past it.<br>`0710`: R15 (D2): prompt pruning, skipping no-change publishes, provisional spacing. | From `0700`: Unbounded rows were about 90% of the database on the machine sampled and raise disk and write cost on every run. |
+| 5 | [0720-e13-silent-failures.md](0720-e13-silent-failures.md) | High | No | **E13, Silent failures.**<br>`0720`: R6's specific fixes (L4): writer lease, bridge exit, resume fallback, ACP, turn failures, storage swallows.<br>`0830`: R10's environment item and L10: filter inherited vendor debug variables. | From `0720`: Users hit silently stopped schedules and agents that forget their conversation, with nothing recording why. |
+| 6 | [0540-e3-retention-and-deletion.md](0540-e3-retention-and-deletion.md) | High | No | **E3, Retention and deletion.**<br>`0730`: R16 (D4): purge on environment deletion and age-based ledger retention.<br>`0540`: ST-19 (rest): `activeTurns()` scans every turn boundary, and the rows are never removed<br>`0840`: D4's last sentence, which no recommendation covers: Kanban, notes, plans and completion comments survive project removal. | From `0730`: The ledger grows for every user with no bound, and deleting an environment leaves its history and evidence bodies behind. |
+| 7 | [0100-e19-terminal-websocket.md](0100-e19-terminal-websocket.md) | Medium | No | **E19, Terminal WebSocket.**<br>`0100`: GW-6: Terminal WebSocket flush ignores the socket buffer and desyncs quiet channels<br>`0375`: GW-16: Small per-chunk and per-frame gateway costs<br>`0610`: WEB-11: The terminal WebSocket rebuilds every channel on every visibility change | From `0100`: A noisy terminal can force a quiet one to resync, a functional gap limited to the opt-in terminal WebSocket. |
+| 8 | [0110-e9-transcript-reads.md](0110-e9-transcript-reads.md) | Medium | No | **E9, Transcript reads.**<br>`0150`: TX-2, TX-15: Dispatches and control changes trigger an unlimited raw transcript read<br>`0200`: TX-18: The `/messages` fallback ignores the limit it has in scope<br>`0110`: TX-8: A tool-detail cache miss cannot recreate remote references | From `0110`: An evicted summary-backed tool detail fails after a costly raw read, a functional gap that needs a cache eviction to appear. |
+| 9 | [0120-gw-3-bearer-terminal-streams.md](0120-gw-3-bearer-terminal-streams.md) | Medium | No | GW-3: Bearer-token web clients open one event stream per terminal | Several terminals on a bearer client can starve `/invoke` on HTTP/1.1, a functional gap for that client type only. |
+| 10 | [0130-e21-pi-bridge.md](0130-e21-pi-bridge.md) | Medium | No | **E21, Pi bridge.**<br>`0130`: BR-10: Pi session list parses every file on each call and hides a timeout<br>`0355`: BR-14: Pi persistence serialises every session on each write | From `0130`: A large Pi history times out and shows an empty list with no error, a functional gap on an infrequent path. |
+| 11 | [0140-br-13-serial-queue-bound.md](0140-br-13-serial-queue-bound.md) | Medium | No | BR-13: Codex notification queue has no count bound and allocates per notification | The queue has no count bound, so the fix removes a real risk and restores a stated invariant. |
+| 12 | [0430-e4-object-store.md](0430-e4-object-store.md) | Medium | No | **E4, Object store.**<br>`0430`: ST-3: Warm captures pay one `utimes` and one `stat` per reused object<br>`0480`: ST-6: Object store runs zlib and fsync synchronously on the event loop<br>`0530`: ST-5: Manifests are re-parsed for every diff page and searched linearly<br>`0550`: ST-20: Hourly retention walks the object store repeatedly | From `0430`: It is the largest remaining warm-capture cost seen in one profile, but runs on a bounded path and has no clean measurement. |
+| 13 | [0230-e6-store-writes.md](0230-e6-store-writes.md) | Medium | No | **E6, Store writes.**<br>`0230`: TX-4 (remainder): Native session mutations still decode the whole store inside the lease<br>`0470`: ST-10 (rest): One-field environment, session and project changes rewrite the whole store<br>`0870`: R20's remainder (D7, D8): blob length, read-only leases and the usage prune. | From `0470`: Whole-store environment writes are a refactor that removes a real scaling cost, and nothing is broken today. |
+| 14 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
+| 15 | [0510-e12-renderer-store.md](0510-e12-renderer-store.md) | Medium | No | **E12, Renderer store.**<br>`0510`: WEB-6: The live-head merge serialises parts with no identity shortcut<br>`0590`: WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount<br>`0640`: WEB-14: Projection store writes copy four Maps even when one changes | From `0510`: Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
+| 16 | [0520-web-9-startup-bundle.md](0520-web-9-startup-bundle.md) | Medium | No | WEB-9: Heavy chat code is in the startup closure | Every launch loads heavy chat code, but the sizes come from one older build. |
+| 17 | [0740-e14-docker-logs.md](0740-e14-docker-logs.md) | Medium | No | **E14, Docker logs.**<br>`0740`: R6 and L4: keep the previous Docker bridge log across a relaunch and make it readable.<br>`0850`: R10's disk items (L9): the no-perl fallback, dropped-write markers and the driver fallback. | From `0740`: It loses the evidence for a crash but no user data, and it affects container bridges only. |
+| 18 | [0750-e15-health-and-diagnostics.md](0750-e15-health-and-diagnostics.md) | Medium | No | **E15, Health and diagnostics.**<br>`0750`: R6's always-on tier and control, plus L4's uncaught exception gap.<br>`0820`: R12 (M1): a rolling health row and a clean shutdown marker.<br>`0810`: R19 (M6): database size, waits, top tables and a panel.<br>`0880`: R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives.<br>`0780`: R11 (M2, L7) and its control: a local diagnostics bundle. | From `0750`: First-occurrence evidence is a missing measurement rather than a defect in shipped behaviour. |
+| 19 | [0760-e5-database-upkeep.md](0760-e5-database-upkeep.md) | Medium | No | **E5, Database upkeep.**<br>`0760`: R17 (D3): the ledger leaves hourly snapshots.<br>`0800`: R18's checkpoint item (D6).: Stop the scrub checkpoint stalling the event loop during a backup<br>`0910`: R18's maintenance items (D5): `optimize`, `foreign_keys`, cache sizes.<br>`0920`: R18's tiers (D5).: Tier `synchronous` and `secure_delete` by data | From `0760`: Disk is already capped at 16 GiB and the copy runs off the event loop, and the cost shrinks with R14 and R15. |
+| 20 | [0770-e17-dead-code.md](0770-e17-dead-code.md) | Medium | No | **E17, Dead code.**<br>`0770`: R9 (L8): remove the no-op toggle.<br>`0930`: L10 and M2 leftovers that no recommendation covers. | From `0770`: A default-on setting tells users something false, though nothing is captured today. |
+| 21 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
+| 22 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 23 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
+| 24 | [0240-e20-acp-bridge.md](0240-e20-acp-bridge.md) | Low | No | **E20, ACP bridge.**<br>`0270`: BR-16: ACP's Cursor replay looks like dead code<br>`0260`: BR-12: ACP stdout framing is quadratic for large frames<br>`0240`: BR-1 (remainder): ACP still serialises every session on each state write | From `0240`: The write rate is already down to once a second, so the remaining cache should wait for a measurement. |
+| 25 | [0250-br-7-codex-running-tool-cards.md](0250-br-7-codex-running-tool-cards.md) | Low | No | BR-7: Codex re-renders and re-sends running tool cards every publish tick | A CPU optimisation with low wire cost and no measured impact. |
+| 26 | [0280-e18-gateway-events.md](0280-e18-gateway-events.md) | Low | No | **E18, Gateway events.**<br>`0280`: GW-5: Events are measured and encoded again for each subscriber<br>`0290`: GW-12: Scoped stream replay writes one cursor frame per skipped event<br>`0300`: GW-14: Replay lookup is a linear filter and an oversized event is invisible<br>`0370`: GW-11: Relayed federation events share one name and the main replay window | From `0280`: A small per-subscriber cost that should wait for a profile. |
+| 27 | [0310-e24-gateway-static-and-preview.md](0310-e24-gateway-static-and-preview.md) | Low | No | **E24, Gateway static and preview.**<br>`0310`: GW-15: Static fallback compression runs before the 304 check<br>`0365`: GW-10: The preview body rewrite makes many full regex passes | From `0310`: Wasted compression only for revalidated static files that have no precompressed sibling. |
+| 28 | [0360-br-15-sse-replay-rings.md](0360-br-15-sse-replay-rings.md) | Low | No | BR-15 (remainder): Two SSE replay rings with uneven quality | Duplicate ring code whose backend subscriber only receives small observation frames. |
+| 29 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 30 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 31 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 32 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
+| 33 | [0600-e22-chat-rendering.md](0600-e22-chat-rendering.md) | Low | No | **E22, Chat rendering.**<br>`0600`: WEB-10: With find open, the whole transcript is re-indexed on every update<br>`0670`: WEB-19: Streaming markdown rebuilds the whole message's tree per update | From `0600`: The cost exists only while find is open on a long transcript. |
+| 34 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
+| 35 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 36 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
+| 37 | [0690-bg-14-tmux-transcript-reopen.md](0690-bg-14-tmux-transcript-reopen.md) | Low | No | BG-14: Reopening a tmux tab replays its whole transcript | It is an occasional reopen read with no measured size. |
+| 38 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 39 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 40 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 41 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+
+## Parallel running
+
+The full plan, with every lane across all four folders, is in [batches.md](../batches.md).
+
+Batches in the same lane run one at a time, in the order shown. Batches in different lanes can run together unless **Not at the same time as** names the other one. A batch with no lane only has to respect that column.
+
+This index only changes when a branch merges, so it can't show what is running now. Before starting a batch, check the running environments and open PRs for its lane and its **Not at the same time as** list. Put the batch ID in the environment and branch name so that check can find it.
+
+### Batches
+
+| Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
+| --- | --- | --- | --- | --- | --- |
+| E1 | Baseline run | The baseline task in `0150`, `0160`, `0180`, `0190`, `0400` and E8 | No lane | None | None |
+| E14 | [Docker logs](0740-e14-docker-logs.md) | `0740`, `0850` | Containers, 6 of 7 | None | None |
+| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 7 of 7 | None | None |
+| E8 | [Agent tab polling](0170-e8-agent-tab-polling.md) | `0170`, `0410` | Transcript, 1 of 5 | E1 (Baseline run) | C6 (Errors and dead ends), E26 (Local desktop transport), E-0120 (Bearer terminal streams) |
+| E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 2 of 5 | E1 (Baseline run) | None |
+| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 3 of 5 | E1 (Baseline run) | None |
+| E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 4 of 5 | None | None |
+| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 5 of 5 | None | C6 (Errors and dead ends) |
+| E2 | [Measurement rows](0700-e2-measurement-rows.md) | `0700`, `0710` | Change tracking, 1 of 3 | None | None |
+| E3 | [Retention and deletion](0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` | Change tracking, 2 of 3 | None | E7 (Diff scans) |
+| E4 | [Object store](0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` | Change tracking, 3 of 3 | None | None |
+| E6 | [Store writes](0230-e6-store-writes.md) | `0230`, `0470`, `0870` | Storage, 1 of 3 | None | None |
+| E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 2 of 3 | E2 (Measurement rows) | E15 (Health and diagnostics) |
+| E7 | [Diff scans](0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` | Git scans and file reads, 1 of 2 | None | E3 (Retention and deletion) |
+| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 2 of 3 | E1 (Baseline run) | E8 (Agent tab polling), E-0120 (Bearer terminal streams) |
+| E19 | [Terminal WebSocket](0100-e19-terminal-websocket.md) | `0100`, `0375`, `0610` | Gateway, 2 of 7 | None | None |
+| E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 5 of 7 | None | None |
+| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 6 of 7 | None | S3 (Electron renderer) |
+| E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | S2 (Bridge credential), E20 (ACP bridge), E21 (Pi bridge) |
+| E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 2 of 4 | None | S1 (GitHub token) |
+| E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |
+| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | S3 (Electron renderer) |
+| E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
+| E21 | [Pi bridge](0130-e21-pi-bridge.md) | `0130`, `0355` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
+| E22 | [Chat rendering](0600-e22-chat-rendering.md) | `0600`, `0670` | No lane | None | None |
+| E23 | [Renderer polling](0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` | No lane | None | C7 (Work panel and navigation) |
+
+Why these are grouped:
+
+- **E1:** The baseline task in `0150`, `0160`, `0180`, `0190`, `0400` and E8. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E8, E9, E10 and E26. `0400` also needs Electron main-process CPU and IPC figures.
+- **E14:** Same log writer and bounds.
+- **E25:** `0500` depends on `0490`.
+- **E8:** Two reports of the same change, merged into one.
+- **E9:** `0200` and `0110` link to `0150`.
+- **E10:** Waiting on the baseline. `0190` links to `0160`.
+- **E11:** Serialising and hashing in the projection path. All Low.
+- **E12:** Same hook and projection store.
+- **E2:** The biggest database gain, in the same measurement service.
+- **E3:** All decide what gets deleted and when.
+- **E4:** Same store and capture code. `0550` depends on `0530`.
+- **E6:** Moving from whole-store to row-level access.
+- **E5:** `0760`, `0910` and `0920` wait on the ledger work. `0920` also has a maintainer deferral.
+- **E7:** The reports cross-reference each other. `0570` is measure-first.
+- **E26:** Both in `backend-process.ts`.
+- **E19:** Same server and client pair.
+- **E18:** Same replay and event files.
+- **E24:** Both in `gateway-proxy.ts`.
+- **E13:** Local bridge launch and exit.
+- **E17:** Low-risk removals. Goes before E15, which names six of the same files.
+- **E15:** Build the sources first. `0780` then packages them.
+- **E16:** Linked settings for log detail.
+- **E20:** Remove the dead code first.
+- **E21:** Same bridge.
+- **E22:** Both redo work on each transcript update.
+- **E23:** Background refetches.
+
+### Files built on their own
+
+These still follow the lane and conflict rules above.
+
+| Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
+| --- | --- | --- | --- | --- | --- |
+| E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 2 of 2 | None | None |
+| E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 3 of 3 | None | None |
+| E-0120 | [Bearer terminal streams](0120-gw-3-bearer-terminal-streams.md) | `0120` | Gateway, 3 of 7 | None | E8 (Agent tab polling), E26 (Local desktop transport) |
+| E-0140 | [Codex queue bound](0140-br-13-serial-queue-bound.md) | `0140` | No lane | None | None |
+| E-0250 | [Codex running tool cards](0250-br-7-codex-running-tool-cards.md) | `0250` | No lane | None | None |
+| E-0360 | [SSE replay rings](0360-br-15-sse-replay-rings.md) | `0360` | No lane | None | None |
+| E-0520 | [Startup bundle](0520-web-9-startup-bundle.md) | `0520` | No lane | None | None |
+| E-0650 | [Terminal container subscription](0650-web-16-terminal-container-environment-subscription.md) | `0650` | No lane | None | None |
+| E-0680 | [Multi Review drift checks](0680-bg-10-multi-review-snapshot-drift-checks.md) | `0680` | No lane | None | None |
+| E-0690 | [Tmux transcript reopen](0690-bg-14-tmux-transcript-reopen.md) | `0690` | No lane | None | None |
+| E-0692 | [Preview tunnel multiplexing](0692-dk-6-preview-tunnel-multiplexing.md) | `0692` | No lane | None | None |
+| E-0694 | [Attention follow polling](0694-dk-16-attention-follow-polling.md) | `0694` | No lane | None | None |
+
+### Not ready to start
+
+When one of these becomes ready, it joins the lane shown.
+
+| File | Why it waits | Lane |
+| --- | --- | --- |
+| [`0385`](0385-tx-10-joined-history-pages.md) | Blocked on todo 0232 and the support window | Transcript |
+| [`0390`](0390-gw-7-websocket-compression.md) | Deferred by 0052 decision D6 | Gateway |
+| [`0693`](0693-dk-10-second-claude-binary.md) | Waits on a maintainer decision | Containers |
+| [`0560`](0560-st-9-agent-mail-store-remainder.md) | Needs a measurement to justify a stored-format change | Storage |
 
 ## Status of every efficiency finding
 
@@ -112,7 +160,7 @@ Work that is already built has no file; the status table below records it.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
-| GW-1 | Open | Discovery is still sent in the fast round (`apps/web/src/hooks/useNativeAgentSession.ts:2484`) and only `/invoke` exists (`apps/backend/src/gateway-auth.ts:471`); see 0170. |
+| GW-1 | Open | Discovery is still sent in the fast round (`apps/web/src/hooks/useNativeAgentSession.ts:2484`) and only `/invoke` exists (`apps/backend/src/gateway-auth.ts:471`); see [E8](0170-e8-agent-tab-polling.md). |
 | GW-2 | Done | The default compression mode is `on` (`apps/backend/src/gateway-support-core.ts:536`, #1548 `12289fc56`, 0052 D14), and SSE streams use `GzipEventClientWriter` (`apps/backend/src/gateway-handlers.ts:211`). |
 | GW-3 | Open | Bearer and cross-origin clients still open one fetch stream per terminal (`apps/web/src/lib/native/web-gateway.ts:1092-1098`); see 0120. |
 | GW-4 | Done | `SseFrameDecoder` keeps a chunk list and searches only the new text (`packages/protocol/src/gateway-event-stream.ts:162`, #1548 `12289fc56`), though the report's minor `indexOf` sub-fix in `parseSseBlock` (`:96`) was not taken, which leaves that parse linear per frame. |
@@ -162,7 +210,7 @@ Work that is already built has no file; the status table below records it.
 | BR-14 | Open | `persistNow` and `shedToFit` still serialise the whole payload (`bridges/pi-bridge/src/persistence.ts:152`, `:175`); see 0355. |
 | BR-15 | Partly done | The transcript helpers moved to `packages/protocol/src/node` (#1593 `e668f0a6d`), but the rings remain separate (`bridges/codex-bridge/src/event-ring.ts:62`, `bridges/claude-bridge/src/routes/events.ts:101`); see 0360. |
 | BR-16 | Open | The Cursor gates remain (`bridges/acp-bridge/src/acp-tools.ts:570`, `:688`, `:810`), and the test harness defaults to Cursor (`bridges/acp-bridge/src/acp-test-harness.ts:246`); see 0270. |
-| WEB-1 | Open | Discovery still sent per tick, `useNativeAgentSession.ts:2484`; see 0410. |
+| WEB-1 | Open | Discovery still sent per tick, `useNativeAgentSession.ts:2484`; see [E8](0170-e8-agent-tab-polling.md). |
 | WEB-2 | Partly done | Identity kept at `useNativeAgentSession.ts:1501`, recency condition gone at `nativeAgentProjectionStore.ts:244-246` (12289fc56); narrower subscriptions remain, see 0590. |
 | WEB-3 | Done | `useHydrateOncePerEnvironment`, `App.tsx:368`; no-op guards in `environmentStore.ts` setters (12289fc56). |
 | WEB-4 | Done | Identity and hydration check before serialising, `pane-layout-persistence.ts:799` (9c06cb7aa). |
@@ -234,7 +282,7 @@ Work that is already built has no file; the status table below records it.
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` remains, see 0694. |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
-| DK-18 | Open | `mkdir` and `appendFile` per entry, `packages/protocol/src/node/application-logging.ts:441-442`; see [0860-r7-relay-and-file-writer.md](0860-r7-relay-and-file-writer.md), task 1, shared with R7. |
+| DK-18 | Open | `mkdir` and `appendFile` per entry, `packages/protocol/src/node/application-logging.ts:441-442`; see [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 
 ## Status of every logging and database item
 

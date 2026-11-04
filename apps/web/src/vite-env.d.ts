@@ -55,6 +55,15 @@ interface Window {
     /** The window's own machine, while its workspace is on another node. */
     portal?: { connectionId: string; backendId: string | null; legacyOrigin: string | null };
   };
+  /**
+   * Electron only, on a local window using the direct gateway transport: the
+   * preload's API and the backend's origin, never a credential. `web-gateway`
+   * composes `orkestrator` from them.
+   */
+  orkestratorDesktopHost?: {
+    api: NonNullable<Window["orkestrator"]>;
+    baseUrl: string;
+  };
   orkestrator?: {
     /** Electron owns physical shortcut input and restores native-view focus. */
     keyboardShortcuts?: { closed(): Promise<void> };

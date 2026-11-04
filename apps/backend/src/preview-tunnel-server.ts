@@ -10,6 +10,7 @@ import {
   PREVIEW_TUNNEL_SUBPROTOCOL,
   type PreviewTunnelServerFrame,
 } from "@orkestrator/protocol/preview-access";
+import { PREVIEW_TUNNEL_SUBPROTOCOL_V2 } from "@orkestrator/protocol/preview-tunnel-mux";
 import {
   previewError,
   previewErrorFromUnknown,
@@ -21,10 +22,12 @@ import {
   type PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
+import { compatibilityPathUsage } from "./core/compatibility-path-usage.js";
 import type { AuthenticatedPreviewAccess } from "./core/preview-access.js";
 import type { PreviewRuntime } from "./core/preview-runtime.js";
 import { PreviewAdmission, type PreviewSlot } from "./preview-admission.js";
 import type { PreviewMetrics } from "./preview-metrics.js";
+import { acceptPreviewTunnelMux } from "./preview-tunnel-mux-server.js";
 import { connectPreviewUpstream, type PreviewUpstreamOptions } from "./preview-upstream.js";
 
 export interface PreviewTunnelServerOptions {
@@ -53,8 +56,9 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 }
 
 /**
- * Desktop preview tunnel: one authenticated WebSocket per upstream TCP
- * connection. The attachment credential authorizes exactly one service at one
+ * Desktop preview tunnel. A v2 client carries many upstream TCP connections
+ * over one authenticated WebSocket (`preview-tunnel-mux-server.ts`); a v1
+ * client opens one authenticated WebSocket per connection. The attachment credential authorizes exactly one service at one
  * endpoint generation; the client never names a host, port, container, or
  * path. Bytes are relayed in bounded frames with real socket backpressure in
  * both directions and are never replayed after a disconnect.
@@ -62,6 +66,8 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 export class PreviewTunnelServer {
   private readonly sockets = new Set<PreviewWebSocket>();
   private readonly admission: PreviewAdmission;
+  /** v2 sessions; their upstream connections take `admission` slots. */
+  private readonly sessions: PreviewAdmission;
   private readonly upstream: PreviewUpstreamOptions;
   private pendingHandshakes = 0;
   private closed = false;
@@ -69,6 +75,10 @@ export class PreviewTunnelServer {
   constructor(private readonly options: PreviewTunnelServerOptions) {
     const limits = options.runtime.limits;
     this.admission = new PreviewAdmission("tunnel", {
+      perService: limits.tunnelsPerService,
+      perBackend: limits.tunnelsPerBackend,
+    });
+    this.sessions = new PreviewAdmission("tunnel", {
       perService: limits.tunnelsPerService,
       perBackend: limits.tunnelsPerBackend,
     });
@@ -96,6 +106,7 @@ export class PreviewTunnelServer {
       pendingHandshakes: this.pendingHandshakes,
       aggregateQueuedBytes: this.aggregateQueuedBytes(),
       admission: this.admission.stats(),
+      sessions: this.sessions.stats().active,
     };
   }
 
@@ -121,7 +132,8 @@ export class PreviewTunnelServer {
     const offered = String(request.headers["sec-websocket-protocol"] ?? "")
       .split(",")
       .map((value) => value.trim());
-    if (!offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL)) {
+    const multiplexed = offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL_V2);
+    if (!multiplexed && !offered.includes(PREVIEW_TUNNEL_SUBPROTOCOL)) {
       rejectUpgrade(socket, 426, "Upgrade Required");
       return true;
     }
@@ -131,16 +143,34 @@ export class PreviewTunnelServer {
       return true;
     }
     const ws = acceptPreviewWebSocket(request, socket, head, {
-      protocol: PREVIEW_TUNNEL_SUBPROTOCOL,
+      protocol: multiplexed ? PREVIEW_TUNNEL_SUBPROTOCOL_V2 : PREVIEW_TUNNEL_SUBPROTOCOL,
       maxPayload: this.options.runtime.limits.tunnelFrameMaxBytes,
     });
     if (!ws) return true;
     this.pendingHandshakes += 1;
     let counted = true;
-    this.accept(ws, () => {
+    const endHandshake = () => {
       if (!counted) return;
       counted = false;
       this.pendingHandshakes -= 1;
+    };
+    if (!multiplexed) {
+      compatibilityPathUsage.record("preview.tunnel-v1");
+      this.accept(ws, endHandshake);
+      return true;
+    }
+    this.sockets.add(ws);
+    acceptPreviewTunnelMux(ws, {
+      runtime: this.options.runtime,
+      metrics: this.options.metrics,
+      streams: this.admission,
+      sessions: this.sessions,
+      upstream: this.upstream,
+      helloTimeoutMs: this.options.helloTimeoutMs,
+      pingIntervalMs: this.options.pingIntervalMs,
+      aggregateQueuedBytes: () => this.aggregateQueuedBytes(),
+      endHandshake,
+      onClosed: () => this.sockets.delete(ws),
     });
     return true;
   }

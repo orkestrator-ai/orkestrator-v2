@@ -1236,6 +1236,7 @@ export interface AppConfig {
      * stored schedules are kept.
      */
     experimentalScheduling?: boolean;
+    localWindowGatewayTransport?: boolean;
     /**
      * Experimental gate for graphs in the web UI. Off (or absent) hides the
      * action bar's Graphs and Run graph… buttons and a ticket's Run graph…;

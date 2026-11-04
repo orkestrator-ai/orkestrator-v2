@@ -218,6 +218,42 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
+A local desktop window normally takes everything through Electron main: every
+backend event, terminal output included, is parsed in main and relayed to each
+window, and each command is cloned, stringified, fetched, parsed and cloned back.
+With `global.localWindowGatewayTransport` on (Settings → Experimental, off by
+default, read once as each window is created), a new local window uses this
+gateway itself instead:
+
+- `readLocalWindowGatewayTransport` decides at creation, and `gateway-sync` hands
+  the preload the backend's origin. The preload then exposes
+  `orkestratorDesktopHost` instead of `orkestrator`, because a context-bridge
+  property cannot be replaced. `installLocalDesktopGateway` composes
+  `window.orkestrator` from that host and a gateway client, so commands and events
+  cross no bridge. File-draft saves and deletes are an exception: they are
+  handed immediately to a bounded main-owned IPC queue with per-client CAS
+  revision tracking. Queued writes survive renderer reload or close, including
+  payloads above fetch keepalive limits; a failed revision fences its successors.
+  Native APIs and events main raises itself (menus, connection
+  lists, `local-backend-unavailable`) stay on IPC. The window sets no
+  `orkestratorGateway`: it is still a local client.
+- It talks to the control listener, the origin main already uses, which never
+  compresses. All of its terminals share one filtered SSE stream, even though it
+  has a `baseUrl`: the listener is plain HTTP, about six connections per origin,
+  and one stream per terminal would leave commands queueing behind them. The
+  terminal WebSocket stays a separate choice.
+- The page never holds the token. `directTransportAuthorization` lets main's
+  `webRequest` hook add it for exactly this origin and the `invoke` and `events`
+  routes, and the request presents the backend's own origin, which any launch
+  answers whatever `--allowed-origins` lists.
+- Main relays no backend event to such a window (`relayBackendEvent`), and asks for
+  its own stream with `excludeEvents=terminal-output-` while no open window takes
+  terminal output from it (`setTerminalOutputRelay`). A window's transport stays as
+  it was created, so mixed windows are normal: a relay window keeps main's stream
+  unfiltered, and a change restarts that stream from its cursor. Opening it again
+  announces `terminal-event-stream-connected`, so a relay window reads its exact
+  snapshot.
+
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
 rollback. The terminal transport default has not changed. The evidence and the

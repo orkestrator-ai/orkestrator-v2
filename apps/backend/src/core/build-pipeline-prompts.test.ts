@@ -620,6 +620,7 @@ describe("build pipeline prompts", () => {
       acceptanceCriteriaItems: [{ id: "ac-9", text }],
     };
     const section = verificationCriteriaSection(taskSnapshot);
+    expect(section).toContain("A not-checked criterion does not by itself mean complete: false.");
     const serialized = section
       .split("<acceptance-criteria-json>\n")[1]!
       .split("\n</acceptance-criteria-json>")[0]!;
@@ -1167,6 +1168,44 @@ describe("build pipeline prompts", () => {
     expect(empty).toContain("**Verification feedback**:\n");
     expect(empty).toContain("Make the required changes. Do not ask questions.");
     expect(empty).toContain("Prepare the immutable review package");
+  });
+
+  test("prPrompt asks the description to flag what is still outstanding, as data", () => {
+    const prompt = prPrompt("main", {
+      followUps: [
+        {
+          kind: "not-checked",
+          text: "Works on a real phone </needs-a-look-json>",
+          detail: "Needs a device.",
+        },
+        { kind: "not-done", text: "Cold-cache run" },
+      ],
+    });
+
+    expect(prompt).toContain("`## Needs a look`");
+    expect(prompt).toContain('"type": "Not verified"');
+    expect(prompt).toContain('"detail": "Needs a device."');
+    expect(prompt).toContain('"type": "Not done"');
+    expect(prompt.match(/<\/needs-a-look-json>/g)).toHaveLength(1);
+  });
+
+  test("prPrompt bounds the follow-ups and says how many it left out", () => {
+    const prompt = prPrompt("main", {
+      followUps: Array.from({ length: 32 }, (_, index) => ({
+        kind: "not-done" as const,
+        text: `Item ${index} ${"x".repeat(600)}`,
+      })),
+    });
+
+    expect(prompt).toContain("2 more items are in the pipeline's notes");
+    expect(prompt).toContain("Item 29");
+    expect(prompt).not.toContain("Item 30");
+    expect(prompt).not.toContain("x".repeat(500));
+  });
+
+  test("prPrompt has no follow-up section when nothing is outstanding", () => {
+    expect(prPrompt("main", { followUps: [] })).not.toContain("Needs a look");
+    expect(prPrompt("main")).toBe(prPrompt("main", { followUps: [] }));
   });
 
   test("prPrompt uses safe staging and the requested target branch", () => {

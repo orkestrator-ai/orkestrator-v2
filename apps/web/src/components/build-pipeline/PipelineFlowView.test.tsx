@@ -642,11 +642,12 @@ describe("a pipeline a restart rewound", () => {
       "Verify",
       "Ship",
       "PR",
+      "Notes",
     ]);
     // The rerun is followed, not the history.
     expect(screen.getByTestId("pipeline-inspector-status").textContent).toBe("Running");
     // The step count is the live run's; the previous attempt is history.
-    expect(screen.getByText(/^5 of 7 steps/)).toBeTruthy();
+    expect(screen.getByText(/^5 of 8 steps/)).toBeTruthy();
 
     selectNode("Previous attempt");
     expect(

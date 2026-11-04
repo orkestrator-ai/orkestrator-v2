@@ -441,6 +441,43 @@ describe("runCommand capture", () => {
     });
   }
 
+  posixOnly("fails a git command whose output stays open after it exits", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
+    try {
+      const pidFile = path.join(tempDir, "descendant.pid");
+      const started = Date.now();
+      const failure = await runCommand(
+        "git",
+        ["-c", `alias.hold=!sleep 30 & echo $! > '${pidFile}'`, "hold"],
+        { timeoutMs: 30_000, outputCloseGraceMs: 100 },
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(CommandFailedError);
+      expect((failure as CommandFailedError).timedOut).toBe(true);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(await waitUntilGone(Number((await readFile(pidFile, "utf8")).trim()))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  posixOnly("keeps git output that arrives within the grace after exit", async () => {
+    const { stdout } = await runCommand(
+      "git",
+      ["-c", "alias.late=!(sleep 0.2; echo late) & exit 0", "late"],
+      {
+        outputCloseGraceMs: 10_000,
+      },
+    );
+    expect(stdout).toBe("late\n");
+  });
+
+  posixOnly("does not bound other commands' output by the git grace", async () => {
+    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.3; echo late) & exit 0"], {
+      outputCloseGraceMs: 50,
+    });
+    expect(stdout).toBe("late\n");
+  });
+
   test("preserves the missing executable outcome", async () => {
     const failure = await runCommand("orkestrator-nonexistent-shell-test-command").catch(
       (error: unknown) => error,

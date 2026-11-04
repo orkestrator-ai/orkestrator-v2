@@ -91,6 +91,8 @@ type RunCommandOptions = {
   stdin?: string | Buffer;
   /** Defaults to 60 seconds; 0 disables the deadline. Invalid durations are rejected. */
   timeoutMs?: number;
+  /** How long a `git` command's output may stay open after it exits. Defaults to 5 seconds. */
+  outputCloseGraceMs?: number;
   /**
    * Values that must never escape this process boundary. Both successful
    * output and errors are redacted because some CLIs echo argv or environment
@@ -215,6 +217,7 @@ function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.Proces
 
 const MAX_COMMAND_OUTPUT_BYTES = 50 * 1024 * 1024;
 const COMMAND_KILL_GRACE_MS = 100;
+const GIT_OUTPUT_CLOSE_GRACE_MS = 5_000;
 
 /** Signal only the group created for this command, never PIDs from a ps snapshot. */
 function signalCommand(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
@@ -256,6 +259,7 @@ function executeCommandBytes(
     let settled = false;
     let timedOut = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let outputCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
     const stopCapture = () => {
       child.stdin.destroy();
@@ -266,6 +270,7 @@ function executeCommandBytes(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(outputCloseTimer);
       options.signal?.removeEventListener("abort", abort);
       stopCapture();
       reject(
@@ -325,12 +330,35 @@ function executeCommandBytes(
       }
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(outputCloseTimer);
       options.signal?.removeEventListener("abort", abort);
       resolve({
         stdout: Buffer.concat(stdout, stdoutBytes),
         stderr: Buffer.concat(stderr, stderrBytes),
       });
     });
+    // A git child can exit while `close` never arrives and its output never does
+    // either, so this fails rather than resolving: empty output would read as a
+    // clean worktree. See docs/tests/flaky-tests/environments-and-containers/
+    // 1537-diff-base-override-scan-timeout.md. Other commands keep waiting, since
+    // a surviving descendant may legitimately still be writing.
+    if (command === "git") {
+      child.on("exit", () => {
+        if (settled || timedOut) return;
+        const graceMs = options.outputCloseGraceMs ?? GIT_OUTPUT_CLOSE_GRACE_MS;
+        outputCloseTimer = setTimeout(() => {
+          if (settled || timedOut) return;
+          timedOut = true;
+          signalCommand(child, "SIGKILL");
+          fail(
+            Object.assign(new Error(`Command output did not close within ${graceMs} ms of exit`), {
+              code: child.exitCode,
+              signal: child.signalCode,
+            }),
+          );
+        }, graceMs);
+      });
+    }
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;

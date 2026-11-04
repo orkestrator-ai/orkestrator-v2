@@ -82,8 +82,19 @@ export async function makeNode(name: string, commandNode: boolean): Promise<Node
  * Start a backend. `isolateHome` points `HOME` (and so every agent CLI's
  * credential lookup) at the node's temporary directory, for scripts that open
  * agent tabs and must make no provider request even by accident.
+ *
+ * `hide` runs the backend in its own unprivileged user and mount namespace
+ * (`unshare`) with each listed directory covered by an empty tmpfs, so it
+ * cannot see another node's files: anything it gets from that node came over
+ * the link. The script itself still sees every node's directory. The
+ * namespace needs no privilege and changes nothing on the host: no network,
+ * firewall or Docker state. `unshare` and `sh` exec in place, so the recorded
+ * child is the backend itself.
  */
-export function start(node: Node, options: { isolateHome?: boolean } = {}): Promise<void> {
+export function start(
+  node: Node,
+  options: { isolateHome?: boolean; hide?: string[] } = {},
+): Promise<void> {
   const args = [
     "apps/backend/src/main.ts",
     "--data-dir",
@@ -100,7 +111,29 @@ export function start(node: Node, options: { isolateHome?: boolean } = {}): Prom
     path.join(node.dir, "worktrees"),
     ...(node.commandNode ? ["--command-node"] : []),
   ];
-  const child = spawn("bun", args, {
+  const hidden = options.hide ?? [];
+  const command: [string, string[]] =
+    hidden.length === 0
+      ? ["bun", args]
+      : [
+          "unshare",
+          [
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "--propagation",
+            "private",
+            "sh",
+            "-c",
+            'for dir; do case "$dir" in --) break;; esac; mount -t tmpfs -o size=1m,mode=0700 none "$dir" || exit 97; done; while [ "$1" != -- ]; do shift; done; shift; exec "$@"',
+            "sh",
+            ...hidden,
+            "--",
+            "bun",
+            ...args,
+          ],
+        ];
+  const child = spawn(command[0], command[1], {
     cwd: repo,
     stdio: ["ignore", "pipe", "pipe"],
     env: {

@@ -957,10 +957,22 @@ How it is verified, with no provider turn:
   `--network none`). It checks the image's `node` user can read the file, that
   Git ignores it even after `git add -A`, and that a retry adds nothing.
 - `bun scripts/qa-coordinator-image-mail.ts` starts two real backends from
-  source, links them over the real gateway and runs every route with no agent
+  source, each blind to the other's files, links them over the real gateway and
+  runs every route with no agent
   ([command-nodes.md](command-nodes.md#images-between-nodes)).
-- Not covered: an agent's own read tool opening the file. Each check would be a
-  billed turn
+- `coordinator-mail-attachments-read-live.test.ts` (slow tier) has the
+  recipient's own agent open the file. It sends through the real commands and
+  injection drain, then hands the exact delivered prompt to the pinned Claude
+  CLI and the pinned Codex CLI, each pointed at a scripted loopback model. The
+  model takes the path from the prompt it received and calls the CLI's own tool
+  (`Read`, `view_image`); the test checks the CLI returned the same bytes as
+  image content. It covers a worker in its worktree and a side agent in its
+  attachment directory, which is outside its working directory: Claude reads
+  there only because the bridge approves `Read` up front for every session,
+  read-only coordinators included (`session-manager-prompt-query.ts`). No
+  provider is called.
+- Not covered: Cursor, Pi and Grok recipients, and an agent reading inside a
+  container
   ([todo 4420](../todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md)).
 
 ## Repository toolbar

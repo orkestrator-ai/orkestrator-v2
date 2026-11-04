@@ -5,7 +5,9 @@
  *
  * Starts two isolated backends from source (`qa-command-nodes-support.ts`):
  * Desk, a command node, and Leaf, which Desk attaches over its real gateway
- * route. No agent runs and no provider turn is made: each coordinator is
+ * route. Each runs in its own unprivileged mount namespace in which the other
+ * node's directory is an empty tmpfs, so the two share no files: an image on
+ * the other node got there over the link. No agent runs and no provider turn is made: each coordinator is
  * created with no provider, an image is pasted through the same command the
  * composer uses, and the coordinator commands the Control MCP tools call are
  * invoked with that conversation's scope. Each step is asserted against what
@@ -217,7 +219,16 @@ async function main() {
   const leaf = await makeNode("Leaf", false);
   const nodes = [desk, leaf];
   try {
-    await Promise.all(nodes.map((node) => start(node, { isolateHome: true })));
+    // Each backend runs blind to the other's directory, as on two machines:
+    // a file can only reach the other node over the link.
+    await Promise.all(
+      nodes.map((node) =>
+        start(node, {
+          isolateHome: true,
+          hide: nodes.filter((other) => other !== node).map((other) => other.dir),
+        }),
+      ),
+    );
     for (const node of nodes) {
       node.id = (await invoke<{ nodeId: string }>(node, "get_node_status")).nodeId;
       const profile = await invoke<{ revision: number }>(node, "get_backend_profile");
@@ -230,6 +241,19 @@ async function main() {
     const leafProject = await project(leaf, {});
     await withOrigin(deskProject.dir);
     await withOrigin(leafProject.dir);
+    for (const [viewer, owner] of [
+      [desk, leaf],
+      [leaf, desk],
+    ] as const) {
+      const theirs = await readdir(owner.dir);
+      const seen = await readdir(`/proc/${viewer.child!.pid}/root${owner.dir}`);
+      check(
+        "IM-00",
+        `${viewer.name} cannot see ${owner.name}'s files (${theirs.length} entries on disk)`,
+        theirs.length > 0 && seen.length === 0,
+        `sees ${seen.length}`,
+      );
+    }
     const attached = await addNode(desk, leaf);
     check(
       "IM-00",

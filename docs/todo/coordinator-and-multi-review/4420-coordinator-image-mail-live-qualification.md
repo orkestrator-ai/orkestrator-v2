@@ -7,9 +7,9 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 ### Tasks
 
-1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: done (transport and placement on two real backends; an agent opening it is task 3).
+1. **Live two-node run**: a coordinator on a real command node sends a pasted image to a worker on a leaf, and a leaf's coordinator sends one back up. Status: done (two real backends that share no files; a slow or dropped link is not covered).
 2. **Live container run**: a containerized worker opens a mailed image inside a real container. Status: done (real container, read as the agent's user; no agent turn).
-3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (needs billed turns).
+3. **Reading it on every coordinator provider**: a recipient agent opens a mailed image with its own read tool. That means a worker in its worktree or container on any provider, and a coordinator on Claude, Codex, Cursor, Pi and Grok from its own attachment directory. Status: open (Claude and Codex done offline for a worktree and a conversation directory; Cursor, Pi, Grok and an agent inside a container remain).
 4. **Clearing images from the project home**: mailed images stay in the user's own checkout until someone removes them. Status: open.
 
 ### 1. Live two-node run
@@ -18,7 +18,7 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 **Context.** `send_coordinator_node_mail` pushes the batch with the transfer framework, and `deliver_node_mail` places it before storing the mail. Upward, `send_coordinator_command_node_mail` spools the batch for the outbox and the collector fetches it (`coordinator-mail-attachments.ts`, `nodes/node-coordination.ts`). Tests: `coordinator-mail-attachments-nodes.test.ts`.
 
-**Investigation.** The transport needs no agent, so it was run on two real backends started from source (`scripts/qa-coordinator-image-mail.ts`, 27/27 checks). One is a command node; the other is a leaf it attaches over the real gateway. Not observed: an 8 MiB image on a slow or SSH-forwarded link, and a reconnect during a transfer. A recipient agent opening the image is a billed turn, which is task 3.
+**Investigation.** The transport needs no agent, so it was run on two real backends started from source (`scripts/qa-coordinator-image-mail.ts`, 29/29 checks). One is a command node; the other is a leaf it attaches over the real gateway. Each runs in its own unprivileged mount namespace in which the other's directory is an empty tmpfs, and the script checks through `/proc/<pid>/root` that neither can see the other's files, so every image that arrived crossed the link. Not observed: an 8 MiB image on a slow or SSH-forwarded link, a reconnect during a transfer, or two kernels. A recipient agent opening the image is task 3.
 
 **Decisions.**
 
@@ -57,7 +57,7 @@ feature (`forward-pasted-images-b87833dd9152-r1`).
 
 **Context.** `ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT` names the directory. Codex's permission profile grants it read (`codex-config.ts`). Claude's read-only turn allows `Read` as a tool, whose reach outside the checkout is the CLI's own rule. The Cursor, Pi and Grok bridges use the root to confine prompt attachments (`prompt-attachments.ts`); their read tools were not traced.
 
-**Investigation.** Not run: each check is a billed turn. If a provider cannot read it, the image cannot reach that coordinator's model by path, though the mail and the tile still arrive.
+**Investigation.** `apps/backend/src/core/coordinator-mail-attachments-read-live.test.ts` (slow tier, 4 passing) needs no billed turn. It sends through the real commands and injection drain, then gives the exact delivered prompt to the pinned Claude CLI (2.1.314) and Codex CLI (0.166.0), each pointed at a scripted loopback model. The model takes the path from the prompt the CLI sent it and calls `Read` or `view_image`; both CLIs returned the same bytes as image content, for a worker in its Git worktree and for a side agent in its own attachment directory. Claude reads the attachment directory, which is outside its working directory, only because `Read` is approved up front, as the bridge does for every session (`session-manager-prompt-query.ts`); without that the CLI refused the read pending a grant. The Codex case uses `codex exec`, not the bridge's app-server. Cursor, Pi and Grok have no scripted model fixture in this repository and were not run; neither was an agent reading inside a container. If a provider cannot read it, the image cannot reach that coordinator's model by path, though the mail and the tile still arrive.
 
 **Decisions.**
 
@@ -96,6 +96,14 @@ Chose a script, `scripts/qa-coordinator-image-mail.ts`, over two `dev:test` prof
 ### Task 2: a plain container, not the Docker agent suite
 
 Chose an opt-in backend test with `--network none` over a `test:agent:docker` case. It touches no Docker network or firewall, which this build was not allowed to change, and it still runs the real `docker exec` writer and the Git-exclusion proof inside the container.
+
+### Task 1: hide each node's files from the other
+
+Ran each QA backend in an unprivileged user and mount namespace (`unshare`) with the other node's directory covered by an empty tmpfs, rather than moving the leaf into a container. It shows the two share no files, so an image on the other node came over the link, without a Docker network, a firewall change or rewriting every on-disk check for `docker exec`. The two still share a kernel and loopback.
+
+### Task 3: a scripted loopback model instead of a billed turn
+
+Pointed the pinned Claude and Codex CLIs at a local scripted model, the pattern `tests/conformance/execution-policy/scripted-anthropic.ts` and `session-title-codex-live.test.ts` already use, rather than spending a provider turn. The CLI's own tool still opens the real file and returns its bytes; only the model's choice of call is scripted. `scriptedAnthropicEndpoint` now passes the first request to the script and records request bodies so the test can find the path and the returned image.
 
 ## Related
 

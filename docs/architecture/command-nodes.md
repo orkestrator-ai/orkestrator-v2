@@ -690,7 +690,11 @@ size and hash, with no content in a log or receipt.
 `bun scripts/qa-coordinator-image-mail.ts` checks this on the real stack. It
 starts a command node and a leaf from source, each with a temporary data
 directory, an ephemeral loopback port, a private token and an isolated `HOME`,
-and has the command node attach the leaf over its gateway. No agent runs: each
+and has the command node attach the leaf over its gateway. Each backend runs in
+its own unprivileged user and mount namespace in which the other node's
+directory is an empty tmpfs (`start(node, { hide })`), so the two share no
+files, as on two machines: an image found on the other node got there over the
+link. The script checks that blindness first. No agent runs: each
 coordinator is created with no session and an image is pasted through
 `write_coordinator_attachment`. It then checks that:
 
@@ -706,7 +710,14 @@ coordinator is created with no session and an image is pasted through
   disconnected node.
 
 The script shares its harness with `qa-command-nodes.ts`
-(`scripts/qa-command-nodes-support.ts`).
+(`scripts/qa-command-nodes-support.ts`). Both backends still share one kernel
+and talk over loopback: a slow, SSH-forwarded or dropped link is not exercised.
+
+That a recipient's agent can open what arrives is checked on the landing places
+themselves, which are the same on every route
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)):
+`coordinator-mail-attachments-read-live.test.ts` runs the pinned Claude and
+Codex CLIs against a scripted loopback model.
 
 ## Tickets across nodes
 

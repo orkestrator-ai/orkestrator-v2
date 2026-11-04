@@ -758,9 +758,9 @@ describe("pipelineFlowModel", () => {
       ["Setup:complete"],
       ["Build:complete"],
       ["Review:complete"],
-      ["Address:complete"],
+      ["Address Findings:complete"],
       ["Verify:complete"],
-      ["Fix:complete"],
+      ["Rework:complete"],
       ["Review 2:complete"],
       ["Verify 2:running"],
       ["Ship:not-started~"],
@@ -772,9 +772,9 @@ describe("pipelineFlowModel", () => {
       "Setup",
       "Build",
       "Review",
-      "Address",
+      "Address Findings",
       "Verify",
-      "Fix",
+      "Rework",
       "Review 2",
       "Verify 2",
       "Ship",
@@ -878,7 +878,7 @@ describe("pipelineFlowModel", () => {
     expect(byTitle.get("Reviewer 1")?.issueCounts).toEqual({ P0: 1, P1: 0, P2: 2 });
     expect(byTitle.get("Reviewer 2")).toMatchObject({ state: "failed", error: "Out of credit" });
     expect(byTitle.get("Consolidation")?.issueCounts).toBeDefined();
-    expect(byTitle.get("Address")?.state).toBe("running");
+    expect(byTitle.get("Address Findings")?.state).toBe("running");
   });
 
   test("a retried reviewer replaces its failed attempt in the same slot", () => {
@@ -1855,7 +1855,7 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
     expect(line(model).slice(4)).toEqual([
       ["Previous attempt:cancelled"],
       ["Verify · round 1:complete"],
-      ["Fix · round 2:complete"],
+      ["Rework · round 2:complete"],
       ["Review · round 2:complete"],
       ["Verify · round 2:failed"],
       ["Verify:running"],

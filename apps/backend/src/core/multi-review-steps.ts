@@ -67,7 +67,7 @@ export function multiReviewStepTurnOptions(step: MultiReviewStepKind): {
  * talk to. It submits no typed result; its handoff turn finishing on its own
  * is the proof of completion that queues an automatic pull request.
  */
-export const MULTI_REVIEW_INTERACTIVE_FIX: Readonly<{
+export const MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS: Readonly<{
   mode: "build";
   interactionPolicy: AgentInteractionPolicy;
 }> = Object.freeze({ mode: "build", interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY });

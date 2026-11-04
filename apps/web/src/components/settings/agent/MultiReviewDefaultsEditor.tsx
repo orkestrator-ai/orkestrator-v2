@@ -396,19 +396,22 @@ export function MultiReviewDefaultsEditor({
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Checkbox
-            id="multi-review-auto-fix"
+            id="multi-review-auto-address-findings"
             checked={tier.multiReview?.autoFix ?? false}
             disabled={disabled}
             onCheckedChange={(checked) =>
               onChange({ ...tier, multiReview: { ...tier.multiReview, autoFix: checked === true } })
             }
-            aria-describedby="multi-review-auto-fix-description"
+            aria-describedby="multi-review-auto-address-findings-description"
           />
-          <Label htmlFor="multi-review-auto-fix">Auto-fix</Label>
+          <Label htmlFor="multi-review-auto-address-findings">Auto-address findings</Label>
         </div>
-        <p id="multi-review-auto-fix-description" className="text-xs text-muted-foreground">
-          Automatically start Fix after a manual Multi Review consolidates, addressing the report’s
-          issues and coverage gaps.
+        <p
+          id="multi-review-auto-address-findings-description"
+          className="text-xs text-muted-foreground"
+        >
+          Automatically start Address Findings after a manual Multi Review consolidates, addressing
+          the report’s issues and coverage gaps.
         </p>
       </div>
 
@@ -426,8 +429,8 @@ export function MultiReviewDefaultsEditor({
           <Label htmlFor="multi-review-auto-pr">Auto-PR</Label>
         </div>
         <p id="multi-review-auto-pr-description" className="text-xs text-muted-foreground">
-          Automatically launch the PR tab, using the pull request default, after the Fix completes
-          or when the review finds nothing to fix.
+          Automatically launch the PR tab, using the pull request default, after Address Findings
+          completes or when the review finds nothing to fix.
         </p>
       </div>
 

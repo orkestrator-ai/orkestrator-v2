@@ -1,22 +1,22 @@
 import { expect, mock, test } from "bun:test";
 import {
-  MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
-  multiReviewCustomFixPrompt,
+  multiReviewCustomAddressFindingsPrompt,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
-import { addressPrompt } from "./build-pipeline-prompts.js";
+import { addressFindingsReportPrompt } from "./build-pipeline-prompts.js";
 import { NativeAgentProviderSessionMissingError } from "./native-agent-service.js";
 import {
-  InvalidMultiReviewAddressStateError,
-  MissingMultiReviewAddressSessionError,
-  dispatchMultiReviewAddressPrompt,
-  recoverMissingMultiReviewFixSession,
-} from "./multi-review-address-dispatch.js";
+  InvalidMultiReviewAddressFindingsStateError,
+  MissingMultiReviewAddressFindingsSessionError,
+  dispatchMultiReviewAddressFindingsPrompt,
+  recoverMissingMultiReviewAddressFindingsSession,
+} from "./multi-review-address-findings-dispatch.js";
 
 const workflow = {
   id: "multi-1",
@@ -25,7 +25,7 @@ const workflow = {
   fixSession: { providerSessionId: "provider-fix" },
 } as MultiReviewWorkflow;
 
-test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable production request", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt adopts and dispatches the stable production request", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
   const dispatchIntent = mock(async () => ({
@@ -33,7 +33,10 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
     requestId: "multi-review-address:multi-1",
   }));
 
-  await dispatchMultiReviewAddressPrompt({ adoptSession, ensureSession, dispatchIntent }, workflow);
+  await dispatchMultiReviewAddressFindingsPrompt(
+    { adoptSession, ensureSession, dispatchIntent },
+    workflow,
+  );
 
   expect(adoptSession).toHaveBeenCalledWith({
     environmentId: "env-1",
@@ -52,7 +55,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt: MULTI_REVIEW_ADDRESS_PROMPT,
+      prompt: MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -60,7 +63,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(ensureSession).not.toHaveBeenCalled();
 });
 
-test("dispatchMultiReviewAddressPrompt creates a fix session separate from review coordination", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt creates an Address Findings session separate from review coordination", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => ({ providerSessionId: "provider-fix-new" }) as never);
   const dispatchIntent = mock(async () => ({
@@ -86,7 +89,7 @@ test("dispatchMultiReviewAddressPrompt creates a fix session separate from revie
     fixSession: undefined,
   } as MultiReviewWorkflow;
 
-  const dispatched = await dispatchMultiReviewAddressPrompt(
+  const dispatched = await dispatchMultiReviewAddressFindingsPrompt(
     { adoptSession, ensureSession, dispatchIntent },
     separate,
   );
@@ -113,10 +116,10 @@ test("dispatchMultiReviewAddressPrompt creates a fix session separate from revie
   expect(separate.reviewSession?.providerSessionId).toBe("provider-review");
 });
 
-test("dispatchMultiReviewAddressPrompt rejects a separate fix session without a report", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt rejects a separate Address Findings session without a report", async () => {
   const ensureSession = mock(async () => ({ providerSessionId: "unexpected" }) as never);
   await expect(
-    dispatchMultiReviewAddressPrompt(
+    dispatchMultiReviewAddressFindingsPrompt(
       {
         adoptSession: mock(async () => undefined as never),
         ensureSession,
@@ -131,11 +134,11 @@ test("dispatchMultiReviewAddressPrompt rejects a separate fix session without a 
         fixSession: undefined,
       },
     ),
-  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressStateError);
+  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressFindingsStateError);
   expect(ensureSession).not.toHaveBeenCalled();
 });
 
-test("dispatchMultiReviewAddressPrompt classifies authoritative session loss", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt classifies authoritative session loss", async () => {
   const adoptSession = mock(async () => {
     throw new NativeAgentProviderSessionMissingError();
   });
@@ -146,12 +149,15 @@ test("dispatchMultiReviewAddressPrompt classifies authoritative session loss", a
   }));
 
   await expect(
-    dispatchMultiReviewAddressPrompt({ adoptSession, ensureSession, dispatchIntent }, workflow),
-  ).rejects.toBeInstanceOf(MissingMultiReviewAddressSessionError);
+    dispatchMultiReviewAddressFindingsPrompt(
+      { adoptSession, ensureSession, dispatchIntent },
+      workflow,
+    ),
+  ).rejects.toBeInstanceOf(MissingMultiReviewAddressFindingsSessionError);
   expect(dispatchIntent).not.toHaveBeenCalled();
 });
 
-test("dispatchMultiReviewAddressPrompt leaves ambiguous delivery retryable", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt leaves ambiguous delivery retryable", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
   const dispatchIntent = mock(async () => ({
@@ -161,11 +167,14 @@ test("dispatchMultiReviewAddressPrompt leaves ambiguous delivery retryable", asy
   }));
 
   await expect(
-    dispatchMultiReviewAddressPrompt({ adoptSession, ensureSession, dispatchIntent }, workflow),
+    dispatchMultiReviewAddressFindingsPrompt(
+      { adoptSession, ensureSession, dispatchIntent },
+      workflow,
+    ),
   ).rejects.toThrow("delivery is ambiguous");
 });
 
-test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custom fix without a renderer", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt creates, publishes and dispatches a custom Address Findings without a renderer", async () => {
   const events: string[] = [];
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => ({ providerSessionId: "provider-custom" }) as never);
@@ -197,7 +206,7 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
     },
   } as MultiReviewWorkflow;
 
-  const session = await dispatchMultiReviewAddressPrompt(
+  const session = await dispatchMultiReviewAddressFindingsPrompt(
     { adoptSession, ensureSession, dispatchIntent },
     custom,
     { ensureNativeAgentJobTab },
@@ -225,7 +234,10 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       requestId: "multi-review-address:multi-1:launch-1",
-      prompt: multiReviewCustomFixPrompt(custom.consolidatedReport!, custom.customFixInstruction!),
+      prompt: multiReviewCustomAddressFindingsPrompt(
+        custom.consolidatedReport!,
+        custom.customFixInstruction!,
+      ),
     }),
   );
   expect(dispatchIntent).toHaveBeenCalledWith(
@@ -244,9 +256,9 @@ test("dispatchMultiReviewAddressPrompt creates, publishes and dispatches a custo
   });
 });
 
-test("dispatchMultiReviewAddressPrompt preserves focus without foreground activation consent", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt preserves focus without foreground activation consent", async () => {
   const ensureNativeAgentJobTab = mock(async () => undefined);
-  await dispatchMultiReviewAddressPrompt(
+  await dispatchMultiReviewAddressFindingsPrompt(
     {
       adoptSession: mock(async () => undefined as never),
       ensureSession: mock(async () => undefined as never),
@@ -263,7 +275,7 @@ test("dispatchMultiReviewAddressPrompt preserves focus without foreground activa
   );
 });
 
-test("dispatchMultiReviewAddressPrompt does not let tab presentation block execution", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt does not let tab presentation block execution", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
   const dispatchIntent = mock(async () => ({
@@ -275,9 +287,13 @@ test("dispatchMultiReviewAddressPrompt does not let tab presentation block execu
   });
 
   await expect(
-    dispatchMultiReviewAddressPrompt({ adoptSession, ensureSession, dispatchIntent }, workflow, {
-      ensureNativeAgentJobTab,
-    }),
+    dispatchMultiReviewAddressFindingsPrompt(
+      { adoptSession, ensureSession, dispatchIntent },
+      workflow,
+      {
+        ensureNativeAgentJobTab,
+      },
+    ),
   ).resolves.toMatchObject({
     fixSession: { providerSessionId: "provider-fix" },
     presentationError: expect.stringContaining("tab could not be opened"),
@@ -285,13 +301,13 @@ test("dispatchMultiReviewAddressPrompt does not let tab presentation block execu
   expect(dispatchIntent).toHaveBeenCalledTimes(1);
 });
 
-test("dispatchMultiReviewAddressPrompt does not publish while prompt delivery is pending", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt does not publish while prompt delivery is pending", async () => {
   let accept!: () => void;
   const accepted = new Promise<void>((resolve) => {
     accept = resolve;
   });
   const ensureNativeAgentJobTab = mock(async () => undefined);
-  const dispatch = dispatchMultiReviewAddressPrompt(
+  const dispatch = dispatchMultiReviewAddressFindingsPrompt(
     {
       adoptSession: mock(async () => undefined as never),
       ensureSession: mock(async () => undefined as never),
@@ -311,10 +327,10 @@ test("dispatchMultiReviewAddressPrompt does not publish while prompt delivery is
   expect(ensureNativeAgentJobTab).toHaveBeenCalledTimes(1);
 });
 
-test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provider I/O", async () => {
+test("dispatchMultiReviewAddressFindingsPrompt rejects a corrupt custom Address Findings before provider I/O", async () => {
   const ensureSession = mock(async () => ({ providerSessionId: "unexpected" }) as never);
   await expect(
-    dispatchMultiReviewAddressPrompt(
+    dispatchMultiReviewAddressFindingsPrompt(
       {
         adoptSession: mock(async () => undefined as never),
         ensureSession,
@@ -329,11 +345,11 @@ test("dispatchMultiReviewAddressPrompt rejects a corrupt custom fix before provi
         customFixModel: workflow.fixModel,
       },
     ),
-  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressStateError);
+  ).rejects.toBeInstanceOf(InvalidMultiReviewAddressFindingsStateError);
   expect(ensureSession).not.toHaveBeenCalled();
 });
 
-test("recoverMissingMultiReviewFixSession adopts and seeds the replacement before returning it", async () => {
+test("recoverMissingMultiReviewAddressFindingsSession adopts and seeds the replacement before returning it", async () => {
   const adoptSession = mock(async () => undefined as never);
   const ensureSession = mock(async () => undefined as never);
   const dispatchIntent = mock(async (input: { prompt: string; requestId: string }) => ({
@@ -362,7 +378,7 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
     },
   } as MultiReviewWorkflow;
 
-  const result = await recoverMissingMultiReviewFixSession(
+  const result = await recoverMissingMultiReviewAddressFindingsSession(
     { adoptSession, ensureSession, dispatchIntent },
     recoverable,
     {
@@ -384,7 +400,7 @@ test("recoverMissingMultiReviewFixSession adopts and seeds the replacement befor
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive:launch-1",
-      prompt: `${addressPrompt(recoverable.consolidatedReport!)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
+      prompt: `${addressFindingsReportPrompt(recoverable.consolidatedReport!)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
       mode: "build",
     }),
   );

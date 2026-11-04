@@ -101,7 +101,7 @@ describe("step sessions", () => {
   });
 
   test("a session every step shares belongs to the step using it now", () => {
-    // Without a separate preparation model all three ran in the fix session.
+    // Without a separate preparation model all three ran in the Address Findings session.
     const legacy = (overrides: Partial<MultiReviewWorkflow>) =>
       workflow({ fixSession: session("shared"), ...overrides });
     expect(access(legacy({ phase: "reviewing" }))).toEqual({

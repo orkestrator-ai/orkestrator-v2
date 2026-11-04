@@ -1,7 +1,9 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
-import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { isBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { isMultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { workflowVocabularyFixtures } from "@/lib/workflow-vocabulary.test-support";
 import * as builds from "@/lib/build-pipeline-persistence";
 import * as reviews from "@/lib/multi-review-persistence";
 import { portalStore } from "@/lib/portal/portal-store";
@@ -59,6 +61,50 @@ afterEach(() => {
   cleanup();
   portalStore.store.setState({ nodes: [] });
 });
+
+test.each(["build-pipeline", "multi-review"])(
+  "remote %s accepts future vocabulary after refresh and a fresh mount",
+  async (kind) => {
+    const {
+      pipeline: currentPipeline,
+      futurePipeline,
+      review,
+      futureReview,
+    } = workflowVocabularyFixtures();
+    expect(isBuildPipeline(currentPipeline)).toBe(true);
+    expect(isMultiReviewWorkflow(review)).toBe(true);
+    const incoming = kind === "build-pipeline" ? futurePipeline : futureReview;
+    expect(
+      kind === "build-pipeline" ? isBuildPipeline(incoming) : isMultiReviewWorkflow(incoming),
+    ).toBe(false);
+    const read = spyOn(portalStore, "invokeOnNode").mockImplementation(
+      async () =>
+        ({
+          snapshot: JSON.parse(JSON.stringify(incoming)),
+        }) as never,
+    );
+    const snap = snapshot(kind, "remote");
+    const expectedStage = kind === "build-pipeline" ? "Build · Rework" : "Review · fixing";
+    try {
+      const hook = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      await waitFor(() => expect(hook.result.current.items[0]?.stage).toBe(expectedStage));
+      expect(hook.result.current.counts.running).toBe(1);
+      const firstReadCount = read.mock.calls.length;
+      await act(async () => requestResourceResync());
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(firstReadCount));
+      expect(hook.result.current.items[0]?.stage).toBe(expectedStage);
+      hook.unmount();
+
+      // A new tree has no previous remote projection to mask a rejected snapshot.
+      const remounted = renderHook(() => useCoordinatorWorkItems(snap, empty));
+      await waitFor(() => expect(remounted.result.current.items[0]?.stage).toBe(expectedStage));
+      expect(remounted.result.current.counts.running).toBe(1);
+      expect(incoming).toEqual(kind === "build-pipeline" ? futurePipeline : futureReview);
+    } finally {
+      read.mockRestore();
+    }
+  },
+);
 
 test.each(["build-pipeline", "multi-review"])(
   "local %s retries errors, distinguishes missing and recovers on resync",

@@ -94,7 +94,7 @@ const ACTION_DEFINITIONS: Record<
     icon: <ScanSearch className="h-4 w-4" />,
   },
   fixReviewIssues: {
-    label: "Fix review issues",
+    label: "Address review findings",
     description:
       "Addresses the consolidated findings after Multi Review and in every build pipeline.",
     icon: <Wrench className="h-4 w-4" />,

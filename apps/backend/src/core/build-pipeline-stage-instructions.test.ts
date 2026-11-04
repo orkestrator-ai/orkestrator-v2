@@ -25,7 +25,10 @@ import {
   startInput as fanoutStartInput,
   withPipeline,
 } from "./build-pipeline-review-fanout-test-support.js";
-import { TEST_FIX_RESULT, TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
+import {
+  TEST_ADDRESS_FINDINGS_RESULT,
+  TEST_REVIEW_PREPARATION,
+} from "./build-pipeline-test-fixtures.js";
 import type { StorageService } from "./storage.js";
 import { UNATTENDED_POLICY_INSTRUCTION } from "./build-pipeline-service-helpers.js";
 
@@ -71,7 +74,7 @@ function scriptRound(provider: FakeProvider): void {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : phase === "verify"
               ? (verifications += 1) === 1
                 ? { complete: false, rationale: "The CLI help is missing." }
@@ -199,9 +202,9 @@ describe("per-stage instructions in the stage prompts", () => {
       }
       // Address keeps its system contract, and the frame comes after it.
       const address = openingPromptsFor(provider, "address")[0]!;
-      expect(address.indexOf("Report your work in the fix result you submit")).toBeLessThan(
-        address.indexOf(BUILD_STEP_INSTRUCTIONS_FRAME_OPEN),
-      );
+      expect(
+        address.indexOf("Report your work in the Address Findings result you submit"),
+      ).toBeLessThan(address.indexOf(BUILD_STEP_INSTRUCTIONS_FRAME_OPEN));
       // Verify keeps its output contract before the frame.
       const verify = openingPromptsFor(provider, "verify")[0]!;
       expect(verify.indexOf("matching the provider-enforced schema")).toBeLessThan(
@@ -368,7 +371,7 @@ describe("the review panel and its preparation", () => {
       expect(build[0]).toContain(framed(STEP_RULES.build));
       expect(build[0]).not.toContain("PREP-RULES");
 
-      const address = bySession("address-issues-session-");
+      const address = bySession("address-findings-session-");
       expect(address).toHaveLength(1);
       expect(address[0]).toContain(framed(STEP_RULES.address));
     });

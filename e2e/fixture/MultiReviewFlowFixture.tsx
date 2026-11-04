@@ -462,7 +462,7 @@ export function MultiReviewFlowFixture() {
         ],
       };
     }
-    if (params.has("fixCompletedPr")) {
+    if (params.has("addressFindingsCompletedPr")) {
       snapshot.autoPr = true;
       snapshot.autoPrLaunch = {
         state: "launched",

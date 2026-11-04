@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 for (const [kind, pickerName, submitName] of [
-  ["restart", "Restart fix model", "Restart Fix"],
-  ["fix", "Custom fix model", "Start fix"],
+  ["restart", "Restart address findings model", "Restart Address Findings"],
+  ["fix", "Custom Address Findings model", "Start Address Findings"],
   ["feature", "Build agent, model and reasoning", undefined],
 ] as const) {
   test(`${kind} platform switch selects Pi's saved default`, async ({ page }, testInfo) => {

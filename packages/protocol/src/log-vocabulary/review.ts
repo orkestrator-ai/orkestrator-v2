@@ -5,7 +5,7 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
     description: "Multi Review workflows: scheduling, graph runs and interactive fix sessions.",
     events: {
       "fix-tab.publish-failed":
-        "A fix request was delivered but its tab could not be opened; the user is told.",
+        "A Address Findings request was delivered but its tab could not be opened; the user is told.",
       "graph-run.not-started": "A workflow's graph run did not start.",
       "reconcile.scan-failed": "A reconciliation scan failed; the next scan retries.",
       "graph-engine.unavailable":
@@ -14,9 +14,9 @@ export const REVIEW_LOG_AREAS = defineLogAreas({
         "Cancelling a graph run failed; the next pass projects how it ended.",
       "delete.cleanup-failed":
         "A cleanup step after deleting a workflow failed; stale tabs reconcile away on hydration.",
-      "fix-session.read-failed": "Reading an interactive fix session's state failed.",
+      "fix-session.read-failed": "Reading an interactive Address Findings session's state failed.",
       "fix-outcome.read-failed": "Reading an interactive fix's outcome failed; it stays pending.",
-      "fix-usage.read-failed": "Reading a fix session's token usage failed.",
+      "fix-usage.read-failed": "Reading an Address Findings session's token usage failed.",
       "result.consume-deferred":
         "Consuming a workflow result failed; it stays staged and is retried.",
       "failure-triage.failed":

@@ -152,7 +152,7 @@ interface PhaseCase {
   edges: {
     intoReviewers: MultiReviewFlowEdgeState[];
     intoConsolidation: MultiReviewFlowEdgeState[];
-    intoFix: MultiReviewFlowEdgeState;
+    intoAddressFindings: MultiReviewFlowEdgeState;
     intoPr?: MultiReviewFlowEdgeState;
   };
   selected: string;
@@ -172,7 +172,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["pending", "pending", "pending"],
       intoConsolidation: ["pending", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Review package",
   },
@@ -183,7 +183,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "active", "pending"],
       intoConsolidation: ["ready", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Reviewer 2 ·",
   },
@@ -198,7 +198,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "pending"],
       intoConsolidation: ["active", "active", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Consolidation",
   },
@@ -209,7 +209,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "ready",
+      intoAddressFindings: "ready",
     },
     selected: "Consolidation",
   },
@@ -225,9 +225,9 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "active",
+      intoAddressFindings: "active",
     },
-    selected: "Fix,",
+    selected: "Address Findings,",
   },
   {
     name: "interactive",
@@ -242,9 +242,9 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "active",
+      intoAddressFindings: "active",
     },
-    selected: "Fix,",
+    selected: "Address Findings,",
   },
   {
     name: "paused while preparing",
@@ -257,7 +257,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["pending", "pending", "pending"],
       intoConsolidation: ["pending", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Review package",
   },
@@ -268,7 +268,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["ready", "ready", "ready"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Consolidation",
   },
@@ -284,9 +284,9 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "ready",
+      intoAddressFindings: "ready",
     },
-    selected: "Fix,",
+    selected: "Address Findings,",
   },
   {
     name: "completed",
@@ -295,10 +295,10 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "complete",
+      intoAddressFindings: "complete",
       intoPr: "ready",
     },
-    selected: "Fix,",
+    selected: "Address Findings,",
   },
   {
     name: "cancelling",
@@ -310,9 +310,9 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "pending", "pending"],
       intoConsolidation: ["pending", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
-    // Consolidation and Fix are being cancelled without having run.
+    // Consolidation and Address Findings are being cancelled without having run.
     selected: "Reviewer 2 ·",
   },
   {
@@ -322,7 +322,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "pending", "pending"],
       intoConsolidation: ["pending", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Reviewer 2 ·",
   },
@@ -333,7 +333,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["failed", "complete", "complete"],
       intoConsolidation: ["pending", "ready", "ready"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Reviewer 3 ·",
   },
@@ -348,7 +348,7 @@ const PHASES: PhaseCase[] = [
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["failed", "failed", "failed"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
     },
     selected: "Consolidation",
   },
@@ -373,7 +373,7 @@ for (const launchState of ["pending", "launched"] as const) {
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: "ready",
+      intoAddressFindings: "ready",
       intoPr: launchState === "pending" ? "active" : "ready",
     },
     selected: "Pull request,",
@@ -383,7 +383,7 @@ for (const launchState of ["pending", "launched"] as const) {
 }
 for (const clean of [true, false]) {
   PHASES.push({
-    name: `detected PR after ${clean ? "clean review" : "Fix"}`,
+    name: `detected PR after ${clean ? "clean review" : "Address Findings"}`,
     workflow: workflow({
       phase: clean ? "ready" : "completed",
       reviewers: allDone(),
@@ -394,7 +394,7 @@ for (const clean of [true, false]) {
     edges: {
       intoReviewers: ["complete", "complete", "complete"],
       intoConsolidation: ["complete", "complete", "complete"],
-      intoFix: clean ? "ready" : "complete",
+      intoAddressFindings: clean ? "ready" : "complete",
       intoPr: "complete",
     },
     selected: "Pull request,",
@@ -443,12 +443,12 @@ describe("flow graph by phase", () => {
       const states = within(pipeline)
         .getAllByRole("tab")
         .map((node) => node.dataset.flowState);
-      const [packageState, reviewerStates, consolidationState, fixState] = phase.nodes;
+      const [packageState, reviewerStates, consolidationState, addressFindingsState] = phase.nodes;
       expect(states).toEqual([
         packageState,
         ...reviewerStates,
         consolidationState,
-        fixState,
+        addressFindingsState,
         phase.pr ?? NOT,
       ]);
 
@@ -458,7 +458,7 @@ describe("flow graph by phase", () => {
       phase.edges.intoConsolidation.forEach((state, index) =>
         expect(edgeState(`into-consolidation-${index}`)).toBe(state),
       );
-      expect(edgeState("into-fix")).toBe(phase.edges.intoFix);
+      expect(edgeState("into-fix")).toBe(phase.edges.intoAddressFindings);
       expect(edgeState("into-pr")).toBe(phase.edges.intoPr ?? "pending");
       if (phase.prSource) {
         const source = document.querySelector<HTMLElement>(`[data-flow-node="${phase.prSource}"]`)!;
@@ -494,7 +494,7 @@ describe("flow graph by phase", () => {
     expect(pendingEdge.getAttribute("stroke-dasharray")).toBe("4 5");
     expect(ready.getAttribute("class")).toContain("stroke-success");
     expect(ready.getAttribute("stroke-dasharray")).toBe("4 5");
-    // Fan-out and fan-in are curves; the hop to Fix is level.
+    // Fan-out and fan-in are curves; the hop to Address Findings is level.
     expect(complete.getAttribute("d")).toContain(" C");
     expect(document.querySelector('[data-flow-edge="into-fix"]')!.getAttribute("d")).toContain(
       " L",
@@ -504,7 +504,7 @@ describe("flow graph by phase", () => {
   test("labels the columns and counts finished reviewers", () => {
     renderTab(PHASES.find((phase) => phase.name === "reviewing")!.workflow);
     const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
-    for (const label of ["Prepare", "Review · 1/3", "Consolidate", "Fix"]) {
+    for (const label of ["Prepare", "Review · 1/3", "Consolidate", "Address Findings"]) {
       expect(within(pipeline).getAllByText(label).length).toBeGreaterThan(0);
     }
   });
@@ -601,7 +601,7 @@ describe("flow graph nodes", () => {
       within(screen.getByRole("tab", { name: /^Consolidation/ })).getByText("waiting"),
     ).toBeTruthy();
     expect(
-      within(screen.getByRole("tab", { name: /^Fix,/ })).getByText("not started"),
+      within(screen.getByRole("tab", { name: /^Address Findings,/ })).getByText("not started"),
     ).toBeTruthy();
   });
 
@@ -736,7 +736,7 @@ describe("flow graph nodes", () => {
     fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
     expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Pull request,");
     fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" });
-    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Fix,");
+    expect(document.activeElement?.getAttribute("aria-label")).toStartWith("Address Findings,");
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(tabs()[0]!);
     expect(screen.getByTestId("multi-review-inspector").getAttribute("aria-labelledby")).toBe(
@@ -802,12 +802,12 @@ describe("stacked layout", () => {
       node("reviewer:2", "reviewer", "running"),
     ],
     consolidationNode: node("consolidation", "consolidation", "not-started"),
-    fixNode: node("fix", "fix", "not-started"),
+    addressFindingsNode: node("fix", "fix", "not-started"),
     prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: ["complete", "active"] as MultiReviewFlowEdgeState[],
       intoConsolidation: ["ready", "pending"] as MultiReviewFlowEdgeState[],
-      intoFix: "pending" as const,
+      intoAddressFindings: "pending" as const,
       intoPr: "pending" as const,
     },
     reviewLabel: "Review · 1/2",
@@ -840,7 +840,7 @@ describe("stacked layout", () => {
     expect(edgeState("into-pr")).toBe("pending");
   });
 
-  test("routes the stacked clean-review connector around Fix from consolidation", () => {
+  test("routes the stacked clean-review connector around Address Findings from consolidation", () => {
     render(
       <MultiReviewFlowGraph
         {...props}
@@ -950,14 +950,14 @@ describe("failed nodes", () => {
     expect(consolidation.querySelector("[data-flow-node-error]")?.textContent).toBe(
       "Consolidation returned an invalid report twice",
     );
-    for (const name of [/^Review package/, /^Fix,/, /^Reviewer 1 ·/]) {
+    for (const name of [/^Review package/, /^Address Findings,/, /^Reviewer 1 ·/]) {
       expect(
         screen.getByRole("tab", { name }).querySelector("[data-flow-node-error]") === null,
       ).toBe(true);
     }
   });
 
-  test("shows the error an interactive fix session stopped with", () => {
+  test("shows the error an interactive Address Findings session stopped with", () => {
     renderTab(
       workflow({
         phase: "interactive",
@@ -966,7 +966,7 @@ describe("failed nodes", () => {
         fixSession: { ...fixSession("idle")!, status: "failed", error: "Codex exited with code 1" },
       }),
     );
-    const fix = screen.getByRole("tab", { name: /^Fix,/ });
+    const fix = screen.getByRole("tab", { name: /^Address Findings,/ });
     expect(fix.dataset.flowState).toBe("failed");
     expect(fix.querySelector("[data-flow-node-error]")?.textContent).toBe(
       "Codex exited with code 1",
@@ -990,12 +990,12 @@ describe("zoom and pan", () => {
       node(`reviewer:${index + 1}`, "reviewer", "running"),
     ),
     consolidationNode: node("consolidation", "consolidation", "not-started"),
-    fixNode: node("fix", "fix", "not-started"),
+    addressFindingsNode: node("fix", "fix", "not-started"),
     prNode: node("pr", "pr", "not-started"),
     edges: {
       intoReviewers: Array.from({ length: count }, () => "active" as const),
       intoConsolidation: Array.from({ length: count }, () => "pending" as const),
-      intoFix: "pending",
+      intoAddressFindings: "pending",
       intoPr: "pending",
     },
     reviewLabel: `Review · 0/${count}`,
@@ -1667,8 +1667,8 @@ describe("step transcript tails", () => {
   });
 
   test("does not read a step whose shared session another step is using", () => {
-    // Every step of this older workflow runs in the fix session; consolidation
-    // is using it, so the Fix step has nothing of its own to show.
+    // Every step of this older workflow runs in the Address Findings session; consolidation
+    // is using it, so the Address Findings step has nothing of its own to show.
     const loadStepTranscript = renderWithStepTail(
       workflow({
         phase: "consolidating",
@@ -1677,7 +1677,7 @@ describe("step transcript tails", () => {
         activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
       }),
     );
-    fireEvent.click(screen.getByRole("tab", { name: /^Fix,/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Address Findings,/ }));
     expect(
       screen.getByText(
         "This step's session is now running consolidation. Open session to read the whole conversation.",

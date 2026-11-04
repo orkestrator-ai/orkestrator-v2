@@ -919,24 +919,26 @@ describe("BuildPipelineService addressing stage", () => {
         { round: 0, issue: reviewWithIssues.issues[0]!.title, status: "open" },
       ]);
       expect(addressing.sessions).toHaveLength(reviewing.sessions.length + 1);
-      const addressSession = addressing.sessions.at(-1)!;
-      expect(addressSession).toMatchObject({
+      const addressFindingsSession = addressing.sessions.at(-1)!;
+      expect(addressFindingsSession).toMatchObject({
         phase: "address",
-        label: "Address Issues Session",
+        label: "Address Findings Session",
       });
-      expect(addressSession.sdkSessionId).not.toBe(reviewSessionId);
-      const addressDispatch = provider.sent.at(-1)!;
-      expect(addressDispatch.sessionId).toBe(addressSession.sdkSessionId);
-      expect(addressDispatch.prompt).toStartWith(
+      expect(addressFindingsSession.sdkSessionId).not.toBe(reviewSessionId);
+      const addressFindingsDispatch = provider.sent.at(-1)!;
+      expect(addressFindingsDispatch.sessionId).toBe(addressFindingsSession.sdkSessionId);
+      expect(addressFindingsDispatch.prompt).toStartWith(
         `${SYSTEM_INSTRUCTIONS_FRAME_OPEN}\n<orkestrator-handoff format="json-v2">`,
       );
-      expect(addressDispatch.prompt).toContain("The range check is exclusive at the upper bound.");
-      expect(addressDispatch.prompt).toContain("clamp(10) returned 9");
-      expect(addressDispatch.prompt).toContain(
+      expect(addressFindingsDispatch.prompt).toContain(
+        "The range check is exclusive at the upper bound.",
+      );
+      expect(addressFindingsDispatch.prompt).toContain("clamp(10) returned 9");
+      expect(addressFindingsDispatch.prompt).toContain(
         "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
       );
-      expect(addressDispatch.prompt).toContain("commit every relevant fix");
-      expect(addressDispatch.mode).toBe("build");
+      expect(addressFindingsDispatch.prompt).toContain("commit every relevant fix");
+      expect(addressFindingsDispatch.mode).toBe("build");
 
       provider.structuredResult = "absent";
       await service.advanceNow(built.id);

@@ -10,13 +10,13 @@ import {
   createDiscoveryPrompt,
   createReviewPreparationPrompt,
   REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
-  parseFixResult,
+  parseAddressFindingsResult,
   parsePrResult,
   parseReviewPreparationResult,
-  type ReviewFixResult,
+  type ReviewAddressFindingsResult,
   type ReviewPreparationResult,
   type ReviewPrResult,
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "./review-prompts.js";
@@ -63,7 +63,7 @@ describe("backend review prompt contracts", () => {
       REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
       REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
-      REVIEW_FIX_RESULT_JSON_SCHEMA,
+      REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
       REVIEW_PR_RESULT_JSON_SCHEMA,
     ])
       assertOpenAiStrictCompatible(schema);
@@ -245,8 +245,8 @@ describe("parseReviewPreparationResult", () => {
   });
 });
 
-describe("parseFixResult", () => {
-  const complete: ReviewFixResult = {
+describe("parseAddressFindingsResult", () => {
+  const complete: ReviewAddressFindingsResult = {
     complete: true,
     summary: "Fixed.",
     filesChanged: ["src/a.ts"],
@@ -256,16 +256,16 @@ describe("parseFixResult", () => {
   };
 
   test("accepts complete and evidence-backed incomplete results", () => {
-    expect(parseFixResult(complete)).toEqual(complete);
+    expect(parseAddressFindingsResult(complete)).toEqual(complete);
     expect(
-      parseFixResult({
+      parseAddressFindingsResult({
         ...complete,
         complete: false,
         commandsRun: [{ command: "bun test", result: "failed", summary: "One failed." }],
       }).complete,
     ).toBe(false);
     expect(
-      parseFixResult({
+      parseAddressFindingsResult({
         ...complete,
         complete: false,
         commandsRun: [],
@@ -276,7 +276,7 @@ describe("parseFixResult", () => {
 
   test("uses only a validation command's final reported state", () => {
     expect(
-      parseFixResult({
+      parseAddressFindingsResult({
         ...complete,
         commandsRun: [
           { command: "bun test", result: "failed", summary: "First attempt." },
@@ -298,7 +298,7 @@ describe("parseFixResult", () => {
       { ...complete, complete: true, limitations: ["Still blocked."] },
       { ...complete, complete: false },
     ])
-      expect(() => parseFixResult(candidate)).toThrow();
+      expect(() => parseAddressFindingsResult(candidate)).toThrow();
   });
 });
 
@@ -454,7 +454,7 @@ describe("prompt contract edge cases", () => {
   });
 
   test("trims blank notes and limitations before applying the completeness rule", () => {
-    const base: ReviewFixResult = {
+    const base: ReviewAddressFindingsResult = {
       complete: false,
       summary: "Fixed.",
       filesChanged: [],
@@ -464,16 +464,16 @@ describe("prompt contract edge cases", () => {
     };
     // A limitation that is only whitespace is not a blocker, so `complete:false`
     // with nothing else failing has no justification left.
-    expect(() => parseFixResult(base)).toThrow(/cannot be incomplete/);
-    expect(parseFixResult({ ...base, complete: true }).notes).toEqual(["keep"]);
-    expect(parseFixResult({ ...base, complete: true }).limitations).toEqual([]);
+    expect(() => parseAddressFindingsResult(base)).toThrow(/cannot be incomplete/);
+    expect(parseAddressFindingsResult({ ...base, complete: true }).notes).toEqual(["keep"]);
+    expect(parseAddressFindingsResult({ ...base, complete: true }).limitations).toEqual([]);
   });
 
   test("treats a re-run command by its trimmed name when deciding blockers", () => {
     // commandsRun records the final state of each command, not every attempt,
     // so a whitespace difference must not hide a re-run behind a stale failure
     // and block an otherwise complete fix.
-    const result = parseFixResult({
+    const result = parseAddressFindingsResult({
       complete: true,
       summary: "Fixed.",
       filesChanged: [],
@@ -488,7 +488,7 @@ describe("prompt contract edge cases", () => {
 
     // The reverse order is a genuine final failure and must still block.
     expect(() =>
-      parseFixResult({
+      parseAddressFindingsResult({
         complete: true,
         summary: "Fixed.",
         filesChanged: [],
@@ -504,7 +504,7 @@ describe("prompt contract edge cases", () => {
 
   test("refuses to call a fix complete while a real blocker remains", () => {
     expect(() =>
-      parseFixResult({
+      parseAddressFindingsResult({
         complete: true,
         summary: "Fixed.",
         filesChanged: [],
@@ -514,7 +514,7 @@ describe("prompt contract edge cases", () => {
       }),
     ).toThrow(/cannot be complete/);
     expect(() =>
-      parseFixResult({
+      parseAddressFindingsResult({
         complete: true,
         summary: "Fixed.",
         filesChanged: [],

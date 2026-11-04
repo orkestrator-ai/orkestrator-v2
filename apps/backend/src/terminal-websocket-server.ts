@@ -48,6 +48,15 @@ export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION = 1024 *
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS = 4_096;
 export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Channel frames stop moving to the socket once it holds this much. The backlog
+ * then stays in the per-channel queues, where the channel soft limit desyncs only
+ * the channel that built it. With no watermark a flood moves through its queue
+ * into the socket, and the next frame on any quiet channel trips the socket soft
+ * limit instead.
+ */
+export const TERMINAL_WEBSOCKET_FLUSH_LOW_WATERMARK_BYTES = 256 * 1024;
+
 type QueuedFrame = { data: string | Uint8Array; bytes: number; outputBytes?: number };
 
 /** Header bytes charged to a buffered event when projecting queue growth. */
@@ -93,6 +102,10 @@ type SocketState = {
   nextChannelId: number;
   roundRobinCursor: number;
   flushScheduled: boolean;
+  /** Sends whose callback has not fired. Those callbacks are what end a pause. */
+  inFlightSends: number;
+  /** Channel backlog is waiting on the socket; a send callback will resume it. */
+  flushPaused: boolean;
   invalidChannelFrames: number;
   pendingOperations: number;
 };
@@ -340,6 +353,8 @@ export class TerminalWebSocketGateway {
       nextChannelId: 1,
       roundRobinCursor: 0,
       flushScheduled: false,
+      inFlightSends: 0,
+      flushPaused: false,
       invalidChannelFrames: 0,
       pendingOperations: 0,
     };
@@ -819,7 +834,7 @@ export class TerminalWebSocketGateway {
       state.queuedBytes + state.ws.bufferedAmount,
     );
     channel.revision = output.revision;
-    this.scheduleFlush(state);
+    if (!state.flushPaused) this.scheduleFlush(state);
   }
 
   private desync(
@@ -882,51 +897,76 @@ export class TerminalWebSocketGateway {
     setImmediate(() => this.flush(state));
   }
 
+  /**
+   * Whether channel frames must wait for the socket. Only true with a send in
+   * flight: its callback is the only thing that resumes a pause, so anything
+   * else in `bufferedAmount` must not be able to strand the backlog.
+   */
+  private socketBackedUp(state: SocketState): boolean {
+    return (
+      state.inFlightSends > 0 &&
+      state.ws.bufferedAmount >= TERMINAL_WEBSOCKET_FLUSH_LOW_WATERMARK_BYTES
+    );
+  }
+
+  private send(state: SocketState, frame: QueuedFrame): void {
+    this.options.metrics?.recordTerminalWebSocketSent(frame.bytes, frame.outputBytes);
+    this.options.metrics?.recordTerminalWebSocketFramedBytes(
+      0,
+      webSocketFrameBytes(frame.bytes, false),
+    );
+    state.inFlightSends += 1;
+    state.ws.send(frame.data, { binary: typeof frame.data !== "string" }, (error) => {
+      state.inFlightSends -= 1;
+      if (error) {
+        state.ws.terminate();
+        return;
+      }
+      if (state.flushPaused && !this.socketBackedUp(state)) {
+        state.flushPaused = false;
+        this.scheduleFlush(state);
+      }
+    });
+  }
+
   private flush(state: SocketState): void {
     state.flushScheduled = false;
     if (state.ws.readyState !== WebSocket.OPEN) return;
     let budget = 64 * 1024;
+    // Control frames ignore the watermark: a keystroke's result or a desync notice
+    // must not wait behind another terminal's output. Their own hard limit is in
+    // `sendControl`.
     while (state.controlQueue.length > 0 && budget > 0) {
       const frame = state.controlQueue.shift()!;
       state.queuedBytes -= frame.bytes;
       budget -= frame.bytes;
-      this.options.metrics?.recordTerminalWebSocketSent(frame.bytes);
-      this.options.metrics?.recordTerminalWebSocketFramedBytes(
-        0,
-        webSocketFrameBytes(frame.bytes, false),
-      );
-      state.ws.send(frame.data, (error) => {
-        if (error) state.ws.terminate();
-      });
+      this.send(state, frame);
     }
     const channels = [...state.channels.values()];
-    if (channels.length > 0) {
+    if (channels.length > 0 && !this.socketBackedUp(state)) {
       for (let offset = 0; offset < channels.length && budget > 0; offset += 1) {
         const index = (state.roundRobinCursor + offset) % channels.length;
         const channel = channels[index]!;
         let channelBudget = 16 * 1024;
-        while (channel.queue.length > 0 && channelBudget > 0 && budget > 0) {
+        while (
+          channel.queue.length > 0 &&
+          channelBudget > 0 &&
+          budget > 0 &&
+          !this.socketBackedUp(state)
+        ) {
           const frame = channel.queue.shift()!;
           channel.queuedBytes -= frame.bytes;
           state.queuedBytes -= frame.bytes;
           channelBudget -= frame.bytes;
           budget -= frame.bytes;
-          this.options.metrics?.recordTerminalWebSocketSent(frame.bytes, frame.outputBytes ?? 0);
-          this.options.metrics?.recordTerminalWebSocketFramedBytes(
-            0,
-            webSocketFrameBytes(frame.bytes, false),
-          );
-          state.ws.send(frame.data, { binary: true }, (error) => {
-            if (error) state.ws.terminate();
-          });
+          this.send(state, frame);
         }
       }
       state.roundRobinCursor = (state.roundRobinCursor + 1) % channels.length;
     }
-    if (
-      state.controlQueue.length > 0 ||
-      [...state.channels.values()].some((channel) => channel.queue.length > 0)
-    ) {
+    const channelBacklog = channels.some((channel) => channel.queue.length > 0);
+    state.flushPaused = channelBacklog && this.socketBackedUp(state);
+    if (state.controlQueue.length > 0 || (channelBacklog && !state.flushPaused)) {
       this.scheduleFlush(state);
     }
   }

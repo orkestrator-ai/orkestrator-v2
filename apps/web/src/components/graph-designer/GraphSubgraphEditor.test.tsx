@@ -29,13 +29,13 @@ describe("GraphSubgraphEditor (item 402)", () => {
     ).toContain("review/consolidate");
 
     // autoFix passes this template's parameter through; autoPr is a value.
-    const autoFix = screen.getByLabelText("Fix automatically") as HTMLSelectElement;
+    const autoFix = screen.getByLabelText("Address Findings automatically") as HTMLSelectElement;
     expect(autoFix.value).toBe("param:autoFix");
     fireEvent.change(autoFix, { target: { value: "default" } });
     expect(reviewOf(harness.current()).params).toEqual({ autoPr: false });
 
     // Roles bind by name unless the node maps them.
-    const fixer = screen.getByLabelText(/^Fix \(one model\)/) as HTMLSelectElement;
+    const fixer = screen.getByLabelText(/^Address Findings \(one model\)/) as HTMLSelectElement;
     expect(fixer.value).toBe("builder");
     fireEvent.change(fixer, { target: { value: "describer" } });
     expect(reviewOf(harness.current()).roles!.fixer).toBe("describer");

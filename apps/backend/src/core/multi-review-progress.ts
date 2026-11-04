@@ -5,7 +5,7 @@
  * is working, and the review pass will not leave the `reviewing` phase while any
  * reviewer is still pending or running. One wedged agent — a Cursor parent
  * holding its turn open for a background child whose transcript stopped moving —
- * therefore halts the whole workflow, including consolidation and the fix stage.
+ * therefore halts the whole workflow, including consolidation and the Address Findings stage.
  *
  * The only signal that separates "slow" from "wedged" is whether the session's
  * transcript is still changing. The bridges stream sub-agent activity into the

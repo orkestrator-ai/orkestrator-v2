@@ -49,7 +49,7 @@ describe("build pipeline reviewer retry", () => {
           later = await read(started.id);
         }
         expect(later.iteration).toBe(1);
-        const firstAddress = later.sessions.find(
+        const firstAddressFindings = later.sessions.find(
           (s) => s.phase === "address" && s.iteration === 0,
         )!;
         const firstConsolidation = later.sessions.find(
@@ -78,12 +78,12 @@ describe("build pipeline reviewer retry", () => {
             )?.superseded,
           ).toBe(true);
           const created = provider.created.length;
-          const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+          const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
           expect(restarted.structuredReview).toBeUndefined();
           expect(provider.created.slice(created).some((s) => s.phase === "address")).toBe(false);
         } else {
           const created = provider.created.length;
-          const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+          const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
           expect(restarted.iteration).toBe(0);
           expect(restarted.structuredReview?.reviewSummary).toBe("Merged review.");
           expect(provider.created.slice(created).map((s) => s.phase)).toEqual(["address"]);

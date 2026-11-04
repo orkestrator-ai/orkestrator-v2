@@ -86,7 +86,7 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         round: "later",
         turn: "write",
         result: "review-preparation",
-        session: { phase: "fix", buildPhase: "fixing", label: "Fix Session" },
+        session: { phase: "fix", buildPhase: "fixing", label: "Rework Session" },
       },
       {
         key: "preparation",
@@ -116,7 +116,7 @@ export const BUILD_PIPELINE_STAGES: readonly BuildPipelineStage[] = Object.freez
         round: "every",
         turn: "write",
         result: "fix-result",
-        session: { phase: "address", buildPhase: "addressing", label: "Address Issues Session" },
+        session: { phase: "address", buildPhase: "addressing", label: "Address Findings Session" },
       },
       {
         key: "verify",

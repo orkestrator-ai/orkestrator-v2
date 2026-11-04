@@ -1743,13 +1743,18 @@ describe("backend native agent and review workflow wrappers", () => {
     // level and rejects any key it does not recognise.
     expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review", { ...input });
 
-    const customFix = {
+    const customAddressFindings = {
       workflowId: "multi-1",
       fixModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
       instruction: "Fix the inactive-tab regression",
     };
-    await expect(backendWrappers.startMultiReviewCustomFix(customFix)).resolves.toBe(workflow);
-    expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review_custom_fix", customFix);
+    await expect(
+      backendWrappers.startMultiReviewCustomAddressFindings(customAddressFindings),
+    ).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "start_multi_review_custom_fix",
+      customAddressFindings,
+    );
 
     const replacement = {
       environmentId: "env-1",
@@ -1757,11 +1762,13 @@ describe("backend native agent and review workflow wrappers", () => {
       expectedProviderSessionId: "provider-fix",
       replacementProviderSessionId: "provider-replacement",
     };
-    await expect(backendWrappers.recoverMultiReviewFixSession(replacement)).resolves.toBe(workflow);
+    await expect(
+      backendWrappers.recoverMultiReviewAddressFindingsSession(replacement),
+    ).resolves.toBe(workflow);
     expect(invokeMock).toHaveBeenLastCalledWith("recover_multi_review_fix_session", replacement);
 
     for (const [method, command] of [
-      [backendWrappers.addressMultiReview, "address_multi_review"],
+      [backendWrappers.addressMultiReviewFindings, "address_multi_review"],
       [backendWrappers.retryMultiReview, "retry_multi_review"],
       [backendWrappers.cancelMultiReview, "cancel_multi_review"],
       [backendWrappers.stopMultiReviewValidation, "stop_multi_review_validation"],

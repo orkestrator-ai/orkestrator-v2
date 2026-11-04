@@ -15,11 +15,11 @@ import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js"
 
 // Fix and PR results are shared with graph types; their home is the protocol.
 export {
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
-  parseFixResult,
+  parseAddressFindingsResult,
   parsePrResult,
-  type ReviewFixResult,
+  type ReviewAddressFindingsResult,
   type ReviewPrResult,
 } from "@orkestrator/protocol/review-results";
 

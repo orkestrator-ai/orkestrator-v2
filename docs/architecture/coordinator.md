@@ -586,7 +586,7 @@ is a local environment whose `worktreePath` is the canonical repository root.
 checkout's current branch on every call. It has no sidebar row: selecting a
 project with a checkout activates its home (`useProjectHomeActivation`). The
 toolbar then shows the ordinary environment controls, acting on the home, so
-Review, Multi Review, its Fix session and Create PR run directly on the main
+Review, Multi Review, its Address Findings session and Create PR run directly on the main
 checkout. The project tabs sit on a row beneath: **Home** shows the home's own
 tabs, and Coordinator, Kanban, GitHub, Linear and Features cover them with a
 board panel. The home's tabs stay mounted under the board, so a tab launched
@@ -2094,7 +2094,7 @@ stable key; a key is sent once, recorded on the association
 | Multi Review | consolidation `ready` (finding counts by severity, coverage gaps, verdict) | `settled` |
 | Multi Review | interactive fix turn finished (`fix-done`, with the reason when auto-PR started no PR) or failed (`fix-failed`) | `settled` |
 | Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL) or already `pr-closed`, `pr-merged` or `pr-unknown`, or the launch failed (`pr-failed`) | `settled` |
-| Multi Review | a reviewer, consolidation or fix session `stalled` | `settled` |
+| Multi Review | a reviewer, consolidation or Address Findings session `stalled` | `settled` |
 | Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
 | Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
@@ -2161,27 +2161,27 @@ shows the wait, and the 20-second waiting debounce only suppresses waits too
 short to matter.
 
 A review with auto-fix and auto-PR advances on its own, so a state it is about
-to leave is not reported. Consolidation with findings goes straight to the Fix
-handoff and never reaches `ready`. A finished Fix that queued its PR is held
+to leave is not reported. Consolidation with findings goes straight to Address Findings
+handoff and never reaches `ready`. A finished Address Findings that queued its PR is held
 until the PR launch settles, and the coordinator hears `pr-started` instead of
 a `fix-done` it would be expected to act on. `pr-opened` follows once the
 environment records `prUrl` with `prState: open`; the PR monitor sets them, and
 the next workflow save or the 60-second sweep reports it. A retained URL whose
 state is closed, merged or unknown is reported as that state, never as open.
-Each PR launch records the identity of the Fix attempt that authorized it
-(`autoPrLaunch.fixIdentity`, a hash of the Fix session key and start time). A
-later Fix, for example after a reviewer restart, is reported as `fix-done`,
+Each PR launch records the identity of Address Findings attempt that authorized it
+(`autoPrLaunch.fixIdentity`, a hash of the Address Findings session key and start time). A
+later Address Findings, for example after a reviewer restart, is reported as `fix-done`,
 noting that the earlier PR does not confirm it includes the new changes. A
 launched record without an identity, from before this change, is treated the
-same way. A failed or stopped Fix reports `fix-failed`
+same way. A failed or stopped Address Findings reports `fix-failed`
 or `fix-done` with "No PR session started"; the review stops there. A
 consolidation with nothing to fix and auto-PR on queues the PR straight away
 (`autoPrLaunch.basis: clean-review`), is held the same way, and reports
 `pr-started`, `pr-opened` or `pr-failed` headed "found nothing to fix"; a
 skipped launch, such as one for an environment that already has a pull
 request, reports `ready` with the reason. Without auto-PR it reports `ready`
-with a line saying no Fix or PR started. A Fix started later is not covered by
-the clean report's PR. A legacy structured Fix holds `completed` until its PR launch settles,
+with a line saying no Address Findings or PR started. An Address Findings run started later is not covered by
+the clean report's PR. A legacy structured Address Findings holds `completed` until its PR launch settles,
 then lists the PR outcome in its details.
 
 **Pull requests.** A `pull-request` association (`resourceId` the worker,
@@ -2433,7 +2433,7 @@ What an omitted choice resolves to:
 | Tool | Omitted | Resolves to |
 | --- | --- | --- |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
-| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Fix review issues, each falling back to Review |
+| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count, each reviewer with its position's saved focus (`multiReview.reviewerLenses`); Review preparation and Address Findings review issues, each falling back to Review |
 | `launch_multi_review`, `start_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
@@ -2534,24 +2534,24 @@ consolidation** and **Auto-PR after fix or clean review** checkboxes, which open
 app-level settings. Omitted, they use those settings. With both on, the review
 runs end to end through the button's own code path in `MultiReviewService`:
 
-1. Consolidation with findings saves the report and the default Fix handoff in
+1. Consolidation with findings saves the report and the default Address Findings handoff in
    one save (`queueDefaultFix`). The supervisor delivers it like
    `address_multi_review`.
-2. When the interactive Fix turn finishes on its own as the conversation's last
+2. When the interactive Address Findings turn finishes on its own as the conversation's last
    turn, the same save that settles it records `autoPrLaunch: pending`
    (`queueAutoPr`).
 3. The supervisor launches the ordinary `PR` tab: the Create PR prompt and the
    `pr` action default, under the stable request id `multi-review-pr:<id>`.
 
-Consolidation with nothing to fix skips the Fix: with `autoPr` on, the save
+Consolidation with nothing to fix skips Address Findings: with `autoPr` on, the save
 that settles it at `ready` records `autoPrLaunch: { basis: "clean-review",
 state: "pending" }` (`queueCleanReviewAutoPr`) and step 3 follows, whatever
 `autoFix` says.
 
-The PR intent is only ever recorded with proof that a Fix completed or that
-there was nothing to fix, so the PR cannot come before a Fix. A failed, stopped, superseded or unconfirmed Fix records
-`skipped` with a reason or nothing at all, and no PR starts. A custom Fix never
-starts a PR. A Fix handoff that cannot be delivered fails the review after its
+The PR intent is only ever recorded with proof that an Address Findings run completed or that
+there was nothing to fix, so the PR cannot come before an Address Findings run. A failed, stopped, superseded or unconfirmed Address Findings records
+`skipped` with a reason or nothing at all, and no PR starts. A custom Address Findings never
+starts a PR. An Address Findings run handoff that cannot be delivered fails the review after its
 bounded retries. The PR launch retries three times before `failed`. Each step
 is durable, so a restart resumes at the step it reached. Nothing in this flow
 merges.
@@ -2559,7 +2559,7 @@ merges.
 `autoPr: true` with `autoFix` omitted also turns auto-fix on, because a
 coordinator asking for an automatic PR wants the whole flow. An explicit
 `autoFix: false` with `autoPr: true` keeps the button's meaning: the PR follows a
-Fix started with `address_multi_review`. `get_multi_review` reports
+Address Findings started with `address_multi_review`. `get_multi_review` reports
 `automation: { autoFix, autoPr, prLaunch?, next }`, where `next` says in one
 sentence what runs next and whether the coordinator has to act.
 
@@ -2571,11 +2571,11 @@ navigation: an inactive environment receives the durable tab and selection,
 which its renderer adopts when the user returns.
 
 `open_multi_review` reopens/focuses that root without starting work.
-`open_multi_review_fix` opens/focuses the authoritative Fix provider session
+`open_multi_review_fix` opens/focuses the authoritative Address Findings provider session
 without sending a turn. `address_multi_review` now opens the root first and
 records the backend's idempotent fix handoff; the supervisor publishes and
-selects Fix after confirmed dispatch when the foreground action initiated that
-attempt. A background retry or backend-restart resume publishes Fix without
+selects Address Findings after confirmed dispatch when the foreground action initiated that
+attempt. A background retry or backend-restart resume publishes Address Findings without
 changing the current tab or pane. A repeated address call returns the existing
 interactive handoff. An unassociated workflow started from the renderer remains
 available within its project. When an association exists, these controls require
@@ -2616,8 +2616,8 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | Existing control / button family | Durable consequences and disposition |
 | --- | --- |
 | `start_multi_review` / Multi Review | Backend-only and build-gated; retained for diagnostics/recovery. Its metadata explicitly prefers `launch_multi_review`, which adds root-tab publication, focus, readiness checks, reattachment, and truthful recovery. |
-| Multi Review open / Open fix session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
-| `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Fix publication; it now selects that tab when published and reports queued/partial outcomes. |
+| Multi Review open / Open Address Findings session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
+| `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Address Findings publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |
 | `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. Resume refuses a pipeline that is not paused. |
 | Step Restart / Restart in… | Added `restart_build_pipeline_step`; see [Restarting a failed pipeline step](#restarting-a-failed-pipeline-step). Rewind code and Skip stay user actions. |
@@ -2664,7 +2664,7 @@ node derive from the command node's receipt key. So when the node link loses
 an answer, the tool returns outcome-unknown and asks for a retry with the same
 `requestId`, and the retry reattaches to what the first attempt made; nothing
 is resent automatically. A remote custom fix that is already past its handoff
-when the retry arrives is reported, with its Fix tab, rather than refused as
+when the retry arrives is reported, with its Address Findings tab, rather than refused as
 not ready. A node from before these commands answers "update that node".
 `request_root_changes` stays on this node; see
 [0395-coordinator-worker-surfaces-follow-ups.md](../todo/coordinator-and-multi-review/0395-coordinator-worker-surfaces-follow-ups.md).
@@ -2681,7 +2681,7 @@ node and only the approved answer crosses the link
 | `list_worker_commands` | The tab's `/` menu: `session.commands` for one native tab, without commands that act on a running turn (`/steer`). `refresh` re-reads the agent's list. | A read. | Nothing. |
 | `run_worker_command` | Picks one row of that menu: `session.command`'s resolution and every refusal it has (missing, ambiguous, unavailable, changed since listed, wrong arguments, busy tab, parked dispatch), dispatched as a selection, never as prompt text. `/steer` is refused. A command that starts a provider turn opens a delegation, as `send_prompt_to_tab` does, and is refused while one is open on that tab; one that answers without a turn (`bridge-local`, an Orkestrator session action such as `/compact`) opens none and says to read its output with `get_tab_transcript`. | Replays the receipt; the dispatch request ID derives from it, so a retry after a lost answer replays on the node that owns the worker. | The command runs in the tab as if the user picked it. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
-| `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Fix tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
+| `custom_fix_multi_review` | The review tab's **Custom fix prompt**: a fix with the caller's instruction and, optionally, another model (`MultiReviewService.customFix`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Address Findings tab, as for `address_multi_review`; a custom fix never starts an automatic PR. Status wakes follow as for a default fix. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
 | `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus. One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |
@@ -3145,7 +3145,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   notice for a silent worker and the poll guard. `family` runs a two-worker
   exchange of sixteen messages, including a follow-up to a busy worker, with
   nobody answering anything. `status` checks that a coordinator-launched
-  Multi Review wakes it once when ready and once when its Fix turn finishes
+  Multi Review wakes it once when ready and once when its Address Findings turn finishes
   (with `address_multi_review` in between), and that a delegated worker held
   on an approval wakes it once after the 20-second debounce. `peer` has two
   ordinary environments exchange ten messages with Wake peers on and no

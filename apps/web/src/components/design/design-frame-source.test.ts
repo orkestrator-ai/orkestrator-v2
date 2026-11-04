@@ -19,3 +19,9 @@ test("development still gets fresh nonce-bearing srcdoc documents", () => {
   expect(first.srcDoc).toContain("script-src 'nonce-");
   expect(designFrameSource("", "https://gateway.example/")).not.toEqual(first);
 });
+
+test("srcdoc does not resolve a document URL for an opaque parent page", () => {
+  const source = designFrameSource("", "about:blank");
+  if (!("srcDoc" in source)) throw new Error("Expected srcdoc");
+  expect(source.srcDoc).toContain("script-src 'nonce-");
+});

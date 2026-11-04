@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
-  AUTO_FIX_FIELD_DESCRIPTION,
+  AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION,
   AUTO_PR_FIELD_DESCRIPTION,
   MULTI_REVIEW_AUTOMATION_DESCRIPTION,
   registerControlReviewActions,
@@ -595,9 +595,9 @@ export function registerCoordinatorWorkflowTools(
         fixModel: agentSelectionSchema
           .optional()
           .describe(
-            "Optional. Omit to use the user's saved fix model. Set only when the user asks for one.",
+            "Optional. Omit to use the user's saved Address Findings model. Set only when the user asks for one.",
           ),
-        autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
+        autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
         autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
         nodeId: nodeIdField,
       }),

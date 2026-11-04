@@ -103,7 +103,7 @@ const buildStepFields = {
     })
     .optional()
     .describe(
-      "Optional. The user's own instructions for this step, at most 16 KiB. The step's prompt carries them after its own contract; Fix uses the build step's. Set only when the user asks for them.",
+      "Optional. The user's own instructions for this step, at most 16 KiB. The step's prompt carries them after its own contract; Rework uses the build step's. Set only when the user asks for them.",
     ),
 };
 

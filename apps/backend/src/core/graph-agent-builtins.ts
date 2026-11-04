@@ -32,7 +32,7 @@ import {
   type TaskSnapshotCriterion,
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
-import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import { boundPipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import {
   graphBuiltInPrompt,
   type GraphBuiltInPromptDefinition,
@@ -53,7 +53,7 @@ import {
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
-  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN,
@@ -61,7 +61,7 @@ import {
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { withReviewLens, type ReviewLens } from "@orkestrator/protocol/review-lens";
-import type { ReviewFixResult } from "@orkestrator/protocol/review-results";
+import type { ReviewAddressFindingsResult } from "@orkestrator/protocol/review-results";
 import {
   isReviewPackageReference,
   type ReviewPackageReference,
@@ -73,11 +73,11 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import {
   addressFindingsPrompt,
-  addressPrompt,
-  addressValidationGuidance,
+  addressFindingsReportPrompt,
+  addressFindingsValidationGuidance,
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
-  fixTaskPrompt,
+  reworkTaskPrompt,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,
   verificationTaskPrompt,
@@ -236,16 +236,16 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       return consolidationText(inputs, target);
     case "fix-review-issues":
       inputs.optional("code");
-      return fixReviewIssuesText(inputs, instruction);
+      return addressFindingsText(inputs, instruction);
     case "address-review": {
       inputs.optional("code");
       const report = inputs.reviewReport(inputs.required("report"));
-      // addressValidationGuidance is addressValidationInstruction without
-      // ADDRESS_OUTPUT_CONTRACT (the fix result as the final JSON response):
+      // addressFindingsValidationGuidance is addressFindingsValidationInstruction without
+      // ADDRESS_FINDINGS_OUTPUT_CONTRACT (the fix result as the final JSON response):
       // the node submits it through its `fix-result` port tool instead.
-      return addressPrompt(
+      return addressFindingsReportPrompt(
         report,
-        addressValidationGuidance(inputs.reviewPackage("package"), target),
+        addressFindingsValidationGuidance(inputs.reviewPackage("package"), target),
       );
     }
     case "build":
@@ -267,7 +267,7 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
         criterionIds: criteria.map(({ id }) => id),
       });
       // As buildTaskPrompt above: the implementation handoff ends the turn.
-      return fixTaskPrompt(
+      return reworkTaskPrompt(
         task,
         notes,
         verificationFeedback(verdict, criteria),
@@ -404,7 +404,7 @@ function withSourceIds(
   };
 }
 
-function fixReviewIssuesText(inputs: BuiltInInputs, instruction: string | undefined): string {
+function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefined): string {
   const entry = inputs.required("report");
   const name = typeName(entry.type);
   let framed: unknown;
@@ -421,20 +421,22 @@ function fixReviewIssuesText(inputs: BuiltInInputs, instruction: string | undefi
     findings = inputs.reportValue(entry);
     framed = findings;
   }
-  // Without an instruction this is addressPrompt as the Multi Review fix sends
+  // Without an instruction this is addressFindingsReportPrompt as the Multi Review fix sends
   // it (no validation instruction: no verifier follows).
-  return instruction ? customFixText(framed, instruction) : addressFindingsPrompt(findings);
+  return instruction
+    ? customAddressFindingsText(framed, instruction)
+    : addressFindingsPrompt(findings);
 }
 
 /**
- * multiReviewCustomFixPrompt with one section swapped. Its
+ * multiReviewCustomAddressFindingsPrompt with one section swapped. Its
  * MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION turns the session into a
  * manual, interactive conversation answered in prose, which contradicts an
  * unattended node that submits a fix result; the implementation-mode
  * instruction it ends with is kept on its own. Built here from the same
  * protocol constants, so a finding or a custom report frames like a report.
  */
-function customFixText(framed: unknown, instruction: string): string {
+function customAddressFindingsText(framed: unknown, instruction: string): string {
   return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
 ${instruction}
 
@@ -446,7 +448,7 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
 ${promptCarrierJson(framed)}
 ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 
-${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION)}`;
+${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION)}`;
 }
 
 function verifyText(inputs: BuiltInInputs, notes: string, target: string): string {
@@ -455,10 +457,12 @@ function verifyText(inputs: BuiltInInputs, notes: string, target: string): strin
   const address = inputs.optional("address");
   // The bounded copy the Build Pipeline keeps on its Address session and
   // renders into Verify's prompt.
-  const addressReport = address
+  const addressFindingsReport = address
     ? {
         kind: "fix-result" as const,
-        result: boundPipelineFixResult(inputs.builtInValue<ReviewFixResult>(address)),
+        result: boundPipelineAddressFindingsResult(
+          inputs.builtInValue<ReviewAddressFindingsResult>(address),
+        ),
       }
     : undefined;
   // verificationTaskPrompt is verificationPrompt without
@@ -471,7 +475,7 @@ function verifyText(inputs: BuiltInInputs, notes: string, target: string): strin
     reviewPackage: inputs.reviewPackage("package"),
     notes,
     targetBranch: target,
-    ...(addressReport ? { addressReport } : {}),
+    ...(addressFindingsReport ? { addressFindingsReport } : {}),
   });
 }
 

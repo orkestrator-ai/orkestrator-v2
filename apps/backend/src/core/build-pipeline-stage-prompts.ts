@@ -26,11 +26,11 @@ import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { sessionAgent, VERIFICATION_SCHEMA } from "./build-pipeline-service-helpers.js";
 import { forcePushUpstream } from "./build-pipeline-code-rewind.js";
 import {
-  addressPrompt,
-  addressValidationInstruction,
+  addressFindingsReportPrompt,
+  addressFindingsValidationInstruction,
   buildPipelineReviewPackageContext,
   buildPrompt,
-  fixPrompt,
+  reworkPrompt,
   keyInformationInstruction,
   prPrompt,
   pushBranchPrompt,
@@ -45,12 +45,12 @@ import {
   prependReviewHandoff,
 } from "./build-pipeline-handoff.js";
 import {
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   createDiscoveryPrompt,
 } from "./review-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
-import { verificationAddressReport } from "./build-pipeline-address-report.js";
+import { verificationAddressFindingsReport } from "./build-pipeline-address-findings-report.js";
 import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 
 /** A stage's opening prompt, its result schema and the images it is sent with. */
@@ -167,12 +167,12 @@ export class BuildPipelineStagePrompts {
       return {
         prompt: prependReviewHandoff(
           handoff,
-          addressPrompt(
+          addressFindingsReportPrompt(
             pipeline.structuredReview,
-            addressValidationInstruction(pipeline.reviewPackage, target),
+            addressFindingsValidationInstruction(pipeline.reviewPackage, target),
           ),
         ),
-        schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+        schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
         images: [],
       };
     }
@@ -183,7 +183,7 @@ export class BuildPipelineStagePrompts {
           notes,
           target,
           worktree,
-          await verificationAddressReport(this.ctx.transcriptCheckpoints, pipeline),
+          await verificationAddressFindingsReport(this.ctx.transcriptCheckpoints, pipeline),
           await this.validationAncestry(pipeline, worktree),
         ),
         schema: VERIFICATION_SCHEMA,
@@ -192,7 +192,7 @@ export class BuildPipelineStagePrompts {
     }
     if (phase === "fix") {
       return {
-        prompt: fixPrompt(
+        prompt: reworkPrompt(
           pipeline,
           notes,
           pipeline.verificationFeedback ?? "The verification did not pass.",

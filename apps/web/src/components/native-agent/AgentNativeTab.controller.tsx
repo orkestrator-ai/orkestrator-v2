@@ -55,7 +55,7 @@ import {
   type AgentModelRef,
   type NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
-import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
+import { MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
 import {
   GOAL_COMMAND_ID,
   isProviderSlashCommand,
@@ -131,7 +131,7 @@ import {
   cancelNativeAgentSignIn,
   getNativeAgentAuthStatus,
   openInBrowser,
-  recoverMultiReviewFixSession,
+  recoverMultiReviewAddressFindingsSession,
   writeCoordinatorAttachment,
   writeBugReportAttachment,
 } from "@/lib/backend";
@@ -140,8 +140,8 @@ import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/
 import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
-import { attachFixPromptEvidence } from "@/lib/chat/fix-prompt-evidence";
-import { findMultiReviewFixReport } from "@/lib/multi-review-fix-tab";
+import { attachAddressFindingsPromptEvidence } from "@/lib/chat/address-findings-prompt-evidence";
+import { findMultiReviewAddressFindingsReport } from "@/lib/multi-review-address-findings-tab";
 import {
   applyClaudeBackgroundTaskStates,
   childBackgroundTasksByParent,
@@ -481,7 +481,7 @@ export function SharedNativeAgentController({
         });
       }
       if (!tabId.startsWith("multi-review-fix:")) return;
-      const workflow = await recoverMultiReviewFixSession({
+      const workflow = await recoverMultiReviewAddressFindingsSession({
         environmentId: data.environmentId,
         tabId,
         expectedProviderSessionId: replacement.requestedProviderSessionId,
@@ -1082,8 +1082,8 @@ export function SharedNativeAgentController({
    * Only the backend transcript supplies positions: a row this tab synthesised
    * for a rowless task is a card, not a place in the conversation.
    */
-  const fixReport = useMultiReviewStore((state) =>
-    findMultiReviewFixReport(state.workflows.values(), tabId, data.environmentId),
+  const addressFindingsReport = useMultiReviewStore((state) =>
+    findMultiReviewAddressFindingsReport(state.workflows.values(), tabId, data.environmentId),
   );
   const richTranscriptScope = useRichTranscriptScopeValue(
     data.environmentId,
@@ -1108,7 +1108,9 @@ export function SharedNativeAgentController({
   const canLoadEarlierHistory = projection?.messageWindow?.canLoadEarlier === true;
   const messages = useMemo(() => {
     const pinned = pinNativeAgentParts(transcriptMessages, displayMessages);
-    const withEvidence = fixReport ? attachFixPromptEvidence(pinned, fixReport) : pinned;
+    const withEvidence = addressFindingsReport
+      ? attachAddressFindingsPromptEvidence(pinned, addressFindingsReport)
+      : pinned;
     return artifactPlacements.stabilize(
       mergeArtifactPublications(withEvidence, artifactPublications, {
         canLoadEarlier: canLoadEarlierHistory,
@@ -1119,7 +1121,7 @@ export function SharedNativeAgentController({
     artifactPublications,
     canLoadEarlierHistory,
     displayMessages,
-    fixReport,
+    addressFindingsReport,
     transcriptMessages,
   ]);
   // "Open full conversation" (web annotations) parks a scroll target for this
@@ -3185,7 +3187,7 @@ export function SharedNativeAgentController({
         role="status"
         className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
-        {MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE}
+        {MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE}
       </div>
     ) : null,
     showPlanReview ? (

@@ -102,7 +102,7 @@ describe("GlobalSettings defaults section", () => {
       "New environments",
       "Review",
       "Review 2",
-      "Fix review issues",
+      "Address review findings",
       "PR",
       "Resolve",
       "Push",
@@ -141,7 +141,7 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    openPicker("Fix review issues");
+    openPicker("Address review findings");
     fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 

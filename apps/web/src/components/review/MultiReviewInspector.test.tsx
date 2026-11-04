@@ -397,7 +397,7 @@ describe("StepTranscriptTail", () => {
     renderStepTail(loadTranscript, { access: { kind: "other-step", step: "fix" } });
     expect(
       screen.getByText(
-        "This step's session is now running Fix. Open session to read the whole conversation.",
+        "This step's session is now running Address Findings. Open session to read the whole conversation.",
       ),
     ).toBeTruthy();
     cleanup();
@@ -412,7 +412,7 @@ describe("StepTranscriptTail", () => {
     );
     expect(
       await screen.findByText(
-        "This step's session is now running Fix. Open session to read the whole conversation.",
+        "This step's session is now running Address Findings. Open session to read the whole conversation.",
       ),
     ).toBeTruthy();
   });
@@ -598,7 +598,7 @@ describe("deferred tail tool bodies", () => {
     fireEvent.click(await screen.findByRole("button", { name: /pwd/ }));
     await waitFor(() => expect(loadToolDetails).toHaveBeenCalledTimes(1));
     act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
-    await screen.findByText(/This step's session is now running Fix/);
+    await screen.findByText(/This step's session is now running Address Findings/);
     await act(async () => resolve({ detailRef, toolOutput: "Old session output" }));
     expect(screen.queryByText("Old session output") === null).toBe(true);
   });

@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { VERIFICATION_VERDICT_SCHEMA, type TaskSnapshot } from "../build-pipeline";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA, REVIEW_PR_RESULT_JSON_SCHEMA } from "../review-results";
+import {
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  REVIEW_PR_RESULT_JSON_SCHEMA,
+} from "../review-results";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-workflow";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "../structured-review";
 import { graphTemplateExamples } from "./examples";
@@ -110,13 +113,13 @@ describe("built-in type library", () => {
     );
     expect(builtIn("verification-verdict@1").schema).toEqual(VERIFICATION_VERDICT_SCHEMA);
     expect(builtIn("validation-plan@1").schema).toEqual(REVIEW_VALIDATION_PLAN_SCHEMA);
-    expect(builtIn("fix-result@1").schema).toEqual(REVIEW_FIX_RESULT_JSON_SCHEMA);
+    expect(builtIn("fix-result@1").schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
     expect(builtIn("pr-result@1").schema).toEqual(REVIEW_PR_RESULT_JSON_SCHEMA);
   });
 
   test("freezing the library does not freeze the shared schemas", () => {
     expect(Object.isFrozen(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA)).toBe(false);
-    expect(Object.isFrozen(REVIEW_FIX_RESULT_JSON_SCHEMA)).toBe(false);
+    expect(Object.isFrozen(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA)).toBe(false);
   });
 
   test("every validator id is used and every type names a known validator", () => {
@@ -281,7 +284,9 @@ describe("domain validators", () => {
     expect(graphBuiltInValidator("review-package-reference").backend?.existing).toContain(
       "verifyEnvironmentReviewPackage",
     );
-    expect(graphBuiltInValidator("fix-result").wraps).toBe("review-results.ts#parseFixResult");
+    expect(graphBuiltInValidator("fix-result").wraps).toBe(
+      "review-results.ts#parseAddressFindingsResult",
+    );
     expect(graphBuiltInValidator("workspace-commit").backend?.existing).toBeUndefined();
   });
 });

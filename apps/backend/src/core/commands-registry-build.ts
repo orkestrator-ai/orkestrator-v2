@@ -1,6 +1,7 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isBuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import {
@@ -26,10 +27,11 @@ export function registerBuildPipelineCommands(
   const { conditionalManifestSnapshot } = dependencies;
   register("start_build_pipeline", (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
-    if (!isStartBuildPipelineInput(args)) {
+    const input = canonicalBuildPipeline(args);
+    if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
     }
-    return context.buildPipelines.start(args as StartBuildPipelineInput);
+    return context.buildPipelines.start(input as StartBuildPipelineInput);
   });
   /**
    * Creates the ticket and the build for it in one backend-owned step, so a

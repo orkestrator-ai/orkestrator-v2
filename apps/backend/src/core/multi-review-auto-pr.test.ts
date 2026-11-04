@@ -1,4 +1,4 @@
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { queueAutoPr, supersedePendingAutoPr } from "./multi-review-auto-pr.js";
@@ -32,40 +32,45 @@ describe("queueAutoPr", () => {
     expect(launched.autoPrLaunch?.state).toBe("launched");
   });
 
-  test("binds a queued launch to the Fix attempt and retains it across later Fixes", () => {
+  test("binds a queued launch to Address Findings attempt and retains it across later Fixes", () => {
     const fix = {
       sessionKey: "fix-a",
       startedAt: "2026-10-16T10:10:00Z",
     } as MultiReviewWorkflow["fixSession"];
     const target = workflow({ autoPr: true, fixSession: fix });
     queueAutoPr(target);
-    expect(target.autoPrLaunch?.fixIdentity).toBe(multiReviewFixIdentity(fix));
+    expect(target.autoPrLaunch?.fixIdentity).toBe(multiReviewAddressFindingsIdentity(fix));
     expect(target.autoPrLaunch?.fixIdentity).toMatch(/^[0-9a-f]{64}$/);
     target.autoPrLaunch!.state = "launched";
     const original = { ...target.autoPrLaunch! };
-    for (const laterFix of [
+    for (const laterAddressFindings of [
       { ...fix!, sessionKey: "fix-b" },
       { ...fix!, startedAt: "2026-10-16T11:10:00Z" },
     ]) {
-      target.fixSession = laterFix;
-      expect(multiReviewFixIdentity(laterFix)).not.toBe(original.fixIdentity);
+      target.fixSession = laterAddressFindings;
+      expect(multiReviewAddressFindingsIdentity(laterAddressFindings)).not.toBe(
+        original.fixIdentity,
+      );
       supersedePendingAutoPr(target);
       queueAutoPr(target);
       expect(target.autoPrLaunch).toEqual(original);
     }
   });
 
-  test.each(["skipped", "failed"] as const)("re-queues a %s launch after a later Fix", (state) => {
-    const target = workflow({
-      autoPr: true,
-      autoPrLaunch: { state, requestId: "multi-review-pr:workflow-1", message: "earlier" },
-    });
-    queueAutoPr(target);
-    expect(target.autoPrLaunch).toEqual({
-      state: "pending",
-      requestId: "multi-review-pr:workflow-1",
-    });
-  });
+  test.each(["skipped", "failed"] as const)(
+    "re-queues a %s launch after a later Address Findings",
+    (state) => {
+      const target = workflow({
+        autoPr: true,
+        autoPrLaunch: { state, requestId: "multi-review-pr:workflow-1", message: "earlier" },
+      });
+      queueAutoPr(target);
+      expect(target.autoPrLaunch).toEqual({
+        state: "pending",
+        requestId: "multi-review-pr:workflow-1",
+      });
+    },
+  );
 });
 
 describe("supersedePendingAutoPr", () => {

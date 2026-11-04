@@ -537,11 +537,11 @@ describe("workflows on a node", () => {
         input: {
           projectId: scope.projectId,
           taskId,
-          taskTitle: "Fix",
+          taskTitle: "Address Findings",
           environmentType: "local",
           agentType: "codex",
           taskSnapshot: {
-            title: "Fix",
+            title: "Address Findings",
             description: "",
             acceptanceCriteria: "",
             comments: [],
@@ -576,7 +576,7 @@ describe("workflows on a node", () => {
       scope,
       requestId: "build-lost",
       nodeId: "bk_leaf",
-      input: { ...launchInput(scope.projectId), taskId: "t1", taskTitle: "Fix" },
+      input: { ...launchInput(scope.projectId), taskId: "t1", taskTitle: "Address Findings" },
     };
     loseNext("start_controller_build_pipeline");
     await expect(run("start_coordinator_node_build_pipeline", args)).rejects.toMatchObject({
@@ -603,7 +603,7 @@ describe("workflows on a node", () => {
       input: {
         projectId: scope.projectId,
         taskId: "t1",
-        taskTitle: "Fix",
+        taskTitle: "Address Findings",
         delegationBaseBranch: "main",
         delegationBaseCommit: BASE,
       },

@@ -325,11 +325,16 @@ export function eventClients(gateway: OrkestratorGateway): Map<ServerResponse, u
   return (gateway as unknown as { clients: Map<ServerResponse, unknown> }).clients;
 }
 
+/** What every registered client offers, whether a writer or a raw response. */
+type EventStreamResponse = Pick<EventClientWriter, "writableLength" | "destroy"> & {
+  write(chunk: string): boolean;
+};
+
 export type GatewayEventStream = {
   /** Everything this browser-side client has received so far. */
   received: () => string;
   /** The gateway-side response the real request path registered. */
-  response: EventClientWriter;
+  response: EventStreamResponse;
   /** True once the gateway hung up on this client. */
   aborted: () => boolean;
   close: () => void;
@@ -459,13 +464,13 @@ export async function openCompressedEventStream(
  * response into the state the limits exist for.
  */
 export function pinBufferedBytes(
-  response: ServerResponse | EventClientWriter,
+  response: ServerResponse | EventStreamResponse,
   bytes: number,
 ): void {
   Object.defineProperty(response, "writableLength", { value: bytes, configurable: true });
 }
 
-export function releaseBufferedBytes(response: ServerResponse | EventClientWriter): void {
+export function releaseBufferedBytes(response: ServerResponse | EventStreamResponse): void {
   Reflect.deleteProperty(response, "writableLength");
 }
 

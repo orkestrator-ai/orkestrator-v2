@@ -751,7 +751,7 @@ function MultiReviewAutoFixFixture() {
       <MultiReviewLaunchDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        defaultAutoFix={saved.multiReview?.autoFix}
+        defaultAutoAddressFindings={saved.multiReview?.autoFix}
         defaultAutoPr={saved.multiReview?.autoPr}
         defaultAgent="claude"
         catalog={reviewModelCatalog}
@@ -765,7 +765,7 @@ function MultiReviewAutoFixFixture() {
           Complete consolidation
         </button>
       )}
-      {consolidated && selection?.autoFix && <div role="tab">Fix</div>}
+      {consolidated && selection?.autoFix && <div role="tab">Address Findings</div>}
       {consolidated && selection?.autoFix && (
         <button type="button" onClick={() => setFixed(true)}>
           Complete fix

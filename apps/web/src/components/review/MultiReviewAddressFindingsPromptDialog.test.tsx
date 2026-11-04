@@ -4,9 +4,9 @@ import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-revi
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
 import {
-  DEFAULT_MULTI_REVIEW_FIX_PROMPT,
-  MultiReviewFixPromptDialog,
-} from "./MultiReviewFixPromptDialog";
+  DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
+  MultiReviewAddressFindingsPromptDialog,
+} from "./MultiReviewAddressFindingsPromptDialog";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high", "xhigh"] }],
@@ -55,7 +55,9 @@ function setFavoritesEmpty() {
   });
 }
 
-function renderDialog(overrides: Partial<Parameters<typeof MultiReviewFixPromptDialog>[0]> = {}) {
+function renderDialog(
+  overrides: Partial<Parameters<typeof MultiReviewAddressFindingsPromptDialog>[0]> = {},
+) {
   const onSubmit = mock((_selection: MultiReviewModelSelection, _prompt: string) => undefined);
   const props = {
     open: true,
@@ -69,13 +71,13 @@ function renderDialog(overrides: Partial<Parameters<typeof MultiReviewFixPromptD
     onSubmit,
     ...overrides,
   };
-  return { onSubmit, props, view: render(<MultiReviewFixPromptDialog {...props} />) };
+  return { onSubmit, props, view: render(<MultiReviewAddressFindingsPromptDialog {...props} />) };
 }
 
 afterEach(cleanup);
 beforeEach(setFavoritesEmpty);
 
-describe("MultiReviewFixPromptDialog", () => {
+describe("MultiReviewAddressFindingsPromptDialog", () => {
   test("switching to Pi selects its later session-default row", () => {
     const { onSubmit } = renderDialog({
       catalog: {
@@ -91,12 +93,12 @@ describe("MultiReviewFixPromptDialog", () => {
         ],
       },
     });
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "pi models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(picker.textContent).toContain("Saved Pi default");
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
       agent: "pi",
       model: "openai/gpt-6.1-sol",
@@ -107,7 +109,7 @@ describe("MultiReviewFixPromptDialog", () => {
   test("renders OpenCode provider captions from the shared flattened catalog", () => {
     renderDialog({ defaultSelection: { agent: "opencode", model: "provider/model" } });
 
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom fix model" }));
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom Address Findings model" }));
     const row = within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", {
       name: /OpenCode/,
     });
@@ -124,13 +126,13 @@ describe("MultiReviewFixPromptDialog", () => {
       },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
 
-    // A custom fix has no speed control of its own, so it has to run at the
-    // speed the workflow's Fix step was configured with.
+    // A custom Address Findings has no speed control of its own, so it has to run at the
+    // speed the workflow's Address Findings step was configured with.
     expect(onSubmit).toHaveBeenCalledWith(
       { agent: "codex", model: "gpt-5.6", reasoningEffort: "high", fastMode: true },
-      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+      DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
     );
   });
 
@@ -143,7 +145,7 @@ describe("MultiReviewFixPromptDialog", () => {
         fastMode: true,
       },
     });
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
 
     fireEvent.pointerDown(picker);
     fireEvent.click(
@@ -152,7 +154,7 @@ describe("MultiReviewFixPromptDialog", () => {
       }),
     );
     fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "codex",
       model: "gpt-5.4",
@@ -164,13 +166,13 @@ describe("MultiReviewFixPromptDialog", () => {
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit.mock.calls.at(-1)?.[0].fastMode).toBeUndefined();
   });
 
   test("submits a cross-provider model and manually selected effort", () => {
     const { onSubmit } = renderDialog();
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
 
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
@@ -180,17 +182,17 @@ describe("MultiReviewFixPromptDialog", () => {
     const reasoning = within(screen.getByRole("group", { name: "Reasoning" }));
     fireEvent.click(reasoning.getByRole("menuitemradio", { name: "Extra high" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
       { agent: "claude", model: "opus", reasoningEffort: "xhigh" },
-      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+      DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
     );
   });
 
   test("submits the Fast choice and keeps it across a reasoning change", () => {
     const { onSubmit } = renderDialog({ catalog: speedCatalog });
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
 
     fireEvent.pointerDown(picker);
     const speed = within(screen.getByRole("group", { name: "Speed mode" }));
@@ -201,11 +203,11 @@ describe("MultiReviewFixPromptDialog", () => {
     const reasoning = within(screen.getByRole("group", { name: "Reasoning" }));
     fireEvent.click(reasoning.getByRole("menuitemradio", { name: "Low" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
 
     expect(onSubmit).toHaveBeenCalledWith(
       { agent: "codex", model: "gpt-5.6", reasoningEffort: "low", fastMode: true },
-      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+      DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
     );
   });
 
@@ -220,7 +222,7 @@ describe("MultiReviewFixPromptDialog", () => {
       },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ fastMode: true });
   });
 
@@ -230,11 +232,11 @@ describe("MultiReviewFixPromptDialog", () => {
       defaultSelection: { agent: "codex", model: "gpt-5.4", fastMode: true },
     });
 
-    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom fix model" }));
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Custom Address Findings model" }));
     expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit.mock.calls[0]?.[0]).not.toHaveProperty("fastMode");
   });
 
@@ -242,7 +244,7 @@ describe("MultiReviewFixPromptDialog", () => {
     const { onSubmit } = renderDialog({
       defaultSelection: { agent: "codex", model: "retired-model", reasoningEffort: "high" },
     });
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
 
     expect(picker.textContent).toContain("GPT-5.6");
     expect(picker.textContent).toContain("high");
@@ -254,10 +256,10 @@ describe("MultiReviewFixPromptDialog", () => {
     ).toBeTruthy();
     fireEvent.keyDown(document.body, { key: "Escape" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
     expect(onSubmit).toHaveBeenCalledWith(
       { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
-      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+      DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
     );
   });
 
@@ -266,28 +268,30 @@ describe("MultiReviewFixPromptDialog", () => {
     const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
     fireEvent.change(prompt, { target: { value: "Only fix the regression" } });
 
-    const picker = screen.getByRole("combobox", { name: "Custom fix model" });
+    const picker = screen.getByRole("combobox", { name: "Custom Address Findings model" });
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "claude models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(picker.textContent).toContain("Opus");
 
-    view.rerender(<MultiReviewFixPromptDialog {...props} open={false} />);
-    view.rerender(<MultiReviewFixPromptDialog {...props} open />);
+    view.rerender(<MultiReviewAddressFindingsPromptDialog {...props} open={false} />);
+    view.rerender(<MultiReviewAddressFindingsPromptDialog {...props} open />);
 
     expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe(
-      DEFAULT_MULTI_REVIEW_FIX_PROMPT,
+      DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
     );
-    expect(screen.getByRole("combobox", { name: "Custom fix model" }).textContent).toContain(
-      "GPT-5.6",
-    );
+    expect(
+      screen.getByRole("combobox", { name: "Custom Address Findings model" }).textContent,
+    ).toContain("GPT-5.6");
   });
 
   test("does not submit a blank prompt", () => {
     const { onSubmit } = renderDialog();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "   " } });
 
-    const start = screen.getByRole("button", { name: "Start fix" }) as HTMLButtonElement;
+    const start = screen.getByRole("button", {
+      name: "Start Address Findings",
+    }) as HTMLButtonElement;
     expect(start.disabled).toBe(true);
     fireEvent.submit(start.closest("form")!);
     expect(onSubmit).not.toHaveBeenCalled();

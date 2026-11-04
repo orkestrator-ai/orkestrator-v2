@@ -4,7 +4,7 @@ import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
-  MULTI_REVIEW_FIX_TAB_TITLE,
+  MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   type MultiReviewModelSelection,
   type MultiReviewStepKind,
   type MultiReviewStepTranscript,
@@ -38,11 +38,11 @@ import * as pipelineReviewTab from "@/components/build-pipeline/PipelineReviewTa
 import {
   autoPrLaunchNotice,
   consolidationStep,
-  fixSessionRuntimeStep,
-  fixSessionRuntimeSummary,
+  addressFindingsSessionRuntimeStep,
+  addressFindingsSessionRuntimeSummary,
   multiReviewStepRuntimeSummary,
-  fixStep,
-  multiReviewFixSessionTabOptions,
+  addressFindingsStep,
+  multiReviewAddressFindingsSessionTabOptions,
   multiReviewReviewSessionTabOptions,
   pullRequestDetail,
   pullRequestStep,
@@ -56,7 +56,7 @@ import {
 /**
  * A node of the flow graph. Nodes are tabs controlling the inspector, named
  * `{title}, {status}…`: "Review package", "Reviewer 1 ·", "Consolidation" and
- * "Fix," pick the four kinds.
+ * "Address Findings," pick the four kinds.
  */
 function flowNode(prefix: string): HTMLElement {
   const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -84,7 +84,7 @@ function showInspectorTab(name: "Transcript" | "Report"): void {
 const STEP_OPEN_LABEL = {
   "Review package": "Open review package generation session",
   Consolidation: "Open consolidation session",
-  "Fix,": "Open fix model session",
+  "Address Findings,": "Open Address Findings model session",
 } as const;
 
 /** Selects a step node and returns the inspector's Open session button for it. */
@@ -406,7 +406,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         prState: "merged",
       }),
     ).toMatchObject({ state: "complete", label: "Pull request merged" });
-    // A pull request opened by hand counts once the Fix is done, not before.
+    // A pull request opened by hand counts once Address Findings is done, not before.
     const manual = { ...base, autoPr: false, prUrl: "https://github.com/o/r/pull/42" };
     expect(pullRequestStep(manual).state).toBe("not-started");
     expect(pullRequestStep({ ...manual, upstreamComplete: true }).state).toBe("complete");
@@ -501,7 +501,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     }
   });
 
-  test("reports each auto-PR launch state after the Fix completes", () => {
+  test("reports each auto-PR launch state after Address Findings completes", () => {
     const requestId = "multi-review-pr:multi-1";
     expect(autoPrLaunchNotice({ state: "pending", requestId })).toMatchObject({ tone: "muted" });
     expect(
@@ -518,7 +518,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       autoPrLaunchNotice({
         state: "skipped",
         requestId,
-        message: "Review the interactive Fix, then use the PR button to create a pull request.",
+        message:
+          "Review the interactive Address Findings, then use the PR button to create a pull request.",
       }).text,
     ).toContain("use the PR button");
     expect(
@@ -551,8 +552,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
     expect(
-      screen.queryByText("The fix request was delivered. The fix session is ready to open.") ===
-        null,
+      screen.queryByText(
+        "The Address Findings request was delivered. The Address Findings session is ready to open.",
+      ) === null,
     ).toBe(true);
     selectFlowNode("Pull request,");
     expect(inspector().getByText(/The fix completed, so a PR tab was launched/)).toBeTruthy();
@@ -619,9 +621,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         expect(flowNode("Pull request,").getAttribute("aria-selected")).toBe("false");
         const edge = document.querySelector('[data-flow-edge="into-pr"]')!;
         expect(edge.getAttribute("data-edge-state")).toBe("pending");
-        const fixRect = document.querySelector<HTMLElement>('[data-flow-node="fix"]')!;
+        const addressFindingsRect = document.querySelector<HTMLElement>('[data-flow-node="fix"]')!;
         expect(edge.getAttribute("d")).toStartWith(
-          `M${parseFloat(fixRect.style.left) + parseFloat(fixRect.style.width)} `,
+          `M${parseFloat(addressFindingsRect.style.left) + parseFloat(addressFindingsRect.style.width)} `,
         );
         selectFlowNode("Pull request,");
         expect(inspector().queryByText(/The review found nothing to fix/) === null).toBe(true);
@@ -1752,15 +1754,21 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(consolidated.textContent).toContain("The failure branch");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Fix",
+        name: "Address Findings",
       }),
     );
 
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
-    expect(await screen.findByText("The fix model is working interactively")).toBeTruthy();
-    expect(await screen.findByText(/fix request was recorded and is being delivered/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Open fix session" }) === null).toBe(true);
-    expect(screen.queryByRole("button", { name: "Fix" }) === null).toBe(true);
+    expect(
+      await screen.findByText("The Address Findings model is working interactively"),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(/Address Findings request was recorded and is being delivered/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Address Findings session" }) === null).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Address Findings" }) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
 
     const retrying: MultiReviewWorkflow = {
@@ -1837,7 +1845,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         <MultiReviewTab {...props} isActive />
       </TerminalProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
 
     view.rerender(
@@ -1848,8 +1856,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
     act(() => useMultiReviewStore.getState().replaceWorkflow(delivered));
 
-    expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
+    expect(
+      await screen.findByRole("button", { name: "Open Address Findings session" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Address Findings session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
 
     view.rerender(
@@ -1858,16 +1868,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         <MultiReviewTab {...props} isActive />
       </TerminalProvider>,
     );
-    expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Open Address Findings session" })).toBeTruthy();
+    expect(screen.queryByText(/Address Findings session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("opens a custom fix dialog with the selected fix model and default prompt", async () => {
+  test("opens a custom Address Findings dialog with the selected Address Findings model and default prompt", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
-    const customFix = mock(
+    const customAddressFindings = mock(
       async (
         _workflowId: string,
         fixModel: MultiReviewWorkflow["fixModel"],
@@ -1892,7 +1902,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           hydrateWorkflow={mock(async () => ready)}
           commands={{
             address: mock(async () => ready),
-            customFix,
+            customAddressFindings,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
             stopReviewer: mock(async () => ready),
@@ -1901,19 +1911,21 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
-    expect(await screen.findByRole("heading", { name: "Custom fix prompt" })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "Custom fix model" }).textContent).toContain(
-      "gpt-5.4",
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Custom Address Findings prompt" }));
+    expect(
+      await screen.findByRole("heading", { name: "Custom Address Findings prompt" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Custom Address Findings model" }).textContent,
+    ).toContain("gpt-5.4");
     const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
     expect(prompt.value).toBe("Please address all the issues and coverage gaps");
 
     fireEvent.change(prompt, { target: { value: "Fix the reported regression" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Address Findings" }));
 
     await waitFor(() =>
-      expect(customFix).toHaveBeenCalledWith(
+      expect(customAddressFindings).toHaveBeenCalledWith(
         ready.id,
         { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
         "Fix the reported regression",
@@ -1926,14 +1938,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       phase: "interactive",
       addressPromptPending: true,
     });
-    expect(screen.queryByRole("heading", { name: "Custom fix prompt" }) === null).toBe(true);
+    expect(screen.queryByRole("heading", { name: "Custom Address Findings prompt" }) === null).toBe(
+      true,
+    );
   });
 
-  test("keeps custom fix launch failures visible inside the dialog", async () => {
+  test("keeps custom Address Findings launch failures visible inside the dialog", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => false);
-    const customFix = mock(async () => {
+    const customAddressFindings = mock(async () => {
       throw new Error("The environment is not ready or the maximum tab count was reached.");
     });
 
@@ -1946,7 +1960,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           hydrateWorkflow={mock(async () => ready)}
           commands={{
             address: mock(async () => ready),
-            customFix,
+            customAddressFindings,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
             stopReviewer: mock(async () => ready),
@@ -1955,25 +1969,25 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Custom Address Findings prompt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start Address Findings" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "The environment is not ready or the maximum tab count was reached.",
     );
-    expect(screen.getByRole("heading", { name: "Custom fix prompt" })).toBeTruthy();
-    expect(customFix).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "Custom Address Findings prompt" })).toBeTruthy();
+    expect(customAddressFindings).toHaveBeenCalledTimes(1);
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("disables custom fix submission while the backend command is pending", async () => {
+  test("disables custom Address Findings submission while the backend command is pending", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
-    let resolveCustomFix!: (workflow: MultiReviewWorkflow) => void;
-    const customFix = mock(
+    let resolveCustomAddressFindings!: (workflow: MultiReviewWorkflow) => void;
+    const customAddressFindings = mock(
       () =>
         new Promise<MultiReviewWorkflow>((resolve) => {
-          resolveCustomFix = resolve;
+          resolveCustomAddressFindings = resolve;
         }),
     );
 
@@ -1984,7 +1998,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         hydrateWorkflow={mock(async () => ready)}
         commands={{
           address: mock(async () => ready),
-          customFix,
+          customAddressFindings,
           retry: mock(async () => ready),
           cancel: mock(async () => ready),
           stopReviewer: mock(async () => ready),
@@ -1992,15 +2006,15 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Custom Address Findings prompt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start Address Findings" }));
     const starting = await screen.findByRole("button", { name: "Starting…" });
     expect(starting.hasAttribute("disabled")).toBe(true);
     fireEvent.click(starting);
-    expect(customFix).toHaveBeenCalledTimes(1);
+    expect(customAddressFindings).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolveCustomFix({
+      resolveCustomAddressFindings({
         ...ready,
         phase: "interactive",
         addressPromptPending: true,
@@ -2010,7 +2024,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       });
     });
     await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Custom fix prompt" }) === null).toBe(true),
+      expect(
+        screen.queryByRole("heading", { name: "Custom Address Findings prompt" }) === null,
+      ).toBe(true),
     );
   });
 
@@ -2020,7 +2036,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ...ready,
       phase: "interactive",
       presentationError:
-        "The fix request was delivered, but its tab could not be opened. Close another tab if needed, then use Open fix session.",
+        "The Address Findings request was delivered, but its tab could not be opened. Close another tab if needed, then use Open Address Findings session.",
       backendRevision: 8,
     };
     useMultiReviewStore.getState().replaceWorkflow(interactive);
@@ -2034,10 +2050,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     expect(await screen.findByText(/tab could not be opened/i)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Address Findings session" })).toBeTruthy();
   });
 
-  test("leaves a custom fix command running when the review tab unmounts", async () => {
+  test("leaves a custom Address Findings command running when the review tab unmounts", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const pending: MultiReviewWorkflow = {
@@ -2050,7 +2066,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       backendRevision: 8,
     };
     let finish!: () => void;
-    const customFix = mock(
+    const customAddressFindings = mock(
       () =>
         new Promise<MultiReviewWorkflow>((resolve) => {
           finish = () => resolve(pending);
@@ -2066,7 +2082,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           hydrateWorkflow={mock(async () => ready)}
           commands={{
             address: mock(async () => ready),
-            customFix,
+            customAddressFindings,
             retry: mock(async () => ready),
             cancel: mock(async () => ready),
             stopReviewer: mock(async () => ready),
@@ -2075,9 +2091,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start fix" }));
-    await waitFor(() => expect(customFix).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Custom Address Findings prompt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start Address Findings" }));
+    await waitFor(() => expect(customAddressFindings).toHaveBeenCalledTimes(1));
     view.unmount();
     await act(async () => {
       finish();
@@ -2088,7 +2104,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
   });
 
-  test("does not open a fix tab when the backend refuses the handoff", async () => {
+  test("does not open an Address Findings tab when the backend refuses the handoff", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const address = mock(async () => {
@@ -2113,7 +2129,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
     expect(await screen.findByText(/consolidation session is no longer available/)).toBeTruthy();
     // Nothing may reach the provider session when the handoff was refused.
     expect(createTab).not.toHaveBeenCalled();
@@ -2149,8 +2165,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
-    expect(await screen.findByText(/fix request was recorded and is being delivered/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
+    expect(
+      await screen.findByText(/Address Findings request was recorded and is being delivered/),
+    ).toBeTruthy();
     const { fixSession: _missing, ...withoutSession } = pending;
     act(() =>
       useMultiReviewStore.getState().replaceWorkflow({
@@ -2168,7 +2186,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("surfaces an acknowledged interactive handoff with no fix session", async () => {
+  test("surfaces an acknowledged interactive handoff with no Address Findings session", async () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const { fixSession: _missing, ...withoutSession } = ready;
@@ -2197,7 +2215,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
     expect(
       await screen.findByText("The consolidation session is no longer available"),
     ).toBeTruthy();
@@ -2240,26 +2258,32 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
-    expect(await screen.findByText(/fix request was recorded and is being delivered/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
+    expect(
+      await screen.findByText(/Address Findings request was recorded and is being delivered/),
+    ).toBeTruthy();
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
     expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
     expect(createTab).not.toHaveBeenCalled();
 
     act(() => useMultiReviewStore.getState().replaceWorkflow(interactive));
     expect(
-      await screen.findByText(/fix request was delivered, but its tab could not be opened/i),
+      await screen.findByText(
+        /Address Findings request was delivered, but its tab could not be opened/i,
+      ),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix request was recorded and is being delivered/) === null).toBe(
-      true,
-    );
+    expect(screen.getByRole("button", { name: "Open Address Findings session" })).toBeTruthy();
+    expect(
+      screen.queryByText(/Address Findings request was recorded and is being delivered/) === null,
+    ).toBe(true);
     expect(createTab).toHaveBeenCalledTimes(1);
     expect(address).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
-    expect(await screen.findByText(/fix session tab could not be opened/i)).toBeTruthy();
-    expect(screen.queryByText(/then use Open fix session/i) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Open Address Findings session" }));
+    expect(
+      await screen.findByText(/Address Findings session tab could not be opened/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/then use Open Address Findings session/i) === null).toBe(true);
     expect(createTab).toHaveBeenCalledTimes(2);
     firstView.unmount();
   });
@@ -2299,7 +2323,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Address Findings" }));
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
     view.unmount();
     await act(async () => acknowledge(pending));
@@ -2321,8 +2345,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         />
       </TerminalProvider>,
     );
-    expect(await screen.findByRole("button", { name: "Open fix session" })).toBeTruthy();
-    expect(screen.queryByText(/fix session is ready to open/i) === null).toBe(true);
+    expect(
+      await screen.findByRole("button", { name: "Open Address Findings session" }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Address Findings session is ready to open/i) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
   });
 
@@ -2374,14 +2400,18 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    expect(await screen.findByText(/fix request was recorded and is being delivered/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Open fix session" }) === null).toBe(true);
+    expect(
+      await screen.findByText(/Address Findings request was recorded and is being delivered/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Address Findings session" }) === null).toBe(
+      true,
+    );
     expect(address).not.toHaveBeenCalled();
     expect(createTab).not.toHaveBeenCalled();
     expect(useMultiReviewStore.getState().workflows.get(ready.id)?.addressPromptPending).toBe(true);
   });
 
-  test("reopens an interactive fix session without sending the address prompt again", async () => {
+  test("reopens an interactive Address Findings session without sending the address prompt again", async () => {
     const ready = readyWorkflow();
     const interactive = { ...ready, phase: "interactive" as const, backendRevision: 8 };
     useMultiReviewStore.getState().replaceWorkflow(interactive);
@@ -2398,7 +2428,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Address Findings session" }));
     await waitFor(() =>
       expect(createTab).toHaveBeenCalledWith(
         "codex",
@@ -2437,11 +2467,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const button = screen.getByRole("button", { name: "Fix" });
+    const button = screen.getByRole("button", { name: "Address Findings" });
     expect(button.hasAttribute("disabled")).toBe(false);
     fireEvent.click(button);
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
-    expect(await screen.findByText(/fix request was recorded and is being delivered/)).toBeTruthy();
+    expect(
+      await screen.findByText(/Address Findings request was recorded and is being delivered/),
+    ).toBeTruthy();
 
     act(() =>
       useMultiReviewStore.getState().replaceWorkflow({
@@ -2455,31 +2487,33 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
   test("resumes the consolidation session but allows a missing session to be recovered", () => {
     const ready = readyWorkflow();
-    expect(multiReviewFixSessionTabOptions(ready)).toEqual({
+    expect(multiReviewAddressFindingsSessionTabOptions(ready)).toEqual({
       tabId: "multi-review-fix:multi-1",
       activateExistingTab: true,
       agentLaunchMode: "native",
       resumeSessionId: "provider-fix",
-      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
+      displayTitle: MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
       isReviewTab: true,
       hideStructuredOutput: true,
       initialAgentModel: "gpt-5.6",
       initialReasoningEffort: "high",
       initialConversationMode: "build",
     });
-    expect(multiReviewFixSessionTabOptions(ready)).not.toHaveProperty("initialPrompt");
-    expect(multiReviewFixSessionTabOptions(ready)).not.toHaveProperty(
+    expect(multiReviewAddressFindingsSessionTabOptions(ready)).not.toHaveProperty("initialPrompt");
+    expect(multiReviewAddressFindingsSessionTabOptions(ready)).not.toHaveProperty(
       "requireExistingResumeSession",
     );
-    const defaultModel = multiReviewFixSessionTabOptions({
+    const defaultModel = multiReviewAddressFindingsSessionTabOptions({
       ...ready,
       fixModel: { agent: "codex", model: "default" },
     });
     expect(defaultModel?.initialAgentModel).toBeUndefined();
     expect(defaultModel?.initialReasoningEffort).toBeUndefined();
     expect(
-      multiReviewFixSessionTabOptions({ ...ready, fixTabId: "multi-review-fix:multi-1:launch-1" })
-        ?.tabId,
+      multiReviewAddressFindingsSessionTabOptions({
+        ...ready,
+        fixTabId: "multi-review-fix:multi-1:launch-1",
+      })?.tabId,
     ).toBe("multi-review-fix:multi-1:launch-1");
   });
 
@@ -2684,7 +2718,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     for (const [nodeName, kind] of [
       ["Review package", "prepare"],
       ["Consolidation", "consolidate"],
-      ["Fix,", "fix"],
+      ["Address Findings,", "fix"],
     ] as const) {
       fireEvent.contextMenu(flowNode(nodeName));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
@@ -2744,8 +2778,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     },
     {
       kind: "fix" as const,
-      node: "Fix,",
-      heading: "Restart Fix",
+      node: "Address Findings,",
+      heading: "Restart Address Findings",
       selection: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
     },
   ])("submits the $kind step's own Restart in selection", async (fixture) => {
@@ -2895,7 +2929,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBeTruthy();
   });
 
-  test("does not offer Pause for an interactive Fix session", async () => {
+  test("does not offer Pause for an interactive Address Findings session", async () => {
     const workflow = readyWorkflow();
     workflow.phase = "interactive";
     workflow.fixSession = { ...workflow.fixSession!, status: "running" };
@@ -2918,7 +2952,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(flowNode("Fix,"));
+    fireEvent.contextMenu(flowNode("Address Findings,"));
     expect(await screen.findByRole("menuitem", { name: "Restart" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Pause" }) === null).toBe(true);
     expect(screen.queryByRole("menuitem", { name: "Resume" }) === null).toBe(true);
@@ -3201,7 +3235,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ).toBe("Review · 0/2");
   });
 
-  test("surfaces a stalled consolidation or fix session with recovery guidance", () => {
+  test("surfaces a stalled consolidation or Address Findings session with recovery guidance", () => {
     const ready = readyWorkflow();
     for (const phase of ["consolidating", "fixing"] as const) {
       const stalled: MultiReviewWorkflow = {
@@ -3235,7 +3269,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       expect(screen.getByRole("status").textContent).toContain(
         phase === "consolidating"
           ? "Review preparation model appears stalled"
-          : "Fix model appears stalled",
+          : "Address Findings model appears stalled",
       );
       expect(screen.getByRole("status").textContent).toContain("Cancel now");
       expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
@@ -3531,7 +3565,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  test("opens preparation and consolidation separately from the fix tab", () => {
+  test("opens preparation and consolidation separately from the Address Findings tab", () => {
     const legacy = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...legacy,
@@ -3573,10 +3607,10 @@ describe("MultiReviewTab pipeline step cards", () => {
 
     activateReviewTile(stepOpenButton("Review package"));
     activateReviewTile(stepOpenButton("Consolidation"));
-    fireEvent.click(stepOpenButton("Fix,"));
+    fireEvent.click(stepOpenButton("Address Findings,"));
 
     // Both coordinator cards resolve to the same dedicated tab identity, while
-    // Fix uses another tab backed by its own provider session.
+    // Address Findings uses another tab backed by its own provider session.
     expect(createTab).toHaveBeenCalledTimes(3);
     expect(createTab.mock.calls[0]?.[0]).toBe("claude");
     expect(createTab.mock.calls[0]?.[1]).toMatchObject({
@@ -3593,7 +3627,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(createTab.mock.calls[2]?.[0]).toBe("codex");
     expect(createTab.mock.calls[2]?.[1]).toMatchObject({
       tabId: "multi-review-fix:multi-1",
-      displayTitle: "Fix",
+      displayTitle: "Address Findings",
       resumeSessionId: "provider-fix",
     });
   });
@@ -3661,7 +3695,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       initialConversationMode: "plan",
       hideStructuredOutput: true,
     });
-    expect(multiReviewFixSessionTabOptions(legacy)).toMatchObject({
+    expect(multiReviewAddressFindingsSessionTabOptions(legacy)).toMatchObject({
       tabId: "multi-review-fix:multi-1",
       resumeSessionId: "provider-fix",
       initialAgentModel: "gpt-5.6",
@@ -3869,7 +3903,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       label: "Waiting for review package",
       state: "not-started",
     });
-    expect(fixStep(paused)).toEqual({
+    expect(addressFindingsStep(paused)).toEqual({
       label: "Waiting for review package",
       state: "not-started",
     });
@@ -3907,36 +3941,36 @@ describe("MultiReviewTab pipeline step cards", () => {
     ).toEqual({ label: "Not started", state: "not-started" });
   });
 
-  test("tracks the fix turn separately from the steps that feed it", () => {
+  test("tracks the Address Findings turn separately from the steps that feed it", () => {
     const ready = readyWorkflow();
-    expect(fixStep(ready)).toEqual({ label: "Ready to start", state: "not-started" });
-    expect(fixStep({ ...ready, phase: "reviewing" })).toEqual({
+    expect(addressFindingsStep(ready)).toEqual({ label: "Ready to start", state: "not-started" });
+    expect(addressFindingsStep({ ...ready, phase: "reviewing" })).toEqual({
       label: "Not started",
       state: "not-started",
     });
-    expect(fixStep({ ...ready, phase: "fixing" })).toEqual({
+    expect(addressFindingsStep({ ...ready, phase: "fixing" })).toEqual({
       label: "Addressing findings",
       state: "running",
     });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "interactive",
         fixSession: { ...ready.fixSession!, status: "running" },
       }),
     ).toEqual({
-      label: "Interactive fix session",
+      label: "Interactive session",
       state: "running",
     });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "interactive",
         fixSession: { ...ready.fixSession!, status: "idle" },
       }),
-    ).toEqual({ label: "Interactive fix session", state: "running" });
+    ).toEqual({ label: "Interactive session", state: "running" });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "interactive",
         fixSession: { ...ready.fixSession!, status: "idle" },
@@ -3949,26 +3983,26 @@ describe("MultiReviewTab pipeline step cards", () => {
       }),
     ).toEqual({ label: "Complete", state: "complete" });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "interactive",
         fixSession: { ...ready.fixSession!, status: "failed" },
       }),
     ).toEqual({ label: "Failed", state: "failed" });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "interactive",
         addressPromptPending: true,
         fixSession: { ...ready.fixSession!, status: "idle" },
       }),
-    ).toEqual({ label: "Starting fix session", state: "running" });
-    expect(fixStep({ ...ready, phase: "completed" })).toEqual({
+    ).toEqual({ label: "Starting session", state: "running" });
+    expect(addressFindingsStep({ ...ready, phase: "completed" })).toEqual({
       label: "Complete",
       state: "complete",
     });
     expect(
-      fixStep({
+      addressFindingsStep({
         ...ready,
         phase: "failed",
         fixResult: {
@@ -3981,12 +4015,12 @@ describe("MultiReviewTab pipeline step cards", () => {
         },
       }),
     ).toEqual({ label: "Failed", state: "failed" });
-    // The workflow failed before the fix request was ever dispatched.
-    expect(fixStep({ ...ready, phase: "failed" })).toEqual({
+    // The workflow failed before the Address Findings request was ever dispatched.
+    expect(addressFindingsStep({ ...ready, phase: "failed" })).toEqual({
       label: "Not started",
       state: "not-started",
     });
-    expect(fixStep({ ...ready, phase: "cancelled" })).toEqual({
+    expect(addressFindingsStep({ ...ready, phase: "cancelled" })).toEqual({
       label: "Cancelled",
       state: "cancelled",
     });
@@ -3994,24 +4028,30 @@ describe("MultiReviewTab pipeline step cards", () => {
 
   test("attributes the shared session clock to the step that is holding it", () => {
     const ready = readyWorkflow();
-    expect(fixSessionRuntimeStep({ ...ready, phase: "preparing" })).toBe("package");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "preparing" })).toBe("package");
     // The reviewers run without this session, so it still holds preparation's
     // finished timings for the whole review stage.
-    expect(fixSessionRuntimeStep({ ...ready, phase: "reviewing" })).toBe("package");
-    expect(fixSessionRuntimeStep({ ...ready, phase: "consolidating" })).toBe("consolidation");
-    expect(fixSessionRuntimeStep(ready)).toBe("consolidation");
-    expect(fixSessionRuntimeStep({ ...ready, phase: "fixing" })).toBe("fix");
-    expect(fixSessionRuntimeStep({ ...ready, phase: "completed" })).toBe("fix");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "reviewing" })).toBe("package");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "consolidating" })).toBe(
+      "consolidation",
+    );
+    expect(addressFindingsSessionRuntimeStep(ready)).toBe("consolidation");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "fixing" })).toBe("fix");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "completed" })).toBe("fix");
     // Until the address turn is dispatched the session still carries
     // consolidation's timings, so no step may show them as its own.
     expect(
-      fixSessionRuntimeStep({ ...ready, phase: "interactive", addressPromptPending: true }),
+      addressFindingsSessionRuntimeStep({
+        ...ready,
+        phase: "interactive",
+        addressPromptPending: true,
+      }),
     ).toBeNull();
-    expect(fixSessionRuntimeStep({ ...ready, phase: "interactive" })).toBe("fix");
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "interactive" })).toBe("fix");
     // Cancelling clears the active request, so nothing can claim the clock.
-    expect(fixSessionRuntimeStep({ ...ready, phase: "cancelled" })).toBeNull();
+    expect(addressFindingsSessionRuntimeStep({ ...ready, phase: "cancelled" })).toBeNull();
     expect(
-      fixSessionRuntimeStep({
+      addressFindingsSessionRuntimeStep({
         ...ready,
         phase: "failed",
         activeRequest: {
@@ -4057,7 +4097,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       "Reviewer 1 · claude, Complete, 1 issue found, 1 coverage gap found",
       "Reviewer 2 · codex, Complete, 1 issue found, 1 coverage gap found",
       expect.stringMatching(/^Consolidation, Consolidating findings, \d+/),
-      "Fix, Not started",
+      "Address Findings, Not started",
       "Pull request, Automatic PR is off. Use the PR button to create one",
     ]);
     for (const label of ["Prepare", "Review · 2/2", "Consolidate", "PR"]) {
@@ -4068,7 +4108,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe(
       "Consolidating findings",
     );
-    expect(within(flowNode("Fix,")).getByText("not started")).toBeTruthy();
+    expect(within(flowNode("Address Findings,")).getByText("not started")).toBeTruthy();
   });
 
   test("keeps a failed preparation session openable so its transcript can be read", () => {
@@ -4147,7 +4187,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(screen.getByText("Package ready")).toBeTruthy();
   });
 
-  test("shows the fix turn as live while it addresses findings", () => {
+  test("shows the Address Findings turn as live while it addresses findings", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
@@ -4175,17 +4215,17 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
 
     expect(screen.getByText("Addressing findings")).toBeTruthy();
-    expect(screen.getByLabelText("Fix runtime")).toBeTruthy();
-    // The finished steps must not show the fix turn's clock as their own.
+    expect(screen.getByLabelText("Address Findings runtime")).toBeTruthy();
+    // The finished steps must not show the Address Findings turn's clock as their own.
     expect(screen.queryByLabelText("Consolidation runtime") === null).toBe(true);
     expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
-    const card = stepOpenButton("Fix,");
+    const card = stepOpenButton("Address Findings,");
     expect(card.hasAttribute("disabled")).toBe(false);
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
   });
 
-  test("shows a settled interactive Fix turn as complete with final usage", () => {
+  test("shows a settled interactive Address Findings turn as complete with final usage", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
@@ -4215,14 +4255,18 @@ describe("MultiReviewTab pipeline step cards", () => {
       />,
     );
 
-    expect(screen.getByText("The fix session finished and is ready for follow-up")).toBeTruthy();
-    const node = flowNode("Fix,");
-    expect(node.getAttribute("aria-label")).toStartWith("Fix, Complete");
-    expect(screen.getByLabelText("Fix runtime").textContent).toBe("4m 0s · 23k tokens");
+    expect(
+      screen.getByText("The Address Findings session finished and is ready for follow-up"),
+    ).toBeTruthy();
+    const node = flowNode("Address Findings,");
+    expect(node.getAttribute("aria-label")).toStartWith("Address Findings, Complete");
+    expect(screen.getByLabelText("Address Findings runtime").textContent).toBe(
+      "4m 0s · 23k tokens",
+    );
     expect(node.querySelector(".animate-spin") === null).toBe(true);
   });
 
-  test("keeps a legacy idle interactive Fix running until its runtime is settled", () => {
+  test("keeps a legacy idle interactive Address Findings running until its runtime is settled", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
@@ -4246,16 +4290,16 @@ describe("MultiReviewTab pipeline step cards", () => {
       />,
     );
 
-    expect(screen.getByText("The fix model is working interactively")).toBeTruthy();
-    const node = flowNode("Fix,");
-    expect(node.getAttribute("aria-label")).toStartWith("Fix, Interactive fix session");
+    expect(screen.getByText("The Address Findings model is working interactively")).toBeTruthy();
+    const node = flowNode("Address Findings,");
+    expect(node.getAttribute("aria-label")).toStartWith("Address Findings, Interactive session");
     expect(node.querySelector(".animate-spin")).toBeTruthy();
   });
 
   test.each([
     ["failed" as const, "Provider turn failed", "Failed"],
     ["cancelled" as const, undefined, "Cancelled"],
-  ])("renders a %s interactive Fix outcome on the card", (status, error, label) => {
+  ])("renders a %s interactive Address Findings outcome on the card", (status, error, label) => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
@@ -4278,10 +4322,14 @@ describe("MultiReviewTab pipeline step cards", () => {
 
     if (error) {
       expect(document.querySelector("header")?.textContent).toContain(error);
-      expect(flowNode("Fix,").querySelector("[data-flow-node-error]")?.textContent).toBe(error);
+      expect(
+        flowNode("Address Findings,").querySelector("[data-flow-node-error]")?.textContent,
+      ).toBe(error);
     }
-    expect(flowNode("Fix,").getAttribute("aria-label")).toStartWith(`Fix, ${label}`);
-    selectFlowNode("Fix,");
+    expect(flowNode("Address Findings,").getAttribute("aria-label")).toStartWith(
+      `Address Findings, ${label}`,
+    );
+    selectFlowNode("Address Findings,");
     expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe(label);
   });
 
@@ -4306,10 +4354,12 @@ describe("MultiReviewTab pipeline step cards", () => {
       />,
     );
 
-    expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
-    const fixNode = flowNode("Fix,");
-    expect(fixNode.querySelector(".text-amber-500")).toBeTruthy();
-    expect(within(fixNode).getByText("stalled")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Address Findings model appears stalled",
+    );
+    const addressFindingsNode = flowNode("Address Findings,");
+    expect(addressFindingsNode.querySelector(".text-amber-500")).toBeTruthy();
+    expect(within(addressFindingsNode).getByText("stalled")).toBeTruthy();
     expect(flowNode("Review package").querySelector(".text-amber-500") === null).toBe(true);
   });
 
@@ -4367,7 +4417,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
   });
 
-  test("shows the interactive fix turn from its durable runtime record", () => {
+  test("shows the interactive Address Findings turn from its durable runtime record", () => {
     const ready = readyWorkflow();
     const workflow: MultiReviewWorkflow = {
       ...ready,
@@ -4421,7 +4471,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     const now = Date.parse("2026-08-14T00:02:05.000Z");
 
     expect(multiReviewStepRuntimeSummary(ready, "consolidation", false, now)).toBe(
-      fixSessionRuntimeSummary(ready.fixSession!, now),
+      addressFindingsSessionRuntimeSummary(ready.fixSession!, now),
     );
     expect(multiReviewStepRuntimeSummary(ready, "package", false, now)).toBeNull();
     // Once a workflow records steps, one that has not run yet stays blank
@@ -4469,16 +4519,21 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(screen.getByLabelText("Consolidation runtime").textContent).toBe("2m 45s · 25k tokens");
   });
 
-  test("formats fix session runtime for live and settled sessions", () => {
+  test("formats Address Findings session runtime for live and settled sessions", () => {
     const ready = readyWorkflow();
     const session = ready.fixSession!;
     const now = Date.parse("2026-08-14T00:02:05.000Z");
-    expect(fixSessionRuntimeSummary({ ...session, status: "running" }, now)).toBe("2m 5s");
+    expect(addressFindingsSessionRuntimeSummary({ ...session, status: "running" }, now)).toBe(
+      "2m 5s",
+    );
     expect(
-      fixSessionRuntimeSummary({ ...session, completedAt: "2026-08-14T00:00:30.000Z" }, now),
+      addressFindingsSessionRuntimeSummary(
+        { ...session, completedAt: "2026-08-14T00:00:30.000Z" },
+        now,
+      ),
     ).toBe("30s");
     const { completedAt: _completedAt, ...unfinished } = session;
-    expect(fixSessionRuntimeSummary(unfinished, now)).toBeNull();
+    expect(addressFindingsSessionRuntimeSummary(unfinished, now)).toBeNull();
   });
 });
 
@@ -4612,7 +4667,7 @@ describe("PR background state and review clock", () => {
     }
   });
 
-  test("accepts a manual PR for a clean review with automatic PR off and no Fix or launch", () => {
+  test("accepts a manual PR for a clean review with automatic PR off and no Address Findings or launch", () => {
     const saved = useEnvironmentStore.getState().environments;
     useEnvironmentStore.setState({
       environments: [

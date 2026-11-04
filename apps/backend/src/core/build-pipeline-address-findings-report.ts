@@ -15,7 +15,7 @@ import {
   type BuildPipeline,
   type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
-import type { VerificationAddressReport } from "./build-pipeline-prompts.js";
+import type { VerificationAddressFindingsReport } from "./build-pipeline-prompts.js";
 import type { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { LAST_ASSISTANT_TEXT_READ_LIMIT, lastAssistantText } from "./workflow-result-missing.js";
@@ -26,7 +26,7 @@ import { LAST_ASSISTANT_TEXT_READ_LIMIT, lastAssistantText } from "./workflow-re
  * round's report is never mistaken for evidence about this one, and a round
  * whose clean review went straight to Verify has none.
  */
-export function roundAddressSession(pipeline: BuildPipeline): PipelineSession | undefined {
+export function roundAddressFindingsSession(pipeline: BuildPipeline): PipelineSession | undefined {
   let address: PipelineSession | undefined;
   for (let index = pipeline.sessions.length - 1; index >= 0; index -= 1) {
     const session = pipeline.sessions[index]!;
@@ -45,11 +45,11 @@ export function roundAddressSession(pipeline: BuildPipeline): PipelineSession | 
  * session never falls back to its text: a session that was skipped or never
  * had its result accepted has no report.
  */
-export async function verificationAddressReport(
+export async function verificationAddressFindingsReport(
   transcripts: BuildPipelineTranscriptCheckpoints,
   pipeline: BuildPipeline,
-): Promise<VerificationAddressReport | undefined> {
-  const address = roundAddressSession(pipeline);
+): Promise<VerificationAddressFindingsReport | undefined> {
+  const address = roundAddressFindingsSession(pipeline);
   if (!address) return undefined;
   if (address.addressReportKind !== undefined) {
     return address.fixResult ? { kind: "fix-result", result: address.fixResult } : undefined;

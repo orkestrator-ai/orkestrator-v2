@@ -12,7 +12,10 @@ import type { StorageService } from "./storage.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
-import { TEST_FIX_RESULT, TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
+import {
+  TEST_ADDRESS_FINDINGS_RESULT,
+  TEST_REVIEW_PREPARATION,
+} from "./build-pipeline-test-fixtures.js";
 import {
   cleanReview,
   mutateStored,
@@ -78,7 +81,7 @@ const reviewAndFailEveryRound = (provider: FakeProvider) => {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: false, rationale: `Still failing (${sessionId}).` }) as T,
     };
   };
@@ -100,13 +103,13 @@ describe("restarting an earlier round's Address", () => {
       const firstReview = failed.sessions.find(
         (session) => session.phase === "review" && session.iteration === 0,
       )!;
-      const firstAddress = failed.sessions.find(
+      const firstAddressFindings = failed.sessions.find(
         (session) => session.phase === "address" && session.iteration === 0,
       )!;
       expect(failed.structuredReview?.issues[0]?.title).not.toContain(firstReview.sdkSessionId);
       const created = provider.created.length;
 
-      const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+      const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
 
       expect(restarted).toMatchObject({ phase: "addressing", iteration: 0 });
       expect(restarted.structuredReview?.issues[0]?.title).toBe(
@@ -156,10 +159,10 @@ describe("restarting an earlier round's Address", () => {
       await mutateStored(storage, started.id, (snapshot) => {
         delete snapshot.roundReviewReports;
       });
-      const firstAddress = failed.sessions.find(
+      const firstAddressFindings = failed.sessions.find(
         (session) => session.phase === "address" && session.iteration === 0,
       )!;
-      const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+      const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
       expect(restarted.iteration).toBe(0);
       expect(restarted.structuredReview).toBeUndefined();
       expect(restarted.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
@@ -188,10 +191,10 @@ describe("restarting an earlier round's Address", () => {
           startedAt: new Date().toISOString(),
         });
       });
-      const firstAddress = failed.sessions.find(
+      const firstAddressFindings = failed.sessions.find(
         (session) => session.phase === "address" && session.iteration === 0,
       )!;
-      const restarted = await service.restartStep(started.id, firstAddress.sessionKey);
+      const restarted = await service.restartStep(started.id, firstAddressFindings.sessionKey);
       expect(restarted.structuredReview).toBeUndefined();
       expect(restarted.sessions.at(-1)?.label).toBe(REVIEW_PACKAGE_SESSION_LABEL);
     });

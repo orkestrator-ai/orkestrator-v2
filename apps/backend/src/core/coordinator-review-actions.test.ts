@@ -548,7 +548,7 @@ test("the project home is never a coordinator worker for launch or address", asy
   expect(start).not.toHaveBeenCalled();
 
   // A review the user started on the project home stays theirs: the
-  // coordinator may not address it, because the fix session writes there.
+  // coordinator may not address it, because the Address Findings session writes there.
   const rendererStarted = await start(
     {
       environmentId,
@@ -570,7 +570,7 @@ test("the project home is never a coordinator worker for launch or address", asy
   expect(address).not.toHaveBeenCalled();
 });
 
-test("Fix opening is presentation-only, stable, and refuses pending handoffs", async () => {
+test("Address Findings opening is presentation-only, stable, and refuses pending handoffs", async () => {
   const launched = await launch();
   const workflow = {
     ...launched.workflow,
@@ -675,7 +675,7 @@ test("address does not arm hidden work when the root cannot be presented", async
   )) as MultiReviewActionResult;
   expect(outcome).toMatchObject({ outcome: "partial", ui: { status: "unavailable" } });
   expect(outcome.recovery).toContain("maximum 9");
-  expect(outcome.recovery).toContain("No fix handoff was queued");
+  expect(outcome.recovery).toContain("No Address Findings handoff was queued");
   expect(outcome.recovery).not.toContain("durable handoff key");
   expect(address).not.toHaveBeenCalled();
 });
@@ -858,7 +858,7 @@ test("saved auto-PR alone applies as the button reads it", async () => {
   expect(outcome.workflow).toMatchObject({ autoFix: false, autoPr: true });
 });
 
-test("a requested auto-PR brings its Fix even when saved auto-fix is off", async () => {
+test("a requested auto-PR brings its Address Findings even when saved auto-fix is off", async () => {
   await storage.updateGlobalConfig({
     ...(await storage.loadConfig()).global,
     agentSettings: { multiReview: { autoFix: false, autoPr: false } },

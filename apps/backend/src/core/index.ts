@@ -78,7 +78,7 @@ import {
   mailAutoSwitchNotice,
 } from "./agent-accounts-auto-switch-notices.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
-import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -195,9 +195,9 @@ import {
   sessionTitleGenerationEnabled,
 } from "./session-title-service.js";
 import {
-  dispatchMultiReviewAddressPrompt,
-  recoverMissingMultiReviewFixSession,
-} from "./multi-review-address-dispatch.js";
+  dispatchMultiReviewAddressFindingsPrompt,
+  recoverMissingMultiReviewAddressFindingsSession,
+} from "./multi-review-address-findings-dispatch.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -1416,18 +1416,18 @@ export class OrkestratorBackend {
         assertAgentToolsReachable,
         artifactDispatch,
         artifactLedger,
-        dispatchAddressPrompt: (workflow, presentation) =>
-          dispatchMultiReviewAddressPrompt(
+        dispatchAddressFindingsPrompt: (workflow, presentation) =>
+          dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
             workflow,
             storage,
             presentation.activateTab,
           ),
-        recoverAddressSession: (workflow, replacement) =>
-          recoverMissingMultiReviewFixSession(this.nativeAgents, workflow, replacement),
-        ...multiReviewNativeFixOptions(this.nativeAgents),
+        recoverAddressFindingsSession: (workflow, replacement) =>
+          recoverMissingMultiReviewAddressFindingsSession(this.nativeAgents, workflow, replacement),
+        ...multiReviewNativeAddressFindingsOptions(this.nativeAgents),
         workflowAdmission: this.workflowAdmission,
-        invalidateAddressSession: async (workflow, session) => {
+        invalidateAddressFindingsSession: async (workflow, session) => {
           await storage.invalidateNativeAgentSession(
             nativeAgentSessionStorageKey(workflow.environmentId, session.agent, session.sessionKey),
             session.providerSessionId,

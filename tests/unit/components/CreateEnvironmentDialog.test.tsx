@@ -4698,7 +4698,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(
       screen.getByLabelText("Review preparation & consolidation agent, model and reasoning"),
     ).toBeTruthy();
-    expect(screen.getByLabelText("Address issues agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Address Findings agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Verify agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Pull request agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Resolve conflicts agent, model and reasoning")).toBeTruthy();
@@ -4716,7 +4716,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
       "Review preparation & consolidation agent, model and reasoning",
       "Review 1 agent, model and reasoning",
       "Review 2 agent, model and reasoning",
-      "Address issues agent, model and reasoning",
+      "Address Findings agent, model and reasoning",
       "Verify agent, model and reasoning",
       "Pull request agent, model and reasoning",
       "Resolve conflicts agent, model and reasoning",

@@ -1,5 +1,13 @@
 # Build pipeline view
 
+> **Names.** Rework runs after Verify finds the ticket unmet, under the Build
+> step's model. Address Findings runs after review reports findings, under the "Address
+> review findings" setting; Multi Review's step of that name is the same job.
+> Stored and transmitted values still say `fix` and `address` until
+> [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md), and "fix"
+> means Rework in a pipeline but Address Findings in a Multi Review
+> (`workflow-vocabulary.ts`).
+
 Status: Living. Checked against the branch that introduced the pipeline flow
 graph (2026-10-26), the branch that made restarts rewind (2026-10-27), the
 node-face and live-usage follow-up (2026-10-27), and the rewind follow-ups
@@ -94,9 +102,9 @@ a transcript.
 
 - **Line.** Ticket, Setup, then every session in the order it ran, then the PR.
   Package preparation and the validation run make a Prepare node; fan-out
-  reviewers of one pass share a column, followed by Consolidation; Address,
-  Verify, Fix, Ship and conflict resolution are one node each. A repeated pass
-  is a new node to the right ("Review 2", "Verify 2", "Fix 2"), never a loop
+  reviewers of one pass share a column, followed by Consolidation; Address Findings,
+  Verify, Rework, Ship and conflict resolution are one node each. A repeated pass
+  is a new node to the right ("Review 2", "Verify 2", "Rework 2"), never a loop
   back, so the whole history is on the line. Sessions a restart superseded
   are one greyed "Previous attempt" node instead (see
   [Restarting a step](#restarting-a-step)); live numbering skips them.
@@ -112,26 +120,26 @@ a transcript.
 - **Ahead.** Steps the pipeline will definitely reach are drawn faded
   (`placeholder`): Build, Prepare (fan-out or a configured preparation model),
   the reviewers or Review, Consolidation (fan-out), Verify, Ship and the PR.
-  Address, Fix, conflict resolution and extra passes are never drawn ahead and
+  Address Findings, Rework, conflict resolution and extra passes are never drawn ahead and
   never dimmed; they appear when they start. A finished or cancelled pipeline
   has nothing ahead.
 - **After review.** One rule routes both review paths (`stageAfterReview` in
   `build-pipeline-service-helpers.ts`): the accepted report, a single
-  reviewer's or the panel's consolidated one, goes to Address when it has
+  reviewer's or the panel's consolidated one, goes to Address Findings when it has
   issues or test coverage gaps, and straight to Verify when it has neither. So
-  a clean pass is followed by Verify on the line, with no Address node. The
+  a clean pass is followed by Verify on the line, with no Address Findings node. The
   fan-out opens the next stage before it drops `reviewFanout`, so a crash in
   between never leaves `reviewing` with nothing to drive it.
-- **Address → Verify.** Address submits a typed `fix-result` and Verify reads
-  it as an evidence frame, not the Address session's last assistant text
+- **Address Findings → Verify.** Address Findings submits a typed `fix-result` and Verify reads
+  it as an evidence frame, not the Address Findings session's last assistant text
   ([review preparation](review-preparation.md#the-address--verify-handoff)). The
-  accepted result is kept, bounded, on the Address session (`fixResult`, marked
-  by `addressReportKind`), and the Address inspector shows it above the
-  transcript as a collapsed "Address report": complete or incomplete, files,
+  accepted result is kept, bounded, on the Address Findings session (`fixResult`, marked
+  by `addressReportKind`), and the Address Findings inspector shows it above the
+  transcript as a collapsed "Address Findings report": complete or incomplete, files,
   checks (failed ones counted), then the summary, checks, files, notes and
-  limitations (`PipelineAddressReport.tsx`). Its submission status reads as for
-  the other typed stages. An Address session from before the typed handoff has
-  no report there, and Verify reads its text as before. A round with no Address
+  limitations (`PipelineAddressFindingsReport.tsx`). Its submission status reads as for
+  the other typed stages. An Address Findings session from before the typed handoff has
+  no report there, and Verify reads its text as before. A round with no Address Findings
   (a clean review) gives Verify no report.
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers
@@ -248,8 +256,8 @@ count out rather than calling it pending.
 The graph reads each node's tokens from `PipelineSession.tokenCount` on the
 pipeline record, never from a transcript. The backend writes it for every stage
 session: fan-out reviewers mirror their reviewer record, and every other stage
-(Build, Fix, review-package preparation, a single review, Consolidation,
-Address, Verify, Ship, conflict resolution) is metered by
+(Build, Rework, review-package preparation, a single review, Consolidation,
+Address Findings, Verify, Ship, conflict resolution) is metered by
 `recordPipelineSessionUsage` from the same provider status read that drives
 the stage. The provider's cumulative `contextUsage.sessionTokens` is used
 when the status read carries it (the Claude and Codex bridges update it while
@@ -280,15 +288,15 @@ the same check.
   inside the text is escaped so it cannot close the frame. Only the
   session-wide unattended-input note follows it. A step without instructions
   gets a prompt identical to before, byte for byte.
-- **Which step a stage reads.** Build, Review (single reviewer), Address,
+- **Which step a stage reads.** Build, Review (single reviewer), Address Findings,
   Verify, Ship and conflict resolution read their own step
-  (`pipelineStepInstructions` with `stepKeyForSessionPhase`). Fix reads
+  (`pipelineStepInstructions` with `stepKeyForSessionPhase`). Rework reads
   Build's, as it runs on Build's model. Each fan-out reviewer reads its own row
   in `reviewers` (`pipelineReviewerInstructions`), after the panel section, so
   the panel's shared prompt prefix stays byte-identical. The dedicated package
   preparation and the fan-out consolidation read `reviewPreparation`
   (`pipelineReviewPreparationInstructions`); without a preparation step they
-  borrow Address's model but not Address's instructions. On the
+  borrow the Address Findings model but not its instructions. On the
   single-reviewer path the build or fix turn prepares the package inline, under
   Build's instructions.
 - **Record.** The backend stores them trimmed on `steps`, `reviewers` and
@@ -297,12 +305,12 @@ the same check.
   rewind, a retried stage, a fresh review panel and a backend restart all read
   the same text. Resume, reminders and repairs continue a session that already
   has the opening prompt and do not repeat it. A pipeline environment from the
-  New Environment dialog's feature option that pins Address but not Verify copies Address's model to Verify, not its
+  New Environment dialog's feature option that pins Address Findings but not Verify copies the Address Findings model to Verify, not its
   instructions.
 - **Launcher.** Each step card in `BuildLaunchDialog.tsx` has a collapsed
   "*Step* instructions" field (`BuildStepInstructionsField.tsx`) with a byte
   counter. Over 16 KiB the field is marked invalid and Start build is disabled.
-  The Build card notes that Fix uses them too. Instructions belong to one
+  The Build card notes that Rework uses them too. Instructions belong to one
   launch: the dialog starts empty every time it opens, and saved build defaults
   (action defaults) hold models only.
 - **CLI.** `orkestrator build launch TICKET --instructions STAGE=TEXT` (or
@@ -396,7 +404,7 @@ pipeline record. An update names the sections it replaces; `issues` and
 it as the running stage and round, under the pipeline lock, and refuses one
 that waits more than 30 seconds behind a supervisor pass (never applying it
 later). Once admitted under the lock, the tool awaits the persistence result;
-the wait timeout cannot report a committed write as failed. The Build, Fix, Address and Verify prompts end with stage-specific
+the wait timeout cannot report a committed write as failed. The Build, Rework, Address Findings and Verify prompts end with stage-specific
 guidance on what to record (`keyInformationInstruction`); Review and the PR
 stages do not keep it.
 
@@ -407,7 +415,7 @@ a Verify verdict sets its round's `passed`, keeping Verify's own summary and
 checks or deriving them from the criterion results. A restart that rewinds to
 an earlier round drops what later rounds recorded and the verification of the
 round it reruns. Restarting at or before Review, or explicitly retrying Review,
-also discards that round's superseded issues; restarting Address or a later
+also discards that round's superseded issues; restarting Address Findings or a later
 stage preserves the round's issues and resolutions. On any rewind or review
 retry, narrative sections and update history are cleared conservatively:
 they have no per-attempt snapshots to restore, so stages rebuild the brief
@@ -460,7 +468,7 @@ messages can still be edited or removed. A typed `/steer` still goes straight to
 live turn (`steer_build_pipeline`).
 
 Actions sit in each node's context menu and in the inspector: open the session
-(Open Fix session on a Fix node), open the review pass as a Multi Review tab,
+(Open Rework session on a Rework node), open the review pass as a Multi Review tab,
 retry a failed reviewer (`retry_build_pipeline_reviewer`), retry the failed
 step (`retry_build_pipeline_stage`), restart from a step
 (`restart_build_pipeline_step`), prepare the review package again
@@ -474,7 +482,7 @@ Skipping moves on without the step's result. Skipping validation stops the
 checks and seals the review package with the results they had (a paused,
 already-cancelled run included), and the Tests view's "Stop tests and
 continue" does the same. Skipping an agent step stops its session and opens the
-next one: Build or Fix goes to review preparation, a review or Address to
+next one: Build or Rework goes to review preparation, a review or Address Findings to
 Verify, and Verify to delivery. Review preparation and the PR steps cannot be
 skipped; skipping Verify still follows the ticket's delivery policy. The skipped
 node reads "Skipped".
@@ -486,15 +494,15 @@ keeps it while the pipeline exists.
 ## Restarting a step
 
 "Restart from here" (`restart_build_pipeline_step`) on any live step — Build,
-Fix, Prepare or its validation, a reviewer or consolidation (the whole review
-pass reruns), Review, Address, Verify, Ship or conflict resolution — rewinds
+Rework, Prepare or its validation, a reviewer or consolidation (the whole review
+pass reruns), Review, Address Findings, Verify, Ship or conflict resolution — rewinds
 the pipeline to that step's own round and position and runs it again. The
 backend (`restartLocatedStage` in `build-pipeline-service-lifecycle.ts`, rules
 in `build-pipeline-rewind.ts`):
 
 - **Rewinds the round.** `iteration` becomes the step's own, so the rounds
   after it are available again: restarting round 1's Verify after round 4
-  failed runs Verify 1, then on failure Fix 2, Verify 2 and so on up to
+  failed runs Verify 1, then on failure Rework 2, Verify 2 and so on up to
   `maxIterations`.
 - **Keeps the code.** The worktree and branch are not reset; the rerun and
   every later step work on the current code, later rounds' commits included.
@@ -506,13 +514,13 @@ in `build-pipeline-rewind.ts`):
   invalidates the review package, validation run, structured review and verdict,
   because they describe later code; a step whose inputs are gone reruns from
   the earliest step of its round that rebuilds them (Review prepares the
-  package again). Address reruns alone on its round's own accepted report
+  package again). Address Findings reruns alone on its round's own accepted report
   (`roundReviewReports`, below); only when that copy is gone does it rerun
   Review, or prepare the package first when that is gone too. Verify
   sessions keep their own verdict (`verificationResult`,
-  `verificationFeedback`, bounded), so a restarted Fix gets the verdict that
+  `verificationFeedback`, bounded), so a restarted Rework gets the verdict that
   ended the round before it. Legacy records without that session's verdict use
-  generic feedback when rewinding to an earlier Fix, never the last round's rationale.
+  generic feedback when rewinding to an earlier Rework, never the last round's rationale.
 - **Treats superseded sessions as history.** They are never the current
   session (`sessionForCurrentPhase`), never the source of a fix baseline (a
   same-round restart still carries the first attempt's baseline), an address
@@ -542,11 +550,11 @@ in `build-pipeline-rewind.ts`):
 
 `restart_build_pipeline_current_step`, `retry_build_pipeline_stage` and
 `retry_build_pipeline_review` keep their semantics; restarting the current step
-supersedes only that step's session. Restarting a Build or Fix that also wrote
-the package plan reruns the Build or Fix; the dedicated preparation session
-restarts preparation alone. On the single-review path, where the Build or Fix
+supersedes only that step's session. Restarting a Build or Rework that also wrote
+the package plan reruns the Build or Rework; the dedicated preparation session
+restarts preparation alone. On the single-review path, where the Build or Rework
 wrote the plan and there is no dedicated session, "Prepare package again" on
-that Build or Fix node, or on the Prepare node holding its checks, sends the
+that Build or Rework node, or on the Prepare node holding its checks, sends the
 stage ID `review-package:<sessionKey>`: the plan's turn stays live, everything
 from package preparation on is superseded, and a dedicated preparation session
 prepares the package from the turn's result. A repeat while that preparation
@@ -574,7 +582,7 @@ session position. The live line routes
 over it (`route: "bypass"`; the stacked column draws the bypass beside it),
 and the attempt branches off the step before it. Its inspector says when and
 from where the restart rewound and lists the steps; "Show steps" expands it
-into greyed nodes titled by round ("Fix · round 2", reviewers of one pass in
+into greyed nodes titled by round ("Rework · round 2", reviewers of one pass in
 one column, including every retry), each selectable with its transcript readable and a "Superseded by
 a restart" note, and no restart or retry. Expansion is renderer-only view
 state (`flowGraphViewStore.expandedAttempts`, at most 50). Superseded nodes are
@@ -711,7 +719,7 @@ Every session on the line is a worker with its own agent mailbox, addressed
 `pipeline-worker:<sessionKey>` in the pipeline environment
 ([coordinator](coordinator.md#pipeline-worker-mailboxes) has the whole
 contract). A node is one worker: each reviewer of a pass, Prepare's package
-preparation, Consolidation, Address, Verify, Fix, Ship and conflict
+preparation, Consolidation, Address Findings, Verify, Rework, Ship and conflict
 resolution, in every round, and a "Previous attempt" node's sessions are
 cancelled workers. The pipeline tab adds no tab, control or read for them: the
 graph still reads only the record, and the workers list (`pipelineWorkers`,
@@ -767,7 +775,7 @@ bound and that test fails until the template says the same.
   records without them. Records written before rewinds existed load as before
   and are superseded by their first restart like any other. Sessions written
   before `headAtStart` existed offer no code rewind; records without
-  `roundReviewReports` rerun Review when an earlier round's Address restarts.
+  `roundReviewReports` rerun Review when an earlier round's Address Findings restarts.
   Review sessions without a `validationHeadAtStart` and panel passes without
   `reviewFanout.workspaceBaseline` predate the read-only guard and are not
   certified against one.

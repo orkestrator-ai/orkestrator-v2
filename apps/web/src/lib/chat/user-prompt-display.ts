@@ -8,7 +8,7 @@ import {
   COORDINATOR_DELEGATION_OMISSION_TEXT,
   COORDINATOR_DELEGATION_PRESENTATION,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
-  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
@@ -85,7 +85,7 @@ function reviewPackagePreparationPresentation(source: string): UserPromptPresent
     : null;
 }
 
-function customFixPresentation(source: string): UserPromptPresentation | null {
+function customAddressFindingsPresentation(source: string): UserPromptPresentation | null {
   const instructionPrefix = `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`;
   if (!source.startsWith(instructionPrefix)) return null;
 
@@ -100,7 +100,7 @@ function customFixPresentation(source: string): UserPromptPresentation | null {
   ).trim();
   if (
     afterFrame !== "" &&
-    afterFrame !== MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION &&
+    afterFrame !== MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION &&
     afterFrame !== contract.continuationPrefix
   ) {
     return null;
@@ -194,7 +194,7 @@ function presentationForContract(
   return null;
 }
 
-function isAddressInstructionDisplay(displayText: string): boolean {
+function isAddressFindingsInstructionDisplay(displayText: string): boolean {
   const text = displayText.trim();
   return (
     text === STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION ||
@@ -222,16 +222,16 @@ function promptDisplaySource(
  * to an earlier review-stage prompt or a later follow-up in a windowed
  * transcript.
  */
-export function isFixOpeningPrompt(
+export function isAddressFindingsOpeningPrompt(
   source: string,
   promptPresentation?: UserPromptPresentationKind,
 ): boolean {
   const displaySource = promptDisplaySource(source, promptPresentation);
-  if (customFixPresentation(displaySource) !== null) return true;
+  if (customAddressFindingsPresentation(displaySource) !== null) return true;
   if (generatedReviewInstructionPresentation(displaySource) !== null) return true;
   const presentation = userPromptPresentation(source, promptPresentation);
   if (presentation.evidencePayload !== null) return true;
-  if (isAddressInstructionDisplay(presentation.displayText)) return true;
+  if (isAddressFindingsInstructionDisplay(presentation.displayText)) return true;
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
   const stripped = stripSystemInstructions(displaySource);
   return stripped.includes(
@@ -258,7 +258,10 @@ function attachAddressFindings(
   source: string,
   presentation: UserPromptPresentation,
 ): UserPromptPresentation {
-  if (presentation.evidencePayload || !isAddressInstructionDisplay(presentation.displayText)) {
+  if (
+    presentation.evidencePayload ||
+    !isAddressFindingsInstructionDisplay(presentation.displayText)
+  ) {
     return presentation;
   }
   const evidencePayload = extractStructuredReviewFindings(source);
@@ -279,8 +282,8 @@ export function userPromptPresentation(
     const withFindings = attachAddressFindings(displaySource, presentation);
     return delegation ? withCoordinatorDelegationNotice(withFindings) : withFindings;
   };
-  const customFix = customFixPresentation(displaySource);
-  if (customFix !== null) return finish(customFix);
+  const customAddressFindings = customAddressFindingsPresentation(displaySource);
+  if (customAddressFindings !== null) return finish(customAddressFindings);
   const generatedReviewInstruction = generatedReviewInstructionPresentation(displaySource);
   if (generatedReviewInstruction !== null) return finish(generatedReviewInstruction);
   const reviewPackagePreparation = reviewPackagePreparationPresentation(displaySource);

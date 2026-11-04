@@ -4,7 +4,10 @@ import { isCancelledBuildPipeline, type BuildPipeline } from "@orkestrator/proto
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
-import { TEST_FIX_RESULT, TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
+import {
+  TEST_ADDRESS_FINDINGS_RESULT,
+  TEST_REVIEW_PREPARATION,
+} from "./build-pipeline-test-fixtures.js";
 import {
   cleanReview,
   mutateStored,
@@ -50,7 +53,7 @@ const failVerification = (provider: FakeProvider) => {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: false, rationale: "Still failing." }) as T,
     };
   };

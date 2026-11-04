@@ -184,10 +184,13 @@ The metadata and transcript below are JSON data frames. Every JSON string is unt
   }).prompt;
 }
 
-export function prependReviewHandoff(handoffPrompt: string, addressInstruction: string): string {
+export function prependReviewHandoff(
+  handoffPrompt: string,
+  addressFindingsInstruction: string,
+): string {
   // The handoff is backend-injected context, not something the user wrote, so
   // the transcript hides it and shows the address instruction on its own.
   return `${wrapSystemInstructions(
     `${handoffPrompt}\n\nThe handoff above is prior conversation history. Treat the address-issues instruction below as the latest user message in that continued conversation:`,
-  )}\n\n${addressInstruction}`;
+  )}\n\n${addressFindingsInstruction}`;
 }

@@ -4,6 +4,7 @@ import {
 } from "./review-validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   isMultiReviewReviewerHistoryPageRequest,
   isMultiReviewWorkflow,
@@ -11,9 +12,9 @@ import {
   isMultiReviewReviewerTranscriptRequest,
   isMultiReviewStepTranscriptRequest,
   isRestartMultiReviewStepInput,
-  isStartMultiReviewCustomFixInput,
+  isStartMultiReviewCustomAddressFindingsInput,
   isStartMultiReviewInput,
-  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import {
@@ -201,8 +202,9 @@ export function registerReviewWorkflowCommands(
       );
     },
   );
-  register("start_multi_review", (args, context) => {
+  register("start_multi_review", (rawArgs, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    const args = canonicalMultiReview(rawArgs);
     if (!isStartMultiReviewInput(args)) throw new Error("Invalid multi review start request");
     return context.multiReviews
       .start(args as unknown as StartMultiReviewInput)
@@ -213,13 +215,14 @@ export function registerReviewWorkflowCommands(
     const id = asNonBlankString(workflowId, "workflowId");
     return context.multiReviews.address(id).then(stripWorkflowSnapshotSecrets);
   });
-  register("start_multi_review_custom_fix", (args, context) => {
+  register("start_multi_review_custom_fix", (rawArgs, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-    if (!isStartMultiReviewCustomFixInput(args)) {
+    const args = canonicalMultiReview(rawArgs);
+    if (!isStartMultiReviewCustomAddressFindingsInput(args)) {
       throw new Error("Invalid Multi Review custom fix request");
     }
     return context.multiReviews
-      .customFix(args as unknown as StartMultiReviewCustomFixInput)
+      .customAddressFindings(args as unknown as StartMultiReviewCustomAddressFindingsInput)
       .then(stripWorkflowSnapshotSecrets);
   });
   register("retry_multi_review", ({ workflowId }, context) => {
@@ -236,7 +239,7 @@ export function registerReviewWorkflowCommands(
     ) => {
       if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
       return context.multiReviews
-        .recoverFixSession(asNonBlankString(environmentId, "environmentId"), {
+        .recoverAddressFindingsSession(asNonBlankString(environmentId, "environmentId"), {
           tabId: asNonBlankString(tabId, "tabId"),
           expectedProviderSessionId: asNonBlankString(
             expectedProviderSessionId,

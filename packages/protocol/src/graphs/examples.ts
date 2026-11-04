@@ -514,7 +514,7 @@ function designBakeOff(): GraphTemplateV1 {
       {
         key: "autoFix",
         type: "boolean",
-        label: "Fix review findings",
+        label: "Address review findings",
         default: true,
       },
     ],

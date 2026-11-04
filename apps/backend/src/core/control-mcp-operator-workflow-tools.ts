@@ -5,7 +5,7 @@ import { z } from "zod";
 import { onNode, type ControlMcpCaller } from "./control-mcp-caller.js";
 import { operatorAction, operatorListNodes } from "./control-mcp-operator-tools.js";
 import {
-  AUTO_FIX_FIELD_DESCRIPTION,
+  AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION,
   AUTO_PR_FIELD_DESCRIPTION,
   MULTI_REVIEW_AUTOMATION_DESCRIPTION,
 } from "./control-mcp-review-actions.js";
@@ -82,7 +82,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
           (name === "start_multi_review"
             ? "Same as launch_multi_review for this credential (prefer that name). "
             : "") +
-          "The complete Multi Review button: reviewers, preparation/consolidation, then the optional Fix and PR, using saved defaults for what you omit; an active review is reused. Its root tab is created in the environment. Follow it with get_multi_review; reuse requestId only to retry. " +
+          "The complete Multi Review button: reviewers, preparation/consolidation, then the optional Address Findings and PR, using saved defaults for what you omit; an active review is reused. Its root tab is created in the environment. Follow it with get_multi_review; reuse requestId only to retry. " +
           MULTI_REVIEW_AUTOMATION_DESCRIPTION,
         inputSchema: z
           .object({
@@ -95,8 +95,8 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
               .optional()
               .describe("Omit for the saved reviewer rows."),
             reviewModel: selection.optional().describe("Omit for the saved consolidation model."),
-            fixModel: selection.optional().describe("Omit for the saved fix model."),
-            autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
+            fixModel: selection.optional().describe("Omit for the saved Address Findings model."),
+            autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
             autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
             targetBranch: z.string().trim().min(1).max(500).optional(),
             reviewInstruction: z.string().max(100_000).optional(),
@@ -131,7 +131,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
     {
       title: "Read a Multi Review",
       description:
-        "One Multi Review's phase, error, Fix handoff and auto-fix/auto-PR state. Check back with it rather than polling.",
+        "One Multi Review's phase, error, Address Findings handoff and auto-address findings/auto-PR state. Check back with it rather than polling.",
       inputSchema: z.object({ workflowId, nodeId: nodeIdField }),
       annotations: readAnnotations(),
     },
@@ -141,7 +141,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
 
   for (const [name, surface, title] of [
     ["open_multi_review", "root", "Open or focus the Multi Review tab"],
-    ["open_multi_review_fix", "fix", "Open or focus the Multi Review Fix tab"],
+    ["open_multi_review_fix", "fix", "Open or focus the Multi Review Address Findings tab"],
   ] as const) {
     server.registerTool(
       name,
@@ -161,7 +161,7 @@ export function registerOperatorWorkflowTools(server: McpServer, caller: Control
     {
       title: "Address Multi Review findings",
       description:
-        "The Address findings button: hand the consolidated findings to the review's Fix session. A pending result means queued; check get_multi_review.",
+        "The Address findings button: hand the consolidated findings to the review's Address Findings session. A pending result means queued; check get_multi_review.",
       inputSchema: z.object({ requestId, workflowId, nodeId: nodeIdField }),
       annotations: WRITE,
     },

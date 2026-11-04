@@ -3,18 +3,20 @@ import {
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 import type { PersistedWorkflowRecord } from "@/types";
 import * as backend from "@/lib/backend";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 
 function snapshot(entry: PersistedWorkflowRecord<unknown>): MultiReviewWorkflow | null {
+  const workflow = canonicalMultiReview(entry.snapshot);
   if (
-    !isMultiReviewWorkflow(entry.snapshot) ||
-    entry.snapshot.id !== entry.id ||
-    entry.snapshot.environmentId !== entry.environmentId
+    !isMultiReviewWorkflow(workflow) ||
+    workflow.id !== entry.id ||
+    workflow.environmentId !== entry.environmentId
   )
     return null;
-  return { ...entry.snapshot, backendRevision: entry.revision };
+  return { ...workflow, backendRevision: entry.revision };
 }
 
 export async function hydrateMultiReviewWorkflow(

@@ -698,7 +698,7 @@ export class BuildPipelineLifecycle {
       if (candidate.validationRun && !candidate.reviewPackage) return;
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase, {
-        addressResult: session?.addressReportKind !== undefined,
+        addressFindingsResult: session?.addressReportKind !== undefined,
         deliveryPolicy: candidate.delivery?.policy,
       });
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;

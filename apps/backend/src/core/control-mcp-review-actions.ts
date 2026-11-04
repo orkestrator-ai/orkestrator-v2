@@ -83,7 +83,7 @@ export function reviewSelection(snapshot: object, input: ReviewLaunchInput) {
       reviewers: source(input.reviewers),
       reviewModel: source(input.reviewModel),
       fixModel: source(input.fixModel),
-      // A requested auto-PR turns an omitted auto-fix on with it.
+      // A requested auto-PR turns an omitted auto-address findings on with it.
       autoFix:
         input.autoFix === undefined && input.autoPr === true ? "implied" : source(input.autoFix),
       autoPr: source(input.autoPr),
@@ -91,15 +91,15 @@ export function reviewSelection(snapshot: object, input: ReviewLaunchInput) {
   };
 }
 
-export const AUTO_FIX_FIELD_DESCRIPTION =
-  "Optional. Start the Fix session automatically when consolidation reports findings, as the button's Auto-fix does. Omit to use the user's saved Auto-fix setting; omitted with autoPr: true means on. Set only when the user asks.";
+export const AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION =
+  "Optional. Start the Address Findings session automatically when consolidation reports findings, as the button's Auto-address findings does. Omit to use the user's saved Auto-address findings setting; omitted with autoPr: true means on. Set only when the user asks.";
 
 export const AUTO_PR_FIELD_DESCRIPTION =
-  "Optional. Start the PR session (push the branch and open the pull request) automatically once the Fix finishes, or straight after a consolidation that found nothing to fix, as the button's Auto-PR does. It never runs while a Fix is pending or running; it never merges. Omit to use the user's saved Auto-PR setting. Set only when the user asks.";
+  "Optional. Start the PR session (push the branch and open the pull request) automatically once Address Findings finishes, or straight after a consolidation that found nothing to fix, as the button's Auto-PR does. It never runs while an Address Findings run is pending or running; it never merges. Omit to use the user's saved Auto-PR setting. Set only when the user asks.";
 
-/** Shared by both launch tools so they describe auto-fix and auto-PR identically. */
+/** Shared by both launch tools so they describe auto-address findings and auto-PR identically. */
 export const MULTI_REVIEW_AUTOMATION_DESCRIPTION =
-  "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks. With both on the review runs end to end: consolidation, then Fix, then a PR session once the Fix completes. With autoPr on, a consolidation with nothing to fix starts the PR session directly. A failed, stopped or stalled Fix starts no PR. autoPr: true alone also turns on autoFix unless autoFix is false, in which case the PR follows a Fix started with address_multi_review.";
+  "Omit autoFix and autoPr to use the user's saved Auto-address findings and Auto-PR settings, as the button does; set them only when the user asks. With both on the review runs end to end: consolidation, then Address Findings, then a PR session once Address Findings completes. With autoPr on, a consolidation with nothing to fix starts the PR session directly. A failed, stopped or stalled Address Findings starts no PR. autoPr: true alone also turns on autoFix unless autoFix is false, in which case the PR follows an Address Findings run started with address_multi_review.";
 
 async function response(
   value: MultiReviewActionResult,
@@ -157,7 +157,7 @@ export function registerControlReviewActions(
     {
       title: "Launch and open environment Multi Review (preferred)",
       description:
-        "Preferred complete Multi Review button action: accept the launch dialog's reviewer rows, preparation/consolidation model, and fix model, use saved branch/instruction defaults when omitted, reuse an active review, start at most once, and durably create/focus its root tab in the selected pane even while the environment UI is inactive. No build pipeline prerequisite. Reuse requestId with the same payload on retry; inspect outcome/ui/recovery before claiming success. " +
+        "Preferred complete Multi Review button action: accept the launch dialog's reviewer rows, preparation/consolidation model, and Address Findings model, use saved branch/instruction defaults when omitted, reuse an active review, start at most once, and durably create/focus its root tab in the selected pane even while the environment UI is inactive. No build pipeline prerequisite. Reuse requestId with the same payload on retry; inspect outcome/ui/recovery before claiming success. " +
         "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults, exactly as the Multi Review button does; set them only when the user asks for specific models (get_launch_options lists them). " +
         MULTI_REVIEW_AUTOMATION_DESCRIPTION +
         " The result's selection reports the rows and auto-actions that will run and which were requested; a reused active review keeps its own.",
@@ -181,9 +181,9 @@ export function registerControlReviewActions(
           fixModel: selection
             .optional()
             .describe(
-              "Optional. Omit to use the user's saved fix model. Set only when the user asks for one.",
+              "Optional. Omit to use the user's saved Address Findings model. Set only when the user asks for one.",
             ),
-          autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
+          autoFix: z.boolean().optional().describe(AUTO_ADDRESS_FINDINGS_FIELD_DESCRIPTION),
           autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
           targetBranch: z.string().trim().min(1).max(500).optional(),
           reviewInstruction: z.string().max(100_000).optional(),
@@ -225,12 +225,12 @@ export function registerControlReviewActions(
     [
       "open_multi_review_fix",
       "open_coordinator_multi_review_fix",
-      "Open or focus the saved Multi Review Fix session",
+      "Open or focus the saved Multi Review Address Findings session",
     ],
     [
       "address_multi_review",
       "address_coordinator_multi_review_action",
-      "Address findings and present the durable Fix handoff",
+      "Address findings and present the durable Address Findings handoff",
     ],
   ] as const) {
     server.registerTool(
@@ -239,7 +239,7 @@ export function registerControlReviewActions(
         title,
         description:
           name === "address_multi_review"
-            ? "Complete Address findings action: open the root review, persist an idempotent fix handoff, then publish Fix after dispatch. The foreground action selects Fix, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
+            ? "Complete Address findings action: open the root review, persist an idempotent Address Findings handoff, then publish Address Findings after dispatch. The foreground action selects Address Findings, while background retry or restart recovery preserves current focus. A pending result means queued, not delivered; inspect get_multi_review for addressPromptPending/presentationError and use open_multi_review_fix for presentation recovery. Adopt another conversation's associated workflow first; unassociated workflows in this project remain addressable."
             : `${title}. Complete durable UI action; no workflow or turn is launched. Works in inactive environments and survives reload. Adopt workflows owned by another conversation first. Inspect outcome/ui/recovery for presentation failure.`,
         inputSchema: z
           .object({
@@ -302,9 +302,9 @@ export function registerControlReviewActions(
   server.registerTool(
     "custom_fix_multi_review",
     {
-      title: "Start a custom fix for a ready Multi Review",
+      title: "Start a custom Address Findings for a ready Multi Review",
       description:
-        "The review tab's Custom fix prompt: start the Fix with your instruction and, optionally, another model (fixModel, from get_launch_options) instead of address_multi_review's default fix. The review must be ready (consolidated). Omit fixModel to keep the review's own fix model; set it only when the user asks for a different one. A custom fix never starts an automatic PR. Reuse requestId only to retry the same call, including after a lost answer from another node; a pending outcome means queued, not delivered.",
+        "The review tab's Custom Address Findings prompt: start Address Findings with your instruction and, optionally, another model (fixModel, from get_launch_options) instead of address_multi_review's default fix. The review must be ready (consolidated). Omit fixModel to keep the review's own Address Findings model; set it only when the user asks for a different one. A custom Address Findings never starts an automatic PR. Reuse requestId only to retry the same call, including after a lost answer from another node; a pending outcome means queued, not delivered.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256),

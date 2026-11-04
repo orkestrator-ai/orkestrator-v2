@@ -129,7 +129,7 @@ function visibleBuildCards(reviewerCount: number, hasPreparation: boolean): Visi
       kind: "step",
       key: "build",
       title: "Build",
-      description: "Implements the ticket and runs the fix stage.",
+      description: "Implements the ticket and does any Rework.",
       icon: <Hammer className="size-4" />,
     },
   ];
@@ -170,7 +170,7 @@ const BUILD_STEPS: Array<{
   {
     key: "build",
     title: "Build",
-    description: "Implements the ticket and runs the fix stage.",
+    description: "Implements the ticket and does any Rework.",
     icon: <Hammer className="size-4" />,
   },
   {
@@ -181,8 +181,8 @@ const BUILD_STEPS: Array<{
   },
   {
     key: "address",
-    title: "Address issues",
-    description: "Continues from the review and fixes its findings.",
+    title: "Address Findings",
+    description: "Continues from the review and addresses its findings.",
     icon: <ListChecks className="size-4" />,
   },
   {
@@ -1205,7 +1205,7 @@ export function BuildLaunchDialog({
                         icon={card.icon}
                         instructions={instructions[card.key] ?? ""}
                         instructionsHint={
-                          card.key === "build" ? "The fix stage uses them too." : undefined
+                          card.key === "build" ? "Rework uses them too." : undefined
                         }
                         onInstructionsChange={(value) => updateInstructions(card.key, value)}
                         state={steps[card.key]}

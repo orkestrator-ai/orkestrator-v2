@@ -572,7 +572,7 @@ describe("BuildChatTab presentation", () => {
       currentSessionIndex: 3,
     });
 
-    selectNode("Fix");
+    selectNode("Rework");
 
     expect(visibleTextContents()).toEqual(["I found the repository checks."]);
     expect(visibleToolInvocations()).toEqual(["mise tasks validate"]);

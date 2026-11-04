@@ -70,7 +70,7 @@ import {
   workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { carriesFixBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
+import { carriesReworkBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
 import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
 import {
@@ -123,7 +123,7 @@ import type { BuildPipelineInteractions } from "./build-pipeline-service-interac
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { sessionWorkspaceBaselineFields } from "./build-pipeline-validation-worktree.js";
 import { BuildPipelineReadOnlyGuard } from "./build-pipeline-read-only-guard.js";
-import { PIPELINE_ADDRESS_REPORT_KIND } from "@orkestrator/protocol/build-pipeline-address-report";
+import { PIPELINE_ADDRESS_FINDINGS_REPORT_KIND } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import { BuildPipelineStagePrompts, type StagePrompt } from "./build-pipeline-stage-prompts.js";
 import {
@@ -150,8 +150,8 @@ const log = createLogger("build-pipeline");
  * Shown in the build header while the pipeline waits for a person. Says what
  * happened, the likely reason, and what each available control will do.
  */
-export const UNCHANGED_FIX_PAUSE_MESSAGE =
-  "Paused: the fix stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
+export const UNCHANGED_REWORK_PAUSE_MESSAGE =
+  "Paused: the Rework stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
 /** A hand-written prompt for one session: a retry, a user message or package preparation. */
 type StageOverride = {
@@ -949,7 +949,7 @@ export class BuildPipelineSupervisor {
     switch (pipeline.phase) {
       case "building":
       case "fixing":
-        if (await this.pauseUnchangedFix(pipeline, session)) return;
+        if (await this.pauseUnchangedRework(pipeline, session)) return;
         if (
           usesPackagePreparationSession(pipeline) &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL
@@ -963,7 +963,7 @@ export class BuildPipelineSupervisor {
         await this.finishReview(pipeline, provider, session);
         return;
       case "addressing":
-        await this.recovery.finishAddress(pipeline, provider, session);
+        await this.recovery.finishAddressFindings(pipeline, provider, session);
         return;
       case "verifying":
         await this.recovery.finishVerification(pipeline, provider, session);
@@ -1026,7 +1026,7 @@ export class BuildPipelineSupervisor {
    * The baseline is consumed on the first comparison, so Resume runs the next
    * round as before instead of pausing again on the same turn.
    */
-  async pauseUnchangedFix(pipeline: BuildPipeline, session: PipelineSession): Promise<boolean> {
+  async pauseUnchangedRework(pipeline: BuildPipeline, session: PipelineSession): Promise<boolean> {
     const baseline = session.fixWorktreeFingerprintAtStart;
     if (session.phase !== "fix" || !baseline) return false;
     // Every attempt in this fix stage shares the original baseline. Consume
@@ -1044,7 +1044,7 @@ export class BuildPipelineSupervisor {
     pipeline.pausedFromPhase = "fixing";
     pipeline.phase = "paused";
     pipeline.pauseCause = "supervisor";
-    pipeline.error = UNCHANGED_FIX_PAUSE_MESSAGE;
+    pipeline.error = UNCHANGED_REWORK_PAUSE_MESSAGE;
     delete pipeline.stallWarning;
     await this.ctx.save(pipeline, pipeline.backendRevision);
     return true;
@@ -1597,21 +1597,21 @@ export class BuildPipelineSupervisor {
           : undefined;
       // Only a real fix turn: the dedicated package-preparation session also
       // runs as "fix" but always arrives with an override and never edits code.
-      const originalFix = pipeline.sessions.find(
+      const originalRework = pipeline.sessions.find(
         (session) =>
           session.phase === "fix" &&
           session.iteration === pipeline.iteration &&
           session.label !== REVIEW_PACKAGE_SESSION_LABEL &&
           // A fix superseded by a rewind from a later round ran before those
           // rounds changed the code; its baseline is not this fix's.
-          carriesFixBaseline(pipeline, session),
+          carriesReworkBaseline(pipeline, session),
       );
       // A retry/restart must compare with the code before the first attempt,
       // including when that attempt's probe was unavailable or already consumed.
-      const fixWorktreeFingerprint =
+      const reworkWorktreeFingerprint =
         !override && sessionPhase === "fix"
-          ? originalFix
-            ? originalFix.fixWorktreeFingerprintAtStart
+          ? originalRework
+            ? originalRework.fixWorktreeFingerprintAtStart
             : await this.worktreeFingerprint(pipeline)
           : undefined;
       // The commit "Rewind code to here" returns to. Best effort and probed
@@ -1708,12 +1708,13 @@ export class BuildPipelineSupervisor {
           ? { producedReviewPackagePlan: true as const }
           : {}),
         // The marker Verify reads to choose the typed report over the text.
-        ...(sessionPhase === "address" && dispatchResultKind === PIPELINE_ADDRESS_REPORT_KIND
-          ? { addressReportKind: PIPELINE_ADDRESS_REPORT_KIND }
+        ...(sessionPhase === "address" &&
+        dispatchResultKind === PIPELINE_ADDRESS_FINDINGS_REPORT_KIND
+          ? { addressReportKind: PIPELINE_ADDRESS_FINDINGS_REPORT_KIND }
           : {}),
         ...sessionWorkspaceBaselineFields(validationWorktree),
-        ...(fixWorktreeFingerprint
-          ? { fixWorktreeFingerprintAtStart: fixWorktreeFingerprint }
+        ...(reworkWorktreeFingerprint
+          ? { fixWorktreeFingerprintAtStart: reworkWorktreeFingerprint }
           : {}),
         ...(headAtStart ? { headAtStart } : {}),
       };

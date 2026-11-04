@@ -17,7 +17,7 @@ import {
   type PreviewRegistrySnapshot,
 } from "@orkestrator/protocol/preview-services";
 import {
-  MULTI_REVIEW_FIX_TAB_TITLE,
+  MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -183,7 +183,7 @@ describe("DraggableTab title precedence", () => {
     const tab: TabInfo = {
       id: "tab-fix",
       type: "agent-native",
-      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
+      displayTitle: MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
       isReviewTab: true,
       nativeAgentData: { platform: "codex", environmentId: "env-1" },
     };
@@ -196,12 +196,12 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 3);
 
-    expect(screen.getByText("Fix 4")).toBeDefined();
+    expect(screen.getByText("Address Findings 4")).toBeDefined();
     expect(screen.queryByText("Review 4") === null).toBe(true);
     expect(screen.queryByText("Generated review title") === null).toBe(true);
   });
 
-  test("restored custom fix tabs migrate the former long title to Fix", () => {
+  test("restored custom Address Findings tabs migrate the former long title to Address Findings", () => {
     const tab: TabInfo = {
       id: "tab-restored-fix",
       type: "agent-native",
@@ -212,7 +212,22 @@ describe("DraggableTab title precedence", () => {
 
     renderTab(tab, 1);
 
-    expect(screen.getByText("Fix 2")).toBeDefined();
+    expect(screen.getByText("Address Findings 2")).toBeDefined();
+    expect(screen.queryByText("Review 2") === null).toBe(true);
+  });
+
+  test("restored tabs saved with the former Fix title show Address Findings", () => {
+    const tab: TabInfo = {
+      id: "tab-restored-short-fix",
+      type: "agent-native",
+      displayTitle: "Fix",
+      isReviewTab: true,
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
+    };
+
+    renderTab(tab, 1);
+
+    expect(screen.getByText("Address Findings 2")).toBeDefined();
     expect(screen.queryByText("Review 2") === null).toBe(true);
   });
 

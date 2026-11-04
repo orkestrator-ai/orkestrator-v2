@@ -213,9 +213,9 @@ not advertise at its version before sending it.
 | `session transcript` | `session.transcript` | transcript window + message pages | read (content) |
 | `changes view ENV` | `changes.view` | `ChangeTrackingService.getView` / `projections.files` after `diffStats.sync` (the `changes_get_view` path) | read |
 | `changes history SESSION` | `changes.history` | `ChangeTrackingService.getHistory` + each turn's projection (no scan) | read |
-| `review launch ENV [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--review-model] [--fix-model] [--[no-]auto-fix] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation. `--focus`/`--focus-file` set `--reviewer` row N's `lens` ([reviewer lenses](review-preparation.md#reviewer-lenses)): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB), one line is both; the receipt carries no lens text | provider |
+| `review launch ENV [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--review-model] [--address-findings-model] [--[no-]auto-address-findings] [--[no-]auto-pr]` | `review.launch` | `launch_controller_multi_review`: the Multi Review button (saved defaults for what is omitted; an active review is reused) under an ID reserved from the operation. `--focus`/`--focus-file` set `--reviewer` row N's `lens` ([reviewer lenses](review-preparation.md#reviewer-lenses)): the first line is the label (at most 64 characters), the rest the instruction (at most 4 KiB), one line is both; the receipt carries no lens text | provider |
 | `review list ENV` / `review get REVIEW` | `review.list/get` | Multi Review storage, bounded summary | read |
-| `review open REVIEW [--fix]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Fix tab; Address findings) | metadata / provider |
+| `review open REVIEW [--address-findings]` / `review address REVIEW` | `review.open/address` | `controller_multi_review_surface` (root or Address Findings tab; Address findings). The former flags `--fix-model`, `--auto-fix` and `--fix` still work | metadata / provider |
 | `review cancel REVIEW` | `review.cancel` | Multi Review supervisor `cancel` | process |
 | `review start ENV [--target-branch B]` | `review.start` | the single-agent Review button: `session.start`'s job path with the shared review prompt (`@orkestrator/protocol/git-workflow-prompts`), the target branch (else the project's PR base branch, else `main`) and the saved review instruction resolved by the backend, the `Review` title, the `review` action default, and a review tab (it offers Address all) | provider |
 | `build launch TICKET --project P (--type local\|container [--base-branch B --base-commit SHA] \| --environment ENV) [--agent A] [--step STAGE=A[/M[@E]]]… [--instructions STAGE=TEXT]… [--instructions-file STAGE=PATH]… [--reviewer A=M[@E]]… [--focus N=TEXT]… [--focus-file N=PATH]… [--max-iterations N]` | `build.launch` | the Build button on a Kanban ticket, through the coordinator's path: `buildPipelineInputWithDefaults` over the saved Build defaults, `isStartBuildPipelineInput`, `BuildPipelineService.start` (whose admission key returns the ticket's active build: `reused`). See [Build Pipelines](#build-pipelines) | metadata, filesystem, provider, external |
@@ -765,7 +765,7 @@ and the app agree.
 - `--instructions STAGE=TEXT` and `--instructions-file STAGE=PATH` (`-` reads
   stdin) add the user's own instructions to a step
   ([per-stage instructions](build-pipeline-view.md#per-stage-instructions)),
-  at most 16 KiB each. A step named only this way keeps its saved model. Fix
+  at most 16 KiB each. A step named only this way keeps its saved model. Rework
   uses Build's.
 - `--reviewer AGENT=MODEL[@EFFORT]` rows replace the saved reviewers; reviewer
   1 is the review step, so `--step review=` and `--instructions review=` are

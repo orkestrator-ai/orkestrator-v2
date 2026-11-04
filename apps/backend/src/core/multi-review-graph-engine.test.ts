@@ -2,7 +2,7 @@
  * Multi Review on the graph engine end to end (item 301): the engine setting
  * and its override, the launch bound from the review's own input, the
  * projection of every step onto the record, cancellation, refused step
- * controls and the manual Fix after the run settles.
+ * controls and the manual Address Findings after the run settles.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { GRAPH_RUN_INPUT_PRODUCER } from "@orkestrator/protocol/graphs/run";
@@ -344,7 +344,7 @@ describe("a graph-engine Multi Review", () => {
     expect(await w.fixture.storage.getMultiReviewWorkflow(workflow.id)).toBeNull();
   });
 
-  test("bespoke step controls are refused; the manual Fix waits for the run to end", async () => {
+  test("bespoke step controls are refused; the manual Address Findings waits for the run to end", async () => {
     const w = await world();
     scriptReview(w, { findings: true });
     w.fakes.held.add("review");

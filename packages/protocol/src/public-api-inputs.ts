@@ -1424,16 +1424,19 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
             ...reviewSelection,
             description: "Preparation and consolidation model. Omitted: the saved one.",
           },
-          fixModel: { ...reviewSelection, description: "Fix model. Omitted: the saved one." },
+          fixModel: {
+            ...reviewSelection,
+            description: "Address Findings model. Omitted: the saved one.",
+          },
           autoFix: {
             type: "boolean",
             description:
-              "Start the Fix session when consolidation reports findings. Omitted: the saved Auto-fix setting (on when autoPr is true).",
+              "Start the Address Findings session when consolidation reports findings. Omitted: the saved Auto-address findings setting (on when autoPr is true).",
           },
           autoPr: {
             type: "boolean",
             description:
-              "Open the pull request once the Fix finishes (or straight after a clean consolidation). Never merges. Omitted: the saved Auto-PR setting.",
+              "Open the pull request once Address Findings finishes (or straight after a clean consolidation). Never merges. Omitted: the saved Auto-PR setting.",
           },
           targetBranch: {
             type: "string",
@@ -1486,7 +1489,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           surface: {
             type: "string",
             enum: ["root", "fix"],
-            description: "root (default): the review tab; fix: its Fix session tab.",
+            description: "root (default): the review tab; fix: its Address Findings session tab.",
           },
         },
         ["workflowId"],

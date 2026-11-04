@@ -227,7 +227,7 @@ export async function createFeatureBuild(
     environmentType: input.environmentType,
     ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
     agentType: input.agentType,
-    ...(input.steps ? { steps: withVerifyFromAddress(input.steps) } : {}),
+    ...(input.steps ? { steps: withVerifyFromAddressFindings(input.steps) } : {}),
     ...(input.reviewers ? { reviewers: input.reviewers } : {}),
     ...(input.reviewPreparation ? { reviewPreparation: input.reviewPreparation } : {}),
     taskTitle: resolvedTask.title,
@@ -260,7 +260,7 @@ export async function createFeatureBuild(
  * do not silently move verify onto the pipeline agent after the dedicated
  * verify action was introduced.
  */
-function withVerifyFromAddress(steps: BuildStepConfigs): BuildStepConfigs {
+function withVerifyFromAddressFindings(steps: BuildStepConfigs): BuildStepConfigs {
   if (steps.verify || !steps.address) return steps;
   // Only the model selection: Address's instructions are about fixing findings.
   const { instructions: _addressInstructions, ...selection } = steps.address;

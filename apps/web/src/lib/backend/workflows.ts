@@ -30,7 +30,7 @@ import {
   type MultiReviewReviewerTranscript,
   type MultiReviewStepKind,
   type MultiReviewStepTranscript,
-  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type {
@@ -186,12 +186,14 @@ export async function startMultiReview(
   return invoke<BackendMultiReviewWorkflow>("start_multi_review", { ...input });
 }
 
-export async function addressMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
+export async function addressMultiReviewFindings(
+  workflowId: string,
+): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("address_multi_review", { workflowId });
 }
 
-export async function startMultiReviewCustomFix(
-  input: StartMultiReviewCustomFixInput,
+export async function startMultiReviewCustomAddressFindings(
+  input: StartMultiReviewCustomAddressFindingsInput,
 ): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("start_multi_review_custom_fix", { ...input });
 }
@@ -200,7 +202,7 @@ export async function retryMultiReview(workflowId: string): Promise<BackendMulti
   return invoke<BackendMultiReviewWorkflow>("retry_multi_review", { workflowId });
 }
 
-export async function recoverMultiReviewFixSession(input: {
+export async function recoverMultiReviewAddressFindingsSession(input: {
   environmentId: string;
   tabId: string;
   expectedProviderSessionId: string;

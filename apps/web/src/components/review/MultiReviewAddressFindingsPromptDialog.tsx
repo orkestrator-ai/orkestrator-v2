@@ -26,11 +26,12 @@ import {
 } from "@/lib/agent-launch";
 import { flatCatalog } from "./MultiReviewLaunchDialog";
 
-// Keep the editable custom-session default independent from the built-in Fix
+// Keep the editable custom-session default independent from the built-in Address Findings
 // action, whose prompt carries workflow-specific mode instructions.
-export const DEFAULT_MULTI_REVIEW_FIX_PROMPT = "Please address all the issues and coverage gaps";
+export const DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT =
+  "Please address all the issues and coverage gaps";
 
-interface MultiReviewFixPromptDialogProps {
+interface MultiReviewAddressFindingsPromptDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   catalog: AgentModelCatalog;
@@ -64,7 +65,7 @@ function catalogSelection(
   };
 }
 
-export function MultiReviewFixPromptDialog({
+export function MultiReviewAddressFindingsPromptDialog({
   open,
   onOpenChange,
   catalog,
@@ -72,11 +73,11 @@ export function MultiReviewFixPromptDialog({
   error,
   busy = false,
   onSubmit,
-}: MultiReviewFixPromptDialogProps) {
+}: MultiReviewAddressFindingsPromptDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const [selection, setSelection] = useState(() => catalogSelection(defaultSelection, catalog));
-  const [prompt, setPrompt] = useState(DEFAULT_MULTI_REVIEW_FIX_PROMPT);
+  const [prompt, setPrompt] = useState(DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT);
   const wasOpen = useRef(false);
 
   useEffect(() => {
@@ -85,7 +86,7 @@ export function MultiReviewFixPromptDialog({
     if (!open) return;
     if (justOpened) {
       setSelection(catalogSelection(defaultSelection, catalog));
-      setPrompt(DEFAULT_MULTI_REVIEW_FIX_PROMPT);
+      setPrompt(DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT);
       return;
     }
     // A live provider catalog can refresh while the dialog is open. Preserve a
@@ -137,9 +138,9 @@ export function MultiReviewFixPromptDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="2xl">
         <DialogHeader>
-          <DialogTitle>Custom fix prompt</DialogTitle>
+          <DialogTitle>Custom Address Findings prompt</DialogTitle>
           <DialogDescription>
-            Choose the model and instructions to use for a new fix session.
+            Choose the model and instructions to use for a new Address Findings session.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -155,7 +156,7 @@ export function MultiReviewFixPromptDialog({
             <Label htmlFor="multi-review-fix-model">Model</Label>
             <AgentModelPicker
               id="multi-review-fix-model"
-              ariaLabel="Custom fix model"
+              ariaLabel="Custom Address Findings model"
               models={models}
               selectedPlatform={selection.agent}
               favorites={favorites}
@@ -186,7 +187,7 @@ export function MultiReviewFixPromptDialog({
                   ? (fastMode) => setSelection((current) => ({ ...current, fastMode }))
                   : undefined
               }
-              title="Custom fix model"
+              title="Custom Address Findings model"
               className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"
             />
           </div>
@@ -197,7 +198,7 @@ export function MultiReviewFixPromptDialog({
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               rows={5}
-              placeholder={DEFAULT_MULTI_REVIEW_FIX_PROMPT}
+              placeholder={DEFAULT_MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT}
             />
           </div>
           {error ? (
@@ -218,7 +219,7 @@ export function MultiReviewFixPromptDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !prompt.trim()}>
-              {busy ? "Starting…" : "Start fix"}
+              {busy ? "Starting…" : "Start Address Findings"}
             </Button>
           </DialogFooter>
         </form>

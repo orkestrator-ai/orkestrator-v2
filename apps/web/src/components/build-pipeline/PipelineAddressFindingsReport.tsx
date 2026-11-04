@@ -1,4 +1,4 @@
-import type { PipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import type { PipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import { cn } from "@/lib/utils";
 
 function plural(count: number, noun: string): string {
@@ -14,7 +14,11 @@ function omittedNote(count: number | undefined): string | null {
  * session's bounded `fixResult`. Collapsed to one summary line; the lists open
  * on demand. Shown only for Address sessions that have one.
  */
-export function PipelineAddressReport({ result }: { result: PipelineFixResult }) {
+export function PipelineAddressFindingsReport({
+  result,
+}: {
+  result: PipelineAddressFindingsResult;
+}) {
   const failed = result.commandsRun.filter((command) => command.result === "failed").length;
   const facts = [
     result.complete ? "complete" : "incomplete",

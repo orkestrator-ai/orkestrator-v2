@@ -4783,7 +4783,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
     expect(
       screen
-        .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+        .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
         .getAttribute("aria-checked"),
     ).toBe("true");
     expect(startMultiReviewMock).not.toHaveBeenCalled();
@@ -4919,7 +4919,9 @@ describe("ActionBar workflow tabs", () => {
     currentMultiReviewSettings = { autoFix: true };
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Auto-fix after consolidation" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Auto-address findings after consolidation" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     await waitFor(() =>
       expect(startMultiReviewMock).toHaveBeenCalledWith(

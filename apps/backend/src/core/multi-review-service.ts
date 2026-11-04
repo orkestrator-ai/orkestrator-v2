@@ -12,13 +12,13 @@ import { validationPreparation } from "./review-validation-service.js";
 import { managedProvider, retainProvider, retireProvider } from "./provider-retirement.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
+  MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE,
   MULTI_REVIEW_WORKFLOW_VERSION,
   MULTI_REVIEW_UNSTICK_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
-  type MultiReviewFixSession,
+  type MultiReviewAddressFindingsSession,
   type MultiReviewPausablePhase,
   type MultiReviewPhase,
   type MultiReviewModelSelection,
@@ -29,7 +29,7 @@ import {
   type MultiReviewEngine,
   type MultiReviewWorkflow,
   type MultiReviewWorktreeSnapshot,
-  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import {
@@ -82,7 +82,10 @@ import {
   type ProviderSessionObservation,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
-import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import {
+  addressFindingsReportPrompt,
+  structuredReportRepairPrompt,
+} from "./build-pipeline-prompts.js";
 import {
   connectionDefaultsFor,
   createAgentModelCatalogReader,
@@ -91,8 +94,8 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import {
   parseReviewPreparationResult,
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
-  parseFixResult,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  parseAddressFindingsResult,
 } from "./review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -101,12 +104,12 @@ import {
   createMultiReviewConsolidationPrompt,
 } from "./multi-review-prompts.js";
 import {
-  InvalidMultiReviewAddressStateError,
-  MissingMultiReviewAddressSessionError,
-  MultiReviewAddressDispatchError,
-  type MultiReviewAddressDispatchResult,
-  type MultiReviewFixSessionReplacement,
-} from "./multi-review-address-dispatch.js";
+  InvalidMultiReviewAddressFindingsStateError,
+  MissingMultiReviewAddressFindingsSessionError,
+  MultiReviewAddressFindingsDispatchError,
+  type MultiReviewAddressFindingsDispatchResult,
+  type MultiReviewAddressFindingsSessionReplacement,
+} from "./multi-review-address-findings-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
   DEFAULT_STALL_ABANDON_MS,
@@ -159,7 +162,7 @@ import {
   multiReviewDiscovery,
   multiReviewObligation,
   needsAutoPrLaunch,
-  needsInteractiveFixObservation,
+  needsInteractiveAddressFindingsObservation,
   needsPausedStopReconciliation,
   reviewSession,
   stableJitterMs,
@@ -210,18 +213,18 @@ import {
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   consolidatedReportIsClean,
-  fixResultCompletes,
-  multiReviewAutoFixDue,
-  interactiveFixAutoPrSkipMessage,
-  interactiveFixCanQueueAutoPr,
+  addressFindingsResultCompletes,
+  multiReviewAutoAddressFindingsDue,
+  interactiveAddressFindingsAutoPrSkipMessage,
+  interactiveAddressFindingsCanQueueAutoPr,
   launchMultiReviewAutoPr,
-  MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE,
+  MULTI_REVIEW_AUTO_PR_MANUAL_ADDRESS_FINDINGS_MESSAGE,
   queueAutoPr,
   queueCleanReviewAutoPr,
   skipAutoPr,
   supersedePendingAutoPr,
   type AutoPrLaunchOutcome,
-  type InteractiveFixTurnOutcome,
+  type InteractiveAddressFindingsTurnOutcome,
 } from "./multi-review-auto-pr.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -240,13 +243,13 @@ const MAX_CONCURRENT_WORKFLOW_PASSES = 8;
 const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
-const INTERACTIVE_FIX_INITIAL_IDLE_POLLS = 1;
+const INTERACTIVE_ADDRESS_FINDINGS_INITIAL_IDLE_POLLS = 1;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
-const ADDRESS_DISPATCH_RETRY_MS = 5_000;
-const MAX_ADDRESS_DISPATCH_ATTEMPTS = 3;
+const ADDRESS_FINDINGS_DISPATCH_RETRY_MS = 5_000;
+const MAX_ADDRESS_FINDINGS_DISPATCH_ATTEMPTS = 3;
 const MAX_AUTO_PR_ATTEMPTS = 3;
-/** Observation passes an unsettled interactive Fix outcome may wait before it counts as unknown. */
-const MAX_FIX_OUTCOME_POLLS = 20;
+/** Observation passes an unsettled interactive Address Findings outcome may wait before it counts as unknown. */
+const MAX_ADDRESS_FINDINGS_OUTCOME_POLLS = 20;
 const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 
 function nowIso(): string {
@@ -298,23 +301,33 @@ function sameModelSelection(
   );
 }
 
-function stepModelLabel(kind: MultiReviewStepKind): "preparation" | "consolidation" | "fix" {
-  return kind === "prepare" ? "preparation" : kind === "consolidate" ? "consolidation" : "fix";
+function stepModelLabel(
+  kind: MultiReviewStepKind,
+): "preparation" | "consolidation" | "Address Findings" {
+  return kind === "prepare"
+    ? "preparation"
+    : kind === "consolidate"
+      ? "consolidation"
+      : "Address Findings";
 }
 
 function stepResultLabel(
   kind: MultiReviewStepKind,
-): "review package preparation" | "consolidated report" | "fix result" {
+): "review package preparation" | "consolidated report" | "Address Findings result" {
   return kind === "prepare"
     ? "review package preparation"
     : kind === "consolidate"
       ? "consolidated report"
-      : "fix result";
+      : "Address Findings result";
 }
 
 /** What a step's follow-up turn says is done, or is to be continued. */
 function stepWorkLabel(kind: MultiReviewStepKind): string {
-  return kind === "prepare" ? "discovery work" : kind === "consolidate" ? "consolidation" : "fix";
+  return kind === "prepare"
+    ? "discovery work"
+    : kind === "consolidate"
+      ? "consolidation"
+      : "Address Findings work";
 }
 
 function clearReviewSession(workflow: MultiReviewWorkflow): void {
@@ -342,7 +355,7 @@ function rotatedSessionKey(base: string): string {
 function beginStepRuntime(
   workflow: MultiReviewWorkflow,
   kind: MultiReviewStepKind,
-  session: MultiReviewFixSession,
+  session: MultiReviewAddressFindingsSession,
 ): void {
   const runtimes = (workflow.stepRuntimes ??= {});
   runtimes[kind] = {
@@ -360,7 +373,7 @@ function beginStepRuntime(
 /** Adopt the clock of a request that was already running when step records were introduced. */
 function backfillActiveStepRuntime(
   workflow: MultiReviewWorkflow,
-  session: MultiReviewFixSession,
+  session: MultiReviewAddressFindingsSession,
 ): boolean {
   const kind = workflow.activeRequest?.kind;
   if (!kind || workflow.stepRuntimes?.[kind]) return false;
@@ -375,13 +388,13 @@ function settleStepRuntime(workflow: MultiReviewWorkflow, kind: MultiReviewStepK
   runtime.completedAt = nowIso();
 }
 
-function clearPendingAddressIdentity(workflow: MultiReviewWorkflow): void {
+function clearPendingAddressFindingsIdentity(workflow: MultiReviewWorkflow): void {
   delete workflow.addressSessionKey;
   delete workflow.addressRequestId;
   delete workflow.addressTabId;
 }
 
-function fixStepHasStarted(workflow: MultiReviewWorkflow): boolean {
+function addressFindingsStepHasStarted(workflow: MultiReviewWorkflow): boolean {
   return (
     workflow.fixLaunch !== undefined ||
     workflow.stepRuntimes?.fix !== undefined ||
@@ -392,7 +405,7 @@ function fixStepHasStarted(workflow: MultiReviewWorkflow): boolean {
   );
 }
 
-function queueDefaultFix(workflow: MultiReviewWorkflow): void {
+function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
   supersedePendingAutoPr(workflow);
   workflow.phase = "interactive";
   workflow.fixLaunch = { kind: "default" };
@@ -408,7 +421,7 @@ function queueDefaultFix(workflow: MultiReviewWorkflow): void {
   delete workflow.error;
 }
 
-function queueRestartedFix(workflow: MultiReviewWorkflow): void {
+function queueRestartedAddressFindings(workflow: MultiReviewWorkflow): void {
   const launch = workflow.fixLaunch ?? { kind: "default" as const };
   workflow.fixLaunch = launch;
   const launchId = randomUUID();
@@ -508,9 +521,14 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
 export function workflowCompletionOutcome(
   workflow: MultiReviewWorkflow,
 ): AgentActivityCompletionOutcome | undefined {
-  const fixEnded = workflow.phase === "interactive" ? workflow.fixSession?.status : undefined;
-  if (workflow.phase === "failed" || fixEnded === "failed") return "failed";
-  if (workflow.phase === "cancelled" || workflow.phase === "paused" || fixEnded === "cancelled") {
+  const addressFindingsEnded =
+    workflow.phase === "interactive" ? workflow.fixSession?.status : undefined;
+  if (workflow.phase === "failed" || addressFindingsEnded === "failed") return "failed";
+  if (
+    workflow.phase === "cancelled" ||
+    workflow.phase === "paused" ||
+    addressFindingsEnded === "cancelled"
+  ) {
     return "none";
   }
   return undefined;
@@ -523,7 +541,7 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   controllerRenewMs?: number;
   cancellationDeadlineMs?: number;
   progressProbeIntervalMs?: number;
-  /** Batch collection window of interactive Fix activity reads (`ActivityReadCoalescer`). */
+  /** Batch collection window of interactive Address Findings activity reads (`ActivityReadCoalescer`). */
   activityReadCoalesceWindowMs?: number;
   stallWarningMs?: number;
   stallAbandonMs?: number;
@@ -535,8 +553,8 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
   observationIntervalMs?: number;
   /** Period of the authoritative storage scan that rediscovers workflows. */
   reconcileIntervalMs?: number;
-  addressDispatchRetryMs?: number;
-  maxAddressDispatchAttempts?: number;
+  addressFindingsDispatchRetryMs?: number;
+  maxAddressFindingsDispatchAttempts?: number;
   provider?: (
     workflow: MultiReviewWorkflow,
     selection: MultiReviewModelSelection,
@@ -569,34 +587,34 @@ export interface MultiReviewServiceOptions extends KeyedWorkflowServiceOptions {
    * The supervisor, not a mounted renderer, retries this callback until it
    * succeeds and acknowledges the persisted intent.
    */
-  dispatchAddressPrompt?: (
+  dispatchAddressFindingsPrompt?: (
     workflow: MultiReviewWorkflow,
     presentation: { activateTab: boolean },
-  ) => Promise<MultiReviewAddressDispatchResult | MultiReviewFixSession | void>;
-  /** Rebinds and seeds a renderer-created replacement for a missing Fix session. */
-  recoverAddressSession?: (
+  ) => Promise<MultiReviewAddressFindingsDispatchResult | MultiReviewAddressFindingsSession | void>;
+  /** Rebinds and seeds a renderer-created replacement for a missing Address Findings session. */
+  recoverAddressFindingsSession?: (
     workflow: MultiReviewWorkflow,
-    replacement: MultiReviewFixSessionReplacement,
-  ) => Promise<MultiReviewAddressDispatchResult>;
+    replacement: MultiReviewAddressFindingsSessionReplacement,
+  ) => Promise<MultiReviewAddressFindingsDispatchResult>;
   /**
-   * How the interactive Fix's latest handoff turn ended. Only `completed`
-   * authorizes an automatic PR; without this reader an interactive Fix never
+   * How the interactive Address Findings's latest handoff turn ended. Only `completed`
+   * authorizes an automatic PR; without this reader an interactive Address Findings never
    * launches one.
    */
-  interactiveFixTurnOutcome?: (
+  interactiveAddressFindingsTurnOutcome?: (
     workflow: MultiReviewWorkflow,
-    session: MultiReviewFixSession,
-  ) => Promise<InteractiveFixTurnOutcome>;
+    session: MultiReviewAddressFindingsSession,
+  ) => Promise<InteractiveAddressFindingsTurnOutcome>;
   /** Holds the native session's dispatch/Stop fence through PR admission. */
-  withInteractiveFixSessionFence?: <T>(
+  withInteractiveAddressFindingsSessionFence?: <T>(
     workflow: MultiReviewWorkflow,
-    session: MultiReviewFixSession,
+    session: MultiReviewAddressFindingsSession,
     operation: () => Promise<T>,
   ) => Promise<T>;
   /** Removes a failed custom launch from the native-agent identity store. */
-  invalidateAddressSession?: (
+  invalidateAddressFindingsSession?: (
     workflow: MultiReviewWorkflow,
-    session: MultiReviewFixSession,
+    session: MultiReviewAddressFindingsSession,
   ) => Promise<void>;
   /** Reviewer fan-out concurrency; clamped by the shared fan-out runner. */
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
@@ -634,15 +652,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * in-memory workflow would reject one another as revision conflicts.
    */
   private readonly saveTails = new WeakMap<MultiReviewWorkflow, Promise<void>>();
-  private readonly addressDispatchRetryAt = new Map<string, number>();
+  private readonly addressFindingsDispatchRetryAt = new Map<string, number>();
   private readonly autoPrRetryAt = new Map<string, number>();
-  private readonly fixOutcomePolls = new Map<string, number>();
+  private readonly addressFindingsOutcomePolls = new Map<string, number>();
   /**
    * Focus is permission from the foreground action, not durable workflow state.
    * It is consumed by the first dispatch attempt and intentionally disappears
    * across retries and backend restarts.
    */
-  private readonly foregroundAddressDispatches = new Set<string>();
+  private readonly foregroundAddressFindingsDispatches = new Set<string>();
   /** The due scheduler's lease renewal; the keyed driver runs its own. */
   private renewTimer: unknown = null;
   private readonly scheduler: WorkflowDueScheduler;
@@ -795,10 +813,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.providerCreations.clear();
     this.providerUsers.clear();
     this.providerReaders.clear();
-    this.addressDispatchRetryAt.clear();
+    this.addressFindingsDispatchRetryAt.clear();
     this.autoPrRetryAt.clear();
-    this.fixOutcomePolls.clear();
-    this.foregroundAddressDispatches.clear();
+    this.addressFindingsOutcomePolls.clear();
+    this.foregroundAddressFindingsDispatches.clear();
     await Promise.allSettled(
       [...this.leases].map(([workflowId, lease]) =>
         this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token),
@@ -937,7 +955,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * A bounded tail of a preparation, consolidation or Fix session, for the
+   * A bounded tail of a preparation, consolidation or Address Findings session, for the
    * flow graph's inspector. Same contract as {@link reviewerTranscript}; a
    * session another step is using now answers with no messages.
    */
@@ -972,7 +990,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         return record.snapshot;
       },
       // A read holds the provider like a reviewer read does, and never
-      // registers the session: an interactive Fix belongs to its native tab.
+      // registers the session: an interactive Address Findings belongs to its native tab.
       withProvider: async (workflow, session, read) => {
         const key = this.providerKey(workflow, session);
         this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
@@ -1222,7 +1240,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   /**
    * Refuses a bespoke step control on a graph-engine review (item 301): its
    * steps are graph activations, controlled from the graph run view. Once
-   * the run settles, the manual Fix (`allowSettled`) works as on any review.
+   * the run settles, the manual Address Findings (`allowSettled`) works as on any review.
    */
   private async assertBespokeControl(
     workflowId: string,
@@ -1243,7 +1261,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   async address(workflowId: string): Promise<MultiReviewWorkflow> {
-    await this.assertBespokeControl(workflowId, "starting its Fix", true);
+    await this.assertBespokeControl(workflowId, "starting its Address Findings", true);
     return this.withLock(workflowId, async () => {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
@@ -1253,13 +1271,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // that second half was interrupted, repeating the command must resume it
         // without trying to transition the already-interactive workflow again.
         if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
-          this.addressDispatchRetryAt.delete(workflow.id);
-          this.foregroundAddressDispatches.add(workflow.id);
+          this.addressFindingsDispatchRetryAt.delete(workflow.id);
+          this.foregroundAddressFindingsDispatches.add(workflow.id);
           void this.advanceNow(workflow.id);
           return workflow;
         }
         // The durable handoff already ran. A transport retry must not send a
-        // second fix turn or report a successful handoff as a validation error.
+        // second Address Findings turn or report a successful handoff as a validation error.
         if (workflow.phase === "interactive") return workflow;
         if (workflow.phase !== "ready" || !workflow.consolidatedReport) {
           throw new Error("The consolidated review is not ready to address");
@@ -1268,10 +1286,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // supervisor adopts the idle consolidation session and dispatches the
         // prompt from `advance`; a renderer can disappear immediately after this
         // save without delaying or losing the work.
-        queueDefaultFix(workflow);
+        queueDefaultAddressFindings(workflow);
         const saved = await this.save(workflow, token);
-        this.addressDispatchRetryAt.delete(workflow.id);
-        this.foregroundAddressDispatches.add(workflow.id);
+        this.addressFindingsDispatchRetryAt.delete(workflow.id);
+        this.foregroundAddressFindingsDispatches.add(workflow.id);
         void this.advanceNow(workflow.id);
         return saved;
       } finally {
@@ -1283,8 +1301,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
   }
 
-  async customFix(input: StartMultiReviewCustomFixInput): Promise<MultiReviewWorkflow> {
-    await this.assertBespokeControl(input.workflowId, "starting its Fix", true);
+  async customAddressFindings(
+    input: StartMultiReviewCustomAddressFindingsInput,
+  ): Promise<MultiReviewWorkflow> {
+    await this.assertBespokeControl(input.workflowId, "starting its Address Findings", true);
     return this.withLock(input.workflowId, async () => {
       const controlled = await this.loadControlled(input.workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${input.workflowId}`);
@@ -1299,13 +1319,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.customFixModel.model === input.fixModel.model &&
           workflow.customFixModel.reasoningEffort === input.fixModel.reasoningEffort
         ) {
-          this.addressDispatchRetryAt.delete(workflow.id);
-          this.foregroundAddressDispatches.add(workflow.id);
+          this.addressFindingsDispatchRetryAt.delete(workflow.id);
+          this.foregroundAddressFindingsDispatches.add(workflow.id);
           void this.advanceNow(workflow.id);
           return workflow;
         }
         if (workflow.phase !== "ready" || !workflow.consolidatedReport) {
-          throw new Error("The consolidated review is not ready for a custom fix");
+          throw new Error("The consolidated review is not ready for a custom Address Findings");
         }
         // Persist the complete launch intent before creating a provider session
         // or publishing its tab. The supervisor can resume every later step
@@ -1339,8 +1359,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         delete workflow.activeRequest;
         delete workflow.error;
         const saved = await this.save(workflow, token);
-        this.addressDispatchRetryAt.delete(workflow.id);
-        this.foregroundAddressDispatches.add(workflow.id);
+        this.addressFindingsDispatchRetryAt.delete(workflow.id);
+        this.foregroundAddressFindingsDispatches.add(workflow.id);
         void this.advanceNow(workflow.id);
         return saved;
       } finally {
@@ -1349,12 +1369,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
   }
 
-  async recoverFixSession(
+  async recoverAddressFindingsSession(
     environmentId: string,
-    replacement: MultiReviewFixSessionReplacement,
+    replacement: MultiReviewAddressFindingsSessionReplacement,
   ): Promise<MultiReviewWorkflow> {
-    if (!this.options.recoverAddressSession) {
-      throw new Error("Multi Review Fix session recovery is unavailable");
+    if (!this.options.recoverAddressFindingsSession) {
+      throw new Error("Multi Review Address Findings session recovery is unavailable");
     }
     const records = await this.storage.listMultiReviewWorkflows(environmentId);
     const candidate = records
@@ -1369,7 +1389,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             replacement.tabId,
       );
     if (!candidate || !isMultiReviewWorkflow(candidate)) {
-      throw new Error("The Multi Review workflow for this Fix tab is no longer available");
+      throw new Error(
+        "The Multi Review workflow for this Address Findings tab is no longer available",
+      );
     }
     return this.withLock(candidate.id, async () => {
       const controlled = await this.loadControlled(candidate.id);
@@ -1379,12 +1401,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (workflow.fixSession?.providerSessionId === replacement.replacementProviderSessionId) {
           return workflow;
         }
-        const recovered = await this.options.recoverAddressSession!(workflow, replacement);
+        const recovered = await this.options.recoverAddressFindingsSession!(workflow, replacement);
         await this.assertFence(workflow.id, token);
         this.pollGate.clearPrefix(`${workflow.id}\0fix\0`);
         supersedePendingAutoPr(workflow);
         this.autoPrRetryAt.delete(workflow.id);
-        this.fixOutcomePolls.delete(workflow.id);
+        this.addressFindingsOutcomePolls.delete(workflow.id);
         workflow.fixSession = recovered.fixSession;
         workflow.fixSession.status = "running";
         workflow.fixSession.startedAt = nowIso();
@@ -1399,7 +1421,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.stepRuntimes.fix.tokenBaseline = 0;
         }
         workflow.fixTabId = recovered.tabId;
-        workflow.presentationError = MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE;
+        workflow.presentationError = MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE;
         delete workflow.error;
         this.progress.forget(replacement.expectedProviderSessionId);
         return await this.save(workflow, token);
@@ -1483,7 +1505,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
-        clearPendingAddressIdentity(workflow);
+        clearPendingAddressFindingsIdentity(workflow);
         delete workflow.customFixInstruction;
         delete workflow.customFixModel;
         delete workflow.presentationError;
@@ -1561,13 +1583,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.phase = "reviewing";
         } else if (workflow.consolidatedReport && reviewSession(workflow)) {
           workflow.phase = "ready";
-          // A failed Fix may have superseded the clean report's pending PR.
+          // A failed Address Findings may have superseded the clean report's pending PR.
           // Restoring that report restores its intent under the same request id.
           queueCleanReviewAutoPr(workflow);
           reviewSession(workflow)!.status = "idle";
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
-          clearPendingAddressIdentity(workflow);
+          clearPendingAddressFindingsIdentity(workflow);
           delete workflow.presentationError;
           delete workflow.activeRequest;
         } else {
@@ -1599,7 +1621,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * because the pass will not consolidate while any reviewer is still pending or
    * running. Stopping retires that reviewer as `cancelled`: the pass skips it,
    * consolidation runs from whatever the remaining reviewers produced, and the
-   * fix stage follows as usual.
+   * Address Findings stage follows as usual.
    *
    * The abort is best-effort by design. The reason to stop a reviewer is that it
    * is unresponsive, so waiting for the provider to confirm the abort would
@@ -1724,7 +1746,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (workflow.reviewSnapshotStale === true && workflow.reviewPackage) {
           throw new Error("Restart the full Multi Review to review the updated worktree snapshot");
         }
-        const restartFixAfterConsolidation = fixStepHasStarted(workflow);
+        const restartFixAfterConsolidation = addressFindingsStepHasStarted(workflow);
 
         supersedePendingAutoPr(workflow);
         this.autoPrRetryAt.delete(workflow.id);
@@ -1763,7 +1785,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         delete workflow.stepRuntimes?.fix;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
-        clearPendingAddressIdentity(workflow);
+        clearPendingAddressFindingsIdentity(workflow);
         delete workflow.customFixInstruction;
         delete workflow.customFixModel;
         delete workflow.presentationError;
@@ -1820,8 +1842,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (kind === "consolidate" && !consolidationStarted) {
           throw new Error("Consolidation has not started");
         }
-        if (kind === "fix" && !fixStepHasStarted(workflow)) {
-          throw new Error("Fix has not started");
+        if (kind === "fix" && !addressFindingsStepHasStarted(workflow)) {
+          throw new Error("Address Findings has not started");
         }
         if (
           kind === "consolidate" &&
@@ -1830,7 +1852,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           throw new Error("Consolidation cannot restart without a reviewer report");
         }
         if (kind === "fix" && !workflow.consolidatedReport) {
-          throw new Error("Fix cannot restart without a consolidated report");
+          throw new Error("Address Findings cannot restart without a consolidated report");
         }
 
         // Snapshot capture can reject (unknown worktree, missing fingerprint,
@@ -1858,13 +1880,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           );
         }
 
-        const shouldReplayFix = kind !== "fix" && fixStepHasStarted(workflow);
-        const preserveSharedFixSession =
+        const shouldReplayAddressFindings =
+          kind !== "fix" && addressFindingsStepHasStarted(workflow);
+        const preserveSharedAddressFindingsSession =
           kind === "fix" &&
           restartedModel === undefined &&
           !workflow.reviewModel &&
           workflow.fixLaunch?.kind !== "custom";
-        // A new preparation or consolidation invalidates the Fix result that
+        // A new preparation or consolidation invalidates Address Findings result that
         // authorized an undelivered PR launch.
         supersedePendingAutoPr(workflow);
         this.autoPrRetryAt.delete(workflow.id);
@@ -1874,7 +1897,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         );
         const activeReviewSession = reviewSession(workflow);
         const abandonActiveReviewSession =
-          kind !== "fix" || (!workflow.reviewModel && !preserveSharedFixSession);
+          kind !== "fix" || (!workflow.reviewModel && !preserveSharedAddressFindingsSession);
         if (abandonActiveReviewSession) {
           await this.abandonSession(
             workflow,
@@ -1923,7 +1946,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete workflow.stepRuntimes?.fix;
           clearReviewSession(workflow);
         } else {
-          if (!preserveSharedFixSession) {
+          if (!preserveSharedAddressFindingsSession) {
             delete workflow.fixSession;
             workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           }
@@ -1934,7 +1957,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               workflow.fixLaunch = { ...workflow.fixLaunch, model: restartedModel };
             }
           }
-          queueRestartedFix(workflow);
+          queueRestartedAddressFindings(workflow);
         }
 
         if (kind === "prepare" && restartedModel) {
@@ -1949,7 +1972,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete workflow.fixSession;
             workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           }
-          workflow.restartFixAfterConsolidation = shouldReplayFix || undefined;
+          workflow.restartFixAfterConsolidation = shouldReplayAddressFindings || undefined;
           delete workflow.consolidatedReport;
           delete workflow.consolidationOverlap;
         } else {
@@ -1962,7 +1985,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (kind !== "fix") {
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
-          clearPendingAddressIdentity(workflow);
+          clearPendingAddressFindingsIdentity(workflow);
           delete workflow.customFixInstruction;
           delete workflow.customFixModel;
           delete workflow.presentationError;
@@ -2173,7 +2196,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   /**
    * Tear down an entire workflow from one parent-tab close intent.
    *
-   * This is intentionally stronger than cancel: every reviewer and fix session
+   * This is intentionally stronger than cancel: every reviewer and Address Findings session
    * is closed, every pane tab owned by the workflow is removed authoritatively,
    * and the durable workflow is deleted so a replacement can start immediately.
    */
@@ -2226,7 +2249,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             : []),
         ];
         // A graph-engine review's sessions belong to its graph run (item
-        // 301), which keeps them; only a manual Fix started after the run
+        // 301), which keeps them; only a manual Address Findings started after the run
         // ended is this record's own.
         const owned =
           workflow.engine === "graph"
@@ -2301,7 +2324,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         await this.storage.deleteMultiReviewWorkflow(workflow.id);
         this.supervisor?.forget(workflow.id);
         this.pollGate.clearPrefix(`${workflow.id}\0`);
-        this.addressDispatchRetryAt.delete(workflow.id);
+        this.addressFindingsDispatchRetryAt.delete(workflow.id);
         const cleanup = await Promise.allSettled([
           this.storage.removeMultiReviewTabs(workflow.environmentId, workflow.id),
           this.syncEnvironmentActivity(workflow.environmentId, closeRequestedAt),
@@ -2342,7 +2365,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * bounded admission and a critical lease-renewal job.
    */
   private createSupervisor(): KeyedWorkflowSupervisor<MultiReviewObligation> {
-    const dispatches = this.options.dispatchAddressPrompt !== undefined;
+    const dispatches = this.options.dispatchAddressFindingsPrompt !== undefined;
     return new KeyedWorkflowSupervisor<MultiReviewObligation>({
       domain: "multi-review",
       kind: "multi-review-tick",
@@ -2393,7 +2416,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     supervisor.note(
       workflowId,
-      multiReviewObligation(snapshot, this.options.dispatchAddressPrompt !== undefined),
+      multiReviewObligation(snapshot, this.options.dispatchAddressFindingsPrompt !== undefined),
       snapshot.environmentId,
     );
   }
@@ -2459,8 +2482,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       span.work("record-scanned", records.length);
       return records.flatMap((record) =>
         isMultiReviewWorkflow(record.snapshot) &&
-        supervisionDemand(record.snapshot, this.options.dispatchAddressPrompt !== undefined) !==
-          "none"
+        supervisionDemand(
+          record.snapshot,
+          this.options.dispatchAddressFindingsPrompt !== undefined,
+        ) !== "none"
           ? [record.id]
           : [],
       );
@@ -2477,14 +2502,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const record = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!record || !isMultiReviewWorkflow(record.snapshot)) return undefined;
     const workflow = record.snapshot;
-    const demand = supervisionDemand(workflow, this.options.dispatchAddressPrompt !== undefined);
+    const demand = supervisionDemand(
+      workflow,
+      this.options.dispatchAddressFindingsPrompt !== undefined,
+    );
     if (demand === "none") return undefined;
     const now = Date.now();
     const fastMs = this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
     if (demand === "fast") {
       const retryAt = needsAutoPrLaunch(workflow)
         ? this.autoPrRetryAt.get(workflowId)
-        : this.addressDispatchRetryAt.get(workflowId);
+        : this.addressFindingsDispatchRetryAt.get(workflowId);
       return retryAt !== undefined && retryAt > now ? retryAt - now : fastMs;
     }
     const observeMs =
@@ -2726,30 +2754,36 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       return;
     }
     const existingPhase = existing.snapshot.phase;
-    const pendingAddress =
+    const pendingAddressFindings =
       existingPhase === "interactive" &&
       existing.snapshot.addressPromptPending === true &&
-      this.options.dispatchAddressPrompt !== undefined;
-    const observingInteractiveFix = needsInteractiveFixObservation(existing.snapshot);
+      this.options.dispatchAddressFindingsPrompt !== undefined;
+    const observingInteractiveAddressFindings = needsInteractiveAddressFindingsObservation(
+      existing.snapshot,
+    );
     const reconcilingPausedStop = needsPausedStopReconciliation(existing.snapshot);
     const pendingAutoPr = needsAutoPrLaunch(existing.snapshot);
     if (
-      !pendingAddress &&
-      !observingInteractiveFix &&
+      !pendingAddressFindings &&
+      !observingInteractiveAddressFindings &&
       !pendingAutoPr &&
       !reconcilingPausedStop &&
       !isSupervisedPhase(existingPhase) &&
       !existing.snapshot.pendingResultConsumptions?.length
     )
       return;
-    if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
+    if (
+      pendingAddressFindings &&
+      (this.addressFindingsDispatchRetryAt.get(workflowId) ?? 0) > Date.now()
+    )
+      return;
     // Back off a retried PR launch only while it is the sole outstanding work.
     if (
       (existingPhase === "completed" ||
         existingPhase === "interactive" ||
         existingPhase === "ready") &&
-      !pendingAddress &&
-      !observingInteractiveFix &&
+      !pendingAddressFindings &&
+      !observingInteractiveAddressFindings &&
       !existing.snapshot.pendingResultConsumptions?.length &&
       pendingAutoPr &&
       (this.autoPrRetryAt.get(workflowId) ?? 0) > Date.now()
@@ -2767,11 +2801,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     } else if (
       workflow.phase === "interactive" &&
       workflow.addressPromptPending === true &&
-      this.options.dispatchAddressPrompt
+      this.options.dispatchAddressFindingsPrompt
     ) {
-      await this.advanceAddressPrompt(workflow, token);
-    } else if (needsInteractiveFixObservation(workflow)) {
-      await this.advanceInteractiveFix(workflow, token);
+      await this.advanceAddressFindingsPrompt(workflow, token);
+    } else if (needsInteractiveAddressFindingsObservation(workflow)) {
+      await this.advanceInteractiveAddressFindings(workflow, token);
     } else if (workflow.phase === "cancelling") {
       await this.advanceCancellation(workflow, token);
     } else if (needsAutoPrLaunch(workflow)) {
@@ -2783,7 +2817,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       workflow.phase === "consolidating" ||
       workflow.phase === "fixing"
     ) {
-      await this.advanceFixModel(workflow, token);
+      await this.advanceAddressFindingsModel(workflow, token);
     }
   }
 
@@ -2803,12 +2837,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /** Complete an interactive handoff without relying on a mounted review tab. */
-  private async advanceAddressPrompt(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+  private async advanceAddressFindingsPrompt(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<void> {
     try {
-      const previousFixSession = workflow.fixSession;
-      const activateTab = this.foregroundAddressDispatches.delete(workflow.id);
-      const dispatched = await this.options.dispatchAddressPrompt!(workflow, { activateTab });
-      const result: MultiReviewAddressDispatchResult | undefined =
+      const previousAddressFindingsSession = workflow.fixSession;
+      const activateTab = this.foregroundAddressFindingsDispatches.delete(workflow.id);
+      const dispatched = await this.options.dispatchAddressFindingsPrompt!(workflow, {
+        activateTab,
+      });
+      const result: MultiReviewAddressFindingsDispatchResult | undefined =
         dispatched && "fixSession" in dispatched
           ? dispatched
           : dispatched
@@ -2838,8 +2877,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (
           workflow.stepRuntimes?.fix &&
           dispatchedSession.tokenCount === undefined &&
-          (!previousFixSession ||
-            previousFixSession.providerSessionId !== dispatchedSession.providerSessionId)
+          (!previousAddressFindingsSession ||
+            previousAddressFindingsSession.providerSessionId !==
+              dispatchedSession.providerSessionId)
         ) {
           workflow.stepRuntimes.fix.tokenBaseline = 0;
         }
@@ -2849,36 +2889,38 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       else delete workflow.presentationError;
       delete workflow.addressPromptPending;
       delete workflow.addressPromptAttempts;
-      clearPendingAddressIdentity(workflow);
+      clearPendingAddressFindingsIdentity(workflow);
       delete workflow.customFixInstruction;
       delete workflow.customFixModel;
       delete workflow.error;
-      this.addressDispatchRetryAt.delete(workflow.id);
+      this.addressFindingsDispatchRetryAt.delete(workflow.id);
       await this.save(workflow, token);
       if (
         fixSession &&
-        previousFixSession &&
-        previousFixSession.providerSessionId !== fixSession.providerSessionId
+        previousAddressFindingsSession &&
+        previousAddressFindingsSession.providerSessionId !== fixSession.providerSessionId
       ) {
         await this.abandonSession(
           workflow,
-          previousFixSession,
-          previousFixSession.providerSessionId,
+          previousAddressFindingsSession,
+          previousAddressFindingsSession.providerSessionId,
         );
-        this.progress.forget(previousFixSession.providerSessionId);
+        this.progress.forget(previousAddressFindingsSession.providerSessionId);
       }
     } catch (error) {
       if (error instanceof ControllerFenceError) throw error;
       const nextError = errorMessage(error).slice(0, 4_096);
       const attempts = (workflow.addressPromptAttempts ?? 0) + 1;
-      const missingSession = error instanceof MissingMultiReviewAddressSessionError;
-      const invalidState = error instanceof InvalidMultiReviewAddressStateError;
-      if (missingSession || invalidState || attempts >= this.maxAddressDispatchAttempts()) {
+      const missingSession = error instanceof MissingMultiReviewAddressFindingsSessionError;
+      const invalidState = error instanceof InvalidMultiReviewAddressFindingsStateError;
+      if (missingSession || invalidState || attempts >= this.maxAddressFindingsDispatchAttempts()) {
         // A definitive miss cannot recover under the old provider id. Other
         // persistent failures stop after a bounded budget so activity and user
         // controls cannot remain wedged forever.
         const failedPreparedSession =
-          error instanceof MultiReviewAddressDispatchError ? error.preparedSession : undefined;
+          error instanceof MultiReviewAddressFindingsDispatchError
+            ? error.preparedSession
+            : undefined;
         if (failedPreparedSession) {
           await this.abandonSession(
             workflow,
@@ -2887,13 +2929,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           );
           this.progress.forget(failedPreparedSession.providerSessionId);
           await this.options
-            .invalidateAddressSession?.(workflow, failedPreparedSession)
+            .invalidateAddressFindingsSession?.(workflow, failedPreparedSession)
             .catch(() => undefined);
         }
         workflow.phase = "failed";
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
-        clearPendingAddressIdentity(workflow);
+        clearPendingAddressFindingsIdentity(workflow);
         delete workflow.customFixInstruction;
         delete workflow.customFixModel;
         delete workflow.activeRequest;
@@ -2905,7 +2947,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete workflow.fixSession;
         }
         workflow.error = nextError;
-        this.addressDispatchRetryAt.delete(workflow.id);
+        this.addressFindingsDispatchRetryAt.delete(workflow.id);
         await this.save(workflow, token);
       } else {
         // Keep the exact same durable request pending. The native-agent layer
@@ -2914,7 +2956,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // not reset a permanently failing dispatch to an infinite retry loop.
         workflow.addressPromptAttempts = attempts;
         workflow.error = nextError;
-        this.addressDispatchRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+        this.addressFindingsDispatchRetryAt.set(
+          workflow.id,
+          Date.now() + this.addressFindingsDispatchRetryMs(),
+        );
         await this.save(workflow, token);
       }
     } finally {
@@ -2923,7 +2968,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * Deliver the PR launch a successful Fix or a clean report recorded. Like
+   * Deliver the PR launch a successful Address Findings or a clean report recorded. Like
    * the address handoff, this runs without a mounted renderer and retries a
    * bounded number of times under one request id, so neither a restart nor a
    * lost acknowledgement can start a second PR agent.
@@ -2934,19 +2979,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     try {
       const cleanReview = launch.basis === "clean-review";
       // A clean report authorizes the PR only while the review still rests on
-      // it; a Fix, restart or cancellation since has moved the review on.
+      // it; an Address Findings run, restart or cancellation since has moved the review on.
       const cleanReviewReady =
         cleanReview && workflow.phase === "ready" && consolidatedReportIsClean(workflow);
-      const structuredFixCompleted =
+      const structuredAddressFindingsCompleted =
         !cleanReview && workflow.phase === "completed" && workflow.fixResult?.complete === true;
       // The interactive intent is recorded only once its handoff turn finished
-      // on its own; it goes stale if the Fix was relaunched since.
-      const interactiveFixSettled =
+      // on its own; it goes stale if Address Findings was relaunched since.
+      const interactiveAddressFindingsSettled =
         !cleanReview &&
         workflow.phase === "interactive" &&
         workflow.addressPromptPending !== true &&
         workflow.fixSession?.status === "idle";
-      if (!cleanReviewReady && !structuredFixCompleted && !interactiveFixSettled) {
+      if (
+        !cleanReviewReady &&
+        !structuredAddressFindingsCompleted &&
+        !interactiveAddressFindingsSettled
+      ) {
         workflow.autoPrLaunch = {
           ...basis,
           fixIdentity: launch.fixIdentity,
@@ -2954,7 +3003,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           requestId: launch.requestId,
           message: cleanReview
             ? "The review moved on from its clean report, so no PR agent was launched"
-            : "Automatic PR requires a completed Fix",
+            : "Automatic PR requires a completed Address Findings run",
         };
         this.autoPrRetryAt.delete(workflow.id);
         await this.save(workflow, token);
@@ -2963,17 +3012,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       let outcome: AutoPrLaunchOutcome;
       try {
         const authorize = async (): Promise<AutoPrLaunchOutcome | undefined> => {
-          const read = await this.interactiveFixOutcome(workflow, workflow.fixSession!);
+          const read = await this.interactiveAddressFindingsOutcome(workflow, workflow.fixSession!);
           await this.assertFence(workflow.id, token);
           if (read === "pending") return { kind: "pending" };
-          this.fixOutcomePolls.delete(workflow.id);
+          this.addressFindingsOutcomePolls.delete(workflow.id);
           if (read !== "completed") {
             return {
               kind: "skipped",
               message:
                 read === "manual"
-                  ? MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE
-                  : interactiveFixAutoPrSkipMessage(read),
+                  ? MULTI_REVIEW_AUTO_PR_MANUAL_ADDRESS_FINDINGS_MESSAGE
+                  : interactiveAddressFindingsAutoPrSkipMessage(read),
             };
           }
           return undefined;
@@ -2984,11 +3033,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             this.storage,
             workflow,
             launch.requestId,
-            interactiveFixSettled ? authorize : undefined,
+            interactiveAddressFindingsSettled ? authorize : undefined,
           );
         outcome =
-          interactiveFixSettled && this.options.withInteractiveFixSessionFence
-            ? await this.options.withInteractiveFixSessionFence(
+          interactiveAddressFindingsSettled &&
+          this.options.withInteractiveAddressFindingsSessionFence
+            ? await this.options.withInteractiveAddressFindingsSessionFence(
                 workflow,
                 workflow.fixSession!,
                 deliver,
@@ -3000,7 +3050,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       await this.assertFence(workflow.id, token);
       if (outcome.kind === "pending") {
-        this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+        this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressFindingsDispatchRetryMs());
         await this.save(workflow, token);
         return;
       }
@@ -3032,7 +3082,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           message: outcome.message.slice(0, 4_096),
         };
         if (!exhausted) {
-          this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+          this.autoPrRetryAt.set(workflow.id, Date.now() + this.addressFindingsDispatchRetryMs());
           await this.save(workflow, token);
           return;
         }
@@ -3045,14 +3095,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * Reconcile the initial interactive Fix turn after ownership moves to its
+   * Reconcile the initial interactive Address Findings turn after ownership moves to its
    * ordinary native-agent tab. The provider remains authoritative; this copy
    * only keeps the Multi Review card, timing, usage, and activity badge honest.
    */
-  private async advanceInteractiveFix(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+  private async advanceInteractiveAddressFindings(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<void> {
     const session = workflow.fixSession!;
-    const fixIdleScope = `fix\0idle\0${session.providerSessionId}`;
-    const fixUsageScope = `fix\0usage\0${session.providerSessionId}`;
+    const addressFindingsIdleScope = `fix\0idle\0${session.providerSessionId}`;
+    const addressFindingsUsageScope = `fix\0usage\0${session.providerSessionId}`;
     try {
       if (!workflow.stepRuntimes?.fix) beginStepRuntime(workflow, "fix", session);
       const provider = await this.provider(workflow, session);
@@ -3097,15 +3150,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const activityChanged = session.observedRunning !== true || session.status !== "running";
         delete session.idleResultPolls;
         delete session.usageFinalizationPolls;
-        this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
-        this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
+        this.pollGate.clear(`${workflow.id}\0${addressFindingsIdleScope}`);
+        this.pollGate.clear(`${workflow.id}\0${addressFindingsUsageScope}`);
         session.observedRunning = true;
         session.status = "running";
         delete session.completedAt;
         delete session.error;
         const refreshedUsage =
           observation?.contextUsage ?? (await provider.refreshUsage?.(session.providerSessionId));
-        const usageChanged = await this.refreshFixSessionUsage(
+        const usageChanged = await this.refreshAddressFindingsSessionUsage(
           workflow,
           token,
           provider,
@@ -3126,12 +3179,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ) {
         if (session.observedRunning !== true) {
           // A wakeup burst does not count as the settling observation.
-          if (!this.countPoll(workflow.id, fixIdleScope)) {
+          if (!this.countPoll(workflow.id, addressFindingsIdleScope)) {
             await this.unclaim(workflow, token);
             return;
           }
           session.idleResultPolls = (session.idleResultPolls ?? 0) + 1;
-          if (session.idleResultPolls <= INTERACTIVE_FIX_INITIAL_IDLE_POLLS) {
+          if (session.idleResultPolls <= INTERACTIVE_ADDRESS_FINDINGS_INITIAL_IDLE_POLLS) {
             await this.save(workflow, token);
             await this.unclaim(workflow, token);
             return;
@@ -3144,11 +3197,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (observation.status === "running" || observation.status === "blocked") {
           delete session.idleResultPolls;
           delete session.usageFinalizationPolls;
-          this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
-          this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
+          this.pollGate.clear(`${workflow.id}\0${addressFindingsIdleScope}`);
+          this.pollGate.clear(`${workflow.id}\0${addressFindingsUsageScope}`);
           session.observedRunning = true;
           session.status = "running";
-          await this.refreshFixSessionUsage(
+          await this.refreshAddressFindingsSessionUsage(
             workflow,
             token,
             provider,
@@ -3169,9 +3222,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         observation.status !== "blocked" &&
         this.validSessionTokens(observation.contextUsage) === undefined &&
         provider.usageFromMessages
-          ? this.readFixSessionMessages(provider, session)
+          ? this.readAddressFindingsSessionMessages(provider, session)
           : undefined;
-      await this.refreshFixSessionUsage(
+      await this.refreshAddressFindingsSessionUsage(
         workflow,
         token,
         provider,
@@ -3184,8 +3237,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.status === "running" || observation.status === "blocked") {
         delete session.idleResultPolls;
         delete session.usageFinalizationPolls;
-        this.pollGate.clear(`${workflow.id}\0${fixIdleScope}`);
-        this.pollGate.clear(`${workflow.id}\0${fixUsageScope}`);
+        this.pollGate.clear(`${workflow.id}\0${addressFindingsIdleScope}`);
+        this.pollGate.clear(`${workflow.id}\0${addressFindingsUsageScope}`);
         session.observedRunning = true;
         session.status = "running";
         await this.save(workflow, token);
@@ -3198,12 +3251,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         (session.usageFinalizationPolls ?? 0) < REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS &&
         !this.pollsExhausted(
           workflow.id,
-          fixUsageScope,
+          addressFindingsUsageScope,
           session.usageFinalizationPolls ?? 0,
           REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS,
         )
       ) {
-        if (!this.countPoll(workflow.id, fixUsageScope)) {
+        if (!this.countPoll(workflow.id, addressFindingsUsageScope)) {
           await this.unclaim(workflow, token);
           return;
         }
@@ -3215,18 +3268,19 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
       // A stop also reads as idle, so only the native-agent turn record can
       // show that the handoff finished on its own and an automatic PR may follow.
-      let fixOutcome: Exclude<InteractiveFixTurnOutcome, "pending"> | "manual" | undefined;
+      let addressFindingsOutcome:
+        Exclude<InteractiveAddressFindingsTurnOutcome, "pending"> | "manual" | undefined;
       if (observation.status === "idle" && workflow.autoPr === true) {
-        const read = await this.interactiveFixOutcome(workflow, session);
+        const read = await this.interactiveAddressFindingsOutcome(workflow, session);
         await this.assertFence(workflow.id, token);
         if (read === "pending") {
           await this.save(workflow, token);
           await this.unclaim(workflow, token);
           return;
         }
-        fixOutcome = read;
+        addressFindingsOutcome = read;
       }
-      this.fixOutcomePolls.delete(workflow.id);
+      this.addressFindingsOutcomePolls.delete(workflow.id);
 
       delete session.idleResultPolls;
       delete session.usageFinalizationPolls;
@@ -3235,24 +3289,24 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (observation.status === "idle") {
         session.status = "idle";
         delete session.error;
-        if (fixOutcome === "completed") {
+        if (addressFindingsOutcome === "completed") {
           queueAutoPr(workflow);
-        } else if (fixOutcome !== undefined) {
+        } else if (addressFindingsOutcome !== undefined) {
           skipAutoPr(
             workflow,
-            fixOutcome === "manual"
-              ? MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE
-              : interactiveFixAutoPrSkipMessage(fixOutcome),
+            addressFindingsOutcome === "manual"
+              ? MULTI_REVIEW_AUTO_PR_MANUAL_ADDRESS_FINDINGS_MESSAGE
+              : interactiveAddressFindingsAutoPrSkipMessage(addressFindingsOutcome),
           );
         }
       } else {
         session.status = "failed";
         session.error =
           observation.status === "missing"
-            ? "The interactive fix session no longer exists"
+            ? "The interactive Address Findings session no longer exists"
             : observation.error
-              ? `The interactive fix session failed: ${observation.error}`
-              : "The interactive fix session failed";
+              ? `The interactive Address Findings session failed: ${observation.error}`
+              : "The interactive Address Findings session failed";
       }
       await this.save(workflow, token);
       await this.release(workflow, token);
@@ -3264,29 +3318,32 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * How the interactive Fix's handoff turn ended, for the automatic PR.
-   * `manual` means this Fix can never authorize one. A turn that stays
+   * How the interactive Address Findings's handoff turn ended, for the automatic PR.
+   * `manual` means this Address Findings can never authorize one. A turn that stays
    * unsettled past a bounded number of passes counts as unknown, so a stuck
-   * record cannot hold the Fix step open.
+   * record cannot hold the Address Findings step open.
    */
-  private async interactiveFixOutcome(
+  private async interactiveAddressFindingsOutcome(
     workflow: MultiReviewWorkflow,
-    session: MultiReviewFixSession,
-  ): Promise<InteractiveFixTurnOutcome | "manual"> {
-    if (!interactiveFixCanQueueAutoPr(workflow) || !this.options.interactiveFixTurnOutcome) {
+    session: MultiReviewAddressFindingsSession,
+  ): Promise<InteractiveAddressFindingsTurnOutcome | "manual"> {
+    if (
+      !interactiveAddressFindingsCanQueueAutoPr(workflow) ||
+      !this.options.interactiveAddressFindingsTurnOutcome
+    ) {
       return "manual";
     }
-    let outcome: InteractiveFixTurnOutcome;
+    let outcome: InteractiveAddressFindingsTurnOutcome;
     try {
-      outcome = await this.options.interactiveFixTurnOutcome(workflow, session);
+      outcome = await this.options.interactiveAddressFindingsTurnOutcome(workflow, session);
     } catch (error) {
       log.warn("fix-outcome.read-failed", { error: formatLogError(error) });
       outcome = "pending";
     }
     if (outcome !== "pending" && outcome !== "unknown") return outcome;
-    const polls = (this.fixOutcomePolls.get(workflow.id) ?? 0) + 1;
-    if (polls >= MAX_FIX_OUTCOME_POLLS) return "unknown";
-    this.fixOutcomePolls.set(workflow.id, polls);
+    const polls = (this.addressFindingsOutcomePolls.get(workflow.id) ?? 0) + 1;
+    if (polls >= MAX_ADDRESS_FINDINGS_OUTCOME_POLLS) return "unknown";
+    this.addressFindingsOutcomePolls.set(workflow.id, polls);
     return "pending";
   }
 
@@ -3321,7 +3378,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         workflow.fixSession.providerSessionId,
         workflow.fixModel,
       );
-      if (!result.settled) waiting.push(`fix model: ${result.error}`);
+      if (!result.settled) waiting.push(`Address Findings model: ${result.error}`);
     }
     if (workflow.reviewSession?.status === "running") {
       const result = await this.abortSession(
@@ -3689,12 +3746,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * The preparation, consolidation, and fix session carries the same hazard as a reviewer: it
+   * The preparation, consolidation, and Address Findings session carries the same hazard as a reviewer: it
    * can report `running` forever while a sub-agent it is waiting on has stopped
    * producing anything. Abandoning it fails the workflow, which is recoverable
    * through Retry, rather than leaving it supervised indefinitely.
    */
-  private async observeFixSessionProgress(
+  private async observeAddressFindingsSessionProgress(
     workflow: MultiReviewWorkflow,
     token: string,
     provider: BuildPipelineProvider,
@@ -3703,7 +3760,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     kind: MultiReviewStepKind,
   ): Promise<void> {
     const previousDigest = session.progressDigest;
-    let usageChanged = await this.refreshFixSessionUsage(
+    let usageChanged = await this.refreshAddressFindingsSessionUsage(
       workflow,
       token,
       provider,
@@ -3722,7 +3779,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // a probe is due. The progress sample prefers the provider's bounded
         // conditional snapshot and shares the usage read only as a fallback.
         if (needsTranscriptUsage) {
-          const usageRead = this.readFixSessionMessages(provider, session);
+          const usageRead = this.readAddressFindingsSessionMessages(provider, session);
           // Awaited (and its failure logged) by the usage refresh below; this
           // keeps the rejection observed while the progress sample runs.
           usageRead.catch(() => undefined);
@@ -3738,7 +3795,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       session.progressDigest,
     );
     if (needsTranscriptUsage && messages) {
-      const transcriptUsageChanged = await this.refreshFixSessionUsage(
+      const transcriptUsageChanged = await this.refreshAddressFindingsSessionUsage(
         workflow,
         token,
         provider,
@@ -3784,7 +3841,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * failed read as "nothing learned", while usage metering catches and logs the
    * same rejection without failing the supervised turn.
    */
-  private readFixSessionMessages(
+  private readAddressFindingsSessionMessages(
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
   ): Promise<unknown[]> {
@@ -3807,7 +3864,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
    * preparation cost as distinct from consolidation. The dispatch baseline is
    * the difference, and the step keeps the delta after the session moves on.
    */
-  private async refreshFixSessionUsage(
+  private async refreshAddressFindingsSessionUsage(
     workflow: MultiReviewWorkflow,
     token: string,
     provider: BuildPipelineProvider,
@@ -3903,7 +3960,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await this.save(workflow, token);
   }
 
-  private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+  private async advanceAddressFindingsModel(
+    workflow: MultiReviewWorkflow,
+    token: string,
+  ): Promise<void> {
     if (workflow.phase === "preparing" && workflow.validationRun) {
       await this.advanceValidation(workflow, token);
       return;
@@ -4123,7 +4183,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               }),
           });
         } else {
-          prompt = addressPrompt(workflow.consolidatedReport!);
+          prompt = addressFindingsReportPrompt(workflow.consolidatedReport!);
         }
       }
       await this.assertFence(workflow.id, token);
@@ -4132,7 +4192,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           ? REVIEW_VALIDATION_PLAN_SCHEMA
           : request.kind === "consolidate"
             ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
-            : REVIEW_FIX_RESULT_JSON_SCHEMA;
+            : REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA;
       const resultKind: WorkflowResultKind = multiReviewStepResultKind(request.kind);
       const agentMcp =
         request.resultTransport === "tool-v1"
@@ -4309,7 +4369,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         this.pollGate.clear(`${workflow.id}\0${request.requestId}\0usage`);
         await this.save(workflow, token);
       }
-      await this.observeFixSessionProgress(
+      await this.observeAddressFindingsSessionProgress(
         workflow,
         token,
         provider,
@@ -4321,9 +4381,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
     const terminalMessages =
       this.validSessionTokens(observation.contextUsage) === undefined && provider.usageFromMessages
-        ? this.readFixSessionMessages(provider, session)
+        ? this.readAddressFindingsSessionMessages(provider, session)
         : undefined;
-    const usageChanged = await this.refreshFixSessionUsage(
+    const usageChanged = await this.refreshAddressFindingsSessionUsage(
       workflow,
       token,
       provider,
@@ -4430,7 +4490,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           this.pollGate.clear(`${workflow.id}\0${request.requestId}\0usage`);
           await this.save(workflow, token);
         }
-        await this.observeFixSessionProgress(
+        await this.observeAddressFindingsSessionProgress(
           workflow,
           token,
           provider,
@@ -4525,7 +4585,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         try {
           plan = parseReviewValidationPlan(result.value);
         } catch (error) {
-          await this.prepareFixSessionSchemaRepair(
+          await this.prepareAddressFindingsSessionSchemaRepair(
             workflow,
             token,
             request,
@@ -4552,7 +4612,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (!result.ok) throw new Error(result.error.message);
         preparation = parseReviewPreparationResult(result.value);
       } catch (error) {
-        await this.prepareFixSessionSchemaRepair(
+        await this.prepareAddressFindingsSessionSchemaRepair(
           workflow,
           token,
           request,
@@ -4589,12 +4649,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (request.kind === "consolidate") {
       const parsed = parseStructuredReportResult(result, workflow.reviewers);
       if (!parsed.success) {
-        await this.prepareFixSessionSchemaRepair(workflow, token, request, session, parsed.error);
+        await this.prepareAddressFindingsSessionSchemaRepair(
+          workflow,
+          token,
+          request,
+          session,
+          parsed.error,
+        );
         return;
       }
       const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers);
       if (provenance.issues.length > 0) {
-        await this.prepareFixSessionSchemaRepair(
+        await this.prepareAddressFindingsSessionSchemaRepair(
           workflow,
           token,
           request,
@@ -4607,11 +4673,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       workflow.consolidationOverlap = consolidationOverlap(parsed.data, workflow.reviewers);
       if (workflow.restartFixAfterConsolidation) {
         delete workflow.restartFixAfterConsolidation;
-        queueRestartedFix(workflow);
-      } else if (multiReviewAutoFixDue(workflow)) {
+        queueRestartedAddressFindings(workflow);
+      } else if (multiReviewAutoAddressFindingsDue(workflow)) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
-        queueDefaultFix(workflow);
+        queueDefaultAddressFindings(workflow);
       } else {
         workflow.phase = "ready";
         // Nothing to fix, so auto-PR moves straight on to the PR.
@@ -4627,7 +4693,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.release(workflow, token);
       return;
     }
-    let fixed: ReturnType<typeof parseFixResult>;
+    let fixed: ReturnType<typeof parseAddressFindingsResult>;
     if (
       !result.ok &&
       result.error.code !== "schema_retry_exhausted" &&
@@ -4641,23 +4707,29 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           typeof result.error.details?.path === "string" ? result.error.details.path : "$";
         throw new FixResultValidationError(result.error.message, path, result.error.details);
       }
-      fixed = parseFixResult(result.value);
+      fixed = parseAddressFindingsResult(result.value);
     } catch (error) {
       const diagnostic =
         error instanceof FixResultValidationError
           ? error
           : new FixResultValidationError(errorMessage(error));
-      await this.prepareFixSessionSchemaRepair(workflow, token, request, session, diagnostic);
+      await this.prepareAddressFindingsSessionSchemaRepair(
+        workflow,
+        token,
+        request,
+        session,
+        diagnostic,
+      );
       return;
     }
     workflow.fixResult = fixed;
     session.completedAt = nowIso();
     settleStepRuntime(workflow, "fix");
     delete workflow.activeRequest;
-    if (!fixResultCompletes(fixed)) {
+    if (!addressFindingsResultCompletes(fixed)) {
       session.status = "failed";
       workflow.phase = "failed";
-      workflow.error = `The fix model could not address every finding: ${fixed.summary}`;
+      workflow.error = `The Address Findings model could not address every finding: ${fixed.summary}`;
     } else {
       session.status = "idle";
       workflow.phase = "completed";
@@ -4669,7 +4741,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await this.release(workflow, token);
   }
 
-  private async prepareFixSessionSchemaRepair(
+  private async prepareAddressFindingsSessionSchemaRepair(
     workflow: MultiReviewWorkflow,
     token: string,
     request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
@@ -4712,10 +4784,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           }
         : request.kind === "fix"
           ? {
-              schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
-              resultLabel: "fix result",
+              schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+              resultLabel: "Address Findings result",
               workLabel: "fix work",
-              stageLabel: "fix stage",
+              stageLabel: "Address Findings stage",
               preserveInstruction:
                 "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
             }
@@ -4981,12 +5053,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     return this.options.controllerLeaseMs ?? CONTROLLER_LEASE_MS;
   }
 
-  private addressDispatchRetryMs(): number {
-    return Math.max(0, this.options.addressDispatchRetryMs ?? ADDRESS_DISPATCH_RETRY_MS);
+  private addressFindingsDispatchRetryMs(): number {
+    return Math.max(
+      0,
+      this.options.addressFindingsDispatchRetryMs ?? ADDRESS_FINDINGS_DISPATCH_RETRY_MS,
+    );
   }
 
-  private maxAddressDispatchAttempts(): number {
-    return Math.max(1, this.options.maxAddressDispatchAttempts ?? MAX_ADDRESS_DISPATCH_ATTEMPTS);
+  private maxAddressFindingsDispatchAttempts(): number {
+    return Math.max(
+      1,
+      this.options.maxAddressFindingsDispatchAttempts ?? MAX_ADDRESS_FINDINGS_DISPATCH_ATTEMPTS,
+    );
   }
 
   /** Captures the one durable source identity every review turn must share. */

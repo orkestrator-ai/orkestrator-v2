@@ -31,13 +31,13 @@ import { flatCatalog } from "./MultiReviewLaunchDialog";
 const STEP_LABELS: Record<MultiReviewStepKind, string> = {
   prepare: "Preparation",
   consolidate: "Consolidation",
-  fix: "Fix",
+  fix: "Address Findings",
 };
 
 interface ModelRestartDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The step's name as a title: "Fix", "Build", "Reviewer 2"… */
+  /** The step's name as a title: "Address Findings", "Build", "Reviewer 2"… */
   stepLabel: string;
   /** Replaces the default explanation under the title. */
   description?: string;

@@ -34,7 +34,7 @@ import type {
 } from "./agent-provider-contract.js";
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
 import {
-  TEST_FIX_RESULT,
+  TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -355,7 +355,7 @@ export class FanoutProvider implements BuildPipelineProvider {
     if (phase === "build" || phase === "fix") {
       return { ...base, value: TEST_REVIEW_PREPARATION as T };
     }
-    if (phase === "address") return { ...base, value: TEST_FIX_RESULT as T };
+    if (phase === "address") return { ...base, value: TEST_ADDRESS_FINDINGS_RESULT as T };
     // Verify, PR and resolve answer the verdict shape; none of them matter to
     // the fan-out, which ends at the consolidated report.
     return { ...base, value: { complete: true, rationale: "Done." } as T };

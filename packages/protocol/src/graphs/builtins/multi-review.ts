@@ -46,9 +46,9 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
     parameters: [
       {
         key: "autoFix",
-        label: "Fix automatically",
+        label: "Address Findings automatically",
         description:
-          "Open the Fix once consolidation reports issues or test coverage gaps. Saved default: off.",
+          "Open Address Findings once consolidation reports issues or test coverage gaps. Saved default: off.",
         type: "boolean",
         default: false,
       },
@@ -56,7 +56,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         key: "autoPr",
         label: "Open a pull request automatically",
         description:
-          "Open the pull request after a Fix that completes, or straight after a consolidated report with nothing to fix. Saved default: off.",
+          "Open the pull request after an Address Findings run that completes, or straight after a consolidated report with nothing to fix. Saved default: off.",
         type: "boolean",
         default: false,
       },
@@ -86,7 +86,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       },
       {
         key: "fixer",
-        label: "Fix",
+        label: "Address Findings",
         multiplicity: "one",
         defaultsFrom: ["fixReviewIssues", "review"],
       },
@@ -129,7 +129,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         name: "fixed",
         type: "workspace@1",
         label: "Fixed branch",
-        description: "The Fix's commit, when a Fix ran and completed.",
+        description: "Address Findings's commit, when an Address Findings run ran and completed.",
         required: false,
         from: port("fix-complete", "code", "complete"),
       },
@@ -218,9 +218,9 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       {
         id: "fix",
         kind: "agent",
-        label: "Fix",
+        label: "Address Findings",
         description:
-          "Today an ordinary interactive Fix tab that the user can talk to; it ends when its handoff turn finishes on its own. Here it submits a fix result.",
+          "Today an ordinary interactive Address Findings tab that the user can talk to; it ends when its handoff turn finishes on its own. Here it submits a fix result.",
         role: "fixer",
         when: paramIsTrue("autoFix"),
         capabilities: { profile: "builder" },
@@ -239,8 +239,8 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       {
         id: "fix-complete",
         kind: "gate",
-        label: "Fix complete?",
-        description: "Only proof that the Fix completed queues the pull request.",
+        label: "Address Findings complete?",
+        description: "Only proof that Address Findings completed queues the pull request.",
         inputs: [
           { name: "result", type: "fix-result@1" },
           { name: "code", type: "workspace@1" },
@@ -300,7 +300,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       edge("fix-complete-result", port("fix", "result"), target("fix-complete", "result")),
       edge("fix-complete-code", port("fix", "code"), target("fix-complete", "code")),
       // Two producers into each `code` port below, on exclusive outlets of
-      // has-findings: a clean report ships the reviewed branch, a complete Fix
+      // has-findings: a clean report ships the reviewed branch, a complete Address Findings
       // ships its own commit.
       edge("clean-describe", port("has-findings", "code", "clean"), target("describe-pr", "code")),
       edge(

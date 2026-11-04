@@ -1,6 +1,6 @@
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { NativeMessage, NativeTextPart } from "./native-message-types";
-import { isFixOpeningPrompt } from "./user-prompt-display";
+import { isAddressFindingsOpeningPrompt } from "./user-prompt-display";
 
 function userPromptSources(message: NativeMessage): string[] {
   const sources = message.parts
@@ -18,7 +18,7 @@ function userPromptSources(message: NativeMessage): string[] {
  * later follow-up. When the opening prompt is outside the loaded window,
  * nothing is pinned so a later bubble does not inherit the card.
  */
-export function attachFixPromptEvidence(
+export function attachAddressFindingsPromptEvidence(
   messages: NativeMessage[],
   report: StructuredReviewReport,
 ): NativeMessage[] {
@@ -26,7 +26,7 @@ export function attachFixPromptEvidence(
     (message) =>
       message.role === "user" &&
       userPromptSources(message).some((source) =>
-        isFixOpeningPrompt(source, message.promptPresentation),
+        isAddressFindingsOpeningPrompt(source, message.promptPresentation),
       ),
   );
   if (openingIndex < 0) return messages;

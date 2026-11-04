@@ -11,9 +11,9 @@
  *   then runs up to `allowance` sequential discovery passes. After each pass
  *   the same session reconciles the pass's report into the round's finding
  *   pool; the round stops early when a pass adds or updates nothing.
- * - A round that leaves findings is fixed; a Fix that is not complete failed
+ * - A round that leaves findings is fixed; an Address Findings run that is not complete failed
  *   the review. The next round starts with an empty pool and half the
- *   allowance, rounded up. After a Fix at allowance 1, or after a round with
+ *   allowance, rounded up. After an Address Findings run at allowance 1, or after a round with
  *   no findings, the model opened the pull request.
  *
  * Loops do not nest in the template model (item 107), so the rounds are
@@ -260,7 +260,7 @@ function roundNodes(round: number, allowance: number): GraphNodeSpec[] {
     {
       id: ids.fix,
       kind: "agent",
-      label: `Round ${round} · Fix`,
+      label: `Round ${round} · Address Findings`,
       description: "Fixes the whole pool in a fresh session and commits.",
       role: "model",
       capabilities: { profile: "builder" },
@@ -278,8 +278,8 @@ function roundNodes(round: number, allowance: number): GraphNodeSpec[] {
     {
       id: ids.fixed,
       kind: "gate",
-      label: `Round ${round} · Fix complete?`,
-      description: "An incomplete Fix failed the review; nothing runs after it.",
+      label: `Round ${round} · Address Findings complete?`,
+      description: "An incomplete Address Findings failed the review; nothing runs after it.",
       inputs: [
         { name: "result", type: "fix-result@1" },
         { name: "code", type: "workspace@1" },

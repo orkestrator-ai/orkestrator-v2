@@ -67,14 +67,14 @@ function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: st
       };
     case "addressing":
       return {
-        label: "Addressing",
+        label: "Addressing Findings",
         className: "bg-amber-500/15 text-amber-400 border-amber-500/30",
       };
     case "verifying":
       return { label: "Verifying", className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30" };
     case "fixing":
       return {
-        label: "Fixing",
+        label: "Reworking",
         className: "bg-orange-500/15 text-orange-400 border-orange-500/30",
       };
     case "creating-pr":

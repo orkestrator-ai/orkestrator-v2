@@ -15,7 +15,7 @@ import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js"
 import { LAST_ASSISTANT_TEXT_READ_LIMIT } from "./workflow-result-missing.js";
 import { StorageService } from "./storage.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { ADDRESS_FIX_RESULT_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
+import { ADDRESS_FINDINGS_RESULT_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 
 function session(phase: PipelineSessionPhase, key: string, iteration = 0): PipelineSession {
   return {
@@ -117,7 +117,7 @@ describe("verification address-report boundaries", () => {
       value.sessions = [session("review", "review-0"), old, session("review", "review-1")];
       ctx.transcriptCheckpoints.observe(old, [assistant("STALE REPORT")]);
       const { prompt } = await supervisor.promptFor(value, "verify", "claude");
-      expect(prompt).toContain("**Address report**: none.");
+      expect(prompt).toContain("**Address Findings report**: none.");
       expect(prompt).not.toContain("STALE REPORT");
     });
   });
@@ -134,7 +134,7 @@ describe("verification address-report boundaries", () => {
       ];
       ctx.transcriptCheckpoints.observe(old, [assistant("ITERATION ZERO REPORT")]);
       const { prompt } = await supervisor.promptFor(value, "verify", "claude");
-      expect(prompt).toContain("**Address report**: none.");
+      expect(prompt).toContain("**Address Findings report**: none.");
       expect(prompt).not.toContain("ITERATION ZERO REPORT");
     });
   });
@@ -145,7 +145,7 @@ describe("verification address-report boundaries", () => {
       value.sessions = [session("review", "old-review", -1), address];
       ctx.transcriptCheckpoints.observe(address, [assistant("ORPHAN REPORT")]);
       expect((await supervisor.promptFor(value, "verify", "claude")).prompt).toContain(
-        "**Address report**: none.",
+        "**Address Findings report**: none.",
       );
     });
   });
@@ -170,7 +170,7 @@ describe("verification address-report boundaries", () => {
             committedAt: new Date(0).toISOString(),
           };
         const { prompt } = await supervisor.promptFor(value, "verify", "claude");
-        expect(prompt).toContain("**Address report**: none.");
+        expect(prompt).toContain("**Address Findings report**: none.");
         expect(prompt).not.toContain("OLD ATTEMPT");
       });
     });
@@ -186,7 +186,7 @@ describe("verification address-report boundaries", () => {
       });
       try {
         expect((await supervisor.promptFor(value, "verify", "claude")).prompt).toContain(
-          "**Address report**: none.",
+          "**Address Findings report**: none.",
         );
         read.mockResolvedValue({
           entries: [
@@ -199,11 +199,11 @@ describe("verification address-report boundaries", () => {
           total: 100 + LAST_ASSISTANT_TEXT_READ_LIMIT,
         });
         expect((await supervisor.promptFor(value, "verify", "claude")).prompt).toContain(
-          "**Address report**: none.",
+          "**Address Findings report**: none.",
         );
         read.mockRejectedValue(new Error("Transcript unavailable"));
         expect((await supervisor.promptFor(value, "verify", "claude")).prompt).toContain(
-          "**Address report**: none.",
+          "**Address Findings report**: none.",
         );
       } finally {
         read.mockRestore();
@@ -250,7 +250,7 @@ describe("verification address-report boundaries", () => {
       try {
         const { prompt } = await supervisor.promptFor(value, "verify", "claude");
         expect(prompt).toContain("TYPED SUMMARY");
-        expect(prompt).toContain(ADDRESS_FIX_RESULT_FRAME_OPEN);
+        expect(prompt).toContain(ADDRESS_FINDINGS_RESULT_FRAME_OPEN);
         expect(prompt).not.toContain("TRANSCRIPT TEXT");
         expect(record).not.toHaveBeenCalled();
       } finally {
@@ -269,7 +269,7 @@ describe("verification address-report boundaries", () => {
       value.sessions = [session("review", "review"), skipped];
       ctx.transcriptCheckpoints.observe(skipped, [assistant("PARTIAL TEXT")]);
       const { prompt } = await supervisor.promptFor(value, "verify", "claude");
-      expect(prompt).toContain("**Address report**: none.");
+      expect(prompt).toContain("**Address Findings report**: none.");
       expect(prompt).not.toContain("PARTIAL TEXT");
     });
   });

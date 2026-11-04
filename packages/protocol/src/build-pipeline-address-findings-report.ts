@@ -13,18 +13,18 @@
  */
 
 /** The result kind an Address session submits; the only value of the marker today. */
-export const PIPELINE_ADDRESS_REPORT_KIND = "fix-result" as const;
-export type PipelineAddressReportKind = typeof PIPELINE_ADDRESS_REPORT_KIND;
+export const PIPELINE_ADDRESS_FINDINGS_REPORT_KIND = "fix-result" as const;
+export type PipelineAddressFindingsReportKind = typeof PIPELINE_ADDRESS_FINDINGS_REPORT_KIND;
 
 /** One check the Address stage reports it ran. */
-export interface PipelineFixResultCommand {
+export interface PipelineAddressFindingsResultCommand {
   command: string;
   result: "passed" | "failed";
   summary: string;
 }
 
 /** Entries the session bounds dropped, per list. Absent when nothing was dropped. */
-export interface PipelineFixResultOmissions {
+export interface PipelineAddressFindingsResultOmissions {
   filesChanged?: number;
   commandsRun?: number;
   notes?: number;
@@ -33,26 +33,26 @@ export interface PipelineFixResultOmissions {
 
 /**
  * The accepted `fix-result` of one Address session, bounded by
- * {@link PIPELINE_FIX_RESULT_LIMITS}. The fields are the workflow result's; a
+ * {@link PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS}. The fields are the workflow result's; a
  * string over its limit ends in `…`, and a list over its limit keeps its first
  * entries (failed commands before passed ones) and counts the rest in
  * {@link omitted}.
  */
-export interface PipelineFixResult {
+export interface PipelineAddressFindingsResult {
   complete: boolean;
   summary: string;
   filesChanged: string[];
-  commandsRun: PipelineFixResultCommand[];
+  commandsRun: PipelineAddressFindingsResultCommand[];
   notes: string[];
   limitations: string[];
-  omitted?: PipelineFixResultOmissions;
+  omitted?: PipelineAddressFindingsResultOmissions;
 }
 
 /**
  * Bounds of the copy kept on the session and rendered into the Verify prompt.
  * The worst case is about 50,000 characters; a real report is a few hundred.
  */
-export const PIPELINE_FIX_RESULT_LIMITS = Object.freeze({
+export const PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS = Object.freeze({
   summaryLength: 4_000,
   filesChanged: 48,
   pathLength: 300,
@@ -64,7 +64,7 @@ export const PIPELINE_FIX_RESULT_LIMITS = Object.freeze({
   entryLength: 600,
 });
 
-type FixResultInput = Omit<PipelineFixResult, "omitted">;
+type FixResultInput = Omit<PipelineAddressFindingsResult, "omitted">;
 
 function truncated(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
@@ -74,13 +74,15 @@ function truncated(value: string, limit: number): string {
  * Copies an accepted fix result into the session's bounded shape. The input is
  * a result the workflow-result contract already accepted; this only shortens it.
  */
-export function boundPipelineFixResult(value: FixResultInput): PipelineFixResult {
-  const limits = PIPELINE_FIX_RESULT_LIMITS;
-  const omitted: PipelineFixResultOmissions = {};
+export function boundPipelineAddressFindingsResult(
+  value: FixResultInput,
+): PipelineAddressFindingsResult {
+  const limits = PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS;
+  const omitted: PipelineAddressFindingsResultOmissions = {};
   const list = <T>(
     entries: readonly T[],
     limit: number,
-    key: keyof PipelineFixResultOmissions,
+    key: keyof PipelineAddressFindingsResultOmissions,
   ): T[] => {
     if (entries.length > limit) omitted[key] = entries.length - limit;
     return entries.slice(0, limit);
@@ -97,7 +99,7 @@ export function boundPipelineFixResult(value: FixResultInput): PipelineFixResult
   if (value.commandsRun.length > limits.commandsRun) {
     omitted.commandsRun = value.commandsRun.length - limits.commandsRun;
   }
-  const result: PipelineFixResult = {
+  const result: PipelineAddressFindingsResult = {
     complete: value.complete,
     summary: truncated(value.summary, limits.summaryLength),
     filesChanged: list(value.filesChanged, limits.filesChanged, "filesChanged").map((path) =>
@@ -141,7 +143,7 @@ function boundedTextList(value: unknown, count: number, length: number): value i
   );
 }
 
-function isOmissions(value: unknown): value is PipelineFixResultOmissions {
+function isOmissions(value: unknown): value is PipelineAddressFindingsResultOmissions {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["filesChanged", "commandsRun", "notes", "limitations"]) &&
@@ -149,9 +151,11 @@ function isOmissions(value: unknown): value is PipelineFixResultOmissions {
   );
 }
 
-/** Validates a stored {@link PipelineFixResult} against its bounds. */
-export function isPipelineFixResult(value: unknown): value is PipelineFixResult {
-  const limits = PIPELINE_FIX_RESULT_LIMITS;
+/** Validates a stored {@link PipelineAddressFindingsResult} against its bounds. */
+export function isPipelineAddressFindingsResult(
+  value: unknown,
+): value is PipelineAddressFindingsResult {
+  const limits = PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS;
   return (
     isRecord(value) &&
     hasOnlyKeys(value, [

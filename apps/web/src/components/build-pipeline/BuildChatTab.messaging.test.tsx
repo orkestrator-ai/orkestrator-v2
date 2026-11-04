@@ -925,8 +925,8 @@ describe("BuildChatTab agent messaging", () => {
 
   test.each([
     ["reviewing", "Restart Review Stage"],
-    ["addressing", "Restart Address Stage"],
-    ["fixing", "Restart Fix Stage"],
+    ["addressing", "Restart Address Findings Stage"],
+    ["fixing", "Restart Rework Stage"],
     ["creating-pr", "Restart PR Stage"],
     ["resolving-conflicts", "Restart Conflict Resolution"],
   ] as const)("names the %s header restart", (phase, label) => {
@@ -947,7 +947,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.getByRole("button", { name: "Restart Validation" })).toBeTruthy();
     expect(
       screen.queryByRole("button", {
-        name: `Restart ${phase === "building" ? "Build" : "Fix"} Stage`,
+        name: `Restart ${phase === "building" ? "Build" : "Rework"} Stage`,
       }) === null,
     ).toBe(true);
   });
@@ -1253,8 +1253,8 @@ describe("BuildChatTab graph", () => {
       expect(graphNode(title).hasAttribute("data-flow-placeholder")).toBe(true);
     }
     // Address, Fix and conflict resolution only appear once they start.
-    expect(queryGraphNode("Address") === null).toBe(true);
-    expect(queryGraphNode("Fix") === null).toBe(true);
+    expect(queryGraphNode("Address Findings") === null).toBe(true);
+    expect(queryGraphNode("Rework") === null).toBe(true);
   });
 
   test("shows only the pull request ahead while the pipeline ships", () => {

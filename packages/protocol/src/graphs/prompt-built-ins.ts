@@ -80,7 +80,7 @@ const workspaceOutput = (required: boolean) => ({
   required,
   description: "The commit the node leaves.",
 });
-const fixResultOutput = (required: boolean) => ({
+const addressFindingsResultOutput = (required: boolean) => ({
   name: "report",
   types: ["fix-result"],
   required,
@@ -198,7 +198,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
   },
   {
     id: "fix-review-issues",
-    label: "Fix review issues",
+    label: "Address review findings",
     description:
       "Addresses every issue and coverage gap in a report, making sensible assumptions without asking questions, and reports what it changed.",
     inputs: [
@@ -212,15 +212,15 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       },
       workspaceInput(false),
     ],
-    outputs: [fixResultOutput(true), workspaceOutput(false)],
+    outputs: [addressFindingsResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
-      "addressPrompt (build-pipeline-prompts.ts) as the Multi Review fix sends it; multiReviewCustomFixPrompt (protocol multi-review.ts) with a user instruction",
+      "addressFindingsReportPrompt (build-pipeline-prompts.ts) as the Multi Review fix sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
     textMaxBytes: 8 * KIB,
   },
   {
     id: "address-review",
-    label: "Address review",
+    label: "Address Findings",
     description:
       "The Build Pipeline's Address stage: fixes the review's findings and validates the fix for the verifier.",
     inputs: [
@@ -234,10 +234,10 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       workspaceInput(false),
       recordedValidationInput,
     ],
-    outputs: [workspaceOutput(false), fixResultOutput(true)],
+    outputs: [workspaceOutput(false), addressFindingsResultOutput(true)],
     profiles: ["builder"],
     backend:
-      "addressPrompt with addressValidationInstruction (build-pipeline-prompts.ts, build-pipeline-service-supervisor.ts)",
+      "addressFindingsReportPrompt with addressFindingsValidationInstruction (build-pipeline-prompts.ts, build-pipeline-service-supervisor.ts)",
     textMaxBytes: 8 * KIB,
   },
   {
@@ -248,14 +248,14 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     // Optional: today's Build turn submits no fix result (a panel review
     // prepares the package in its own session; one reviewer's Build submits
     // the package preparation instead).
-    outputs: [workspaceOutput(false), fixResultOutput(false)],
+    outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
     profiles: ["builder"],
     backend: "buildPrompt (build-pipeline-prompts.ts)",
     textMaxBytes: 16 * KIB,
   },
   {
     id: "pipeline-fix",
-    label: "Fix unmet criteria",
+    label: "Rework unmet criteria",
     description:
       "Fixes the acceptance criteria verification found unmet, establishing reproduction before excusing an unrelated failure.",
     inputs: [
@@ -270,9 +270,9 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       workspaceInput(false),
     ],
     // Optional, as for Build: today's Fix turn submits no fix result.
-    outputs: [workspaceOutput(false), fixResultOutput(false)],
+    outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
     profiles: ["builder"],
-    backend: "fixPrompt (build-pipeline-prompts.ts)",
+    backend: "reworkPrompt (build-pipeline-prompts.ts)",
     textMaxBytes: 16 * KIB,
   },
   {

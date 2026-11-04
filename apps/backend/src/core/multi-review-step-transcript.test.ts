@@ -220,7 +220,7 @@ describe("step transcript reads", () => {
   });
 
   test("reads a shared session only for the step using it now", async () => {
-    // Without a separate preparation model every step ran in the fix session.
+    // Without a separate preparation model every step ran in the Address Findings session.
     const shared = session("shared");
     const legacy = (phase: MultiReviewWorkflow["phase"]) =>
       workflow({
@@ -255,8 +255,16 @@ describe("step transcript reads", () => {
     );
     expect(consolidation).toMatchObject({ session: "other-step", sessionStep: "fix" });
     expect(fixing.reads).toEqual([]);
-    const fixTail = await readMultiReviewStepTranscript(fixing, "multi-1", "fix", undefined);
-    expect(fixTail).toMatchObject({ session: "own", messages: [row(1, "fixing the findings")] });
+    const addressFindingsTail = await readMultiReviewStepTranscript(
+      fixing,
+      "multi-1",
+      "fix",
+      undefined,
+    );
+    expect(addressFindingsTail).toMatchObject({
+      session: "own",
+      messages: [row(1, "fixing the findings")],
+    });
     expect(fixing.reads).toEqual(["shared"]);
   });
 

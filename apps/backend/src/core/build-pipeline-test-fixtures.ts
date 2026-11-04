@@ -1,4 +1,4 @@
-import type { ReviewFixResult, ReviewPreparationResult } from "./review-prompts.js";
+import type { ReviewAddressFindingsResult, ReviewPreparationResult } from "./review-prompts.js";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 
 export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {
@@ -18,7 +18,7 @@ export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {
 };
 
 /** A complete Address `fix-result` for suites that only need the stage to finish. */
-export const TEST_FIX_RESULT: ReviewFixResult = {
+export const TEST_ADDRESS_FINDINGS_RESULT: ReviewAddressFindingsResult = {
   complete: true,
   summary: "Addressed every review finding.",
   filesChanged: ["src/app.ts"],

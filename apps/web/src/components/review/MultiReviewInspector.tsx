@@ -396,10 +396,10 @@ export function toMultiReviewStepMessages(snapshot: MultiReviewStepTranscript): 
 const STEP_LABEL: Record<MultiReviewStepKind, string> = {
   prepare: "review package generation",
   consolidate: "consolidation",
-  fix: "Fix",
+  fix: "Address Findings",
 };
 
-/** The transcript tail of a preparation, consolidation or Fix session. */
+/** The transcript tail of a preparation, consolidation or Address Findings session. */
 export function StepTranscriptTail({
   workflowId,
   step,

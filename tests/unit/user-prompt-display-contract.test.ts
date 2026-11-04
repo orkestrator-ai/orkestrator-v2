@@ -17,7 +17,7 @@ import {
   createCoordinatorDelegatedPrompt,
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
+import { addressFindingsReportPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
 import { withUnattendedPolicy } from "../../apps/backend/src/core/build-pipeline-service-helpers";
 import { reviewValidationDiscoveryPrompt } from "../../apps/backend/src/core/review-validation-prompts";
 import {
@@ -27,7 +27,7 @@ import {
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import {
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
-  multiReviewCustomFixPrompt,
+  multiReviewCustomAddressFindingsPrompt,
 } from "@orkestrator/protocol/multi-review";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
@@ -125,7 +125,7 @@ describe("backend prompt display contract", () => {
   });
 
   test("filters the exact fix-phase address prompt", () => {
-    const source = addressPrompt(report);
+    const source = addressFindingsReportPrompt(report);
     const presentation = userPromptPresentation(source);
 
     expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
@@ -149,7 +149,7 @@ describe("backend prompt display contract", () => {
   });
 
   test("filters the replacement Fix-session prompt without leaking report evidence into the instruction", () => {
-    const source = `${addressPrompt(report)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
+    const source = `${addressFindingsReportPrompt(report)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
     const presentation = userPromptPresentation(source);
 
     expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);
@@ -170,7 +170,7 @@ describe("backend prompt display contract", () => {
   });
 
   test("renders evidence from the exact custom-fix prompt producer", () => {
-    const source = multiReviewCustomFixPrompt(
+    const source = multiReviewCustomAddressFindingsPrompt(
       TEST_STRUCTURED_REVIEW_REPORT,
       "Preserve the public API.",
     );
@@ -285,7 +285,7 @@ describe("backend prompt display contract", () => {
         total: 1,
       },
     });
-    const source = prependReviewHandoff(handoff, addressPrompt(report));
+    const source = prependReviewHandoff(handoff, addressFindingsReportPrompt(report));
     const presentation = userPromptPresentation(source);
 
     expect(presentation.displayText).toBe(STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION);

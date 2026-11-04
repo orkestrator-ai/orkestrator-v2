@@ -31,6 +31,7 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
+import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import type { CommandContext } from "./commands-context.js";
 import type { KanbanTask } from "./storage-shared.js";
 import {
@@ -44,9 +45,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The start request with every omitted choice filled from the saved Build defaults. */
 export async function buildPipelineStartWithSavedDefaults(
-  args: unknown,
+  rawArgs: unknown,
   context: Pick<CommandContext, "storage">,
 ): Promise<StartBuildPipelineInput> {
+  const args = canonicalBuildPipeline(rawArgs);
   if (!isRecord(args) || typeof args.projectId !== "string" || !args.projectId.trim()) {
     throw new Error("Invalid build pipeline start request");
   }

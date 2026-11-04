@@ -209,7 +209,7 @@ describe("status adapters", () => {
           completedAt: "2026-10-20T08:00:00Z",
         },
         { phase: "verify", status: "idle", iteration: 1, label: "Verify" },
-        { phase: "fix", status: "idle", iteration: 2, label: "Fix" },
+        { phase: "fix", status: "idle", iteration: 2, label: "Address Findings" },
         { phase: "verify", status: "idle", iteration: 2, label: "Verify" },
       ],
     });

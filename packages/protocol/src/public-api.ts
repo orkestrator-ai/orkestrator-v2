@@ -462,7 +462,7 @@ export const PUBLIC_ACTIONS = {
     observation: "receipt",
     milestone: "D",
     summary:
-      "Start an environment's Multi Review, as the Multi Review button does: reviewers, consolidation, then optional Fix and PR, with saved defaults for what is omitted; an active review is reused.",
+      "Start an environment's Multi Review, as the Multi Review button does: reviewers, consolidation, then optional Address Findings and PR, with saved defaults for what is omitted; an active review is reused.",
   },
   "review.list": {
     version: 1,
@@ -478,7 +478,8 @@ export const PUBLIC_ACTIONS = {
     effects: [],
     observation: "immediate",
     milestone: "D",
-    summary: "Read one Multi Review: phase, reviewers, consolidation, Fix and PR steps.",
+    summary:
+      "Read one Multi Review: phase, reviewers, consolidation, Address Findings and PR steps.",
   },
   "review.open": {
     version: 1,
@@ -486,7 +487,7 @@ export const PUBLIC_ACTIONS = {
     effects: ["metadata"],
     observation: "receipt",
     milestone: "D",
-    summary: "Open or focus a Multi Review's root tab or its Fix tab; starts no work.",
+    summary: "Open or focus a Multi Review's root tab or its Address Findings tab; starts no work.",
   },
   "review.address": {
     version: 1,
@@ -495,7 +496,7 @@ export const PUBLIC_ACTIONS = {
     observation: "receipt",
     milestone: "D",
     summary:
-      "Address a Multi Review's findings: hand them to its Fix session (the Address findings button).",
+      "Address a Multi Review's findings: hand them to its Address Findings session (the Address findings button).",
   },
   "review.cancel": {
     version: 1,

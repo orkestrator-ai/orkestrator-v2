@@ -54,7 +54,7 @@ const report: StructuredReviewReport = {
   reviewSummary: "Clean",
 };
 
-const FIX_SESSION = {
+const ADDRESS_FINDINGS_SESSION = {
   agent: "claude",
   model: "opus",
   sessionKey: "fix-session",
@@ -65,14 +65,14 @@ const FIX_SESSION = {
 };
 
 /**
- * The validator demands a consolidated report and a live fix session from every
- * post-consolidation phase, an active fix request while fixing, and a
+ * The validator demands a consolidated report and a live Address Findings session from every
+ * post-consolidation phase, an active Address Findings request while fixing, and a
  * cancellation timestamp while cancelling. A snapshot missing them is rejected
  * outright, which would make the phase under test vacuous.
  */
 function phaseFields(phase: MultiReviewPhase): Record<string, unknown> {
   const settled = ["ready", "fixing", "interactive", "completed"].includes(phase)
-    ? { consolidatedReport: report, fixSession: FIX_SESSION }
+    ? { consolidatedReport: report, fixSession: ADDRESS_FINDINGS_SESSION }
     : {};
   return {
     ...settled,

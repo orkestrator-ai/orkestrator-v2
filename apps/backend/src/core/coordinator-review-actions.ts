@@ -7,9 +7,9 @@ import {
   type MultiReviewWorkflow,
   type MultiReviewActionResult,
   isMultiReviewModelSelection,
-  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
   type MultiReviewModelSelection,
-  type StartMultiReviewCustomFixInput,
+  type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type { Environment, PersistedMultiReviewWorkflow } from "./models.js";
@@ -154,20 +154,20 @@ export async function startMultiReviewAt(
 }
 
 /**
- * Open a saved review's root or Fix tab, or address its findings: the
+ * Open a saved review's root or Address Findings tab, or address its findings: the
  * durable UI actions behind `open_multi_review`, `open_multi_review_fix` and
- * `address_multi_review`. `beforeAddress` runs once the root tab is open and
- * before the fix handoff is armed (a coordinator adopts the workflow there).
+ * `address_multi_review`. `beforeAddressFindings` runs once the root tab is open and
+ * before the Address Findings handoff is armed (a coordinator adopts the workflow there).
  */
 export async function runMultiReviewSurface(
   context: CommandContext,
   saved: { snapshot: MultiReviewWorkflow; revision: number },
   surface: "root" | "fix" | "address",
-  beforeAddress?: () => Promise<void>,
+  beforeAddressFindings?: () => Promise<void>,
   /** With `root`: open this reviewer's read-only transcript subtab instead. */
   reviewerId?: string,
-  /** With `address`: start the dialog's custom fix instead of the default one. */
-  customFix?: Omit<StartMultiReviewCustomFixInput, "workflowId">,
+  /** With `address`: start the dialog's custom Address Findings instead of the default one. */
+  customAddressFindings?: Omit<StartMultiReviewCustomAddressFindingsInput, "workflowId">,
 ): Promise<MultiReviewActionResult> {
   const id = saved.snapshot.id;
   let workflow = { ...saved.snapshot, backendRevision: saved.revision };
@@ -208,24 +208,27 @@ export async function runMultiReviewSurface(
     let rootUi: MultiReviewActionResult["ui"];
     try {
       // Make the supervisor's pending/error state reachable before arming
-      // the handoff. The supervisor publishes and selects Fix on delivery.
+      // the handoff. The supervisor publishes and selects Address Findings on delivery.
       rootUi = await openMultiReviewTab(context.storage, workflow);
     } catch (error) {
-      if (customFix)
+      if (customAddressFindings)
         throw new Error(
-          `Custom fix could not open the review tab: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+          `Custom Address Findings could not open the review tab: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
         );
       return result(
         workflow,
         true,
         { status: "unavailable" },
-        `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No fix handoff was queued.`,
+        `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No Address Findings handoff was queued.`,
       );
     }
-    await beforeAddress?.();
+    await beforeAddressFindings?.();
     try {
-      workflow = customFix
-        ? await context.multiReviews.customFix({ workflowId: id, ...customFix })
+      workflow = customAddressFindings
+        ? await context.multiReviews.customAddressFindings({
+            workflowId: id,
+            ...customAddressFindings,
+          })
         : await context.multiReviews.address(id);
     } catch (error) {
       const latest = await context.storage.getMultiReviewWorkflow(id).catch(() => null);
@@ -234,14 +237,15 @@ export async function runMultiReviewSurface(
       const handoffArmed =
         workflow.phase === "interactive" &&
         workflow.addressPromptPending === true &&
-        (!customFix ||
-          (workflow.customFixInstruction === customFix.instruction &&
-            workflow.customFixModel?.agent === customFix.fixModel.agent &&
-            workflow.customFixModel.model === customFix.fixModel.model &&
-            workflow.customFixModel.reasoningEffort === customFix.fixModel.reasoningEffort));
-      if (customFix && !handoffArmed)
+        (!customAddressFindings ||
+          (workflow.customFixInstruction === customAddressFindings.instruction &&
+            workflow.customFixModel?.agent === customAddressFindings.fixModel.agent &&
+            workflow.customFixModel.model === customAddressFindings.fixModel.model &&
+            workflow.customFixModel.reasoningEffort ===
+              customAddressFindings.fixModel.reasoningEffort));
+      if (customAddressFindings && !handoffArmed)
         throw new Error(
-          `Custom fix handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
+          `Custom Address Findings handoff could not be queued: ${conciseError(error)} Retry custom_fix_multi_review with the same requestId after resolving the blocker.`,
         );
       return {
         ...result(
@@ -249,8 +253,8 @@ export async function runMultiReviewSurface(
           true,
           rootUi,
           handoffArmed
-            ? `The review tab opened, but the address action reported: ${conciseError(error)} The durable fix handoff remains queued; inspect get_multi_review before retrying.`
-            : `The review tab opened, but the fix handoff could not be queued: ${conciseError(error)} Resolve the reported state and retry address_multi_review.`,
+            ? `The review tab opened, but the address action reported: ${conciseError(error)} The durable Address Findings handoff remains queued; inspect get_multi_review before retrying.`
+            : `The review tab opened, but the Address Findings handoff could not be queued: ${conciseError(error)} Resolve the reported state and retry address_multi_review.`,
         ),
         outcome: "partial",
       };
@@ -260,7 +264,7 @@ export async function runMultiReviewSurface(
         ...result(workflow, true, rootUi),
         outcome: "pending",
         recovery:
-          "The fix handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Fix tab failure. Do not send a separate fix prompt.",
+          "The Address Findings handoff is durably queued. Inspect get_multi_review until addressPromptPending clears; presentationError reports any Address Findings tab failure. Do not send a separate fix prompt.",
       } satisfies MultiReviewActionResult;
     try {
       return result(workflow, true, await openMultiReviewTab(context.storage, workflow, "fix"));
@@ -273,7 +277,7 @@ export async function runMultiReviewSurface(
           workflow,
           true,
           rootUi,
-          `The fix handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
+          `The Address Findings handoff completed, but its tab could not be opened: ${conciseError(error)} Use open_multi_review_fix after ensuring the environment is ready and has a free tab.`,
         ),
         outcome: "partial",
       };
@@ -290,7 +294,7 @@ export async function runMultiReviewSurface(
       true,
       { status: "unavailable" },
       surface === "fix"
-        ? `The fix session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
+        ? `The Address Findings session tab could not be opened: ${conciseError(error)} Wait for any pending handoff, ensure the environment is ready and has a free tab, then retry open_multi_review_fix. No turn was dispatched.`
         : `The review tab could not be opened: ${conciseError(error)} Ensure the environment is ready and has a free tab, then retry open_multi_review. No workflow was started or cancelled.`,
     );
   }
@@ -510,7 +514,7 @@ export function registerCoordinatorReviewActions(
     surface: "root" | "fix" | "address",
     args: Record<string, unknown>,
     context: CommandContext,
-    customFix?: { instruction: string; fixModel?: MultiReviewModelSelection },
+    customAddressFindings?: { instruction: string; fixModel?: MultiReviewModelSelection },
   ): Promise<MultiReviewActionResult> => {
     const caller = await identity(args.scope, context);
     const id = asNonBlankString(args.workflowId, "workflowId");
@@ -526,7 +530,7 @@ export function registerCoordinatorReviewActions(
     )
       throw new Error("Multi Review not found in this project");
     if (surface === "address") {
-      // Addressing starts a writable fix session in the workflow's
+      // Addressing starts a writable Address Findings session in the workflow's
       // environment; on the project home that is the read-only checkout.
       const environment = await context.storage.getEnvironment(saved.snapshot.environmentId);
       if (isProjectHomeEnvironment(environment))
@@ -583,12 +587,12 @@ export function registerCoordinatorReviewActions(
         }
       },
       undefined,
-      customFix
+      customAddressFindings
         ? {
-            instruction: customFix.instruction,
-            // Omitted, the custom fix runs the review's own fix model, as the
+            instruction: customAddressFindings.instruction,
+            // Omitted, the custom Address Findings runs the review's own Address Findings model, as the
             // dialog's model picker starts on it.
-            fixModel: customFix.fixModel ?? saved.snapshot.fixModel,
+            fixModel: customAddressFindings.fixModel ?? saved.snapshot.fixModel,
           }
         : undefined,
     );
@@ -606,18 +610,18 @@ export function registerCoordinatorReviewActions(
   }
 
   /**
-   * The review tab's custom fix ("…" beside Fix): a fix with the caller's
+   * The review tab's custom Address Findings ("…" beside Address Findings): a fix with the caller's
    * instruction and, optionally, another model. One run per `requestId`.
    */
   register("custom_fix_coordinator_multi_review_action", async (args, context) => {
     const caller = await identity(args.scope, context);
     const input = args.input;
     if (!input || typeof input !== "object" || Array.isArray(input))
-      throw new Error("Expected the custom fix input");
+      throw new Error("Expected the custom Address Findings input");
     const { requestId, workflowId, instruction, fixModel } = input as Record<string, unknown>;
     const text = asNonBlankString(instruction, "instruction").trim();
-    if (text.length > MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH)
-      throw new Error("The custom fix instruction is too long");
+    if (text.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
+      throw new Error("The custom Address Findings instruction is too long");
     if (fixModel !== undefined && !isMultiReviewModelSelection(fixModel))
       throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
     const workflow = asNonBlankString(workflowId, "workflowId");

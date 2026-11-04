@@ -302,7 +302,7 @@ const ADAPTERS: readonly GraphTypeAdapter[] = Object.freeze([
   },
   {
     id: "fix-result-to-file-list",
-    label: "Fix result → files",
+    label: "Address Findings result → files",
     description: "The files a fix or build changed, each with the fix summary as its reason.",
     from: "fix-result@1",
     to: "file-list@1",

@@ -181,9 +181,9 @@ test("unrolls repeated passes to the right instead of looping back", async ({ pa
     "Setup",
     "Build",
     "Review",
-    "Address",
+    "Address Findings",
     "Verify",
-    "Fix",
+    "Rework",
     "Review 2",
     "Verify 2",
     "Ship",
@@ -347,7 +347,7 @@ test("an expanded previous attempt keeps the live line beside every superseded s
   const superseded = [
     "Previous attempt",
     "Verify · round 1",
-    "Fix · round 2",
+    "Rework · round 2",
     "Review · round 2",
     "Verify · round 2",
   ];

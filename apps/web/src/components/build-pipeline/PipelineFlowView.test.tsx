@@ -169,7 +169,7 @@ describe("pipeline inspector controls", () => {
         ),
       ),
     );
-    selectNode("Address");
+    selectNode("Address Findings");
     const report = screen.getByTestId("pipeline-address-report");
     expect(report.textContent).toContain("Address report");
     expect(report.textContent).toContain("incomplete · 3 files · 2 checks (1 failed)");
@@ -661,8 +661,8 @@ describe("a pipeline a restart rewound", () => {
     );
     fireEvent.click(within(inspector()).getByRole("button", { name: "Show steps" }));
 
-    await waitFor(() => expect(queryGraphNode("Fix · round 2")).not.toBeNull());
-    const fix = graphNode("Fix · round 2");
+    await waitFor(() => expect(queryGraphNode("Rework · round 2")).not.toBeNull());
+    const fix = graphNode("Rework · round 2");
     expect(fix.hasAttribute("data-flow-superseded")).toBe(true);
     selectNode("Verify · round 2");
     expect(within(inspector()).getByText(/Superseded by a restart/)).toBeTruthy();
@@ -676,7 +676,7 @@ describe("a pipeline a restart rewound", () => {
 
     selectNode("Previous attempt");
     fireEvent.click(within(inspector()).getByRole("button", { name: "Hide steps" }));
-    await waitFor(() => expect(queryGraphNode("Fix · round 2") === null).toBe(true));
+    await waitFor(() => expect(queryGraphNode("Rework · round 2") === null).toBe(true));
   });
 
   test("each historical reviewer retry opens its own transcript", async () => {

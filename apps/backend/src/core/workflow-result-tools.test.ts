@@ -854,16 +854,16 @@ describe("broker result key correction with signed capabilities", () => {
   });
 
   test("wrong result kinds stay denied before disclosing a correction", async () => {
-    const fixKey = crypto.randomUUID();
+    const addressFindingsKey = crypto.randomUUID();
     await service.prepare({
       ...scope,
-      resultKey: fixKey,
+      resultKey: addressFindingsKey,
       kind: "fix-result",
       provider: "opencode",
     });
-    const fixCapability = service.capabilityToken(scope, fixKey);
+    const fixCapability = service.capabilityToken(scope, addressFindingsKey);
     for (const name of ["submit_review_report", "report_finding"]) {
-      for (const submittedKey of [fixKey, otherKey]) {
+      for (const submittedKey of [addressFindingsKey, otherKey]) {
         const response = await handlers.get(name)!({
           resultKey: submittedKey,
           capability: fixCapability,
@@ -877,12 +877,12 @@ describe("broker result key correction with signed capabilities", () => {
             error: { code: "capability_denied", nextAction: "stop" },
           },
         });
-        expect(JSON.stringify(response)).not.toContain(fixKey);
+        expect(JSON.stringify(response)).not.toContain(addressFindingsKey);
         expect(JSON.stringify(response)).not.toContain(otherKey);
       }
     }
     expect(findingCalls).toHaveLength(0);
-    expect(await service.projection(fixKey)).toBe("preparing");
+    expect(await service.projection(addressFindingsKey)).toBe("preparing");
   });
 });
 

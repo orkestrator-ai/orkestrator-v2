@@ -21,7 +21,10 @@ import {
 } from "../build-pipeline.js";
 import type { GitHubPullRequestChecksState } from "../github-pull-requests.js";
 import { reviewPackageArtifactPath } from "../review-artifacts.js";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA, REVIEW_PR_RESULT_JSON_SCHEMA } from "../review-results.js";
+import {
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  REVIEW_PR_RESULT_JSON_SCHEMA,
+} from "../review-results.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-workflow.js";
 import {
   STRUCTURED_REVIEW_MAX_FILES_REVIEWED,
@@ -701,10 +704,10 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
   {
     name: "fix-result",
     version: 1,
-    label: "Fix result",
+    label: "Address Findings result",
     description: "What a fixing or building node changed and validated, and whether it finished.",
     family: "report",
-    schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+    schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
     budgets: { maxBytes: VALUE_CAP, maxItems: 10_000 },
     render: {
       markdown:

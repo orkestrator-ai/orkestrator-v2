@@ -6,7 +6,7 @@
  */
 import type { JsonSchema } from "./structured-output.js";
 
-export interface ReviewFixResult {
+export interface ReviewAddressFindingsResult {
   complete: boolean;
   summary: string;
   filesChanged: string[];
@@ -25,7 +25,7 @@ export interface ReviewPrResult {
   summary: string;
 }
 
-export const REVIEW_FIX_RESULT_JSON_SCHEMA: JsonSchema = {
+export const REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["complete", "summary", "filesChanged", "commandsRun", "notes", "limitations"],
@@ -71,14 +71,14 @@ function textList(value: unknown): value is string[] {
 }
 
 function finalCommandResults(
-  commands: ReviewFixResult["commandsRun"],
-): ReviewFixResult["commandsRun"] {
-  const final = new Map<string, ReviewFixResult["commandsRun"][number]>();
+  commands: ReviewAddressFindingsResult["commandsRun"],
+): ReviewAddressFindingsResult["commandsRun"] {
+  const final = new Map<string, ReviewAddressFindingsResult["commandsRun"][number]>();
   for (const command of commands) final.set(command.command.trim(), command);
   return [...final.values()];
 }
 
-export function parseFixResult(value: unknown): ReviewFixResult {
+export function parseAddressFindingsResult(value: unknown): ReviewAddressFindingsResult {
   if (
     !record(value) ||
     typeof value.complete !== "boolean" ||
@@ -108,7 +108,7 @@ export function parseFixResult(value: unknown): ReviewFixResult {
     ...value,
     notes: notes.map((entry) => entry.trim()).filter(Boolean),
     limitations: limitations.map((entry) => entry.trim()).filter(Boolean),
-  } as unknown as ReviewFixResult;
+  } as unknown as ReviewAddressFindingsResult;
   const blockers = [
     ...finalCommandResults(result.commandsRun).filter((entry) => entry.result === "failed"),
     ...result.limitations,

@@ -126,7 +126,7 @@ describe("node and edge states", () => {
     ).toEqual({
       intoReviewers: ["complete", "active", "pending", "failed", "pending"],
       intoConsolidation: ["ready", "pending", "pending", "pending", "pending"],
-      intoFix: "pending",
+      intoAddressFindings: "pending",
       intoPr: "pending",
       prSource: "fix",
     });
@@ -141,13 +141,13 @@ describe("node and edge states", () => {
     ).toEqual({
       intoReviewers: ["complete", "pending"],
       intoConsolidation: ["complete", "pending"],
-      intoFix: "active",
+      intoAddressFindings: "active",
       intoPr: "pending",
       prSource: "fix",
     });
   });
 
-  test("feeds the PR from the Fix, or from consolidation after a clean report", () => {
+  test("feeds the PR from Address Findings, or from consolidation after a clean report", () => {
     const states = {
       package: "complete",
       reviewers: ["complete"],
@@ -549,7 +549,7 @@ describe("layout", () => {
     expect(Math.abs(wide.package.x - (2000 - (wide.pr.x + wide.pr.width)))).toBeLessThanOrEqual(1);
   });
 
-  test("keeps Package to Fix in the width and runs the PR column past it", () => {
+  test("keeps Package to Address Findings in the width and runs the PR column past it", () => {
     for (const width of [960, 1024, 1440]) {
       const layout = multiReviewFlowLayout({ width, reviewerCount: 4, packageHasChips: true });
       const without = width - 16;

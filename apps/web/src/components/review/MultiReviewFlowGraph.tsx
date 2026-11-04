@@ -53,7 +53,7 @@ export interface MultiReviewFlowGraphProps {
   packageNode: MultiReviewFlowNodeModel;
   reviewerNodes: MultiReviewFlowNodeModel[];
   consolidationNode: MultiReviewFlowNodeModel;
-  fixNode: MultiReviewFlowNodeModel;
+  addressFindingsNode: MultiReviewFlowNodeModel;
   prNode: MultiReviewFlowNodeModel;
   edges: MultiReviewFlowEdges;
   reviewLabel: string;
@@ -79,7 +79,7 @@ export interface MultiReviewFlowGraphProps {
 
 /**
  * The Multi Review pipeline as a left-to-right graph: package, the reviewer
- * panel stacked in one column, consolidation, Fix, then the pull request. The
+ * panel stacked in one column, consolidation, Address Findings, then the pull request. The
  * drawing, zoom, pan and stacking are the shared {@link FlowGraph}'s; this
  * places the five columns and says which edges join them.
  */
@@ -87,7 +87,7 @@ export function MultiReviewFlowGraph({
   packageNode,
   reviewerNodes,
   consolidationNode,
-  fixNode,
+  addressFindingsNode,
   prNode,
   edges,
   reviewLabel,
@@ -103,12 +103,12 @@ export function MultiReviewFlowGraph({
   // The height dragged with the divider, shared by every Multi Review.
   const storedHeight = useUIStore((state) => state.multiReviewGraphHeight);
   const setStoredHeight = useUIStore((state) => state.setMultiReviewGraphHeight);
-  const nodes = [packageNode, ...reviewerNodes, consolidationNode, fixNode, prNode].map(
+  const nodes = [packageNode, ...reviewerNodes, consolidationNode, addressFindingsNode, prNode].map(
     withIdleIcon,
   );
   const [packageView, ...rest] = nodes;
   const reviewerViews = rest.slice(0, reviewerNodes.length);
-  const [consolidationView, fixView, prView] = rest.slice(reviewerNodes.length);
+  const [consolidationView, addressFindingsView, prView] = rest.slice(reviewerNodes.length);
 
   const graphEdges: FlowGraphEdge[] = [];
   reviewerNodes.forEach((node, index) => {
@@ -128,7 +128,12 @@ export function MultiReviewFlowGraph({
     );
   });
   graphEdges.push(
-    { id: "into-fix", from: consolidationNode.id, to: fixNode.id, state: edges.intoFix },
+    {
+      id: "into-fix",
+      from: consolidationNode.id,
+      to: addressFindingsNode.id,
+      state: edges.intoAddressFindings,
+    },
     edges.prSource === "consolidation"
       ? {
           id: "into-pr",
@@ -140,7 +145,7 @@ export function MultiReviewFlowGraph({
         }
       : {
           id: "into-pr",
-          from: fixNode.id,
+          from: addressFindingsNode.id,
           to: prNode.id,
           state: edges.intoPr,
           source: edges.prSource ?? "fix",
@@ -164,9 +169,9 @@ export function MultiReviewFlowGraph({
     },
     {
       key: "fix",
-      label: "Fix",
-      nodes: [fixView!],
-      edgeIn: { id: "into-fix", state: edges.intoFix },
+      label: "Address Findings",
+      nodes: [addressFindingsView!],
+      edgeIn: { id: "into-fix", state: edges.intoAddressFindings },
       ...(edges.prSource === "consolidation"
         ? { bypass: { id: "into-pr", source: "consolidation", state: edges.intoPr } }
         : {}),
@@ -191,7 +196,7 @@ export function MultiReviewFlowGraph({
             package: flowNodeHeight(packageView!),
             reviewers: reviewerViews.map(flowNodeHeight),
             consolidation: flowNodeHeight(consolidationView!),
-            fix: flowNodeHeight(fixView!),
+            fix: flowNodeHeight(addressFindingsView!),
             pr: flowNodeHeight(prView!),
           },
         });
@@ -199,7 +204,7 @@ export function MultiReviewFlowGraph({
           [packageNode.id, geometry.package],
           ...reviewerNodes.map((node, index) => [node.id, geometry.reviewers[index]!] as const),
           [consolidationNode.id, geometry.consolidation],
-          [fixNode.id, geometry.fix],
+          [addressFindingsNode.id, geometry.fix],
           [prNode.id, geometry.pr],
         ]);
         return {
@@ -210,7 +215,7 @@ export function MultiReviewFlowGraph({
             { key: "prepare", x: geometry.columns.prepare, text: "Prepare" },
             { key: "review", x: geometry.columns.review, text: reviewLabel, title: reviewTitle },
             { key: "consolidate", x: geometry.columns.consolidate, text: "Consolidate" },
-            { key: "fix", x: geometry.columns.fix, text: "Fix" },
+            { key: "fix", x: geometry.columns.fix, text: "Address Findings" },
             { key: "pr", x: geometry.columns.pr, text: "PR" },
           ],
         };
@@ -219,7 +224,7 @@ export function MultiReviewFlowGraph({
       ports={[
         { nodeId: packageNode.id, side: "out" },
         { nodeId: consolidationNode.id, side: "in" },
-        { nodeId: fixNode.id, side: "in" },
+        { nodeId: addressFindingsNode.id, side: "in" },
         { nodeId: prNode.id, side: "in" },
       ]}
       stages={stages}

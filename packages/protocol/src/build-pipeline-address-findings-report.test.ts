@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-  PIPELINE_FIX_RESULT_LIMITS,
-  boundPipelineFixResult,
-  isPipelineFixResult,
-  type PipelineFixResult,
-} from "./build-pipeline-address-report.js";
+  PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS,
+  boundPipelineAddressFindingsResult,
+  isPipelineAddressFindingsResult,
+  type PipelineAddressFindingsResult,
+} from "./build-pipeline-address-findings-report.js";
 import { isBuildPipeline, type BuildPipeline, type PipelineSession } from "./build-pipeline.js";
 
-const result: PipelineFixResult = {
+const result: PipelineAddressFindingsResult = {
   complete: true,
   summary: "Fixed the inverted branch.",
   filesChanged: ["src/app.ts"],
@@ -56,14 +56,14 @@ function pipelineWith(session: Partial<PipelineSession>): BuildPipeline {
 
 describe("bounded Address fix result", () => {
   test("a small result is kept as it is", () => {
-    const bounded = boundPipelineFixResult(result);
+    const bounded = boundPipelineAddressFindingsResult(result);
     expect(bounded).toEqual(result);
-    expect(isPipelineFixResult(bounded)).toBe(true);
+    expect(isPipelineAddressFindingsResult(bounded)).toBe(true);
   });
 
   test("long strings and lists are cut to the bounds and counted", () => {
-    const limits = PIPELINE_FIX_RESULT_LIMITS;
-    const bounded = boundPipelineFixResult({
+    const limits = PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS;
+    const bounded = boundPipelineAddressFindingsResult({
       complete: false,
       summary: "s".repeat(limits.summaryLength + 10),
       filesChanged: Array.from({ length: limits.filesChanged + 3 }, (_, index) =>
@@ -80,7 +80,7 @@ describe("bounded Address fix result", () => {
       notes: Array.from({ length: limits.notes + 1 }, () => "n".repeat(limits.entryLength + 1)),
       limitations: ["Lint fails on origin/main too."],
     });
-    expect(isPipelineFixResult(bounded)).toBe(true);
+    expect(isPipelineAddressFindingsResult(bounded)).toBe(true);
     expect(bounded.summary).toHaveLength(limits.summaryLength);
     expect(bounded.summary.endsWith("…")).toBe(true);
     expect(bounded.filesChanged).toHaveLength(limits.filesChanged);
@@ -100,14 +100,14 @@ describe("bounded Address fix result", () => {
     for (const invalid of [
       null,
       { ...result, complete: "yes" },
-      { ...result, summary: "s".repeat(PIPELINE_FIX_RESULT_LIMITS.summaryLength + 1) },
+      { ...result, summary: "s".repeat(PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS.summaryLength + 1) },
       { ...result, commandsRun: [{ command: "x", result: "skipped", summary: "" }] },
       { ...result, notes: [1] },
       { ...result, extra: true },
       { ...result, omitted: { notes: 0 } },
       { ...result, omitted: { other: 1 } },
     ]) {
-      expect(isPipelineFixResult(invalid)).toBe(false);
+      expect(isPipelineAddressFindingsResult(invalid)).toBe(false);
     }
   });
 });

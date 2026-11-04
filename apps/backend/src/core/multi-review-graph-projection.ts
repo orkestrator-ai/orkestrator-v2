@@ -53,7 +53,7 @@ import {
   type ReviewerProvisionalFinding,
   type ReviewerRecord,
 } from "@orkestrator/protocol/review-fanout";
-import type { ReviewFixResult } from "@orkestrator/protocol/review-results";
+import type { ReviewAddressFindingsResult } from "@orkestrator/protocol/review-results";
 import {
   isReviewPackageReference,
   type ReviewPackageReference,
@@ -65,8 +65,8 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import { graphReviewCoverageGapIds } from "./graph-agent-builtins.js";
 import { graphAgentSessionKey } from "./graph-agent-state.js";
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
-import { parseFixResult } from "./review-prompts.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
+import { parseAddressFindingsResult } from "./review-prompts.js";
 import {
   attributeReportFindings,
   consolidationOverlap,
@@ -142,9 +142,9 @@ export async function projectMultiReviewGraphRun(
     }
   }
 
-  // The Fix's result.
+  // Address Findings's result.
   if (!next.fixResult && fix?.state === "complete" && fix.outputs.result) {
-    const result = await readFixResult(read, fix.outputs.result);
+    const result = await readAddressFindingsResult(read, fix.outputs.result);
     if (result) next.fixResult = result;
   }
 
@@ -395,13 +395,13 @@ async function readPackage(
   return isReviewPackageReference(value) ? value : undefined;
 }
 
-async function readFixResult(
+async function readAddressFindingsResult(
   read: MultiReviewGraphArtifactReader,
   artifactId: string,
-): Promise<ReviewFixResult | undefined> {
+): Promise<ReviewAddressFindingsResult | undefined> {
   const value = artifactValue(await read(artifactId));
   try {
-    return parseFixResult(value);
+    return parseAddressFindingsResult(value);
   } catch {
     return undefined;
   }
@@ -559,7 +559,7 @@ function setRuntime(
 
 /**
  * The automatic pull request, from the `describe-pr` and `pr` nodes. Only a
- * Fix that completed or a clean report reaches them (the template's gates),
+ * Address Findings that completed or a clean report reaches them (the template's gates),
  * so the record says what the bespoke handoff would: pending while they run,
  * launched once the pull request exists.
  */
@@ -573,9 +573,9 @@ function projectAutoPr(
   const describe = latest.get(slot(N.describePr));
   const pr = latest.get(slot(N.pr));
   const gate = latest.get(slot(N.hasFindings));
-  // A Fix-authorized launch names the Fix it follows, as `queueAutoPr` does,
-  // so status notices never present it as the outcome of a later Fix.
-  const fixIdentity = multiReviewFixIdentity(workflow.fixSession);
+  // An Address Findings run-authorized launch names Address Findings it follows, as `queueAutoPr` does,
+  // so status notices never present it as the outcome of a later Address Findings.
+  const fixIdentity = multiReviewAddressFindingsIdentity(workflow.fixSession);
   const cleanReport =
     gate?.outlet === "clean" ||
     (!workflow.fixResult &&
@@ -607,7 +607,7 @@ function projectAutoPr(
     return;
   }
   // The gates between the step that authorizes the pull request (a clean
-  // consolidation, a Fix that completed) and `describe-pr` run in later saves
+  // consolidation, an Address Findings run that completed) and `describe-pr` run in later saves
   // of the run. The bespoke engine queues the pull request in the same save as
   // that step, so a revision in between must already read pending: otherwise
   // it shows a review that ended without one, and a status wake reports that.
@@ -638,7 +638,7 @@ function projectAutoPr(
   }
 }
 
-/** Issues or coverage gaps: what the template's `has-findings` gate routes to the Fix. */
+/** Issues or coverage gaps: what the template's `has-findings` gate routes to Address Findings. */
 function hasFindings(report: StructuredReviewReport): boolean {
   return report.issues.length > 0 || report.testCoverageGaps.length > 0;
 }
@@ -674,9 +674,9 @@ function phaseOf(
   if (workflow.fixResult) return workflow.fixResult.complete ? "completed" : "failed";
   if (run.status === "failed") return "failed";
   if (isActive(fix)) return workflow.consolidatedReport ? "fixing" : "consolidating";
-  // Auto-fix hands a report with findings to the Fix through a gate that
+  // Auto-address findings hands a report with findings to Address Findings through a gate that
   // runs in a later save; the bespoke engine moves on in the same save, so
-  // the review is never shown ready (with a Fix button and a wake) in between.
+  // the review is never shown ready (with an Address Findings run button and a wake) in between.
   if (
     workflow.consolidatedReport &&
     workflow.autoFix === true &&
@@ -702,7 +702,7 @@ function failureOf(
   latest: ReadonlyMap<string, NodeActivation>,
 ): string {
   if (workflow.fixResult && !workflow.fixResult.complete) {
-    return `The fix model could not address every finding: ${workflow.fixResult.summary}`;
+    return `The Address Findings model could not address every finding: ${workflow.fixResult.summary}`;
   }
   const failed = [N.plan, N.package, N.consolidate, N.fix]
     .map((nodeId) => latest.get(slot(nodeId)))

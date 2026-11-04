@@ -15,7 +15,7 @@ import {
   isMultiReviewModelSelection,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
-  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
@@ -1071,14 +1071,15 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     }
     const reviewerId =
       surface === "reviewer" ? asNonBlankString(args.reviewerId, "reviewerId") : undefined;
-    let customFix: { requestId: string; instruction: string; fixModel?: unknown } | undefined;
+    let customAddressFindings:
+      { requestId: string; instruction: string; fixModel?: unknown } | undefined;
     if (surface === "custom-fix") {
       const instruction = asNonBlankString(args.instruction, "instruction").trim();
-      if (instruction.length > MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH)
+      if (instruction.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
         throw new Error("The custom fix instruction is too long");
       if (args.fixModel !== undefined && !isMultiReviewModelSelection(args.fixModel))
         throw new Error("Expected fixModel to be { agent, model, reasoningEffort? }");
-      customFix = {
+      customAddressFindings = {
         requestId: asNonBlankString(args.requestId, "requestId"),
         instruction,
         ...(args.fixModel !== undefined ? { fixModel: args.fixModel } : {}),
@@ -1153,12 +1154,12 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           throw error;
         });
     if (surface === "address") await adopt();
-    if (!customFix)
+    if (!customAddressFindings)
       return open(
         reviewerId ? { reviewerId } : {},
         surface === "address" ? `address:${caller.coordinatorId}:${id}` : undefined,
       );
-    const { requestId, ...fix } = customFix;
+    const { requestId, ...fix } = customAddressFindings;
     // The receipt keeps only the outcome; the workflow is read fresh, so a
     // replay reports where the fix is now rather than where it was.
     const outcome = await withCoordinatorReceipt(

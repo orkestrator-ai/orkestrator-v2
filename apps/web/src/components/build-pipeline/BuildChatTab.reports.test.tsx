@@ -913,9 +913,9 @@ describe("BuildChatTab reports and verdicts", () => {
       ["waiting-for-setup", "Retry Setup"],
       ["building", "Retry Build Stage"],
       ["reviewing", "Retry Review Stage"],
-      ["addressing", "Retry Address Stage"],
+      ["addressing", "Retry Address Findings Stage"],
       ["verifying", "Retry Verification Stage"],
-      ["fixing", "Retry Fix Stage"],
+      ["fixing", "Retry Rework Stage"],
       ["creating-pr", "Retry PR Stage"],
       ["resolving-conflicts", "Retry Conflict Resolution"],
     ];

@@ -21,7 +21,7 @@ import {
   type CoordinatorStatusWakeTimers,
 } from "./coordinator-status-wakes.js";
 import type { StorageService } from "./storage.js";
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import type { Environment } from "./models.js";
 
 class ManualTimers implements CoordinatorStatusWakeTimers {
@@ -578,7 +578,7 @@ describe("pull request status wakes", () => {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewFixIdentity(fix),
+        fixIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     const main = await current.main();
@@ -635,7 +635,7 @@ describe("pull request status wakes", () => {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewFixIdentity(fix),
+        fixIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     const main = await current.main();

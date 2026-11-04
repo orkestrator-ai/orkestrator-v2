@@ -186,7 +186,7 @@ export const BUILD_ACTION_INPUTS: Readonly<
           type: "integer",
           minimum: 1,
           maximum: MAX_BUILD_PIPELINE_ITERATIONS,
-          description: `Review, fix and verify rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omitted: 3.`,
+          description: `Review, address findings, verify and rework rounds before the pipeline gives up, from 1 to ${MAX_BUILD_PIPELINE_ITERATIONS}. Omitted: 3.`,
         },
       },
       ["projectId", "ticketId"],

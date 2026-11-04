@@ -40,7 +40,7 @@ import type { WorkspaceWriters } from "./workspace-writers.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { ProviderWorkerMail } from "./agent-provider-contract.js";
 import {
-  TEST_FIX_RESULT,
+  TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -180,7 +180,7 @@ export class FakeProvider implements BuildPipelineProvider {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }

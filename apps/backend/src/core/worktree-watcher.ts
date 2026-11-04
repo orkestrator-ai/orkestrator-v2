@@ -7,17 +7,31 @@ import {
   resolveWorktreeGitPaths,
   type WorktreeGitPaths,
 } from "./worktree-git-paths.js";
+import {
+  planWatchTargets,
+  worktreeWatchPlanIo,
+  type WatchTarget,
+  type WorktreeWatchPlanIo,
+} from "./worktree-watch-plan.js";
 
 /**
  * Turns "something in this worktree changed" into a debounced signal.
  *
  * Diff stats used to be recomputed on a blind fifteen-second timer, so an idle
  * environment paid for a full git scan every tick to produce a byte-identical
- * answer. Watching costs one file descriptor and reports in milliseconds, which
- * makes the badge both cheaper and more responsive than the timer it replaces.
+ * answer. Watching reports in milliseconds, which makes the badge both cheaper
+ * and more responsive than the timer it replaces.
  *
  * Recursive `fs.watch` is not available everywhere, so this degrades rather than
  * fails: when the watch cannot be established the caller keeps its timer.
+ *
+ * A `node_modules` Git proves ignored and free of tracked files is left out
+ * (`worktree-watch-plan.ts`). What that means depends on the platform. On Linux
+ * a recursive watch costs one inotify watch per directory, so the subtree is not
+ * watched at all, and new directories are noticed and watched as they appear.
+ * On macOS one recursive watch has no per-directory cost, while each extra one
+ * stalls the event loop to start and to close, so the root stays one watch and
+ * events under the subtree are dropped on arrival.
  *
  * Events are hints, never proof. A burst is reported once, after
  * {@link WATCH_SETTLE_MS}, as a {@link WorktreeChangeHint} saying which views it
@@ -72,6 +86,13 @@ export interface WorktreeWatcherOptions {
   comparisonRef?: string;
   /** Injected for tests; defaults to node's fs.watch. */
   startWatch?: StartWatch;
+  /**
+   * Decides what may be left out. `null` watches the whole root. Defaults to real
+   * Git and file system reads, or to `null` when `startWatch` is injected.
+   */
+  plan?: WorktreeWatchPlanIo | null;
+  /** A recursive watch costs one kernel watch per directory. Defaults to Linux. */
+  perDirectoryWatches?: boolean;
   /**
    * Resolves the worktree's Git dirs. Defaults to {@link resolveWorktreeGitPaths};
    * `null` disables metadata watching (the watcher then never reports qualified
@@ -149,20 +170,56 @@ export function classifyWorktreeChange(
 const defaultStartWatch: StartWatch = (target, listener, options) =>
   watch(target, { recursive: options.recursive, persistent: false }, listener);
 
+/** A change that can alter which `node_modules` Git proves can be left out. */
+function canChangeExclusions(name: string): boolean {
+  if (name === ".git/index") return true;
+  const base = path.posix.basename(name);
+  return base === ".gitignore" || base === "node_modules";
+}
+
+function targetKey(target: WatchTarget): string {
+  return `${target.recursive ? "r" : "d"}:${target.relative}`;
+}
+
+function isVanishedPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** A child this process cannot read has no status either: Git cannot see into it. */
+function isUnwatchableChild(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return isVanishedPath(error) || code === "EACCES" || code === "EPERM";
+}
+
 export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeWatcher {
   const settleMs = options.settleMs ?? WATCH_SETTLE_MS;
   const start = options.startWatch ?? defaultStartWatch;
   const refs = relevantRefPaths(options.comparisonRef ?? "");
   const resolveGitPaths =
     options.resolveGitPaths === undefined ? resolveWorktreeGitPaths : options.resolveGitPaths;
+  const plan =
+    options.plan === undefined ? (options.startWatch ? null : worktreeWatchPlanIo) : options.plan;
+  const splitting = plan !== null && (options.perDirectoryWatches ?? process.platform === "linux");
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
-  let rootWatcher: FSWatcher | undefined;
+  const treeWatches = new Map<
+    string,
+    { target: WatchTarget; handle: FSWatcher; identity: string | null }
+  >();
   const metadataWatchers: FSWatcher[] = [];
   // A main checkout's metadata is below the root; a linked worktree's is not
   // until its extra watches are established.
   let metadataCovered = false;
+  // A split root sees only its direct children until the plan has been applied.
+  let treeCovered = !splitting;
+  let coverageAnnounced = false;
+  let excluded: readonly string[] = [];
+  let replanAtSettle = false;
+  let replanQueued = false;
+  let applyQueued = false;
+  let reconciling = false;
   let pending: WorktreeChangeHint = { fileList: false, tree: false, overflow: false };
   let burstEvents = 0;
   // Content paths seen in this burst; null once one event lacked a name or
@@ -173,6 +230,12 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (closed) return;
     options.onError?.(error);
     close();
+  };
+
+  const announceCoverage = () => {
+    if (closed || coverageAnnounced || !metadataCovered || !treeCovered) return;
+    coverageAnnounced = true;
+    options.onCoverageChange?.();
   };
 
   const schedule = (
@@ -197,6 +260,11 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     if (timer) return;
     timer = setTimeout(() => {
       timer = undefined;
+      if (replanAtSettle) {
+        replanAtSettle = false;
+        replanQueued = true;
+        reconcile();
+      }
       const settled: WorktreeChangeHint =
         burstPaths && burstPaths.size > 0 && !pending.overflow
           ? { ...pending, paths: [...burstPaths] }
@@ -229,11 +297,21 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     return handle;
   };
 
-  try {
-    rootWatcher = watchPath(options.worktreePath, true, (_eventType, filename) => {
-      const hint = classifyWorktreeChange(filename, refs);
-      if (!hint) return;
-      const name = filename === null ? null : filename.replaceAll(path.sep, "/");
+  const onTreeEvent = (target: WatchTarget, eventType: string, filename: string | null) => {
+    const relative = filename === null ? null : filename.replaceAll(path.sep, "/");
+    const name =
+      relative === null ? null : target.relative ? `${target.relative}/${relative}` : relative;
+    if (name !== null && excluded.some((entry) => isInsideTree(entry, name))) return;
+    const hint = classifyWorktreeChange(name, refs);
+    if (plan && name !== null && canChangeExclusions(name)) {
+      // A new `node_modules` must be left out before anything enters it. The
+      // rest wait for the burst to settle, so a rebase costs one read.
+      if (path.posix.basename(name) === "node_modules") {
+        replanQueued = true;
+        reconcile();
+      } else replanAtSettle = true;
+    }
+    if (hint) {
       schedule(
         hint,
         name === null || name === ".git" || name.startsWith(".git/")
@@ -242,26 +320,161 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
             : undefined
           : name,
       );
+    }
+    // Only a directory's own watch can say a child came or went: nothing below
+    // a split directory is watched unless this adds it.
+    if (splitting && (name === null || (eventType === "rename" && !target.recursive))) {
+      noteStructureChange(name);
+    }
+  };
+
+  const noteStructureChange = (name: string | null) => {
+    if (!plan) return;
+    if (name === null) {
+      applyQueued = true;
+      reconcile();
+      return;
+    }
+    void plan.directoryIdentity(options.worktreePath, name).then((identity) => {
+      if (closed) return;
+      const watched =
+        treeWatches.get(targetKey({ relative: name, recursive: true })) ??
+        treeWatches.get(targetKey({ relative: name, recursive: false }));
+      if (identity === (watched?.identity ?? null)) return;
+      applyQueued = true;
+      reconcile();
+    }, fail);
+  };
+
+  const attach = (target: WatchTarget, identity: string | null) => {
+    const handle = watchPath(
+      target.relative ? path.join(options.worktreePath, target.relative) : options.worktreePath,
+      target.recursive,
+      (eventType, filename) => onTreeEvent(target, eventType, filename),
+    );
+    treeWatches.set(targetKey(target), { target, handle, identity });
+  };
+
+  /** Moves the watches to the current plan; returns whether any were added. */
+  const applyPlan = async (io: WorktreeWatchPlanIo): Promise<boolean> => {
+    const root = options.worktreePath;
+    let desired: readonly WatchTarget[];
+    try {
+      desired = await planWatchTargets(excluded, (relative) => io.childDirectories(root, relative));
+    } catch (error) {
+      // The worktree itself went away. Its owner decides what that means.
+      if (isVanishedPath(error)) return false;
+      throw error;
+    }
+    const identities = await Promise.all(
+      desired.map((target) => io.directoryIdentity(root, target.relative)),
+    );
+    if (closed) return false;
+    const wanted = new Map<string, { target: WatchTarget; identity: string | null }>();
+    desired.forEach((target, index) => {
+      const identity = identities[index] ?? null;
+      if (identity !== null || target.relative === "") {
+        wanted.set(targetKey(target), { target, identity });
+      }
     });
+    for (const [key, watched] of Array.from(treeWatches)) {
+      const next = wanted.get(key);
+      // No identity is not a different one: the first root watch starts before
+      // it can be read, and a root that went away reports that on its own watch.
+      if (next && (!next.identity || !watched.identity || next.identity === watched.identity)) {
+        continue;
+      }
+      treeWatches.delete(key);
+      closeQuietly(watched.handle);
+    }
+    let added = false;
+    for (const [key, { target, identity }] of wanted) {
+      const watched = treeWatches.get(key);
+      if (watched) {
+        watched.identity = identity;
+        continue;
+      }
+      try {
+        attach(target, identity);
+        added = true;
+      } catch (error) {
+        // It went away between the listing and the watch, and the event in its
+        // parent that says so plans again. The root has no parent to say so.
+        if (target.relative === "" || !isUnwatchableChild(error)) throw error;
+      }
+    }
+    return added;
+  };
+
+  const runReconcile = async (io: WorktreeWatchPlanIo) => {
+    while (!closed && (replanQueued || applyQueued)) {
+      const replan = replanQueued;
+      replanQueued = false;
+      applyQueued = false;
+      if (replan) {
+        // No answer proves nothing, so nothing stays left out.
+        const listed = await io.listExcluded(options.worktreePath).catch(() => undefined);
+        if (closed) return;
+        const previous = excluded;
+        excluded = listed ?? [];
+        // Writes to a subtree put back were dropped until now, so report them.
+        if (previous.some((entry) => !excluded.includes(entry))) {
+          schedule({ fileList: true, tree: true }, null);
+        }
+      }
+      if (!splitting) continue;
+      const added = await applyPlan(io);
+      if (closed) return;
+      // A write before a new watch began reached nothing, so report the gap: the
+      // scan this causes starts after the watch did.
+      if (added) schedule({ fileList: true, tree: true }, null);
+      if (!treeCovered) {
+        treeCovered = true;
+        announceCoverage();
+      }
+    }
+  };
+
+  /** One pass at a time; a request during a pass is picked up by that pass. */
+  const reconcile = () => {
+    if (!plan || closed || reconciling) return;
+    reconciling = true;
+    void runReconcile(plan)
+      .catch(fail)
+      .finally(() => {
+        reconciling = false;
+        if (replanQueued || applyQueued) reconcile();
+      });
+  };
+
+  try {
+    attach({ relative: "", recursive: !splitting }, null);
   } catch (error) {
     options.onError?.(error);
-    rootWatcher = undefined;
+  }
+  const watchEstablished = treeWatches.size > 0;
+  if (watchEstablished && plan) {
+    replanQueued = true;
+    reconcile();
   }
 
-  if (rootWatcher && resolveGitPaths) {
+  if (watchEstablished && resolveGitPaths) {
     void resolveGitPaths(options.worktreePath).then(
       (paths) => {
         if (closed || !paths) return;
         if (!paths.linked && isInside(options.worktreePath, paths.commonDir)) {
           metadataCovered = true;
-          options.onCoverageChange?.();
+          announceCoverage();
           return;
         }
         try {
           if (paths.linked || !isInside(options.worktreePath, paths.gitDir)) {
             metadataWatchers.push(
               watchPath(paths.gitDir, false, (_eventType, filename) => {
-                if (isRelevantGitDirChange(filename)) schedule({ fileList: true, tree: false });
+                if (!isRelevantGitDirChange(filename)) return;
+                // Staging can put a tracked file inside a subtree left out.
+                if (plan && filename !== "HEAD") replanAtSettle = true;
+                schedule({ fileList: true, tree: false });
               }),
             );
           }
@@ -286,7 +499,7 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
           }
           if (!closed) {
             metadataCovered = true;
-            options.onCoverageChange?.();
+            announceCoverage();
           }
         } catch (error) {
           fail(error);
@@ -302,25 +515,33 @@ export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeW
     closed = true;
     if (timer) clearTimeout(timer);
     timer = undefined;
-    for (const handle of [rootWatcher, ...metadataWatchers]) {
-      try {
-        handle?.close();
-      } catch {
-        // Already closed, or the platform tore it down with the directory.
-      }
-    }
+    for (const { handle } of treeWatches.values()) closeQuietly(handle);
+    for (const handle of metadataWatchers) closeQuietly(handle);
+    treeWatches.clear();
     metadataWatchers.length = 0;
   }
 
   return {
     get watching() {
-      return rootWatcher !== undefined && !closed;
+      return watchEstablished && !closed;
     },
     get qualified() {
-      return rootWatcher !== undefined && !closed && metadataCovered;
+      return watchEstablished && !closed && metadataCovered && treeCovered;
     },
     close,
   };
+}
+
+function closeQuietly(handle: FSWatcher): void {
+  try {
+    handle.close();
+  } catch {
+    // Already closed, or the platform tore it down with the directory.
+  }
+}
+
+function isInsideTree(tree: string, name: string): boolean {
+  return name === tree || (name.startsWith(tree) && name[tree.length] === "/");
 }
 
 function isInside(root: string, candidate: string): boolean {

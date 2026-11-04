@@ -6,6 +6,7 @@ import { getLocalGitStatusDetailed } from "./commands-files.js";
 import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "./diff-stats-service.js";
 import { createGitFetchScheduler } from "./diff-stats-tracking.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { worktreeWatchPlanIo } from "./worktree-watch-plan.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
 
 // This slow-tier file creates real repositories/worktrees and waits for
@@ -73,9 +74,12 @@ beforeAll(async () => {
   await fs.mkdir(repo);
   run(repo, "init", "-q", "-b", "main");
   await fs.writeFile(path.join(repo, "a.txt"), "one\n");
-  run(repo, "add", "a.txt");
+  await fs.writeFile(path.join(repo, ".gitignore"), "node_modules/\n");
+  run(repo, "add", "a.txt", ".gitignore");
   run(repo, "commit", "-q", "-m", "initial");
   run(repo, "worktree", "add", "-q", linked, "-b", "feature");
+  // Left out of the watch, so every test below runs against the watch plan.
+  await fs.mkdir(path.join(linked, "node_modules", "pkg"), { recursive: true });
 
   metrics = new RecurringWorkMetrics();
   const gitFetches = createGitFetchScheduler();
@@ -92,6 +96,7 @@ beforeAll(async () => {
       startWorktreeWatcher({
         ...options,
         settleMs: 50,
+        plan: worktreeWatchPlanIo,
         startWatch: (target, listener, watchOptions) =>
           watch(target, { ...watchOptions, persistent: false }, (event, filename) => {
             const name = filename?.toString() ?? null;
@@ -182,6 +187,48 @@ describe("real Git through the shared owner", () => {
     // would be a watcher hint of its own, invalidating the result it had just
     // published and making the read above join a redundant rescan (case 0180).
     expect((await fs.stat(index)).mtimeMs).toBe(indexBefore);
+  });
+
+  test("a file in a directory created after the watch began is detected", async () => {
+    if (!watchingSupported) return;
+    let before = latestRevision();
+    await fs.mkdir(path.join(linked, "fresh", "deep"), { recursive: true });
+    await fs.writeFile(path.join(linked, "fresh", "deep", "first.txt"), "one\n");
+    await until(() => latestRevision() > before);
+    expect(await readRows()).toContainEqual({
+      path: "fresh/deep/first.txt",
+      status: "?",
+      additions: 1,
+    });
+
+    // The later file is what a watch the plan added has to report on its own.
+    before = latestRevision();
+    await fs.writeFile(path.join(linked, "fresh", "deep", "second.txt"), "two\n");
+    await until(() => latestRevision() > before);
+    expect(await readRows()).toContainEqual({
+      path: "fresh/deep/second.txt",
+      status: "?",
+      additions: 1,
+    });
+
+    before = latestRevision();
+    await fs.rm(path.join(linked, "fresh"), { recursive: true });
+    await until(() => latestRevision() > before);
+  });
+
+  test("a write under the ignored node_modules changes nothing and starts no scan", async () => {
+    if (!watchingSupported) return;
+    const started = metrics.snapshot().kinds["diff-scan"]?.requested ?? 0;
+    await fs.writeFile(path.join(linked, "node_modules", "pkg", "index.js"), "x\n");
+    // A later source edit proves the watch delivered past the write above.
+    const before = latestRevision();
+    await fs.appendFile(path.join(linked, "a.txt"), "three\n");
+    await until(() => latestRevision() > before);
+    // One hint for the edit, however many scans the gap merged it into.
+    expect((metrics.snapshot().kinds["diff-scan"]?.requested ?? 0) - started).toBeLessThanOrEqual(
+      2,
+    );
+    expect((await readRows()).map((row) => row.path)).not.toContain("node_modules/pkg/index.js");
   });
 
   test("a file written inside the minimum gap reaches the following scan unasked", async () => {

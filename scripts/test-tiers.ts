@@ -113,6 +113,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/multi-review-claude-bridge-restart.test.ts",
     "tests/recurring-baseline.test.ts",
     "tests/standalone.test.ts",
+    "tests/worktree-watcher-real.test.ts",
     "tests/worktree-watcher.test.ts",
   ],
   "apps/desktop": [

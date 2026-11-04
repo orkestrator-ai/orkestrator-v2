@@ -10,6 +10,7 @@ import {
   mergedProjectView,
   repositoryLabel,
   repositoryOpenTarget,
+  repositoryTileColor,
   type MergedProject,
 } from "@/lib/federation/sidebar-layout";
 import type { FederatedEnvironment } from "@/lib/federation/summaries";
@@ -27,7 +28,7 @@ export interface CompactRepository {
   key: string;
   /** The tooltip and accessible name. */
   name: string;
-  /** The house tile's outline: the command node's colour for a repository. */
+  /** The house tile's outline: for a repository, `repositoryTileColor`. */
   colorToken: string | undefined;
   icon: string | null | undefined;
   /** The repository's identity; absent for a project that reports none. */
@@ -74,7 +75,7 @@ export function compactRepositories(
       {
         key: entry.key,
         name: repositoryLabel(entry.name),
-        colorToken: commandNode?.colorToken,
+        colorToken: repositoryTileColor(commandNode, entry.name, opens),
         icon: commandNode?.projects.find(
           (project) => project.repositoryHint === entry.name && project.icon,
         )?.icon,

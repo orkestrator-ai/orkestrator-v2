@@ -10,7 +10,7 @@ describe("ACP bridge", () => {
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
-      error: "cursor cannot list resumable ACP sessions",
+      error: "acp-fixture cannot list resumable ACP sessions",
     });
   });
 
@@ -19,7 +19,7 @@ describe("ACP bridge", () => {
     const response = await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers });
     expect(response.status).toBe(410);
     expect(await response.json()).toMatchObject({
-      error: "cursor cannot list resumable ACP sessions",
+      error: "acp-fixture cannot list resumable ACP sessions",
     });
   });
 
@@ -311,7 +311,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_888,
       reasoningTokens: 31,
       apiDurationMs: 1_448,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage?.durationMs).toBeGreaterThanOrEqual(0);
     expect(session.contextUsage).not.toHaveProperty("costUsd");
@@ -388,7 +388,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(sparseSession.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(sparseSession.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -421,7 +421,7 @@ describe("ACP bridge", () => {
       sessionTokens: 15_897,
       inputTokens: 200,
       outputTokens: 22,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(restored.contextUsage).not.toHaveProperty("cacheReadTokens");
     expect(restored.contextUsage).not.toHaveProperty("reasoningTokens");
@@ -484,7 +484,7 @@ describe("ACP bridge", () => {
       inputTokens: 850,
       outputTokens: 50,
       reasoningTokens: 77,
-      source: "cursor",
+      source: "acp-fixture",
     });
     // No turn was in flight, so the elapsed time must be carried over rather
     // than measured again from a clock this turn no longer owns.
@@ -637,7 +637,7 @@ describe("ACP bridge", () => {
     expect(session.contextUsage).toMatchObject({
       usedTokens: 1_500,
       maximumTokens: 30_000,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(5);
   });
@@ -668,7 +668,7 @@ describe("ACP bridge", () => {
       usedTokens: 4_321,
       inputTokens: 4_000,
       outputTokens: 321,
-      source: "cursor",
+      source: "acp-fixture",
     });
   });
 
@@ -698,7 +698,7 @@ describe("ACP bridge", () => {
       outputTokens: 20,
       cacheReadTokens: 30,
       cacheWriteTokens: 5,
-      source: "cursor",
+      source: "acp-fixture",
     });
   });
 

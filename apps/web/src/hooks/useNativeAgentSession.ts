@@ -22,6 +22,7 @@ import type {
   NativeAgentViewIdentity,
   NativeAgentDiscoverySection,
   NativeAgentDiscoveryView,
+  NativeAgentLiveUpdate,
   NativeAgentSessionStateView,
   NativeAgentTranscriptUpdate,
   NativeAgentTranscriptView,
@@ -32,6 +33,7 @@ import {
   applyNativeAgentTranscriptDelta,
   DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
   isNativeAgentSessionProjection,
+  NATIVE_AGENT_LIVE_UPDATE_VERSION,
   nativeAgentCapabilities,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -47,6 +49,7 @@ import {
   getNativeAgentTranscriptUpdate,
   getNativeAgentSessionStateUpdate,
   getNativeAgentDiscoveryUpdate,
+  getNativeAgentLiveUpdate,
   getNativeAgentToolDetails,
   forkNativeAgentSession,
   listNativeAgentResumableSessions,
@@ -68,9 +71,13 @@ import {
   stopNativeAgentBackgroundTask,
   updateNativeAgentControls,
 } from "@/lib/backend";
+import { isUnsupportedBackendCommand } from "@/lib/backend/shared";
 import type { PermissionRuleChoiceInput } from "@/lib/backend/permission-rules";
 import { encodedValueBytes, retainedHistoryBytes } from "@/lib/native-history-accounting";
-import { nativeSessionReadDemand } from "@/lib/native-session-read-policy";
+import {
+  NativeDiscoveryReadSchedule,
+  nativeSessionReadDemand,
+} from "@/lib/native-session-read-policy";
 import {
   registerNativeSessionView,
   runNativeSessionReadRound,
@@ -80,7 +87,10 @@ import {
   nativeObservationInvalidationMatches,
   subscribeNativeObservationInvalidations,
 } from "@/lib/native-observation-events";
-import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
+import {
+  NATIVE_AGENT_OBSERVATION_EVENT_VERSION,
+  nativeSessionInvalidationNamesDiscovery,
+} from "@orkestrator/protocol/native-agent-observation";
 import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -122,6 +132,8 @@ let syncCapability: {
   observationEvents?: boolean;
   /** The backend can answer transcript deltas with part-level patches. */
   transcriptPatches?: boolean;
+  /** The backend answers transcript and state in one request. */
+  liveUpdate?: boolean;
   checkedAt: number;
   generation: number;
 } | null = null;
@@ -335,12 +347,15 @@ async function nativeAgentSyncSupported(): Promise<boolean> {
       const transcriptPatches =
         capabilities.transcriptPatchVersions?.includes(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) ===
         true;
+      const liveUpdate =
+        capabilities.liveUpdateVersions?.includes(NATIVE_AGENT_LIVE_UPDATE_VERSION) === true;
       if (generation === syncCapabilityGeneration) {
         syncCapability = {
           supported,
           progressive,
           observationEvents,
           transcriptPatches,
+          liveUpdate,
           checkedAt: Date.now(),
           generation,
         };
@@ -386,6 +401,28 @@ export function nativeObservationEventsSupported(): boolean {
 function nativeTranscriptPatchesSupported(): boolean {
   return Boolean(
     syncCapability?.generation === syncCapabilityGeneration && syncCapability.transcriptPatches,
+  );
+}
+
+/** A backend that turned out not to have the command answers both parts `pending`. */
+async function readLiveUpdate<TMessage>(
+  send: <T>(command: string, input: object, run: () => Promise<T>) => Promise<T>,
+  input: Parameters<typeof getNativeAgentLiveUpdate>[0],
+): Promise<NativeAgentLiveUpdate<TMessage>> {
+  try {
+    return await send("live-update", input, () => getNativeAgentLiveUpdate<TMessage>(input));
+  } catch (error) {
+    if (!isUnsupportedBackendCommand(error, "get_native_agent_live_update")) throw error;
+    if (syncCapability) syncCapability.liveUpdate = false;
+    const pending = { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, status: "pending" } as const;
+    return { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, transcript: pending, state: pending };
+  }
+}
+
+/** Synchronous and conservative: false until this backend generation answered. */
+function nativeLiveUpdateSupported(): boolean {
+  return Boolean(
+    syncCapability?.generation === syncCapabilityGeneration && syncCapability.liveUpdate,
   );
 }
 
@@ -847,6 +884,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   const progressiveDiscoveryRef = useRef<NativeAgentDiscoveryView | undefined>(
     matchingProgressiveCache?.discovery,
   );
+  const [discoverySchedule] = useState(() => new NativeDiscoveryReadSchedule());
   const syncLiveProjectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
     (sharedSyncCache?.liveProjection as NativeAgentSessionProjection<TMessage> | undefined) ?? null,
   );
@@ -1390,6 +1428,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         progressiveStateTokenRef.current = undefined;
         progressiveDiscoveryTokenRef.current = undefined;
         progressiveDiscoveryRef.current = undefined;
+        discoverySchedule.markDue();
         markSessionStateAvailability("unavailable");
         setSessionStateError(null);
       }
@@ -1784,6 +1823,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [
       applyProjection,
+      discoverySchedule,
       environmentId,
       historyRequestBudget,
       identityBelongsToView,
@@ -2113,6 +2153,29 @@ export function useNativeAgentSession<TMessage = unknown>({
             };
             return send("transcript", input, () => getNativeAgentTranscriptUpdate<TMessage>(input));
           };
+          /*
+           * A background round over tokens this view already holds asks for both
+           * in one request. Everything else (a first read, a manual read, a
+           * recovery after a part was lost) reads them apart, so a cold transcript
+           * never holds session state back. A part the backend could not answer
+           * in time comes back `pending` and is read on its own below, as is
+           * everything if this backend turns out not to have the command.
+           */
+          const liveTranscriptToken = progressiveTranscriptTokenRef.current;
+          const liveStateToken = progressiveStateTokenRef.current;
+          const liveUpdate =
+            background && liveTranscriptToken && liveStateToken && nativeLiveUpdateSupported()
+              ? readLiveUpdate<TMessage>(send, {
+                  ...identity,
+                  viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+                  liveWindow: DEFAULT_NATIVE_AGENT_LIVE_WINDOW,
+                  transcriptToken: liveTranscriptToken,
+                  stateToken: liveStateToken,
+                  ...(nativeTranscriptPatchesSupported()
+                    ? { patchVersion: NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION }
+                    : {}),
+                })
+              : null;
           const applyTranscriptUpdate = (
             update: NativeAgentTranscriptUpdate<TMessage>,
             requestedWithToken: boolean,
@@ -2203,7 +2266,12 @@ export function useNativeAgentSession<TMessage = unknown>({
             });
             return "failed";
           };
-          const transcriptRead = requestTranscript(false)
+          const firstTranscript = liveUpdate
+            ? liveUpdate.then(({ transcript }) =>
+                transcript.status === "pending" ? requestTranscript(false) : transcript,
+              )
+            : requestTranscript(false);
+          const transcriptRead = firstTranscript
             .then(async (update) => {
               if (!stillCurrent()) return;
               let result = applyTranscriptUpdate(
@@ -2250,9 +2318,12 @@ export function useNativeAgentSession<TMessage = unknown>({
               : {}),
             ...(options?.manual === true ? { forceSnapshot: true } : {}),
           };
-          const stateRead = send("session-state", stateInput, () =>
-            getNativeAgentSessionStateUpdate(stateInput),
-          )
+          const requestState = () =>
+            send("session-state", stateInput, () => getNativeAgentSessionStateUpdate(stateInput));
+          const firstState = liveUpdate
+            ? liveUpdate.then(({ state }) => (state.status === "pending" ? requestState() : state))
+            : requestState();
+          const stateRead = firstState
             .then((update) => {
               if (!stillCurrent()) return;
               if (update.status === "snapshot") {
@@ -2305,32 +2376,48 @@ export function useNativeAgentSession<TMessage = unknown>({
               });
             });
 
-          const discoveryInput = {
-            ...identity,
-            viewVersion: 1 as const,
-            sections: [
-              "models",
-              "commands",
-              "mcp",
-              "runtime",
-            ] satisfies NativeAgentDiscoverySection[],
-            ...(progressiveDiscoveryTokenRef.current
-              ? { knownToken: progressiveDiscoveryTokenRef.current }
-              : {}),
-            ...(options?.manual === true ? { forceSnapshot: true } : {}),
-          };
-          void send("discovery", discoveryInput, () =>
-            getNativeAgentDiscoveryUpdate(discoveryInput),
-          )
-            .then((update) => {
-              if (!stillCurrent()) return;
-              if (update.status === "snapshot") {
-                applyProgressiveDiscovery(update.value, update.token);
-              } else if (update.status === "unchanged") {
-                progressiveDiscoveryTokenRef.current = update.token;
-              }
-            })
-            .catch(() => undefined);
+          const turnPhase = projectionRef.current?.turn.phase;
+          let readDiscovery = true;
+          if (background) readDiscovery = discoverySchedule.claim(Date.now(), turnPhase);
+          else discoverySchedule.claimExplicit(Date.now(), turnPhase);
+          if (readDiscovery) {
+            const discoveryInput = {
+              ...identity,
+              viewVersion: 1 as const,
+              sections: [
+                "models",
+                "commands",
+                "mcp",
+                "runtime",
+              ] satisfies NativeAgentDiscoverySection[],
+              ...(progressiveDiscoveryTokenRef.current
+                ? { knownToken: progressiveDiscoveryTokenRef.current }
+                : {}),
+              ...(options?.manual === true ? { forceSnapshot: true } : {}),
+            };
+            void send("discovery", discoveryInput, () =>
+              getNativeAgentDiscoveryUpdate(discoveryInput),
+            )
+              .then((update) => {
+                // Nothing else re-reads a discarded or failed answer soon.
+                if (!stillCurrent()) {
+                  discoverySchedule.markDue();
+                  return;
+                }
+                if (update.status === "snapshot") {
+                  applyProgressiveDiscovery(update.value, update.token);
+                  if (progressiveDiscoveryRef.current !== update.value) {
+                    discoverySchedule.markDue();
+                  }
+                } else if (update.status === "unchanged") {
+                  progressiveDiscoveryTokenRef.current = update.token;
+                } else {
+                  discoverySchedule.markDue();
+                }
+                discoverySchedule.observe(progressiveDiscoveryRef.current);
+              })
+              .catch(() => discoverySchedule.markDue());
+          }
 
           await Promise.allSettled([transcriptRead, stateRead]);
           // A superseding refresh owns the flag from here on; clearing it would
@@ -2505,6 +2592,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       applyProgressiveTranscript,
       beginSessionStateRefresh,
       commitSyncMaterialization,
+      discoverySchedule,
       enabled,
       environmentId,
       flushPendingReconcile,
@@ -2760,6 +2848,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = progressive.discoveryToken;
       progressiveDiscoveryRef.current = progressive.discovery;
+      discoverySchedule.markDue();
       markTranscriptAvailability(
         progressive.transcriptAvailability === "empty"
           ? "empty"
@@ -2779,6 +2868,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       progressiveStateTokenRef.current = undefined;
       progressiveDiscoveryTokenRef.current = undefined;
       progressiveDiscoveryRef.current = undefined;
+      discoverySchedule.markDue();
       // No matching transcript metadata, so a retained or foreign projection is
       // only ever `cached` here: its message count cannot prove the transcript
       // read ever came back empty.
@@ -2788,6 +2878,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       setSessionStateError(null);
     }
   }, [
+    discoverySchedule,
     enabled,
     environmentId,
     identity,
@@ -2830,14 +2921,21 @@ export function useNativeAgentSession<TMessage = unknown>({
     if (!enabled) return;
     return registerNativeSessionView(sharedReadTarget, {
       wantsBackgroundRead: () => backgroundRefreshEnabledRef.current,
-      refresh: async (context, round) =>
-        refreshRef.current?.(
-          context.reason === "interval"
-            ? { manual: false, round }
-            : { manual: false, reconcileAfterInFlight: true, round },
-        ) ?? null,
+      refresh: async (context, round) => {
+        // A resume or reconnect may have missed any announcement.
+        if (context.reason !== "interval" && context.reason !== "invalidate") {
+          discoverySchedule.markDue();
+        }
+        return (
+          refreshRef.current?.(
+            context.reason === "interval"
+              ? { manual: false, round }
+              : { manual: false, reconcileAfterInFlight: true, round },
+          ) ?? null
+        );
+      },
     });
-  }, [enabled, sharedReadTarget]);
+  }, [discoverySchedule, enabled, sharedReadTarget]);
   const { invalidate: coordinatedInvalidate } = useCoordinatedRead({
     key: {
       resource: "native-agent-session",
@@ -2863,17 +2961,18 @@ export function useNativeAgentSession<TMessage = unknown>({
   useEffect(() => {
     const unsubscribeChange = onResourceChanged("native-agent-session", (change) => {
       if (
-        enabled &&
-        isActive &&
-        change.id === environmentId &&
-        (change.agent === undefined ||
-          (change.agent === platform && change.logicalSessionKey === sessionKey))
+        change.id !== environmentId ||
+        (change.agent !== undefined &&
+          (change.agent !== platform || change.logicalSessionKey !== sessionKey))
       ) {
-        coordinatedInvalidate();
+        return;
       }
+      if (nativeSessionInvalidationNamesDiscovery(change.cause)) discoverySchedule.markDue();
+      if (enabled && isActive) coordinatedInvalidate();
     });
     const unsubscribeResync = onResourceResync(() => {
       invalidateNativeAgentSyncCapability();
+      discoverySchedule.markDue();
       if (enabled && isActive) coordinatedInvalidate();
     });
     /*
@@ -2884,6 +2983,7 @@ export function useNativeAgentSession<TMessage = unknown>({
      * re-reads every view.
      */
     const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
+      if (invalidation.kind === "all") discoverySchedule.markDue();
       if (
         enabled &&
         isActive &&
@@ -2901,7 +3001,15 @@ export function useNativeAgentSession<TMessage = unknown>({
       unsubscribeResync();
       unsubscribeObservation();
     };
-  }, [coordinatedInvalidate, enabled, environmentId, isActive, platform, sessionKey]);
+  }, [
+    coordinatedInvalidate,
+    discoverySchedule,
+    enabled,
+    environmentId,
+    isActive,
+    platform,
+    sessionKey,
+  ]);
 
   const send = useCallback(
     async (

@@ -41,7 +41,7 @@ governs, marked "Decided".
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
-16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
+16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
 
@@ -980,7 +980,9 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 **Context.** `packages/cli/src/client/commands/session.ts`, `packages/cli/src/client/transport.ts`, `packages/protocol/src/node/application-logging.ts`. A `knownToken` on the public API is a contract change (`docs/architecture/public-cli.md`).
 
-DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of this change's scope and is still open.
+DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of that change's scope.
+
+DK-18 done on 2026-11-04. The writer (`installProductionApplicationLogging` in `application-logging.ts`) queues lines and each link of its one write chain appends everything queued, on the next event-loop turn, in pieces of at most `maxBatchBytes` (256 KiB). `mkdir` runs before the first write and again only after a failed write. Lines logged during an append share the next one, so `flush` and `stop` still await the chain's tail. The 4 MiB `maxPendingBytes` bound and its drop markers are unchanged, and it now has a count bound beside it, `maxPendingEntries` (65,536 entries), as the invariants require of every queue. `ENOENT` on an append means the folder was removed: the unwritten lines get one retry through a fresh `mkdir`, and the file index is rescanned from what is on disk. Any other failure loses that batch, writes one `write.failed` line to the console with its `entries` and `bytes`, and never rejects the chain. Tests: `apps/desktop/electron/application-logging.test.ts` ("production application log batching": a counted burst, order across batches, the batch bound, the flush bound in event-loop turns, stop and the quit hold, a removed folder, failed `mkdir` and append, a report that throws, the byte and count bounds) and `apps/backend/src/standalone-logging.test.ts` (shutdown keeps every queued line).
 
 **Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here.
 
@@ -1001,6 +1003,30 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
   - **Stream-parse the JSON as it arrives.**
     - Pros: no whole-body buffer at all.
     - Cons: needs a streaming parser; responses are at most 8 MiB, so the saving is small.
+  - Done with the recommended option.
+- **DK-18: when does the log sink write?**
+  - **Coalesce on the next event-loop turn into one append (recommended).**
+    - Pros: no timer; a lone line waits for nothing but an append already in flight, which suits 0880's note that a line logged before a hold reaches the file late; under load the batch grows by itself while the previous append runs.
+    - Cons: a slow trickle still makes one append per line, so the saving is on bursts.
+  - **A timer of about 100 ms, flushing `error` at once.**
+    - Pros: fewer appends under a sustained trickle.
+    - Cons: every line waits, a timer has to be cleared on stop, and a crash loses up to one interval.
+  - Done with the recommended option.
+- **DK-18: keep the file handle open between batches?**
+  - **No: one `appendFile` per batch, with `mkdir` only after a failure (recommended).**
+    - Pros: no descriptor to close on rollover and quit; a removed folder or file recovers on the next write.
+    - Cons: still one open and close per batch.
+  - **Yes, while the day and index are unchanged.**
+    - Pros: no open per batch.
+    - Cons: a deleted file goes on being written unseen, and rollover and quit each have a handle to close.
+  - Done with the recommended option.
+- **DK-18: what happens to a batch whose write fails?**
+  - **Lose it and report it, retrying only `ENOENT` (recommended).**
+    - Pros: as before a batch cannot grow memory or wedge the chain; `ENOENT` is raised at open, so its retry cannot write a line twice.
+    - Cons: a failed batch loses more lines than one failed line did. They are reported on the console but not marked in the file.
+  - **Requeue it and retry every failure.**
+    - Pros: survives a short `ENOSPC`.
+    - Cons: a partial write would be repeated, and old lines would compete with new ones for the queue bound.
   - Done with the recommended option.
 
 ## Assumptions and decisions
@@ -1351,6 +1377,21 @@ Made on 2026-11-03. An older backend refuses an unknown input field with
 rather than sending the token and retrying without it on refusal. The check
 reads capabilities once per follow, through the same routing as the read,
 and never depends on matching the server's error prose.
+
+### Task 16: a count bound beside the log sink's byte bound (DK-18)
+
+Made on 2026-11-04. The queue used to be a promise chain bounded by bytes alone.
+AGENTS.md invariant 11 asks every queue for both bounds, so the array that
+replaced it has `maxPendingEntries` as well. At 65,536 entries it stays out of
+the way at a typical line length, where the 4 MiB byte bound is reached first.
+A line over it is dropped and announced exactly as one over the byte bound is.
+
+### Task 16: test seam for the log sink's file calls (DK-18)
+
+Made on 2026-11-04. `installProductionApplicationLogging` takes an optional
+`files` with `mkdir` and `appendFile`, as it already takes `now` and `bounds`.
+The tests need to count and fail those calls, and `mock.module` on
+`node:fs/promises` would be global across the suite.
 
 ### Task 16: unchanged still reads the window fresh (DK-16)
 

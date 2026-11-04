@@ -282,7 +282,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` remains, see 0694. |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
-| DK-18 | Open | `mkdir` and `appendFile` per entry, `packages/protocol/src/node/application-logging.ts:441-442`; see [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
+| DK-18 | Done | One `appendFile` per event-loop turn and `mkdir` only after a failure, in `packages/protocol/src/node/application-logging.ts`; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16 and [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 
 ## Status of every logging and database item
 
@@ -296,7 +296,7 @@ When one of these becomes ready, it joins the lane shown.
 | R4 change-driven heartbeats | Done | `STALL_NO_DELTA_MS` and the keepalive (`packages/protocol/src/node/bridge-diagnostics.ts:18`, `:29`), buffered logger flush (`:684`, `:696`), #1637; report addendum. |
 | R5 safe error formatter | Done | `formatLogError` and `CommandFailedError` print backstop (`apps/backend/src/core/shell.ts:75-80`), #1570; the stderr tail was dropped by the user's decision (`docs/architecture/logging.md:258-260`). |
 | R6 essential tier and silent gaps | Partly done | The silent failures log and the previous Docker bridge log is kept (0720, 0740); the essential tier and the user-facing notices are open in 0750 and 0720. |
-| R7 relay and file writer | Partly done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching, line bound and relay skip are open in 0860 (`docs/architecture/logging.md:634-635`). |
+| R7 relay and file writer | Partly done | Level-carrying records and the updater logger landed in #1558 (`backend-process.ts:46-64`, `updater-log.ts:35`); batching landed with DK-18; only the line bound and relay skip remain open in [0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer). See [the file writer](../../architecture/logging.md#the-file-writer). |
 | R8 renderer diagnostics | Partly done | Lifecycle logs moved to `debug` (#1592) and keystroke warnings throttled (`useTerminal.ts:1125`); switch, DevTools and ring are open in 0790. |
 | R9 Codex raw event logging | Open | `ORKESTRATOR_CODEX_RAW_LOG_DIR` is read and never set (`bridges/codex-bridge/src/index.ts:382`), writer reachable only for tests (`:974`), default still on (`app-config-defaults.ts:91`); 0770. |
 | R10 Docker log hygiene | Open | `cat >>` fallback (`docker/orkestrator-log-writer.sh:35-40`), no options without `local` (`container-resources.ts:212`), `...process.env` (`commands-servers.ts:961`); 0830 and 0850. |

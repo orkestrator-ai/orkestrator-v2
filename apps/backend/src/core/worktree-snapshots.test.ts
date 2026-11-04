@@ -12,6 +12,7 @@ import {
 } from "@orkestrator/protocol/worktree-snapshots";
 import {
   DiffStatsService,
+  LOCAL_SCAN_MIN_GAP_MS,
   type DiffScanResult,
   type DiffStatsServiceOptions,
   type DiffStatsTarget,
@@ -130,6 +131,9 @@ function createOwner(
       walks.push({ key: request.worktreePath ?? request.containerId ?? "", gate });
       return gate.promise;
     },
+    // These cases assert what each hint does at once; "minimum scan gap" below
+    // turns the gap back on.
+    localScanMinGapMs: 0,
     ...options.overrides,
   });
 
@@ -889,5 +893,241 @@ describe("tree bounds", () => {
         (event) => event.environmentId === "env-local" && event.treeRevision === 2,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("minimum scan gap", () => {
+  /** A worktree whose scan reports whichever files exist when it starts. */
+  function gapped(overrides: Partial<DiffStatsServiceOptions> = {}) {
+    const owner = createOwner({
+      overrides: { localScanMinGapMs: LOCAL_SCAN_MIN_GAP_MS, ...overrides },
+    });
+    const files = ["a.ts"];
+    owner.autoScan(() => result(files.map((file) => change(file))));
+    return { owner, files, scans: () => owner.kinds()["diff-scan"]!.started };
+  }
+
+  async function trackedAndScanned(world: ReturnType<typeof gapped>, target = local()) {
+    track(world.owner, target);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(1);
+  }
+
+  test("a hint inside the gap is coalesced, and the scan runs when the gap ends", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    const coalesced = world.owner.kinds()["diff-scan"]!.coalesced;
+
+    await world.owner.time.advance(500);
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.scans()).toBe(1);
+    expect(world.owner.kinds()["diff-scan"]!.coalesced).toBe(coalesced + 1);
+
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS - 501);
+    expect(world.scans()).toBe(1);
+    await world.owner.time.advance(1);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a hint after the gap scans at once", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("every hint inside one gap shares one trailing scan", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    for (let hint = 0; hint < 5; hint += 1) {
+      await world.owner.time.advance(100);
+      world.owner.hint({ fileList: true });
+    }
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 5);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a file changed during the gap is reflected by the following scan", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    const hits = world.owner.kinds()["file-list-read"]?.cacheHits ?? 0;
+
+    await world.owner.time.advance(100);
+    world.files.push("changed-in-gap.ts");
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.owner.diffEvents.at(-1).stats.filesChanged).toBe(1);
+
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+    await flushMicrotasks();
+    // Published with no reader asking, and then served from that same scan.
+    expect(world.owner.diffEvents.at(-1).stats.filesChanged).toBe(2);
+    const read = await readList(world.owner, localLookup);
+    expect(read.changes).toEqual([change("a.ts"), change("changed-in-gap.ts")]);
+    expect(world.scans()).toBe(2);
+    expect(world.owner.kinds()["file-list-read"]?.cacheHits).toBe(hits + 1);
+  });
+
+  test("constant writes neither scan on every burst nor starve the trailing scan", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    // An install: a settled burst every half second for ten seconds.
+    for (let burst = 0; burst < 20; burst += 1) {
+      await world.owner.time.advance(500);
+      world.files.push(`burst-${burst}.ts`);
+      world.owner.hint({ fileList: true });
+      await flushMicrotasks();
+    }
+    const duringWrites = world.scans() - 1;
+    expect(duringWrites).toBeGreaterThanOrEqual(4);
+    expect(duringWrites).toBeLessThanOrEqual(5);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+    await flushMicrotasks();
+    expect(world.owner.diffEvents.at(-1).stats.filesChanged).toBe(21);
+  });
+
+  test("the gap runs from the end of a slow scan", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+    world.owner.autoScan(undefined);
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+
+    // Far longer than the gap, with a change arriving while it runs.
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 3);
+    world.owner.hint({ fileList: true });
+    await settleScan(world.owner, 0, result([change("a.ts")]));
+    expect(world.scans()).toBe(2);
+
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS - 1);
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(1);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(3);
+  });
+
+  test("a reader inside the gap scans at once, and the held-back scan is dropped", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(100);
+    world.files.push("read-in-gap.ts");
+    world.owner.hint({ fileList: true });
+    const read = await readList(world.owner, localLookup);
+    expect(read.changes).toEqual([change("a.ts"), change("read-in-gap.ts")]);
+    expect(world.scans()).toBe(2);
+
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 2);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a hint soon after a reader's scan waits a full gap from that scan", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(100);
+    world.owner.hint({ fileList: true });
+    await readList(world.owner, localLookup);
+    expect(world.scans()).toBe(2);
+
+    await world.owner.time.advance(1_000);
+    world.owner.hint({ fileList: true });
+    // The first hint's gap ends here, but the reader's scan already answered it.
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS - 1_100);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(99);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(1);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(3);
+  });
+
+  test("a refresh inside the gap scans at once", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(100);
+    world.owner.service.refresh("env-local");
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a refresh or known mutation during a scan reruns as soon as it ends", async () => {
+    for (const urgent of [
+      (owner: Owner) => owner.service.refresh("env-local"),
+      (owner: Owner) => owner.service.invalidateChanges(localLookup),
+    ]) {
+      const world = gapped();
+      await trackedAndScanned(world);
+      await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS);
+      world.owner.autoScan(undefined);
+      world.owner.hint({ fileList: true });
+      await flushMicrotasks();
+      expect(world.scans()).toBe(2);
+
+      urgent(world.owner);
+      await settleScan(world.owner, 0, result([change("a.ts")]));
+      expect(world.scans()).toBe(3);
+    }
+  });
+
+  test("pausing or untracking inside the gap cancels the held-back scan", async () => {
+    for (const stop of [
+      (owner: Owner) => owner.service.pause("env-local"),
+      (owner: Owner) => owner.service.untrack("env-local"),
+    ]) {
+      const world = gapped();
+      await trackedAndScanned(world);
+      await world.owner.time.advance(100);
+      world.owner.hint({ fileList: true });
+      stop(world.owner);
+      await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 2);
+      await flushMicrotasks();
+      expect(world.scans()).toBe(1);
+    }
+  });
+
+  test("a retarget inside the gap scans the new target at once, exactly once", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(100);
+    world.owner.hint({ fileList: true });
+    track(world.owner, local({ worktreePath: "/work/moved" }));
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 2);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a container's hints keep their own spacing and are not gapped again", async () => {
+    const owner = createOwner({ overrides: { localScanMinGapMs: LOCAL_SCAN_MIN_GAP_MS } });
+    owner.autoScan(() => result([change("a.ts")]));
+    track(owner, container());
+    await flushMicrotasks();
+    const before = owner.kinds()["diff-scan"]!.started;
+    owner.service.invalidateBaseline(containerLookup);
+    await flushMicrotasks();
+    expect(owner.kinds()["diff-scan"]!.started).toBe(before + 1);
+  });
+
+  test("a clock that jumps backwards scans rather than waiting it out", async () => {
+    let now = 1_000_000;
+    const world = gapped({ monotonicNow: () => now });
+    await trackedAndScanned(world);
+    now -= 3_600_000;
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
   });
 });

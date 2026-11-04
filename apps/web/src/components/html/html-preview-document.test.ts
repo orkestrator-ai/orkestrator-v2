@@ -68,6 +68,11 @@ describe("buildHtmlPreviewDocument", () => {
   });
 
   test.each([
+    ["CSS import", '<style>@import "a.css";</style>'],
+    ["CSS background", '<p style="background:url(a.png)">x</p>'],
+    ["srcset", '<img srcset="a.png 2x">'],
+    ["poster", '<video poster="a.png"></video>'],
+    ["SVG image", '<svg><image href="a.png"/></svg>'],
     ["a script", "<script>alert(1)</script>"],
     ["a remote image", '<img src="https://example.com/a.png">'],
     ["a sibling image", '<img src="a.png">'],
@@ -75,6 +80,39 @@ describe("buildHtmlPreviewDocument", () => {
     ["a nested frame", '<iframe src="https://example.com"></iframe>'],
   ])("reports %s as refused content", (_name, html) => {
     expect(buildHtmlPreviewDocument(html).hasRefusedContent).toBe(true);
+  });
+
+  test("removes declarative navigation mutation", () => {
+    const parsed = parse(
+      buildHtmlPreviewDocument(
+        '<svg><a href="#safe"><animate attributeName="href" values="https://evil.invalid"/><set attributeName="target" to="_self"/><text>Open</text></a></svg>',
+      ).srcDoc,
+    );
+    expect(parsed.querySelector("animate, set")).toBeNull();
+  });
+
+  test("serialized markup is stable on reparse, including namespace mutation", () => {
+    const html =
+      '<form><math><mtext></form><form><mglyph><style></math><a href="https://evil.invalid/">Mutation</a>';
+    const first = buildHtmlPreviewDocument(html);
+    expect(buildHtmlPreviewDocument(first.srcDoc).srcDoc).toBe(first.srcDoc);
+    for (const link of Array.from(parse(first.srcDoc).querySelectorAll("a"))) {
+      expect(link.getAttribute("target")).toBe("_blank");
+    }
+  });
+
+  test("does not flag inline data or fragment CSS references", () => {
+    expect(
+      buildHtmlPreviewDocument(
+        '<style>p{background:url( "data:image/png;base64,AAAA" );filter:url(#blur)}</style>',
+      ).hasRefusedContent,
+    ).toBe(false);
+  });
+
+  test("does not flag inert JSON-LD", () => {
+    expect(
+      buildHtmlPreviewDocument('<script type="application/ld+json">{}</script>').hasRefusedContent,
+    ).toBe(false);
   });
 
   test("does not report a self-contained page", () => {

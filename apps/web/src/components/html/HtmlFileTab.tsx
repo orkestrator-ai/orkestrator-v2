@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileCode, Info } from "lucide-react";
 import { useFileDirtyStore } from "@/stores";
 import type { SaveFile } from "@/hooks/useFileSave";
@@ -49,42 +49,77 @@ export function HtmlFileTab({
     [html, mode],
   );
 
-  return (
-    <RenderedRawFileShell
-      mode={mode}
-      onModeChange={setMode}
-      icon={FileCode}
-      filePath={filePath}
-      language={language}
-      value={html}
-      lineNumber={lineNumber}
-      columnNumber={columnNumber}
-      navigationRequestId={navigationRequestId}
-      isActive={isActive}
-      isSaving={isSaving}
-      onChange={(nextHtml) => setContent(tabId, nextHtml)}
-      onSave={onSave}
-      notice={
-        preview?.hasRefusedContent ? (
-          <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-4 py-2 text-xs text-muted-foreground">
-            <Info className="h-3.5 w-3.5 shrink-0" />
-            <span>
-              This page may look incomplete: Rendered view does not run scripts or load external
-              files.
-            </span>
-          </div>
-        ) : null
+  const hostRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isActive || mode !== "rendered") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Opaque, script-free frames cannot forward keyboard events. Return keyboard
+    // focus to the host after a pointer interaction; native scrolling and links
+    // still work without granting the repository scripts or same-origin access.
+    const recoverFocus = () => {
+      timer = setTimeout(() => {
+        if (
+          hostRef.current?.contains(document.activeElement) &&
+          document.activeElement?.tagName === "IFRAME"
+        ) {
+          hostRef.current.focus({ preventScroll: true });
+        }
+      }, 0);
+    };
+    const save = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void onSave();
       }
-    >
-      {preview && (
-        <iframe
-          title={`Rendered view of ${filePath}`}
-          sandbox={HTML_PREVIEW_SANDBOX}
-          referrerPolicy="no-referrer"
-          srcDoc={preview.srcDoc}
-          className="block h-full w-full border-0 bg-white"
-        />
-      )}
-    </RenderedRawFileShell>
+    };
+    window.addEventListener("blur", recoverFocus);
+    window.addEventListener("keydown", save);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("blur", recoverFocus);
+      window.removeEventListener("keydown", save);
+    };
+  }, [isActive, mode, onSave]);
+
+  return (
+    <div ref={hostRef} tabIndex={-1} className="absolute inset-0 outline-none">
+      <RenderedRawFileShell
+        mode={mode}
+        onModeChange={setMode}
+        icon={FileCode}
+        filePath={filePath}
+        language={language}
+        value={html}
+        lineNumber={lineNumber}
+        columnNumber={columnNumber}
+        navigationRequestId={navigationRequestId}
+        isActive={isActive}
+        isSaving={isSaving}
+        onChange={(nextHtml) => setContent(tabId, nextHtml)}
+        onSave={onSave}
+        notice={
+          preview?.hasRefusedContent ? (
+            <div className="flex shrink-0 items-center gap-2 border-b border-border bg-background px-4 py-2 text-xs text-muted-foreground">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                This page may look incomplete: Rendered view does not run scripts or load external
+                files.
+              </span>
+            </div>
+          ) : null
+        }
+      >
+        {preview && (
+          <iframe
+            title={`Rendered view of ${filePath}`}
+            sandbox={HTML_PREVIEW_SANDBOX}
+            tabIndex={-1}
+            referrerPolicy="no-referrer"
+            srcDoc={preview.srcDoc}
+            className="block h-full w-full border-0 bg-white"
+          />
+        )}
+      </RenderedRawFileShell>
+    </div>
   );
 }

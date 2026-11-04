@@ -105,6 +105,16 @@ describe("HtmlFileTab", () => {
     expect(useFileDirtyStore.getState().getContent(TAB_ID)).toBe("<h1>Edited</h1>");
   });
 
+  test.each(["ctrlKey", "metaKey"])("saves from Rendered using %s", async (modifier) => {
+    render(renderTab());
+    selectMode("Raw");
+    const editor = await screen.findByRole("textbox");
+    fireEvent.change(editor, { target: { value: "<p>Dirty</p>" } });
+    selectMode("Rendered");
+    fireEvent.keyDown(window, { key: "s", [modifier]: true });
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
   test("restores an unsaved buffer instead of the disk content", () => {
     useFileDirtyStore.getState().setContent(TAB_ID, "<h1>Unsaved</h1>");
     render(renderTab());

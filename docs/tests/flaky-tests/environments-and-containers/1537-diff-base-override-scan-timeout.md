@@ -175,6 +175,9 @@ runs.
 alone do not close it.
 
 **On a new deadline miss**, read the step its report names: `#24 readFileList`
-means the partial fix did not hold, and any other step means the root reached the
-test by another path. CI has not reported a step yet; local evidence is on aarch64
+can mean either a stuck child on the current replacement target or a regression
+of the superseded-scan detachment. The step number alone cannot distinguish them.
+Use the shell trace documented above to identify which target owns the stalled
+child before concluding that the partial fix regressed. Any other step identifies
+a different wait to investigate for the remaining runtime defect. CI has not reported a step yet; local evidence is on aarch64
 and CI is x86-64.

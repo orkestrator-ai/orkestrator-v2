@@ -713,6 +713,46 @@ describe("DiffStatsService", () => {
     expect(harness.intervalFor("env-container")).toBe(15_000);
   });
 
+  test("resuming with an unresolved scan detaches it and fences its late completion", async () => {
+    const harness = createHarness();
+    let releaseOld!: () => void;
+    let calls = 0;
+    harness.setScan(() =>
+      ++calls === 1
+        ? new Promise((resolve) => {
+            releaseOld = () =>
+              resolve({ stats: stats({ additions: 99 }), changes: [{ path: "stale.ts" }] });
+          })
+        : Promise.resolve({ stats: stats({ additions: 7 }), changes: [{ path: "resumed.ts" }] }),
+    );
+    try {
+      harness.service.track(localTarget());
+      await settle();
+      harness.service.pause("env-local");
+      harness.service.track(localTarget());
+      await settle();
+      expect(harness.scans).toHaveLength(2);
+      expect(harness.service.snapshot()[0]?.stats).toEqual(stats({ additions: 7 }));
+      await expect(
+        harness.service.readFileList({
+          lookup: { worktreePath: "/tmp/env-local-worktree" },
+          comparisonRef: "main",
+          includeUncommitted: true,
+        }),
+      ).resolves.toMatchObject({ changes: [{ path: "resumed.ts" }] });
+      const publications = harness.emitted.length;
+      releaseOld();
+      await settle();
+      expect(harness.scans).toHaveLength(2);
+      expect(harness.emitted).toHaveLength(publications);
+      expect(harness.service.snapshot()[0]?.stats).toEqual(stats({ additions: 7 }));
+      expect(harness.service.status().inFlight).toBe(0);
+    } finally {
+      releaseOld?.();
+      harness.service.shutdown();
+    }
+  });
+
   test("untrack discards the counts", async () => {
     const harness = createHarness();
     harness.service.track(localTarget());

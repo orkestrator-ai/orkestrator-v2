@@ -1,3 +1,4 @@
+import { createStore } from "zustand/vanilla";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
@@ -12,14 +13,49 @@ let refresh: (() => void) | undefined;
 let resync: (() => void) | undefined;
 let notice: ((event: { payload: unknown }) => void) | undefined;
 let noticeStop = 0;
+const nodeSubscribers = new Map<
+  string,
+  { onEvent: (event: string, payload: unknown) => void; onResync: () => void }
+>();
+const nodeStops: string[] = [];
+const routed: Array<{ nodeId: string; command: string; args: Record<string, unknown> }> = [];
+const portalState = createStore(() => ({
+  selfId: "bk_command",
+  nodes: [] as Array<{ nodeId: string }>,
+}));
+mock.module("@/lib/portal/portal-store", () => ({
+  portalStore: {
+    store: portalState,
+    getState: portalState.getState,
+    invokeOnNode: (nodeId: string, command: string, args: Record<string, unknown>) => {
+      routed.push({ nodeId, command, args });
+      return answer(command, args);
+    },
+  },
+}));
 import { mockToastInfo, mockToastWarning } from "../../../../../tests/mocks/sonner";
 mock.module("@/lib/federation/node-events", () => ({
-  subscribeCommandNodeEvents: (subscriber: { onEvent: () => void; onResync: () => void }) => {
-    refresh = subscriber.onEvent;
+  subscribeCommandNodeEvents: (subscriber: {
+    onEvent: (event: string, payload: unknown) => void;
+    onResync: () => void;
+  }) => {
+    refresh = () => subscriber.onEvent("coordinator-account-switched", record);
+    notice = ({ payload }) => subscriber.onEvent("coordinator-account-switched", payload);
     resync = subscriber.onResync;
-    return () => {};
+    return () => {
+      noticeStop++;
+    };
   },
-  subscribeNodeEvents: () => () => {},
+  subscribeNodeEvents: (
+    nodeId: string,
+    subscriber: { onEvent: (event: string, payload: unknown) => void; onResync: () => void },
+  ) => {
+    nodeSubscribers.set(nodeId, subscriber);
+    return () => {
+      nodeSubscribers.delete(nodeId);
+      nodeStops.push(nodeId);
+    };
+  },
 }));
 mock.module("@/lib/native/authoritative-events", () => ({
   listenAuthoritative: (_event: string, handler: () => void, options: { onResync: () => void }) => {
@@ -79,6 +115,12 @@ const { describeCoordinatorAccountSwitch, CoordinatorAccountSwitchNotices } =
 
 beforeEach(() => {
   calls.length = 0;
+  routed.length = 0;
+  nodeSubscribers.clear();
+  nodeStops.length = 0;
+  portalState.setState({ nodes: [] });
+  mockToastInfo.mockClear();
+  mockToastWarning.mockClear();
   unknown = false;
   state = {
     grants: { claude: false, codex: false },
@@ -89,7 +131,7 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-function show(machine: null | undefined = undefined) {
+function show(machine: string | null | undefined = undefined) {
   return render(
     <CoordinatorAccountSwitchGrant
       platform="claude"
@@ -159,6 +201,62 @@ describe("coordinator account-switch permission in Settings", () => {
     resync?.();
     await screen.findByRole("listitem", { name: "Switch on other leaf" });
   });
+
+  test("reads and writes a specific leaf grant and refreshes after events and resync", async () => {
+    const view = show("bk_leaf");
+    const box = await tick();
+    expect(routed[0]).toEqual({
+      nodeId: "bk_leaf",
+      command: "get_coordinator_account_switch_grant",
+      args: { platform: "claude" },
+    });
+    fireEvent.click(box);
+    await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("true"));
+    expect(routed.at(-1)).toEqual({
+      nodeId: "bk_leaf",
+      command: "set_coordinator_account_switch_grant",
+      args: { platform: "claude", enabled: true },
+    });
+    state = { ...state, recentSwitches: [record] };
+    nodeSubscribers.get("bk_leaf")!.onEvent("coordinator-account-switched", record);
+    await screen.findByRole("listitem", { name: "Switch on beelink" });
+    state = { ...state, grants: { claude: false, codex: false }, recentSwitches: [] };
+    nodeSubscribers.get("bk_leaf")!.onResync();
+    await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByRole("listitem")).toBeNull();
+    view.unmount();
+    expect(nodeStops).toEqual(["bk_leaf"]);
+  });
+
+  test("subscribes to leaf notices independently of the selected workspace and releases removed nodes", () => {
+    portalState.setState({ nodes: [{ nodeId: "bk_command" }, { nodeId: "bk_leaf" }] });
+    const view = render(<CoordinatorAccountSwitchNotices />);
+    expect([...nodeSubscribers.keys()]).toEqual(["bk_leaf"]);
+    nodeSubscribers.get("bk_leaf")!.onEvent("coordinator-account-switched", record);
+    expect(mockToastInfo).toHaveBeenCalledTimes(1);
+    expect(mockToastInfo.mock.calls[0]?.[1]).toMatchObject({
+      id: `coordinator-account-switch:bk_leaf:${record.requestId}`,
+    });
+    portalState.setState({ nodes: [{ nodeId: "bk_other" }] });
+    expect(nodeStops).toEqual(["bk_leaf"]);
+    expect([...nodeSubscribers.keys()]).toEqual(["bk_other"]);
+    view.unmount();
+    expect(nodeStops).toEqual(["bk_leaf", "bk_other"]);
+  });
+
+  test.each(["failed", "outcome-unknown"] as const)(
+    "warning description describes %s truthfully",
+    (state) => {
+      render(<CoordinatorAccountSwitchNotices />);
+      notice!({ payload: { ...record, state, message: "Check target" } });
+      const description = `The orkestrator-v2 coordinator tried to switch the active Claude account on beelink from “Host login” to “Work (work@example.com)”: “Workers are about to hit the 5-hour limit”${state === "outcome-unknown" ? " The outcome is unknown. Check the active account on the target machine." : ""} Check target`;
+      expect(mockToastWarning).toHaveBeenCalledWith(
+        "Account switch did not complete",
+        expect.objectContaining({ description }),
+      );
+      expect(mockToastInfo).not.toHaveBeenCalled();
+    },
+  );
 
   test("notice listener shows success and warning, ignores malformed data and cleans up", async () => {
     notice = undefined;

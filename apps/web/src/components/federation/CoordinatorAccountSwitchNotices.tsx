@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { portalListen } from "@/lib/portal/portal-transport";
+import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
+import { portalStore } from "@/lib/portal/portal-store";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COORDINATOR_ACCOUNT_SWITCHED_EVENT,
   type CoordinatorAccountSwitchRecord,
@@ -10,7 +12,12 @@ import {
 export function describeCoordinatorAccountSwitch(record: CoordinatorAccountSwitchRecord): string {
   const provider = record.platform === "codex" ? "Codex" : "Claude";
   const from = record.fromAccountLabel ?? record.fromAccountId;
-  return `The ${record.coordinatorName} switched the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}`;
+  const action = record.state === "executed" ? "switched" : "tried to switch";
+  const check =
+    record.state === "outcome-unknown"
+      ? " The outcome is unknown. Check the active account on the target machine."
+      : "";
+  return `The ${record.coordinatorName} ${action} the active ${provider} account on ${record.nodeName}${from ? ` from “${from}”` : ""} to “${record.toAccountLabel}”${record.reason ? `: “${record.reason}”` : "."}${check}`;
 }
 
 function isRecord(value: unknown): value is CoordinatorAccountSwitchRecord {
@@ -31,28 +38,52 @@ function isRecord(value: unknown): value is CoordinatorAccountSwitchRecord {
  */
 export function CoordinatorAccountSwitchNotices() {
   useEffect(() => {
-    let stop: (() => void) | null = null;
-    let active = true;
-    void portalListen<unknown>(COORDINATOR_ACCOUNT_SWITCHED_EVENT, ({ payload }) => {
+    const stops = new Map<BackendId, () => void>();
+    const show = (source: string, payload: unknown) => {
       if (!isRecord(payload)) return;
       const settled = payload.state === "executed";
       toast[settled ? "info" : "warning"](
         settled ? "Account switched without asking" : "Account switch did not complete",
         {
-          id: `coordinator-account-switch:${payload.requestId}`,
-          description: `${describeCoordinatorAccountSwitch(payload)}${settled ? "" : ` ${payload.message ?? ""}`}`,
+          id: `coordinator-account-switch:${source}:${payload.requestId}`,
+          description: `${describeCoordinatorAccountSwitch(payload)}${settled || !payload.message ? "" : ` ${payload.message}`}`,
           duration: 30_000,
         },
       );
-    })
-      .then((unlisten) => {
-        if (active) stop = unlisten;
-        else unlisten();
-      })
-      .catch(() => undefined);
+    };
+    const commandStop = subscribeCommandNodeEvents({
+      events: [COORDINATOR_ACCOUNT_SWITCHED_EVENT],
+      onEvent: (_event, payload) => show(portalStore.getState().selfId ?? "command", payload),
+      // History in Settings is authoritative; do not replay old toasts on resync.
+      onResync: () => {},
+    });
+    const syncNodes = () => {
+      const { nodes, selfId } = portalStore.getState();
+      const ids = new Set(nodes.map((node) => node.nodeId).filter((id) => id !== selfId));
+      for (const [id, stop] of Array.from(stops)) {
+        if (!ids.has(id)) {
+          stop();
+          stops.delete(id);
+        }
+      }
+      for (const id of ids) {
+        if (stops.has(id)) continue;
+        stops.set(
+          id,
+          subscribeNodeEvents(id, {
+            events: [COORDINATOR_ACCOUNT_SWITCHED_EVENT],
+            onEvent: (_event, payload) => show(id, payload),
+            onResync: () => {},
+          }),
+        );
+      }
+    };
+    const storeStop = portalStore.store.subscribe(syncNodes);
+    syncNodes();
     return () => {
-      active = false;
-      stop?.();
+      storeStop();
+      commandStop();
+      for (const stop of stops.values()) stop();
     };
   }, []);
   return null;

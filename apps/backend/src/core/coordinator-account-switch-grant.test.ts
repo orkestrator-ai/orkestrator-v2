@@ -371,6 +371,21 @@ describe("standing permission to switch accounts", () => {
     });
   });
 
+  test("refuses an exhausted controlled-machine account before recording or switching", async () => {
+    await grant(true);
+    usage[LEAF]!["acct-leaf"] = reading(100);
+    const result = await switchTo("acct-leaf", "leaf-spent", { nodeId: LEAF });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("used up");
+    expect(switches).toHaveLength(0);
+    expect(await actions.list()).toHaveLength(0);
+    expect((await grantState()).recentSwitches).toHaveLength(0);
+    expect(
+      events.filter((entry) => entry.event === COORDINATOR_ACCOUNT_SWITCHED_EVENT),
+    ).toHaveLength(0);
+    expect(accounts[LEAF]!.find((row) => row.isActive)?.id).toBe("default");
+  });
+
   test("a retry with the same requestId does not switch twice", async () => {
     await grant(true);
     await switchTo("acct-work", "once");

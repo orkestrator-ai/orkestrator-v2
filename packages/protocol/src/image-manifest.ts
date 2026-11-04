@@ -95,6 +95,12 @@ export const IMAGE_CAPABILITIES = {
    * An older image keeps the token-bearing `insteadOf` rewrite.
    */
   "github-git-credential": 1,
+  /**
+   * `workspace-setup.sh` clones from the project's read-only mirror named by
+   * `ORKESTRATOR_GIT_MIRROR`, and falls back to its ordinary clone. An older
+   * image gets neither the mount nor the variable.
+   */
+  "git-mirror": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

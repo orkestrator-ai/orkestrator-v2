@@ -866,6 +866,7 @@ async function replaceRuntimePreservingStateUnfenced(
       runtimeGeneration,
       imageId: image.imageId,
       storage: candidateStorage,
+      reusesWorkspace: true,
     });
     const candidate: ContainerRuntimeIdentity = {
       containerId: candidateId,

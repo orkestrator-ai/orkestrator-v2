@@ -40,7 +40,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12, DK-14 and DK-15 done; DK-13 open).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; follow-ups in [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md)).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
@@ -1133,7 +1133,7 @@ Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the he
 
 ### 15. Container data transfer
 
-**Problem.** Each environment clones from the remote again (DK-13) and copies agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
+**Problem.** Until 2026-11-04 each environment cloned from the remote again (DK-13) and copied agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
 
 **Context.** Decided 2026-11-01: do this now, ahead of the measurement gate. Files: `docker/workspace-setup.sh` (DK-12, DK-13), `portable-inputs.ts` and the entrypoints (DK-14), `environment-move.ts` (DK-15). Container storage rules in `docs/architecture/container-lifecycle.md` apply: no removal outside lifecycle operations.
 
@@ -1147,7 +1147,13 @@ Done 2026-11-04 against `main` at `96ee1eb3`:
 
 - DK-14: `import_agent_input` in `docker/entrypoint.sh` leaves an input alone when copying it would change nothing, and removes what an earlier boot imported once it leaves the mounts (`staged-inputs=5`). Logins are imported on every start (`forget_unchanged_agent_login`, `remember_agent_login`). Tests: `apps/backend/tests/portable-inputs-stamps.test.ts`, `portable-inputs-stamps-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Input stamps") describes the behaviour. Follow-ups: [4580](../containers-and-environments/4580-input-stamp-follow-ups.md).
 
-**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+Done 2026-11-04 against `main` at `a8bdce44`:
+
+- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it. Follow-ups: [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+
+**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move.
+
+**Do blobless clones pay many lazy round trips for history-heavy diffs? Yes** (measured 2026-11-04, table below). Each batch of missing blobs is one more fetch from the remote, and `git log -p`, `git log --stat` and `git blame` ask in small batches, so an ordinary read of history takes minutes on `git/git`. That decided the clone flags: a clone from the mirror holds the whole history rather than a partial one.
 
 Measurements, beelink (btrfs host, about ten builds running at once, so timings are noisy), three runs each:
 
@@ -1171,6 +1177,40 @@ DK-14, beelink (btrfs host, other builds running, so timings are noisy), rootful
 
 The first start's hashing did not show above the noise. Real homes were not measured: fixture homes only, so the sizes above are chosen rather than typical. The numbers came from a throwaway script that bound the image's own entrypoint with timing lines added, then started and stopped each container.
 
+DK-13, beelink, 2026-11-04 (btrfs host, other builds running, load average 5–10, so timings are noisy), Docker Engine 29.9.2, default bridge, image `orkestrator-v2:dev-04afd6671451` with this branch's `workspace-setup.sh` bound over its own, writable-layer workspace, git 2.47.3 in the container and 2.56.0 on the host. Each cell is three containers of `workspace-setup.sh --prepare-only`. Network is the container's `eth0` receive counter. Disk is `du -sb`. "Before" is the blobless clone that was the only path until now; "after" is a second environment, with the mirror published.
+
+| Repository | Clone time before | Clone time after | Network before | Network after | Workspace before | Workspace after | Git directory before | Git directory after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `orkestrator-ai/orkestrator-v2` | 6.5–7.1 s | 1.4–1.6 s | 43.2–43.4 MiB | 0.01 MiB | 160 MiB | 202 MiB | 45 MiB | 87 MiB |
+| `git/git` | 9.6–11.2 s | 4.3–4.7 s | 124.4–124.6 MiB | 0.01 MiB | 179 MiB | 371 MiB | 131 MiB | 323 MiB |
+
+The mirror itself, built on the host by `refreshProjectGitMirror`: 5.6 s and 86 MiB for `orkestrator-ai/orkestrator-v2`, 16.6 s and 322 MiB for `git/git`. A refresh with nothing new took 0.34–0.35 s. So the first environment of a project pays its blobless clone and, in the background, the mirror; the second and later ones save the network but hold more disk, since `--dissociate` copies the history into each.
+
+Reads of history after each clone of `git/git`, from one run of each in the same image. "Lazy fetches" counts `child_start` fetches in `GIT_TRACE2_EVENT`:
+
+| Read | Blobless (today's clone) | Full, from the mirror |
+| --- | --- | --- |
+| Objects missing after the clone | 162,097 | 0 |
+| `git diff HEAD~1 HEAD` | 0.4 s, 1 lazy fetch | 0.0 s, none |
+| `git log -p -20` | 1.4 s, 3 lazy fetches | 0.0 s, none |
+| `git log -p -200` | 43.0 s, 106 lazy fetches, 3.2 MiB | 0.1 s, none |
+| `git diff --stat HEAD~300 HEAD` | 3.1 s, 2 lazy fetches, 5.4 MiB | 0.2 s, none |
+| `git log --stat -500` | 78.5 s, 194 lazy fetches, 6.9 MiB | 0.3 s, none |
+| `git blame Makefile` | Stopped at the 150 s limit, 354 lazy fetches, 14.2 MiB | 0.7 s, none |
+| Git directory after those reads | 140 MiB | 323 MiB |
+
+The combination the report's fix could have used, `--filter=blob:none` with `--reference --dissociate`, on `git/git`:
+
+| Mirror | Clone | Network | Git directory | Objects missing |
+| --- | --- | --- | --- | --- |
+| Up to date | 4.4 s | 0.0 MiB | 323 MiB | 0, and reads as above, but still marked partial |
+| 2,000 commits behind | 9.7 s | 29.3 MiB | 32 MiB | 31,276; `git blame Makefile` then took 113 s and 262 lazy fetches |
+| The same, 2,000 behind, no `--filter` | 16.5 s | 73.2 MiB | 319 MiB | 0; reads as above |
+
+Without `--filter`, a stale mirror costs a real download of what it lacks. With it, `--dissociate` discards what the mirror held (`repack` treats objects a partial clone's pack refers to as the promisor remote's), so the result depends on how stale the mirror happens to be, and the clone goes back to the remote for them.
+
+The numbers came from throwaway scripts: one bound the real setup script into containers and read the counters above, the other ran the flag variants and reads directly with the image's git. Neither is committed. Rootless Docker and Docker Desktop were not measured.
+
 The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
@@ -1183,6 +1223,51 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
   - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-13: which clone flags?** (decided 2026-11-04, measured above)
+  - **`--no-tags --reference <mirror> --dissociate`, with no `--filter` (taken).**
+    - Pros: no download on a fresh mirror; a stale one pays only the difference; self-contained, so reads and later mirror removal need nothing else. Reads of history go from minutes to under a second.
+    - Cons: each environment's Git directory holds the history: 45 to 87 MiB and 131 to 323 MiB on the two repositories measured, where the blobless clone leaves it on the remote.
+  - **Add `--filter=blob:none` as well.**
+    - Pros: looks like the smallest change, and keeps today's flags.
+    - Cons: not stable. With a mirror behind the remote, `--dissociate` drops what the mirror held and the environment fetches it back lazily, so it pays both the mirror and the remote.
+  - **A blobless clone over `file://` from the mirror, then point `origin` at the remote.**
+    - Pros: the same disk as today with no download.
+    - Cons: keeps the lazy round trips measured above; needs `safe.directory` and `uploadpack.allowFilter` for the mirror, and several more steps between clone and checkout to fail partway through.
+- **DK-13: where does the mirror live?** (decided 2026-11-04)
+  - **A host directory, `<data>/git-mirrors/<project id>/mount/mirror.git`, bound read-only (taken).**
+    - Pros: the backend fetches with host Git and the project's existing credential path. A rename publishes it. No Docker lifecycle of its own, and the ticket names it a host resource.
+    - Cons: a bind source can go away underneath a stopped container, which is why the mount is `-v` rather than `--mount`; world-readable inside an owner-only parent, for rootless Docker.
+  - **A labelled named volume.**
+    - Pros: Docker refuses to remove one a container references, and it is fast on Docker Desktop.
+    - Cons: the host cannot write it, so every refresh needs a helper container with network access and the project's credentials inside it, which the ticket rules out.
+- **DK-13: when does it refresh?** (decided 2026-11-04)
+  - **In the background on each container creation, at most every 15 minutes per project, never waited for (taken).**
+    - Pros: a launch is never delayed or blocked, an idle project makes no requests, and staleness only costs the difference. Git publishes a pack before the refs that reach it, so a clone may read during a refresh.
+    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md) task 1 can seed the first mirror from the host checkout.
+  - **Wait for the first build, then clone from it.**
+    - Pros: one download rather than two for a new project.
+    - Cons: delays the first environment by a whole clone, and a slow or failing remote would hold up a launch, which the ticket forbids.
+  - **A periodic timer per project.**
+    - Pros: always fresh.
+    - Cons: network traffic for projects nobody is using, for no benefit: a clone already fetches what is missing.
+- **DK-13: how is it locked?** (decided 2026-11-04)
+  - **One refresh per mirror in the backend, launches join it, with no lock for readers (taken).**
+    - Pros: no lock to go stale; a crash cannot block anyone. A second backend on the same data directory holds no writer lease, so it creates no containers and starts no refresh. Tested with clones, refreshes and a compaction at once, followed by `git fsck --full`.
+    - Cons: relies on the writer lease across processes, though Git's own ref locks still apply if that ever failed. A lock left by a crash fails fetches until the third failure rebuilds the mirror; clones are unaffected.
+  - **A lock file readers also honour.**
+    - Pros: explicit.
+    - Cons: the mount is read-only, so a container could not take it, and a stale one is exactly the failure this must not have.
+- **DK-13: how is disk bounded?** (decided 2026-11-04)
+  - **2 GiB per project, past which it has no mirror and the blobless clone stays, retried weekly (taken).**
+    - Pros: bounds each environment's copy as well as the mirror. A size check every 5 s stops a transfer that passes the limit. Also: 3 GiB free needed to build, 1 GiB to fetch, compaction past 30 packs, branches only.
+    - Cons: a fixed number, not a setting. A repository just over it loses the mirror entirely.
+  - **Remove mirrors idle for some time.**
+    - Pros: also reclaims projects nobody launches.
+    - Cons: another background removal for a resource bounded per project anyway. Not done; the disk report shows them.
+- **DK-13: when is it removed?** (decided 2026-11-04)
+  - **With the project in `cleanupProjectForRemoval`, by the orphan sweep for what that left, and by its own refresh past the limit (taken).**
+    - Pros: shared by `remove_project` and `project.remove`; a failure never blocks removing the project, and the sweep retries, refusing an unreadable project store. Any stopped container still starts, because a clone needs nothing from it and `-v` recreates the source.
+    - Cons: deleting a project's last environment keeps the mirror until the project goes, so the next environment is quick.
 - **DK-14: what makes a skip safe?** (decided 2026-11-04)
   - **Hash each input's content and compare it with the stamp and with what the home holds; skip only when all three agree (taken).**
     - Pros: skips exactly when the copy would change nothing, so an edited or deleted import comes back as it does today, and a stale or forged stamp can only cause a copy. It survives the backend rewriting a revision in place and the relay's new inodes and whole-second times.
@@ -1869,6 +1954,8 @@ browser and real-stack suites were not run.
   not in a container. ST-18's open-view path is proved at the backend and by the
   renderer's existing `reset` test, not in a live browser session.
 
+- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+
 - WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
 - WEB-19 timings in Chromium: the numbers are production React under Happy DOM; no React Profiler run was made.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
@@ -1881,6 +1968,18 @@ browser and real-stack suites were not run.
 - [Flake 1314](../../tests/flaky-tests/design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md).
 
 ## Assumptions and decisions
+
+### Task 15: DK-13's mirror holds branches only
+
+The ticket asked for a mirror without saying which refs. Took `+refs/heads/*` because clones use `--no-tags`, and `refs/pull/*` can dwarf a repository on GitHub. A tag or pull request an environment later asks for comes from the remote, as it did before.
+
+### Task 15: `--reference`, not the suggested `--reference-if-able`
+
+The report and the ticket suggested `--reference-if-able`. With no `--filter`, a mirror removed between the check and the clone would then download the whole history silently. `--reference` fails instead, so that race falls back to the blobless clone and says why. The script does the check itself, so the flag's tolerance added nothing.
+
+### Task 15: stale means the difference, not a fallback
+
+The ticket lists a stale mirror among those that fall back to today's clone. A clone from a stale mirror already works and downloads only what it lacks (73 MiB rather than the 124 MiB of a blobless clone, in the 2,000-commit case above), so it is not treated as a failure. It is logged as `used`.
 
 ### Task 3: terminal foreground recovery after review
 

@@ -7,6 +7,21 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
     events: {
       "portable-inputs.relay-missing":
         "Docker is rootless and the image predates the staged-input relay, so the container cannot read them until rebuilt.",
+      "git-mirror.mount-unavailable":
+        "A new container gets no project Git mirror, so its clone goes to the remote.",
+      "git-mirror.refreshed": "A project's Git mirror was built or updated.",
+      "git-mirror.refresh-failed":
+        "A project's Git mirror could not be updated. New clones still work, from the mirror as it was or from the remote.",
+      "git-mirror.low-disk": "A project's Git mirror was not updated: the disk is nearly full.",
+      "git-mirror.oversized":
+        "A project's repository is too large for a Git mirror, so its environments keep the blobless clone.",
+      "git-mirror.compact-failed": "A project's Git mirror could not be compacted.",
+      "git-mirror.state-write-failed": "A project's Git mirror could not be marked for checking.",
+      "git-mirror.remove-failed": "A project's Git mirror could not be removed; a sweep retries.",
+      "git-mirror.orphans-removed": "Git mirrors of removed projects were removed.",
+      "git-mirror.clone-used": "A new environment cloned from its project's Git mirror.",
+      "git-mirror.clone-fallback":
+        "A new environment could not clone from its project's Git mirror and cloned from the remote.",
       "project-seed.refused":
         "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",

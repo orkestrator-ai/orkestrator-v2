@@ -301,6 +301,26 @@ export function probeNetworkRow(dockerRun: Run = run, now = Date.now()): ReportR
   };
 }
 
+/** Per-project Git mirrors (`project-git-mirror.ts`), with those of removed projects. */
+export function gitMirrorRow(dataDir: string): ReportRow {
+  const root = path.join(dataDir, "git-mirrors");
+  const mirrors = childDirectories(root);
+  const stored = readStorageDatabaseStore(dataDir, "projects");
+  const projectIds = Array.isArray(stored)
+    ? new Set(stored.map((project) => (project as { id?: unknown }).id))
+    : null;
+  const orphans = projectIds
+    ? mirrors.filter((directory) => !projectIds.has(path.basename(directory)))
+    : [];
+  return {
+    location: `${root} (one per project with container environments)`,
+    bytes: diskUsage([root]),
+    orphaned: projectIds ? `${orphans.length} of ${mirrors.length}` : "unknown",
+    owner: "Orkestrator (rebuilt when needed; at most 2 GiB each)",
+    cleanup: "removed with the project; the hourly sweep removes those of removed projects",
+  };
+}
+
 export type ReportContext = {
   mainCheckout: string;
   homeDir: string;
@@ -491,6 +511,7 @@ export async function collectReport(context: ReportContext): Promise<ReportRow[]
   }
 
   rows.push(environmentCleanupLedgerRow(context.dataDir, new Set(environmentIds)));
+  rows.push(gitMirrorRow(context.dataDir));
   rows.push(...previewPartitionRows(context.dataDir));
 
   const tempLeftovers = childDirectories(context.tmpDir).filter((directory) =>

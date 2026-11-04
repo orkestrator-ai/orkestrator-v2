@@ -188,3 +188,54 @@ for (const zoom of [0.8, 1.25]) {
       .toBe(fullWidth);
   });
 }
+
+// Keep the animation attribute present independently of the hook, so these
+// assertions exercise the stylesheet guards rather than the hook's early exit.
+test("OS reduced motion disables the panel CSS transition", async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFixture(page, testInfo);
+  const sidebar = page.locator("[data-panel]").first();
+  await sidebar.evaluate((panel) => {
+    panel.parentElement!.setAttribute("data-sidebar-width-animating", "true");
+  });
+  await expect(sidebar).toHaveCSS("transition-property", "flex-grow");
+  await expect(sidebar).toHaveCSS("transition-duration", "0.18s");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(sidebar).toHaveCSS("transition-duration", "0s");
+  await expect(sidebar).toHaveCSS("transition-property", "none");
+  await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(1);
+
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(sidebar).toHaveCSS("transition-duration", "0.18s");
+});
+
+test("an active resize handle excludes the panel CSS transition", async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await openFixture(page, testInfo);
+  const sidebar = page.locator("[data-panel]").first();
+  const handle = page.locator("[data-separator]");
+  const box = (await handle.boundingBox())!;
+  // Hold the real handle with the pointer rather than setting its state by hand.
+  await page.mouse.move(box.x + box.width / 2, box.y + 50);
+  await page.mouse.down();
+  try {
+    await expect(handle).toHaveAttribute("data-separator", "active");
+    // Pointer capture settles the hook. Reapply its attribute to isolate the
+    // :has() guard, which must still prevent easing while the pointer is held.
+    await sidebar.evaluate((panel) => {
+      panel.parentElement!.setAttribute("data-sidebar-width-animating", "true");
+    });
+    await expect(sidebar).toHaveCSS("transition-duration", "0s");
+    const before = (await sidebar.boundingBox())!.width;
+    await page.mouse.move(box.x + box.width / 2 + 25, box.y + 50, { steps: 4 });
+    expect((await sidebar.boundingBox())!.width).toBeGreaterThan(before + 20);
+    await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(1);
+  } finally {
+    await page.mouse.up();
+  }
+  await page.mouse.move(900, 10);
+  await expect(handle).not.toHaveAttribute("data-separator", "active");
+  await expect(sidebar).toHaveCSS("transition-property", "flex-grow");
+  await expect(sidebar).toHaveCSS("transition-duration", "0.18s");
+});

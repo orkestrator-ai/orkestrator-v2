@@ -8,6 +8,8 @@ import { PreviewAdmission } from "./preview-admission.js";
 import { PreviewMetrics } from "./preview-metrics.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
 import type { GatewayAuth } from "./gateway-auth.js";
+import { GatewayCredentialThrottle } from "./gateway-credential-throttle.js";
+import { GatewayHostPolicy } from "./gateway-host-policy.js";
 import { BrowserSessionStore, gatewayRequestCredential } from "./gateway-sessions.js";
 import {
   KEEPALIVE_MS,
@@ -68,6 +70,8 @@ export class GatewayContext {
   readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   readonly hostUpdaterControl: OrkestratorGatewayOptions["hostUpdaterControl"];
   readonly allowedOrigins: string[];
+  readonly hostPolicy: GatewayHostPolicy;
+  readonly credentialThrottle = new GatewayCredentialThrottle();
   readonly compression: GatewayCompressionMode;
   readonly keepaliveMs: number;
   readonly proxyBodyIdleTimeoutMs: number;
@@ -183,6 +187,7 @@ export class GatewayContext {
     )
       .map((origin) => origin.trim().replace(/\/$/, ""))
       .filter(Boolean);
+    this.hostPolicy = new GatewayHostPolicy(this.allowedOrigins);
     this.metrics = new GatewayMetricsStore(this.compression);
     this.terminalWebSocket = new TerminalWebSocketGateway({
       backend: this.backend,
@@ -190,7 +195,7 @@ export class GatewayContext {
       // upgrade's own headers decide, where a cookie only carries a session.
       tokenMatches: (request, suppliedToken) =>
         suppliedToken !== undefined
-          ? this.credentials.gatewayCredentialMatches(suppliedToken)
+          ? this.credentials.gatewayCredentialMatches(suppliedToken, request)
           : this.credentials.requestCredentialMatches(request),
       credentialExpiresAt: (request, suppliedToken) =>
         this.credentials.gatewayCredentialExpiresAt(

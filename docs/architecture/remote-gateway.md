@@ -113,7 +113,7 @@ equivalent environment variable unless noted.
 | `--host` | | Bind address. Default is the first Tailscale address. |
 | `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121` for the default data directory's backend, and a free port for any other. See [Default gateway port](#default-gateway-port). |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
-| `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
+| `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. Their hosts are also names the gateway answers to. See [Security notes](#security-notes). |
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
 | `--tailscale-serve-port` | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | Serve HTTPS port. Default `443`. |
 | `--tailscale-bin` | `ORKESTRATOR_TAILSCALE_BIN` | Tailscale CLI path. |
@@ -427,7 +427,17 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   Cookies are scoped by host, not port, so every other service on the same
   host (a container dev server on a published loopback port, any HTTP service
   on the Tailscale address) receives the cookie; the session limits what that
-  exposes. It is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
+  exposes. A session that leaks this way still acts as the user until it ends,
+  including opening host terminals, but it cannot read or rotate the token.
+  This is accepted rather than closed: a restricted container is refused at the
+  gateway's port, and binding a session to the peer address would not help,
+  because Tailscale Serve and Docker Desktop both show their clients as
+  loopback. A `full` mode container can reach the gateway, so `full` mode gives
+  up this protection. Observed on Docker Desktop only
+  ([qualification record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04));
+  if a restricted container reaches the gateway elsewhere, revisit this
+  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+- The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
   browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
   a same-host `https:` `Origin`). The gateway reads and strips the
   `__Host-orkestrator_gateway_auth` name too, but does not issue it yet: older
@@ -449,6 +459,27 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   session id sent as a bearer, or a client grant gets `403`, so a browser
   signed in through the login form cannot show the token in Settings → Web
   client; Electron, the hosted client and the CLI send the bearer.
+- The gateway answers `421` on every listener, WebSocket upgrades included, to a
+  `Host` an attacker could rebind to it with DNS (`gateway-host-policy.ts`). It
+  accepts IP literals, single-label names, `*.localhost`, `*.ts.net`, this
+  machine's host name and its `.local` form, and the hosts of
+  `--allowed-origins`. **Reaching the gateway through a name of your own, such as
+  a reverse proxy that keeps `Host`, needs that origin in `--allowed-origins`.**
+  This stops a browser, not a client that writes its own headers, which still
+  needs a credential.
+- Wrong gateway tokens slow down (`gateway-credential-throttle.ts`). A listener
+  answers 10 different wrong values, then pauses for 1 s, doubling with each
+  further wrong value up to 60 s, and forgets after 15 minutes without a new one.
+  During a pause a new value gets `429` with `Retry-After` and is not compared,
+  so **the correct token is refused too**; otherwise the one success would give
+  a guesser the answer. A guesser can therefore hold off a real sign-in. Still
+  exempt are browser sessions, client grants, a connection that has already
+  shown the token, and a non-loopback address that has. Repeating a known wrong
+  value gets the usual `401` and does not count, so a client left with an old
+  token cannot start a pause. Each listener counts alone, so guessing through
+  the browser listener leaves the desktop app's control listener alone. Rotating
+  the token clears everything. The count lives in memory only, and holds keyed
+  digests rather than the values.
 - Default bind is Tailscale-only. `--allow-non-tailscale-bind` is for local
   development.
 - Do not use Tailscale Funnel.

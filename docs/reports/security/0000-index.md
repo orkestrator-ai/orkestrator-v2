@@ -15,16 +15,16 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [0070-s1-github-token.md](0070-s1-github-token.md) | Very high | No | **S1, GitHub token.**<br>`0070`: H5: the default credential, splitting container from backend use, scope warning<br>`0220`: I3: token in `~/.gitconfig`: Stop writing the GitHub token into the container's `~/.gitconfig` | From `0070`: Every container agent gets a credential that usually reaches all the user's repositories, which crosses the container boundary by default. |
-| 2 | [0010-s4-gateway-login.md](0010-s4-gateway-login.md) | High | No | **S4, Gateway login.**<br>`0010`: H1: the `__Host-` name, and the session that still reaches other ports<br>`0150`: L10: Host allowlist and login throttling<br>`0260`: §8: dynamic checks of H1, M1, M2 and H3 | From `0010`: A leaked session can still act as the user until it ends, which is a real exposure wherever a container can reach the gateway. |
-| 3 | [0040-s2-bridge-credential.md](0040-s2-bridge-credential.md) | High | No | **S2, Bridge credential.**<br>`0040`: H4: credential out of the agent's uid, widening, self-answered approvals, `readOnly`<br>`0120`: L2: bridge and agent-tools tokens in `docker exec` argv<br>`0250`: I7: `okb_` prefix and redaction rule | From `0040`: An agent on a hardened environment can still undo human approval, a reachable exposure that todo 3930 also rates High. |
-| 4 | [0050-s3-electron-renderer.md](0050-s3-electron-renderer.md) | High | No | **S3, Electron renderer.**<br>`0050`: M6: CSP on the renderer and gateway HTML, Trusted Types, invoke allowlist<br>`0130`: L5: default-deny permissions on renderer and realm sessions<br>`0060`: M7: CommonJS preloads and `sandbox: true` | From `0050`: The renderer shows attacker-influenced content, and one sanitiser bypass reaches a generic host command bridge with no second layer. |
-| 5 | [0080-m9-legacy-host-mounts.md](0080-m9-legacy-host-mounts.md) | High | No | M9: new containers from old images, and listing affected environments | Whole host agent homes reach any container from an older image, though current images are not affected. |
-| 6 | [0090-x1-coordinator-trust-boundary.md](0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
-| 7 | [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) | High | No | M12: SNI enforcement, DNS filtering, default allowlist, user-facing statement | Shared edges, attacker credentials and DNS remain working exfiltration channels from a restricted container. |
-| 8 | [0140-s5-release-chain.md](0140-s5-release-chain.md) | High | No | **S5, Release chain.**<br>`0140`: L6: AppImage manifests, `install.sh` pin, npm provenance, updater lockfile<br>`0240`: I6: `persist-credentials` on the image publish job | From `0140`: A compromised release or publish reaches users directly, and nothing but the feed hash and a workstation stands in the way. |
-| 9 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
-| 10 | [0200-i1-workspace-grant-allowlist.md](0200-i1-workspace-grant-allowlist.md) | Medium | No | I1: grant deny-list against its documented guarantee | A grant holder can change global config and request host updates, but grants are short-lived and issued through the user's own command node. |
-| 11 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
+| 2 | [0040-s2-bridge-credential.md](0040-s2-bridge-credential.md) | High | No | **S2, Bridge credential.**<br>`0040`: H4: credential out of the agent's uid, widening, self-answered approvals, `readOnly`<br>`0120`: L2: bridge and agent-tools tokens in `docker exec` argv<br>`0250`: I7: `okb_` prefix and redaction rule | From `0040`: An agent on a hardened environment can still undo human approval, a reachable exposure that todo 3930 also rates High. |
+| 3 | [0050-s3-electron-renderer.md](0050-s3-electron-renderer.md) | High | No | **S3, Electron renderer.**<br>`0050`: M6: CSP on the renderer and gateway HTML, Trusted Types, invoke allowlist<br>`0130`: L5: default-deny permissions on renderer and realm sessions<br>`0060`: M7: CommonJS preloads and `sandbox: true` | From `0050`: The renderer shows attacker-influenced content, and one sanitiser bypass reaches a generic host command bridge with no second layer. |
+| 4 | [0080-m9-legacy-host-mounts.md](0080-m9-legacy-host-mounts.md) | High | No | M9: new containers from old images, and listing affected environments | Whole host agent homes reach any container from an older image, though current images are not affected. |
+| 5 | [0090-x1-coordinator-trust-boundary.md](0090-x1-coordinator-trust-boundary.md) | High | No | **X1, Coordinator trust boundary.**<br>`Security 0090`: M11: delegation scope and marking mail-originated delegations<br>`Security 0180`: L16: operator token reads, confirm token wording, self-reminder framing<br>`Security 0210`: I2: two stale statements about side agents<br>`Coordinator 0120`: Labelling the home in `list_environments` and a live read-only step for the message gate.<br>`Coordinator 0310`: Refusing `adopt_workflow` from a side agent. | From `Security 0090`: An injected worker can reach a user-created environment under its looser policy, limited only by framing and budgets. |
+| 6 | [0100-m12-egress-sni-and-dns.md](0100-m12-egress-sni-and-dns.md) | High | No | M12: SNI enforcement, DNS filtering, default allowlist, user-facing statement | Shared edges, attacker credentials and DNS remain working exfiltration channels from a restricted container. |
+| 7 | [0140-s5-release-chain.md](0140-s5-release-chain.md) | High | No | **S5, Release chain.**<br>`0140`: L6: AppImage manifests, `install.sh` pin, npm provenance, updater lockfile<br>`0240`: I6: `persist-credentials` on the image publish job | From `0140`: A compromised release or publish reaches users directly, and nothing but the feed hash and a workstation stands in the way. |
+| 8 | [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) | Medium | No | L15: agent-tools server on `0.0.0.0` | The server is token-protected, so the wider bind adds reach for a leaked token rather than a direct way in. |
+| 9 | [0200-i1-workspace-grant-allowlist.md](0200-i1-workspace-grant-allowlist.md) | Medium | No | I1: grant deny-list against its documented guarantee | A grant holder can change global config and request host updates, but grants are short-lived and issued through the user's own command node. |
+| 10 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
+| 11 | [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) | Medium | No | §8: H1, M1 and M2 in shipping Safari, H3 on rootless Docker, and gateway reach on Linux Engine | The checks that could run here passed; what is left qualifies other platforms, and accepting a leaked session rests on the Linux Engine answer. |
 | 12 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: default flip and legacy route retirement | The sandbox header already closes the top-level path, and all remaining work is blocked in todo 0042. |
 | 13 | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) | Low | No | H2: retiring in-container firewall enforcement | The root paths are closed, and the one remaining item is blocked on todo 0018's qualification. |
 | 14 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
@@ -46,9 +46,8 @@ This index only changes when a branch merges, so it can't show what is running n
 | --- | --- | --- | --- | --- | --- |
 | X1 | [Coordinator trust boundary](0090-x1-coordinator-trust-boundary.md) | `0090`, `0180`, `0210`; also coordinator `0120` task 1, `0310` | Coordinator backend, 4 of 6 | None | None |
 | S1 | [GitHub token](0070-s1-github-token.md) | `0070`, `0220` | Containers, 1 of 7 | None | E17 (Dead code) |
-| S2 | [Bridge credential](0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` | Containers, 2 of 7 | None | E13 (Silent failures), E20 (ACP bridge), E21 (Pi bridge), S4 (Gateway login) |
+| S2 | [Bridge credential](0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` | Containers, 2 of 7 | None | E13 (Silent failures), E20 (ACP bridge), E21 (Pi bridge) |
 | S3 | [Electron renderer](0050-s3-electron-renderer.md) | `0050`, `0130`, `0060` | Desktop, 1 of 3 | None | E16 (Log controls), E24 (Gateway static and preview) |
-| S4 | [Gateway login](0010-s4-gateway-login.md) | `0010`, `0150`, `0260` task 1 | Gateway, 1 of 7 | None | S2 (Bridge credential) |
 | S5 | [Release chain](0140-s5-release-chain.md) | `0140`, `0240` | No lane | None | None |
 
 Why these are grouped:
@@ -57,7 +56,6 @@ Why these are grouped:
 - **S1:** Same token and the same credential sync. Needs a decision first: `0070` makes sharing opt-in and existing installs need a migration choice.
 - **S2:** `0120` says to do it with or after `0040`. `0250` changes how those tokens look. The options for `0040` are in todos 3930 and 4210.
 - **S3:** CSP, permissions and sandbox for the same windows.
-- **S4:** Both change `gateway-auth.ts`. `0260` tests the result in browsers. `0260` task 2 needs real Docker daemons and can run separately.
 - **S5:** Both cover publishing. `0240` is a one-line fix. `0140` task 3 changes how the package is published, so it needs the maintainer's approval.
 
 ### Files built on their own
@@ -70,10 +68,11 @@ These still follow the lane and conflict rules above.
 | S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 4 of 7 | None | None |
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 5 of 7 | None | None |
 | S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 3 of 3 | None | None |
-| S-0200 | [Workspace grant allowlist](0200-i1-workspace-grant-allowlist.md) | `0200` | Gateway, 4 of 7 | None | None |
-| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 7 of 7 | None | None |
+| S-0200 | [Workspace grant allowlist](0200-i1-workspace-grant-allowlist.md) | `0200` | Gateway, 3 of 6 | None | None |
+| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 6 of 6 | None | None |
 | S-0230 | [Preview publication domain](0230-i5-preview-publication-domain.md) | `0230` | No lane | None | None |
 | S-0270 | [iOS app review](0270-s8-ios-app-review.md) | `0270` | No lane | None | None |
+| S-0260 | [Live checks on other platforms](0260-live-checks-on-other-platforms.md) | `0260` | No lane | None | None |
 
 ### Not ready to start
 
@@ -87,11 +86,11 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-20 done, 15 partly done, 18 open, 12 no action.
+21 done, 16 partly done, 16 open, 12 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
-| H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); remainder in [S4 part 0010](0010-s4-gateway-login.md#0010-finish-the-gateway-cookie-hardening-and-settle-what-a-leaked-session-still-allows) |
+| H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); the leaked-session exposure is accepted in `docs/architecture/remote-gateway.md`, Security notes; the `__Host-` name remains in [todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md) |
 | H2 | Partly done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); remainder in [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
 | H3 | Done | `apps/backend/src/core/container-project-seed-files.ts:66-110`; no project file in `bindIfExists` calls (`apps/backend/src/core/commands-containers.ts:503-559`); commit `1565c7c16` |
 | H4 | Partly done | `packages/protocol/src/execution-policy-narrowing.ts:140`, each bridge's `delete process.env` (commits `2d4528dc5`, `a2bba9d80`); remainder in [S2 part 0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls) |
@@ -118,7 +117,7 @@ When one of these becomes ready, it joins the lane shown.
 | L7 | Done | `apps/backend/src/core/commands-environment-fork.ts:127`, `:141`, `apps/backend/src/core/commands-agent-support.ts:277`, `apps/backend/src/core/commands-projects.ts:462` |
 | L8 | Done | `apps/backend/src/core/commands-registry-terminal.ts:148`, `:926`, `:984`; commit `75743022e` |
 | L9 | Done | `apps/backend/src/core/commands-files.ts:991`, `apps/backend/src/core/git-fsmonitor.ts:22`; commit `abe48fb37` |
-| L10 | Open | `apps/backend/src/gateway-auth.ts:205-214`, `:764-771`; [S4 part 0150](0010-s4-gateway-login.md#0150-check-the-gateways-host-header-and-throttle-login) |
+| L10 | Done | `apps/backend/src/gateway-host-policy.ts`, `apps/backend/src/gateway-credential-throttle.ts`, `apps/backend/tests/gateway-host-policy.test.ts`, `apps/backend/tests/gateway-credential-throttle.test.ts` |
 | L11 | Done | `apps/backend/src/gateway-bind-policy.ts:33-46`, `apps/backend/src/main.ts:144`; commit `129cb2d32` |
 | L12 | Partly done | `packages/cli/src/client/targets.ts:130-146`, `:215-222` (commit `b88623136`); remainder in [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) |
 | L13 | Done | `apps/web/src/lib/chat/file-url.ts:68-73`; commit `5c760e3c8` |
@@ -146,8 +145,8 @@ When one of these becomes ready, it joins the lane shown.
 | §8 `tmux-hooks` `find` not reviewed | No action | Read for this split: the path is quoted and the other value is a number (`apps/backend/src/core/tmux-hooks.ts:966-968`, `apps/backend/src/core/tmux-shared.ts:299-301`, `:700`) |
 | §8 Pi's `grep` and `find` tools | No action | They live in the Pi SDK outside this repository, and the report asks for nothing |
 | §8 iOS app not reviewed | Open | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) |
-| §8 Dynamic testing | Open | [S4 part 0260](0010-s4-gateway-login.md#0260-run-the-outstanding-dynamic-security-checks) |
-| §9 step 1 (H1 + M1) | Partly done | [S4 part 0010](0010-s4-gateway-login.md#0010-finish-the-gateway-cookie-hardening-and-settle-what-a-leaked-session-still-allows), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
+| §8 Dynamic testing | Partly done | H1, M1 and M2 in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`); H3 on Docker Desktop (`docs/development/container-qualification.md`); remainder in [0260-live-checks-on-other-platforms.md](0260-live-checks-on-other-platforms.md) |
+| §9 step 1 (H1 + M1) | Partly done | [Todo 2960](../../todo/cross-cutting/2960-host-prefixed-gateway-cookie.md), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
 | §9 step 3 (H2) | Partly done | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
 | §9 step 4 (M3) | Done | See M3 |

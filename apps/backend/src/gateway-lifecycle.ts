@@ -234,6 +234,10 @@ export class GatewayLifecycle {
     });
     server.on("upgrade", (request, socket, head) => {
       try {
+        if (!this.ctx.hostPolicy.allows(request.headers.host)) {
+          socket.end("HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n");
+          return;
+        }
         // Exact-path routing: the preview tunnel claims only its own path and
         // never steals terminal upgrades; everything unclaimed is destroyed.
         if (this.ctx.previewTunnel?.handleUpgrade(request, socket, head)) return;
@@ -311,6 +315,7 @@ export class GatewayLifecycle {
       this.ctx.token = token;
       this.ctx.authFile = authFile;
       this.ctx.agentTestBootstraps.clear();
+      this.ctx.credentialThrottle.reset();
       // Every browser session was signed in under the previous token.
       this.ctx.browserSessions.revokeAll();
       // Authentication is latched when a WebSocket becomes ready. Rotating

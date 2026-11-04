@@ -87,7 +87,7 @@ The material risks are concentrated in four themes:
 
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
-| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
+| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Partly fixed: the token is out of the cookie; a leaked session is accepted, and the `__Host-` name waits on iOS (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
@@ -116,15 +116,20 @@ grants nothing new.
 
 ### H1. The gateway auth cookie is the durable token and is sent to every port on the host
 
-**Status:** Fixed (2026-11-03). The cookie now holds an opaque, in-memory
+**Status:** Partly fixed (2026-11-03). The cookie now holds an opaque, in-memory
 session id (`apps/backend/src/gateway-sessions.ts`) with a 12-hour idle and
 7-day absolute lifetime, revoked by logout, token rotation and a backend
 restart; it is `Secure` over HTTPS. A cookie holding the durable token is
 refused and expired, and the browser gets the login page. `gateway-settings`
 reveals or rotates the token only for the token sent as a bearer header. A
-leaked cookie still authenticates as that session until it ends. The
-`__Host-` name is read and stripped but not issued yet, because older iOS
-builds look the cookie up by its plain name (todo 2960).
+leaked cookie still authenticates as that session until it ends; this was
+accepted on 2026-11-04, because a restricted container was refused at the
+gateway's port on Docker Desktop and binding a session to its peer address would
+not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine
+is still to check
+([0260](security/0260-live-checks-on-other-platforms.md)). The `__Host-` name is
+read and stripped but not issued yet, because older iOS builds look the cookie
+up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
 
 **Where**
@@ -672,7 +677,7 @@ write and terminal calls when the policy denies them.
 | L7 | Project `gitUrl` reaches `git ls-remote`/`fetch` without `--`; `add_project` skips URL validation | `commands-environment-fork.ts:127, 141`, `commands-agent-support.ts:275`, `commands-registry-projects.ts:421` | Argument injection if a stored URL starts with `-`. Clone already uses `--`. | Fixed: the fork publish check (`ls-remote`, `fetch`) and the remote branch lookup pass the URL after `--`, and `addExistingProject` (behind `add_project`, `start_project_clone` and the public `project.add`) refuses a URL starting with `-` (`git-url-option-injection.test.ts`) |
 | L8 | `read_local_file`/`write_local_file` accept any client-supplied root | `commands-registry-terminal.ts:896, 938-960` | Relative paths are confined, but the root is not tied to a registered environment. Resolve the root as `read_file_base64` does. | Fixed (2026-11-03): both commands accept only the worktree of a registered local environment (`requireRegisteredLocalRoot`) and do their I/O under that environment's stored root; any other directory is refused before reading or writing |
 | L9 | Host-side git scans of local worktrees inherit worktree config | `commands-files.ts:977`, `1268-1295` | Use the hardened `-c` set from `change-tracking/capture.ts`. | Fixed: diff-stats scans (`getLocalGitStatusDetailed`) pass `HARDENED_GIT_CONFIG` (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, in `git-fsmonitor.ts`), which capture's `SAFE_GIT_CONFIG` now extends; the `core.fsmonitor=true` write at `1268-1295` was already removed (`commands-files-local-scan.test.ts`) |
-| L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Reported |
+| L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Fixed (2026-11-04): `gateway-host-policy.ts` answers `421` to a name that could be rebound, and `gateway-credential-throttle.ts` pauses new wrong tokens across the login form, bearer headers, the terminal socket and the cookie migration check. |
 | L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Fixed (2026-11-03): the two mode flags no longer turn the bind guard off. Without `--allow-non-tailscale-bind` they relax it for a loopback bind only (`gateway-bind-policy.ts`), so `--host 127.0.0.1` or `--host ::1` starts and `0.0.0.0` or a LAN address is refused at startup with `Refusing to bind gateway to non-Tailscale address`. Tailscale Serve now proxies to whichever loopback address the listener bound (`http://[::1]:<port>` for `::1`). A Tailscale or allowed LAN host is still refused, because Serve can only front loopback. `--allow-non-tailscale-bind` is unchanged, and the desktop, which passes it, is unaffected. |
 | L12 | CLI trusts the instance descriptor (owner/mode unchecked; `EPERM` counted as alive) | `packages/cli/src/client/targets.ts:120-184` | A local co-tenant on a stale port could receive the bearer token. | Partially fixed (2026-11-03): `readDescriptor` checks the opened file (`O_NOFOLLOW`) and refuses one owned by another user or with any group/other permission bits, naming the file and the reason; a refused profile descriptor no longer falls back to the manifest endpoint. `processIsAlive` no longer counts `EPERM` as alive. This closes the cross-user PID case; reuse by another process of the same user remains undetected because the descriptor is not bound to the original process start time or port listener. Tests: `packages/cli/tests/client-descriptor-trust.test.ts` |
 | L13 | A `javascript:` href hidden by a tab or control character passes the markdown URL transform | `apps/web/.../markdown-plugins.ts:112-117`, `file-url.ts:74, 83` | Not exploitable today, because `MarkdownLink` calls `preventDefault()`. Strip control characters, or check `new URL().protocol`. | Fixed (2026-11-03): `parseLocalFileLinkTarget` returns null for any destination containing a C0 control character (U+0000–U+001F) or DEL, so such an href is no longer treated as a local path and falls through to `defaultUrlTransform`, which blanks the unsafe scheme. Tests: `apps/web/src/lib/chat/file-url.test.ts`, `apps/web/src/lib/chat/rich-markdown/markdown-plugins.test.ts` |
@@ -790,7 +795,7 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). Dynamic testing remains for H1/M1/M2 in Chromium and Safari and H3 against rootful and rootless Docker.
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop (`docs/development/container-qualification.md`). Shipping Safari and rootless Docker remain ([0260](security/0260-live-checks-on-other-platforms.md)).
 
 ## 9. Recommended remediation order
 

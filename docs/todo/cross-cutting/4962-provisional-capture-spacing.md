@@ -1,6 +1,6 @@
 # Decide the provisional capture spacing from a measurement
 
-From [efficiency report](../../reports/2026-10-29-logging-and-database-efficiency.md#r15-prune-superseded-measurements-fully-and-skip-no-change-publishes-d2) R15, part 0710 of batch E2, task 3 ("Decide the provisional spacing") and that part's "Needs verification". The batch file was deleted when E2 was built; read it with `git show e198fd4a7:docs/reports/efficiency-logging-database/0700-e2-measurement-rows.md`.
+From [efficiency report](../../reports/2026-10-29-logging-and-database-efficiency.md#r15-prune-superseded-measurements-fully-and-skip-no-change-publishes-d2) R15, part 0710 of batch E2, task 3 ("Decide the provisional spacing") and that part's "Needs verification". The batch file was deleted when E2 was built; it is in Git history at base commit `e198fd4a7`.
 
 ## Task analysis
 

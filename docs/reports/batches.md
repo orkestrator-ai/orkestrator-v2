@@ -36,7 +36,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E10 | [efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md](efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` |
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
 | E12 | [efficiency-logging-database/0510-e12-renderer-store.md](efficiency-logging-database/0510-e12-renderer-store.md) | `0510`, `0590`, `0640` |
-| E2 | [efficiency-logging-database/0700-e2-measurement-rows.md](efficiency-logging-database/0700-e2-measurement-rows.md) | `0700`, `0710` |
 | E3 | [efficiency-logging-database/0540-e3-retention-and-deletion.md](efficiency-logging-database/0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` |
 | E4 | [efficiency-logging-database/0430-e4-object-store.md](efficiency-logging-database/0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` |
 | E6 | [efficiency-logging-database/0230-e6-store-writes.md](efficiency-logging-database/0230-e6-store-writes.md) | `0230`, `0470`, `0870` |
@@ -63,7 +62,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Coordinator panel | 1. C9 (Panel split)<br>2. C7 (Work panel and navigation)<br>3. C8 (Tab strip)<br>4. C6 (Errors and dead ends)<br>5. C10 (Explanations)<br>6. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E8 (Agent tab polling)<br>2. E9 (Transcript reads)<br>3. E10 (Conditional reads and deltas)<br>4. E11 (Projection hashing)<br>5. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
-| Change tracking | 1. E2 (Measurement rows)<br>2. E3 (Retention and deletion)<br>3. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
+| Change tracking | 1. E3 (Retention and deletion)<br>2. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E6 (Store writes)<br>2. E5 (Database upkeep)<br>3. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
@@ -126,7 +125,6 @@ Don't run these pairs at the same time.
 | Finish | Before |
 | --- | --- |
 | E1 (Baseline run) | E8, E9, E10 and E26, on code those batches have not changed yet |
-| E2 (Measurement rows) | E5, whose `0760`, `0910` and `0920` depend on the ledger shrinking |
 | `0040` in S2 | `0120` in S2, or do both together, because `0040` can change how the token reaches the bridge |
 | `0360` in C5 | `0170` in C5, so the new lines go into the extracted builder |
 | `0530` in E4 | `0550` in E4 |

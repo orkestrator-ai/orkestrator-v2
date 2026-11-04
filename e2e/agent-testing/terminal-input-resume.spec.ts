@@ -488,10 +488,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
       };
       await openEnvironment(target.name);
       const terminal = page.locator(".xterm:visible").first();
-      // Run actionability/modal handlers away from the toast, without sending
-      // a mouse event that would move vim's cursor.
-      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
-      await terminal.locator(".xterm-helper-textarea").focus();
+      await terminal.click();
       await page.keyboard.type("echo READY_PID=$$");
       await page.keyboard.press("Enter");
       const creates = () =>
@@ -546,10 +543,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
         )
         .toBe(true);
       // Stable terminal keys can reuse an id; compare actual shell PIDs.
-      // Run actionability/modal handlers away from the toast, without sending
-      // a mouse event that would move vim's cursor.
-      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
-      await terminal.locator(".xterm-helper-textarea").focus();
+      await terminal.click();
       await page.keyboard.type("echo RECOVERY_PID=$$");
       await page.keyboard.press("Enter");
       await expect.poll(() => output(replacement)).toMatch(/RECOVERY_PID=\d+/);
@@ -583,10 +577,7 @@ for (const transport of ["http-sse", "websocket"] as const) {
       await page.reload();
       await openEnvironment(target.name);
       await expect.poll(renderedOutput).toContain("recovered-background");
-      // Run actionability/modal handlers away from the toast, without sending
-      // a mouse event that would move vim's cursor.
-      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
-      await terminal.locator(".xterm-helper-textarea").focus();
+      await terminal.click();
       await page.keyboard.type("echo after-reload");
       await page.keyboard.press("Enter");
       await expect.poll(() => output(replacement)).toMatch(/after-reload\r?\n/);

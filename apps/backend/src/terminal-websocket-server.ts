@@ -486,6 +486,11 @@ export class TerminalWebSocketGateway {
         });
         break;
       }
+      case "ping":
+        // Through the bounded control queue like every other frame: the
+        // answer only arrives once this socket's outbound path is draining.
+        this.sendControl(state, { type: "pong", nonce: frame.nonce });
+        break;
       case "ack": {
         const channel = this.channel(state, frame.channelId);
         if (
@@ -846,6 +851,7 @@ export class TerminalWebSocketGateway {
       type: "ready",
       version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
       socketId: randomBytes(12).toString("hex"),
+      features: ["ping"],
     });
   }
 

@@ -6,6 +6,7 @@ import {
   TERMINAL_BROWSER_TAB_REQUEST_EVENT,
   type TerminalBrowserTabRequest,
 } from "@/lib/terminal-links";
+import { createXtermTerminal } from "@/lib/terminal-xterm";
 import {
   createTerminalKey,
   useTerminalPortalStore,
@@ -40,13 +41,16 @@ function createTerminal(
     scrollback?: number;
   } = {},
 ): PersistentTerminalData {
-  return useTerminalPortalStore.getState().createTerminal({
-    tabId,
-    environmentId,
-    containerId: options.containerId === undefined ? "container-1" : options.containerId,
-    appearance: options.appearance,
-    scrollback: options.scrollback,
-  });
+  return useTerminalPortalStore.getState().createTerminal(
+    {
+      tabId,
+      environmentId,
+      containerId: options.containerId === undefined ? "container-1" : options.containerId,
+      appearance: options.appearance,
+      scrollback: options.scrollback,
+    },
+    createXtermTerminal,
+  );
 }
 
 beforeEach(() => {
@@ -126,11 +130,14 @@ describe("terminal creation and lookup", () => {
     const invalidScrollback = createTerminal("fallback", "env-1", {
       scrollback: 0,
     });
-    const duplicate = useTerminalPortalStore.getState().createTerminal({
-      tabId: "custom",
-      environmentId: "env-1",
-      containerId: "different-container",
-    });
+    const duplicate = useTerminalPortalStore.getState().createTerminal(
+      {
+        tabId: "custom",
+        environmentId: "env-1",
+        containerId: "different-container",
+      },
+      createXtermTerminal,
+    );
 
     expect(custom.terminal.options.fontFamily).toStartWith('"Commit Mono"');
     expect(custom.terminal.options.fontSize).toBe(17);
@@ -342,7 +349,9 @@ describe("terminal lifecycle mutations", () => {
 
 describe("terminal recreation", () => {
   test("returns null when the terminal does not exist", () => {
-    expect(useTerminalPortalStore.getState().recreateTerminal("missing", "missing")).toBeNull();
+    expect(
+      useTerminalPortalStore.getState().recreateTerminal("missing", "missing", createXtermTerminal),
+    ).toBeNull();
   });
 
   test("disposes the old terminal, removes its portal, and preserves settings and identity", () => {
@@ -367,7 +376,7 @@ describe("terminal recreation", () => {
 
     const recreated = useTerminalPortalStore
       .getState()
-      .recreateTerminal("env-custom", "tab-custom");
+      .recreateTerminal("env-custom", "tab-custom", createXtermTerminal);
 
     expect(recreated).not.toBeNull();
     if (!recreated) {
@@ -407,7 +416,9 @@ describe("terminal recreation", () => {
     old.terminal.options.theme = undefined;
     old.terminal.options.scrollback = undefined;
 
-    const recreated = useTerminalPortalStore.getState().recreateTerminal("env-error", "tab-error");
+    const recreated = useTerminalPortalStore
+      .getState()
+      .recreateTerminal("env-error", "tab-error", createXtermTerminal);
 
     expect(recreated).not.toBeNull();
     expect(recreated?.containerId).toBeNull();

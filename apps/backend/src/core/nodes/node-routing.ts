@@ -60,6 +60,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "sync_node_tickets",
   "create_node_action_request",
   "list_node_action_requests",
+  // Each machine's standing permission is for its own coordinators only.
+  "run_granted_agent_account_switch",
   "resolve_node_action_request",
   // Transfers and comparisons are run by the command node, not through it.
   "transfer_node_files",

@@ -13,6 +13,7 @@ import {
 } from "@orkestrator/protocol/agent-usage-limits";
 import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
+import { COORDINATOR_ACCOUNT_SWITCH_LIMIT } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import { isPlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import {
   SCHEDULED_JOB_LIMITS,
@@ -42,7 +43,13 @@ import type { ControlMcpInvoker } from "./control-shared-actions.js";
  * (`switch-agent-account`, like `request_environment_deletion`) unless the
  * self-timer that woke the coordinator carries the user's permission, which
  * only a turn the user started can attach (`remind_me` with
- * `authorizeAccountSwitch`).
+ * `authorizeAccountSwitch`), or the user gave coordinators standing
+ * permission for that provider in Settings
+ * (`@orkestrator/protocol/coordinator-account-switch-grant`). The standing
+ * permission is this machine's, checked here and again by
+ * `run_granted_agent_account_switch` as it records the switch; it still
+ * refuses a signed-out or known-exhausted account, and past the hourly limit
+ * the switch asks the user after all.
  */
 
 export const ACCOUNT_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]> = [
@@ -52,6 +59,26 @@ export const ACCOUNT_TOOL_CAPABILITIES: ReadonlyArray<readonly [string, string]>
   ["switch_provider_account", "accounts"],
   ["set_account_auto_switch", "accounts"],
 ];
+
+const PLATFORM_NAMES: Record<AgentAccountPlatform, string> = { claude: "Claude", codex: "Codex" };
+
+function accountName(account: AgentAccountSummary): string {
+  return account.identity.email ? `${account.label} (${account.identity.email})` : account.label;
+}
+
+/** `run_granted_agent_account_switch`'s answer; the request is a `NodeActionRequest`. */
+type GrantedSwitch =
+  | { outcome: "not-granted" }
+  | { outcome: "over-limit"; recent: number; limit: number; windowMinutes: number }
+  | {
+      outcome: "ran" | "existing";
+      request: {
+        requestId: string;
+        state: string;
+        authorizedBy?: string;
+        result?: { code: string; message: string };
+      };
+    };
 
 const NO_ACCOUNTS_NOTE =
   "Only Claude and Codex keep switchable accounts. Grok, Pi, OpenCode and Cursor use one login per machine; signing in another is the user's job in Settings.";
@@ -200,6 +227,86 @@ function autoSwitchView(state: AgentAccountAutoSwitchState): JsonRecord {
           ? "A manual switch pinned this account. Automatic switching stays off until the tick is set again."
           : "Automatic switching is off.",
   };
+}
+
+/**
+ * The standing permission never switches to an account its usage reading says
+ * is used up. No reading (an idle Claude account often has none) is not
+ * evidence either way, so it does not refuse.
+ */
+async function refuseExhausted(
+  machine: Machine,
+  platform: AgentAccountPlatform,
+  account: AgentAccountSummary,
+  at: number,
+): Promise<void> {
+  let reading: unknown;
+  try {
+    reading = await machine.call<unknown>("get_agent_account_usage", {
+      platform,
+      accountId: account.id,
+    });
+  } catch {
+    return;
+  }
+  if (!isPlanUsageSnapshot(reading)) return;
+  const exhausted = exhaustedUsageWindows(reading.windows, at);
+  if (exhausted.length === 0) return;
+  const until = exhausted
+    .map((window) => window.resetsAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+  throw new Error(
+    `“${account.label}” has used up its ${PLATFORM_NAMES[platform]} plan on ${machine.nodeName}${until ? ` until ${until}` : ""}, so it is not switched to without the user, even with the standing permission. Pick an account with hasAllocationLeft true from list_provider_accounts.`,
+  );
+}
+
+function grantedResult(
+  request: { requestId: string; state: string; result?: { code: string; message: string } },
+  view: {
+    machineView: JsonRecord;
+    platform: AgentAccountPlatform;
+    previousAccountId: string | undefined;
+    accountId: string;
+    accountLabel: string;
+  },
+) {
+  if (request.state === "failed") {
+    throw new Error(
+      `The switch under the standing permission failed: ${request.result?.message ?? "no reason given"}.`,
+    );
+  }
+  const base = {
+    machine: view.machineView,
+    platform: view.platform,
+    previousAccountId: view.previousAccountId,
+    accountId: view.accountId,
+    accountLabel: view.accountLabel,
+    authorizedBy: { setting: "standing-grant", recordId: request.requestId },
+    scope: "machine",
+  };
+  if (request.state === "outcome-unknown") {
+    return toolResult({
+      ...base,
+      state: "outcome-unknown",
+      note: `${request.result?.message ?? "The outcome is unknown."} No approval was needed; do not ask the user to approve it.`,
+    });
+  }
+  if (request.state !== "executed") {
+    return toolResult({
+      ...base,
+      state: "switching",
+      note: "This switch is already running under the standing permission. Check list_provider_accounts before calling again.",
+    });
+  }
+  return toolResult({
+    ...base,
+    state: "switched",
+    effect: agentAccountSwitchEffect(view.platform),
+    nextStep:
+      "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
+  });
 }
 
 export function registerAccountTools(server: McpServer, context: AccountToolContext): void {
@@ -451,7 +558,8 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
     {
       title: "Switch the active provider account",
       description:
-        "Make another signed-in Claude or Codex login the active account for that provider on this machine (or another with nodeId), through the same switch as Settings. Machine-wide: every session of that provider on that machine moves to it on its next turn; a turn already running finishes on the current account; no restart. It changes which subscription is billed, so: with scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once; otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Only when the user asked for a switch, never on your own initiative. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true.",
+        "Make another signed-in Claude or Codex login the active account for that provider on this machine (or another with nodeId), through the same switch as Settings. Machine-wide: every session of that provider on that machine moves to it on its next turn; a turn already running finishes on the current account; no restart. " +
+        `It changes which subscription is billed, so it needs the user's permission, in one of three forms. (1) With scheduleId of the self-timer that woke you, whose reminder says it carries the user's permission, it switches at once. (2) When the user turned on "Let coordinators switch accounts without asking" for that provider in Settings on this machine, it switches at once with no approval, on this machine and on machines this one controls (state switched, authorizedBy standing-grant); the user is shown each such switch, but you still tell them what you did. Even then it refuses a signed-out account or one whose usage reading says it is used up, and after ${COORDINATOR_ACCOUNT_SWITCH_LIMIT.switches} switches of one provider on one machine within an hour it asks the user instead and says why. (3) Otherwise it creates a request the user approves in Orkestrator and you are told the outcome by mail. Read state in the result: only pending means the user must approve; never ask the user to approve a switch that already ran. Only switch when the user asked for switches, never on your own initiative; the standing permission is that request made in advance. Take accountId from list_provider_accounts and prefer one with hasAllocationLeft true. Like any manual switch, it pins the account while automatic switching is on.`,
       inputSchema: z.object({
         requestId: z
           .string()
@@ -461,7 +569,14 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           .describe("Stable key for this switch; reuse it only to retry the same call."),
         platform: z.enum(AGENT_ACCOUNT_PLATFORMS),
         accountId: z.string().trim().min(1).max(100),
-        reason: z.string().trim().min(1).max(500).describe("What the user asked, in their words."),
+        reason: z
+          .string()
+          .trim()
+          .min(1)
+          .max(500)
+          .describe(
+            "What the user asked, in their words, and why this account now. Shown to the user with the switch.",
+          ),
         nodeId: nodeIdField.describe("A machine from list_nodes; omit for this one."),
         scheduleId: z
           .string()
@@ -470,7 +585,7 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           .max(100)
           .optional()
           .describe(
-            "The self-timer whose reminder carries the user's permission to switch, so no approval is needed.",
+            "The self-timer whose reminder carries the user's permission to switch, so no approval is needed. Not needed when Settings already lets coordinators switch without asking.",
           ),
       }),
       annotations: {
@@ -532,22 +647,74 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
             "Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
         });
       }
-      const request = await invoke<JsonRecord>("create_node_action_request", {
-        requestId: `switch-account:${scope.coordinatorId}:${requestId}`,
-        kind: "switch-agent-account",
-        targets: [
-          {
-            nodeId: machine.nodeId,
-            nodeName: machine.nodeName,
+      const switchRequestId = `switch-account:${scope.coordinatorId}:${requestId}`;
+      const requestedBy = { ...(await mailbox()), projectId: scope.projectId };
+      const target = {
+        nodeId: machine.nodeId,
+        nodeName: machine.nodeName,
+        platform,
+        accountId,
+        accountLabel: accountName(account),
+      };
+      let askedBecause: string | undefined;
+      // A permission that cannot be read is not a permission: ask instead.
+      const granted = await invoke<{ grants?: Partial<Record<AgentAccountPlatform, boolean>> }>(
+        "get_coordinator_account_switch_grant",
+        { platform },
+      ).then(
+        (state) => state.grants?.[platform] === true,
+        () => false,
+      );
+      if (granted) {
+        await refuseExhausted(machine, platform, account, now());
+        const previous = snapshot.accounts.find(
+          (entry) => entry.platform === platform && entry.id === previousAccountId,
+        );
+        const run = await invoke<GrantedSwitch>("run_granted_agent_account_switch", {
+          requestId: switchRequestId,
+          ...target,
+          ...(previousAccountId ? { previousAccountId } : {}),
+          ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
+          requestedBy,
+          reason,
+        });
+        if (run.outcome === "ran" || run.outcome === "existing") {
+          const { request } = run;
+          if (request.authorizedBy === "standing-grant") {
+            return grantedResult(request, {
+              machineView,
+              platform,
+              previousAccountId,
+              accountId,
+              accountLabel: account.label,
+            });
+          }
+          // The same requestId already asked the user; report that request.
+          return toolResult({
+            state: request.state,
+            approvalRequestId: request.requestId,
+            machine: machineView,
             platform,
             accountId,
-            accountLabel: account.identity.email
-              ? `${account.label} (${account.identity.email})`
-              : account.label,
-          },
-        ],
-        requestedBy: { ...(await mailbox()), projectId: scope.projectId },
+            ...(request.result ? { result: request.result } : {}),
+            note:
+              request.state === "pending"
+                ? `requestId ${requestId} already asked the user to approve this switch. Nothing has changed yet; you will be told the outcome by mail.`
+                : `requestId ${requestId} was already used for this switch, which is ${request.state}. Use a new requestId for a new switch.`,
+          });
+        }
+        if (run.outcome === "over-limit") {
+          askedBecause = `Coordinators already switched the active ${PLATFORM_NAMES[platform]} account on ${machine.nodeName} ${run.recent} times in the last ${run.windowMinutes} minutes, the most Settings allows without asking.`;
+        }
+        // not-granted: the user turned it off since the read; ask as before.
+      }
+      const request = await invoke<JsonRecord>("create_node_action_request", {
+        requestId: switchRequestId,
+        kind: "switch-agent-account",
+        targets: [target],
+        requestedBy,
         reason,
+        ...(askedBecause ? { askedBecause } : {}),
       });
       return toolResult({
         state: "pending",
@@ -558,7 +725,8 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         accountId,
         scope: "machine",
         effect: agentAccountSwitchEffect(platform),
-        note: `Waiting for the user to approve switching the active ${platform} account on ${machine.nodeName} to “${account.label}”. Nothing has changed yet; you will be told the outcome by mail. Finish your turn.`,
+        ...(askedBecause ? { askedBecause } : {}),
+        note: `${askedBecause ? `${askedBecause} So this one needs approval. ` : ""}Waiting for the user to approve switching the active ${platform} account on ${machine.nodeName} to “${account.label}”. Nothing has changed yet; you will be told the outcome by mail. Finish your turn.`,
       });
     },
   );

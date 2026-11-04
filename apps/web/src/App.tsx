@@ -102,6 +102,7 @@ import { FederationProvider } from "@/components/federation/FederationProvider";
 import { SshPromptDialog } from "@/components/federation/SshPromptDialog";
 import { FederationEffects } from "@/components/federation/FederationEffects";
 import { NodeActionRequestsDialog } from "@/components/federation/NodeActionRequestsDialog";
+import { CoordinatorAccountSwitchNotices } from "@/components/federation/CoordinatorAccountSwitchNotices";
 import { ProjectCopyDialog } from "@/components/federation/ProjectCopyDialog";
 import { CommandHandoverDialog } from "@/components/federation/CommandHandoverDialog";
 import { NodeSshPromptDialog } from "@/components/settings/machines/NodeSshPromptDialog";
@@ -1722,6 +1723,7 @@ function ConnectedApp() {
             <SshPromptDialog />
             <FederationEffects />
             <NodeActionRequestsDialog />
+            <CoordinatorAccountSwitchNotices />
             <ProjectCopyDialog />
             <CommandHandoverDialog />
             {/* SSH prompts from this node's own tunnels to the nodes it commands. */}

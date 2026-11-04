@@ -362,6 +362,41 @@ test("an account switch names the machine, the provider and the account, and say
   await waitFor(() => expect(resolved).toEqual([{ requestId: "req-switch", decision: "approve" }]));
 });
 
+test("an account switch past the standing permission's limit says why it asks", async () => {
+  invokeMock.mockImplementation(async (command: string) =>
+    command === "list_node_action_requests"
+      ? [
+          {
+            requestId: "req-over",
+            kind: "switch-agent-account",
+            targets: [
+              {
+                nodeId: "bk_beelink",
+                nodeName: "beelink",
+                platform: "claude",
+                accountId: "acct-work",
+                accountLabel: "Work",
+              },
+            ],
+            reason: "Limit soon.",
+            askedBecause:
+              "Coordinators already switched the active Claude account on beelink 3 times in the last 60 minutes, the most Settings allows without asking.",
+            state: "pending",
+          },
+        ]
+      : undefined,
+  );
+  render(
+    <FederationProvider>
+      <NodeActionRequestsDialog />
+    </FederationProvider>,
+  );
+  const dialog = await screen.findByTestId("node-action-request");
+  expect(dialog.textContent).toContain(
+    "You are asked because: Coordinators already switched the active Claude account on beelink 3 times",
+  );
+});
+
 describe("the user approves a coordinator's message to the project home", () => {
   const homeRequest = {
     requestId: "home-req",

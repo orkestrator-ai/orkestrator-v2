@@ -1701,8 +1701,14 @@ the main coordinator has four tools (capability `accounts`, plus
   `set_active_agent_account`, the Settings switch, machine-wide. Without
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
-  of a self-timer that carries the user's permission it switches at once.
-  Either way it pins the account if automatic switching is on.
+  of a self-timer that carries the user's permission it switches at once, and
+  so it does when the user ticked "Let coordinators switch accounts without
+  asking" for that provider in Settings on the coordinator's machine (within
+  an hourly limit, never to a signed-out or used-up account; see
+  [agent-accounts.md](agent-accounts.md#switching-without-asking)). The result's
+  `state` says which happened, and the coordinator rule tells the coordinator
+  never to ask the user to approve a switch that already ran. Either way it
+  pins the account if automatic switching is on.
 - `set_account_auto_switch` changes the automatic-switching ticks, with no
   approval, because the backend then does the switching. On a leaf it refuses the
   shared ticks, which its command node holds, and can still end that leaf's pin. Each

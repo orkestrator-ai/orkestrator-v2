@@ -671,7 +671,9 @@ export class GatewayProxy {
           // Bun clears the socket when the upstream response has already closed.
           activeProxyResponse?.socket?.destroy(disconnectError);
           activeProxyResponse?.destroy(disconnectError);
-          proxyRequest.socket?.destroy(disconnectError);
+          // A finished exchange keeps this reference after its socket returns to
+          // the keep-alive pool, where another request may already be using it.
+          if (!proxyRequest.destroyed) proxyRequest.socket?.destroy(disconnectError);
           proxyRequest.destroy(disconnectError);
           response.destroy(disconnectError);
         }

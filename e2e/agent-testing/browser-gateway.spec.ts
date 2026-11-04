@@ -597,7 +597,8 @@ test("real browser gateway exercises an authoritative local environment", async 
     await invoke("start_local_terminal_session", { sessionId: terminal.sessionId });
     await invoke("local_terminal_write", {
       sessionId: terminal.sessionId,
-      data: "sleep 1; i=0; while [ $i -lt 1100 ]; do printf '%0480d\\n' \"$i\"; i=$((i + 1)); done; printf 'background-done\\n'; printf 'changed\\n' > smoke-change.txt\n",
+      // `%s` keeps the marker out of the echoed command: only the finished loop prints it.
+      data: "sleep 1; i=0; while [ $i -lt 1100 ]; do printf '%0480d\\n' \"$i\"; i=$((i + 1)); done; printf 'background-%s\\n' done; printf 'changed\\n' > smoke-change.txt\n",
     });
 
     // Exercise the inactive-environment contract through unrelated authoritative
@@ -628,11 +629,27 @@ test("real browser gateway exercises an authoritative local environment", async 
         { timeout: 30_000 },
       )
       .toEqual({ current: true, retainedWithinBudget: true, rolledOver: true });
-    const historyPage = await invoke<{
-      rows: Array<{ text: string }>;
-      previousCursor: string | null;
-    } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
-    expect(historyPage?.rows.some((row) => row.text.includes("background-done"))).toBe(true);
+    const readHistory = () =>
+      invoke<{
+        rows: Array<{ text: string }>;
+        previousCursor: string | null;
+        historyGap: boolean;
+      } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
+    const historyHas = (page: Awaited<ReturnType<typeof readHistory>>, text: string) =>
+      page?.rows.some((row) => row.text.includes(text));
+    // The archive's write queue holds 256 records per session, so a burst that
+    // outruns a flush loses lines and reports `historyGap`. Without a gap, every
+    // line must be there.
+    const burstPage = await readHistory();
+    if (!burstPage?.historyGap) expect(historyHas(burstPage, "background-done")).toBe(true);
+    // Reading the page drained that queue, so output after a burst is always kept.
+    await invoke("local_terminal_write", {
+      sessionId: terminal.sessionId,
+      data: "printf 'history-%s\\n' resumed\n",
+    });
+    await expect
+      .poll(async () => historyHas(await readHistory(), "history-resumed"), { timeout: 15_000 })
+      .toBe(true);
     await invoke<void>("refresh_environment_diff_stats", {
       environmentId: environment.id,
     });
@@ -2690,7 +2707,7 @@ test("local environment move survives inactive navigation and reload", async ({ 
       await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
       await expect(page.getByRole("textbox", { name: "Destination folder" })).toBeVisible();
     };
-    await page.reload({ waitUntil: "load" });
+    await page.reload();
     await openSettings();
     const destination = path.join(root, "first");
     await page.getByRole("textbox", { name: "Destination folder" }).fill(destination);
@@ -2725,7 +2742,7 @@ test("local environment move survives inactive navigation and reload", async ({ 
       environmentId: source!.id,
       destinationDir: nextDestination,
     });
-    await page.reload({ waitUntil: "load" });
+    await page.reload();
     const moved = await moving;
     expect(moved.worktreePath).toBe(path.join(nextDestination, path.basename(original)));
     expect(await fs.readFile(path.join(moved.worktreePath!, "move-preserved.txt"), "utf8")).toBe(

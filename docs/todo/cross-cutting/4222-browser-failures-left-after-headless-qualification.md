@@ -10,7 +10,7 @@ Analysed 2026-11-03 against `main` at `a2827f52f`.
 ### Tasks
 
 1. **Two Multi Review layout assertions in `test:browser`**: they fail every time on beelink with the renderer unchanged. Status: open.
-2. **`terminal-input-resume.spec.ts` needs `vim`**: the host has no `vim`, so the first case fails in the isolated suite. Status: open.
+2. **`terminal-input-resume.spec.ts` needs `vim`**: the host has no `vim`, so the first case failed in the isolated suite. Status: done 2026-11-04.
 
 ### 1. Two Multi Review layout assertions in `test:browser`
 
@@ -50,6 +50,16 @@ Analysed 2026-11-03 against `main` at `a2827f52f`.
   - **Drive `nvim` when `vim` is absent.**
     - Pros: keeps coverage here.
     - Cons: the flags and redraw behaviour differ, and the spec's comments describe vim's.
+
+## Assumptions and decisions
+
+### Task 2: driving `nvim` when `vim` is absent
+
+Chose the `nvim` fallback, with a skip that names what is missing when neither is on `PATH`, instead of the skip this file recommended. The fallback keeps the case running on this host, which is the host where the failure was recorded.
+
+The objection above held, and the spec adapts to it. `nvim` positions each cell, so the checks on typed text read the terminal's state snapshot; that also makes `not.toContain("before-XY")` a real check for either editor. It answers terminal queries as writes, so the spec waits a second before injecting the fault. A mouse report can share a write with the keystroke, so the check for `Z` uses `endsWith`. The saved-file and shell-PID assertions are unchanged.
+
+On a `--fixture` profile the case passed 6 of 6 with `--repeat-each=6 --workers=1` on `nvim`, and once more after formatting. It was not run with `vim`, because this host has none.
 
 ## Related
 

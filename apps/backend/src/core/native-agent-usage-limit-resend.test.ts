@@ -623,3 +623,32 @@ describe("a stop nothing here will resend still gets reported", () => {
     expect(h.noteUnresentStop).not.toHaveBeenCalled();
   });
 });
+
+test("a workflow on a provider without accounts reports its stop and stays stopped", async () => {
+  const noteUnresentStop = mock(async (_input: Record<string, unknown>) => undefined);
+  const provider = createNativeAgentProvider(
+    { agent: "grok", baseUrl: "http://grok-workflow", authToken: "a" },
+    {
+      usageLimitStops: {
+        handleLimitStop: async () => "resend",
+        noteUnresentStop,
+      },
+    },
+  );
+  expect(
+    await provider.usageLimitStop?.({
+      environmentId: "env-1",
+      requestId: "request-1",
+      error: "USAGE_EXHAUSTED",
+      resends: 0,
+      session: { label: "Build Session" },
+    }),
+  ).toBe("stop");
+  expect(noteUnresentStop.mock.calls[0]?.[0]).toEqual({
+    platform: "grok",
+    environmentId: "env-1",
+    requestId: "request-1",
+    error: "USAGE_EXHAUSTED",
+    session: { label: "Build Session" },
+  });
+});

@@ -1309,7 +1309,7 @@ function ConnectedApp() {
           {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
             <div
               role="alert"
-              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-amber-500/40 bg-amber-950/95 px-4 py-3 text-sm text-amber-100 shadow-xl"
+              className="fixed inset-x-4 bottom-4 z-[90] flex items-center justify-between gap-4 rounded-lg border border-border bg-popover/95 px-4 py-3 text-sm text-popover-foreground shadow-xl backdrop-blur-sm"
             >
               <span>
                 Orkestrator could not check Docker availability. Container actions remain disabled

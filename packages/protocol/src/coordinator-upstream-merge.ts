@@ -4,7 +4,8 @@ import type { ProjectGitStatus } from "./coordinator.js";
  * Keeping a project's checkout on its upstream before a message to the main
  * coordinator. The backend decides (`check_coordinator_upstream_merge`):
  * whenever Git can fast-forward the checkout cleanly, it is fast-forwarded,
- * without asking. Nothing is merged under a running turn or into a checkout a
+ * without asking. When the fetch is slow or fails, the backend fast-forwards
+ * to the upstream commit already fetched itself and answers `fast-forwarded`. Nothing is merged under a running turn or into a checkout a
  * fast-forward would not apply to (local commits, uncommitted changes, an
  * unfinished operation). Browser-safe.
  *
@@ -55,6 +56,12 @@ export const COORDINATOR_UPSTREAM_MERGE_SKIP_REASONS = [
   "blocked",
   /** Only from backends that still honoured a stored decline. */
   "declined",
+  /**
+   * Nothing left for the client to merge: the fetch was slow or failed, so the
+   * backend fast-forwarded to the upstream commit already fetched. `status`
+   * is the checkout after it.
+   */
+  "fast-forwarded",
 ] as const;
 
 export type CoordinatorUpstreamMergeSkipReason =

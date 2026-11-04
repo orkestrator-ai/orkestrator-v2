@@ -54,6 +54,12 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "unhandled-rejection": "An unhandled rejection occurred while the renderer was starting.",
     },
   },
+  "desktop.permissions": {
+    description: "Permission requests refused on the renderer and workspace realm sessions.",
+    events: {
+      denied: "A renderer asked for a permission the policy does not grant.",
+    },
+  },
   "desktop.dialog": {
     description: "Native dialogs, whose modal loops hold the main thread while they are open.",
     events: {

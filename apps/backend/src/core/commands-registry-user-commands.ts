@@ -18,6 +18,7 @@ import {
   terminalEnv,
 } from "./commands-terminal.js";
 import { asBoolean, asString } from "./commands-validation.js";
+import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { spawnContainerUserCommand } from "./user-command-container.js";
 import { UserCommandError, type UserCommandLaunch } from "./user-commands.js";
@@ -198,8 +199,15 @@ async function localLaunch(
   return {
     target,
     cwd,
-    spawn: (command) =>
-      spawnPty(shell, ["-lc", command], { cwd, cols: COLS, rows: ROWS, env: terminalEnv(env) }),
+    spawn: (command) => {
+      const lowered = lowPriorityCommand(shell, ["-lc", command]);
+      return spawnPty(lowered.command, lowered.args, {
+        cwd,
+        cols: COLS,
+        rows: ROWS,
+        env: terminalEnv(env),
+      });
+    },
   };
 }
 

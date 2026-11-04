@@ -405,8 +405,9 @@ closed first) is client-local.
   - binds its own connection scope `panel:<uuid>`;
   - uses its own session partition per machine,
     `persist:orkestrator-panel-<sha256(connectionId)[:16]>`;
-  - installs its own request-auth hook for that scope, plus navigation guards
-    and a deny-all window-open handler.
+  - installs its own request-auth hook for that scope, plus navigation guards,
+    the [renderer permission policy](renderer-security.md#permissions) and a
+    deny-all window-open handler.
 
   The parent sends only bounds (scaled by zoom), visibility and close. The
   native view is hidden while a dialog or menu of the parent is open. A window

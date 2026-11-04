@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,8 @@ import {
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { registerProtectedRichCache } from "@/lib/chat/rich-content-reset";
+import { AgentChatSearchIndex } from "./agent-chat-search-index";
 
 export interface AgentChatFindMatch {
   itemIndex: number;
@@ -106,16 +109,29 @@ export function useAgentChatFind<TItem>({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const [searchIndex] = useState(() => new AgentChatSearchIndex<TItem>());
+  const searching = isActive && isOpen;
 
   const matches = useMemo(
     () =>
-      isActive && query.trim()
-        ? findAgentChatMatches(
-            items.map((item) => getSearchText(item)),
-            query,
-          )
+      searching && query.trim()
+        ? findAgentChatMatches(searchIndex.texts(items, getSearchText), query)
         : [],
-    [getSearchText, isActive, items, query],
+    [getSearchText, items, query, searchIndex, searching],
+  );
+
+  useEffect(() => {
+    if (!searching) searchIndex.clear();
+  }, [searchIndex, searching]);
+
+  // The index holds message text: cleared with other protected rich content.
+  const searchIndexCacheId = useId();
+  useEffect(
+    () =>
+      registerProtectedRichCache(`agent-chat-find:${searchIndexCacheId}`, {
+        clearAll: () => searchIndex.clear(),
+      }),
+    [searchIndex, searchIndexCacheId],
   );
   const normalizedCurrentMatchIndex =
     matches.length === 0 ? -1 : Math.min(currentMatchIndex, matches.length - 1);

@@ -142,6 +142,16 @@ replay shows it as the card, never as a message the user typed. See
 
 - Never let the stdout read loop await a render, an SSE write, or the browser —
   app-server's outbound queue is bounded, so that stalls **every** thread.
+- The notification queue (`SerialQueue`) is that loop's overflow, so it is
+  bounded by count and bytes. Past a bound it drops what has not started and
+  the supervisor replaces the child, because a stream with a dropped
+  notification cannot be trusted. A key's tasks drain together, so never rely
+  on order across keys.
+- Every accumulator mutation that changes what an item renders moves its
+  `version` (`ensureItem` or `touch`): a running item's parts are reused while
+  it stands still (`runningItemParts`), so a change that skips it never shows.
+- A `message.patched` frame carries `content` only when the body changed. It
+  applies at `revision - 1`, so absent means unchanged, never empty.
 - Never auto-retry an ambiguous dispatch. Only an explicit `-32001` overload means
   the turn definitely did not run; anything else must reconcile via `thread/read`.
 - `/dispatch` answers `absent` only from the journal, never from `thread/read`:

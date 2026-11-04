@@ -123,7 +123,7 @@ export async function drainPersistence(): Promise<void> {
 }
 
 /**
- * Bring an oversized payload under the file bound by shedding transcripts.
+ * The state file's text, brought under `budget` by shedding transcripts.
  *
  * Transcripts are trimmed per session, never in aggregate, so enough sessions
  * will always eventually exceed the whole-file bound. Skipping the write there
@@ -137,28 +137,54 @@ export async function drainPersistence(): Promise<void> {
  * to the same Pi conversation, it just starts with an empty rendered copy.
  * Live state is deliberately untouched: the tab the user is looking at keeps
  * its transcript.
+ *
+ * Each record is encoded once and spliced into the envelope, so the bytes are
+ * exactly `JSON.stringify(payload)`'s and shedding costs only the records it
+ * trims, however many sessions there are. Undefined when even the non-transcript
+ * state does not fit.
  */
-function shedToFit(payload: PersistedState, order: Map<string, number>): boolean {
-  const byOldest = [...payload.sessions].sort(
-    (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
-  );
-  let shed = 0;
-  for (const session of byOldest) {
-    if (session.messages.length === 0) continue;
-    session.droppedMessages = (session.droppedMessages ?? 0) + session.messages.length;
-    session.messages = [];
-    session.transcriptTruncated = true;
-    shed += 1;
-    if (Buffer.byteLength(JSON.stringify(payload)) <= MAX_STATE_FILE_BYTES) {
-      log.warn("state.transcripts-shed", { sessions: shed });
-      return true;
+export function encodeStateWithinBudget(
+  payload: PersistedState,
+  lastAccessedById: ReadonlyMap<string, number>,
+  budget: number,
+): string | undefined {
+  const envelope = JSON.stringify({ ...payload, sessions: [] });
+  const head = envelope.slice(0, -2);
+  const records = payload.sessions.map((session) => JSON.stringify(session));
+  const separators = Math.max(0, records.length - 1);
+  let total = Buffer.byteLength(envelope) + separators;
+  for (const record of records) total += Buffer.byteLength(record);
+
+  if (total > budget) {
+    const oldestFirst = payload.sessions
+      .map((session, index) => ({ session, index }))
+      .sort(
+        (left, right) =>
+          (lastAccessedById.get(left.session.id) ?? 0) -
+          (lastAccessedById.get(right.session.id) ?? 0),
+      );
+    let shed = 0;
+    for (const { session, index } of oldestFirst) {
+      if (total <= budget) break;
+      if (session.messages.length === 0) continue;
+      session.droppedMessages = (session.droppedMessages ?? 0) + session.messages.length;
+      session.messages = [];
+      session.transcriptTruncated = true;
+      shed += 1;
+      const trimmed = JSON.stringify(session);
+      total += Buffer.byteLength(trimmed) - Buffer.byteLength(records[index]!);
+      records[index] = trimmed;
     }
+    if (total > budget) {
+      // Every transcript is gone and it still does not fit, which means the
+      // non-transcript state alone is over budget. Report it rather than failing
+      // silently forever.
+      log.warn("state.over-budget", { sessions: shed });
+      return undefined;
+    }
+    log.warn("state.transcripts-shed", { sessions: shed });
   }
-  // Every transcript is gone and it still does not fit, which means the
-  // non-transcript state alone is over budget. Report it rather than failing
-  // silently forever.
-  log.warn("state.over-budget", { sessions: shed });
-  return false;
+  return `${head}${records.join(",")}]}`;
 }
 
 async function persistNow(write: PersistWriteForTests = { barrier: false }): Promise<void> {
@@ -167,20 +193,15 @@ async function persistNow(write: PersistWriteForTests = { barrier: false }): Pro
   // A session whose close is publishing its removal is still registered (so a
   // retry reaches it) but must already be absent from what is written.
   const live = Array.from(sessions.values()).filter((state) => !isPendingRemoval(state));
-  const payload: PersistedState = {
-    version: 1,
-    provider: "pi",
-    sessions: live.map(toPersisted),
-  };
-  let serialized = JSON.stringify(payload);
-  if (Buffer.byteLength(serialized) > MAX_STATE_FILE_BYTES) {
-    const order = new Map(live.map((state) => [state.id, state.lastAccessed]));
-    if (!shedToFit(payload, order)) {
-      // Best-effort callers swallow this through the queue tail. A durability
-      // barrier does not: dispatch must stop when no state file was published.
-      throw new Error("Pi bridge state exceeds its persistence budget");
-    }
-    serialized = JSON.stringify(payload);
+  const serialized = encodeStateWithinBudget(
+    { version: 1, provider: "pi", sessions: live.map(toPersisted) },
+    new Map(live.map((state) => [state.id, state.lastAccessed])),
+    MAX_STATE_FILE_BYTES,
+  );
+  if (serialized === undefined) {
+    // Best-effort callers swallow this through the queue tail. A durability
+    // barrier does not: dispatch must stop when no state file was published.
+    throw new Error("Pi bridge state exceeds its persistence budget");
   }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
   if (writeGateForTests) await writeGateForTests(write);

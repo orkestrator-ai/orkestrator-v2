@@ -1236,6 +1236,7 @@ export interface AppConfig {
      * stored schedules are kept.
      */
     experimentalScheduling?: boolean;
+    localWindowGatewayTransport?: boolean;
     /**
      * Experimental gate for graphs in the web UI. Off (or absent) hides the
      * action bar's Graphs and Run graph… buttons and a ticket's Run graph…;
@@ -1261,6 +1262,12 @@ export interface AppConfig {
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
     /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
     agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
+    /**
+     * The user's standing permission for this machine's coordinators to switch
+     * accounts without asking. Machine-local, never inherited; written only by
+     * `setCoordinatorAccountSwitchGrant`, the settings form never sends it.
+     */
+    coordinatorAccountSwitchGrant?: import("@orkestrator/protocol/coordinator-account-switch-grant").CoordinatorAccountSwitchGrants;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes

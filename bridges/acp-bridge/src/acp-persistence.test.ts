@@ -219,7 +219,7 @@ describe("ACP bridge", () => {
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
         version: 3,
-        provider: "cursor",
+        provider: "acp-fixture",
         sessions: [
           {
             id: "legacy-policy",
@@ -266,7 +266,7 @@ describe("ACP bridge", () => {
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
         version: 3,
-        provider: "cursor",
+        provider: "acp-fixture",
         sessions: [
           {
             id: "session-model-ids",
@@ -442,106 +442,6 @@ describe("ACP bridge", () => {
     ).toMatchObject({ type: "thinking", parentTaskUseId: "cursor-subagent-1" });
   });
 
-  test("bounds replay metadata before publishing and persists the trimmed transcript", async () => {
-    const stateDirectory = await temporaryDirectory();
-    const lifecycleFile = resolve(stateDirectory, "cursor-replay-bounds.log");
-    const maximumTranscriptBytes = 1024 * 1024;
-    const first = await spawnBridge({
-      stateDirectory,
-      env: {
-        ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes),
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA: "1",
-      },
-    });
-    const created = (await nativeFetch(`${first.base}/session/create`, {
-      method: "POST",
-      headers: first.headers,
-      body: JSON.stringify({ clientSessionKey: "env-cursor-bounds:tab-1" }),
-    }).then((response) => response.json())) as { id: string };
-
-    await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers: first.headers,
-      body: JSON.stringify({ prompt: "CURSOR_OVERSIZED_REPLAY" }),
-    });
-    await waitFor(
-      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
-      (value) => value.includes("stop:"),
-    );
-    const session = (await nativeFetch(`${first.base}/session/${created.id}`, {
-      headers: first.headers,
-    }).then((response) => response.json())) as {
-      status: string;
-      baseIndex: number;
-      messages: Array<{ parts: Array<Record<string, unknown>> }>;
-    };
-    expect(session.status).toBe("idle");
-    expect(Buffer.byteLength(JSON.stringify(session.messages))).toBeLessThanOrEqual(
-      maximumTranscriptBytes,
-    );
-    expect(session.baseIndex).toBeGreaterThan(0);
-    expect(
-      session.messages
-        .flatMap((message) => message.parts)
-        .some(
-          (part) =>
-            typeof part.content === "string" &&
-            part.content.includes("Earlier steps in this response were dropped"),
-        ),
-    ).toBe(true);
-    // Both bounds evict oldest-first, so the calls that survive the budget are
-    // the *newest* ones — the metadata the live turn is most likely to need.
-    // `replay-huge-b` is the one dropped, and its live part keeps the generic
-    // title rather than inheriting a surviving neighbour's filename.
-    const retainedTool = session.messages
-      .flatMap((message) => message.parts)
-      .find((part) => part.toolTitle === "Read huge-c.json");
-    expect(retainedTool?.toolUseId).toBe("live-huge-c");
-    expect((retainedTool?.toolArgs as { payload?: string } | undefined)?.payload?.length).toBe(
-      480 * 1024,
-    );
-    expect(
-      session.messages
-        .flatMap((message) => message.parts)
-        .find((part) => part.toolUseId === "live-huge-b"),
-    ).toMatchObject({ toolTitle: "Read File", toolArgs: {} });
-
-    const persisted = await waitFor(
-      async () =>
-        JSON.parse(await fs.readFile(resolve(stateDirectory, "state.json"), "utf8")) as {
-          sessions: Array<{
-            status: string;
-            messages: Array<{ parts: Array<Record<string, unknown>> }>;
-          }>;
-        },
-      (value) =>
-        value.sessions[0]?.messages
-          .flatMap((message) => message.parts)
-          .some((part) => part.toolTitle === "Read huge-c.json") === true,
-    );
-    expect(persisted.sessions[0]?.status).toBe("idle");
-    expect(Buffer.byteLength(JSON.stringify(persisted.sessions[0]?.messages))).toBeLessThanOrEqual(
-      maximumTranscriptBytes,
-    );
-
-    await stopChild(first.child);
-    const restarted = await spawnBridge({
-      stateDirectory,
-      env: { ACP_MAX_TRANSCRIPT_BYTES: String(maximumTranscriptBytes) },
-    });
-    const restored = (await nativeFetch(`${restarted.base}/session/${created.id}`, {
-      headers: restarted.headers,
-    }).then((response) => response.json())) as {
-      status: string;
-      messages: Array<{ parts: Array<Record<string, unknown>> }>;
-    };
-    expect(restored.status).toBe("idle");
-    expect(Buffer.byteLength(JSON.stringify(restored.messages))).toBeLessThanOrEqual(
-      maximumTranscriptBytes,
-    );
-  });
-
   test("bounds all persisted sessions while retaining structured output across restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const maximumStateBytes = 2 * 1024 * 1024;
@@ -627,7 +527,7 @@ describe("ACP bridge", () => {
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
         version: 3,
-        provider: "cursor",
+        provider: "acp-fixture",
         sessions: [
           {
             id: "session-malformed",
@@ -904,7 +804,7 @@ describe("ACP bridge", () => {
       resolve(stateDirectory, "state.json"),
       JSON.stringify({
         version: 1,
-        provider: "cursor",
+        provider: "acp-fixture",
         sessions: [
           {
             id: "session-v1",

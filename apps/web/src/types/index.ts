@@ -634,6 +634,11 @@ export interface GlobalConfig {
   experimentalCodexRawEventLogging?: boolean;
   /** Experimental: scheduled jobs (Settings → Schedules, schedule tools and actions) */
   experimentalScheduling?: boolean;
+  /**
+   * Desktop app: a local window created while this is on takes backend events
+   * and commands over the gateway directly rather than through Electron main.
+   */
+  localWindowGatewayTransport?: boolean;
   /** Experimental: graphs (the action bar's Graphs and Run graph… buttons, a ticket's Run graph…) */
   experimentalGraphs?: boolean;
   /** "Save logs to disk": whether application logs are written. Applies live. */

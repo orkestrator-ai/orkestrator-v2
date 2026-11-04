@@ -114,7 +114,8 @@ content. Caches register themselves (`registerProtectedRichCache`) so the
 module imports no transport or hook code: artifact reads and search bodies
 (`artifact-requests.ts`), publication ledgers (`useArtifactPublications`),
 the authenticated identity (`useTranscriptArtifactCapabilities`), search
-projections (`markdown-search.ts`) and resolved media
+projections (`markdown-search.ts`), each open find bar's row index
+(`useAgentChatFind`) and resolved media
 (`media-resolver.ts`, including the image preview cache). The render
 scheduler and the view store are cleared directly.
 

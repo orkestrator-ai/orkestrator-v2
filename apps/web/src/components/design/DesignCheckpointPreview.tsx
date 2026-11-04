@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DesignFrame } from "@orkestrator/protocol/design-canvas";
-import { designBootstrap } from "@orkestrator/protocol/design-runtime";
-import { createUuid } from "@/lib/uuid";
+import { designFrameSource } from "./design-frame-source";
 import { DesignFrameBridge } from "./frame-bridge";
 
 /** The only bridge surface a preview uses: it renders, never edits. */
@@ -32,7 +31,7 @@ export function DesignCheckpointPreview({
   const iframe = useRef<HTMLIFrameElement>(null);
   const [bridge, setBridge] = useState<DesignPreviewBridge | null>(null);
   const [state, setState] = useState<"rendering" | "ready" | "failed">("rendering");
-  const html = useMemo(() => designBootstrap(createUuid()), []);
+  const frameSource = useMemo(() => designFrameSource(), []);
 
   // Open and close pair here: a bridge replaced before it was committed never listens.
   useEffect(() => {
@@ -80,7 +79,7 @@ export function DesignCheckpointPreview({
               title={`${label}: ${frame.name} (read-only)`}
               sandbox="allow-scripts"
               referrerPolicy="no-referrer"
-              srcDoc={html}
+              {...frameSource}
               tabIndex={-1}
               aria-hidden
               className="pointer-events-none absolute top-0 left-0 origin-top-left border-0 bg-white"

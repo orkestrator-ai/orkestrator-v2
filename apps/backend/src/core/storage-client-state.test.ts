@@ -261,6 +261,34 @@ describe("client state commands", () => {
     });
   });
 
+  test("a failed fetch still fast-forwards to the upstream commit already fetched", async () => {
+    // A slow or unreachable remote: the fetch reports failure, but the two
+    // upstream commits are already on disk and the checkout is clean.
+    const stale = {
+      ...behind,
+      remoteState: "stale",
+      lastError: { operation: "fetch", message: "Permission denied (publickey)" },
+    };
+    const merged = { ...behind, behind: 0 };
+    let localMerges = 0;
+    const projectGit = {
+      isCheckoutBusy: async () => false,
+      fetch: async () => stale,
+      fastForwardToFetchedUpstream: async () => {
+        localMerges += 1;
+        return { outcome: "fast-forwarded" as const, status: merged };
+      },
+    };
+    await withCommands(projectGit as never, async (call, projectId) => {
+      expect(await call("check_coordinator_upstream_merge", { projectId })).toEqual({
+        offer: false,
+        reason: "fast-forwarded",
+        status: merged,
+      });
+      expect(localMerges).toBe(1);
+    });
+  });
+
   test("a blocked checkout is not offered", async () => {
     const projectGit = {
       isCheckoutBusy: async () => false,

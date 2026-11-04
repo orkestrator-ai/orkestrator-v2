@@ -58,12 +58,12 @@ import {
   appendHeadersVary,
   responseCompressionContexts,
   jsonResponse,
-  textResponse,
   getBearerToken,
   tokenMatches,
   readJsonBody,
   readLoginToken,
   loginPage,
+  loginPageResponse,
   wantsHtml,
   browserPreviewRefererPrefix,
 } from "./gateway-internals.js";
@@ -571,12 +571,7 @@ export class GatewayAuth {
       const notice = staleCookie
         ? "Your browser session has ended. Enter the gateway token to sign in again."
         : "";
-      textResponse(
-        response,
-        401,
-        loginPage(notice, this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
-      );
+      loginPageResponse(response, 401, loginPage(notice, this.agentTestLoginHint()));
     } else {
       jsonResponse(response, 401, { error: "Authentication required" });
     }
@@ -773,12 +768,7 @@ export class GatewayAuth {
 
   async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === "GET") {
-      textResponse(
-        response,
-        200,
-        loginPage("", this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
-      );
+      loginPageResponse(response, 200, loginPage("", this.agentTestLoginHint()));
       return;
     }
     if (request.method !== "POST") {
@@ -792,11 +782,10 @@ export class GatewayAuth {
       token = await readLoginToken(request);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
-        textResponse(
+        loginPageResponse(
           response,
           413,
           loginPage("Login request is too large.", this.agentTestLoginHint()),
-          "text/html; charset=utf-8",
         );
         return;
       }
@@ -809,20 +798,18 @@ export class GatewayAuth {
     if (outcome === "throttled") {
       const retryAfter = this.ctx.credentialThrottle.retryAfterSeconds(request);
       response.setHeader("retry-after", String(retryAfter));
-      textResponse(
+      loginPageResponse(
         response,
         429,
         loginPage(throttledMessage(retryAfter), this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
       );
       return;
     }
     if (outcome === "wrong") {
-      textResponse(
+      loginPageResponse(
         response,
         401,
         loginPage("Invalid gateway token.", this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
       );
       return;
     }
@@ -973,14 +960,13 @@ export class GatewayAuth {
       return;
     }
     if (!this.consumeAgentTestBootstrap(url.searchParams.get("code") ?? "")) {
-      textResponse(
+      loginPageResponse(
         response,
         401,
         loginPage(
           "That login link was already used or has expired. Mint a fresh one.",
           this.agentTestLoginHint(),
         ),
-        "text/html; charset=utf-8",
       );
       return;
     }

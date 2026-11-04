@@ -16,6 +16,11 @@ export interface NativeComposeQueuedPrompt {
   id: string;
   text: string;
   /**
+   * Why this prompt waits for the turn to end instead of offering Steer: the
+   * provider cannot steer, or steering it was refused. Shown under the text.
+   */
+  note?: string;
+  /**
    * Steer this prompt into the running turn, draining it from the queue.
    * Absent when there is no live turn to steer or this prompt cannot be steered.
    */
@@ -315,9 +320,24 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
                 data-queued-prompt-id={item.id}
                 className="flex min-w-0 items-center gap-3 px-3 py-1 focus-within:bg-muted/40"
               >
-                <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.text}>
-                  {item.text}
-                </span>
+                {item.note ? (
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-muted-foreground" title={item.text}>
+                      {item.text}
+                    </span>
+                    <span
+                      data-testid="compose-queue-item-note"
+                      className="truncate text-[11px] text-muted-foreground/80"
+                      title={item.note}
+                    >
+                      {item.note}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground" title={item.text}>
+                    {item.text}
+                  </span>
+                )}
                 {item.onSteer ? (
                   <button
                     type="button"

@@ -78,7 +78,8 @@ import {
   type ThinkingLevelDefaults,
 } from "./models.js";
 import { modelRuntime } from "./runtime.js";
-import { withTimeout } from "./timeout.js";
+import { cachedSessionList, rememberSessionList, sessionFilesStamp } from "./session-list-cache.js";
+import { TimeoutError, withTimeout } from "./timeout.js";
 import { applySessionEvent, providerDuration, replayNestedToolCalls } from "./translate.js";
 import {
   boundTranscript,
@@ -1278,6 +1279,15 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   }
 }
 
+/** What a list that ran out of time answers. Fixed, because it reaches the user. */
+export const SESSION_LIST_TIMEOUT_MESSAGE = "Pi took too long to read its session history";
+
+let sessionListTimeoutMs = CATALOG_TIMEOUT_MS;
+
+export function setSessionListTimeoutForTests(timeoutMs?: number): void {
+  sessionListTimeoutMs = timeoutMs ?? CATALOG_TIMEOUT_MS;
+}
+
 /**
  * Sessions this workspace can be resumed into.
  *
@@ -1285,13 +1295,32 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
  * than every session the user has ever run on this machine.
  */
 export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-  const listed = await withTimeout(
-    SessionManager.list(workingDirectory, sessionDirectory()),
-    CATALOG_TIMEOUT_MS,
-    "Pi session list timed out",
-  ).catch(() => []);
+  const read = new AbortController();
+  try {
+    return await withTimeout(
+      readResumableSessions(read.signal),
+      sessionListTimeoutMs,
+      SESSION_LIST_TIMEOUT_MESSAGE,
+    );
+  } catch (error) {
+    read.abort();
+    // A timeout is not an empty history. The route says so; the user would
+    // otherwise see no sessions and no reason.
+    if (error instanceof TimeoutError) throw error;
+    log.warn("session-list.failed", { error: formatLogError(error, { message: false }) });
+    return [];
+  }
+}
 
-  return listed.slice(0, MAX_RESUME_ENTRIES).map((info) => ({
+async function readResumableSessions(signal: AbortSignal): Promise<NativeAgentResumeEntry[]> {
+  // Asked of Pi rather than derived: its default directory's name is its own.
+  const directory = SessionManager.create(workingDirectory, sessionDirectory()).getSessionDir();
+  const stamp = await sessionFilesStamp(directory);
+  const cached = cachedSessionList(directory, stamp);
+  if (cached) return cached;
+
+  const listed = await SessionManager.list(workingDirectory, sessionDirectory(), undefined, signal);
+  const entries = listed.slice(0, MAX_RESUME_ENTRIES).map((info) => ({
     // The *path* is the resume handle: two sessions can share an id across
     // session directories, and `SessionManager.open` takes a path.
     sessionId: info.path,
@@ -1305,6 +1334,8 @@ export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]>
       ? { branchLabel: info.name?.trim() || info.firstMessage.trim().slice(0, 80) || "Fork" }
       : {}),
   }));
+  rememberSessionList(directory, stamp, entries);
+  return entries;
 }
 
 /**

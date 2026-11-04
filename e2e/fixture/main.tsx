@@ -171,6 +171,9 @@ const CoordinatorActivityFixture = lazy(async () => ({
   default: (await import("./CoordinatorActivityFixture")).CoordinatorActivityFixture,
 }));
 
+const PipelineWorkerMailFixture = lazy(async () => ({
+  default: (await import("./PipelineWorkerMailFixture")).PipelineWorkerMailFixture,
+}));
 const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
@@ -1855,6 +1858,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <MailTilesFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/pipeline-worker-mail") {
+    return (
+      <Suspense fallback={null}>
+        <PipelineWorkerMailFixture />
       </Suspense>
     );
   }

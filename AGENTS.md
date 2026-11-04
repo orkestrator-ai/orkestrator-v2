@@ -27,6 +27,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
+| The renderer's Content Security Policy, the preload sandbox, renderer and realm permissions | [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md) |
 | Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
@@ -176,9 +177,9 @@ the container image in `docker/`.
 - Register backend commands in `apps/backend/src/core/commands.ts` through
   `createCommandRegistry()`, using the existing `CommandContext` and
   `StorageService` patterns rather than renderer-only state.
-- Desktop `BrowserWindow` preloads are bundled as ESM, so the main window and
-  toolchain bootstrap windows keep `sandbox: false`. Browser preview views stay
-  sandboxed.
+- Desktop windows and views with a preload run `sandbox: true`, so preloads are
+  bundled as CommonJS and may require only `electron`; see
+  [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md).
 - Application data lives in `~/Library/Application Support/orkestrator-v2/`
   (macOS) or `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/` (Linux).
 
@@ -1063,10 +1064,9 @@ names at all. Three invariants keep it honest:
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
-Desktop `BrowserWindow` preloads are bundled as ESM, so the main window and
-toolchain bootstrap windows keep `sandbox: false`. Sandboxed Chromium evaluates
-preloads as CommonJS and cannot load `import` from `electron`. Browser preview
-views stay sandboxed.
+Every desktop window and view runs `sandbox: true`. Sandboxed Chromium evaluates
+a preload as CommonJS whose `require` loads only `electron`, so `bundleElectron`
+builds preloads separately from the ESM main process.
 
 ### Docker
 
@@ -1477,6 +1477,13 @@ alive to supervise Vite, Electron, the backend, bridges, and their process trees
 mise run dev:test --profile agent-settings-dialog --fixture
 ```
 
+On Linux, a run with no terminal (an agent's shell) starts Electron headless, so
+no window opens on the host's desktop; `browserUrl` still serves the app. If your
+shell has a pseudo-terminal, pass `--headless`. For native-window QA, pass
+`--no-headless` and use a disposable display. The one-shot isolated runners are
+always headless. See
+[Headless Electron](docs/development/agent-testing.md#headless-electron).
+
 Startup is idempotent: running the same command for a live profile reports the
 existing instance instead of creating a second backend. In another command
 session, discover its state:
@@ -1545,7 +1552,9 @@ mise run test:logged -- --name agent-browser -- mise run test:agent:browser
 Use the optional suites only when their layer is in scope:
 
 ```bash
-# Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown
+# Real Electron main process, preload, IPC, clipboard, title, userData, and shutdown.
+# These launch their own Electron and need a display; on a shared Linux host use a
+# disposable one (see "Electron specs and their display" in agent-testing.md).
 mise run test:logged -- --name agent-electron -- mise run test:agent:electron
 
 # Requires a profile started with --fixture-environments local,container

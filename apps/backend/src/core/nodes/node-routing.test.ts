@@ -40,6 +40,7 @@ test("controller worker surfaces are node-link only, never workspace-grant acces
     "launch_controller_terminal",
     "open_controller_browser",
     "edit_controller_worker_tab",
+    "restart_controller_build_pipeline_step",
   ]) {
     expect(isNodeExcludedCommand(command)).toBe(false);
     expect(isWorkspaceExcludedCommand(command)).toBe(true);

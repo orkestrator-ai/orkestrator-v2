@@ -6,7 +6,10 @@ import { useVirtuosoScrollState } from "@/hooks";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
-import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import {
+  type CoalescedRowAliases,
+  findPreviousNativeMessage,
+} from "@/lib/chat/native-message-adapters";
 import { findNativeAgentAdapter } from "@/components/native-agent/adapter";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
@@ -50,6 +53,9 @@ export function GraphActivationTranscript({
   const [fallbackCreatedAt] = useState(() => new Date().toISOString());
   const agent = session?.agent;
   const messages = entry?.view?.status === "found" ? entry.view.messages : undefined;
+  // Records are parsed afresh on every read, so a coalesced run's surviving id
+  // is remembered by member id here.
+  const [coalescedAliases] = useState<CoalescedRowAliases>(() => new Map());
   const transcript = useMemo(
     () =>
       agent
@@ -57,9 +63,18 @@ export function GraphActivationTranscript({
             messages,
             agent,
             session?.startedAt ?? activation.startedAt ?? fallbackCreatedAt,
+            [],
+            coalescedAliases,
           )
         : [],
-    [agent, messages, session?.startedAt, activation.startedAt, fallbackCreatedAt],
+    [
+      agent,
+      messages,
+      session?.startedAt,
+      activation.startedAt,
+      fallbackCreatedAt,
+      coalescedAliases,
+    ],
   );
   const sessionKey = session?.sessionKey;
   const providerSessionId = session?.providerSessionId;

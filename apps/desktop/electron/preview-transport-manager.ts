@@ -39,7 +39,7 @@ import {
   type ExternalForwardTimers,
   type ExternalForwardUpstream,
 } from "./preview-external-forward.js";
-import { openPreviewTunnel } from "./preview-tunnel-client.js";
+import { PreviewTunnelConnector } from "./preview-tunnel-session.js";
 import { createLogger, type Logger, type LogEventOf } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");
@@ -101,6 +101,8 @@ export interface PreviewTransportManagerOptions {
   externalForwardIdleMs?: number;
   externalForwardTimers?: ExternalForwardTimers;
   poolMax?: number;
+  /** A tunnel session with no connections closes after this long; defaults to 30 s. */
+  tunnelSessionIdleMs?: number;
   onStateChange?: (serviceKey: string) => void;
   logger?: Pick<Logger<LogEventOf<"preview">>, "warn">;
   /** Resolve a host name to its addresses (injectable in tests). */
@@ -133,6 +135,8 @@ interface ServiceGroup {
   forward: PreviewExternalForward | null;
   forwarding: Promise<PreviewExternalForward> | null;
   pool: Array<{ socket: Duplex; idle: ReturnType<typeof setTimeout> }>;
+  /** Multiplexed tunnel sessions, one per attachment (v1 against an older backend). */
+  tunnel: PreviewTunnelConnector;
   retireTimer: ReturnType<typeof setTimeout> | null;
   renewTimer: ReturnType<typeof setInterval> | null;
   state: BrowserPreviewTransportState;
@@ -413,11 +417,22 @@ export class PreviewTransportManager {
   stats() {
     let sockets = 0;
     let pooled = 0;
+    let tunnelSessions = 0;
+    let tunnelStreams = 0;
     for (const group of this.groups.values()) {
       sockets += group.sockets.size;
       pooled += group.pool.length;
+      const tunnel = group.tunnel.stats();
+      tunnelSessions += tunnel.sessions;
+      tunnelStreams += tunnel.streams;
     }
-    return { services: this.groups.size, ingressSockets: sockets, pooledUpstreams: pooled };
+    return {
+      services: this.groups.size,
+      ingressSockets: sockets,
+      pooledUpstreams: pooled,
+      tunnelSessions,
+      tunnelStreams,
+    };
   }
 
   /** Service partitions this transport's services hold, starting ones included. */
@@ -515,6 +530,7 @@ export class PreviewTransportManager {
       forward: null,
       forwarding: null,
       pool: [],
+      tunnel: new PreviewTunnelConnector({ sessionIdleMs: this.options.tunnelSessionIdleMs }),
       retireTimer: null,
       renewTimer: null,
       state: { mode: "desktop-tunnel", state: "connecting" },
@@ -595,8 +611,9 @@ export class PreviewTransportManager {
         throw previewFailure("backend-unavailable");
       }
       group.attachment = attachment;
-      // Pooled connections belong to the old attachment and generation.
+      // Pooled connections and sessions belong to the old attachment and generation.
       this.drainPool(group);
+      group.tunnel.retireSessions();
       if (previous) {
         void this.options
           .invoke("release_preview_attachment", { attachmentId: previous.attachmentId })
@@ -900,12 +917,15 @@ export class PreviewTransportManager {
     const url = this.options.tunnelUrl();
     if (!url) throw previewFailure("backend-unavailable");
     const open = async (attachment: PreviewAttachmentDescriptor) => {
-      const stream = await openPreviewTunnel({
-        url,
-        attachmentId: attachment.attachmentId,
-        credential: attachment.tunnel!.credential,
-        signal,
-      });
+      const stream = await group.tunnel.open(
+        {
+          url,
+          attachmentId: attachment.attachmentId,
+          credential: attachment.tunnel!.credential,
+          signal,
+        },
+        attachment.tunnel!.multiplexSubprotocol !== undefined,
+      );
       this.observe("desktop.connect_ms", stream.openMs);
       this.restoreReady(group);
       return stream;
@@ -1097,6 +1117,7 @@ export class PreviewTransportManager {
     if (group.retireTimer) clearTimeout(group.retireTimer);
     if (group.renewTimer) clearInterval(group.renewTimer);
     this.drainPool(group);
+    group.tunnel.close();
     const forward = group.forward;
     group.forward = null;
     await forward?.close();

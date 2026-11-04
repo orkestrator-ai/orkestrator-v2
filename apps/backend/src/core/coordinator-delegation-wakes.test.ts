@@ -12,6 +12,8 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
+
 import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { runCommand } from "./shell.js";
@@ -368,7 +370,7 @@ describe("a delegation that keeps failing", () => {
     expect(woken.wakeFailedAt).toBeUndefined();
   });
 
-  test("is retired even when the notice cannot be sent", async () => {
+  test("keeps the wake owed when the retirement notice fails, then delivers on recovery", async () => {
     const world = await create({ delegations: { wakeRetireMinMs: 0 } });
     const worker = await world.addEnvironment("worker", { launched: true });
     await closeDelegation(world, worker);
@@ -377,7 +379,32 @@ describe("a delegation that keeps failing", () => {
     await runPasses(world, RETIRE_ATTEMPTS);
     spy.mockRestore();
 
-    expect((await delegation(world, worker)).wakeFailedAt).toBeString();
+    expect((await delegation(world, worker)).wakeFailedAt).toBeUndefined();
+    expect((await delegation(world, worker)).wokenAt).toBeUndefined();
+    const main = await world.main();
+    await runPasses(world, 1);
+    expect((await delegation(world, worker)).wokenAt).toBeString();
+    expect(await inboxSubjects(world, main)).toContain("Worker worker finished");
+  });
+
+  test("keeps the wake owed without a main, then notifies a later main", async () => {
+    const world = await create({ delegations: { wakeRetireMinMs: 0 } });
+    const main = await world.main();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await closeDelegation(world, worker);
+    await world.coordinator.closeConversation(world.projectId, main.conversationId!);
+    const ensure = spyOn(world.coordinator, "ensureMainConversation").mockRejectedValue(
+      new Error("cannot open main"),
+    );
+    await runPasses(world, RETIRE_ATTEMPTS);
+    expect((await delegation(world, worker)).wokenAt).toBeUndefined();
+    expect((await delegation(world, worker)).wakeFailedAt).toBeUndefined();
+    ensure.mockRestore();
+    await world.coordinator.ensureMainConversation(world.projectId);
+    const later = await world.main();
+    await runPasses(world, 1);
+    expect((await delegation(world, worker)).wokenAt).toBeString();
+    expect(await inboxSubjects(world, later)).toContain("Worker worker finished");
   });
 
   test("a report still held for it is released as ordinary mail on the sweep", async () => {
@@ -519,6 +546,31 @@ describe("a delegation closing during a pass", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
     passes.mockRestore();
+  });
+
+  test("a request between the last pass and promise cleanup starts a new pass", async () => {
+    const world = await create();
+    const worker = await world.addEnvironment("worker", { launched: true });
+    await closeDelegation(world, worker);
+    const internal = world.coordinator as unknown as {
+      deliverDelegationWakesOnce(): Promise<void>;
+    };
+    let next!: Promise<void>;
+    const pass = spyOn(internal, "deliverDelegationWakesOnce");
+    pass.mockImplementationOnce(() =>
+      Promise.resolve().then(() => {
+        queueMicrotask(() =>
+          queueMicrotask(() => {
+            next = world.coordinator.deliverDelegationWakes();
+          }),
+        );
+      }),
+    );
+    await world.coordinator.deliverDelegationWakes();
+    await next;
+    expect(pass).toHaveBeenCalledTimes(2);
+    expect((await delegation(world, worker)).wokenAt).toBeString();
+    pass.mockRestore();
   });
 
   test("a call with nothing running starts a pass of its own", async () => {
@@ -721,4 +773,50 @@ test("a new service forgets the count: a restart only restarts it", async () => 
   failing.mockRestore();
 
   expect((await delegation(world, worker)).wakeFailedAt).toBeUndefined();
+});
+
+test("reconcile and wake-pass logs report scoped recovery", async () => {
+  const world = await create();
+  const worker = await world.addEnvironment("worker", { launched: true });
+  const logs = captureLogs();
+  const read = spyOn(world.storage, "getEnvironment").mockRejectedValueOnce(
+    new Error("read fault"),
+  );
+  const sync = spyOn(world.storage, "synchronizeAgentMailboxes").mockRejectedValueOnce(
+    new Error("mail fault"),
+  );
+  const list = spyOn(world.coordinator, "deliverDelegationWakes").mockRejectedValueOnce(
+    new Error("list fault"),
+  );
+  try {
+    await world.coordinator.reconcileWorkerDelegations();
+    await world.coordinator.reconcileWorkerDelegations();
+    expect(logs.records()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "throttle.recovered",
+          fields: expect.objectContaining({
+            site: "mail.reconcile-failed",
+            scope: world.coordinatorId,
+          }),
+        }),
+        expect.objectContaining({
+          event: "throttle.recovered",
+          fields: expect.objectContaining({
+            site: "delegation.reconcile-failed",
+            scope: `launch-${worker.environmentId}`,
+          }),
+        }),
+        expect.objectContaining({
+          event: "throttle.recovered",
+          fields: expect.objectContaining({ site: "delegation.wake-pass-failed" }),
+        }),
+      ]),
+    );
+  } finally {
+    read.mockRestore();
+    list.mockRestore();
+    sync.mockRestore();
+    logs.restore();
+  }
 });

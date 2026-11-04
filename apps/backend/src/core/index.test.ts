@@ -2157,7 +2157,7 @@ test("turn-end observation finishes before the same-edge prompt queue drain", as
   }
 });
 
-test("production activity wiring forwards only worker waiting/working edges and preserves the tab key", async () => {
+test("production activity wiring forwards worker waiting/idle/working edges and preserves the tab key", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-edges-"));
   const backend = new OrkestratorBackend({
     dataDir,
@@ -2179,12 +2179,14 @@ test("production activity wiring forwards only worker waiting/working edges and 
       owner: "environment",
     };
     const transition = internal.nativeAgents.options.onActivityTransition;
-    for (const state of ["waiting", "working"]) transition({ ...base, state });
-    for (const state of ["idle", "unknown"]) transition({ ...base, state });
+    for (const state of ["waiting", "idle", "waiting", "working"]) transition({ ...base, state });
+    for (const state of ["unknown"]) transition({ ...base, state });
     transition({ ...base, state: "waiting", owner: "coordinator" });
     transition({ ...base, state: "waiting", logicalSessionKey: "env-other:tab:two" });
     transition({ ...base, state: "waiting", logicalSessionKey: undefined });
     expect(note.mock.calls).toEqual([
+      [{ environmentId: "env:one", tabId: "tab:two", state: "waiting" }],
+      [{ environmentId: "env:one", tabId: "tab:two", state: "idle" }],
       [{ environmentId: "env:one", tabId: "tab:two", state: "waiting" }],
       [{ environmentId: "env:one", tabId: "tab:two", state: "working" }],
     ]);

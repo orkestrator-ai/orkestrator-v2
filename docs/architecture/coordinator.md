@@ -1640,9 +1640,11 @@ that queue.
 
 A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
 run on turn ends, so the time bound stops a short fault retiring every wake owed.
-The coordinator gets one notice, on a best-effort basis, since it can fail for the
-same reason; a report still held is released as ordinary mail on the next sweep;
-and the delegation records `wakeFailedAt` with `wokenAt`, keeping `state` as the
+The retirement notice must reach the mail store first. If sending fails or no main
+is open, the wake stays owed for a later pass or main. After storing the notice,
+the pass rechecks that the main is still open before stamping retirement. A report
+still held is released as ordinary mail on the next sweep, and the delegation
+records `wakeFailedAt` with `wokenAt`, keeping `state` as the
 worker's own outcome. The count is in memory, so a restart restarts it. Messaging
 turned off, or no room for a new main under the conversation limit, is a state the
 user can change rather than a fault: such a wake is held, not counted, and goes out

@@ -965,9 +965,13 @@ export class CoordinatorService {
         const delegation = association.delegation;
         if (!delegation) continue;
         if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
-        await this.settleWorkerDelegation(association, worker.state).catch((error: unknown) => {
-          this.noteDelegationReconcileFailure(association.id, error);
-        });
+        await this.settleWorkerDelegation(association, worker.state)
+          .then(() => {
+            log.recovered("delegation.reconcile-failed", association.id);
+          })
+          .catch((error: unknown) => {
+            this.noteDelegationReconcileFailure(association.id, error);
+          });
       }
     });
     await this.deliverDelegationWakes();
@@ -1144,25 +1148,37 @@ export class CoordinatorService {
     for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
       const main = coordinatorMainConversation(workspace);
       if (!main) continue;
-      await this.reconcileMainMail(workspace, main).catch((error: unknown) => {
-        log.throttled("warn", "mail.reconcile-failed", {
-          scope: workspace.id,
-          error,
-          fields: () => ({ coordinatorId: workspace.id, error: formatLogError(error) }),
+      await this.reconcileMainMail(workspace, main)
+        .then(() => {
+          log.recovered("mail.reconcile-failed", workspace.id);
+        })
+        .catch((error: unknown) => {
+          log.throttled("warn", "mail.reconcile-failed", {
+            scope: workspace.id,
+            error,
+            fields: () => ({ coordinatorId: workspace.id, error: formatLogError(error) }),
+          });
         });
-      });
     }
     for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
-      await this.reconcileWorkerDelegation(association).catch((error: unknown) => {
-        this.noteDelegationReconcileFailure(association.id, error);
-      });
+      await this.reconcileWorkerDelegation(association)
+        .then(() => {
+          log.recovered("delegation.reconcile-failed", association.id);
+        })
+        .catch((error: unknown) => {
+          this.noteDelegationReconcileFailure(association.id, error);
+        });
     }
-    await this.deliverDelegationWakes().catch((error: unknown) => {
-      log.throttled("warn", "delegation.wake-pass-failed", {
-        error,
-        fields: () => ({ error: formatLogError(error, { stack: false }) }),
+    await this.deliverDelegationWakes()
+      .then(() => {
+        log.recovered("delegation.wake-pass-failed");
+      })
+      .catch((error: unknown) => {
+        log.throttled("warn", "delegation.wake-pass-failed", {
+          error,
+          fields: () => ({ error: formatLogError(error, { stack: false }) }),
+        });
       });
-    });
     const owed = new Set(
       [
         ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
@@ -1223,9 +1239,13 @@ export class CoordinatorService {
       (association) => association.nodeId === nodeId && association.resourceId === environmentId,
     );
     for (const association of open) {
-      await this.reconcileRemoteDelegation(association).catch((error: unknown) => {
-        this.noteDelegationReconcileFailure(association.id, error);
-      });
+      await this.reconcileRemoteDelegation(association)
+        .then(() => {
+          log.recovered("delegation.reconcile-failed", association.id);
+        })
+        .catch((error: unknown) => {
+          this.noteDelegationReconcileFailure(association.id, error);
+        });
     }
     if (open.length > 0) await this.deliverDelegationWakes();
   }
@@ -1324,6 +1344,9 @@ export class CoordinatorService {
       this.delegationWakeRerun = false;
       await this.deliverDelegationWakesOnce();
     } while (this.delegationWakeRerun);
+    // Publish inactivity in the same microtask as the final rerun check.
+    // The old promise's finally must not clear a new pass started after this.
+    this.delegationWakeDelivery = null;
   }
 
   private async deliverDelegationWakesOnce(): Promise<void> {
@@ -1383,9 +1406,10 @@ export class CoordinatorService {
   /**
    * Stop retrying a wake that keeps failing, and tell the coordinator once.
    *
-   * The notice goes first and is best effort, since it can fail for the same
-   * reason the wake did. It is idempotent per delegation, so a crash before the
-   * mark below only repeats the attempt. It goes to the open main rather than
+   * The notice must be stored before retirement, since it can fail for the same
+   * reason the wake did. A missing main or failed send leaves the wake owed.
+   * It is idempotent per delegation, so a crash before the mark below only
+   * repeats the attempt. It goes to the open main rather than
    * through `ensureMainConversation`, which may be what keeps failing. The mark
    * makes nothing owed any more, so a report still held for this delegation is
    * released as ordinary mail on the sweep (`releaseOrphanedDelegationHolds`).
@@ -1401,54 +1425,56 @@ export class CoordinatorService {
       association.coordinatorId,
     );
     const main = owner ? coordinatorMainConversation(owner) : undefined;
-    if (owner && main) {
-      const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
-      try {
-        await this.storage.sendAgentMail(
-          {
-            kind: "system",
-            projectId: association.projectId,
-            source: "workflow",
-            resourceId: association.resourceId,
-          },
-          {
-            requestId: `delegation-wake-failed-${association.id}`,
-            toEnvironmentId: coordinatorRuntimeId(owner.id, main.id),
-            toTabId: main.tabId,
-            subject: `Worker ${association.resourceId} ${delegation.state}: wake failed`,
-            body:
-              `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ended its delegation as ${delegation.state}, but waking you for it failed ${attempts} times (${kind}), so it will not be tried again. ` +
-              `A report it sent, if any, is released as ordinary mail. Read its state yourself before relying on it.` +
-              `\n\nRead more: \`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
-          },
-          {
-            notice: {
-              resource: {
-                kind: "agent-tab",
-                id: delegation.workerTabId,
-                environmentId: association.resourceId,
-                tabId: delegation.workerTabId,
-                label: association.resourceId,
-              },
-              state: delegation.state,
-              tone: "failure",
+    if (!owner || !main) return;
+    const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
+    try {
+      await this.storage.sendAgentMail(
+        {
+          kind: "system",
+          projectId: association.projectId,
+          source: "workflow",
+          resourceId: association.resourceId,
+        },
+        {
+          requestId: `delegation-wake-failed-${association.id}`,
+          toEnvironmentId: coordinatorRuntimeId(owner.id, main.id),
+          toTabId: main.tabId,
+          subject: `Worker ${association.resourceId} ${delegation.state}: wake failed`,
+          body:
+            `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ended its delegation as ${delegation.state}, but waking you for it failed ${attempts} times (${kind}), so it will not be tried again. ` +
+            `A report it sent, if any, is released as ordinary mail. Read its state yourself before relying on it.` +
+            `\n\nRead more: \`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
+        },
+        {
+          notice: {
+            resource: {
+              kind: "agent-tab",
+              id: delegation.workerTabId,
+              environmentId: association.resourceId,
+              tabId: delegation.workerTabId,
+              label: association.resourceId,
             },
+            state: delegation.state,
+            tone: "failure",
           },
-        );
-      } catch (error) {
-        // Messaging was turned off while this was failing: hold, as for the wake.
-        if (wakeHeldByUserState(error)) {
-          this.delegationWakeFailures.delete(association.id);
-          return;
-        }
-        if (!(error instanceof AgentMailError && error.code === "idempotency-conflict")) {
-          log.warn("delegation.wake-retire-notice-failed", {
-            associationId: association.id,
-            kind: logErrorKind(error),
-          });
-        }
+        },
+      );
+    } catch (error) {
+      // Messaging was turned off while this was failing: hold, as for the wake.
+      if (wakeHeldByUserState(error)) {
+        this.delegationWakeFailures.delete(association.id);
+        return;
+      }
+      if (!(error instanceof AgentMailError && error.code === "idempotency-conflict")) {
+        log.warn("delegation.wake-retire-notice-failed", {
+          associationId: association.id,
+          kind: logErrorKind(error),
+        });
+        return;
       }
     }
+    const latest = await this.storage.coordinators.getCoordinatorWorkspaceById(owner.id);
+    if (!latest?.conversations.some((item) => item.id === main.id && !item.closedAt)) return;
     await this.storage.coordinators.markCoordinatorDelegationWakeFailed(association.id);
     this.delegationWakeFailures.delete(association.id);
     log.warn("delegation.wake-retired", { associationId: association.id, attempts, kind });

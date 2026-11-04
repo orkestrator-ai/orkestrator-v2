@@ -403,7 +403,7 @@ function GalleryButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 min-w-8 items-center justify-center rounded px-1.5 text-muted-foreground outline-none hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 [&_svg]:size-4",
+        "inline-flex h-8 min-w-8 items-center justify-center rounded px-1.5 text-muted-foreground outline-none hover:bg-elevated hover:text-foreground focus-hairline disabled:opacity-40 [&_svg]:size-4",
         pressed && "bg-elevated text-foreground",
       )}
     >

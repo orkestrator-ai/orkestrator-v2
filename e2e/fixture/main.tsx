@@ -1,3 +1,4 @@
+import { FocusVisibilityFixture } from "./FocusVisibilityFixture";
 import { SidebarMotionFixture } from "../../apps/web/src/test/SidebarMotionFixture";
 import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { SuborkGroupFixture } from "./SuborkGroupFixture";
@@ -751,7 +752,7 @@ function MultiReviewAutoFixFixture() {
       <MultiReviewLaunchDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        defaultAutoFix={saved.multiReview?.autoFix}
+        defaultAutoAddressFindings={saved.multiReview?.autoFix}
         defaultAutoPr={saved.multiReview?.autoPr}
         defaultAgent="claude"
         catalog={reviewModelCatalog}
@@ -765,7 +766,7 @@ function MultiReviewAutoFixFixture() {
           Complete consolidation
         </button>
       )}
-      {consolidated && selection?.autoFix && <div role="tab">Fix</div>}
+      {consolidated && selection?.autoFix && <div role="tab">Address Findings</div>}
       {consolidated && selection?.autoFix && (
         <button type="button" onClick={() => setFixed(true)}>
           Complete fix
@@ -2056,6 +2057,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/remember-rule-panel") return <RememberRulePanelFixture />;
+  if (window.location.pathname === "/focus-visibility") return <FocusVisibilityFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
   if (window.location.pathname === "/markdown-editor-diagram")

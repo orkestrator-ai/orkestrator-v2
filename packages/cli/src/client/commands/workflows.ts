@@ -375,22 +375,34 @@ export const workflowCommands: CommandSpec[] = [
         description: `Preparation and consolidation model: ${SELECTION_HELP}`,
       },
       {
+        name: "address-findings-model",
+        kind: "string",
+        valueName: "SELECTION",
+        description: `Address Findings model: ${SELECTION_HELP}`,
+      },
+      {
         name: "fix-model",
         kind: "string",
         valueName: "SELECTION",
-        description: `Fix model: ${SELECTION_HELP}`,
+        description: "Former name of --address-findings-model.",
+      },
+      {
+        name: "auto-address-findings",
+        kind: "boolean",
+        negatable: true,
+        description: "Start Address Findings when consolidation reports findings.",
       },
       {
         name: "auto-fix",
         kind: "boolean",
         negatable: true,
-        description: "Start the Fix when consolidation reports findings.",
+        description: "Former name of --auto-address-findings.",
       },
       {
         name: "auto-pr",
         kind: "boolean",
         negatable: true,
-        description: "Open the pull request after the Fix (never merges).",
+        description: "Open the pull request after Address Findings (never merges).",
       },
       {
         name: "target-branch",
@@ -408,6 +420,10 @@ export const workflowCommands: CommandSpec[] = [
     ],
     inputFields: {
       reviewer: "reviewers",
+      "address-findings-model": "fixModel",
+      "fix-model": "fixModel",
+      "auto-address-findings": "autoFix",
+      "auto-fix": "autoFix",
       focus: "reviewers",
       "focus-file": "reviewers",
       "instruction-file": "reviewInstruction",
@@ -424,8 +440,13 @@ export const workflowCommands: CommandSpec[] = [
         return lens ? { ...row, lens } : row;
       });
       const reviewModel = stringOption(options, "review-model");
-      const fixModel = stringOption(options, "fix-model");
-      const autoFix = optionalBoolean(options, "auto-fix");
+      const addressFindingsFlag = stringOption(options, "address-findings-model")
+        ? "--address-findings-model"
+        : "--fix-model";
+      const fixModel =
+        stringOption(options, "address-findings-model") ?? stringOption(options, "fix-model");
+      const autoFix =
+        optionalBoolean(options, "auto-address-findings") ?? optionalBoolean(options, "auto-fix");
       const autoPr = optionalBoolean(options, "auto-pr");
       const instructionFile = stringOption(options, "instruction-file");
       const reviewInstruction =
@@ -445,7 +466,7 @@ export const workflowCommands: CommandSpec[] = [
           environmentId: parsed.positionals.environment,
           ...(reviewers.length ? { reviewers } : {}),
           ...(reviewModel ? { reviewModel: parseSelection(reviewModel, "--review-model") } : {}),
-          ...(fixModel ? { fixModel: parseSelection(fixModel, "--fix-model") } : {}),
+          ...(fixModel ? { fixModel: parseSelection(fixModel, addressFindingsFlag) } : {}),
           ...(autoFix !== undefined ? { autoFix } : {}),
           ...(autoPr !== undefined ? { autoPr } : {}),
           ...(options["target-branch"] !== undefined
@@ -522,20 +543,31 @@ export const workflowCommands: CommandSpec[] = [
   {
     path: ["review", "open"],
     action: "review.open",
-    summary: "Open or focus a Multi Review's tab (--fix: its Fix tab); starts no work.",
+    summary:
+      "Open or focus a Multi Review's tab (--address-findings: its Address Findings tab); starts no work.",
     positionals: [{ name: "workflow", required: true, description: "Multi Review ID." }],
     options: [
-      { name: "fix", kind: "boolean", description: "Open the Fix session tab instead." },
+      {
+        name: "address-findings",
+        kind: "boolean",
+        description: "Open the Address Findings session tab instead.",
+      },
+      { name: "fix", kind: "boolean", description: "Former name of --address-findings." },
       REQUEST_ID_OPTION,
     ],
-    inputFields: { workflow: "workflowId", fix: "surface" },
+    inputFields: { workflow: "workflowId", fix: "surface", "address-findings": "surface" },
     idOutput: "workflow ID",
     async run(context, parsed) {
       const workflowId = parsed.positionals.workflow as string;
       const { session, result, receipt, warnings } = await submit<ReviewActionResult>(
         context,
         "review.open",
-        { workflowId, ...(parsed.options.fix === true ? { surface: "fix" } : {}) },
+        {
+          workflowId,
+          ...(parsed.options.fix === true || parsed.options["address-findings"] === true
+            ? { surface: "fix" }
+            : {}),
+        },
         parsed.options,
       );
       return {
@@ -552,7 +584,7 @@ export const workflowCommands: CommandSpec[] = [
   reviewMutation(
     "address",
     "review.address",
-    "Address a Multi Review's findings: hand them to its Fix session.",
+    "Address a Multi Review's findings: hand them to its Address Findings session.",
   ),
   reviewMutation("cancel", "review.cancel", "Cancel a running Multi Review; its record is kept."),
   agentButtonCommand("review.start"),

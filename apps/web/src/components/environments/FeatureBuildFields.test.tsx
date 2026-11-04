@@ -99,7 +99,7 @@ describe("FeatureBuildFields intent guidance", () => {
     expect(screen.getByRole("button", { name: "A feature" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "With a prompt" })).toBeTruthy();
     expect(screen.getByTestId("build-intent-guidance").textContent).toBe(
-      "Creates a pipeline environment: build, review, fix, verify, PR and conflict resolution run automatically.",
+      "Creates a pipeline environment: build, review, address findings, verify, rework, PR and conflict resolution run automatically.",
     );
   });
 

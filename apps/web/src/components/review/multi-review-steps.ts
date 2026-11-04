@@ -11,7 +11,7 @@ import type {
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import {
-  MULTI_REVIEW_FIX_TAB_TITLE,
+  MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   MULTI_REVIEW_REVIEW_TAB_TITLE,
   multiReviewSharedSessionStep,
 } from "@orkestrator/protocol/multi-review";
@@ -35,7 +35,7 @@ import type { MultiReviewFlowState } from "./multi-review-flow";
  * provider session was deleted, the native tab asks the backend to seed and
  * record a fresh replacement before exposing it to the user.
  */
-export function multiReviewFixSessionTabOptions(
+export function multiReviewAddressFindingsSessionTabOptions(
   workflow: MultiReviewWorkflow,
 ): CreateTabOptions | null {
   const session = workflow.fixSession;
@@ -45,7 +45,7 @@ export function multiReviewFixSessionTabOptions(
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
-    displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
+    displayTitle: MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
     isReviewTab: true,
     hideStructuredOutput: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
@@ -74,7 +74,7 @@ export function multiReviewReviewSession(
   );
 }
 
-/** Opens a preparation or consolidation conversation, never the Fix tab. */
+/** Opens a preparation or consolidation conversation, never the Address Findings tab. */
 export function multiReviewReviewSessionTabOptions(
   workflow: MultiReviewWorkflow,
   step: "prepare" | "consolidate" = "consolidate",
@@ -196,8 +196,8 @@ export function consolidationStep(workflow: MultiReviewWorkflow): MultiReviewSte
   return step("Not started", "not-started");
 }
 
-/** The fix turn is the last step, and only the user can start it. */
-export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
+/** The Address Findings turn is the last step, and only the user can start it. */
+export function addressFindingsStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
   if (workflow.phase === "completed") return step("Complete", "complete");
   if (workflow.phase === "fixing") return step("Addressing findings", "running");
   if (workflow.phase === "paused" && workflow.pausedStep === "fix") {
@@ -210,7 +210,7 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
     return step("Waiting for consolidation", "not-started");
   }
   if (workflow.phase === "interactive") {
-    if (workflow.addressPromptPending === true) return step("Starting fix session", "running");
+    if (workflow.addressPromptPending === true) return step("Starting session", "running");
     if (
       workflow.fixSession?.status === "idle" &&
       workflow.stepRuntimes?.fix?.completedAt !== undefined
@@ -218,7 +218,7 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
       return step("Complete", "complete");
     if (workflow.fixSession?.status === "failed") return step("Failed", "failed");
     if (workflow.fixSession?.status === "cancelled") return step("Cancelled", "cancelled");
-    return step("Interactive fix session", "running");
+    return step("Interactive session", "running");
   }
   const cancelled = cancellationStep(workflow.phase);
   if (cancelled) return cancelled;
@@ -226,7 +226,7 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
     workflow.activeRequest?.kind === "fix" ||
     workflow.fixResult !== undefined ||
     workflow.addressPromptPending === true ||
-    // A graph-engine Fix that started (item 301), whose run then ended.
+    // A graph-engine Address Findings that started (item 301), whose run then ended.
     (workflow.engine === "graph" && workflow.stepRuntimes?.fix !== undefined) ||
     (workflow.engine === "graph" && workflow.fixSession?.status === "failed");
   if (workflow.phase === "failed" && dispatched) return step("Failed", "failed");
@@ -239,7 +239,7 @@ export type MultiReviewStepKey = "package" | "consolidation" | "fix";
 /**
  * Why a failed step failed, for its node. A step is only shown failed when the
  * workflow's failure belongs to it, so the workflow error is that step's; an
- * interactive Fix session that stopped records its own.
+ * interactive Address Findings session that stopped records its own.
  */
 export function multiReviewStepError(
   workflow: MultiReviewWorkflow,
@@ -260,16 +260,18 @@ const STEP_KEY: Record<MultiReviewStepKind, MultiReviewStepKey> = {
 };
 
 /**
- * Which step owns the fix session's clock. The three steps share one provider
+ * Which step owns the Address Findings session's clock. The three steps share one provider
  * session and every dispatch resets `startedAt`, so a runtime shown against the
  * wrong card would be the next step's elapsed time under a settled step's name.
  */
-export function fixSessionRuntimeStep(workflow: MultiReviewWorkflow): MultiReviewStepKey | null {
+export function addressFindingsSessionRuntimeStep(
+  workflow: MultiReviewWorkflow,
+): MultiReviewStepKey | null {
   const kind = multiReviewSharedSessionStep(workflow);
   return kind ? STEP_KEY[kind] : null;
 }
 
-export function fixSessionRuntimeSummary(
+export function addressFindingsSessionRuntimeSummary(
   session: NonNullable<MultiReviewWorkflow["fixSession"]>,
   now = Date.now(),
 ): string | null {
@@ -285,7 +287,7 @@ export function fixSessionRuntimeSummary(
 export type FixSessionOpenOutcome =
   "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
 
-/** Status copy for the backend-owned PR launch that follows a successful Fix or a clean report. */
+/** Status copy for the backend-owned PR launch that follows a successful Address Findings or a clean report. */
 export function autoPrLaunchNotice(
   launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>,
   /** A graph-engine review (item 301): a system step, not an agent tab, opens it. */
@@ -360,7 +362,7 @@ export function pullRequestStep({
   prUrl: string | null;
   prState: PrState | null;
   agentPhase: NativeAgentTurnPhase | undefined;
-  /** The Fix, or the clean report that stood in for it, finished. */
+  /** Address Findings, or the clean report that stood in for it, finished. */
   upstreamComplete: boolean;
   /**
    * A graph-engine review (item 301): the graph run's `open-pull-request`
@@ -444,7 +446,7 @@ export function pullRequestStep({
       return autoPr
         ? {
             state: "not-started",
-            label: "The PR agent starts once the Fix completes",
+            label: "The PR agent starts once Address Findings completes",
             pendingLabel: "waiting",
           }
         : {
@@ -461,19 +463,19 @@ export function pullRequestDetail(prUrl: string | null, targetBranch: string): s
   return number ? `#${number} · into ${targetBranch}` : `into ${targetBranch}`;
 }
 
-export function openFixSessionError(
+export function openAddressFindingsSessionError(
   outcome: Exclude<FixSessionOpenOutcome, "opened">,
   source: "automatic" | "manual",
 ): string {
   if (outcome === "no-session") return "The consolidation session is no longer available";
   if (outcome === "environment-unavailable") {
     return source === "automatic"
-      ? "The fix request was delivered, but this environment cannot open agent tabs right now. When it is ready, use Open fix session."
-      : "The environment is not ready to open the fix session.";
+      ? "The Address Findings request was delivered, but this environment cannot open agent tabs right now. When it is ready, use Open Address Findings session."
+      : "The environment is not ready to open the Address Findings session.";
   }
   return source === "automatic"
-    ? "The fix request was delivered, but its tab could not be opened. Close another tab if needed, then use Open fix session."
-    : "The fix session tab could not be opened. Close another tab if the workspace is at its limit, then try again.";
+    ? "The Address Findings request was delivered, but its tab could not be opened. Close another tab if needed, then use Open Address Findings session."
+    : "The Address Findings session tab could not be opened. Close another tab if the workspace is at its limit, then try again.";
 }
 
 /**
@@ -557,7 +559,7 @@ const STEP_REQUEST_KIND: Record<MultiReviewStepKey, MultiReviewStepKind> = {
 };
 
 /**
- * Preparation, consolidation and the fix turn each report their own runtime.
+ * Preparation, consolidation and the Address Findings turn each report their own runtime.
  *
  * The backend records them per step because the three share one provider
  * session whose clock and token counter every dispatch resets. Workflows that
@@ -576,14 +578,14 @@ export function multiReviewStepRuntimeParts(
     const runtime = workflow.stepRuntimes[STEP_REQUEST_KIND[step]];
     return runtime ? runtimeParts(runtime, running, now) : null;
   }
-  if (fixSessionRuntimeStep(workflow) !== step) return null;
+  if (addressFindingsSessionRuntimeStep(workflow) !== step) return null;
   const session =
     step === "fix"
       ? workflow.fixSession
       : (workflow.reviewSession ??
         (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession));
   if (!session) return null;
-  const elapsed = fixSessionRuntimeSummary(session, now);
+  const elapsed = addressFindingsSessionRuntimeSummary(session, now);
   if (!elapsed) return null;
   return session.status === "running"
     ? {

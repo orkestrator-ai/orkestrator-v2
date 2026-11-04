@@ -30,3 +30,14 @@ passing isolated owner.
 
 Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.LaDtCt/browser.log.gz`
 and `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.90xq9n/repair-paging-browser-owner.log.gz`.
+
+
+## Workflow vocabulary review — 2026-11-04
+
+- **Reviewed head:** `f735aabd0b4cbd3b3c38da602c3aa8b79b8357d0`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=55208 mise run test:logged -- --name review-browser-isolated-port -- mise run test:browser`.
+- **Worker configuration and result:** nine component Playwright workers; 1,274 passed, 122 skipped and four failed in 24.4 minutes. The public-site stage did not run because the component stage failed.
+- **Failure evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fFxacM/review-browser-isolated-port.log.gz` and the validation summary `output/agent-testing/review-validation-f735aabd0.md`.
+- **Failure:** mobile `native: history pages in without a click, opening with a page and paging near the top` (`e2e/TranscriptPaging.spec.ts:414`, assertion at `:441`) timed out after 30 seconds: expected one, received zero.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=54831 mise run test:logged -- --name review-paging-diagnostic -- bunx playwright test --config e2e/playwright.config.ts e2e/TranscriptPaging.spec.ts --project mobile-chromium --workers=1 --output output/playwright/review-paging-diagnostic` passed. Passing counts and duration were not retained by the logged wrapper.
+- **Assessment:** unchanged isolated passes confirm intermittent recurrence. The cause of this run is unconfirmed; no implementation, assertion, timeout or skip changed in these owners. The original aggregate remains failed.

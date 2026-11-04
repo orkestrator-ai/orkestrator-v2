@@ -80,7 +80,7 @@ function PullRequestRow({
         data-number={item.number}
         aria-current={highlighted ? "true" : undefined}
         className={cn(
-          "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none",
+          "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted/50 focus-hairline",
           highlighted && "bg-selected/50 ring-1 ring-selected-edge",
         )}
       >
@@ -189,7 +189,7 @@ export function PullRequestList({
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search pull requests"
                 aria-label="Search pull requests"
-                className="h-7 w-full rounded-md border border-border/70 bg-input-surface pr-2 pl-7 text-xs placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+                className="h-7 w-full rounded-md border border-border/70 bg-input-surface pr-2 pl-7 text-xs placeholder:text-muted-foreground/60 focus-hairline"
               />
             </div>
             <Button

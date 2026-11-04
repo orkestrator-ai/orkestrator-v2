@@ -111,6 +111,12 @@ export function normalizeActionDefaults(value: unknown): ActionDefaults {
     const entry = normalizeEntry(record[key]);
     if (entry) normalized[key] = entry;
   }
+  // The key a later build saves the Address Findings default under. See
+  // workflow-vocabulary.ts: without this a settings write here would drop it.
+  if (!normalized.fixReviewIssues) {
+    const entry = normalizeEntry(record.addressFindings);
+    if (entry) normalized.fixReviewIssues = entry;
+  }
   return normalized;
 }
 

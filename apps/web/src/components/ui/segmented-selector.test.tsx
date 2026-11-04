@@ -76,20 +76,40 @@ describe("SegmentedSelector", () => {
       <SegmentedSelector
         value="coordinator"
         ariaLabel="Project navigation"
-        buttonClassName="focus-visible:ring-inset"
+        buttonClassName="text-xs"
         onValueChange={() => undefined}
         options={[
-          { value: "coordinator", label: "Coordinator", className: "focus-visible:ring-current" },
+          { value: "coordinator", label: "Coordinator", className: "rounded-lg" },
           { value: "kanban", label: "Kanban" },
         ]}
       />,
     );
     const coordinator = screen.getByRole("button", { name: "Coordinator" }).className;
     const kanban = screen.getByRole("button", { name: "Kanban" }).className;
-    expect(coordinator).toContain("focus-visible:ring-current");
-    expect(coordinator).not.toContain("focus-visible:ring-ring/60");
-    expect(coordinator).toContain("focus-visible:ring-inset");
-    expect(kanban).toContain("focus-visible:ring-ring/60");
-    expect(kanban).not.toContain("focus-visible:ring-current");
+    expect(coordinator).toContain("rounded-lg");
+    expect(coordinator).not.toContain("rounded-md");
+    expect(coordinator).toContain("text-xs");
+    expect(kanban).toContain("rounded-md");
+    expect(kanban).not.toContain("rounded-lg");
+  });
+
+  test("only the selected fill draws its focus hairline in its text colour", () => {
+    render(
+      <SegmentedSelector
+        value="coordinator"
+        ariaLabel="Project navigation"
+        onValueChange={() => undefined}
+        options={[
+          { value: "coordinator", label: "Coordinator" },
+          { value: "kanban", label: "Kanban" },
+        ]}
+      />,
+    );
+    const coordinator = screen.getByRole("button", { name: "Coordinator" }).className;
+    const kanban = screen.getByRole("button", { name: "Kanban" }).className;
+    expect(coordinator).toContain("focus-hairline");
+    expect(coordinator).toContain("[--focus-hairline-color:currentColor]");
+    expect(kanban).toContain("focus-hairline");
+    expect(kanban).not.toContain("[--focus-hairline-color:currentColor]");
   });
 });

@@ -217,12 +217,8 @@ describe("Electron backend command registry", () => {
       await runGit(repo, ["init", "-b", "main", "."]);
       await fs.writeFile(path.join(repo, "old name.txt"), "x\ny\nz\nw\n");
       await fs.writeFile(path.join(repo, "stat only.txt"), "same\n");
-      const latin1 = Buffer.concat([
-        Buffer.from(`${repo}/caf`),
-        Buffer.from([0xe9]),
-        Buffer.from(".txt"),
-      ]);
-      await fs.writeFile(latin1, "a\n");
+      const unicodePath = path.join(repo, "caf雪.txt");
+      await fs.writeFile(unicodePath, "a\n");
       await runGit(repo, ["add", "-A"]);
       await runGit(repo, ["commit", "-m", "base"]);
       const oid = spawnSync("git", ["rev-parse", "HEAD"], {
@@ -230,7 +226,7 @@ describe("Electron backend command registry", () => {
         encoding: "utf8",
       }).stdout.trim();
       await runGit(repo, ["mv", "old name.txt", "new name.txt"]);
-      await fs.appendFile(latin1, "b\n");
+      await fs.appendFile(unicodePath, "b\n");
       await fs.utimes(
         path.join(repo, "stat only.txt"),
         new Date("2001-01-01"),
@@ -257,7 +253,7 @@ describe("Electron backend command registry", () => {
             additions,
           })),
         ).toEqual([
-          { file: "caf\ufffd.txt", originalPath: undefined, status: "M", additions: 1 },
+          { file: "caf雪.txt", originalPath: undefined, status: "M", additions: 1 },
           { file: "new name.txt", originalPath: "old name.txt", status: "R100", additions: 0 },
         ]);
       });
@@ -456,6 +452,34 @@ exit 0
         true,
       ),
     ).toThrow("invalid base64");
+  });
+
+  test("decodes non-UTF-8 path bytes lossily after unframing the container response", () => {
+    // Keep the invalid bytes in the wire payload: macOS cannot create these
+    // worktree names, but a Linux container can send them to any host.
+    const filename = Buffer.concat([Buffer.from("caf"), Buffer.from([0xe9]), Buffer.from(".txt")]);
+    const summary = Buffer.concat([
+      Buffer.from(":100644 100644 1111111 2222222 M\0"),
+      filename,
+      Buffer.from("\x001\t0\t"),
+      filename,
+      Buffer.from("\0"),
+    ]);
+    const response = [
+      "\x1eORKESTRATOR_DIFF\x1f",
+      summary.toString("base64"),
+      "\x1eORKESTRATOR_UNTRACKED\x1f",
+      "",
+      "\x1eORKESTRATOR_END\x1f",
+    ].join("");
+    expect(commandTesting.parseContainerGitStatusResponse(response, true)).toEqual([
+      expect.objectContaining({
+        path: "caf�.txt",
+        filename: "caf�.txt",
+        status: "M",
+        additions: 1,
+      }),
+    ]);
   });
 
   test(

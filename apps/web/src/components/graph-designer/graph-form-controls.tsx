@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  */
 
 export const FIELD_CLASS =
-  "h-7 w-full min-w-0 rounded-md border border-border/70 bg-input-surface px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50 aria-invalid:border-destructive disabled:opacity-50";
+  "h-7 w-full min-w-0 rounded-md border border-border/70 bg-input-surface px-2 text-xs text-foreground outline-none focus-hairline aria-invalid:border-destructive disabled:opacity-50";
 
 export function FormSection({
   title,

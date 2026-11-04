@@ -1112,7 +1112,7 @@ export function BackgroundTaskCard({
         />
         <CollapsibleTrigger
           className={cn(
-            "flex min-h-7 min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            "flex min-h-7 min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-hairline",
             hasPreview ? "items-start" : "items-center",
             hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
           )}
@@ -1236,7 +1236,7 @@ export function SubagentPart({
       onOpenChange={setIsOpen}
       className={cn(!embedded && agentCardClassName)}
     >
-      <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
+      <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-hairline cursor-pointer">
         <div className={cn("flex gap-3", preview.text ? "items-start" : "items-center")}>
           <AgentActivityIcon status={status} />
           <div className="min-w-0 flex-1">
@@ -1510,7 +1510,7 @@ export function TaskGroupPart({
         ) : (
           <AgentActivityIcon status={status} />
         )}
-        <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
+        <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-hairline cursor-pointer">
           <div className={cn("flex min-h-7 gap-3", preview ? "items-start" : "items-center")}>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs">

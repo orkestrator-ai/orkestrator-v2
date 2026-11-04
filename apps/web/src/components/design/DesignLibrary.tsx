@@ -564,7 +564,7 @@ export function DesignLibrary({
             return (
               <li
                 key={entry.id}
-                className={cn("grid gap-2 rounded-md border p-2", isSelected && "border-primary")}
+                className={cn("grid gap-2 rounded-md border p-2", isSelected && "border-ring")}
               >
                 <button
                   type="button"

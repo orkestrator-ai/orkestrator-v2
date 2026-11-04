@@ -389,7 +389,7 @@ export const CodeBlock = memo(function CodeBlock({
           </span>
           <button
             type="button"
-            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-foreground outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-foreground outline-none hover:bg-elevated focus-hairline"
             onClick={() => setViewerOpen(true)}
           >
             Open all {lineCount} lines in viewer

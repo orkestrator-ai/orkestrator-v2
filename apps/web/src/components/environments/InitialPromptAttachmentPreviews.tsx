@@ -67,7 +67,7 @@ export function InitialPromptAttachmentPreviews({
               <button
                 type="button"
                 onClick={() => openImagePreview(attachment.id)}
-                className="block h-full w-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+                className="block h-full w-full cursor-zoom-in outline-none focus-hairline"
                 aria-label={`Preview ${attachment.name}`}
                 title={attachment.name}
               >

@@ -137,7 +137,7 @@ function SearchInput({
           // Keep Radix typeahead from stealing keystrokes; Escape still closes.
           if (event.key !== "Escape") event.stopPropagation();
         }}
-        className="h-7 w-full rounded-md border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
+        className="h-7 w-full rounded-md border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus-hairline"
       />
     </div>
   );

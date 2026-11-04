@@ -115,9 +115,9 @@ export function multiReviewWorkSummary(estimate: MultiReviewWorkEstimate): strin
   const pr = estimate.prTurns > 0 ? " and 1 pull request turn once it succeeds" : "";
   const fix =
     estimate.fixTurns > 0
-      ? `, then 1 fix turn${pr}`
+      ? `, then 1 Address Findings turn${pr}`
       : estimate.prTurns > 0
-        ? "; a fix is launched separately and is not included, but a successful fix is followed by 1 pull request turn"
-        : "; a fix is launched separately and is not included";
+        ? "; Address Findings is launched separately and is not included, but a successful run is followed by 1 pull request turn"
+        : "; Address Findings is launched separately and is not included";
   return `Expected work: 1 preparation turn, validation run once and shared, ${reviewers}, and 1 consolidation turn${fix}. Each model step may add up to ${estimate.maxRepairTurnsPerStep} repair turns if its structured output is invalid.`;
 }

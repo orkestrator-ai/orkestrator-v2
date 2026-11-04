@@ -322,7 +322,7 @@ export const DesignFrameView = memo(function DesignFrameView({
       <div className="absolute -top-7 left-0 flex max-w-full items-center gap-1">
         <button
           type="button"
-          className={`max-w-full cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring ${frameSelected ? "text-blue-500" : focused ? "text-foreground" : ""}`}
+          className={`max-w-full cursor-grab truncate rounded-sm px-0.5 text-left text-xs text-muted-foreground focus-hairline focus-hairline-outset ${frameSelected ? "text-blue-500" : focused ? "text-foreground" : ""}`}
           onPointerDown={(event) => {
             if (event.button !== 0) return;
             // WebKit does not focus buttons on click; canvas keys (Delete) need focus inside.
@@ -352,7 +352,7 @@ export const DesignFrameView = memo(function DesignFrameView({
             <button
               type="button"
               aria-label={`Frame actions for ${frame.name}`}
-              className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted focus-hairline"
             >
               <MoreHorizontal className="size-3.5" />
             </button>
@@ -515,7 +515,7 @@ export const DesignFrameView = memo(function DesignFrameView({
           <button
             type="button"
             aria-label="Resize selected element"
-            className="pointer-events-auto absolute -right-2 -bottom-2 h-4 w-4 cursor-nwse-resize border border-blue-500 bg-white focus-visible:outline-2 focus-visible:outline-ring"
+            className="pointer-events-auto absolute -right-2 -bottom-2 h-4 w-4 cursor-nwse-resize border border-blue-500 bg-white focus-hairline"
             onPointerDown={(event) => {
               if (event.button !== 0) return;
               event.stopPropagation();
@@ -592,7 +592,7 @@ export const DesignFrameView = memo(function DesignFrameView({
       <button
         type="button"
         aria-label={`Resize frame ${frame.name}`}
-        className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize border border-blue-500 bg-white focus-visible:outline-2 focus-visible:outline-ring"
+        className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize border border-blue-500 bg-white focus-hairline"
         onPointerDown={(event) => startDrag(event, "resize")}
         onPointerMove={moveDrag}
         onPointerUp={() => settleDrag(true)}

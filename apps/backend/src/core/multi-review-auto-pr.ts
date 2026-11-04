@@ -1,4 +1,4 @@
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
@@ -14,33 +14,33 @@ export const MULTI_REVIEW_AUTO_PR_TAB_TITLE = "PR";
 export const MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE =
   "A pull request already exists for this environment, so no PR agent was launched.";
 
-/** How the interactive Fix tab's handoff turn ended, as the native-agent layer records it. */
-export type InteractiveFixTurnOutcome =
+/** How the interactive Address Findings tab's handoff turn ended, as the native-agent layer records it. */
+export type InteractiveAddressFindingsTurnOutcome =
   "completed" | "failed" | "interrupted" | "superseded" | "pending" | "unknown";
 
-const INTERACTIVE_FIX_AUTO_PR_SKIPPED: Record<
-  Exclude<InteractiveFixTurnOutcome, "completed" | "pending">,
+const INTERACTIVE_ADDRESS_FINDINGS_AUTO_PR_SKIPPED: Record<
+  Exclude<InteractiveAddressFindingsTurnOutcome, "completed" | "pending">,
   string
 > = {
-  failed: "The Fix turn failed, so no PR agent was launched.",
+  failed: "The Address Findings turn failed, so no PR agent was launched.",
   interrupted:
-    "The Fix was stopped before it finished, so no PR agent was launched. Use the PR button when the changes are ready.",
+    "Address Findings was stopped before it finished, so no PR agent was launched. Use the PR button when the changes are ready.",
   superseded:
-    "The Fix conversation continued after the automatic request, so no PR agent was launched. Use the PR button when the changes are ready.",
+    "The Address Findings conversation continued after the automatic request, so no PR agent was launched. Use the PR button when the changes are ready.",
   unknown:
-    "Whether the Fix finished could not be confirmed, so no PR agent was launched. Use the PR button when the changes are ready.",
+    "Whether Address Findings finished could not be confirmed, so no PR agent was launched. Use the PR button when the changes are ready.",
 };
 
-export const MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE =
-  "Review the interactive Fix, then use the PR button to create a pull request.";
+export const MULTI_REVIEW_AUTO_PR_MANUAL_ADDRESS_FINDINGS_MESSAGE =
+  "Review the interactive Address Findings, then use the PR button to create a pull request.";
 
 /**
- * Whether an interactive Fix can authorize an automatic PR at all: only the
+ * Whether an interactive Address Findings can authorize an automatic PR at all: only the
  * standard handoff in its own interactive session. A custom instruction asks
  * for something narrower than "address the report", so its result is the
  * user's to judge.
  */
-export function interactiveFixCanQueueAutoPr(workflow: MultiReviewWorkflow): boolean {
+export function interactiveAddressFindingsCanQueueAutoPr(workflow: MultiReviewWorkflow): boolean {
   const session = workflow.fixSession;
   return (
     workflow.autoPr === true &&
@@ -51,20 +51,20 @@ export function interactiveFixCanQueueAutoPr(workflow: MultiReviewWorkflow): boo
   );
 }
 
-/** Why a settled interactive Fix launched no PR, for an outcome that is not proof of completion. */
-export function interactiveFixAutoPrSkipMessage(
-  outcome: Exclude<InteractiveFixTurnOutcome, "completed" | "pending">,
+/** Why a settled interactive Address Findings launched no PR, for an outcome that is not proof of completion. */
+export function interactiveAddressFindingsAutoPrSkipMessage(
+  outcome: Exclude<InteractiveAddressFindingsTurnOutcome, "completed" | "pending">,
 ): string {
-  return INTERACTIVE_FIX_AUTO_PR_SKIPPED[outcome];
+  return INTERACTIVE_ADDRESS_FINDINGS_AUTO_PR_SKIPPED[outcome];
 }
 
 /**
- * Records the auto-PR intent in the same save as the proof that the Fix
+ * Records the auto-PR intent in the same save as the proof that Address Findings
  * completed: a complete structured result, or an interactive handoff turn
  * that finished on its own as the conversation's last turn.
  *
  * A launch that already reached the agent is never repeated. A skipped or
- * failed one may be retried by a later successful Fix, because the condition
+ * failed one may be retried by a later successful Address Findings, because the condition
  * that stopped it (an existing PR, a full tab strip) can have changed.
  */
 export function queueAutoPr(workflow: MultiReviewWorkflow): void {
@@ -74,11 +74,11 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
   workflow.autoPrLaunch = {
     state: "pending",
     requestId: `multi-review-pr:${workflow.id}`,
-    fixIdentity: multiReviewFixIdentity(workflow.fixSession),
+    fixIdentity: multiReviewAddressFindingsIdentity(workflow.fixSession),
   };
 }
 
-/** Whether a consolidated report gives the Fix nothing to address. */
+/** Whether a consolidated report gives Address Findings nothing to address. */
 export function consolidatedReportIsClean(
   workflow: Pick<MultiReviewWorkflow, "consolidatedReport">,
 ): boolean {
@@ -87,10 +87,10 @@ export function consolidatedReportIsClean(
 }
 
 /**
- * Whether consolidation hands its report to the Fix: auto-fix is on and the
+ * Whether consolidation hands its report to Address Findings: auto-address findings is on and the
  * report has issues or test coverage gaps. Otherwise the review is ready.
  */
-export function multiReviewAutoFixDue(
+export function multiReviewAutoAddressFindingsDue(
   workflow: Pick<MultiReviewWorkflow, "autoFix" | "consolidatedReport">,
 ): boolean {
   return (
@@ -101,13 +101,13 @@ export function multiReviewAutoFixDue(
 }
 
 /** Whether a structured Fix result proves completion: it may queue the pull request. */
-export function fixResultCompletes(result: { complete: boolean }): boolean {
+export function addressFindingsResultCompletes(result: { complete: boolean }): boolean {
   return result.complete === true;
 }
 
 /**
  * Records the auto-PR intent in the same save as a consolidated report with
- * nothing to fix. No Fix runs, so the reviewed branch goes straight to the PR,
+ * nothing to fix. No Address Findings runs, so the reviewed branch goes straight to the PR,
  * whether the review was started by the button, a coordinator, or any other
  * caller that turned auto-PR on.
  */
@@ -122,21 +122,21 @@ export function queueCleanReviewAutoPr(workflow: MultiReviewWorkflow): void {
   };
 }
 
-/** Records why a settled Fix launched no PR, unless a launch is already queued or delivered. */
+/** Records why a settled Address Findings launched no PR, unless a launch is already queued or delivered. */
 export function skipAutoPr(workflow: MultiReviewWorkflow, message: string): void {
   if (workflow.autoPr !== true) return;
   const state = workflow.autoPrLaunch?.state;
   if (state === "pending" || state === "launched") return;
   workflow.autoPrLaunch = {
     state: "skipped",
-    fixIdentity: multiReviewFixIdentity(workflow.fixSession),
+    fixIdentity: multiReviewAddressFindingsIdentity(workflow.fixSession),
     requestId: `multi-review-pr:${workflow.id}`,
     message,
   };
 }
 
 /**
- * A new Fix turn supersedes an undelivered PR launch. A later complete
+ * A new Address Findings turn supersedes an undelivered PR launch. A later complete
  * structured result may queue it again, so the PR never races a running fix.
  */
 export function supersedePendingAutoPr(workflow: MultiReviewWorkflow): void {
@@ -210,7 +210,7 @@ export type AutoPrLaunchOutcome =
   | { kind: "retry"; message: string };
 
 /**
- * Starts the ordinary PR agent for a workflow whose Fix completed, or whose
+ * Starts the ordinary PR agent for a workflow whose Address Findings completed, or whose
  * consolidated report found nothing to fix.
  */
 export async function launchMultiReviewAutoPr(

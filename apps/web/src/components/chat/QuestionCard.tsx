@@ -294,7 +294,7 @@ function QuestionItem({
                 aria-pressed={isSelected}
                 className={cn(
                   "w-full rounded-md px-3 py-2.5 text-left transition-colors",
-                  "hover:bg-muted/70 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
+                  "hover:bg-muted/70 focus-hairline focus-hairline-outset",
                   disabled && "cursor-not-allowed opacity-70 hover:bg-transparent",
                   isSelected ? "bg-muted" : "bg-transparent",
                 )}
@@ -372,7 +372,7 @@ function QuestionItem({
             onChange={(e) => onCustomTextChange(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={disabled}
-            className="h-9 border-muted-foreground/20 bg-transparent text-sm focus:border-primary"
+            className="h-9 border-muted-foreground/20 bg-transparent text-sm focus-hairline"
           />
           {info.secret && (
             <p className="mt-1 text-[11px] text-muted-foreground">

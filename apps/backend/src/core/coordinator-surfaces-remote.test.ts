@@ -601,10 +601,10 @@ test("a reviewer's transcript tab opens on the review's node", async () => {
   ).toContain("older Orkestrator");
 });
 
-test("a custom fix on another node starts once, adopts the review, and survives a lost answer", async () => {
+test("a custom Address Findings on another node starts once, adopts the review, and survives a lost answer", async () => {
   const workflow = await readyReview();
   // The node's supervisor takes the handoff and delivers it before the answer is lost.
-  const customFix = mock(async (input: Record<string, unknown>) => {
+  const customAddressFindings = mock(async (input: Record<string, unknown>) => {
     const delivered = {
       ...workflow,
       phase: "interactive",
@@ -625,7 +625,7 @@ test("a custom fix on another node starts once, adopts the review, and survives 
     await leaf.saveMultiReviewWorkflow(workflow.id, workerId, saved!.revision, delivered);
     return delivered;
   });
-  leafContext.multiReviews = { customFix } as unknown as CommandContext["multiReviews"];
+  leafContext.multiReviews = { customAddressFindings } as unknown as CommandContext["multiReviews"];
   const input = { requestId: "fix-1", workflowId: workflow.id, instruction: "Only the tests" };
   loseAnswer.add("controller_multi_review_surface");
   const lost = await tool("custom_fix_multi_review", input);
@@ -640,8 +640,8 @@ test("a custom fix on another node starts once, adopts the review, and survives 
     ui: { tabId: "multi-review-fix:review-1:launch" },
     workflow: { id: workflow.id, phase: "interactive" },
   });
-  expect(customFix).toHaveBeenCalledTimes(1);
-  expect(customFix.mock.calls[0]![0]).toEqual({
+  expect(customAddressFindings).toHaveBeenCalledTimes(1);
+  expect(customAddressFindings.mock.calls[0]![0]).toEqual({
     workflowId: workflow.id,
     instruction: "Only the tests",
     fixModel: { agent: "codex", model: "default" },
@@ -649,7 +649,7 @@ test("a custom fix on another node starts once, adopts the review, and survives 
   expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
     replayed: true,
   });
-  expect(customFix).toHaveBeenCalledTimes(1);
+  expect(customAddressFindings).toHaveBeenCalledTimes(1);
   const associations = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
     world.projectId,
   );
@@ -674,7 +674,7 @@ function realReviewSupervisor() {
   return reviewService;
 }
 
-test("a delivered custom fix replays only the complete explicit model selection", async () => {
+test("a delivered custom Address Findings replays only the complete explicit model selection", async () => {
   const workflow = await readyReview();
   const model = { agent: "codex" as const, model: "default", reasoningEffort: "low" };
   await leaf.saveMultiReviewWorkflow(workflow.id, workerId, workflow.version, {
@@ -711,8 +711,8 @@ test("a delivered custom fix replays only the complete explicit model selection"
   };
   const refused = await tool("custom_fix_multi_review", changed);
   expect(refused.isError).toBe(true);
-  expect(refused.text).toContain("not ready for a custom fix");
-  // Failed receipts remain retryable errors, never a completed replay of the old Fix.
+  expect(refused.text).toContain("not ready for a custom Address Findings");
+  // Failed receipts remain retryable errors, never a completed replay of the old Address Findings.
   expect((await tool("custom_fix_multi_review", changed)).isError).toBe(true);
   expect((await tool("custom_fix_multi_review", input)).structuredContent).toMatchObject({
     replayed: true,
@@ -723,7 +723,7 @@ test("a delivered custom fix replays only the complete explicit model selection"
   });
 });
 
-test("a pending remote custom fix retains its handoff through a lost answer and dispatch failure", async () => {
+test("a pending remote custom Address Findings retains its handoff through a lost answer and dispatch failure", async () => {
   const workflow = await readyReview();
   const entered = barrier();
   const resume = barrier();
@@ -734,8 +734,8 @@ test("a pending remote custom fix retains its handoff through a lost answer and 
   });
   reviewService = new MultiReviewService(leaf, async <T>() => ({}) as T, {
     autoAdvance: false,
-    addressDispatchRetryMs: 60_000,
-    dispatchAddressPrompt: dispatch,
+    addressFindingsDispatchRetryMs: 60_000,
+    dispatchAddressFindingsPrompt: dispatch,
   });
   leafContext.multiReviews = reviewService;
   const input = {
@@ -798,17 +798,17 @@ test("a pending remote custom fix retains its handoff through a lost answer and 
     fixModel: { ...input.fixModel, reasoningEffort: "high" },
   });
   expect(changed.isError).toBe(true);
-  expect(changed.text).toContain("not ready for a custom fix");
+  expect(changed.text).toContain("not ready for a custom Address Findings");
   expect((await leafTabs()).every((tab) => tab.type === "multi-review")).toBe(true);
 });
 
-test("a remote custom fix refused before handoff can retry the same receipt", async () => {
+test("a remote custom Address Findings refused before handoff can retry the same receipt", async () => {
   const workflow = await readyReview();
   const service = realReviewSupervisor();
-  const realCustomFix = service.customFix.bind(service);
-  const customFix = mock(realCustomFix);
-  customFix.mockRejectedValueOnce(new Error("dispatch preflight unavailable"));
-  service.customFix = customFix;
+  const realCustomAddressFindings = service.customAddressFindings.bind(service);
+  const customAddressFindings = mock(realCustomAddressFindings);
+  customAddressFindings.mockRejectedValueOnce(new Error("dispatch preflight unavailable"));
+  service.customAddressFindings = customAddressFindings;
   const input = { requestId: "preflight", workflowId: workflow.id, instruction: "Only the tests" };
   const refused = await tool("custom_fix_multi_review", input);
   expect(refused.isError).toBe(true);
@@ -819,5 +819,5 @@ test("a remote custom fix refused before handoff can retry the same receipt", as
   const retried = await tool("custom_fix_multi_review", input);
   expect(retried.isError).toBe(false);
   expect(retried.structuredContent).toMatchObject({ outcome: "pending" });
-  expect(customFix).toHaveBeenCalledTimes(2);
+  expect(customAddressFindings).toHaveBeenCalledTimes(2);
 });

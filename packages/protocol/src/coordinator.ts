@@ -151,12 +151,19 @@ export type CoordinatorTurnOrigin = "user" | "mail";
 export const COORDINATOR_MAIL_ADDRESS = "coordinator";
 
 /**
- * The address a coordinator on a node in leaf mode mails to reach the main
- * coordinator for the same repository on the command node that controls it.
- * Its mail waits in the leaf's outbox until that command node collects it.
+ * The address an agent or coordinator on a node in leaf mode mails to reach the
+ * main coordinator for the same repository on the command node that controls
+ * it. Its mail waits in the leaf's outbox until that command node collects it.
  * It is the one cross-node action a leaf-mode coordinator has.
  */
 export const COMMAND_NODE_COORDINATOR_MAIL_ADDRESS = "command-node-coordinator";
+
+/**
+ * The address an agent mails when the user asks for the coordinator on its own
+ * machine. On a leaf, `COORDINATOR_MAIL_ADDRESS` usually means the command
+ * node's coordinator; this one never leaves the machine.
+ */
+export const LOCAL_COORDINATOR_MAIL_ADDRESS = "local-coordinator";
 
 /** The project's open main coordinator conversation, if any. */
 export function coordinatorMainConversation(

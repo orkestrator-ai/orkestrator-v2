@@ -89,3 +89,16 @@ test("long GitHub repository text ellipsizes inside the add-project dialog", asy
     )
     .toEqual({ overflowWrap: "anywhere", contained: true });
 });
+
+test("source tabs keep focus separate from their active border", async ({ page }) => {
+  await page.goto("/add-project");
+  await page.keyboard.press("Tab");
+  for (const name of ["Existing repository", "Create new"]) {
+    const tab = page.getByRole("tab", { name, exact: true });
+    await tab.focus();
+    await expect(tab).toHaveAttribute("data-state", "active");
+    await expect(tab).toHaveCSS("outline-style", "solid");
+    await expect(tab).toHaveCSS("outline-width", "1px");
+    await expect(tab).toHaveCSS("outline-offset", "-2px");
+  }
+});

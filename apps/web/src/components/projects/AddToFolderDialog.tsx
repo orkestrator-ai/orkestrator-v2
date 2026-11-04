@@ -135,7 +135,7 @@ export function AddToFolderDialog({
                       "h-7 gap-1.5 px-2 text-xs",
                       normalized !== null &&
                         projectFolderKey(folder) === projectFolderKey(normalized) &&
-                        "border-primary",
+                        "border-ring",
                     )}
                     onClick={() => {
                       setValue(folder);

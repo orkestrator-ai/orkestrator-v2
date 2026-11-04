@@ -32,7 +32,7 @@ import { BuildPipelineService } from "./build-pipeline-service.js";
 
 import { ProviderSessionFailedError } from "./build-pipeline-provider.js";
 import {
-  TEST_FIX_RESULT,
+  TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -126,7 +126,7 @@ class FakeProvider implements BuildPipelineProvider {
   reviewReport: StructuredReviewReport = cleanReview;
   verificationComplete = true;
   preparationResult = TEST_REVIEW_PREPARATION;
-  fixResult: unknown = TEST_FIX_RESULT;
+  fixResult: unknown = TEST_ADDRESS_FINDINGS_RESULT;
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
   usageFromMessages?: BuildPipelineProvider["usageFromMessages"];
@@ -845,7 +845,7 @@ describe("BuildPipelineService", () => {
             file: "src/app.ts",
             line: 1,
             symbol: "run",
-            description: "A finding that enters the address stage.",
+            description: "A finding that enters the Address Findings stage.",
             evidence: "The provider returned it.",
             suggestion: "Address it.",
             verification: "Run the pipeline.",
@@ -970,7 +970,7 @@ describe("BuildPipelineService", () => {
         .filter((call) => provider.phases.get(call.sessionId) === "verify")
         .at(-1)!;
       expect(restarted.sessionId).not.toBe(oldVerify.sdkSessionId);
-      expect(restarted.prompt).toContain("**Address report**: none.");
+      expect(restarted.prompt).toContain("**Address Findings report**: none.");
       expect(restarted.prompt).not.toContain("FALSE CLAIM");
     });
   });

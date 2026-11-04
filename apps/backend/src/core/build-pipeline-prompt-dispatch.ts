@@ -34,7 +34,7 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 import {
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
 } from "./review-prompts.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
@@ -65,7 +65,7 @@ export class BuildPipelinePromptDispatch {
           : attempt.phase === "verifying"
             ? VERIFICATION_SCHEMA
             : attempt.phase === "addressing"
-              ? REVIEW_FIX_RESULT_JSON_SCHEMA
+              ? REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
               : undefined
       : undefined;
     // A real stage has to carry the selection its session was opened with:

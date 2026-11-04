@@ -214,9 +214,9 @@ export const WorkflowSnapshotGraph = memo(function WorkflowSnapshotGraph({
               aria-pressed={selectedId === node.id}
               onClick={() => onSelect(node.id)}
               className={cn(
-                "absolute flex flex-col justify-center rounded-xl border px-2.5 py-1.5 text-left outline-2 outline-offset-2 outline-transparent focus-visible:outline-primary",
+                "absolute flex flex-col justify-center rounded-xl border px-2.5 py-1.5 text-left outline outline-offset-2 outline-transparent focus-hairline",
                 STATUS_CLASS[node.status] ?? STATUS_CLASS.unknown,
-                selectedId === node.id && "outline-primary/60",
+                selectedId === node.id && "outline-ring",
                 changed && "ring-2 ring-primary/70",
               )}
               style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
@@ -380,7 +380,7 @@ export function WorkflowNodeDetails({
                     `${workflowTitle} · ${node.label || node.id}`,
                   );
                 }}
-                className="rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground outline-none hover:bg-elevated focus-hairline disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {link.label || RELATION_LABEL[link.relation]}
                 {usable ? "" : " (not available here)"}

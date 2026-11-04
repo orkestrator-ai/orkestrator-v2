@@ -1,4 +1,4 @@
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 /**
  * Status wakes on the real mail world: storage, routes, budgets, the
  * coordinator service and the injection drain are production code; only the
@@ -419,7 +419,7 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "review-1", { ...auto, phase: "reviewing" });
     await associate(world, "multi-review", "review-1");
     await settle(context);
-    // Consolidation with findings goes straight to the Fix handoff: no ready.
+    // Consolidation with findings goes straight to the Address Findings handoff: no ready.
     await saveReview(world, worker, "review-1", {
       ...auto,
       phase: "interactive",
@@ -432,7 +432,7 @@ describe("coordinator status wakes", () => {
       fixSession: { ...fix, status: "running" },
     });
     await settle(context);
-    // The Fix finished and queued its PR in the same save: hold for the PR.
+    // Address Findings finished and queued its PR in the same save: hold for the PR.
     await saveReview(world, worker, "review-1", {
       ...auto,
       phase: "interactive",
@@ -450,7 +450,7 @@ describe("coordinator status wakes", () => {
         state: "launched",
         requestId: "multi-review-pr:review-1",
         tabId: "pr-tab",
-        fixIdentity: multiReviewFixIdentity(fix),
+        fixIdentity: multiReviewAddressFindingsIdentity(fix),
       },
     });
     await settle(context);
@@ -479,7 +479,7 @@ describe("coordinator status wakes", () => {
   });
 
   test.each(["sessionKey", "startedAt"] as const)(
-    "a later Fix with a new %s wakes with fix-done after an earlier PR launch",
+    "a later Address Findings with a new %s wakes with fix-done after an earlier PR launch",
     async (field) => {
       const context = await createWorld();
       const { world } = context;
@@ -490,7 +490,7 @@ describe("coordinator status wakes", () => {
         state: "launched",
         requestId: "pr",
         tabId: "pr-tab",
-        fixIdentity: multiReviewFixIdentity(fix),
+        fixIdentity: multiReviewAddressFindingsIdentity(fix),
       };
       const snapshot = { autoPr: true, phase: "interactive", fixSession: fix, autoPrLaunch };
       await saveReview(world, worker, "review-1", snapshot);
@@ -511,7 +511,7 @@ describe("coordinator status wakes", () => {
         "fix-done",
       ]);
       expect(world.received(coordinator)[1]).toContain(
-        "does not confirm inclusion of this Fix's changes",
+        "does not confirm inclusion of this Address Findings run's changes",
       );
     },
   );
@@ -531,7 +531,7 @@ describe("coordinator status wakes", () => {
         autoPrLaunch: {
           state: "launched",
           requestId: "pr",
-          fixIdentity: multiReviewFixIdentity(fix),
+          fixIdentity: multiReviewAddressFindingsIdentity(fix),
         },
       };
       const prUrl = "https://github.com/org/repo/pull/7";
@@ -557,7 +557,7 @@ describe("coordinator status wakes", () => {
   );
 
   test.each(["failed", "skipped"] as const)(
-    "a structured Fix held for a pending PR wakes when the launch is %s",
+    "a structured Address Findings held for a pending PR wakes when the launch is %s",
     async (state) => {
       const context = await createWorld();
       const { world } = context;
@@ -590,7 +590,7 @@ describe("coordinator status wakes", () => {
     },
   );
 
-  test("an auto-PR review stops at a failed Fix or PR launch and says why", async () => {
+  test("an auto-PR review stops at a failed Address Findings or PR launch and says why", async () => {
     const context = await createWorld();
     const { world } = context;
     const coordinator = await world.main();
@@ -605,7 +605,11 @@ describe("coordinator status wakes", () => {
     await saveReview(world, worker, "fix-failed", {
       ...auto,
       phase: "interactive",
-      fixSession: { ...fix, status: "failed", error: "The interactive fix session failed" },
+      fixSession: {
+        ...fix,
+        status: "failed",
+        error: "The interactive Address Findings session failed",
+      },
     });
     await saveReview(world, worker, "pr-failed", {
       ...auto,
@@ -625,7 +629,7 @@ describe("coordinator status wakes", () => {
       autoPrLaunch: {
         state: "skipped",
         requestId: "multi-review-pr:pr-skipped",
-        message: "The Fix was stopped before it finished, so no PR agent was launched.",
+        message: "Address Findings was stopped before it finished, so no PR agent was launched.",
       },
     });
     await settle(context);
@@ -642,7 +646,7 @@ describe("coordinator status wakes", () => {
     expect(byResource.get("pr-failed")?.body).toContain("maximum of 12 tabs");
     expect(byResource.get("pr-skipped")?.notice?.state).toBe("fix-done");
     expect(byResource.get("pr-skipped")?.body).toContain(
-      "No PR session started: The Fix was stopped before it finished",
+      "No PR session started: Address Findings was stopped before it finished",
     );
   });
 
@@ -1300,7 +1304,7 @@ describe("status classification and bounds", () => {
         "review-1",
       )!.key;
     expect(ready("2026-10-16T10:00:00Z")).not.toBe(ready("2026-10-16T11:00:00Z"));
-    // A pending fix handoff has not settled.
+    // A pending Address Findings handoff has not settled.
     expect(
       multiReviewStatus(
         { phase: "interactive", addressPromptPending: true, fixSession: { status: "idle" } },
@@ -1377,10 +1381,10 @@ describe("status classification and bounds", () => {
         "review-1",
       )!.details;
     expect(ready({ autoFix: true, autoPr: true })).toContain(
-      "Auto-fix is on, but there was nothing to fix, so no Fix or PR session started.",
+      "Auto-address findings is on, but there was nothing to fix, so no Address Findings or PR session started.",
     );
     expect(ready({ autoPr: true }).join(" ")).toContain(
-      "once a Fix started with address_multi_review",
+      "once an Address Findings run started with address_multi_review",
     );
     expect(ready({})).toHaveLength(1);
     expect(
@@ -1389,12 +1393,15 @@ describe("status classification and bounds", () => {
         "review-1",
       )!.details.join(" "),
     ).not.toContain("nothing to fix");
-    const completedFix = { sessionKey: "structured-fix", startedAt: "2026-10-16T10:10:00Z" };
+    const completedAddressFindings = {
+      sessionKey: "structured-fix",
+      startedAt: "2026-10-16T10:10:00Z",
+    };
     const completed = {
       phase: "completed",
       autoPr: true,
       fixResult: { complete: true },
-      fixSession: completedFix,
+      fixSession: completedAddressFindings,
     };
     expect(
       multiReviewStatus(
@@ -1410,7 +1417,7 @@ describe("status classification and bounds", () => {
             state: "launched",
             requestId: "r",
             tabId: "pr",
-            fixIdentity: multiReviewFixIdentity(completedFix),
+            fixIdentity: multiReviewAddressFindingsIdentity(completedAddressFindings),
           },
         },
         "review-1",
@@ -1429,7 +1436,7 @@ describe("status classification and bounds", () => {
     ).toBe("fix-done");
   });
 
-  test("a legacy launch with no Fix identity cannot claim a later Fix's PR", () => {
+  test("a legacy launch with no Address Findings identity cannot claim a later Address Findings's PR", () => {
     expect(
       multiReviewStatus(
         {

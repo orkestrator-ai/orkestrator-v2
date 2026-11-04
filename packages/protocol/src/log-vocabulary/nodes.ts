@@ -1,11 +1,13 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const NODES_LOG_AREAS = defineLogAreas({
   nodes: {
     description: "Command nodes: links, handovers, leaf mail, ticket sync and project copies.",
     events: {
+      ...THROTTLE_LOG_EVENTS,
       "actions.resume-failed": "Approved actions could not be resumed; a later pass retries.",
       "project-copy.notify-failed": "The coordinator could not be told a project copy finished.",
+      "mail.return-deferred": "The leaf refused returned mail; it remains queued for retry.",
       "notices.take-back-failed": "A notice for this node's coordinator stayed in the outbox.",
       "notice.collected-retired":
         "A detached controller owned a notice with ambiguous delivery; retired without redelivery.",

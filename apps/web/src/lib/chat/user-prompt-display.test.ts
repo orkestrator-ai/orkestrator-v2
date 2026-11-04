@@ -7,7 +7,7 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
-  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE,
@@ -21,11 +21,11 @@ import {
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
-  MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
-  multiReviewCustomFixPrompt,
+  multiReviewCustomAddressFindingsPrompt,
 } from "@orkestrator/protocol/multi-review";
 import {
   structuredReviewFindings,
@@ -35,7 +35,7 @@ import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/struc
 import { MAX_JSON_PAYLOAD_LENGTH } from "./json-payload";
 import {
   USER_PROMPT_RENDER_CHARACTER_LIMIT,
-  isFixOpeningPrompt,
+  isAddressFindingsOpeningPrompt,
   userPromptDisplayText,
   userPromptPresentation,
 } from "./user-prompt-display";
@@ -61,10 +61,10 @@ function consolidationPrompt(reportJson: string): string {
   return `${PREFIX}\n\n${MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT.openMarker}\n${reportJson}\n${MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT.closeMarker}\n\n${CONTINUATION}`;
 }
 
-function customFixPrompt(
+function customAddressFindingsPrompt(
   evidence: string,
   instruction = "Run validation.",
-  continuation = MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  continuation = MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
 ): string {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
   return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}\n\n${wrapSystemInstructions(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION)}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${wrapSystemInstructions(continuation)}`;
@@ -135,7 +135,7 @@ describe("userPromptDisplayText", () => {
 
   test("still presents review evidence inside the delegated user prompt", () => {
     const presentation = userPromptPresentation(
-      delegatedPrompt(customFixPrompt('{"issues":[{"title":"Delegated finding"}]}')),
+      delegatedPrompt(customAddressFindingsPrompt('{"issues":[{"title":"Delegated finding"}]}')),
       COORDINATOR_DELEGATION_PRESENTATION,
     );
 
@@ -197,7 +197,7 @@ describe("userPromptDisplayText", () => {
 
   test("extracts the structured findings frame for rendering above the fix prompt", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-    const prompt = customFixPrompt('{"issues":[{"title":"Duplicated finding"}]}');
+    const prompt = customAddressFindingsPrompt('{"issues":[{"title":"Duplicated finding"}]}');
     const presentation = userPromptPresentation(prompt);
     const displayed = presentation.displayText;
 
@@ -245,7 +245,7 @@ describe("userPromptDisplayText", () => {
     expect(presentation.evidencePayload?.kind).toBe("review-findings");
     if (presentation.evidencePayload?.kind !== "review-findings") throw new Error("unreachable");
     expect(presentation.evidencePayload.findings).toEqual(findings);
-    expect(isFixOpeningPrompt(source)).toBe(true);
+    expect(isAddressFindingsOpeningPrompt(source)).toBe(true);
   });
 
   test("keeps legacy custom-fix transcripts focused on the user instruction", () => {
@@ -261,7 +261,7 @@ describe("userPromptDisplayText", () => {
   });
 
   test("hides generated review guidance while retaining the user-facing instruction", () => {
-    expect(userPromptDisplayText(MULTI_REVIEW_ADDRESS_PROMPT)).toBe(
+    expect(userPromptDisplayText(MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT)).toBe(
       MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
     );
     expect(
@@ -273,7 +273,7 @@ describe("userPromptDisplayText", () => {
 
   test("shows decoded report JSON instead of the escaped prompt carrier", () => {
     const presentation = userPromptPresentation(
-      customFixPrompt(
+      customAddressFindingsPrompt(
         '{"issues":[{"title":"Generic \\u003cT\\u003e \\u0026 JSX \\u003cdiv\\u003e"}]}',
       ),
     );
@@ -284,7 +284,7 @@ describe("userPromptDisplayText", () => {
   });
 
   test("falls back to the omission when custom-fix evidence is malformed", () => {
-    const presentation = userPromptPresentation(customFixPrompt('{"issues":['));
+    const presentation = userPromptPresentation(customAddressFindingsPrompt('{"issues":['));
 
     expect(presentation.evidencePayload).toBeNull();
     expect(presentation.displayText).toContain(
@@ -295,7 +295,7 @@ describe("userPromptDisplayText", () => {
 
   test("falls back to the omission when custom-fix evidence exceeds the parse budget", () => {
     const evidence = JSON.stringify({ value: "x".repeat(MAX_JSON_PAYLOAD_LENGTH) });
-    const presentation = userPromptPresentation(customFixPrompt(evidence));
+    const presentation = userPromptPresentation(customAddressFindingsPrompt(evidence));
 
     expect(presentation.evidencePayload).toBeNull();
     expect(presentation.displayText).toContain(
@@ -329,7 +329,7 @@ describe("userPromptDisplayText", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const instruction = `Only fix ${contract.openMarker} the typo ${contract.closeMarker} in the README.`;
     const presentation = userPromptPresentation(
-      customFixPrompt('{"issues":[{"title":"Marker finding"}]}', instruction),
+      customAddressFindingsPrompt('{"issues":[{"title":"Marker finding"}]}', instruction),
     );
 
     expect(presentation.displayText).toBe(instruction);
@@ -342,7 +342,7 @@ describe("userPromptDisplayText", () => {
   test("keeps user words after an unmatched system-instructions marker", () => {
     const instruction = `Fix the ${SYSTEM_INSTRUCTIONS_FRAME_OPEN} handling in the frame code`;
     const presentation = userPromptPresentation(
-      customFixPrompt('{"issues":[{"title":"Unmatched marker finding"}]}', instruction),
+      customAddressFindingsPrompt('{"issues":[{"title":"Unmatched marker finding"}]}', instruction),
     );
 
     expect(presentation.displayText).toBe(instruction);
@@ -363,7 +363,7 @@ describe("userPromptDisplayText", () => {
       ],
       testCoverageGaps: [],
     } as unknown as StructuredReviewReport;
-    const source = multiReviewCustomFixPrompt(report, "Fix the finding");
+    const source = multiReviewCustomAddressFindingsPrompt(report, "Fix the finding");
     const presentation = userPromptPresentation(source);
 
     expect(source.split(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toHaveLength(4);
@@ -374,7 +374,9 @@ describe("userPromptDisplayText", () => {
 
   test("bounds a custom-fix instruction before Markdown rendering", () => {
     const instruction = `${"x".repeat(USER_PROMPT_RENDER_CHARACTER_LIMIT + 1_000)}UNIQUE_TAIL`;
-    const presentation = userPromptPresentation(customFixPrompt('{"issues":[]}', instruction));
+    const presentation = userPromptPresentation(
+      customAddressFindingsPrompt('{"issues":[]}', instruction),
+    );
 
     expect(presentation.displayText.length).toBeLessThan(instruction.length);
     expect(presentation.displayText).toContain(
@@ -387,7 +389,7 @@ describe("userPromptDisplayText", () => {
   test("still parses the instruction-first prompt emitted with the generic continuation", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const presentation = userPromptPresentation(
-      customFixPrompt(
+      customAddressFindingsPrompt(
         '{"issues":[{"title":"Older format"}]}',
         "Run validation.",
         contract.continuationPrefix,
@@ -466,7 +468,7 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
   });
 
   test("tolerates echo drift around generated review guidance", () => {
-    expect(userPromptDisplayText(`${MULTI_REVIEW_ADDRESS_PROMPT}\n`)).toBe(
+    expect(userPromptDisplayText(`${MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT}\n`)).toBe(
       MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
     );
     expect(
@@ -498,21 +500,29 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
   });
 });
 
-describe("isFixOpeningPrompt", () => {
+describe("isAddressFindingsOpeningPrompt", () => {
   test("recognizes address and custom-fix openings, not review-stage or follow-up text", () => {
-    expect(isFixOpeningPrompt(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix)).toBe(
-      true,
-    );
-    expect(isFixOpeningPrompt(MULTI_REVIEW_ADDRESS_USER_INSTRUCTION)).toBe(true);
-    expect(isFixOpeningPrompt(customFixPrompt('{"issues":[{"title":"Fix finding"}]}'))).toBe(true);
     expect(
-      isFixOpeningPrompt(legacyCustomFixPrompt('{"issues":[{"title":"Legacy finding"}]}')),
+      isAddressFindingsOpeningPrompt(
+        STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix,
+      ),
+    ).toBe(true);
+    expect(isAddressFindingsOpeningPrompt(MULTI_REVIEW_ADDRESS_USER_INSTRUCTION)).toBe(true);
+    expect(
+      isAddressFindingsOpeningPrompt(
+        customAddressFindingsPrompt('{"issues":[{"title":"Fix finding"}]}'),
+      ),
     ).toBe(true);
     expect(
-      isFixOpeningPrompt(
+      isAddressFindingsOpeningPrompt(
+        legacyCustomFixPrompt('{"issues":[{"title":"Legacy finding"}]}'),
+      ),
+    ).toBe(true);
+    expect(
+      isAddressFindingsOpeningPrompt(
         `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`,
       ),
     ).toBe(false);
-    expect(isFixOpeningPrompt("Please also fix the tests.")).toBe(false);
+    expect(isAddressFindingsOpeningPrompt("Please also fix the tests.")).toBe(false);
   });
 });

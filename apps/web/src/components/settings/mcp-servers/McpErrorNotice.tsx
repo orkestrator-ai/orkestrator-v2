@@ -70,7 +70,7 @@ export function McpErrorReference({ reference }: { reference: string }) {
       Reference: <code className="break-all font-mono text-foreground/80">{reference}</code>
       <button
         type="button"
-        className="inline-flex items-center gap-1 rounded px-1 text-blue-300 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="inline-flex items-center gap-1 rounded px-1 text-blue-300 underline-offset-2 hover:underline focus-hairline"
         aria-label="Copy error reference"
         onClick={() => {
           void writeText(reference).then(

@@ -24,6 +24,61 @@
   }
 }
 
+/*
+ * The one keyboard-focus indicator: a single 1px line in `--color-ring`. It is
+ * an outline inset with a gap from the border, so selection stays distinct.
+ * It needs no border, leaves shadows alone and survives forced colours.
+ * `focus-visible:outline-none` opts out a control whose wrapper draws the frame.
+ *
+ * Set the resting colour as well to avoid fading in from the text colour.
+ * The utility repeats it on focus to override transparent selection outlines.
+ */
+@utility focus-hairline {
+  outline-width: 1px;
+  outline-offset: var(--focus-hairline-offset, -2px);
+  &:focus-visible {
+    outline-color: var(--focus-hairline-color, var(--color-ring));
+    outline-offset: var(--focus-hairline-offset, -2px);
+    outline-style: solid;
+  }
+}
+
+/* Visible labels for visually hidden radio inputs use the same indicator. */
+@utility focus-hairline-peer {
+  .peer:focus-visible ~ & {
+    outline: 1px solid var(--focus-hairline-color, var(--color-ring));
+    outline-offset: -2px;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible,
+  .peer:focus-visible ~ .focus-hairline-peer {
+    outline-color: Highlight !important;
+  }
+}
+
+/* For a solid fill or bare text, which an inset line would vanish into or touch. */
+@utility focus-hairline-outset {
+  --focus-hairline-offset: 2px;
+}
+
+/*
+ * Elements with no focus styling of their own, such as links and <summary>. Inset,
+ * because an edge-to-edge row in a scroll container would clip anything further out.
+ */
+@layer base {
+  * {
+    outline-color: var(--focus-hairline-color, var(--color-ring));
+  }
+
+  :focus-visible {
+    outline-style: solid;
+    outline-width: 1px;
+    outline-offset: -2px;
+  }
+}
+
 /* FiraCode Nerd Font for terminal */
 @font-face {
   font-family: "FiraCode Nerd Font";
@@ -954,8 +1009,8 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 .graph-designer-canvas .react-flow__node-graph-node:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 3px;
+  outline: 1px solid var(--color-ring);
+  outline-offset: 2px;
   border-radius: 0.75rem;
 }
 

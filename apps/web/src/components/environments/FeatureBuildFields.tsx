@@ -75,7 +75,8 @@ const BUILD_INTENTS: Array<{
 const BUILD_INTENT_GUIDANCE: Record<BuildIntent, { kind: string; detail: string }> = {
   feature: {
     kind: "pipeline environment",
-    detail: "build, review, fix, verify, PR and conflict resolution run automatically.",
+    detail:
+      "build, review, address findings, verify, rework, PR and conflict resolution run automatically.",
   },
   prompt: {
     kind: "prompt environment",
@@ -108,8 +109,8 @@ const SINGLE_STEPS: Array<{
   },
   {
     key: "address",
-    title: "Address issues",
-    description: "Fixes the consolidated review findings.",
+    title: "Address Findings",
+    description: "Addresses the consolidated review findings.",
     icon: <ListChecks className="size-4" />,
   },
   {

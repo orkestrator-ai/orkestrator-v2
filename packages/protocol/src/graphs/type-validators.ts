@@ -10,7 +10,7 @@
  * registry (item 103) can bind them. Custom types never name a validator.
  */
 import { isVerificationVerdict } from "../build-pipeline.js";
-import { parseFixResult, parsePrResult } from "../review-results.js";
+import { parseAddressFindingsResult, parsePrResult } from "../review-results.js";
 import {
   isReviewPackageReference,
   isSafeReviewTargetBranch,
@@ -468,8 +468,8 @@ const VALIDATORS: readonly GraphBuiltInValidator[] = [
   {
     id: "fix-result",
     summary: "Complete only without failed commands or limitations; incomplete only with one.",
-    wraps: "review-results.ts#parseFixResult",
-    check: (value) => parses(parseFixResult, value),
+    wraps: "review-results.ts#parseAddressFindingsResult",
+    check: (value) => parses(parseAddressFindingsResult, value),
     backend: { checks: PLACEHOLDER_CHECKS, existing: `${CONTRACTS_MODULE} (kind fix-result)` },
   },
   {

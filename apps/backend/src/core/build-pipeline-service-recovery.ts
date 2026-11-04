@@ -22,12 +22,12 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import { boundPipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import {
   effectiveDeliveryPolicy,
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
-import { parseFixResult, type ReviewFixResult } from "./review-prompts.js";
+import { parseAddressFindingsResult, type ReviewAddressFindingsResult } from "./review-prompts.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
@@ -171,7 +171,7 @@ export class BuildPipelineRecovery {
    * which judges the round. A session without the marker started before the
    * typed handoff; Verify reads its last assistant text instead.
    */
-  async finishAddress(
+  async finishAddressFindings(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
@@ -184,19 +184,21 @@ export class BuildPipelineRecovery {
     if (!requestId) throw new Error("Address result key is missing");
     const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      await this.awaitStructuredResult(pipeline, provider, session, "address stage");
+      await this.awaitStructuredResult(pipeline, provider, session, "Address Findings stage");
       return;
     }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
-    let fixResult: ReviewFixResult;
+    let fixResult: ReviewAddressFindingsResult;
     try {
-      fixResult = parseFixResult(result.value);
+      fixResult = parseAddressFindingsResult(result.value);
     } catch (error) {
-      throw new Error(`The address stage returned a malformed fix result: ${errorMessage(error)}`);
+      throw new Error(
+        `The Address Findings stage returned a malformed result: ${errorMessage(error)}`,
+      );
     }
     session.structuredResultStatus = "accepted";
-    session.fixResult = boundPipelineFixResult(fixResult);
+    session.fixResult = boundPipelineAddressFindingsResult(fixResult);
     this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     await this.stageSupervisor.startStage(pipeline, "verify", "verifying");
     await this.ctx.consumeWorkflowResult(pipeline, session, requestId);

@@ -62,13 +62,13 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import { multiReviewDefaultRows } from "./coordinator-launch-defaults.js";
 import {
-  fixResultCompletes,
-  multiReviewAutoFixDue,
+  addressFindingsResultCompletes,
+  multiReviewAutoAddressFindingsDue,
   queueAutoPr,
   queueCleanReviewAutoPr,
 } from "./multi-review-auto-pr.js";
 import {
-  MULTI_REVIEW_INTERACTIVE_FIX,
+  MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS,
   MULTI_REVIEW_REVIEWER_RESULT_KIND,
   MULTI_REVIEW_STAGE_KEYS,
   MULTI_REVIEW_STEP_TURNS,
@@ -365,10 +365,11 @@ describe("Multi Review template ↔ multi-review-service", () => {
       MULTI_REVIEW_STEP_TURNS.consolidate.readOnly ? "read-only" : "write",
     );
     // The Fix is an interactive build-mode tab the user can talk to.
-    expect(MULTI_REVIEW_INTERACTIVE_FIX.mode).toBe("build");
+    expect(MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.mode).toBe("build");
     expect(nodeTurn(plan, "fix")).toBe("write");
     expect(agent(plan, "fix").askHuman).toBe(
-      MULTI_REVIEW_INTERACTIVE_FIX.interactionPolicy === INTERACTIVE_AGENT_INTERACTION_POLICY,
+      MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.interactionPolicy ===
+        INTERACTIVE_AGENT_INTERACTION_POLICY,
     );
     // Today's PR agent pushes; here a system node does (D12).
     expect(node(plan, "pr")).toMatchObject({ kind: "system", action: "open-pull-request" });
@@ -386,9 +387,9 @@ describe("Multi Review template ↔ multi-review-service", () => {
         for (const report of FINDINGS) {
           for (const complete of [false, true]) {
             const workflow = { autoFix, autoPr, consolidatedReport: report } as MultiReviewWorkflow;
-            const fixes = multiReviewAutoFixDue(workflow);
+            const fixes = multiReviewAutoAddressFindingsDue(workflow);
             if (!fixes) queueCleanReviewAutoPr(workflow);
-            else if (fixResultCompletes({ complete })) queueAutoPr(workflow);
+            else if (addressFindingsResultCompletes({ complete })) queueAutoPr(workflow);
             const engine = { fix: fixes, pr: workflow.autoPrLaunch?.state === "pending" };
             const ran = route(plan, {
               params: { autoFix, autoPr },

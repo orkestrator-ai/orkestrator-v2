@@ -1,14 +1,14 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { ADDRESS_FIX_RESULT_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
+import { ADDRESS_FINDINGS_RESULT_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import {
   advanceUntil,
   rewritePipeline,
   startInput,
   withPipeline,
 } from "./build-pipeline-review-fanout-test-support.js";
-import { TEST_FIX_RESULT } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { TEST_ADDRESS_FINDINGS_RESULT } from "./build-pipeline-test-fixtures.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { resumePromptFor } from "./build-pipeline-service-helpers.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -42,11 +42,13 @@ describe("typed Address report", () => {
         });
         const dispatch = provider.sent.find((entry) => entry.sessionId === address.sdkSessionId)!;
         expect(dispatch.prompt).toContain("submit_fix_result");
-        expect(dispatch.prompt).toContain("Report your work in the fix result you submit");
+        expect(dispatch.prompt).toContain(
+          "Report your work in the Address Findings result you submit",
+        );
         expect(dispatch.workflowResultTool).toBe("submit_fix_result");
 
         const submitted = {
-          ...TEST_FIX_RESULT,
+          ...TEST_ADDRESS_FINDINGS_RESULT,
           complete: false,
           summary: "Fixed the inverted branch; lint still fails on origin/main.",
           commandsRun: [
@@ -71,7 +73,7 @@ describe("typed Address report", () => {
         });
 
         const prompt = verifyPrompt(provider.sent)!;
-        expect(prompt).toContain(ADDRESS_FIX_RESULT_FRAME_OPEN);
+        expect(prompt).toContain(ADDRESS_FINDINGS_RESULT_FRAME_OPEN);
         expect(prompt).toContain(submitted.summary);
         expect(prompt).toContain("Lint fails on origin/main too");
         // The transcript is never the report once the session is typed.
@@ -113,20 +115,20 @@ describe("typed Address report", () => {
           });
 
           if (outcome === "delivers") {
-            await workflowResults!.submit(scope, reminder.requestId, TEST_FIX_RESULT);
+            await workflowResults!.submit(scope, reminder.requestId, TEST_ADDRESS_FINDINGS_RESULT);
             const verifying = await advanceUntil(service, read, started.id, "verifying");
             expect(verifying.phase).toBe("verifying");
             expect(
               verifying.sessions.find((session) => session.sdkSessionId === address.sdkSessionId)
                 ?.fixResult,
-            ).toEqual(TEST_FIX_RESULT);
+            ).toEqual(TEST_ADDRESS_FINDINGS_RESULT);
             return;
           }
           const sentBefore = provider.sent.length;
           const failed = await advanceUntil(service, read, started.id, "failed", 5);
           expect(failed.phase).toBe("failed");
           expect(failed.error).toBe(
-            "The address stage finished without returning its required structured result",
+            "The Address Findings stage finished without returning its required structured result",
           );
           // The reminder was the stage's only one.
           expect(provider.sent).toHaveLength(sentBefore);
@@ -154,11 +156,14 @@ describe("typed Address report", () => {
               ok: true,
               provider: "claude",
               requestId,
-              value: { ...TEST_FIX_RESULT, limitations: ["Lint still fails."] } as never,
+              value: {
+                ...TEST_ADDRESS_FINDINGS_RESULT,
+                limitations: ["Lint still fails."],
+              } as never,
             }
           : structured(sessionId, requestId);
       const failed = await advanceUntil(service, read, started.id, "failed", 5);
-      expect(failed.error).toContain("The address stage returned a malformed fix result");
+      expect(failed.error).toContain("The Address Findings stage returned a malformed result");
       expect(current(failed).fixResult).toBeUndefined();
     });
   });
@@ -205,9 +210,9 @@ describe("Address sessions from before the typed report", () => {
         expect(legacy.addressReportKind).toBeUndefined();
         expect(legacy.fixResult).toBeUndefined();
         const prompt = verifyPrompt(provider.sent)!;
-        expect(prompt).toContain("the address stage's latest assistant text");
+        expect(prompt).toContain("the Address Findings stage's latest assistant text");
         expect(prompt).toContain("LEGACY ADDRESS REPORT: fixed the branch.");
-        expect(prompt).not.toContain(ADDRESS_FIX_RESULT_FRAME_OPEN);
+        expect(prompt).not.toContain(ADDRESS_FINDINGS_RESULT_FRAME_OPEN);
         expect(record).toHaveBeenCalledWith("build-pipeline.address-text-report");
       } finally {
         record.mockRestore();
@@ -232,12 +237,12 @@ describe("Address sessions from before the typed report", () => {
       const verifying = await advanceUntil(service, read, started.id, "verifying");
       expect(verifying.phase).toBe("verifying");
       expect(verifying.sessions.some((session) => session.phase === "address")).toBe(false);
-      expect(verifyPrompt(provider.sent)).toContain("**Address report**: none.");
+      expect(verifyPrompt(provider.sent)).toContain("**Address Findings report**: none.");
     });
   });
 
   test("resume asks for the fix result only from a typed Address session", () => {
-    const typed = resumePromptFor("addressing", { addressResult: true })!;
+    const typed = resumePromptFor("addressing", { addressFindingsResult: true })!;
     const legacy = resumePromptFor("addressing")!;
     expect(typed).toContain("finish with the required fix result");
     expect(legacy).not.toContain("fix result");
@@ -252,7 +257,7 @@ describe("Address sessions from before the typed report", () => {
           const started = await service.start(startInput());
           await advanceUntil(service, read, started.id, "addressing");
           const call = prepare.mock.calls.find(([input]) => input.kind === "fix-result");
-          expect(call?.[0].schema).toEqual(REVIEW_FIX_RESULT_JSON_SCHEMA);
+          expect(call?.[0].schema).toEqual(REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA);
         } finally {
           prepare.mockRestore();
         }

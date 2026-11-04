@@ -3,12 +3,16 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  canonicalBuildPipeline,
+  canonicalMultiReview,
+} from "@orkestrator/protocol/workflow-vocabulary";
+import {
   isLaunchMultiReviewActionInput,
   isMultiReviewModelSelection,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
-  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
   type MultiReviewActionResult,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
@@ -236,7 +240,7 @@ export function registerControllerWorkflowCommands(
     }
     // Choices the coordinator left out run this node's Build button defaults.
     const input = buildPipelineInputWithDefaults(
-      args.input,
+      canonicalBuildPipeline(args.input),
       savedLaunchSettings(await context.storage.loadConfig(), projectId),
     );
     if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
@@ -276,10 +280,10 @@ export function registerControllerWorkflowCommands(
   ): Promise<MultiReviewActionResult> => {
     if (!context.multiReviews) throw new Error("Multi Review supervisor is unavailable");
     const service = context.multiReviews;
-    if (!isLaunchMultiReviewActionInput(args.input)) {
+    const input = canonicalMultiReview(args.input);
+    if (!isLaunchMultiReviewActionInput(input)) {
       throw new Error("Invalid Multi Review button action");
     }
-    const input = args.input;
     const reservedId = asNonBlankString(args.reservedId, "reservedId");
     const environment = await environmentOf(context, input.environmentId);
     const start = await multiReviewButtonStart(
@@ -371,7 +375,7 @@ export function registerControllerWorkflowCommands(
     }
     if (surface === "custom-fix") {
       const instruction = asNonBlankString(args.instruction, "instruction").trim();
-      if (instruction.length > MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH) {
+      if (instruction.length > MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH) {
         throw new Error("The custom fix instruction is too long");
       }
       const fixModel = args.fixModel;
@@ -426,8 +430,17 @@ export function registerControllerWorkflowCommands(
         "Multi-review can start only after the associated build pipeline completed successfully",
       );
     }
+    const requested = canonicalMultiReview(args.input);
+    // Validate explicit automation before defaults: the resolver treats an
+    // omitted flag as a saved preference, which must not repair malformed input.
+    if (
+      (requested.autoFix !== undefined && typeof requested.autoFix !== "boolean") ||
+      (requested.autoPr !== undefined && typeof requested.autoPr !== "boolean")
+    ) {
+      throw new Error("Invalid multi-review request");
+    }
     const input = await multiReviewInputWithDefaults(
-      { ...args.input, projectId: environment.projectId },
+      { ...requested, projectId: environment.projectId },
       savedLaunchSettings(await context.storage.loadConfig(), environment.projectId, environment),
       () =>
         readLaunchModelCatalog(

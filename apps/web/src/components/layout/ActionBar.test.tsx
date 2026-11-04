@@ -1449,13 +1449,12 @@ describe("ActionBar coordinator tab activity", () => {
     expect(kanban.className).not.toContain("relative");
   });
 
-  test("the coordinator tab alone takes its focus ring from its text", () => {
+  test("the coordinator tab shows focus the same way as its neighbours", () => {
     const { tab } = renderTab("working");
-    expect(tab.className).toContain("focus-visible:ring-current");
-    expect(tab.className).not.toContain("focus-visible:ring-ring/60");
+    expect(tab.className).toContain("focus-hairline");
+    expect(tab.className).not.toContain("forced-colors:");
     const kanban = screen.getByRole("button", { name: "Kanban" });
-    expect(kanban.className).toContain("focus-visible:ring-ring/60");
-    expect(kanban.className).not.toContain("focus-visible:ring-current");
+    expect(kanban.className).toContain("focus-hairline");
   });
 });
 
@@ -4783,7 +4782,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
     expect(
       screen
-        .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+        .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
         .getAttribute("aria-checked"),
     ).toBe("true");
     expect(startMultiReviewMock).not.toHaveBeenCalled();
@@ -4919,7 +4918,9 @@ describe("ActionBar workflow tabs", () => {
     currentMultiReviewSettings = { autoFix: true };
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Auto-fix after consolidation" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Auto-address findings after consolidation" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
     await waitFor(() =>
       expect(startMultiReviewMock).toHaveBeenCalledWith(

@@ -44,7 +44,7 @@ describe("multi review obligations", () => {
       fixSession: { status: "running" } as MultiReviewWorkflow["fixSession"],
     });
     expect(multiReviewObligation(pausedStop, true)).toBe("paused-stop");
-    // A successful Fix's PR launch is owed in any phase, until delivered.
+    // A successful Address Findings's PR launch is owed in any phase, until delivered.
     const prLaunch = (state: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>["state"]) =>
       workflow({ phase: "interactive", autoPrLaunch: { state, requestId: "pr" } });
     expect(multiReviewObligation(prLaunch("pending"), true)).toBe("pr-handoff");

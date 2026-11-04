@@ -952,7 +952,7 @@ export function LinearTicketsViewContent({
                       className={cn(
                         "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
                         checked
-                          ? "border-primary bg-primary/10 text-foreground"
+                          ? "border-ring bg-primary/10 text-foreground"
                           : "border-border bg-background text-muted-foreground hover:text-foreground",
                       )}
                     >

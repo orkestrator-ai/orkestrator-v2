@@ -145,11 +145,11 @@ describe("rewinding to an earlier step", () => {
           .slice(2)
           .every((session) => !supersededKeys.includes(session.sessionKey)),
       ).toBe(true);
-      // The new Fix 2 answers the new Verify 1, not the superseded run's.
+      // The new Rework 2 answers the new Verify 1, not the superseded run's.
       const rerunVerify = live(refailed)[2]!;
       const rerunFix = live(refailed)[3]!;
-      const fixPrompt = provider.sent.find((sent) => sent.sessionId === rerunFix.sdkSessionId);
-      expect(fixPrompt?.prompt).toContain(`Still failing (${rerunVerify.sdkSessionId}).`);
+      const reworkPrompt = provider.sent.find((sent) => sent.sessionId === rerunFix.sdkSessionId);
+      expect(reworkPrompt?.prompt).toContain(`Still failing (${rerunVerify.sdkSessionId}).`);
       expect(rerunVerify.verificationFeedback).toBe(`Still failing (${rerunVerify.sdkSessionId}).`);
     });
   });
@@ -167,16 +167,16 @@ describe("rewinding to an earlier step", () => {
       const firstVerify = failed.sessions.find(
         (session) => session.phase === "verify" && session.iteration === 0,
       )!;
-      const firstFix = failed.sessions.find((session) => session.phase === "fix")!;
-      expect(firstFix.iteration).toBe(1);
+      const firstRework = failed.sessions.find((session) => session.phase === "fix")!;
+      expect(firstRework.iteration).toBe(1);
 
-      const restarted = await service.restartStep(started.id, firstFix.sessionKey);
+      const restarted = await service.restartStep(started.id, firstRework.sessionKey);
 
       expect(restarted).toMatchObject({ phase: "fixing", iteration: 1 });
       expect(restarted.verificationFeedback).toBe(`Still failing (${firstVerify.sdkSessionId}).`);
       expect(shape(live(restarted))).toEqual(["build:0", "review:0", "verify:0", "fix:1"]);
       const replacement = restarted.sessions.at(-1)!;
-      expect(replacement.sessionKey).not.toBe(firstFix.sessionKey);
+      expect(replacement.sessionKey).not.toBe(firstRework.sessionKey);
       const sent = provider.sent.find((entry) => entry.sessionId === replacement.sdkSessionId);
       expect(sent?.prompt).toContain(`Still failing (${firstVerify.sdkSessionId}).`);
     });
@@ -577,7 +577,7 @@ describe("rewinding to an earlier step", () => {
         started.id,
         (snapshot) => snapshot.phase === "failed",
       );
-      const firstFix = failed.sessions.find((entry) => entry.phase === "fix")!;
+      const firstRework = failed.sessions.find((entry) => entry.phase === "fix")!;
       const latestFeedback = failed.verificationFeedback!;
       await mutateStored(storage, started.id, (snapshot) => {
         for (const entry of snapshot.sessions) {
@@ -585,7 +585,7 @@ describe("rewinding to an earlier step", () => {
           delete entry.verificationResult;
         }
       });
-      const restarted = await service.restartStep(started.id, firstFix.sessionKey);
+      const restarted = await service.restartStep(started.id, firstRework.sessionKey);
       expect(restarted.verificationFeedback).toBeUndefined();
       const sent = provider.sent.find(
         (entry) => entry.sessionId === restarted.sessions.at(-1)!.sdkSessionId,

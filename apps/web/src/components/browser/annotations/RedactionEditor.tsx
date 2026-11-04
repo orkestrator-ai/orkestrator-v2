@@ -122,7 +122,7 @@ export function RedactionEditor({
             tabIndex={0}
             aria-label={`Redaction ${index + 1}`}
             onKeyDown={(event) => moveRegion(index, event)}
-            className="absolute bg-black outline-none ring-offset-1 focus-visible:ring-2 focus-visible:ring-primary"
+            className="absolute bg-black outline-none focus-hairline"
             style={percent(region)}
           />
         ))}

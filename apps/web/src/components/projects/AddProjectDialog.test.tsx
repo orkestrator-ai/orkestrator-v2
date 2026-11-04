@@ -102,10 +102,10 @@ describe("AddProjectDialog", () => {
     expect(tabList.className).toContain("p-0");
 
     for (const tab of [existingTab, createTab]) {
-      expect(tab.className).toContain("border-2");
+      expect(tab.className).not.toContain("border-2");
       expect(tab.className).toContain("p-3");
       expect(tab.className).toContain("justify-start");
-      expect(tab.className).toContain("data-[state=active]:!border-primary");
+      expect(tab.className).toContain("data-[state=active]:!border-ring");
       expect(tab.className).toContain("data-[state=inactive]:!bg-zinc-900");
       expect(tab.className).toContain("hover:data-[state=inactive]:border-zinc-600");
     }

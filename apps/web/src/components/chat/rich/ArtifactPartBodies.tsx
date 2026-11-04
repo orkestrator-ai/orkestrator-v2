@@ -184,7 +184,7 @@ function ToolbarAction({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded border border-border px-1.5 text-foreground outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-3",
+        "inline-flex h-6 items-center gap-1 rounded border border-border px-1.5 text-foreground outline-none hover:bg-elevated focus-hairline disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-3",
         pressed && "bg-elevated",
       )}
     >

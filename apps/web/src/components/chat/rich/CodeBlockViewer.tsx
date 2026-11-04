@@ -227,7 +227,7 @@ export function RichPinRecoveryNotice({
       <button
         type="button"
         onClick={onReopen}
-        className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 outline-none hover:bg-elevated focus-hairline"
       >
         <RotateCcw aria-hidden="true" className="size-3" /> Reopen
       </button>
@@ -235,7 +235,7 @@ export function RichPinRecoveryNotice({
         type="button"
         aria-label="Dismiss"
         onClick={onDismiss}
-        className="inline-flex size-5 items-center justify-center rounded outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="inline-flex size-5 items-center justify-center rounded outline-none hover:bg-elevated focus-hairline"
       >
         <X aria-hidden="true" className="size-3" />
       </button>

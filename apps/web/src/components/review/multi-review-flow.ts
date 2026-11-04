@@ -52,7 +52,7 @@ export interface MultiReviewFlowEdges {
   intoReviewers: MultiReviewFlowEdgeState[];
   /** Reviewer → consolidation, one per reviewer in panel order. */
   intoConsolidation: MultiReviewFlowEdgeState[];
-  intoFix: MultiReviewFlowEdgeState;
+  intoAddressFindings: MultiReviewFlowEdgeState;
   intoPr: MultiReviewFlowEdgeState;
   prSource?: "consolidation" | "fix";
 }
@@ -78,7 +78,9 @@ export function multiReviewFlowEdges(states: {
     intoConsolidation: states.reviewers.map((reviewer) =>
       multiReviewFlowEdgeState(reviewer, states.consolidation, { waitingIsReady: true }),
     ),
-    intoFix: multiReviewFlowEdgeState(states.consolidation, states.fix, { waitingIsReady: true }),
+    intoAddressFindings: multiReviewFlowEdgeState(states.consolidation, states.fix, {
+      waitingIsReady: true,
+    }),
     prSource: states.prFromConsolidation ? "consolidation" : "fix",
     intoPr: multiReviewFlowEdgeState(
       states.prFromConsolidation ? states.consolidation : states.fix,

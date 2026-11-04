@@ -175,7 +175,7 @@ export function DesignFrameInspector({
                     type={field === "name" ? "text" : "number"}
                     inputMode={field === "name" ? undefined : "numeric"}
                     step={field === "name" ? undefined : 1}
-                    className={`h-7 px-2 text-xs md:text-xs ${changed ? "border-primary ring-1 ring-primary/40" : ""}`}
+                    className={`h-7 px-2 text-xs md:text-xs ${changed ? "border-ring" : ""}`}
                     value={shown(field)}
                     maxLength={field === "name" ? FRAME_NAME_MAX + 20 : undefined}
                     aria-invalid={errors[field] ? true : undefined}

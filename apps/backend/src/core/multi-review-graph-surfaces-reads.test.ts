@@ -124,7 +124,7 @@ describe("CLI review commands on a graph-engine review", () => {
     const ready = ok<Record<string, unknown>>(await harness.call("review.get", { workflowId }));
     expect(ready.result).toMatchObject({
       phase: "ready",
-      automation: { next: "Waiting for address_multi_review to start the Fix." },
+      automation: { next: "Waiting for address_multi_review to start Address Findings." },
     });
     const listed = ok<{ items: Array<Record<string, unknown>>; total: number }>(
       await harness.call("review.list", { environmentId: w.environmentId }),
@@ -237,7 +237,7 @@ describe("the review-pass tab's reads on a graph-engine review", () => {
     expect(contentOf(consolidate.messages)[0]).toBe(
       `${settled.reviewSession!.providerSessionId} step 0`,
     );
-    // No Fix ran: the step has no session to read.
+    // No Address Findings ran: the step has no session to read.
     expect(await w.service.stepTranscript(settled.id, "fix")).toMatchObject({
       session: "none",
       messages: [],

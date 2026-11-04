@@ -166,7 +166,7 @@ export function UsageTrendChart({ days, platforms, metric }: UsageTrendChartProp
           onKeyDown={onKeyDown}
           onMouseMove={(event) => setSelected(pointerDay(event.clientX))}
           onMouseLeave={() => setSelected(null)}
-          className="absolute inset-y-0 left-12 right-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="absolute inset-y-0 left-12 right-0 rounded-lg outline-none focus-hairline"
         >
           <span id={labelId} className="sr-only">
             {`Daily ${metric === "cost" ? "spend" : "processed tokens"} by platform. Arrow keys read one day.`}

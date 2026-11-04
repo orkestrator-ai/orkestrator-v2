@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
+import { SEGMENT_SELECTED_CLASS_NAME } from "@/components/ui/segmented-selector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -1676,9 +1677,9 @@ export function CreateEnvironmentDialog({
                         !dockerAvailable ? "Start Docker to use container environments" : undefined
                       }
                       className={cn(
-                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-hairline",
                         environmentType === "containerized"
-                          ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                          ? SEGMENT_SELECTED_CLASS_NAME
                           : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
                         (isLoading || !dockerAvailable) && "cursor-not-allowed opacity-50",
                       )}
@@ -1699,9 +1700,9 @@ export function CreateEnvironmentDialog({
                           : undefined
                       }
                       className={cn(
-                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-hairline",
                         environmentType === "local"
-                          ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                          ? SEGMENT_SELECTED_CLASS_NAME
                           : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
                         (isLoading || !localEnvironmentAvailable) &&
                           "cursor-not-allowed opacity-50",
@@ -1805,9 +1806,9 @@ export function CreateEnvironmentDialog({
                         onClick={() => setNetworkAccessMode("restricted")}
                         disabled={isLoading}
                         className={cn(
-                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-hairline",
                           networkAccessMode === "restricted"
-                            ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                            ? SEGMENT_SELECTED_CLASS_NAME
                             : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
                           isLoading && "cursor-not-allowed opacity-50",
                         )}
@@ -1821,9 +1822,9 @@ export function CreateEnvironmentDialog({
                         onClick={() => setNetworkAccessMode("full")}
                         disabled={isLoading}
                         className={cn(
-                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-hairline",
                           networkAccessMode === "full"
-                            ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                            ? SEGMENT_SELECTED_CLASS_NAME
                             : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
                           isLoading && "cursor-not-allowed opacity-50",
                         )}

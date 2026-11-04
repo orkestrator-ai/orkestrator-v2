@@ -879,7 +879,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
 
   test("starts a custom fix once with the review's fix model by default", async () => {
     const workflow = await readyReview();
-    const customFix = mock(async (input: Record<string, unknown>) => ({
+    const customAddressFindings = mock(async (input: Record<string, unknown>) => ({
       ...workflow,
       phase: "interactive",
       addressPromptPending: true,
@@ -887,7 +887,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
     }));
     context = {
       ...context,
-      multiReviews: { customFix } as unknown as CommandContext["multiReviews"],
+      multiReviews: { customAddressFindings } as unknown as CommandContext["multiReviews"],
     } as CommandContext;
     const input = { requestId: "fix-1", workflowId: workflow.id, instruction: "Only the tests" };
     const first = await call<MultiReviewActionResult>(
@@ -897,7 +897,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
       },
     );
     expect(first.outcome).toBe("pending");
-    expect(customFix.mock.calls[0]![0]).toEqual({
+    expect(customAddressFindings.mock.calls[0]![0]).toEqual({
       workflowId: workflow.id,
       instruction: "Only the tests",
       fixModel: { agent: "codex", model: "default" },
@@ -911,7 +911,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
       replayed: true,
       workflow: { id: workflow.id },
     });
-    expect(customFix).toHaveBeenCalledTimes(1);
+    expect(customAddressFindings).toHaveBeenCalledTimes(1);
     await expect(
       call("custom_fix_coordinator_multi_review_action", {
         input: { ...input, fixModel: { agent: "claude", model: "opus" } },
@@ -922,18 +922,19 @@ describe("Multi Review custom fix and reviewer tabs", () => {
   for (const blocker of ["tab", "handoff", "readiness"])
     test(`custom fix retries the same request after ${blocker} failure`, async () => {
       const workflow = await readyReview();
-      const customFix = mock(async () => ({
+      const customAddressFindings = mock(async () => ({
         ...workflow,
         phase: "interactive",
         addressPromptPending: true,
       }));
-      context.multiReviews = { customFix } as unknown as CommandContext["multiReviews"];
+      context.multiReviews = { customAddressFindings } as unknown as CommandContext["multiReviews"];
       const input = { requestId: "retry-fix", workflowId: workflow.id, instruction: "Fix tests" };
       const open =
         blocker === "tab"
           ? spyOn(storage, "savePaneLayout").mockRejectedValueOnce(new Error("no room"))
           : null;
-      if (blocker === "handoff") customFix.mockRejectedValueOnce(new Error("not ready"));
+      if (blocker === "handoff")
+        customAddressFindings.mockRejectedValueOnce(new Error("not ready"));
       if (blocker === "readiness") await storage.updateEnvironment(workerId, { status: "stopped" });
       await expect(call("custom_fix_coordinator_multi_review_action", { input })).rejects.toThrow(
         "same requestId",
@@ -944,7 +945,7 @@ describe("Multi Review custom fix and reviewer tabs", () => {
         outcome: "pending",
       });
       await call("custom_fix_coordinator_multi_review_action", { input });
-      expect(customFix).toHaveBeenCalledTimes(blocker === "handoff" ? 2 : 1);
+      expect(customAddressFindings).toHaveBeenCalledTimes(blocker === "handoff" ? 2 : 1);
     });
 
   test("opens a reviewer's transcript subtab, and explains one that has not started", async () => {

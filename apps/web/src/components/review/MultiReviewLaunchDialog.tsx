@@ -69,7 +69,7 @@ export interface MultiReviewLaunchSelection {
 }
 
 export interface MultiReviewLaunchDefaults {
-  defaultAutoFix?: boolean;
+  defaultAutoAddressFindings?: boolean;
   defaultAutoPr?: boolean;
   defaultAgent: LaunchAgent;
   catalog: AgentModelCatalog;
@@ -81,7 +81,7 @@ export interface MultiReviewLaunchDefaults {
   /** @deprecated Compatibility for callers that have not moved to reviewerDefaults. */
   secondReviewerDefaults?: MultiReviewRowDefaults;
   reviewModelDefaults?: MultiReviewRowDefaults;
-  fixModelDefaults?: MultiReviewRowDefaults;
+  addressFindingsModelDefaults?: MultiReviewRowDefaults;
 }
 
 interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
@@ -173,7 +173,7 @@ function catalogWithConfiguredOpenCodeFallbacks(
     ...(defaults.reviewerDefaults ?? []),
     defaults.secondReviewerDefaults,
     defaults.reviewModelDefaults,
-    defaults.fixModelDefaults,
+    defaults.addressFindingsModelDefaults,
   ].filter((row): row is MultiReviewRowDefaults => row?.defaultAgent === "opencode");
   const configuredModels = new Map<string, Set<string>>();
   for (const row of configuredRows) {
@@ -212,7 +212,7 @@ function initialRows({
   reviewerDefaults,
   secondReviewerDefaults,
   reviewModelDefaults,
-  fixModelDefaults,
+  addressFindingsModelDefaults,
 }: MultiReviewLaunchDefaults): {
   reviewers: PickerRow[];
   reviewModel: PickerRow;
@@ -227,7 +227,7 @@ function initialRows({
     reviewerDefaults,
     secondReviewerDefaults,
     reviewModelDefaults,
-    fixModelDefaults,
+    addressFindingsModelDefaults,
   });
   const fallbackDefaults: MultiReviewRowDefaults = {
     defaultAgent,
@@ -244,7 +244,7 @@ function initialRows({
       initialConfiguredRow(defaults, fallbackDefaults, resolvedCatalog, { withLens: true }),
     ),
     reviewModel: initialConfiguredRow(reviewModelDefaults, fallbackDefaults, resolvedCatalog),
-    fixModel: initialConfiguredRow(fixModelDefaults, fallbackDefaults, resolvedCatalog),
+    fixModel: initialConfiguredRow(addressFindingsModelDefaults, fallbackDefaults, resolvedCatalog),
   };
 }
 
@@ -254,7 +254,7 @@ export function defaultMultiReviewLaunchSelection(
 ): MultiReviewLaunchSelection {
   const rows = initialRows(defaults);
   return {
-    autoFix: defaults.defaultAutoFix ?? false,
+    autoFix: defaults.defaultAutoAddressFindings ?? false,
     autoPr: defaults.defaultAutoPr ?? false,
     reviewers: rows.reviewers.map(cleanRow),
     reviewModel: cleanStepRow(rows.reviewModel),
@@ -394,7 +394,7 @@ function ModelRow({
 }
 
 export function MultiReviewLaunchDialog({
-  defaultAutoFix = false,
+  defaultAutoAddressFindings = false,
   defaultAutoPr = false,
   open,
   onOpenChange,
@@ -406,7 +406,7 @@ export function MultiReviewLaunchDialog({
   reviewerDefaults,
   secondReviewerDefaults,
   reviewModelDefaults,
-  fixModelDefaults,
+  addressFindingsModelDefaults,
   busy = false,
   onConfirm,
 }: MultiReviewLaunchDialogProps) {
@@ -429,13 +429,13 @@ export function MultiReviewLaunchDialog({
     makeRow(),
     initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, catalog),
   ]);
-  const [fixModel, setFixModel] = useState<PickerRow>(() =>
-    initialConfiguredRow(fixModelDefaults, fallbackDefaults, catalog),
+  const [fixModel, setAddressFindingsModel] = useState<PickerRow>(() =>
+    initialConfiguredRow(addressFindingsModelDefaults, fallbackDefaults, catalog),
   );
   const [reviewModel, setReviewModel] = useState<PickerRow>(() =>
     initialConfiguredRow(reviewModelDefaults, fallbackDefaults, catalog),
   );
-  const [autoFix, setAutoFix] = useState(defaultAutoFix);
+  const [autoFix, setAutoAddressFindings] = useState(defaultAutoAddressFindings);
   const [autoPr, setAutoPr] = useState(defaultAutoPr);
   const wasOpen = useRef(false);
   // Normalized launch identity, not display labels. Joined into one string so
@@ -469,20 +469,20 @@ export function MultiReviewLaunchDialog({
       reviewerDefaults,
       secondReviewerDefaults,
       reviewModelDefaults,
-      fixModelDefaults,
+      addressFindingsModelDefaults,
     });
     setReviewers(rows.reviewers);
     setReviewModel(rows.reviewModel);
-    setFixModel(rows.fixModel);
-    setAutoFix(defaultAutoFix);
+    setAddressFindingsModel(rows.fixModel);
+    setAutoAddressFindings(defaultAutoAddressFindings);
     setAutoPr(defaultAutoPr);
   }, [
-    defaultAutoFix,
+    defaultAutoAddressFindings,
     defaultAutoPr,
     catalog,
     defaultAgent,
     fallbackDefaults,
-    fixModelDefaults,
+    addressFindingsModelDefaults,
     open,
     preferredFastModes,
     preferredModels,
@@ -620,13 +620,13 @@ export function MultiReviewLaunchDialog({
               </div>
               <ModelRow
                 row={fixModel}
-                label="Fix model"
+                label="Address Findings model"
                 models={models}
                 catalog={catalog}
                 favorites={favorites}
                 onToggleFavorite={toggleFavorite}
                 onReorderFavorites={reorderFavorites}
-                onChange={setFixModel}
+                onChange={setAddressFindingsModel}
               />
               <p className="mt-2 text-xs leading-relaxed text-zinc-500">
                 This model receives the consolidated report and addresses its issues and coverage
@@ -634,12 +634,14 @@ export function MultiReviewLaunchDialog({
               </p>
               <div className="mt-4 flex items-center gap-2">
                 <Checkbox
-                  id="multi-review-launch-auto-fix"
+                  id="multi-review-launch-auto-address-findings"
                   checked={autoFix}
                   disabled={busy}
-                  onCheckedChange={(checked) => setAutoFix(checked === true)}
+                  onCheckedChange={(checked) => setAutoAddressFindings(checked === true)}
                 />
-                <Label htmlFor="multi-review-launch-auto-fix">Auto-fix after consolidation</Label>
+                <Label htmlFor="multi-review-launch-auto-address-findings">
+                  Auto-address findings after consolidation
+                </Label>
               </div>
               <div className="mt-3 flex items-center gap-2">
                 <Checkbox

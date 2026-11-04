@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import {
   BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
@@ -108,7 +109,8 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
   activeBuildEnvironmentIds: new Set(),
   viewedSessionIds: new Map(),
 
-  replacePipeline: (pipeline) => {
+  replacePipeline: (incoming) => {
+    const pipeline = canonicalBuildPipeline(incoming);
     if (!isBuildPipeline(pipeline)) {
       throw new Error("Invalid backend build pipeline snapshot");
     }

@@ -4371,15 +4371,17 @@ describe("multi review commands", () => {
     });
     const start = mock(async (_input: unknown) => workflow("start"));
     const address = mock(async (id: string) => ({ ...workflow("address"), id }));
-    const customFix = mock(async (input: { workflowId: string }) => ({
-      ...workflow("customFix"),
+    const customAddressFindings = mock(async (input: { workflowId: string }) => ({
+      ...workflow("customAddressFindings"),
       id: input.workflowId,
     }));
     const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
-    const recoverFixSession = mock(async (_environmentId: string, input: { tabId: string }) => ({
-      ...workflow("recoverFixSession"),
-      id: input.tabId.includes("multi-1") ? "multi-1" : "unexpected",
-    }));
+    const recoverAddressFindingsSession = mock(
+      async (_environmentId: string, input: { tabId: string }) => ({
+        ...workflow("recoverAddressFindingsSession"),
+        id: input.tabId.includes("multi-1") ? "multi-1" : "unexpected",
+      }),
+    );
     const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
     const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
       ...workflow("stopReviewer"),
@@ -4412,9 +4414,9 @@ describe("multi review commands", () => {
     const supervisor = {
       start,
       address,
-      customFix,
+      customAddressFindings,
       retry,
-      recoverFixSession,
+      recoverAddressFindingsSession,
       cancel,
       stopValidation,
       stopReviewer,
@@ -4471,13 +4473,13 @@ describe("multi review commands", () => {
         }
         expect(start).toHaveBeenCalledWith(startInput);
         expect(address).toHaveBeenCalledWith("multi-1");
-        expect(customFix).toHaveBeenCalledWith({
+        expect(customAddressFindings).toHaveBeenCalledWith({
           workflowId: "multi-1",
           fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
           instruction: "Fix the inactive-tab regression",
         });
         expect(retry).toHaveBeenCalledWith("multi-1");
-        expect(recoverFixSession).toHaveBeenCalledWith("e1", {
+        expect(recoverAddressFindingsSession).toHaveBeenCalledWith("e1", {
           tabId: "multi-review-fix:multi-1:launch-1",
           expectedProviderSessionId: "provider-fix",
           replacementProviderSessionId: "provider-replacement",
@@ -4545,7 +4547,7 @@ describe("multi review commands", () => {
     const lifecycle = mock(async () => undefined);
     const supervisor = {
       start,
-      customFix: lifecycle,
+      customAddressFindings: lifecycle,
       address: lifecycle,
       retry: lifecycle,
       cancel: lifecycle,

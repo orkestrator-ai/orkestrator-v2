@@ -262,7 +262,7 @@ export function AnnotationList({
                   )}
                   <button
                     type="button"
-                    className="min-w-0 flex-1 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="min-w-0 flex-1 rounded text-left outline-none focus-hairline"
                     onClick={() => onOpen(item.id)}
                     aria-label={`Open note: ${title}`}
                   >

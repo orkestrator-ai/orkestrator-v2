@@ -9,6 +9,7 @@ import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorMainConversation,
   coordinatorRuntimeId,
+  type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
 import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrator";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
@@ -107,10 +108,28 @@ async function mailboxDisplayName(
   return mailbox?.descriptor.displayName || undefined;
 }
 
+/** The environment a workflow a coordinator on this backend started runs in. */
+async function workflowEnvironmentId(
+  storage: StorageService,
+  association: CoordinatorWorkflowAssociation,
+): Promise<string | undefined> {
+  if (association.kind === "build-pipeline")
+    return storage.getBuildPipelineEnvironmentId(association.resourceId).catch(() => undefined);
+  const snapshot =
+    association.kind === "multi-review"
+      ? (await storage.getMultiReviewWorkflow(association.resourceId).catch(() => null))?.snapshot
+      : association.kind === "graph-run"
+        ? await storage.graphRuns.getGraphRun(association.resourceId).catch(() => null)
+        : undefined;
+  const environmentId = (snapshot as { environmentId?: unknown } | null | undefined)?.environmentId;
+  return typeof environmentId === "string" ? environmentId : undefined;
+}
+
 /**
  * When a coordinator on this backend last contacted a local environment's tab:
- * launched or delegated to the environment, or mailed the tab. Associations
- * with a `nodeId` are for environments on other nodes and never count.
+ * launched or delegated to the environment, started a workflow in it, or mailed
+ * the tab. Associations with a `nodeId` are for environments on other nodes and
+ * never count.
  */
 export async function localCoordinatorContact(
   storage: StorageService,
@@ -118,15 +137,12 @@ export async function localCoordinatorContact(
   tabId?: string,
 ): Promise<LocalCoordinatorContact> {
   const environment = await storage.getEnvironment(environmentId).catch(() => null);
-  const [associations, workspace, mailbox] = await Promise.all([
+  const [associations, mailbox] = await Promise.all([
     environment
       ? storage.coordinators
           .listCoordinatorWorkflowAssociations(environment.projectId)
           .catch(() => [])
       : [],
-    environment
-      ? storage.coordinators.getCoordinatorWorkspace(environment.projectId).catch(() => null)
-      : null,
     tabId
       ? storage.getAgentMailMailbox(environmentId, tabId, { limit: 200 }).catch(() => null)
       : null,
@@ -135,22 +151,28 @@ export async function localCoordinatorContact(
   const consider = (value: string | undefined) => {
     if (value && (!at || value > at)) at = value;
   };
-  for (const association of associations) {
-    if (
-      association.kind !== "environment" ||
-      association.resourceId !== environmentId ||
-      association.nodeId ||
-      association.pending
-    ) {
-      continue;
-    }
-    if (association.baseCommit) consider(association.createdAt);
-    consider(association.delegation?.requestedAt);
-  }
   for (const message of mailbox?.messages ?? []) {
     if (message.from.kind === "coordinator") consider(message.createdAt);
   }
-  return { ...(at ? { at } : {}), hasCoordinator: Boolean(workspace) };
+  const workflows: CoordinatorWorkflowAssociation[] = [];
+  for (const association of associations) {
+    if (association.nodeId || association.pending) continue;
+    if (association.kind === "environment") {
+      if (association.resourceId !== environmentId) continue;
+      if (association.baseCommit) consider(association.createdAt);
+      consider(association.delegation?.requestedAt);
+    } else workflows.push(association);
+  }
+  // A workflow cannot contribute a contact newer than its association. Once
+  // the newest matching workflow is found, older records need no hydration.
+  workflows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const association of workflows) {
+    if (at && association.createdAt <= at) break;
+    if ((await workflowEnvironmentId(storage, association)) === environmentId) {
+      consider(association.createdAt);
+    }
+  }
+  return at ? { at } : {};
 }
 
 /** What node mail needs from the coordinator notices; set once both exist. */
@@ -700,6 +722,46 @@ export class NodeCoordination {
     };
   }
 
+  /**
+   * A command node has no coordinator for an agent's repository: its mail to
+   * "coordinator" goes to this node's own instead of waiting in the outbox for
+   * one that may never exist. With none here either, the send fails and the
+   * item stays queued. Addressed and coordinator mail is never handed back.
+   */
+  async returnOutboxMail(controllerId: BackendId, seq: number): Promise<void> {
+    const storage = this.options.storage;
+    const controller = this.options.nodes
+      .listControllers()
+      .find((entry) => entry.controllerId === controllerId);
+    if (!controller) throw new Error("Only an attached command node can hand back its mail.");
+    const item = await this.leafMail.queued(controllerId, seq);
+    if (!item) return;
+    if (item.fromCoordinator || item.toCoordinator || item.allowLocalFallback === false) {
+      throw new Error("That mail was addressed to a coordinator conversation.");
+    }
+    const environment = await storage.getEnvironment(item.fromEnvironmentId);
+    if (!environment) throw new Error("The environment that sent that mail no longer exists.");
+    await storage.sendAgentMail(
+      {
+        kind: "tab",
+        environmentId: environment.id,
+        projectId: environment.projectId,
+        tabId: item.fromTabId,
+      },
+      {
+        requestId: item.requestId,
+        toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
+        toTabId: "",
+        ...(item.subject ? { subject: item.subject } : {}),
+        body: item.body,
+      },
+      {
+        fallbackNotice: `${controller.displayName} has no coordinator for this repository, so this came to you instead.`,
+      },
+    );
+    await this.leafMail.ack(controllerId, seq, [seq], true, true);
+  }
+
   /** Whether a project here has a coordinator a command node's coordinator can mail. */
   async projectCoordinator(projectId: string): Promise<{
     hasCoordinator: boolean;
@@ -917,9 +979,9 @@ export class NodeCoordination {
           )
         : undefined;
       const main = workspace ? coordinatorMainConversation(workspace) : null;
-      if (workspace && !main && input.from?.coordinator) {
-        // A leaf coordinator's new message reaches the main as local mail to
-        // "coordinator" would, starting a closed one with the default agent.
+      if (workspace && !main && input.from) {
+        // Mail from a leaf reaches the main as local mail to "coordinator"
+        // would, starting a closed one with the default agent.
         address = { environmentId: COORDINATOR_MAIL_ADDRESS, tabId: "" };
       } else if (!workspace || !main) {
         throw Object.assign(new Error("No open coordinator for that project on this node."), {

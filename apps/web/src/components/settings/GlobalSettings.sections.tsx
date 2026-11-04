@@ -974,9 +974,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             type="button"
             onClick={() => setPreferredEditor("vscode")}
             className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
+              "p-3 rounded-lg border text-left transition-colors",
               preferredEditor === "vscode"
-                ? "border-primary bg-primary/5"
+                ? "border-ring bg-primary/5"
                 : "border-transparent bg-zinc-900 hover:border-zinc-600",
             )}
           >
@@ -989,9 +989,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             type="button"
             onClick={() => setPreferredEditor("cursor")}
             className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
+              "p-3 rounded-lg border text-left transition-colors",
               preferredEditor === "cursor"
-                ? "border-primary bg-primary/5"
+                ? "border-ring bg-primary/5"
                 : "border-transparent bg-zinc-900 hover:border-zinc-600",
             )}
           >
@@ -2122,7 +2122,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                         void backend.openInBrowser(webClientStatus.url!);
                       }
                     }}
-                    className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-hairline"
                     title={webClientStatus.url}
                   >
                     <span className="truncate">{webClientStatus.url}</span>
@@ -2264,9 +2264,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           type="button"
           onClick={() => setDebugLogging(!debugLogging)}
           className={cn(
-            "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
+            "max-w-xs w-full p-3 rounded-lg border text-left transition-colors",
             debugLogging
-              ? "border-primary bg-primary/5"
+              ? "border-ring bg-primary/5"
               : "border-transparent bg-zinc-900 hover:border-zinc-600",
           )}
         >
@@ -2475,9 +2475,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           type="button"
           onClick={() => setExperimentalCodexRawEventLogging(!experimentalCodexRawEventLogging)}
           className={cn(
-            "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
+            "max-w-xs w-full p-3 rounded-lg border text-left transition-colors",
             experimentalCodexRawEventLogging
-              ? "border-primary bg-primary/5"
+              ? "border-ring bg-primary/5"
               : "border-transparent bg-zinc-900 hover:border-zinc-600",
           )}
         >

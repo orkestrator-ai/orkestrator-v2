@@ -389,6 +389,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
     );
   });
 
+  register("return_node_outbox_mail", async (args, context) => {
+    assertOnlyKeys(args, ["controllerId", "seq"], "arguments");
+    if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
+    if (typeof args.seq !== "number" || !Number.isSafeInteger(args.seq) || args.seq <= 0) {
+      throw new Error("Expected seq.");
+    }
+    await coordination(context).returnOutboxMail(args.controllerId, args.seq);
+    return { returned: true };
+  });
+
   // Action requests (command node): coordinators ask, the user decides.
   register("create_node_action_request", async (args, context) => {
     assertOnlyKeys(

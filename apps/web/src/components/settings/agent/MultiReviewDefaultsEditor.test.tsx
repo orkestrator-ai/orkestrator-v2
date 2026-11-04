@@ -111,7 +111,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
   test("toggles auto-fix and retains it when changing the reviewer count", () => {
     const onChange = mock((_tier: AgentSettingsTier) => undefined);
     render(<SettingsHarness canInherit={false} onChange={onChange} />);
-    const checkbox = screen.getByRole("checkbox", { name: "Auto-fix" });
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-address findings" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
     expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(true);
@@ -155,7 +155,7 @@ describe("MultiReviewDefaultsEditor Fast defaults", () => {
       />,
     );
 
-    const checkbox = screen.getByRole("checkbox", { name: "Auto-fix" });
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-address findings" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
     expect(onChange.mock.calls.at(-1)?.[0].multiReview?.autoFix).toBe(true);

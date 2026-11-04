@@ -173,7 +173,7 @@ export function WorkflowSnapshotCard({
               <button
                 type="button"
                 onClick={() => setLiveOpen(true)}
-                className="ml-auto inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="ml-auto inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 outline-none hover:bg-elevated focus-hairline"
               >
                 <Radio aria-hidden="true" className="size-3" /> Open live workflow
               </button>

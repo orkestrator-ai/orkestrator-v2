@@ -396,10 +396,10 @@ export function toMultiReviewStepMessages(snapshot: MultiReviewStepTranscript): 
 const STEP_LABEL: Record<MultiReviewStepKind, string> = {
   prepare: "review package generation",
   consolidate: "consolidation",
-  fix: "Fix",
+  fix: "Address Findings",
 };
 
-/** The transcript tail of a preparation, consolidation or Fix session. */
+/** The transcript tail of a preparation, consolidation or Address Findings session. */
 export function StepTranscriptTail({
   workflowId,
   step,
@@ -682,7 +682,7 @@ export function MultiReviewFindingsBadge({
         title="Issues so far"
         data-testid="multi-review-findings-badge"
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1 rounded-full border border-border bg-flow-node/95 p-1 shadow-[0_8px_24px_rgb(0_0_0/0.45)] transition-colors hover:bg-elevated-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        className="flex items-center gap-1 rounded-full border border-border bg-flow-node/95 p-1 shadow-[0_8px_24px_rgb(0_0_0/0.45)] transition-colors hover:bg-elevated-hover focus-hairline"
       >
         {counts.map(([severity, count]) => (
           <span

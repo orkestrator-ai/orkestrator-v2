@@ -184,10 +184,10 @@ describe("Orkestrator control MCP server", () => {
               baseCommit: "a".repeat(40),
               taskId: "task",
               agentType: "codex",
-              taskTitle: "Fix",
+              taskTitle: "Address Findings",
               taskSnapshot: {
-                title: "Fix",
-                description: "Fix parser",
+                title: "Address Findings",
+                description: "Address Findings parser",
                 acceptanceCriteria: "Tests pass",
               },
             },
@@ -336,9 +336,11 @@ describe("Orkestrator control MCP server", () => {
           }
         | undefined;
       expect(tool?.description).toContain(
-        "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks.",
+        "Omit autoFix and autoPr to use the user's saved Auto-address findings and Auto-PR settings, as the button does; set them only when the user asks.",
       );
-      expect(tool?.description).toContain("A failed, stopped or stalled Fix starts no PR.");
+      expect(tool?.description).toContain(
+        "A failed, stopped or stalled Address Findings starts no PR.",
+      );
       expect(tool?.description).not.toContain("always apply");
       for (const field of ["autoFix", "autoPr"]) {
         expect(tool?.inputSchema?.properties?.[field]?.type).toBe("boolean");
@@ -526,7 +528,7 @@ describe("Orkestrator control MCP server", () => {
       invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
         ?.args.input,
     ).toEqual({ requestId: "launch-review-defaults", environmentId: "env-1" });
-    // Auto-PR passes through untouched; the backend resolves the Fix it implies.
+    // Auto-PR passes through untouched; the backend resolves Address Findings it implies.
     overrides.set("launch_coordinator_multi_review_action", () => ({
       outcome: "opened",
       reused: false,
@@ -558,10 +560,10 @@ describe("Orkestrator control MCP server", () => {
       automation: {
         autoFix: true,
         autoPr: true,
-        next: "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes; a clean report starts the PR session directly.",
+        next: "Address Findings starts automatically if consolidation reports findings, then a PR session once Address Findings completes; a clean report starts the PR session directly.",
       },
     });
-    const autoFixOff = await rpc(credential.url, credential.token, "tools/call", {
+    const autoAddressFindingsOff = await rpc(credential.url, credential.token, "tools/call", {
       name: "launch_multi_review",
       arguments: {
         requestId: "launch-review-auto-fix-off",
@@ -570,7 +572,7 @@ describe("Orkestrator control MCP server", () => {
         autoPr: true,
       },
     });
-    expect(autoFixOff.body.result?.structuredContent?.selection).toMatchObject({
+    expect(autoAddressFindingsOff.body.result?.structuredContent?.selection).toMatchObject({
       source: { autoFix: "requested", autoPr: "requested" },
     });
     overrides.set("start_coordinator_multi_review", () => ({
@@ -612,7 +614,7 @@ describe("Orkestrator control MCP server", () => {
         automation: {
           autoFix: false,
           autoPr: true,
-          next: "Stops at ready if consolidation reports findings; address_multi_review starts the Fix; a PR session starts once that Fix completes. A clean report starts the PR session directly.",
+          next: "Stops at ready if consolidation reports findings; address_multi_review starts Address Findings; a PR session starts once that Address Findings run completes. A clean report starts the PR session directly.",
         },
       },
       selection: {
@@ -876,7 +878,7 @@ describe("Orkestrator control MCP server", () => {
     expect(invocations.some((entry) => entry.command.startsWith("start_environment"))).toBe(false);
   });
 
-  test("rejects cross-project environments and invalidates paused, superseded, and expired credentials", async () => {
+  test("rejects cross-project environments and invalidates paused, superseded, and revoked credentials", async () => {
     let lifecycleState = "ready";
     let incarnation = "incarnation-1";
     overrides.set("get_project_coordinator", () => ({
@@ -937,10 +939,34 @@ describe("Orkestrator control MCP server", () => {
 
     incarnation = "incarnation-1";
     credential = issue();
-    const now = Date.now();
-    const clock = spyOn(Date, "now").mockReturnValue(now + 12 * 60 * 60 * 1_000 + 1);
+    server.revokeCoordinatorCredentials("coordinator-1", "conversation-1");
+    expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+  });
+
+  // A bridge reads its token once, at launch, so a credential that lapsed while
+  // it sat idle overnight left a live coordinator with no tools at all: no
+  // launches and no send_message to hand the work on with.
+  test("a coordinator credential outlives any idle period while its bridge runs", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [{ id: "conversation-1", mailboxIncarnationId: "incarnation-1" }],
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["environments", "discovery", "mail"],
+    });
+    const later = Date.now() + 30 * 24 * 60 * 60 * 1_000;
+    const clock = spyOn(Date, "now").mockReturnValue(later);
     try {
-      expect((await rpc(credential.url, credential.token, "tools/list")).response.status).toBe(401);
+      const listed = await rpc(credential.url, credential.token, "tools/list");
+      expect(listed.response.status).toBe(200);
     } finally {
       clock.mockRestore();
     }

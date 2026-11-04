@@ -344,7 +344,7 @@ export function NativeAgentQuestionCard({
                   onClick={() => selectOption(option.id)}
                   className={cn(
                     "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                    "focus-hairline",
                     selected
                       ? "border-primary/50 bg-primary/10"
                       : "border-border/60 hover:bg-white/[0.03]",
@@ -392,7 +392,7 @@ export function NativeAgentQuestionCard({
                 onClick={toggleCustom}
                 className={cn(
                   "flex w-full items-center gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                  "focus-hairline",
                   showFreeText
                     ? "border-primary/50 bg-primary/10"
                     : "border-dashed border-border/60 hover:bg-white/[0.03]",
@@ -436,7 +436,7 @@ export function NativeAgentQuestionCard({
                 value={answer.freeText}
                 disabled={disabled}
                 placeholder="Type your answer"
-                className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-sm focus-visible:border-ring focus-visible:outline-none"
+                className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-sm focus-hairline"
                 onChange={(event) =>
                   updateAnswer(question, (current) => ({
                     ...current,

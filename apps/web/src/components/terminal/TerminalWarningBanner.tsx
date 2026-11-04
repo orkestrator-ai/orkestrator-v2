@@ -32,7 +32,7 @@ export function TerminalWarningBanner({ message, onDismiss }: TerminalWarningBan
         aria-label="Dismiss terminal warning"
         title="Dismiss"
         onClick={onDismiss}
-        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring"
+        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-hairline"
       >
         <X className="h-3.5 w-3.5" />
       </button>

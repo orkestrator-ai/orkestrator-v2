@@ -92,7 +92,7 @@ export function GraphDiagnosticRow({
       {target ? (
         <button
           type="button"
-          className="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary"
+          className="flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-accent focus-hairline"
           onClick={() => onSelect(target, true)}
           aria-label={`${diagnostic.severity}: ${diagnostic.message}${location ? ` (${location})` : ""}`}
         >

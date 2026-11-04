@@ -32,7 +32,7 @@ export function TerminalDisconnectedBanner({
       <button
         type="button"
         onClick={onReconnect}
-        className="shrink-0 cursor-pointer rounded-sm border border-red-400/40 px-1.5 py-0.5 font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-visible:outline focus-visible:outline-1 focus-visible:outline-red-300"
+        className="shrink-0 cursor-pointer rounded-sm border border-red-400/40 px-1.5 py-0.5 font-medium text-red-100 transition-colors hover:bg-red-500/20 focus-hairline"
       >
         Reconnect
       </button>
@@ -41,7 +41,7 @@ export function TerminalDisconnectedBanner({
         aria-label="Dismiss disconnected notice"
         title="Dismiss"
         onClick={onDismiss}
-        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-red-300 transition-colors hover:bg-red-500/20 hover:text-red-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-red-300"
+        className="-mr-0.5 shrink-0 cursor-pointer rounded-sm p-0.5 text-red-300 transition-colors hover:bg-red-500/20 hover:text-red-100 focus-hairline"
       >
         <X className="h-3.5 w-3.5" />
       </button>

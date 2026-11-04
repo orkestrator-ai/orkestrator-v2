@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { canonicalMultiReview } from "@orkestrator/protocol/workflow-vocabulary";
 
 interface MultiReviewState {
   workflows: Map<string, MultiReviewWorkflow>;
@@ -10,8 +11,9 @@ interface MultiReviewState {
 /** Read-only projection of backend-owned Multi Review workflows. */
 export const useMultiReviewStore = create<MultiReviewState>()((set) => ({
   workflows: new Map(),
-  replaceWorkflow: (workflow) =>
+  replaceWorkflow: (incoming) =>
     set((state) => {
+      const workflow = canonicalMultiReview(incoming);
       const current = state.workflows.get(workflow.id);
       if (current && current.backendRevision > workflow.backendRevision) return state;
       const workflows = new Map(state.workflows);

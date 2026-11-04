@@ -41,7 +41,7 @@ export function CaptureModePicker({
             if (next) onChange(next);
           }}
           className={cn(
-            "rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+            "rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground outline-none focus-hairline disabled:opacity-50",
             value === mode && "bg-primary/15 text-foreground",
           )}
         >

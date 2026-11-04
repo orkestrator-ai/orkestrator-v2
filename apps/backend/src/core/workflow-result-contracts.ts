@@ -27,10 +27,10 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import {
   REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
-  REVIEW_FIX_RESULT_JSON_SCHEMA,
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
-  parseFixResult,
+  parseAddressFindingsResult,
   parsePrResult,
   parseReviewPreparationResult,
 } from "./review-prompts.js";
@@ -279,7 +279,9 @@ function finalReviewReconciliation(
   });
 }
 
-function finalFixResult(value: Record<string, unknown>): WorkflowResultValidationIssue[] {
+function finalAddressFindingsResult(
+  value: Record<string, unknown>,
+): WorkflowResultValidationIssue[] {
   return finalContent((issues) => {
     inspectFinalText(issues, value.summary, "$.summary");
     inspectTextArray(issues, value.notes, "$.notes");
@@ -559,9 +561,9 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
         ? validateReconciliationContext(value, slot.context)
         : [],
   }),
-  builtInKind("fix-result", () => REVIEW_FIX_RESULT_JSON_SCHEMA, {
-    validator: parses(parseFixResult),
-    finalContent: finalFixResult,
+  builtInKind("fix-result", () => REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA, {
+    validator: parses(parseAddressFindingsResult),
+    finalContent: finalAddressFindingsResult,
   }),
   builtInKind("verification-result", () => VERIFICATION_VERDICT_SCHEMA, {
     // Keep the old two-field shape compatible. The consumer records every

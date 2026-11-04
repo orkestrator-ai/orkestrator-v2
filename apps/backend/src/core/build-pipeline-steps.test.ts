@@ -24,7 +24,7 @@ import {
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
-  TEST_FIX_RESULT,
+  TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -185,7 +185,7 @@ class RecordingProvider implements BuildPipelineProvider {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : this.verificationComplete
               ? { complete: true, rationale: "All criteria pass." }
               : { complete: false, rationale: "Acceptance checks still fail." }) as T,
@@ -1762,24 +1762,26 @@ describe("per-step execution modes", () => {
           effort: "high",
         }),
       );
-      const addressDispatch = sent.find((entry) => entry.agent === "opencode");
-      expect(addressDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
-      expect(addressDispatch?.prompt).toContain("Off-by-one");
-      expect(addressDispatch?.prompt).toContain("Report your work in the fix result you submit");
-      // The verifier judges the address stage's own typed report instead of
+      const addressFindingsDispatch = sent.find((entry) => entry.agent === "opencode");
+      expect(addressFindingsDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
+      expect(addressFindingsDispatch?.prompt).toContain("Off-by-one");
+      expect(addressFindingsDispatch?.prompt).toContain(
+        "Report your work in the Address Findings result you submit",
+      );
+      // The verifier judges the Address Findings stage's own typed report instead of
       // rerunning its checks, and never its last assistant text.
       const verifyDispatch = sent.find((entry) =>
         entry.prompt.startsWith("Verify the committed branch changes"),
       );
       expect(verifyDispatch?.prompt).toContain("<address-fix-result-json>");
-      expect(verifyDispatch?.prompt).toContain(TEST_FIX_RESULT.summary);
+      expect(verifyDispatch?.prompt).toContain(TEST_ADDRESS_FINDINGS_RESULT.summary);
       expect(verifyDispatch?.prompt).not.toContain(
         "Fixed the off-by-one; reran src/app.test.ts: pass.",
       );
       const verifying = await snapshot(storage, started.id);
       const address = verifying.sessions.find((session) => session.phase === "address");
       expect(address?.addressReportKind).toBe("fix-result");
-      expect(address?.fixResult).toEqual(TEST_FIX_RESULT);
+      expect(address?.fixResult).toEqual(TEST_ADDRESS_FINDINGS_RESULT);
       expect(codex.sentModes.slice(0, 2)).toEqual(["build", "plan"]);
     });
   });

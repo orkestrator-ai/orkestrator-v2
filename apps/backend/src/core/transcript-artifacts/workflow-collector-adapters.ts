@@ -295,7 +295,7 @@ export function adaptMultiReview(runId: string, workflow: Json): AdaptedWorkflow
     nodes.push(
       node(workflowTarget, {
         id: "fix",
-        label: modelLabel("Fix", workflow.fixModel),
+        label: modelLabel("Address Findings", workflow.fixModel),
         role: "agent",
         ...(fixResult && step.status !== "running"
           ? {

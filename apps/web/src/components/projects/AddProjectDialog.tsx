@@ -30,7 +30,7 @@ const PATH_DETECTION_DEBOUNCE_MS = 2000;
 
 /** Matches the bordered option cards used on settings pages. */
 const SOURCE_SELECTOR_TRIGGER_CLASSES =
-  "h-auto justify-start gap-2 rounded-lg border-2 p-3 text-left text-sm font-medium !text-foreground shadow-none data-[state=active]:!border-primary data-[state=active]:!bg-primary/5 data-[state=active]:!text-foreground data-[state=active]:shadow-none data-[state=inactive]:border-transparent data-[state=inactive]:!bg-zinc-900 hover:data-[state=inactive]:border-zinc-600";
+  "h-auto justify-start gap-2 rounded-lg border p-3 text-left text-sm font-medium !text-foreground shadow-none data-[state=active]:!border-ring data-[state=active]:!bg-primary/5 data-[state=active]:!text-foreground data-[state=active]:shadow-none data-[state=inactive]:border-transparent data-[state=inactive]:!bg-zinc-900 hover:data-[state=inactive]:border-zinc-600";
 
 interface AddProjectDialogProps {
   open: boolean;

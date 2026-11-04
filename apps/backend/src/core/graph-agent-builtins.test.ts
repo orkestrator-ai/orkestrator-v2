@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
-import { boundPipelineFixResult } from "@orkestrator/protocol/build-pipeline-address-report";
+import { boundPipelineAddressFindingsResult } from "@orkestrator/protocol/build-pipeline-address-findings-report";
 import {
   GRAPH_BUILT_IN_PROMPT_IDS,
   graphBuiltInPrompt,
@@ -15,23 +15,23 @@ import {
 import {
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
-  multiReviewCustomFixPrompt,
+  multiReviewCustomAddressFindingsPrompt,
 } from "@orkestrator/protocol/multi-review";
 import {
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
-import type { ReviewFixResult } from "@orkestrator/protocol/review-results";
+import type { ReviewAddressFindingsResult } from "@orkestrator/protocol/review-results";
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
-  ADDRESS_OUTPUT_CONTRACT,
-  addressPrompt,
-  addressValidationInstruction,
+  ADDRESS_FINDINGS_OUTPUT_CONTRACT,
+  addressFindingsReportPrompt,
+  addressFindingsValidationInstruction,
   buildPipelineReviewPackageContext,
   buildPrompt,
-  fixPrompt,
+  reworkPrompt,
   PULL_REQUEST_TITLE_MAX_CHARACTERS,
   prPrompt,
   pullRequestDescriptionPrompt,
@@ -62,7 +62,7 @@ const BUILDER_PHRASES: Record<GraphBuiltInPromptId, string> = {
   "fix-review-issues": STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION,
   "address-review": "Fix every recorded failure that relates to the ticket",
   build: "You are building a feature. Here is the ticket:",
-  "pipeline-fix": "Fix the unmet acceptance criteria for this ticket:",
+  "pipeline-fix": "Rework this ticket: fix its unmet acceptance criteria:",
   verify: "Verify the committed branch changes against this ticket:",
   "pull-request-description": "Write the pull request title and description",
   "resolve-conflicts": "Fetch origin, merge origin/main, and resolve every merge conflict",
@@ -204,7 +204,7 @@ describe("graphBuiltInPromptText", () => {
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text).toContain(BUILDER_PHRASES[id]);
       expect(pushInstructions(text)).toEqual([]);
-      expect(text).not.toContain(ADDRESS_OUTPUT_CONTRACT);
+      expect(text).not.toContain(ADDRESS_FINDINGS_OUTPUT_CONTRACT);
       expect(text).not.toContain(VERIFICATION_OUTPUT_CONTRACT);
       expect(text).not.toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
     });
@@ -392,7 +392,7 @@ describe("equivalence with the bound builders", () => {
     expect(text).toBe(buildPrompt(pipeline(), NOTES, "main"));
   });
 
-  test("pipeline-fix is fixPrompt with the verdict's feedback", () => {
+  test("pipeline-fix is reworkPrompt with the verdict's feedback", () => {
     const verdict = example<{ rationale: string }>("verification-verdict");
     const text = graphBuiltInPromptText({
       ...exampleContext("pipeline-fix"),
@@ -400,12 +400,12 @@ describe("equivalence with the bound builders", () => {
       notes: NOTES,
     });
     const feedback = `${verdict.rationale}\n\nUnmet acceptance criteria:\n- ac-2: The CSV has a header row and every visible row. (A three-row report exports two rows.)`;
-    expect(text).toBe(fixPrompt(pipeline(), NOTES, feedback, "main"));
+    expect(text).toBe(reworkPrompt(pipeline(), NOTES, feedback, "main"));
   });
 
   test("verify is verificationPrompt without its final-JSON output contract", () => {
     const reviewPackage = example<ReviewPackageReference>("review-package");
-    const fixResult = example<ReviewFixResult>("fix-result");
+    const fixResult = example<ReviewAddressFindingsResult>("fix-result");
     const text = graphBuiltInPromptText({
       ...exampleContext("verify"),
       inputs: {
@@ -418,12 +418,12 @@ describe("equivalence with the bound builders", () => {
     expect(`${text}\n\n${VERIFICATION_OUTPUT_CONTRACT}`).toBe(
       verificationPrompt(pipeline({ reviewPackage }), NOTES, "main", undefined, {
         kind: "fix-result",
-        result: boundPipelineFixResult(fixResult),
+        result: boundPipelineAddressFindingsResult(fixResult),
       }),
     );
   });
 
-  test("address-review is addressPrompt with the validation instruction minus its output contract", () => {
+  test("address-review is addressFindingsReportPrompt with the validation instruction minus its output contract", () => {
     const report = example<StructuredReviewReport>("review-report");
     const reviewPackage = example<ReviewPackageReference>("review-package");
     const text = graphBuiltInPromptText({
@@ -433,10 +433,13 @@ describe("equivalence with the bound builders", () => {
         package: artifact("package", "review-package", reviewPackage),
       },
     });
-    const instruction = addressValidationInstruction(reviewPackage, "main");
-    expect(instruction.endsWith(`\n\n${ADDRESS_OUTPUT_CONTRACT}`)).toBe(true);
+    const instruction = addressFindingsValidationInstruction(reviewPackage, "main");
+    expect(instruction.endsWith(`\n\n${ADDRESS_FINDINGS_OUTPUT_CONTRACT}`)).toBe(true);
     expect(text).toBe(
-      addressPrompt(report, instruction.slice(0, -`\n\n${ADDRESS_OUTPUT_CONTRACT}`.length)),
+      addressFindingsReportPrompt(
+        report,
+        instruction.slice(0, -`\n\n${ADDRESS_FINDINGS_OUTPUT_CONTRACT}`.length),
+      ),
     );
   });
 
@@ -569,13 +572,13 @@ describe("equivalence with the bound builders", () => {
       ...exampleContext("fix-review-issues"),
       inputs: { report: artifact("report", "review-report", report) },
     };
-    expect(graphBuiltInPromptText(context)).toBe(addressPrompt(report));
+    expect(graphBuiltInPromptText(context)).toBe(addressFindingsReportPrompt(report));
 
-    // With a user instruction: the custom fix prompt, unattended.
+    // With a user instruction: the custom Address Findings prompt, unattended.
     const instruction = "Only fix the P1 issue.";
     const custom = graphBuiltInPromptText({ ...context, instruction });
     expect(custom).toBe(
-      multiReviewCustomFixPrompt(report, instruction).replace(
+      multiReviewCustomAddressFindingsPrompt(report, instruction).replace(
         wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
         wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
       ),
@@ -588,7 +591,7 @@ describe("equivalence with the bound builders", () => {
       inputs: { report: artifact("report", "finding", finding) },
     });
     expect(single).toBe(
-      addressPrompt({
+      addressFindingsReportPrompt({
         ...report,
         issues: [finding],
         testCoverageGaps: [],

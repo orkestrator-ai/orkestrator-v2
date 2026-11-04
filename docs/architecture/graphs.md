@@ -811,8 +811,8 @@ An isolated branch holds a reader on the run's workspace. A mock run holds no
 locks (`graphRunLockedWorkspace`).
 
 **Across engines** (`workspace-writers.ts`). Build Pipelines and bespoke Multi
-Reviews count as holders of the checkout: a pipeline writes in Build, Fix,
-package preparation, Address, Verify (its shell may write build outputs), PR,
+Reviews count as holders of the checkout: a pipeline writes in Build, Rework,
+package preparation, Address Findings, Verify (its shell may write build outputs), PR,
 conflict resolution and setup, and reads while reviewing (a session still
 running counts by its own stage); a bespoke Multi Review writes while
 preparing or fixing and reads while reviewing or consolidating (a graph-engine
@@ -1668,7 +1668,7 @@ what the graph runtime gained for it.
   (`graph-agent-host.ts`). The `discovery-review` built-in reads an optional
   `instruction` input (`text@1` or `markdown@1`) as the review's own
   instruction, where today's reviewer prompt has it, so a template can
-  instruct its reviewers without turning its Fix into a custom Fix. It must
+  instruct its reviewers without turning its Address Findings into a custom Address Findings. It must
   come from a run input (an upstream node's text there is refused, invariant
   5). Item 301 wires its optional `reviewInstruction` run input
   (`markdown@1`, up to 128 KiB) to it. When the graph engine is selected, an
@@ -1872,7 +1872,7 @@ environment is away, and a wait surviving a backend restart).
   activation reports when it finishes, so the agents running when the meter
   is reached finish and can take the run past it (a soft limit by design).
 - **Cross-engine locking** covers graph runs, Build Pipelines and bespoke
-  Multi Reviews. Interactive agent tabs (Multi Review's interactive Fix tab
+  Multi Reviews. Interactive agent tabs (Multi Review's interactive Address Findings tab
   included) are not tracked, and a bespoke Multi Review does not itself wait
   for a graph writer before preparing or fixing.
 - **Built-ins** keep their own engines; engine-only behaviours are not

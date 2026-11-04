@@ -271,7 +271,7 @@ export const buildCommands: CommandSpec[] = [
     summary:
       "Start a ticket's Build Pipeline, as the Build button does (its active build is reused).",
     description:
-      "Builds the Kanban ticket in a new environment (--type) or an existing one (--environment): build, review, address, verify and PR. Omitted steps, reviewers and preparation use the saved Build defaults; a step named only by --instructions keeps its saved model. The pipeline continues in the backend; follow it with `build get`.",
+      "Builds the Kanban ticket in a new environment (--type) or an existing one (--environment): build, review, address findings, verify and PR. Omitted steps, reviewers and preparation use the saved Build defaults; a step named only by --instructions keeps its saved model. The pipeline continues in the backend; follow it with `build get`.",
     positionals: [
       { name: "ticket", required: true, description: "Kanban ticket ID (ticket list)." },
     ],
@@ -317,7 +317,7 @@ export const buildCommands: CommandSpec[] = [
         name: "instructions",
         kind: "list",
         valueName: "STAGE=TEXT",
-        description: `Your instructions for a step (repeatable), at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes; N=TEXT for --reviewer row N. Fix uses build's.`,
+        description: `Your instructions for a step (repeatable), at most ${MAX_BUILD_STEP_INSTRUCTIONS_BYTES} bytes; N=TEXT for --reviewer row N. Rework uses build's.`,
       },
       {
         name: "instructions-file",
@@ -349,7 +349,7 @@ export const buildCommands: CommandSpec[] = [
         name: "max-iterations",
         kind: "integer",
         valueName: "N",
-        description: `Review, fix and verify rounds, 1 to ${MAX_BUILD_PIPELINE_ITERATIONS} (default 3).`,
+        description: `Review, address findings, verify and rework rounds, 1 to ${MAX_BUILD_PIPELINE_ITERATIONS} (default 3).`,
       },
       REQUEST_ID_OPTION,
     ],

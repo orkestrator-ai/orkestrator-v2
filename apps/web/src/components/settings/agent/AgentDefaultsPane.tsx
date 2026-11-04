@@ -94,7 +94,7 @@ const ACTION_DEFINITIONS: Record<
     icon: <ScanSearch className="h-4 w-4" />,
   },
   fixReviewIssues: {
-    label: "Fix review issues",
+    label: "Address review findings",
     description:
       "Addresses the consolidated findings after Multi Review and in every build pipeline.",
     icon: <Wrench className="h-4 w-4" />,
@@ -249,9 +249,9 @@ export function AgentDefaultsPane({
               disabled={disabled}
               onClick={() => onChange({ ...tier, defaultAgent: undefined })}
               className={cn(
-                "rounded-lg border-2 p-3 text-left text-sm font-medium transition-colors",
+                "rounded-lg border p-3 text-left text-sm font-medium transition-colors",
                 !tier?.defaultAgent
-                  ? "border-primary bg-primary/5"
+                  ? "border-ring bg-primary/5"
                   : "border-transparent bg-zinc-900 hover:border-zinc-600",
               )}
             >
@@ -270,9 +270,9 @@ export function AgentDefaultsPane({
               disabled={disabled}
               onClick={() => onChange({ ...tier, defaultAgent: platform })}
               className={cn(
-                "rounded-lg border-2 p-3 text-left transition-colors",
+                "rounded-lg border p-3 text-left transition-colors",
                 tier?.defaultAgent === platform
-                  ? "border-primary bg-primary/5"
+                  ? "border-ring bg-primary/5"
                   : "border-transparent bg-zinc-900 hover:border-zinc-600",
               )}
             >

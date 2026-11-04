@@ -12,7 +12,7 @@ import {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { cleanReview } from "./build-pipeline-service-test-support.js";
 import {
-  carriesFixBaseline,
+  carriesReworkBaseline,
   pruneRoundReviewReports,
   recordRewind,
   retainRoundReviewReport,
@@ -208,19 +208,19 @@ describe("build pipeline rewinds", () => {
 
   test("an earlier fix baseline carries over only within its own round", () => {
     const fix = session("fix", 1);
-    expect(carriesFixBaseline({}, fix)).toBe(true);
+    expect(carriesReworkBaseline({}, fix)).toBe(true);
 
     const sameRound = rewind({ id: "same", fromIteration: 1, iteration: 1 });
     const supersededHere = { ...fix, supersededBy: "same" };
-    expect(carriesFixBaseline({ rewinds: [sameRound] }, supersededHere)).toBe(true);
+    expect(carriesReworkBaseline({ rewinds: [sameRound] }, supersededHere)).toBe(true);
 
     const fromLater = rewind({ id: "later", fromIteration: 3, iteration: 0 });
-    expect(carriesFixBaseline({ rewinds: [fromLater] }, { ...fix, supersededBy: "later" })).toBe(
+    expect(carriesReworkBaseline({ rewinds: [fromLater] }, { ...fix, supersededBy: "later" })).toBe(
       false,
     );
     // Restarted in its own round, then rewound again from a later round.
     expect(
-      carriesFixBaseline(
+      carriesReworkBaseline(
         {
           rewinds: [sameRound, { ...fromLater, at: new Date(20_000).toISOString() }],
         },
@@ -228,7 +228,7 @@ describe("build pipeline rewinds", () => {
       ),
     ).toBe(false);
     // A rewind whose record was dropped from the bounded history is not trusted.
-    expect(carriesFixBaseline({ rewinds: [] }, supersededHere)).toBe(false);
+    expect(carriesReworkBaseline({ rewinds: [] }, supersededHere)).toBe(false);
   });
 });
 

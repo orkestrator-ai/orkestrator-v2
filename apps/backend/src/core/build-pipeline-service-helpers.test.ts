@@ -21,7 +21,7 @@ import { WorkflowResultService } from "./workflow-result-service.js";
 import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { UNCHANGED_FIX_PAUSE_MESSAGE } from "./build-pipeline-service-supervisor.js";
+import { UNCHANGED_REWORK_PAUSE_MESSAGE } from "./build-pipeline-service-supervisor.js";
 import {
   connectionDefaultsFor,
   fastModeForModel,
@@ -39,7 +39,7 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import {
-  TEST_FIX_RESULT,
+  TEST_ADDRESS_FINDINGS_RESULT,
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
@@ -95,8 +95,8 @@ describe("stageAfterReview", () => {
   const gap = { file: "src/app.ts", untestedBehavior: "The error branch." };
   test.each([
     ["no findings", "Verify", [], []],
-    ["issues", "Address", [issue], []],
-    ["only coverage gaps", "Address", [], [gap]],
+    ["issues", "Address Findings", [issue], []],
+    ["only coverage gaps", "Address Findings", [], [gap]],
   ] as const)("routes a report with %s to %s", (_name, stage, issues, testCoverageGaps) => {
     expect(
       stageAfterReview({ issues: [...issues], testCoverageGaps: [...testCoverageGaps] }),
@@ -338,7 +338,7 @@ class FakeProvider implements BuildPipelineProvider {
         : phase === "build" || phase === "fix"
           ? TEST_REVIEW_PREPARATION
           : phase === "address"
-            ? TEST_FIX_RESULT
+            ? TEST_ADDRESS_FINDINGS_RESULT
             : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
@@ -761,7 +761,7 @@ describe("BuildPipelineService", () => {
             phase === "build" || phase === "fix"
               ? TEST_REVIEW_PREPARATION
               : phase === "address"
-                ? TEST_FIX_RESULT
+                ? TEST_ADDRESS_FINDINGS_RESULT
                 : {
                     ...cleanReview,
                     issues: [
@@ -1146,7 +1146,7 @@ describe("BuildPipelineService", () => {
     const CHANGED = "b".repeat(64);
 
     /** Fails the first verification and returns the pipeline in its fix stage. */
-    async function startFixing(
+    async function startReworking(
       service: BuildPipelineService,
       storage: StorageService,
       provider: FakeProvider,
@@ -1210,7 +1210,7 @@ describe("BuildPipelineService", () => {
     test("pauses instead of re-reviewing identical code", async () => {
       await withService(async (service, storage, provider, _invocations, controls) => {
         controls.fingerprint = UNCHANGED;
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         expect(fixing.sessions.at(-1)).toMatchObject({
           phase: "fix",
           fixWorktreeFingerprintAtStart: UNCHANGED,
@@ -1223,7 +1223,7 @@ describe("BuildPipelineService", () => {
           phase: "paused",
           pausedFromPhase: "fixing",
           pauseCause: "supervisor",
-          error: UNCHANGED_FIX_PAUSE_MESSAGE,
+          error: UNCHANGED_REWORK_PAUSE_MESSAGE,
         });
         expect(paused.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
         expect(
@@ -1235,7 +1235,7 @@ describe("BuildPipelineService", () => {
     test("continues to review when the fix changed the worktree", async () => {
       await withService(async (service, storage, provider, _invocations, controls) => {
         controls.fingerprint = UNCHANGED;
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
 
         controls.fingerprint = CHANGED;
         await service.advanceNow(fixing.id);
@@ -1249,15 +1249,15 @@ describe("BuildPipelineService", () => {
     test("a new verification failure opens a new fix-stage baseline", async () => {
       await withService(async (service, storage, provider, _invocations, controls) => {
         controls.fingerprint = UNCHANGED;
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         controls.fingerprint = CHANGED;
         await service.advanceNow(fixing.id);
         await service.advanceNow(fixing.id);
         expect((await pipeline(storage, fixing.id)).phase).toBe("verifying");
         await service.advanceNow(fixing.id);
-        const nextFix = await pipeline(storage, fixing.id);
-        expect(nextFix).toMatchObject({ phase: "fixing", iteration: 2 });
-        expect(nextFix.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBe(CHANGED);
+        const nextRework = await pipeline(storage, fixing.id);
+        expect(nextRework).toMatchObject({ phase: "fixing", iteration: 2 });
+        expect(nextRework.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBe(CHANGED);
         await service.advanceNow(fixing.id);
         expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
       });
@@ -1265,7 +1265,7 @@ describe("BuildPipelineService", () => {
 
     test("continues the loop when the fingerprint cannot be established", async () => {
       await withService(async (service, storage, provider) => {
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
 
         await service.advanceNow(fixing.id);
@@ -1278,7 +1278,7 @@ describe("BuildPipelineService", () => {
       test(`${recovery} preserves the baseline before a failed fix changed code`, async () => {
         await withService(async (service, storage, provider, invocations, controls) => {
           controls.fingerprint = UNCHANGED;
-          const fixing = await startFixing(service, storage, provider);
+          const fixing = await startReworking(service, storage, provider);
           const originalSessionId = fixing.sessions.at(-1)!.sdkSessionId;
           controls.fingerprint = CHANGED;
           const before = invocations.filter((call) => call.args.fingerprint).length;
@@ -1321,7 +1321,7 @@ describe("BuildPipelineService", () => {
 
     test("restart keeps an unavailable initial baseline disabled", async () => {
       await withService(async (service, storage, provider, invocations, controls) => {
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         controls.fingerprint = UNCHANGED;
         const before = invocations.filter((call) => call.args.fingerprint).length;
         await service.restartCurrentStep(fixing.id);
@@ -1338,7 +1338,7 @@ describe("BuildPipelineService", () => {
       test(`consumes the persisted baseline after ${failure} completion probes`, async () => {
         await withService(async (service, storage, provider, invocations, controls) => {
           controls.fingerprint = UNCHANGED;
-          const fixing = await startFixing(service, storage, provider);
+          const fixing = await startReworking(service, storage, provider);
           const before = invocations.filter((call) => call.args.fingerprint).length;
           if (failure === "unavailable") controls.fingerprint = undefined;
           else if (failure === "failed") controls.probeError = new Error("busy");
@@ -1365,7 +1365,7 @@ describe("BuildPipelineService", () => {
       await withService(async (service, storage, provider, invocations, controls) => {
         controls.fingerprint = UNCHANGED;
         controls.probeError = new Error("review-worktree-probe:too-large");
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         expect(invocations.filter((call) => call.args.fingerprint)).toHaveLength(1);
         expect(fixing.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();
         // Install a persisted baseline to exercise the same policy on completion.
@@ -1382,7 +1382,7 @@ describe("BuildPipelineService", () => {
       test(`pauses before ${preparation} package preparation and excludes its override turn`, async () => {
         await withService(async (service, storage, provider, invocations, controls) => {
           controls.fingerprint = UNCHANGED;
-          const fixing = await startFixing(service, storage, provider);
+          const fixing = await startReworking(service, storage, provider);
           await mutateStored(storage, fixing.id, (snapshot) => {
             if (preparation === "fanout") {
               snapshot.reviewers = [{ agent: "claude" }, { agent: "codex" }];
@@ -1422,7 +1422,7 @@ describe("BuildPipelineService", () => {
         await withService(
           async (service, storage, provider, _invocations, controls) => {
             controls.fingerprint = UNCHANGED;
-            const fixing = await startFixing(service, storage, provider);
+            const fixing = await startReworking(service, storage, provider);
             const session = fixing.sessions.at(-1)!;
             expect(session.resultTransport).toBe("tool-v1");
             const key = session.structuredRequestId!;
@@ -1454,7 +1454,7 @@ describe("BuildPipelineService", () => {
     test("resume runs the next round instead of pausing again", async () => {
       await withService(async (service, storage, provider, _invocations, controls) => {
         controls.fingerprint = UNCHANGED;
-        const fixing = await startFixing(service, storage, provider);
+        const fixing = await startReworking(service, storage, provider);
         await service.advanceNow(fixing.id);
         expect((await pipeline(storage, fixing.id)).phase).toBe("paused");
 

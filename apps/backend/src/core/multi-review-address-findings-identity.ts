@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 /** Identifies one Fix attempt without exposing its provider session or contents. */
-export function multiReviewFixIdentity(session: unknown): string | undefined {
+export function multiReviewAddressFindingsIdentity(session: unknown): string | undefined {
   if (!session || typeof session !== "object" || !("sessionKey" in session)) return undefined;
   if (typeof session.sessionKey !== "string" || !session.sessionKey.trim()) return undefined;
   const startedAt =

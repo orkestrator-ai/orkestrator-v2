@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+} from "@orkestrator/protocol/coordinator";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,7 +63,7 @@ describe("fast-forwarding to the upstream already fetched", () => {
     const ssh = path.join(root, "slow-ssh.sh");
     await fs.writeFile(
       ssh,
-      `#!/bin/sh\nwhile [ ! -e '${release}' ]; do sleep 0.05; done\nexit 1\n`,
+      `#!/bin/sh\nwhile [ ! -e '${release}' ]; do sleep 0.05; done\nif [ "$(cat '${release}')" = success ]; then exec git-upload-pack '${remote}'; fi\nexit 1\n`,
       { mode: 0o755 },
     );
     await git(["config", "core.sshCommand", ssh]);
@@ -69,6 +73,19 @@ describe("fast-forwarding to the upstream already fetched", () => {
     storage = new StorageService(path.join(root, "data"));
     await storage.init();
     projectId = (await storage.addProject(createProject(remote, checkout))).id;
+    const now = new Date().toISOString();
+    await storage.coordinators.mutateCoordinatorWorkspace(projectId, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [],
+      selectedConversationId: null,
+      repositoryContextRevision: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
   });
 
   afterEach(async () => {
@@ -77,42 +94,94 @@ describe("fast-forwarding to the upstream already fetched", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  test("a typed message's check fast-forwards locally while the fetch hangs", async () => {
-    const service = new ProjectGitService(storage);
-    const before = await git(["rev-parse", "HEAD"]);
-    // The slow fetch is already running and holds the checkout's Git queue.
-    const late = service.fetch(projectId, true);
-    let lateSettled = false;
-    void late.finally(() => {
-      lateSettled = true;
-    });
-    const check = await checkUpstreamBeforeMessage(service, projectId, { timeoutMs: 50 });
-    // Answered past the bound, not by a fetch that failed fast.
-    expect(lateSettled).toBe(false);
-    expect(check).toMatchObject({
-      offer: false,
-      reason: "fast-forwarded",
-      status: { headCommit: tip, behind: 0, ahead: 0 },
-    });
-    expect(await git(["rev-parse", "HEAD"])).toBe(tip);
+  test.each(["failure", "success"])(
+    "a late fetch %s preserves the merged snapshot",
+    async (mode) => {
+      const service = new ProjectGitService(storage);
+      const before = await git(["rev-parse", "HEAD"]);
+      // The slow fetch stays in flight while the checkout is merged locally.
+      const late = service.fetch(projectId, true);
+      let lateSettled = false;
+      void late.finally(() => {
+        lateSettled = true;
+      });
+      const check = await checkUpstreamBeforeMessage(service, projectId, { timeoutMs: 50 });
+      // Answered past the bound, not by a fetch that failed fast.
+      expect(lateSettled).toBe(false);
+      expect(check).toMatchObject({
+        offer: false,
+        reason: "fast-forwarded",
+        status: { headCommit: tip, behind: 0, ahead: 0 },
+      });
+      expect(await git(["rev-parse", "HEAD"])).toBe(tip);
 
-    // The late fetch ends (here it fails) and merges nothing a second time.
-    await fs.writeFile(release, "");
-    expect((await late).remoteState).toBe("stale");
-    expect(await git(["rev-parse", "HEAD"])).toBe(tip);
-    expect(await git(["rev-list", "--count", `${before}..HEAD`])).toBe("2");
-    expect((await git(["reflog", "--format=%gs", "-n", "5"])).split("\n")[0]).toMatch(
-      /^merge [0-9a-f]+: Fast-forward$/,
-    );
-  });
+      expect((await service.fastForwardToFetchedUpstream(projectId)).outcome).toBe("not-behind");
+      const merged = (await storage.coordinators.getCoordinatorWorkspace(projectId))!;
+      expect(merged.repositoryStatus).toMatchObject({
+        headCommit: tip,
+        behind: 0,
+        operationState: "fetching",
+      });
+      expect(merged.repositoryContextEvents).toHaveLength(1);
+      expect(merged.repositoryContextEvents![0]).toMatchObject({
+        previousHeadCommit: before,
+        headCommit: tip,
+        source: "upstream",
+      });
+      // The late fetch publishes metadata without reversing the merged context.
+      await fs.writeFile(release, mode);
+      expect((await late).remoteState).toBe(mode === "success" ? "fresh" : "stale");
+      const settled = (await storage.coordinators.getCoordinatorWorkspace(projectId))!;
+      expect(settled.repositoryStatus).toMatchObject({
+        headCommit: tip,
+        behind: 0,
+        operationState: "idle",
+      });
+      expect(settled.repositoryStatus!.revision).toBeGreaterThan(merged.repositoryStatus!.revision);
+      expect(settled.repositoryStatus!.lastError?.operation ?? null).toBe(
+        mode === "failure" ? "fetch" : null,
+      );
+      expect(settled.repositoryContextRevision).toBe(merged.repositoryContextRevision);
+      expect(settled.repositoryContextEvents).toEqual(merged.repositoryContextEvents);
+      expect(await git(["rev-parse", "HEAD"])).toBe(tip);
+      expect(await git(["rev-list", "--count", `${before}..HEAD`])).toBe("2");
+      expect((await git(["reflog", "--format=%gs", "-n", "5"])).split("\n")[0]).toMatch(
+        /^merge [0-9a-f]+: Fast-forward$/,
+      );
+    },
+  );
 
   test("turn admission waits for the local fast-forward", async () => {
     const service = new ProjectGitService(storage);
     const merging = service.fastForwardToFetchedUpstream(projectId);
+    expect(await service.fastForwardToFetchedUpstream(projectId)).toEqual({
+      outcome: "busy",
+      status: null,
+    });
     const admitted = await service.beginTurnAfterMergeSync(projectId);
     expect(await git(["rev-parse", "HEAD"])).toBe(tip);
     admitted();
     expect((await merging).outcome).toBe("fast-forwarded");
+  });
+
+  test("a failed fast-forward persists its error and releases the mutation claim", async () => {
+    const service = new ProjectGitService(storage);
+    const head = await git(["rev-parse", "HEAD"]);
+    const lock = path.join(checkout, ".git", "index.lock");
+    await fs.writeFile(lock, "");
+    await expect(service.fastForwardToFetchedUpstream(projectId)).rejects.toThrow();
+    const workspace = (await storage.coordinators.getCoordinatorWorkspace(projectId))!;
+    expect(workspace.repositoryStatus).toMatchObject({
+      headCommit: head,
+      behind: 2,
+      operationState: "idle",
+      lastError: { operation: "sync" },
+    });
+    await fs.unlink(lock);
+    expect((await service.fastForwardToFetchedUpstream(projectId)).outcome).toBe("fast-forwarded");
+    expect(
+      (await storage.coordinators.getCoordinatorWorkspace(projectId))!.repositoryStatus!.lastError,
+    ).toBeNull();
   });
 
   test("leaves an uncommitted, diverged or busy checkout alone", async () => {
@@ -125,6 +194,10 @@ describe("fast-forwarding to the upstream already fetched", () => {
       reason: "blocked",
     });
     expect(await git(["rev-parse", "HEAD"])).toBe(head);
+    expect(
+      (await storage.coordinators.getCoordinatorWorkspace(projectId))!.repositoryStatus!
+        .operationState,
+    ).toBe("fetching");
     // Let the check's late fetch end before the checkout changes under it.
     await fs.writeFile(release, "");
     await service.fetch(projectId);

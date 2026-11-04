@@ -148,6 +148,7 @@ export class ProjectGitService {
     string,
     { force: boolean; promise: Promise<ProjectGitStatus> }
   >();
+  private readonly fetching = new Set<string>();
   private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
   private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
   private readonly confirmations = new Map<
@@ -550,7 +551,7 @@ export class ProjectGitService {
       mergeInProgress,
       rebaseInProgress,
       sequencerInProgress,
-      operationState: "idle",
+      operationState: this.fetching.has(projectId) ? "fetching" : "idle",
       repositoryOperationBlockedReason: blockedReason,
       branches,
       lastError: previous?.lastError ?? null,
@@ -716,7 +717,7 @@ export class ProjectGitService {
     }
     const operation = (async () => {
       const root = await this.root(projectId);
-      return this.serialize(root, async () => {
+      const prepared = await this.serialize(root, async () => {
         const before = await this.readStatus(
           projectId,
           root,
@@ -728,7 +729,7 @@ export class ProjectGitService {
           before.fetchedAt &&
           Date.now() - Date.parse(before.fetchedAt) < FETCH_COOLDOWN_MS
         ) {
-          return before;
+          return { status: before };
         }
         const configuredRemotes = before.remote
           ? [before.remote]
@@ -742,39 +743,52 @@ export class ProjectGitService {
               .map((remote) => remote.trim())
               .filter(Boolean);
         if (configuredRemotes.length === 0) {
-          return this.persist(projectId, {
-            ...before,
-            remoteState: "unknown",
-            // A repository without remotes is a valid local-only state, so do
-            // not retain an error that makes the checkout look broken.
-            lastError: null,
-          });
+          return {
+            status: await this.persist(projectId, {
+              ...before,
+              remoteState: "unknown",
+              // A repository without remotes is a valid local-only state, so do
+              // not retain an error that makes the checkout look broken.
+              lastError: null,
+            }),
+          };
         }
+        this.fetching.add(projectId);
         await this.operationState(projectId, "fetching");
-        try {
-          await runRemoteGit(
-            "fetch",
-            before.remote ? ["--prune", before.remote] : ["--prune", "--all"],
-            {
-              cwd: root,
-              timeoutMs: 60_000,
-            },
-          );
-          const refreshed = await this.readStatus(projectId, root, before);
-          refreshed.remoteState = "fresh";
-          refreshed.fetchedAt = new Date().toISOString();
-          refreshed.lastError = null;
-          return this.persist(projectId, refreshed);
-        } catch (error) {
-          return this.persist(projectId, {
-            ...before,
-            operationState: "idle",
-            remoteState: "stale",
-            lastError: gitError("fetch", error),
-          });
-        }
+        return { remote: before.remote };
+      });
+      if ("status" in prepared) return prepared.status!;
+      let fetchError: ProjectGitStatus["lastError"] = null;
+      try {
+        await runRemoteGit(
+          "fetch",
+          prepared.remote ? ["--prune", prepared.remote] : ["--prune", "--all"],
+          {
+            cwd: root,
+            timeoutMs: 60_000,
+          },
+        );
+      } catch (error) {
+        fetchError = gitError("fetch", error);
+      }
+      // Network I/O moves only remote refs. Publish against the current
+      // checkout under the same lock as local fast-forwards, never its old head.
+      return this.serialize(root, async () => {
+        this.fetching.delete(projectId);
+        const current = (await this.storage.coordinators.getCoordinatorWorkspace(projectId))
+          ?.repositoryStatus;
+        const refreshed = await this.readStatus(projectId, root, current).catch((error) => {
+          if (!current) throw error;
+          fetchError ??= gitError("fetch", error);
+          return { ...current, revision: current.revision + 1, operationState: "idle" as const };
+        });
+        refreshed.remoteState = fetchError ? "stale" : "fresh";
+        if (!fetchError) refreshed.fetchedAt = new Date().toISOString();
+        refreshed.lastError = fetchError;
+        return this.persist(projectId, refreshed);
       });
     })().finally(() => {
+      this.fetching.delete(projectId);
       if (this.fetches.get(projectId)?.promise === operation) this.fetches.delete(projectId);
     });
     this.fetches.set(projectId, { force, promise: operation });
@@ -1003,10 +1017,9 @@ export class ProjectGitService {
    * commits, no unfinished operation, no running or starting turn), and turn
    * admission waits for it like a merge sync.
    *
-   * Deliberately outside the per-checkout queue: the slow fetch it stands in
-   * for holds that queue, and it writes only remote-tracking refs, which this
-   * neither reads past its first status nor writes. Other mutations are kept
-   * out by `activeMutations`; Git's own locks cover the rest.
+   * Shares the checkout queue with status publication and other mutations.
+   * Fetch network I/O runs outside that queue and only moves remote refs;
+   * this merges the exact commit read by its initial status.
    */
   fastForwardToFetchedUpstream(projectId: string): Promise<FetchedUpstreamFastForward> {
     if (
@@ -1020,10 +1033,12 @@ export class ProjectGitService {
     // Claimed synchronously, as a merge sync is, so a turn that starts now
     // waits for it rather than racing it.
     this.activeMutations.add(projectId);
-    const run = this.fastForwardToFetchedUpstreamOnce(projectId).finally(() => {
-      this.activeMutations.delete(projectId);
-      this.fetchedFastForwards.delete(projectId);
-    });
+    const run = this.root(projectId)
+      .then((root) => this.serialize(root, () => this.fastForwardToFetchedUpstreamOnce(projectId)))
+      .finally(() => {
+        this.activeMutations.delete(projectId);
+        this.fetchedFastForwards.delete(projectId);
+      });
     this.fetchedFastForwards.set(projectId, run);
     return run;
   }
@@ -1048,7 +1063,7 @@ export class ProjectGitService {
     if (!COMMIT_ID.test(before.upstreamCommit)) {
       throw new Error("The upstream commit could not be read");
     }
-    await this.operationState(projectId, "syncing");
+    await this.operationState(projectId, this.fetching.has(projectId) ? "fetching" : "syncing");
     try {
       // The exact commit just checked, not `@{upstream}`, which the slow
       // fetch may move while this runs.
@@ -1058,7 +1073,7 @@ export class ProjectGitService {
       });
     } catch (error) {
       const refreshed = await this.readStatus(projectId, root, before).catch(() => before);
-      refreshed.operationState = "idle";
+      refreshed.operationState = this.fetching.has(projectId) ? "fetching" : "idle";
       refreshed.lastError = gitError("sync", error);
       await this.persist(projectId, refreshed);
       throw new Error(refreshed.lastError.message);

@@ -126,17 +126,18 @@ export async function fastForwardBeforeCoordinatorMail(
       // Keep the late attempt's rejection handled; it only logs.
       void attempt.catch(() => undefined);
     }
-    // A busy checkout was not attempted. Mail held behind the running turn is
-    // redelivered when it ends, and that delivery must not find the cooldown
-    // spent by an attempt that did nothing.
-    if (outcome === "busy" && attempts.get(projectId) === now) attempts.delete(projectId);
     if (FETCHED_UPSTREAM_FALLBACK.has(outcome) && git.fastForwardToFetchedUpstream) {
       const fallback = await git.fastForwardToFetchedUpstream(projectId).catch((error: unknown) => {
         log.warn("checkout.mail-follow-failed", { projectId, error: formatLogError(error) });
         return null;
       });
       if (fallback?.outcome === "fast-forwarded") outcome = "fast-forwarded-fetched";
+      else if (fallback?.outcome === "busy") outcome = "busy";
     }
+    // A busy checkout was not attempted. Mail held behind the running turn is
+    // redelivered when it ends, and that delivery must not find the cooldown
+    // spent by an attempt that did nothing.
+    if (outcome === "busy" && attempts.get(projectId) === now) attempts.delete(projectId);
     if (
       outcome === "fast-forwarded" ||
       outcome === "fast-forwarded-fetched" ||

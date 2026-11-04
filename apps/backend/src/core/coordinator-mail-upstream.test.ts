@@ -200,6 +200,33 @@ describe("fastForwardBeforeCoordinatorMail", () => {
     expect(git.fetch).toHaveBeenCalledTimes(1);
   });
 
+  test("a turn starting during fetch releases the fallback's busy cooldown", async () => {
+    let running = false;
+    let finishFetch!: (status: ProjectGitStatus) => void;
+    let fetchAttempts = 0;
+    const git = fakeGit({
+      isCheckoutBusy: mock(async () => running),
+      fetch: mock(() => {
+        if (++fetchAttempts > 1) return Promise.resolve(behind);
+        running = true;
+        return new Promise<ProjectGitStatus>((resolve) => {
+          finishFetch = resolve;
+        });
+      }),
+      fastForwardToFetchedUpstream: mock(async () => ({
+        outcome: "busy" as const,
+        status: null,
+      })),
+    });
+    const deps = { storage: storageWith(), git, timeoutMs: 5, now: () => 100 };
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe("busy");
+    finishFetch(behind);
+    await Promise.resolve();
+    running = false;
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe("fast-forwarded");
+    expect(git.fetch).toHaveBeenCalledTimes(2);
+  });
+
   test("never throws: a failing lookup or Git service reads as failed", async () => {
     const storage = {
       coordinators: {

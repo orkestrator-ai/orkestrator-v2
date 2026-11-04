@@ -33,7 +33,11 @@ import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-mess
  *   account on one machine, through the same `set_active_agent_account` the
  *   Settings switch uses. It changes which subscription pays for every new
  *   turn there, so it needs the user unless a self-timer carries their
- *   permission (see `control-mcp-account-tools.ts`).
+ *   permission or the user turned on the standing permission in Settings
+ *   (see `control-mcp-account-tools.ts`). A switch under the standing
+ *   permission is recorded here as a request that ran without a decision
+ *   (`authorizedBy: "standing-grant"`, `runUnattended`), so the user can see
+ *   it afterwards, and the hourly limit counts those records.
  * - `answer-worker-question`: answer a question a worker on one node is
  *   waiting on, with the answer the coordinator proposed or the user's edit
  *   of it, through the same `resolve_native_agent_interaction` the worker's
@@ -90,6 +94,9 @@ export interface NodeActionTarget {
   platform?: string;
   accountId?: string;
   accountLabel?: string;
+  /** `switch-agent-account`: the account active when it was asked for. */
+  previousAccountId?: string;
+  previousAccountLabel?: string;
 }
 
 export type NodeActionState =
@@ -116,6 +123,15 @@ export interface NodeActionRequest {
   workerQuestion?: WorkerQuestionRelay;
   /** `message-project-home`: the message held for the user's approval. */
   projectHomeMessage?: ProjectHomeMessage;
+  /**
+   * Ran without a decision because the user granted it in advance in
+   * Settings. Such a record is created already approved and is never pending.
+   */
+  authorizedBy?: "standing-grant";
+  /** The requesting coordinator's display name, for records the user reads later. */
+  coordinatorName?: string;
+  /** Why the user is asked although a standing permission exists (its limit). */
+  askedBecause?: string;
   createdAt: string;
   expiresAt: string;
   state: NodeActionState;
@@ -242,6 +258,7 @@ export class NodeActionRequests {
     agentsMd?: NodeActionRequest["agentsMd"];
     workerQuestion?: NodeActionRequest["workerQuestion"];
     projectHomeMessage?: NodeActionRequest["projectHomeMessage"];
+    askedBecause?: string;
   }): Promise<NodeActionRequest> {
     if (input.requestId !== undefined && (!input.requestId.trim() || input.requestId.length > 256))
       throw new Error("Expected a requestId of 1-256 characters");
@@ -278,6 +295,7 @@ export class NodeActionRequests {
       ...(input.projectHomeMessage
         ? { projectHomeMessage: structuredClone(input.projectHomeMessage) }
         : {}),
+      ...(input.askedBecause ? { askedBecause: input.askedBecause.slice(0, 500) } : {}),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + NODE_ACTION_REQUEST_TTL_MS).toISOString(),
       state: "pending",
@@ -285,6 +303,78 @@ export class NodeActionRequests {
     this.requests = [...this.requests, request].slice(-MAX_REQUESTS);
     await this.persist();
     return request;
+  }
+
+  /**
+   * Run a request the user authorized in advance, without asking: it is
+   * recorded already approved and executed at once by the kind's own
+   * executor, and the requesting coordinator gets no mail (the tool call
+   * that asked returns the outcome).
+   *
+   * At most `limit.count` such runs within `limit.windowMs` share a `scope`
+   * (failed runs changed nothing and do not count). Past that, nothing is
+   * recorded and the caller asks the user instead. The count and the record
+   * are taken together, with no await between them, so concurrent calls
+   * cannot both take the last place.
+   *
+   * A `requestId` already used returns that request as it is, whether it ran
+   * unattended or is an ordinary request the user was asked about.
+   */
+  async runUnattended(
+    input: {
+      requestId: string;
+      kind: NodeActionKind;
+      targets: NodeActionTarget[];
+      requestedBy: NodeActionRequest["requestedBy"];
+      reason?: string;
+      coordinatorName?: string;
+    },
+    limit: { count: number; windowMs: number; scope(request: NodeActionRequest): boolean },
+  ): Promise<{ request: NodeActionRequest; ran: boolean } | { overLimit: { recent: number } }> {
+    if (!input.requestId.trim() || input.requestId.length > 256)
+      throw new Error("Expected a requestId of 1-256 characters");
+    if (input.targets.length === 0) throw new Error("A request needs at least one target.");
+    await this.ensureLoaded();
+    const existing = this.requests.find((request) => request.requestId === input.requestId);
+    if (existing) {
+      if (
+        existing.kind !== input.kind ||
+        existing.requestedBy.coordinatorEnvironmentId !==
+          input.requestedBy.coordinatorEnvironmentId ||
+        existing.requestedBy.coordinatorTabId !== input.requestedBy.coordinatorTabId ||
+        existing.targets[0]?.nodeId !== input.targets[0]?.nodeId ||
+        existing.targets[0]?.platform !== input.targets[0]?.platform ||
+        existing.targets[0]?.accountId !== input.targets[0]?.accountId
+      )
+        throw new Error("Request ID was reused with a different payload");
+      return { request: structuredClone(existing), ran: false };
+    }
+    const now = this.now();
+    const recent = this.requests.filter(
+      (request) =>
+        request.authorizedBy === "standing-grant" &&
+        request.state !== "failed" &&
+        now - Date.parse(request.createdAt) < limit.windowMs &&
+        limit.scope(request),
+    ).length;
+    if (recent >= limit.count) return { overLimit: { recent } };
+    const at = new Date(now).toISOString();
+    const request: NodeActionRequest = {
+      requestId: input.requestId,
+      kind: input.kind,
+      targets: input.targets.map((target) => ({ ...target })),
+      requestedBy: { ...input.requestedBy },
+      ...(input.reason ? { reason: input.reason.slice(0, 500) } : {}),
+      authorizedBy: "standing-grant",
+      ...(input.coordinatorName ? { coordinatorName: input.coordinatorName.slice(0, 120) } : {}),
+      createdAt: at,
+      expiresAt: at,
+      resolvedAt: at,
+      state: "approved",
+    };
+    this.requests = [...this.requests, request].slice(-MAX_REQUESTS);
+    await this.persist();
+    return { request: await this.execute(request, {}), ran: true };
   }
 
   async list(options: { pendingOnly?: boolean } = {}): Promise<NodeActionRequest[]> {
@@ -398,7 +488,9 @@ export class NodeActionRequests {
     } finally {
       this.running.delete(request.requestId);
     }
-    await this.options.notify?.(structuredClone(request)).catch(() => undefined);
+    // An unattended run answers the call that started it; mail would repeat it.
+    if (!request.authorizedBy)
+      await this.options.notify?.(structuredClone(request)).catch(() => undefined);
     return structuredClone(request);
   }
 

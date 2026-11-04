@@ -69,6 +69,36 @@ describe("StorageService config migration", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+  test("keeps the coordinator account-switch permission across settings saves and restarts", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-account-switch-grant-config-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      expect((await storage.loadConfig()).global.coordinatorAccountSwitchGrant).toBeUndefined();
+
+      await storage.setCoordinatorAccountSwitchGrant("claude", true);
+      // A settings form never grants it, and a stale form never takes it away.
+      const { coordinatorAccountSwitchGrant: _omitted, ...rendererSave } = (
+        await storage.loadConfig()
+      ).global;
+      await storage.updateGlobalConfig({ ...rendererSave, debugLogging: true });
+      await storage.updateGlobalConfig({
+        ...rendererSave,
+        coordinatorAccountSwitchGrant: { codex: true },
+      });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.coordinatorAccountSwitchGrant).toEqual({
+        claude: true,
+      });
+
+      await restarted.setCoordinatorAccountSwitchGrant("claude", false);
+      expect((await restarted.loadConfig()).global.coordinatorAccountSwitchGrant).toBeUndefined();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
   test("round-trips review lens presets, refuses over-bound lists and restores the shipped five", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-review-lens-config-"));
     try {

@@ -12,7 +12,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 4. **Live qualification of the scenario**: a real Claude and Codex coordinator sets a timer, is woken, finds a limited worker and switches, on an isolated `dev:test` profile with two logins. Status: open (depends on 1, 2 and 3; needs live providers).
 5. **Structured usage-limit signal from the bridges**: carry Codex's `usageLimitExceeded` code and Claude's rate-limit status to the backend instead of classifying error text. Status: open.
 6. **The user's zone when the coordinator's machine is not the user's**: absolute times use the backend host's zone. Status: open.
-7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: open.
+7. **Show a timer's permission and a coordinator's switches to the user**: Settings → Schedules and the account views do not mark either. Status: open (switches under the standing permission in Settings are recorded and shown since 2026-11-04, see "Standing permission"; a timer's permission and the switches it allows are not).
 8. **Resume limited workers after a switch**: the coordinator must prompt each limited tab itself. Status: open (depends on 5).
 
 ### 1. Self-timers on the existing scheduler
@@ -173,6 +173,14 @@ Analysed 2026-10-30 against `main` at `361dc0a6`.
 - **Choice.** Built: `nodeId` on both account tools, routed through `invoke_on_node` (accounts belong to the machine, so a node needs no copy of the project). A timer's permission covers another machine only if `nodeIds` names it.
 - **Why.** Settings → Machines already switches nodes this way, so it was cheap and reuses the same command.
 
+### Standing permission (tasks 2 and 7)
+
+Added 2026-11-04 after two approval requests waited about 4.5 hours overnight while seven build pipelines failed on the 5-hour limit.
+
+- **Options.** (a) Keep only the self-timer permission. (b) A per-provider Settings tick, held on the coordinator's machine, covering its switches there and on the machines it controls. (c) The same tick, plus a per-target-machine list.
+- **Choice.** (b), with guardrails: signed-in target only, never one whose reading shows a used-up window, at most 3 per target machine and provider per rolling hour (then an approval request with `askedBecause`). Each switch is recorded as an executed `switch-agent-account` request (`authorizedBy: "standing-grant"`), toasted, and listed under the tick. It pins like any manual switch.
+- **Why.** (a) needs the user to foresee the night. (c) adds a list nobody asked for: the user's case was two machines at once, and Settings' machine picker already lets a leaf hold its own choice for its own coordinators. Recording as a request reuses task 7's recommended history and gives the limit a durable count. See [agent-accounts.md](../../architecture/agent-accounts.md#switching-without-asking).
+
 ### Usage-limit reader (task 3)
 
 - **Options.** (a) Classify at the time the outcome is recorded and persist a kind. (b) Classify at read time from the persisted error text. (c) Read every tab live through `get_tab_state`.
@@ -188,6 +196,10 @@ the active login. The scenario it supports end to end: "Check the
 environments in 2 hours. See if any of them have hit usage limits, then
 switch to another account that has usage allocation left." Everything has
 deterministic evidence only.
+
+With "Let coordinators switch accounts without asking" ticked in Settings for a
+provider, a switch runs at once instead of waiting for approval, within the
+limits in "Standing permission".
 
 The tools are offered to every main coordinator: `get_usage_limits` with
 capability `environments`, the account tools with the new capability

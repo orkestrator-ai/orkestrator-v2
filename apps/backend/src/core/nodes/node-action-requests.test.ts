@@ -125,3 +125,47 @@ test("stable approval identities survive reload, reject changed payloads, and ne
   });
   expect(notices).toBe(1);
 });
+
+test("unattended runs take the limit and the record together, and never mail", async () => {
+  let executions = 0;
+  let notices = 0;
+  const actions = new NodeActionRequests({
+    load: async () => [],
+    save: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    },
+    emit: () => undefined,
+    executors: {
+      "switch-agent-account": async () => {
+        executions++;
+        return { code: "switched", message: "Switched." };
+      },
+    },
+    notify: async () => {
+      notices++;
+    },
+  });
+  const run = (requestId: string) =>
+    actions.runUnattended(
+      {
+        requestId,
+        kind: "switch-agent-account",
+        targets: [{ nodeId: "bk_leaf", nodeName: "Leaf", platform: "claude", accountId: "a" }],
+        requestedBy: input.requestedBy,
+        reason: "limit",
+      },
+      { count: 2, windowMs: 60_000, scope: () => true },
+    );
+  const outcomes = await Promise.all([run("one"), run("two"), run("three"), run("one")]);
+  expect(executions).toBe(2);
+  expect(notices).toBe(0);
+  expect(outcomes.filter((outcome) => "overLimit" in outcome)).toEqual([
+    { overLimit: { recent: 2 } },
+  ]);
+  const [listed] = await actions.list();
+  expect(listed).toMatchObject({ authorizedBy: "standing-grant", state: "executed" });
+  // The repeated requestId reported the first run instead of running again.
+  expect(outcomes[3]).toMatchObject({ ran: false, request: { requestId: "one" } });
+  expect(await actions.list({ pendingOnly: true })).toHaveLength(0);
+  await expect(actions.resolve("one", "approve")).rejects.toThrow("already executed");
+});

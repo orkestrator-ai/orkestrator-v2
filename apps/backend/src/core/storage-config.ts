@@ -10,6 +10,7 @@ import {
   type InheritedGlobalSettings,
 } from "@orkestrator/protocol/controller-settings";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import { withCoordinatorAccountSwitchGrant } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { parseLogDetail } from "@orkestrator/protocol/log-policy";
 import { isMultiReviewEngine } from "@orkestrator/protocol/multi-review";
@@ -819,6 +820,10 @@ export class ConfigRepository {
     if (config.global.agentAccountAutoSwitch !== undefined)
       validated.agentAccountAutoSwitch = config.global.agentAccountAutoSwitch;
     else delete validated.agentAccountAutoSwitch;
+    // Written only by `setCoordinatorAccountSwitchGrant`, likewise.
+    if (config.global.coordinatorAccountSwitchGrant !== undefined)
+      validated.coordinatorAccountSwitchGrant = config.global.coordinatorAccountSwitchGrant;
+    else delete validated.coordinatorAccountSwitchGrant;
     // Written only by `setGitHubCliReminderDismissed`, likewise.
     if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
     else delete validated.githubCliReminderDismissed;
@@ -934,6 +939,26 @@ export class ConfigRepository {
       const next = update(config.global.agentAccountAutoSwitch);
       if (Object.keys(next).length > 0) config.global.agentAccountAutoSwitch = next;
       else delete config.global.agentAccountAutoSwitch;
+      await this.context.saveSensitiveJson(this.files.configFile(), config);
+      this.context.changes.announce("config", "app");
+      return this.withInheritedSettings(config);
+    });
+  }
+
+  /** The only writer of `coordinatorAccountSwitchGrant`; see `update_global_config`'s exception. */
+  async setCoordinatorAccountSwitchGrant(
+    platform: import("@orkestrator/protocol/agent-accounts").AgentAccountPlatform,
+    enabled: boolean,
+  ): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadOwnConfig();
+      const next = withCoordinatorAccountSwitchGrant(
+        config.global.coordinatorAccountSwitchGrant,
+        platform,
+        enabled,
+      );
+      if (Object.keys(next).length > 0) config.global.coordinatorAccountSwitchGrant = next;
+      else delete config.global.coordinatorAccountSwitchGrant;
       await this.context.saveSensitiveJson(this.files.configFile(), config);
       this.context.changes.announce("config", "app");
       return this.withInheritedSettings(config);

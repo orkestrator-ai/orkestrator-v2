@@ -9,6 +9,7 @@ import {
   StorageDatabaseVersionError,
   StoreConflictError,
   StoreTooLargeError,
+  rowBytesExpression,
   type StoreLayout,
 } from "./storage-database.js";
 
@@ -57,6 +58,58 @@ afterEach(async () => {
 });
 
 describe("StorageDatabase", () => {
+  test("a library without octet_length falls back to the cast, with the same answer", async () => {
+    const db = database(await dataDir());
+    expect(rowBytesExpression(db.db)).toBe("octet_length(value)");
+    const fallback = rowBytesExpression({
+      query() {
+        throw new Error("no such function: octet_length");
+      },
+    });
+    expect(fallback).toBe("length(CAST(value AS BLOB))");
+    const value = JSON.stringify("é€😀\u0000 and a long tail ".repeat(5_000));
+    db.transaction(() => db.rows("records").put("unicode", value));
+    for (const expression of ["octet_length(value)", fallback]) {
+      expect(
+        db.db.query(`SELECT ${expression} AS bytes FROM store_rows WHERE store = 'records'`).get(),
+      ).toEqual({ bytes: Buffer.byteLength(value) });
+    }
+  });
+
+  test("a sizes-only listing keeps the listing's order without an ordered scan", async () => {
+    const db = database(await dataDir());
+    const rows = db.rows("owned");
+    db.transaction(() => {
+      rows.put("b", JSON.stringify({ owner: "one" }), { position: 2 });
+      rows.put("a", JSON.stringify({ owner: "two", text: "é" }), { position: 3 });
+      rows.put("c", JSON.stringify({ owner: "one" }), { position: 1 });
+      rows.put("z", JSON.stringify({ owner: "one" }), { position: 7 });
+      rows.put("y", JSON.stringify({ owner: "two" }), { position: 7 });
+    });
+    const sizes = rows.list({ values: false });
+    expect(sizes.map((entry) => entry.key)).toEqual(["c", "b", "a", "y", "z"]);
+    expect(sizes.map(({ key, position }) => [key, position])).toEqual(
+      rows.list().map(({ key, position }) => [key, position]),
+    );
+    expect(sizes.every((entry) => entry.value === null)).toBe(true);
+    expect(sizes.find((entry) => entry.key === "a")?.bytes).toBe(
+      Buffer.byteLength(JSON.stringify({ owner: "two", text: "é" })),
+    );
+    expect(rows.list({ values: false, owner: "two" }).map((entry) => entry.key)).toEqual([
+      "a",
+      "y",
+    ]);
+
+    // The plan is the point: the listing must not seek each row by its position.
+    const plan = db.db
+      .query(
+        `EXPLAIN QUERY PLAN SELECT collection, key, position, owner, NULL AS value,
+           octet_length(value) AS bytes FROM store_rows WHERE store = ?`,
+      )
+      .all("owned") as Array<{ detail: string }>;
+    expect(plan.map((row) => row.detail).join("\n")).not.toContain("store_rows_position");
+  });
+
   test("row byte counts use portable SQLite SQL and count UTF-8 bytes", async () => {
     const db = database(await dataDir());
     const value = JSON.stringify({ text: "café 🐙" });

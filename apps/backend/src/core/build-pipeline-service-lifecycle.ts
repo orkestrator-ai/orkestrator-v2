@@ -6,13 +6,12 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
  * the stage supervisor.
  */
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   BUILD_CANCELLED_ERROR,
   type BuildPipeline,
   type PipelineSession,
-  type PipelineSessionPhase,
   type StartBuildPipelineInput,
   isBuildPipeline,
   isActiveBuildPhase,
@@ -95,78 +94,19 @@ import {
   type BuildPipelineRestartSlot,
 } from "@orkestrator/protocol/build-pipeline-restart-selection";
 
+import {
+  coordinatorRestartRefusal,
+  currentStepTarget,
+  failedStepTarget,
+  locateSessionStep,
+  namedStepTarget,
+  type CoordinatorRestartedStep,
+  type RestartTarget,
+} from "./build-pipeline-restart-targets.js";
+
 const log = createLogger("build-pipeline");
 
-/** Stage IDs of this form ask to prepare the review package again from the named session. */
-const PACKAGE_STAGE_PREFIX = "review-package:";
 const activityLog = createLogger("backend.activity");
-
-type RestartTarget =
-  | { kind: "validation" }
-  | { kind: "satisfied" }
-  | { kind: "review-package"; implementationPhase: "build" | "fix" }
-  | {
-      kind: "session";
-      session?: PipelineSession;
-      phase: PipelineSessionPhase;
-      forceStage?: boolean;
-    }
-  | Error;
-
-function findStageSession(pipeline: BuildPipeline, stageId: string): PipelineSession | undefined {
-  return pipeline.sessions.find(
-    (session) => session.sdkSessionId === stageId || session.sessionKey === stageId,
-  );
-}
-
-/**
- * The step a session stage ID names. A build or fix turn that also wrote the
- * package plan is still the Build or Fix step the user restarted: it runs
- * again. The dedicated preparation session restarts package preparation alone.
- */
-function locateSessionStep(
-  pipeline: BuildPipeline,
-  stageId: string,
-): Extract<RestartTarget, { kind: "session" }> | Error {
-  const session = findStageSession(pipeline, stageId);
-  return session
-    ? {
-        kind: "session",
-        session,
-        phase: session.phase,
-        forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
-      }
-    : new Error("This pipeline stage is no longer available");
-}
-
-/**
- * Prepares the review package again from a build or fix turn that wrote its
- * plan, keeping that turn. The single-review path has no dedicated
- * preparation session to restart, so this is its package-only restart.
- */
-function locatePackageRestart(pipeline: BuildPipeline, stageId: string): RestartTarget {
-  const session = findStageSession(pipeline, stageId);
-  if (!session) return new Error("This pipeline stage is no longer available");
-  if (!isReviewPackagePreparationSession(session, pipeline)) {
-    return new Error("This step did not prepare the review package.");
-  }
-  const latest = pipeline.rewinds?.at(-1);
-  const current = sessionForCurrentPhase(pipeline);
-  if (
-    !isSupersededPipelineSession(session) &&
-    latest?.sessionKey === session.sessionKey &&
-    latest.step.kind === "review-package" &&
-    (pipeline.restartRequest?.kind === "review-package" ||
-      (current?.label === REVIEW_PACKAGE_SESSION_LABEL &&
-        current.status === "running" &&
-        Date.parse(current.startedAt) >= Date.parse(latest.at)))
-  ) {
-    // The same request again (a double click, a retried command) while the
-    // preparation it started is still pending or running.
-    return { kind: "satisfied" };
-  }
-  return { kind: "session", session, phase: session.phase, forceStage: false };
-}
 
 /**
  * Clears the per-stage bookkeeping a restart or skip leaves behind: errors,
@@ -174,6 +114,7 @@ function locatePackageRestart(pipeline: BuildPipeline, stageId: string): Restart
  */
 function clearStageControlState(candidate: BuildPipeline): void {
   delete candidate.error;
+  delete candidate.cancelledAt;
   delete candidate.failureContext;
   delete candidate.reconnectAttempt;
   delete candidate.pendingPromptAttempt;
@@ -890,30 +831,101 @@ export class BuildPipelineLifecycle {
     stageId: string,
     selection?: BuildPipelineRestartSelection,
   ): Promise<BuildPipeline> {
-    if (selection) {
-      return this.restartLocatedStage(
-        pipelineId,
-        (candidate) => locateSessionStep(candidate, stageId),
-        { selection },
-      );
-    }
-    return this.restartLocatedStage(pipelineId, (candidate) => {
-      if (candidate.validationRun && stageId === `validation:${candidate.validationRun.id}`) {
-        return { kind: "validation" };
-      }
-      const latest = candidate.rewinds?.at(-1);
-      if (
-        latest?.step.kind === "validation" &&
-        latest.validationRun &&
-        stageId === `validation:${latest.validationRun.id}`
-      ) {
-        return { kind: "satisfied" };
-      }
-      if (stageId.startsWith(PACKAGE_STAGE_PREFIX)) {
-        return locatePackageRestart(candidate, stageId.slice(PACKAGE_STAGE_PREFIX.length));
-      }
-      return locateSessionStep(candidate, stageId);
-    });
+    return this.restartLocatedStage(
+      pipelineId,
+      (candidate) => namedStepTarget(candidate, stageId, Boolean(selection)),
+      selection ? { selection } : {},
+    );
+  }
+
+  /**
+   * The coordinator's `restart_build_pipeline_step`: restarts `stageId`, or
+   * with none the step a failed pipeline failed in, or the paused, stalled or
+   * running pipeline's current step, as the UI's restarts do. A cancelled or
+   * completed pipeline, a failure outside every step and an unknown step are
+   * refused before anything changes. `alreadyRestarted` reports a repeat of a
+   * restart that has already happened (nothing was done again).
+   */
+  async restartForCoordinator(
+    pipelineId: string,
+    stageId: string | undefined,
+    selection?: BuildPipelineRestartSelection,
+    requestId?: string,
+  ): Promise<{
+    pipeline: BuildPipeline;
+    step: CoordinatorRestartedStep;
+    alreadyRestarted: boolean;
+  }> {
+    const requestKey = requestId ? createHash("sha256").update(requestId).digest("hex") : undefined;
+    const intent = createHash("sha256")
+      .update(
+        JSON.stringify({
+          stageId,
+          selection: selection
+            ? {
+                agent: selection.agent,
+                model: selection.model,
+                reasoningEffort: selection.reasoningEffort,
+                fastMode: selection.fastMode,
+              }
+            : undefined,
+        }),
+      )
+      .digest("hex");
+    // Read when located, before the restart supersedes the session it names.
+    let step: CoordinatorRestartedStep = { phase: "unknown", round: 1 };
+    let alreadyRestarted = false;
+    const pipeline = await this.restartLocatedStage(
+      pipelineId,
+      (candidate) => {
+        const prior = requestKey
+          ? candidate.coordinatorRestarts?.find((entry) => entry.key === requestKey)
+          : undefined;
+        if (prior) {
+          if (prior.intent !== intent)
+            return new Error("Restart requestId was reused with different intent");
+          step = prior.step;
+          alreadyRestarted = true;
+          return { kind: "satisfied" };
+        }
+        if (requestKey && (candidate.coordinatorRestarts?.length ?? 0) >= 1024) {
+          return new Error("This pipeline has reached its coordinator restart history capacity");
+        }
+        const target =
+          coordinatorRestartRefusal(candidate, stageId) ??
+          (stageId !== undefined
+            ? namedStepTarget(candidate, stageId, Boolean(selection))
+            : candidate.phase === "failed"
+              ? failedStepTarget(candidate)
+              : currentStepTarget(candidate));
+        if (target instanceof Error) return target;
+        const session = target.kind === "session" ? target.session : undefined;
+        step = {
+          phase:
+            target.kind === "session"
+              ? target.phase
+              : target.kind === "review-package"
+                ? "review-preparation"
+                : target.kind === "validation"
+                  ? "validation"
+                  : candidate.phase,
+          round: (session?.iteration ?? candidate.iteration) + 1,
+          ...(session ? { sessionKey: session.sessionKey, label: session.label } : {}),
+        };
+        alreadyRestarted =
+          target.kind === "satisfied" || (session ? isSupersededPipelineSession(session) : false);
+        return target;
+      },
+      {
+        ...(selection ? { selection } : {}),
+        recordRestart: requestKey
+          ? (candidate) => {
+              (candidate.coordinatorRestarts ??= []).push({ key: requestKey, intent, step });
+            }
+          : undefined,
+      },
+    );
+    return { pipeline, step, alreadyRestarted };
   }
 
   /**
@@ -1039,46 +1051,9 @@ export class BuildPipelineLifecycle {
     );
   }
 
-  /**
-   * Restarts whichever stage the pipeline is on, resolved inside the lock so a
-   * renderer that has not yet seen the latest transition cannot restart the
-   * stage the pipeline has already left.
-   */
+  /** Restarts whichever stage the pipeline is on ({@link currentStepTarget}). */
   async restartCurrentStep(pipelineId: string): Promise<BuildPipeline> {
-    return this.restartLocatedStage(pipelineId, (candidate) => {
-      const phase =
-        candidate.phase === "paused" ? candidate.pausedFromPhase : resumablePhase(candidate.phase);
-      const stagePhase = phase ? sessionPhaseFor(phase) : null;
-      if (!phase || !stagePhase) {
-        return new Error("This build has no running stage to restart");
-      }
-      if (
-        candidate.restartRequest?.kind === "validation" ||
-        (candidate.rewinds?.at(-1)?.replacementValidationRunId === candidate.validationRun?.id &&
-          (candidate.validationRun?.status === "planned" ||
-            candidate.validationRun?.status === "running"))
-      )
-        return { kind: "satisfied" };
-      const validationTarget = reviewValidationStage(candidate, phase);
-      if (validationTarget === "validation") return { kind: "validation" };
-      if (validationTarget === "review-package") {
-        return {
-          kind: "review-package",
-          implementationPhase: phase === "fixing" ? "fix" : "build",
-        };
-      }
-      // Between a transition and the next tick the current session can still be
-      // the previous stage's, so it only stands for this stage when it matches.
-      const session = sessionForCurrentPhase(candidate);
-      return session?.phase === stagePhase
-        ? {
-            kind: "session",
-            session,
-            phase: stagePhase,
-            forceStage: session.label !== REVIEW_PACKAGE_SESSION_LABEL,
-          }
-        : { kind: "session", phase: stagePhase };
-    });
+    return this.restartLocatedStage(pipelineId, currentStepTarget);
   }
 
   private async restartLocatedStage(
@@ -1086,6 +1061,7 @@ export class BuildPipelineLifecycle {
     locate: (candidate: BuildPipeline) => RestartTarget,
     options: {
       expectedHead?: string;
+      recordRestart?: (candidate: BuildPipeline) => void;
       /** Prepares the reset intent. Git changes only after the restart is saved. */
       resetCode?: (
         candidate: BuildPipeline,
@@ -1139,7 +1115,12 @@ export class BuildPipelineLifecycle {
       }
       let selectionSlot: BuildPipelineRestartSlot | null = null;
       if (options.selection) {
-        selectionSlot = named ? pipelineRestartSlot(candidate, named) : null;
+        selectionSlot = named
+          ? pipelineRestartSlot(candidate, named)
+          : target.kind === "session" &&
+              (target.phase !== "review" || (candidate.reviewers?.length ?? 0) <= 1)
+            ? pipelineRestartSlot(candidate, { phase: target.phase, label: "" })
+            : null;
         if (!selectionSlot) {
           rejection = new Error("This step cannot be restarted with a different agent or model.");
           return;
@@ -1396,6 +1377,7 @@ export class BuildPipelineLifecycle {
       clearStageControlState(candidate);
       candidate.pendingKanbanReactivation = true;
       delete candidate.kanbanReactivationRetryAt;
+      options.recordRestart?.(candidate);
     };
     await this.ctx.mutate(pipelineId, mutation, (candidate) => {
       const target = locate(candidate);
@@ -1605,6 +1587,7 @@ export class BuildPipelineLifecycle {
         delete candidate.pauseCause;
         delete candidate.error;
         delete candidate.failureContext;
+        delete candidate.cancelledAt;
         delete candidate.reconnectAttempt;
         delete candidate.stageRetryRequested;
         delete candidate.completionCommentStatus;
@@ -1642,6 +1625,7 @@ export class BuildPipelineLifecycle {
       }
       delete candidate.error;
       delete candidate.failureContext;
+      delete candidate.cancelledAt;
       delete candidate.reconnectAttempt;
       delete candidate.pendingPromptAttempt;
       delete candidate.activePromptContext;
@@ -1678,6 +1662,7 @@ export class BuildPipelineLifecycle {
       candidate.interactionRetryRequested = true;
       delete candidate.error;
       delete candidate.failureContext;
+      delete candidate.cancelledAt;
       delete candidate.pendingInteractionResolution;
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;

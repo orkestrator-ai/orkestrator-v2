@@ -1262,6 +1262,12 @@ export interface AppConfig {
     /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
     agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
     /**
+     * The user's standing permission for this machine's coordinators to switch
+     * accounts without asking. Machine-local, never inherited; written only by
+     * `setCoordinatorAccountSwitchGrant`, the settings form never sends it.
+     */
+    coordinatorAccountSwitchGrant?: import("@orkestrator/protocol/coordinator-account-switch-grant").CoordinatorAccountSwitchGrants;
+    /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes
      * affect attempts admitted after the change only.

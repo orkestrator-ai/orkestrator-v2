@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import type { FileSubtree } from "@/lib/backend";
+import type { ConditionalSnapshot, FileSubtree } from "@/lib/backend";
 import { useFilesPanelStore } from "@/stores/filesPanelStore";
 
 const log = createLogger("web.files");
@@ -27,7 +27,7 @@ export async function loadFileSubtree(
   key: string,
   directory: string,
   reload: boolean,
-  read: () => Promise<FileSubtree | null>,
+  read: (knownDigest: string | undefined) => Promise<ConditionalSnapshot<FileSubtree> | null>,
 ): Promise<void> {
   const state = useFilesPanelStore.getState();
   if (state.fileSubtreeKey !== key || !state.expandedFolders.includes(directory)) return;
@@ -47,14 +47,22 @@ export async function loadFileSubtree(
   if (!token) return;
   const promise = admitted(async () => {
     // Queued work may have been collapsed or superseded before admission.
-    if (useFilesPanelStore.getState().folderLoadTokens.get(directory) !== token) return false;
-    let subtree: FileSubtree | null = null;
+    const admittedState = useFilesPanelStore.getState();
+    if (admittedState.folderLoadTokens.get(directory) !== token) return false;
+    // Only a directory still held can be answered "unchanged".
+    const knownDigest = Object.hasOwn(admittedState.fileSubtrees, directory)
+      ? admittedState.fileSubtreeDigests[directory]
+      : undefined;
+    let snapshot: ConditionalSnapshot<FileSubtree> | null = null;
     try {
-      subtree = await read();
+      snapshot = await read(knownDigest);
     } catch (err) {
       log.error("folder.load-failed", { error: formatLogError(err) });
     }
-    return useFilesPanelStore.getState().finishFolderLoad(key, directory, token, subtree);
+    const { finishFolderLoad } = useFilesPanelStore.getState();
+    return snapshot?.unchanged
+      ? finishFolderLoad(key, directory, token, "unchanged")
+      : finishFolderLoad(key, directory, token, snapshot?.value ?? null, snapshot?.digest);
   });
   pending.set(token, { promise });
   try {

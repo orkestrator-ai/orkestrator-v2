@@ -46,6 +46,7 @@ export function WorkspaceRealmHost() {
   const {
     allEnvironments,
     loadEnvironments,
+    refreshEnvironmentSnapshot,
     createEnvironment,
     startEnvironment,
     updateEnvironment,
@@ -53,8 +54,10 @@ export function WorkspaceRealmHost() {
   const projectsLoaded = useProjectStore((state) => state.hasLoaded);
   const configLoaded = useConfigStore((state) => state.hasLoaded);
   const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
-  useEnvironmentListSync(projectIds, (projectId) =>
-    loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
+  useEnvironmentListSync(
+    projectIds,
+    (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
+    refreshEnvironmentSnapshot,
   );
   const loadAuthoritativeEnvironments = useCallback(
     (projectId: string) => loadEnvironments(projectId, { throwOnError: true }),

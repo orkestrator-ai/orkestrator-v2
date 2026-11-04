@@ -194,9 +194,10 @@ describe("useFilesPanel worktree snapshot revisions", () => {
       ],
       view: stamp(treeRevision),
     }));
-    const subtreeSpy = spyOn(backend, "getLocalFileSubtree").mockResolvedValue({
-      children: [],
-      truncated: false,
+    const subtreeSpy = spyOn(backend, "getLocalFileSubtreeSnapshot").mockResolvedValue({
+      unchanged: false,
+      digest: "",
+      value: { children: [], truncated: false },
     });
     spies.push(subtreeSpy);
     renderHook(() => useFilesPanel());
@@ -204,8 +205,12 @@ describe("useFilesPanel worktree snapshot revisions", () => {
     const originalTree = useFilesPanelStore.getState().fileTree;
     const reads = subtreeSpy.mock.calls.length;
     subtreeSpy.mockResolvedValue({
-      children: [{ name: "fresh.txt", path: "deferred/fresh.txt", isDirectory: false }],
-      truncated: false,
+      unchanged: false,
+      digest: "",
+      value: {
+        children: [{ name: "fresh.txt", path: "deferred/fresh.txt", isDirectory: false }],
+        truncated: false,
+      },
     });
     treeRevision = 2;
     announce();

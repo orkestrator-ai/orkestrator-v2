@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ChevronRight, Loader2 } from "lucide-react";
 import type {
@@ -168,11 +169,15 @@ function ProjectCopyDialogBody({
       else unlisten();
     });
     // Events are hints: a slow poll covers one that was missed.
-    const timer = setInterval(refreshRecord, 3_000);
+    const stopPolling = startCoordinatedPoll({
+      resource: "project-copy",
+      intervalMs: 3_000,
+      read: refreshRecord,
+    });
     return () => {
       active = false;
       stop?.();
-      clearInterval(timer);
+      stopPolling();
       if (queued) clearTimeout(queued);
     };
   }, [tracking, refreshRecord]);

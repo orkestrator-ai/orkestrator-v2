@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { HostMaintenanceSnapshot, HostTask } from "@orkestrator/protocol/host-maintenance";
 import type { DockerTopology, ImageStatus } from "@orkestrator/protocol/image-manifest";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realBackend from "@/lib/backend";
 
 const realBackendSnapshot = { ...realBackend };
@@ -31,23 +32,18 @@ const startHostImageUpdate = mock(async () => {
   return runningTask;
 });
 
-let poll: () => void;
+let poll: () => unknown;
 let interval: ReturnType<typeof spyOn>;
 beforeEach(() => {
-  const original = globalThis.setInterval;
-  interval = spyOn(globalThis, "setInterval").mockImplementation(((
-    callback: () => void,
-    delay?: number,
-  ) => {
-    if (delay !== 2_000) return original(callback, delay);
-    poll = callback;
-    return 1 as unknown as ReturnType<typeof setInterval>;
-  }) as typeof setInterval);
+  interval = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read }) => {
+    poll = read;
+    return () => undefined;
+  });
 });
 
 async function tick() {
   await act(async () => {
-    poll();
+    await poll();
   });
 }
 

@@ -218,3 +218,10 @@ timeout, skip or implementation changed.
 - **Failure:** mobile `scrollbar departure after find stays put when streaming reapplies highlights` failed its first attempt (`toBe`) and passed on retry. It failed again on mobile in a five-owner subset run (GlobalSettings, MergedProjectList, CloseRetention, StreamingTranscript, ToolGroupFold) on the branch, and passed in the same subset on detached `origin/main` `fd679c0e2`.
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=1488 mise run test:logged -- --name ek-branch-stream-4 -- bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts:361 e2e/ToolGroupFold.spec.ts:442 --retries=0` passed, exit 0, in 4.3 s, as did three earlier runs of the same command.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KtcBbJ/browser.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z0tt7k/`. Cause remains unconfirmed.
+
+## Recurrence on the WEB-19 branch and its base, 2026-11-04
+
+- **Commands:** `bunx playwright test --config e2e/playwright.config.ts e2e/StreamingTranscript.spec.ts -g 'scrollbar departure after find' --workers=1 --project=desktop-chromium --repeat-each=4`, once on branch `renderer-refetch-rerenders-1f6b9bb3b04b-r1` (before its rebase on `main`) and once on `a8bdce444`, on a Linux host with other work running.
+- **Result:** 2 of 4 failed on the branch and 1 of 4 failed on the base commit, each with `lastOutcome` `unresolved` rather than `converged`. So it reproduces alone, without an aggregate suite, on code without the branch's change. Four runs each are too few to compare the two rates.
+- **Disposition:** stays open; no assertion, timeout, skip or implementation changed.
+

@@ -2930,6 +2930,31 @@ export class NativeAgentService {
     });
   }
 
+  /**
+   * The tab a turn runs in, for a provider whose Orkestrator connection is
+   * environment-wide (OpenCode). That connection cannot tell the agent which
+   * of the environment's mailboxes it is, so the turn's instructions do
+   * (`openCodeTabMailInstruction`).
+   */
+  private async tabMailFor(
+    durable: PersistedNativeAgentSession,
+  ): Promise<{ environmentId: string; tabId: string } | undefined> {
+    if (
+      durable.owner?.kind !== "environment" ||
+      nativeAgentCapabilities(durable.agent).agentTools === true
+    ) {
+      return undefined;
+    }
+    const prefix = `env-${durable.environmentId}:`;
+    const tabId = durable.logicalSessionKey.startsWith(prefix)
+      ? durable.logicalSessionKey.slice(prefix.length)
+      : "";
+    if (!tabId) return undefined;
+    const config = await this.storage.loadConfig().catch(() => null);
+    if (config?.global.agentMessaging?.enabled !== true) return undefined;
+    return { environmentId: durable.environmentId, tabId };
+  }
+
   private settleArtifactTurn(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "logicalSessionKey">,
     requestId: string,
@@ -3641,6 +3666,7 @@ export class NativeAgentService {
             const agentMcp = dispatchAgentMcpResolved
               ? dispatchAgentMcp
               : await resolveAgentMcp(durable);
+            const tabMail = await this.tabMailFor(durable);
             /*
              * Fence every observation read that started before this point, or
              * runs while the send is in flight: its idle is the provider's
@@ -3710,6 +3736,7 @@ export class NativeAgentService {
                 ),
                 agentMcp,
                 ...(artifactGrant ? { artifactGrant } : {}),
+                ...(tabMail ? { tabMail } : {}),
               });
               // Provider acceptance is the authoritative working edge. Record it
               // before the durable dispatch bookkeeping completes so a newer

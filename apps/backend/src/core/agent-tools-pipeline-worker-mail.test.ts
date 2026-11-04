@@ -231,6 +231,15 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
       return { worker, connection, capability, call };
     }
 
+    test("directory discovery permits no capability but rejects a bad worker capability", async () => {
+      const { call } = await workerPipeline();
+      const undecided = await call("list_mailboxes", {});
+      expect(undecided.result?.isError).not.toBe(true);
+      expect(undecided.result?.structuredContent?.identity).toBeNull();
+      const denied = await call("list_mailboxes", { mailCapability: "invalid" });
+      expect(denied.result?.isError).toBe(true);
+    });
+
     test("the environment connection acts as the worker with its mail capability", async () => {
       const { worker, connection, capability, call } = await workerPipeline();
       const tools = (await rpc(connection.url, connection.token, "tools/list")).result?.tools as
@@ -302,6 +311,8 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
           ...args,
         });
       // The environment credential alone never reaches a worker's mailbox.
+      expect((await call("check_inbox", { tabId: worker })).result?.isError).toBe(true);
+      expect((await call("list_mailboxes", { tabId: worker })).result?.isError).toBe(true);
       expect((await send({ fromTabId: worker })).result?.isError).toBe(true);
       const forged = `${capability.slice(0, -2)}${capability.endsWith("AA") ? "BB" : "AA"}`;
       expect((await send({ mailCapability: forged })).result?.isError).toBe(true);

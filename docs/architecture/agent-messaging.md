@@ -464,9 +464,22 @@ through tool calls" in [agent-engines.md](agent-engines.md).
 `apps/backend/src/core/agent-tools.ts` + `agent-tools-messaging.ts`.
 
 This is the server interactive agents use. A credential is scoped to one
-tab or to one environment. Environment credentials resolve a mailbox only
-when exactly one live pull-capable tab exists, or the caller passes
-`tabId` / `fromTabId` to claim one.
+tab or to one environment. An environment credential (the shared
+connection) may act only as a mailbox `sharedConnectionMayActAs` admits:
+never a native Claude, Codex, Pi, Cursor or Grok tab, since each of those
+has its own tab-scoped connection and a call naming one on the shared
+connection comes from some other session. Among the rest it resolves a
+mailbox when exactly one exists, or when the caller passes `tabId` /
+`fromTabId` to claim one.
+
+The shared connection's MCP instructions name no mailbox. A client reads
+them once, at connect time, so a list of tabs there goes stale as tabs open
+and close, and an agent that trusts it reads another tab's inbox. Each OpenCode turn instead carries its
+own tab in its trusted system text (`openCodeTabMailInstruction`), and the
+agent passes that as `tabId`. `list_mailboxes` still answers a caller that
+has not said which mailbox it is, with `identity: null`, no `self` row and
+an `identityHint`, because it is how such a caller finds out. A claim that
+is wrong still fails there.
 
 Tools (always the same set; enforcement is at call time):
 
@@ -631,9 +644,9 @@ for coordinator delegation.
 config. Qualified for coordinator delegation.
 
 **OpenCode native.** Flags are on. MCP is registered once against
-`opencode serve` with an environment-scoped token. That is enough when the
-environment has a single pull-capable tab; with several, the agent must
-pass `tabId`. There is no per-turn MCP attach, which is why OpenCode is
+`opencode serve` with an environment-scoped token. Each turn's trusted
+system text names its tab, and the agent passes it as `tabId`; with a
+single OpenCode tab the call may omit it. There is no per-turn MCP attach, which is why OpenCode is
 unqualified for workflow-result *tools* — that is a different feature, not
 a mail gap.
 
@@ -708,9 +721,11 @@ locked native mailbox.
 | Coordinator delegation | Y | Y | Y | Y | Y | Y | Y |
 | Routed wake (coordinator, peer) | Y | Y | Y | Y | Y | Y | Y |
 
-OpenCode’s **P** on per-tab credentials: environment-level MCP is enough
-for a single native tab; several pull-capable tabs in one environment must
-claim `tabId`.
+OpenCode’s **P** on per-tab credentials: the connection is
+environment-level, so each turn is told its tab and claims it with `tabId`.
+The shared connection cannot act as another platform's native tab, but two
+OpenCode tabs in one environment share one connection, and nothing below
+the prompt stops one from claiming the other's `tabId`.
 
 ### Other tab kinds and callers
 
@@ -741,8 +756,9 @@ missing store features.
 3. **Control MCP external send is inbox-only.** By design: an operator
    token must not start an agent turn.
 
-4. **OpenCode MCP is environment-scoped.** Complete for one native tab;
-   weaker identity when several pull-capable tabs share the process.
+4. **OpenCode MCP is environment-scoped.** Each turn is told its own tab,
+   and the shared connection cannot act as another platform's tab, but
+   OpenCode tabs in one environment can still claim each other's `tabId`.
 
 Nothing in the store is Claude-specific. A provider that can load MCP,
 ack a carrier, and accept `dispatchMailInject` is complete once the

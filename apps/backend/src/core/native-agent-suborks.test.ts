@@ -162,7 +162,7 @@ describe("the tool", () => {
     expect(AGENT_SUBORK_TOOL_NAMES).toEqual([SUBORK_TOOL_NAME]);
   });
 
-  test("a turn on the shared connection is refused unless the tab is OpenCode's", async () => {
+  test("a denied shared tab claim preserves the own-connection explanation", async () => {
     const w = await world();
     const shared = fakeAgentTools(w.agentTools.connection("e1", "p1", "host"));
     const result = await shared.call(SUBORK_TOOL_NAME, {
@@ -171,7 +171,7 @@ describe("the tool", () => {
       tabId: "agent",
     });
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain("Suborks can't start suborks");
+    expect(JSON.stringify(result.content)).toContain("has its own Orkestrator connection");
   });
 
   test("mail off is a clear refusal, not a call that never answers", async () => {

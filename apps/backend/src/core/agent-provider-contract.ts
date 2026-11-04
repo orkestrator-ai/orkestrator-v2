@@ -442,6 +442,16 @@ export interface ProviderCreateSessionOptions {
   policy?: NativeAgentExecutionPolicy;
 }
 
+/**
+ * The agent tab a turn runs in, for providers whose Orkestrator tool
+ * connection is environment-wide (OpenCode): the agent names this mailbox
+ * on its mail calls instead of guessing among the environment's tabs.
+ */
+export interface ProviderTabMail {
+  environmentId: string;
+  tabId: string;
+}
+
 /** One pipeline worker's mailbox and the signed capability that acts as it. */
 export interface ProviderWorkerMail {
   environmentId: string;
@@ -476,6 +486,12 @@ export interface ProviderSendOptions {
    * dispatch instructions; never logged or shown in transcripts.
    */
   workerMail?: ProviderWorkerMail;
+  /**
+   * The agent tab this turn runs in, for providers whose Orkestrator tool
+   * connection is environment-wide (OpenCode). Delivered to the agent as
+   * trusted dispatch instructions.
+   */
+  tabMail?: ProviderTabMail;
   /**
    * The result key of the attempt `workflowResultTool` belongs to. Bridges that
    * gate tools themselves (Claude, Cursor, Grok, Pi; Codex checks the tools are

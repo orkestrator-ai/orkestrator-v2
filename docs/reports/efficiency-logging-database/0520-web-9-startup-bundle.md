@@ -6,11 +6,11 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Tasks
 
-1. **Baseline the startup closure**: repeat the throwaway build measurement on current `main`. Status: open.
-2. **Lazy-load mail markdown**: stop always-loaded modules pulling in `MessageMarkdown`. Status: open (depends on 1).
-3. **Lazy-load the find and search module**: move `native-message-search` out of the closure. Status: open (depends on 1).
-4. **Stop re-exporting `terminalPortalStore`**: keep xterm out of everything that imports `@/stores`. Status: open (depends on 1).
-5. **Consider `manualChunks`**: only if tasks 2 to 4 leave a reason. Status: open (depends on 2, 3, 4).
+1. **Baseline the startup closure**: repeat the throwaway build measurement on current `main`. Status: done (2026-11-04; 94 chunks, 4.23 MB, 1.28 MB gzip at `96ee1eb3e`).
+2. **Lazy-load mail markdown**: stop always-loaded modules pulling in `MessageMarkdown`. Status: done (2026-11-04; the eager path was `AgentMailConversationView`, not `MailTile`).
+3. **Lazy-load the find and search module**: move `native-message-search` out of the closure. Status: done (2026-11-04; making `AgentNativeTab` properly lazy was enough).
+4. **Stop re-exporting `terminalPortalStore`**: keep xterm out of everything that imports `@/stores`. Status: done (2026-11-04; the re-export is gone, and xterm's runtime left the store too).
+5. **Consider `manualChunks`**: only if tasks 2 to 4 leave a reason. Status: done (2026-11-04; not needed, 2.55 MB and 0.80 MB gzip without it).
 
 ### 1. Baseline the startup closure
 
@@ -80,8 +80,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ## Needs verification
 
-- Every size above is the report's; none was re-measured.
-- What holds `native-message-search` and `uiStore` in the closure today.
+- Nothing left here. The measurements and what held each module in the closure are in [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#3-renderer-re-renders-and-refetches).
 
 ## Related
 

@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
@@ -133,7 +133,7 @@ governs, marked "Decided".
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below). No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -192,6 +192,110 @@ No React Profiler run was made; the numbers are render counts from tests.
   - **The selected environment's entry.**
     - Pros: what the report suggested; the selector is a single `get`.
     - Cons: still re-renders on every change inside that environment.
+
+#### WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix (done 2026-11-04)
+
+Re-checked against `main` at `96ee1eb3e` first. All five still applied, in places differently from the report. Each landed as its own commit. Every change has a test that fails on the previous code, except the WEB-9 sizes and the timings, which are measurements.
+
+**WEB-9, startup bundle.** Measured from a production build's manifest: `index.html`'s static imports plus `renderer-entry` (which `main.tsx` always imports) and its static imports. To reproduce: `bunx vite build --manifest && bun run scripts/startup-closure.ts` in `apps/web`.
+
+| Startup closure | Chunks | JavaScript | Gzip | CSS |
+| --- | --- | --- | --- | --- |
+| Before (`96ee1eb3e`) | 94 | 4,231,413 bytes (4.23 MB) | 1,281,858 bytes (1.28 MB) | 291,857 bytes |
+| After `AgentNativeTab` alone went lazy | 95 | about 3.90 MB (sum of chunk code) | not measured | not measured |
+| After | 89 | 2,547,787 bytes (2.55 MB) | 796,120 bytes (0.80 MB) | 287,918 bytes |
+
+The report's 3.76 MB came from an older build, so the 4.23 MB baseline replaces it. A module graph dump of the real build showed the causes differ from the report's:
+
+- `native-message-search` was held by `AppShell -> BugReportSheet -> native-agent/index.ts -> AgentNativeTab`, and by `ProjectWorkspace -> CoordinatorPanel`. Vite's `INEFFECTIVE_DYNAMIC_IMPORT` warning names this. Both now use `LazyAgentNativeTab`; no find-specific lazy loading was needed, and the warning is gone.
+- Removing the `terminalPortalStore` re-export alone would not have moved xterm: `paneLayoutStore` and `App -> terminal/index.ts -> PersistentTerminal` also reached it. xterm's runtime moved to `lib/terminal-xterm.ts`, the store takes that factory as an argument, and `LazyTerminalPortalHost` loads the host the first time an environment has a terminal tab.
+- The Markdown stack had three more paths, each now behind a boundary: the mail conversation view (`AgentMailMarkdown`, with the plain body as its fallback), the files panel's pull request views, and `TerminalContainerOverlays -> SetupPendingOverlay -> NativeMessage`. `App` also lazy-loads `ProjectWorkspace` (Kanban, GitHub, Linear, pull requests, coordinator).
+
+`startup-closure.test.ts` walks the static graph from the entries in under a second and fails, naming the import chain, when xterm, `dompurify`, `marked`, `react-markdown`, `react-virtuoso`, `NativeMessage`, `MessageMarkdown` and six other named modules are reachable. On the old source tree it fails with those chains. In headless Chromium the production build requested exactly the 89 closure chunks at launch with no page error, and importing the terminal host, native agent, project workspace, mail Markdown, setup overlay, pull request view and pull request list entries raised none. `manualChunks` was not needed. What remains in the closure is not chat code: `react-dom` (530 KB), `@dnd-kit/core`, `CreateEnvironmentDialog` (70 KB), the action bar and `AgentInfoButton`, and `packages/protocol` (about 820 KB across its modules, not examined here).
+
+**WEB-6, live-head merge.** `preferCompleteLiveHead` moved to `hooks/native-agent-live-head.ts` so it can be tested. It returns the incoming rows early when the held and incoming rows share their parts, and compares the rest with `sameTranscriptJson` (`lib/chat/same-transcript-json.ts`), which matches comparing `JSON.stringify` output, key order included, without building it. `native-agent-live-head.test.ts`: `JSON.stringify` runs in a verbatim copy of the old merge and never in the new one, and the two agree over 4,000 random heads, including which row object survives. The 0510 note that the early return should match the `:301` path was wrong: identical parts reach the incoming-only path (`restoredPrefix: false`), and the test pins that. Median per merge on a 200-part row (about 700 KB), one local run:
+
+| Case | Before | After |
+| --- | --- | --- |
+| Same row object | 0.195 ms | 0.000 ms |
+| Reparsed trimmed head, ids unchanged | 0.299 ms | 0.058 ms |
+| Reparsed trimmed head, ids reissued | 0.288 ms | 0.034 ms |
+
+These are small absolute costs, which matches the report's reasoning-only impact rating: the fix removes garbage per update rather than a visible stall. Found on the way and not changed: [4520](../transcripts-and-observation/4520-live-head-omitted-count-duplicate-part.md).
+
+**WEB-10, find indexing.** `AgentChatSearchIndex` (`components/chat/agent-chat-search-index.ts`) keeps each row's text while find is open, reused until the row changes, and is cleared on close and with protected rich content. `matches` also ignored `isOpen`, so a closed bar with a query left in it kept indexing on every update; it is now gated (every consumer already checked `isOpen`). `AgentChatFind.indexing.test.tsx`: an update over 1,000 reparsed rows called `getSearchText` 1,000 times before and 0 now, one changed row calls it once, and typing another query reads nothing again. Five of its six tests fail on the old hook. Local measurement of the real `getNativeMessageSearchText` over Markdown rows:
+
+| Rows | Re-index per update before | Comparison per update after |
+| --- | --- | --- |
+| 300 (under the 512-entry cache) | 0.4–0.5 ms | 0.8 ms |
+| 1,000 | 320–366 ms | 2.5 ms |
+| 3,000 | 1,012–1,192 ms | 2.4 ms |
+
+The first pass after opening find still reads every row once (179–1,197 ms at those sizes); only later passes and further typing improve. The comparison timings ran once each on one reparsed copy.
+
+**WEB-11, terminal socket.** On becoming visible, `TerminalWebSocketClient` now replaces a socket the server has answered only on a mobile host hidden for at least `MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS` (5 s). A socket that is down or unanswered still retries at once on any host. `terminal-websocket-client.visibility.test.ts`: three of its five tests fail on the old client. Live on a `dev:test` profile with the transport turned on, with `visibilityState` overridden in the page rather than a really hidden window: one terminal socket stayed open through a 200 ms and a 6 s hide, and output before and after arrived.
+
+**WEB-2's third fix.** The target was the hook rather than the controller, as 0590 found: the controller's only projection store subscription is its own turn-stop marker. `useNativeAgentSession` subscribed to its whole sync and progressive cache entries, whose every use is a `useState` or `useRef` initial value. It now reads them with `getState()`; the shared projection stays subscribed because an effect follows it. `useNativeAgentSession.store-subscriptions.test.tsx`: one cache write cost one hook render before and none now; a new projection still arrives and a remount still restores the cached transcript token. `useNativeAgentSession.background-flags.test.tsx` ("a manual read still raises and clears the flags") only saw the flag because the removed subscription forced a render mid-read, so it now holds the read open.
+
+**Real stack.** On a credential-free `dev:test` profile (`web9-lazy-bundles`, since stopped and reset), which serves the Vite dev renderer rather than the production bundle: launch and opening the mail panel requested no xterm, `PersistentTerminal`, `AgentNativeTab`, `ProjectWorkspace` or `MessageMarkdown` module. The project board then loaded its own code and showed the coordinator. A terminal tab took input, showed its output again after a reload and re-selecting the environment, and closing a second terminal disposed it. The bug report sheet opened with no failure surface. No page error throughout. Not exercised live: rendering a mail body, the failed-setup overlay and the files panel's pull request tabs, which unit tests cover; a real agent turn, as the profile had no credentials; and a real mobile WebView (see "Needs verification").
+
+**Decisions.**
+
+- **How to take xterm out of the store (WEB-9)?**
+  - **The caller passes an xterm factory to `createTerminal` and `recreateTerminal` (recommended, done).**
+    - Pros: the store has type-only xterm imports; no hidden module state; the only callers already sit in the lazily loaded host.
+    - Cons: a new required argument on two store methods.
+  - **Make `createTerminal` asynchronous and import xterm inside it.**
+    - Pros: callers need no factory.
+    - Cons: the host creates terminals in a layout effect and reads them back in the same pass; it would have to handle terminals that do not exist yet.
+- **What should the terminal host do when an environment's last terminal tab closes (WEB-9)?**
+  - **Stay mounted once loaded (recommended, done).**
+    - Pros: it is what disposes the terminals of removed tabs, so nothing leaks.
+    - Cons: one idle host per environment that has ever had a terminal tab.
+  - **Unmount with the last tab.**
+    - Pros: nothing left mounted.
+    - Cons: the closing tab's terminal would never be disposed.
+- **Lazy-load the whole `AgentMailPanel`, or only the Markdown in a mail body (WEB-9)?**
+  - **Only the Markdown, with the plain body as the fallback (recommended, done).**
+    - Pros: the panel still opens at once; it was the analysis file's recommendation.
+    - Cons: a body can show raw Markdown briefly the first time a thread is read.
+  - **The whole panel.**
+    - Pros: removes more from the closure.
+    - Cons: it is mounted in two places in `AppShell`, and a boundary has to work around its open state.
+- **How to compare parts in the merge (WEB-6)?** This replaces the analysis file's recommendation.
+  - **A comparison with the same answer as comparing the JSON, without serializing (recommended, done).**
+    - Pros: no second copy of the text to bound; stops at the first difference; also covers the incoming part, which is always newly parsed.
+    - Cons: assumes JSON-shaped values; a non-JSON value such as `NaN` compares differently from its serialization, and transcript parts have none.
+  - **A WeakMap from part object to its serialized string.**
+    - Pros: small change; the analysis file's recommendation.
+    - Cons: every incoming part misses, so each merge still serializes them, and the cached strings add to what the projection store's byte ceiling does not count.
+- **Where to reuse search text (WEB-10)?** This replaces the report's WeakMap and debounce.
+  - **A per-hook index by row id, reused when the row is the same object or has the same content (recommended, done).**
+    - Pros: covers reparsed rows, which are new objects; independent of the window-wide text cache that thrashes; bounded by the current rows and dropped on close.
+    - Cons: compares every row per update (2.5 ms at 1,000 to 3,000 rows here), and a second holder of derived text, so it registers with the protected rich cache reset.
+  - **A WeakMap from message object to projection.**
+    - Pros: one lookup per row.
+    - Cons: `normalizeNativeMessages` kept row identity only when re-normalising the same raw copy; a reparsed copy misses every row.
+  - **Debounce the recomputation.**
+    - Pros: trivial.
+    - Cons: every pass still re-parses everything above 512 rows, and matches lag behind the text.
+- **What decides a socket rebuild on return (WEB-11)?**
+  - **Mobile hosts hidden for at least 5 s; a socket that is down or unanswered retries on any host (recommended, done).**
+    - Pros: a desktop alt-tab costs nothing; no new frame or version entry; keeps the protection where the code comment says it matters.
+    - Cons: a desktop socket that dies on its own while the main stream stays healthy has no foreground rescue any more; the gateway's silence watchdog only catches a link that went silent as a whole.
+  - **An application-level echo, rebuilding only if unanswered.**
+    - Pros: tests the socket directly on every host.
+    - Cons: a protocol addition with a version-compatibility entry, and a delay on return while it waits.
+- **How to read the two caches without subscribing (WEB-2)?**
+  - **`getState()` on each render (recommended, done).**
+    - Pros: removes the subscriptions; holds no reference to an entry, so an evicted cache can be freed.
+    - Cons: a later render relying on the value would silently see whatever is current, so the test pins the render count.
+  - **Capture them once in `useState`.**
+    - Pros: makes "only at mount" explicit.
+    - Cons: keeps a cache entry, including its retained history messages, alive for the hook's whole life.
+  - **Select individual fields with `useShallow`.**
+    - Pros: no change to how the values are read.
+    - Cons: subscribes to values only used as initial state, and a token that moves still re-renders.
 
 ### 4. Live agent view requests
 
@@ -823,6 +927,18 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
 
+### Task 3: what counts as the WEB-9 startup closure (2026-11-04)
+
+Counted `src/renderer-entry.tsx` and its static imports with `index.html`'s, because `main.tsx` always imports it dynamically. Counting strict static imports alone gives 2 chunks and 0.13 MB, which measures nothing useful. The report's own figure is not comparable either way: it came from an older build by a method the report does not spell out.
+
+### Task 3: scope of the WEB-9 boundaries (2026-11-04)
+
+Stopped once the chat, Markdown and xterm code had left the closure, which is what the finding names. `CreateEnvironmentDialog`, the action bar and other non-chat code stay eager; no sidebar component was touched, because a compact sidebar build was running at the same time. Added `apps/web/scripts/startup-closure.ts` and `startup-closure.test.ts` beyond the report's list, so the sizes can be repeated and a stray static import fails a test instead of silently undoing the work.
+
+### Task 3: mobile host detection for WEB-11 (2026-11-04)
+
+The client decides "mobile" from `navigator.userAgentData.mobile`, the user agent, or iPadOS's touch-capable `MacIntel`, not from the layout's viewport media query: the concern is how the host suspends sockets, and a narrow desktop window is not a mobile host. The 5 s bound is a judgment with no measurement behind it.
+
 ### Task 14: preserve unrelated task records (review, 2026-11-02)
 
 Compared the complete document diff from the recorded review base
@@ -1174,6 +1290,7 @@ browser and real-stack suites were not run.
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.
 - The compression default under real remote load: tracked in 0052 task 2.
+- WEB-11 on a real mobile WebView: that a socket hidden past 5 s is rebuilt, and that 5 s is long enough to spare a glance away and short enough to catch a dead socket. Only tests with a fake socket and a desktop browser with `visibilityState` overridden have run.
 
 ## Related
 

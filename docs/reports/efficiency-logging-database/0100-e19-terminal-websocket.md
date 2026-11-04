@@ -140,7 +140,7 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 
 #### Tasks
 
-1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: open.
+1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: done (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)) as recommended below, with a 5 s bound.
 
 #### 1. Rebuild only when needed
 

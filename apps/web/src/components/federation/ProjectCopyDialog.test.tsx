@@ -7,10 +7,14 @@ import { FederationProvider } from "./FederationProvider";
 import { NodeActionRequestsDialog } from "./NodeActionRequestsDialog";
 import { ProjectCopyDialog } from "./ProjectCopyDialog";
 
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 afterEach(() => {
   cleanup();
+  resetReadCoordinatorForTests();
   act(() => useProjectCopyStore.getState().close());
   invokeMock.mockReset();
   invokeMock.mockImplementation(() => Promise.resolve());
@@ -103,6 +107,7 @@ function record(stage: ProjectCopyRecord["stage"]): ProjectCopyRecord {
 
 describe("copying a project to another machine", () => {
   test("suggested files are ticked, dependencies hidden, and the copy names target, location and files", async () => {
+    const { clock, document: visibility, coordinator } = installFakeReadCoordinator();
     const copies: Array<Record<string, unknown>> = [];
     let stage: ProjectCopyRecord["stage"] = "cloning";
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
@@ -173,12 +178,29 @@ describe("copying a project to another machine", () => {
     await waitFor(() =>
       expect(dialog.textContent).toContain("Cloning the repository on Build box"),
     );
+    const count = () =>
+      invokeMock.mock.calls.filter(([command]) => command === "list_project_copies").length;
+    const initial = count();
+    visibility.setVisibility("hidden");
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(count()).toBe(initial);
     stage = "completed";
+    visibility.setVisibility("visible");
+    await act(async () => {
+      await clock.advance(500);
+    });
     await waitFor(
       () => expect(screen.getByRole("button", { name: "Open on Build box" })).toBeTruthy(),
       { timeout: 5_000 },
     );
     expect(dialog.textContent).toContain("with 0 files (0 B)");
+    cleanup();
+    const stopped = count();
+    await clock.advance(30_000);
+    expect(count()).toBe(stopped);
+    expect(coordinator.getDiagnostics().entries).toEqual([]);
   });
 
   test("a coordinator's copy request is approved from the copy dialog with the user's choices", async () => {

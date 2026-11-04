@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { useEnvironments } from "./useEnvironments";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
@@ -19,6 +21,7 @@ import {
 } from "@/lib/pane-selection-storage";
 
 afterEach(() => {
+  cleanup();
   localStorage.clear();
   useEnvironmentStore.setState({ environments: [] });
 });
@@ -275,6 +278,64 @@ describe("refreshEnvironmentSnapshot", () => {
     expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual(["env-new"]);
     read.mockRestore();
   });
+
+  test.each([false, true])(
+    "does not add a creation snapshot when generation changes (settled=%s)",
+    async (settled) => {
+      const pid = `creation-${settled}`;
+      const created = environment("env-created", pid);
+      let finishCreate!: (value: Environment) => void;
+      let finishRead!: (value: Environment) => void;
+      const create = spyOn(backend, "createEnvironment").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishCreate = resolve;
+          }),
+      );
+      const read = spyOn(backend, "getEnvironmentSnapshot").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+      try {
+        const { result } = renderHook(() =>
+          useEnvironments(null, { listenForRenameEvents: false }),
+        );
+        let snapshot = settled ? refreshEnvironmentSnapshot(pid, created.id) : undefined;
+        let creation!: Promise<Environment>;
+        act(() => {
+          creation = result.current.createEnvironment(pid);
+        });
+        if (!settled) snapshot = refreshEnvironmentSnapshot(pid, created.id);
+        const other = environment("env-other", pid);
+        if (settled) {
+          await act(async () => {
+            finishCreate(other);
+            await creation;
+          });
+        }
+        await act(async () => {
+          finishRead(created);
+          expect(await snapshot).toBe(true);
+        });
+        expect(useEnvironmentStore.getState().environments).toEqual(settled ? [other] : []);
+        if (!settled)
+          await act(async () => {
+            finishCreate(created);
+            await creation;
+          });
+        else useEnvironmentStore.getState().addEnvironment(created);
+        expect(useEnvironmentStore.getState().environments.map(({ id }) => id)).toEqual([
+          ...(settled ? [other.id] : []),
+          created.id,
+        ]);
+      } finally {
+        create.mockRestore();
+        read.mockRestore();
+      }
+    },
+  );
 
   test("reports a backend that predates the read, changing nothing", async () => {
     const held = environment("env-1", "project-1");

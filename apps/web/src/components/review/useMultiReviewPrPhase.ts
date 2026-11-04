@@ -26,7 +26,10 @@ export function useMultiReviewPrPhase({
   useEffect(() => {
     if (!active || !tabId || !agent || !key) return;
     let cancelled = false;
+    let inFlight = false;
     const refresh = async () => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
       try {
         const update = await loadSessionState({
           environmentId,
@@ -38,6 +41,8 @@ export function useMultiReviewPrPhase({
         setObserved(update.status === "snapshot" ? { key, phase: update.value.turn.phase } : null);
       } catch {
         if (!cancelled) setObserved(null);
+      } finally {
+        inFlight = false;
       }
     };
     void refresh();

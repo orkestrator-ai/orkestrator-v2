@@ -79,8 +79,8 @@ function applySignInGuidance(
 ): void {
   const interactive = provider.interactiveSnapshot?.bind(provider);
   if (interactive) {
-    provider.interactiveSnapshot = async (sessionId) =>
-      withSignInGuidance(await interactive(sessionId), guidance);
+    provider.interactiveSnapshot = async (sessionId, options) =>
+      withSignInGuidance(await interactive(sessionId, options), guidance);
   }
   const state = provider.sessionStateSnapshot?.bind(provider);
   if (state) {

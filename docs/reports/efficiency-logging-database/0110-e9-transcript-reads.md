@@ -21,9 +21,9 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 #### Tasks
 
 1. **Capture the baseline**: measure bridge read bytes per prompt send before changing anything. Status: open.
-2. **State-only read for `messageLimit: 1` callers**: stop reading the transcript for callers that want the phase or interactions. Status: open (depends on 1).
-3. **State-only post-dispatch refresh**: make the refresh after dispatch, settle and retire read state only. Status: open (depends on 1).
-4. **Pass `limit` through the raw read**: make `interactiveSnapshot` and `legacy` honour a limit for the callers that remain. Status: open (depends on 1).
+2. **State-only read for `messageLimit: 1` callers**: stop reading the transcript for callers that want the phase or interactions. Status: open (task 4 cut these reads to two rows; they still run the composer, catalogue and MCP reads).
+3. **State-only post-dispatch refresh**: make the refresh after dispatch, settle and retire read state only. Status: done differently on 2026-11-04: those refreshes read a 32-row tail (`refreshProjectionState`); see 1202's Assumptions and decisions.
+4. **Pass `limit` through the raw read**: make `interactiveSnapshot` and `legacy` honour a limit for the callers that remain. Status: done 2026-11-04.
 5. **Re-check the duplicate row cache (TX-15)**: confirm the legacy and summary paths no longer cache the same rows in normal use. Status: open (depends on 3).
 
 #### 1. Capture the baseline
@@ -94,7 +94,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
-No part of the fix has landed. `getNativeAgentSession` no longer decodes the store (see [0230](0230-e6-store-writes.md#0230-native-session-mutations-still-decode-the-whole-store-inside-the-lease)), but the bridge read described here is unchanged.
+Tasks 3 and 4 landed on 2026-11-04 without the baseline, at the ticket's request: no read other than `sync-v1` is unlimited now, and a refresh whose result is dropped reads a 32-row tail. `getNativeAgentSession` no longer decodes the store (see [0230](0230-e6-store-writes.md#0230-native-session-mutations-still-decode-the-whole-store-inside-the-lease)).
 
 ### Constraints and rationale
 

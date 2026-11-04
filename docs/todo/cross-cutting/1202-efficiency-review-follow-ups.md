@@ -30,7 +30,7 @@ governs, marked "Decided".
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
-5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
+5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
@@ -326,7 +326,7 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
 
 **Context.** The report's TX items in `native-agent-transcript-projection.ts`, `native-agent-service.ts` and `http-bridge-provider.ts`. #1506 (history paging) changed the projection after the report.
 
-**Investigation.** Confirmed 2026-11-01: the transcript view cache holds one entry per key, so a delta is built only from the newest view (TX-1). The projection-sync path already keeps bounded revisions (`state.revisions`), which is the model for the fix. Not re-checked since #1506: TX-2's unlimited `legacy()` reads, TX-3, TX-7, TX-8, TX-9 and TX-11 to TX-18.
+**Investigation.** Confirmed 2026-11-01: the transcript view cache holds one entry per key, so a delta is built only from the newest view (TX-1). The projection-sync path already keeps bounded revisions (`state.revisions`), which is the model for the fix. Re-checked 2026-11-04 against `96ee1eb3e`: TX-2 still applied after #1506, because `interactiveSnapshot` read `legacy()` with no limit and `refreshProjectionOnce` passed none, so it was fixed rather than recorded as no longer applying. Not re-checked since #1506: TX-3, TX-7, TX-8, TX-9 and TX-11 to TX-18.
 
 **Decisions.**
 
@@ -337,6 +337,7 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
   - **Keep one base and send a snapshot to anyone behind.**
     - Pros: no change.
     - Cons: the problem stays.
+  - Done with the recommended option; see "Task 5" under Assumptions and decisions.
 
 ### 6. Bridge hot paths
 
@@ -1508,6 +1509,65 @@ token afterwards. Dropping the forced read would let the backend answer from
 its cache or with a delta the public page cannot express. It would also make
 `unchanged` depend on cache state rather than on the transcript. The provider
 read on each poll stays, and reducing it belongs with task 4.
+
+### Task 5: baseline gate (TX-1, TX-2)
+
+Made on 2026-11-04. Task 1 gates TX-1 and TX-2 on a baseline. Ticket
+`ef867c11` asked for both to be built, so the build went ahead with fake-provider
+tests only. No live snapshot-rate or bytes-per-send figure exists on either side;
+that stays open under task 1.
+
+### Task 5: ring size and bounds (TX-1)
+
+Made on 2026-11-04. Eight views per key, 2 MiB per key and 32 MiB in total
+(`native-agent-transcript-delta-bases.ts`), the top of the recommended 4 to 8.
+The per-key and total bytes match `NATIVE_SYNC_MAX_REVISION_BYTES` and
+`NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES`. A base is charged only for rows its
+successor no longer holds, plus one reference per row, so shared rows count once.
+The sync path's 60-second expiry was not copied: the ticket asks for count and
+bytes, and expiry runs only on a write, so it would release nothing on an idle
+session.
+
+### Task 5: deltas across several revisions (TX-1)
+
+Made on 2026-11-04. Comparing a base with the newest view misses what happened
+between them, so `chainedTranscriptDelta` walks the views in between. It keeps
+deletions the endpoints would read as aging out, and carries in `revisedMessages`
+any held row that changed before leaving the window, skipping part-trimmed head
+rows. It answers with a snapshot when the windows share nothing or the carried
+rows exceed the revised-list bounds. The ring empties on a new epoch, session or
+generation, or a base too large to keep, because a delta across a hole could miss
+something.
+
+### Task 5: the early cached answer (TX-1)
+
+Made on 2026-11-04. The cached answer path tries the ring too (0160's
+recommendation), because that is the path a reader who is behind takes. The delta
+is marked `freshness: "cached"` like the snapshot it replaces and may be one read
+stale; the background read still runs. A forced read skips the ring.
+
+### Task 5: how post-dispatch reads are bounded (TX-2)
+
+Made on 2026-11-04. Reads other than `sync-v1` ask the bridge for the window plus
+one row, the extra row showing that older history exists. `sync-v1` stays whole
+because it fills `projectionHistory`. Refreshes whose result is dropped (dispatch
+outcomes, settled queue dispatches, interaction answers) read a 32-row tail
+through `refreshProjectionState`. They still do everything else a refresh does,
+including the announcement, and do not change the window readers inherit.
+
+A state-only read was not used for these sites. `sessionStateSnapshot` has a
+different shape from the snapshot the refresh builds on, and 0150 lists the side
+effects of a full refresh as unverified. Fork, stop and control changes return a
+projection, so they keep their window and gain only the limit.
+
+Two consequences are handled in code. A tail read reports its own cut as
+truncation, so the "16 MiB transport limit" notice now requires fewer or more rows
+than asked, or shed parts. A paused coordinator compares a cut cached view with
+the saved display tail and shows the longer one, so a short tail cannot hide saved
+history.
+
+One is accepted: a legacy reader whose next read fails sees the cached tail under
+the error state until a read succeeds.
 
 ### Task 15: an input is what is staged, not the host's file (DK-14)
 

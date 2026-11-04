@@ -37,7 +37,7 @@ function command(name: string, extra: Partial<NativeAgentSlashCommand> = {}) {
 }
 
 async function world(catalogue: NativeAgentSlashCommand[] = [command("/review")]) {
-  const context = await setup();
+  const context = await setup("claude", { abortGraceMs: 0 });
   const { harness, service, stub, projectId } = context;
   Object.assign(stub.provider, {
     commandCatalogue: async (): Promise<ProviderCommandCatalogue> => ({
@@ -113,6 +113,10 @@ describe("stop_worker_turn", () => {
   test("a delegation on a turn whose stop is not confirmed yet settles on the turn end", async () => {
     const w = await world();
     w.activity("working");
+    // This scenario keeps running after abort; the default stub confirms idle.
+    (w.stub.provider.abort as unknown as ReturnType<typeof mock>).mockImplementation(
+      async () => undefined,
+    );
     await w.run("open_coordinator_delegation", {
       environmentId: "env-1",
       tabId: w.tabId,
@@ -234,6 +238,9 @@ describe("stop_worker_turn", () => {
         requestId: `job-${closed}`,
       });
       // Unconfirmed: the delegation waits for the turn end, which never comes.
+      (w.stub.provider.abort as unknown as ReturnType<typeof mock>).mockImplementation(
+        async () => undefined,
+      );
       expect(
         await w.run("stop_coordinator_worker_turn", {
           input: { requestId: `stop-${closed}`, environmentId: "env-1", tabId: w.tabId },

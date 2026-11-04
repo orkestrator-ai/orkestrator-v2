@@ -4,6 +4,7 @@ import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { AgentRegistry } from "../agent-registry.js";
 import type { CommandContext } from "../commands-context.js";
+import type { NativeAgentServiceOptions } from "../native-agent-service-shared.js";
 import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { launchInternals } from "../native-agent-service-test-collaborators.js";
@@ -75,7 +76,10 @@ export async function cleanupSessionHarnesses(): Promise<void> {
   }
 }
 
-export async function setup(agent: BuildPipelineAgent = "claude") {
+export async function setup(
+  agent: BuildPipelineAgent = "claude",
+  options: NativeAgentServiceOptions = {},
+) {
   const stub = controlledProvider(agent);
   let service!: NativeAgentService;
   const harness = await createPublicApiHarness({
@@ -89,7 +93,7 @@ export async function setup(agent: BuildPipelineAgent = "claude") {
     harness.storage,
     async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> =>
       (await harness.commands.get(name)!(args, harness.context)) as T,
-    { provider: async () => stub.provider },
+    { ...options, provider: async () => stub.provider },
   );
   (harness.context as { nativeAgents?: NativeAgentService }).nativeAgents = service;
   (harness.context as { agentRegistry?: AgentRegistry }).agentRegistry = new AgentRegistry(

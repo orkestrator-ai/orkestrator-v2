@@ -264,6 +264,57 @@ describe("desktop window contexts", () => {
     expect(remote.sent).toEqual([]);
   });
 
+  test("a backend event skips a local window on the direct transport, main's own does not", () => {
+    const h = harness();
+    const relay = h.context(1, "local");
+    const direct = h.context(2, "local");
+    const remote = h.context(3, "remote-1");
+    (direct.value as Context).localGatewayTransport = true;
+    (remote.value as Context).localGatewayTransport = true;
+    for (const context of [relay, direct, remote]) h.windows.register(context.value);
+
+    h.windows.relayBackendEvent("local", "terminal-output-local:1", { data: "x" });
+    expect(relay.sent).toEqual([["orkestrator:event", "terminal-output-local:1", { data: "x" }]]);
+    expect(direct.sent).toEqual([]);
+
+    // A window on another connection still takes that connection's relay.
+    h.windows.relayBackendEvent("remote-1", "remote-event", 1);
+    expect(remote.sent).toEqual([["orkestrator:event", "remote-event", 1]]);
+
+    h.windows.emitToConnection("local", "local-backend-unavailable", { message: "down" });
+    expect(direct.sent).toEqual([
+      ["orkestrator:event", "local-backend-unavailable", { message: "down" }],
+    ]);
+  });
+
+  test("a realm's portal keeps its relay beside a window on the direct transport", () => {
+    const h = harness();
+    const direct = h.context(1, "local");
+    (direct.value as Context).localGatewayTransport = true;
+    h.windows.register(direct.value);
+    const realm = h.context(100, "workspace-1", { portal: "local" });
+    h.realms.set(100, realm.value);
+
+    h.windows.relayBackendEvent("local", "resource-changed", 1);
+    expect(direct.sent).toEqual([]);
+    expect(realm.sent).toEqual([[PORTAL_EVENT_CHANNEL, "resource-changed", 1]]);
+  });
+
+  test("terminal output stays on main's stream only while an open window takes it there", () => {
+    const h = harness();
+    expect(h.windows.needsLocalTerminalRelay()).toBe(false);
+    const direct = h.context(1, "local");
+    (direct.value as Context).localGatewayTransport = true;
+    h.windows.register(direct.value);
+    expect(h.windows.needsLocalTerminalRelay()).toBe(false);
+
+    const relay = h.context(2, "local");
+    const closeRelay = h.windows.register(relay.value);
+    expect(h.windows.needsLocalTerminalRelay()).toBe(true);
+    closeRelay();
+    expect(h.windows.needsLocalTerminalRelay()).toBe(false);
+  });
+
   test("before connections exist, events go nowhere and a switch is refused", async () => {
     const h = harness();
     const window = h.context(1, "local");

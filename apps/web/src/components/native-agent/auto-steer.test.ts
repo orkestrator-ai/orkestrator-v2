@@ -53,7 +53,8 @@ describe("autoSteerNotice", () => {
     );
     expect(rejected).toEqual({
       tone: "info",
-      message: "Steering is full for this turn. Your message was queued instead.",
+      message:
+        "The last steer attempt was refused because steering is full for this turn. Your message remains queued.",
     });
   });
 
@@ -86,7 +87,7 @@ describe("queuedSteerNote", () => {
     expect(queuedSteerNote({ ...steerable, providerSteers: false })).toBe(
       "Claude cannot be steered here, so this is sent when the turn ends.",
     );
-    expect(queuedSteerNote({ ...steerable, parked: true })).toContain("still being confirmed");
+    expect(queuedSteerNote({ ...steerable, parked: true })).toContain("recovery controls");
     expect(queuedSteerNote({ ...steerable, steerable: false, attachmentCount: 1 })).toContain(
       "text only",
     );
@@ -95,7 +96,13 @@ describe("queuedSteerNote", () => {
     );
   });
 
-  test("a refusal is what happened to this row, so it wins", () => {
+  test("recovery takes priority over a historical refusal even after the turn ends", () => {
+    expect(
+      queuedSteerNote({ ...steerable, running: false, parked: true, refusal: "Old refusal" }),
+    ).toContain("recovery controls");
+  });
+
+  test("a refusal is historical context even when another steer is available", () => {
     expect(
       queuedSteerNote({ ...steerable, providerSteers: false, refusal: "Steering is full." }),
     ).toBe("Steering is full.");
@@ -108,10 +115,23 @@ describe("steerRefusalNote", () => {
     expect(steerRefusalNote({ outcome: "unknown", requestId: "r" }, "Claude")).toBeUndefined();
     expect(steerRefusalNote(null, "Claude")).toBeUndefined();
     expect(steerRefusalNote({ outcome: "mismatch" }, "Claude")).toBe(
-      "The turn moved on before this could be steered. Sent when the turn ends.",
+      "The last steer attempt missed the active turn. This message remains queued.",
     );
     expect(steerRefusalNote({ outcome: "idle" }, "Claude")).toBe(
-      "Claude finished the turn before this could be steered. Sent as the next turn.",
+      "Claude finished the turn before the last steer attempt. This message remains queued.",
     );
   });
 });
+
+for (const reason of [
+  "steer-capacity-exceeded",
+  "steer-history-unavailable",
+  "steer-not-recorded",
+] as const) {
+  test(`queued rejection ${reason} never asks for another send`, () => {
+    const outcome = { outcome: "rejected" as const, reason, requestId: "r" };
+    expect(steerRefusalNote(outcome, "Claude")).toContain("remains queued");
+    expect(steerRefusalNote(outcome, "Claude")).not.toMatch(/send.*again|sent when/i);
+    expect(autoSteerNotice(outcome, "Claude")?.message).not.toMatch(/send.*again/i);
+  });
+}

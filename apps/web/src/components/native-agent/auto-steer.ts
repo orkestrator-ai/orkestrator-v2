@@ -1,7 +1,4 @@
-import {
-  nativeAgentSteerRejectionMessage,
-  type NativeAgentSessionActionOutcome,
-} from "@orkestrator/protocol/native-agent";
+import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 
 /**
  * Auto-steer (Settings → General) sends a message typed while a turn is running
@@ -37,14 +34,12 @@ export function shouldAutoSteer(input: {
 }
 
 /**
- * Why a queued prompt has no Steer action while a turn is running, shown on
- * its row so a message waiting for the next turn says why rather than just
- * sitting there. `undefined` when there is no running turn (nothing to steer
- * into) or the row can be steered.
+ * Current queue blockers and historical steer refusals, shown on the row.
+ * Recovery remains visible even after a turn ends; otherwise an idle or
+ * steerable row without a refusal needs no note.
  *
- * A row that steering refused keeps that refusal (`refusal`) until it leaves
- * the queue; it wins over the generic reasons because it is what actually
- * happened to this message.
+ * A refusal is historical context, not a claim that another steer cannot run.
+ * Current recovery requirements always take priority over that history.
  */
 export function queuedSteerNote(input: {
   /** A turn is running: the queue's rows would otherwise be steerable. */
@@ -61,13 +56,13 @@ export function queuedSteerNote(input: {
   refusal?: string;
   label: string;
 }): string | undefined {
+  if (input.parked) {
+    return "Waiting for the earlier message to be resolved. If prompted, use the recovery controls to retry or discard it.";
+  }
   if (!input.running) return undefined;
   if (input.refusal) return input.refusal;
   if (!input.providerSteers) {
     return `${input.label} cannot be steered here, so this is sent when the turn ends.`;
-  }
-  if (input.parked) {
-    return "An earlier message is still being confirmed, so this is sent when the turn ends.";
   }
   if (input.steerable) return undefined;
   if (input.attachmentCount > 0) {
@@ -93,11 +88,25 @@ export function steerRefusalNote(
     case "unknown":
       return undefined;
     case "rejected":
-      return `${nativeAgentSteerRejectionMessage(outcome)} Sent when the turn ends.`;
+      return `${queuedSteerRejectionReason(outcome.reason)} This message remains queued.`;
     case "mismatch":
-      return "The turn moved on before this could be steered. Sent when the turn ends.";
+      return "The last steer attempt missed the active turn. This message remains queued.";
     default:
-      return `${label} finished the turn before this could be steered. Sent as the next turn.`;
+      return `${label} finished the turn before the last steer attempt. This message remains queued.`;
+  }
+}
+
+/** Queue guidance must never reuse direct-send instructions to resend. */
+function queuedSteerRejectionReason(
+  reason: Extract<NativeAgentSessionActionOutcome, { outcome: "rejected" }>["reason"],
+): string {
+  switch (reason) {
+    case "steer-capacity-exceeded":
+      return "The last steer attempt was refused because steering is full for this turn.";
+    case "steer-history-unavailable":
+      return "The last steer attempt was refused because steering history is unavailable.";
+    case "steer-not-recorded":
+      return "The last steer attempt could not be recorded.";
   }
 }
 
@@ -127,7 +136,7 @@ export function autoSteerNotice(
     case "rejected":
       return {
         tone: "info",
-        message: `${nativeAgentSteerRejectionMessage(outcome)} Your message was queued instead.`,
+        message: `${queuedSteerRejectionReason(outcome.reason)} Your message remains queued.`,
       };
     case "mismatch":
       return {

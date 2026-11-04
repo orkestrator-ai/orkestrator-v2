@@ -38,6 +38,8 @@ const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
 const realNativeComposeBarPasteSnapshot = { ...realNativeComposeBarPaste };
 
 let providerSteers = true;
+let parked = false;
+let running = true;
 /** The durable queue the fake backend holds: enqueue adds, an applied steer drains. */
 let queuedItems: Array<{ id: string; text: string }> = [];
 
@@ -49,7 +51,16 @@ function projectionFor(agent: AgentPlatform): NativeAgentSessionProjection<Nativ
     environmentId: ENV_ID,
     sessionId: `${agent}-session`,
     connection: "connected",
-    turn: { phase: "running" },
+    turn: { phase: running ? "running" : "idle" },
+    ...(parked
+      ? {
+          recoverableDispatch: {
+            requestId: "parked-1",
+            status: "action-required",
+            createdAt: "2026-11-04T09:00:00Z",
+          },
+        }
+      : {}),
     messages: [],
     interactions: [],
     composerControls: [],
@@ -238,6 +249,8 @@ afterEach(() => {
   refreshError = false;
   steerOutcome = { outcome: "applied" };
   providerSteers = true;
+  parked = false;
+  running = true;
   queuedItems = [];
   resetSonnerMocks();
   useConfigStore.getState().setConfig(configSnapshot);
@@ -309,7 +322,7 @@ describe("Coordinator chat steering", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("compose-queue-item-note").textContent).toBe(
-        "Steering is full for this turn. Sent when the turn ends.",
+        "The last steer attempt was refused because steering is full for this turn. This message remains queued.",
       ),
     );
     expect(queuedRows()).toHaveLength(1);
@@ -328,7 +341,7 @@ describe("Coordinator chat steering", () => {
     });
     await waitFor(() =>
       expect(screen.getByTestId("compose-queue-item-note").textContent).toBe(
-        "The turn moved on before this could be steered. Sent when the turn ends.",
+        "The last steer attempt missed the active turn. This message remains queued.",
       ),
     );
     expect(queuedRows()).toHaveLength(1);
@@ -348,4 +361,102 @@ describe("Coordinator chat steering", () => {
     expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
+});
+
+async function publishProjection() {
+  await act(async () => {
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(createSessionKey(ENV_ID, TAB_ID), projectionFor("claude"));
+  });
+}
+
+for (const reason of [
+  "steer-capacity-exceeded",
+  "steer-history-unavailable",
+  "steer-not-recorded",
+] as const) {
+  test(`Coordinator retains one copy after ${reason} without provider text`, async () => {
+    setAutoSteer(true);
+    steerOutcome = { outcome: "rejected", reason, requestId: "r" };
+    await sendToWorkingCoordinator("check pull requests");
+    await waitFor(() =>
+      expect(screen.getByTestId("compose-queue-item-note").textContent).toContain("remains queued"),
+    );
+    expect(queuedItems).toHaveLength(1);
+    expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /^Steer queued prompt/ })).toBeTruthy();
+    running = false;
+    await publishProjection();
+    await waitFor(() => expect(screen.queryByTestId("compose-queue-item-note")).toBeNull());
+    running = true;
+    await publishProjection();
+    await waitFor(() =>
+      expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+        "last steer attempt",
+      ),
+    );
+  });
+}
+
+test("recovery guidance wins while parked and disappears once recovery clears, including dialog metadata", async () => {
+  setAutoSteer(false);
+  await sendToWorkingCoordinator("check pull requests");
+  parked = true;
+  providerSteers = false;
+  await publishProjection();
+  await waitFor(() =>
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+      "recovery controls",
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "View queued prompts (1)" }));
+  expect(screen.getByRole("dialog").textContent).toContain("recovery controls");
+  parked = false;
+  providerSteers = true;
+  await publishProjection();
+  await waitFor(() =>
+    expect(screen.getByRole("dialog").textContent).not.toContain("recovery controls"),
+  );
+});
+
+for (const outcome of ["rejected", "applied"] as const) {
+  test(`a ${outcome} steer retains its outcome when projection refresh fails`, async () => {
+    setAutoSteer(true);
+    refreshError = true;
+    steerOutcome =
+      outcome === "applied"
+        ? { outcome }
+        : { outcome, reason: "steer-not-recorded", requestId: "r" };
+    await sendToWorkingCoordinator("check pull requests");
+    if (outcome === "rejected") {
+      await waitFor(() =>
+        expect(screen.getByTestId("compose-queue-item-note").textContent).toContain(
+          "could not be recorded",
+        ),
+      );
+      expect(queuedItems).toHaveLength(1);
+    } else {
+      await waitFor(() =>
+        expect(mockToastSuccess.mock.calls.map((call) => call[0])).toContain(
+          "Steered the active Claude turn",
+        ),
+      );
+      expect(queuedItems).toHaveLength(0);
+    }
+    refreshError = false;
+    await publishProjection();
+    await waitFor(() => expect(queuedRows()).toHaveLength(outcome === "applied" ? 0 : 1));
+    expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+  });
+}
+
+test("a transport error retains the durable queued copy", async () => {
+  setAutoSteer(true);
+  steerError = new Error("Steer unavailable");
+  await sendToWorkingCoordinator("check pull requests");
+  await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
+  expect(queuedItems).toHaveLength(1);
+  expect(queuedRows()).toHaveLength(1);
+  expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
 });

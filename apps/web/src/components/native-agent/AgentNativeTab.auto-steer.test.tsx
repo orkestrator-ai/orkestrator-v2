@@ -298,7 +298,7 @@ describe("AgentNativeTab auto-steer", () => {
 
     await waitFor(() =>
       expect(mockToastInfo.mock.calls.map((call) => call[0])).toContain(
-        "Steering is full for this turn. Your message was queued instead.",
+        "The last steer attempt was refused because steering is full for this turn. Your message remains queued.",
       ),
     );
     expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);

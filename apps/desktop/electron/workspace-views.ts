@@ -162,6 +162,7 @@ export type WorkspaceViewsOptions = {
   releaseScope(scope: string): void;
   installRequestAuth(webContents: WebContentsLike, scope: string): void;
   installNavigationGuards(webContents: WebContentsLike): void;
+  installPermissionPolicy(webContents: WebContentsLike): void;
   /** The realm's own IPC context: called before its document loads. */
   register(record: WorkspaceViewRecord, parent: ParentWindowLike): void;
   unregister(record: WorkspaceViewRecord): void;
@@ -226,8 +227,7 @@ export class WorkspaceViews {
           preload: this.options.preloadPath,
           contextIsolation: true,
           nodeIntegration: false,
-          // Same reason as the main window: the preload is bundled as ESM.
-          sandbox: false,
+          sandbox: true,
           partition: this.options.partitionFor(input.nodeId, parent.webContents.id),
         },
       });
@@ -254,6 +254,7 @@ export class WorkspaceViews {
       view.setVisible(false);
       view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       this.options.installNavigationGuards(view.webContents);
+      this.options.installPermissionPolicy(view.webContents);
       this.options.installRequestAuth(view.webContents, scope);
       this.options.register(entry, parent);
       view.webContents.on("render-process-gone", () => this.dispose(entry, "crashed"));

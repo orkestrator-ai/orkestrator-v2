@@ -27,6 +27,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
 | How projects or environments are listed or displayed (`components/sidebar/`, `EnvironmentItem*`, `components/federation/RemoteMachineTree.tsx`, `FederatedSidebarSections.tsx`, `lib/federation/aggregate.ts`, `node-summaries.ts`) | [`docs/architecture/federation.md`](docs/architecture/federation.md#one-presentation-for-both-paths) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
+| The renderer's Content Security Policy, the preload sandbox, renderer and realm permissions | [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md) |
 | Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
@@ -176,9 +177,9 @@ the container image in `docker/`.
 - Register backend commands in `apps/backend/src/core/commands.ts` through
   `createCommandRegistry()`, using the existing `CommandContext` and
   `StorageService` patterns rather than renderer-only state.
-- Desktop `BrowserWindow` preloads are bundled as ESM, so the main window and
-  toolchain bootstrap windows keep `sandbox: false`. Browser preview views stay
-  sandboxed.
+- Desktop windows and views with a preload run `sandbox: true`, so preloads are
+  bundled as CommonJS and may require only `electron`; see
+  [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md).
 - Application data lives in `~/Library/Application Support/orkestrator-v2/`
   (macOS) or `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/` (Linux).
 
@@ -1063,10 +1064,9 @@ names at all. Three invariants keep it honest:
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
-Desktop `BrowserWindow` preloads are bundled as ESM, so the main window and
-toolchain bootstrap windows keep `sandbox: false`. Sandboxed Chromium evaluates
-preloads as CommonJS and cannot load `import` from `electron`. Browser preview
-views stay sandboxed.
+Every desktop window and view runs `sandbox: true`. Sandboxed Chromium evaluates
+a preload as CommonJS whose `require` loads only `electron`, so `bundleElectron`
+builds preloads separately from the ESM main process.
 
 ### Docker
 

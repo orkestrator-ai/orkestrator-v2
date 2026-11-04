@@ -6,7 +6,11 @@ import { installDefaultContextMenu } from "./context-menu.js";
 import { resolveRendererIndexPath } from "./paths.js";
 import { desktopTitleBarStyle } from "./title-bar-inset.js";
 import { installRendererDiagnostics } from "./renderer-diagnostics.js";
+import { installRendererPermissionPolicy } from "./renderer-permissions.js";
 import { installRendererRecovery } from "./renderer-recovery.js";
+import { isTrustedRendererUrl } from "./trusted-renderer-url.js";
+
+export { isTrustedRendererUrl };
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindow;
 type ContextMenuMenu = Parameters<typeof installDefaultContextMenu>[1];
@@ -25,29 +29,6 @@ export type CreateMainWindowOptions = {
   beforeLoad?: (window: BrowserWindow) => void | Promise<void>;
   platform?: NodeJS.Platform;
 };
-
-export function isTrustedRendererUrl(candidateUrl: string, trustedRendererUrl: string): boolean {
-  try {
-    const candidate = new URL(candidateUrl);
-    const trusted = new URL(trustedRendererUrl);
-
-    if (trusted.protocol === "http:" || trusted.protocol === "https:") {
-      return candidate.origin === trusted.origin;
-    }
-
-    if (trusted.protocol === "file:") {
-      return (
-        candidate.protocol === "file:" &&
-        candidate.host === trusted.host &&
-        candidate.pathname === trusted.pathname
-      );
-    }
-
-    return candidate.href === trusted.href;
-  } catch {
-    return false;
-  }
-}
 
 type GuardedWebContents = {
   on(
@@ -114,10 +95,9 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
       preload: path.join(options.dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // Sandboxed Chromium evaluates preloads as CommonJS. These preloads are
-      // bundled as ESM (`import` from "electron"), so sandbox: true fails to
-      // load window.orkestrator. Keep sandbox off until a CJS preload exists.
-      sandbox: false,
+      // Sandboxed Chromium evaluates preloads as CommonJS and lets them require
+      // only "electron", which is what `bundleElectron` emits for them.
+      sandbox: true,
       ...(options.partition ? { partition: options.partition } : {}),
     },
   });
@@ -126,6 +106,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
   installRendererDiagnostics(mainWindow.webContents);
   installRendererRecovery(mainWindow.webContents);
   installRendererNavigationGuards(mainWindow.webContents, trustedRendererUrl);
+  installRendererPermissionPolicy(mainWindow.webContents.session, trustedRendererUrl);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
   await options.beforeLoad?.(mainWindow);

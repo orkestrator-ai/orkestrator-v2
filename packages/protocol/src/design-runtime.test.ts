@@ -12,7 +12,7 @@ import {
   appClaimsShortcut,
   shortcutFocus,
 } from "./keyboard-shortcuts.js";
-import { designBootstrap, installDesignRuntime } from "./design-runtime.js";
+import { designBootstrap, designFrameDocument, installDesignRuntime } from "./design-runtime.js";
 
 describe("design runtime sanitizer", () => {
   let testWindow: Window;
@@ -293,3 +293,25 @@ for (const minified of [false, true]) {
     }
   });
 }
+
+describe("designFrameDocument", () => {
+  const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("base64");
+  const document = designFrameDocument(sha256);
+  const script = /<script>([\s\S]*)<\/script><\/body>/.exec(document)?.[1];
+
+  test("pins exactly the script it carries, so authored code still cannot execute", () => {
+    if (!script) throw new Error("Expected an inline bootstrap");
+    expect(document).toContain(`script-src 'sha256-${sha256(script)}'`);
+    expect(document).not.toContain("'nonce-");
+    expect(document).toContain("connect-src 'none'");
+  });
+
+  test("declares its charset, because the hash covers the decoded script", () => {
+    expect(document.indexOf('<meta charset="utf-8">')).toBeLessThan(document.indexOf("<script"));
+  });
+
+  test("carries the same runtime as the nonce form", () => {
+    const nonced = designBootstrap("a".repeat(32));
+    expect(nonced).toContain(`<script nonce="${"a".repeat(32)}">${script}</script>`);
+  });
+});

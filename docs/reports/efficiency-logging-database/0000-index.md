@@ -82,14 +82,14 @@ This index only changes when a branch merges, so it can't show what is running n
 | E6 | [Store writes](0230-e6-store-writes.md) | `0230`, `0470`, `0870` | Storage, 1 of 3 | None | None |
 | E5 | [Database upkeep](0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` | Storage, 2 of 3 | E2 (Measurement rows) | E15 (Health and diagnostics) |
 | E7 | [Diff scans](0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` | Git scans and file reads, 1 of 2 | None | E3 (Retention and deletion) |
-| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 2 of 3 | E1 (Baseline run) | E8 (Agent tab polling), E-0120 (Bearer terminal streams) |
+| E26 | [Local desktop transport](0400-e26-local-desktop-transport.md) | `0400`, `0860` | Desktop, 1 of 2 | E1 (Baseline run) | E8 (Agent tab polling), E-0120 (Bearer terminal streams) |
 | E19 | [Terminal WebSocket](0100-e19-terminal-websocket.md) | `0100`, `0375`, `0610` | Gateway, 1 of 6 | None | None |
 | E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 4 of 6 | None | None |
-| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 5 of 6 | None | S3 (Electron renderer) |
+| E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 5 of 6 | None | None |
 | E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | S2 (Bridge credential), E20 (ACP bridge), E21 (Pi bridge) |
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 2 of 4 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |
-| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | S3 (Electron renderer) |
+| E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | None |
 | E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
 | E21 | [Pi bridge](0130-e21-pi-bridge.md) | `0130`, `0355` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
 | E22 | [Chat rendering](0600-e22-chat-rendering.md) | `0600`, `0670` | No lane | None | None |
@@ -131,7 +131,7 @@ These still follow the lane and conflict rules above.
 | Batch | Name | Files | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E-0580 | [File RPC and usage report](0580-st-21-file-rpc-and-usage-report.md) | `0580` | Git scans and file reads, 2 of 2 | None | None |
-| E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 3 of 3 | None | None |
+| E-0691 | [Preview capture data URLs](0691-dk-5-preview-capture-data-urls.md) | `0691` | Desktop, 2 of 2 | None | None |
 | E-0120 | [Bearer terminal streams](0120-gw-3-bearer-terminal-streams.md) | `0120` | Gateway, 2 of 6 | None | E8 (Agent tab polling), E26 (Local desktop transport) |
 | E-0140 | [Codex queue bound](0140-br-13-serial-queue-bound.md) | `0140` | No lane | None | None |
 | E-0250 | [Codex running tool cards](0250-br-7-codex-running-tool-cards.md) | `0250` | No lane | None | None |

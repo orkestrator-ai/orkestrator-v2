@@ -1,5 +1,6 @@
 import * as support from "./gateway-support-core.js";
 import { BROWSER_PREVIEW_ENVIRONMENT_HEADER } from "@orkestrator/protocol/browser-preview";
+import { GATEWAY_LOGIN_CONTENT_SECURITY_POLICY } from "@orkestrator/protocol/renderer-content-security-policy";
 import {
   API_PREFIX,
   DYNAMIC_GZIP_LEVEL,
@@ -295,6 +296,18 @@ export function loginPage(message = "", hint = ""): string {
     </main>
   </body>
 </html>`;
+}
+
+export function loginPageResponse(
+  response: ServerResponse,
+  statusCode: number,
+  html: string,
+): void {
+  // A login page under the legacy preview prefix keeps that route's sandbox.
+  if (!response.hasHeader("content-security-policy")) {
+    response.setHeader("content-security-policy", GATEWAY_LOGIN_CONTENT_SECURITY_POLICY);
+  }
+  support.textResponse(response, statusCode, html, "text/html; charset=utf-8");
 }
 
 export function wantsHtml(request: IncomingMessage): boolean {

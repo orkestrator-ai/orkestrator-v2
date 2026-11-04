@@ -271,8 +271,9 @@ function deliveryEntries(batch: PersistedSuborkBatch): SuborkDeliveryEntry[] {
     if (!isBranch(entry)) {
       return { label: entry.name, status: "failed", text: entry.error };
     }
-    const label = `${AGENT_PLATFORM_LABELS[entry.agent]} · ${entry.modelLabel ?? entry.model ?? "saved default"}${
-      entry.name === suborkDefaultName(entry.agent, entry.modelLabel) ? "" : ` (${entry.name})`
+    const modelLabel = entry.modelUnpinned ? undefined : (entry.modelLabel ?? entry.model);
+    const label = `${AGENT_PLATFORM_LABELS[entry.agent]} · ${modelLabel ?? "saved default"}${
+      entry.name === suborkDefaultName(entry.agent, modelLabel) ? "" : ` (${entry.name})`
     }`;
     return entry.status === "completed" && entry.answer
       ? {
@@ -370,6 +371,10 @@ export class NativeAgentSuborkService {
   async init(): Promise<void> {
     this.stopped = false;
     for (const batch of await this.batches.listSuborkBatches()) {
+      this.startedTotals.set(
+        batch.sessionKey,
+        Math.max(this.startedTotals.get(batch.sessionKey) ?? 0, batch.sessionStartedTotal),
+      );
       this.index(batch);
       if (
         batch.status === "running" ||
@@ -397,6 +402,7 @@ export class NativeAgentSuborkService {
   }
 
   private index(batch: PersistedSuborkBatch): boolean {
+    if (batch.historyPruned) return false;
     let calls = this.bySession.get(batch.sessionKey);
     if (!calls) {
       calls = new Map();
@@ -726,11 +732,13 @@ export class NativeAgentSuborkService {
           : batch.suborks.some((entry) => entry.guarded)
             ? "Do not change files in this workspace until the answers arrive: an agent marked guarded cannot be stopped from writing, so its answer is refused if the workspace's Git state changes while it runs. "
             : "") +
-        (started === 0
-          ? "None of the targets started, for the reasons listed. No message will follow: correct the targets and call again, or tell the person."
-          : caller.inboxOnly
-            ? `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. This tab's delivery is off, so the answers will wait in your inbox and will not wake you: read them with check_inbox on your next turn.`
-            : `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. End your turn now if you have nothing else to do. All the answers arrive together in a new message that wakes you, and you continue from there. Do not poll, and do not do the same work yourself.`),
+        (batch.historyPruned
+          ? "This request already settled. Its retained details have expired; no new work or mail will be started."
+          : started === 0
+            ? "None of the targets started, for the reasons listed. No message will follow: correct the targets and call again, or tell the person."
+            : caller.inboxOnly
+              ? `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. This tab's delivery is off, so the answers will wait in your inbox and will not wake you: read them with check_inbox on your next turn.`
+              : `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. End your turn now if you have nothing else to do. All the answers arrive together in a new message that wakes you, and you continue from there. Do not poll, and do not do the same work yourself.`),
     };
   }
 
@@ -744,7 +752,7 @@ export class NativeAgentSuborkService {
     const excess = calls.size - SUBORK_LIMITS.retainedBatchesPerSession;
     for (const call of removable.slice(0, excess)) {
       calls.delete(call.id);
-      await this.batches.deleteSuborkBatch(call.id).catch((error: unknown) => {
+      await this.batches.pruneSuborkBatch(call.id).catch((error: unknown) => {
         log.warn("retention.failed", { error: formatLogError(error) });
       });
     }
@@ -1024,7 +1032,7 @@ export class NativeAgentSuborkService {
     const runner = new AgentBranchRunner(host);
     runner.beginPass();
     const deadlineMs = this.options.deadlineMs ?? SUBORK_LIMITS.deadlineMs;
-    await Promise.all(
+    const advances = await Promise.allSettled(
       unsettled.map(async (branch, index) => {
         const startedAt = Date.parse(branch.startedAt ?? batch.createdAt);
         if (this.now() - startedAt >= deadlineMs) {
@@ -1040,6 +1048,11 @@ export class NativeAgentSuborkService {
         await runner.advanceIsolated(branch, index, unsettled.length);
       }),
     );
+    // A peer may still be inside provider.send when another branch is fenced.
+    // Drain every send before the pass performs its final abort cleanup.
+    for (const advance of advances) {
+      if (advance.status === "rejected") throw advance.reason;
+    }
     await runner.flushObservations();
     if (await this.certifyGuarded(batch)) await host.save();
     for (const branch of batch.suborks) {

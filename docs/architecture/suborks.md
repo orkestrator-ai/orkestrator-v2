@@ -48,6 +48,11 @@ the path from a plain-text request to the tool (see
 [Real-process evidence](#real-process-evidence)), but what a real model does with the
 description is [not yet qualified](../todo/agent-engines/4340-suborks-live-qualification.md).
 
+Retention keeps compact call receipts until environment deletion. A retry of a pruned
+request returns its original handle and an expiry notice, without starting targets
+or sending another message. Receipts retain identity, outcome and session usage
+counts, but no prompts, answers or transcript references.
+
 ## Results delivery
 
 **`ask_agents` returns a handle at once, and the answers come back in one agent
@@ -190,7 +195,7 @@ dialog names an advisory tier and says when a change fails the answer.
 | Prompt | 64 KiB | That target fails: name files rather than pasting them |
 | Response kept | 64 KiB | Kept from the start; the delivery marks the cut |
 | Answers in the mail | 30 KiB in total | Shared fairly after reserving frames, UTF-8 labels and cut notices within the 32 KiB mail limit; each cut points to the transcript |
-| Calls retained per session | 16 | The oldest finished call is removed with its transcripts |
+| Calls retained per session | 16 | The oldest finished call loses its payload and transcripts; a compact retry receipt remains |
 | Running time | 45 minutes | Fails that target; the runner's stall and idle bounds usually end it sooner |
 
 **Depth is 1.** A subork's turn runs on a result-only credential that lists

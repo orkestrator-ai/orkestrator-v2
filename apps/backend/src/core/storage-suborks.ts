@@ -65,6 +65,8 @@ export interface PersistedSuborkBatch {
   /** The caller's native session storage key. */
   sessionKey: string;
   tabId: string;
+  /** Compact retry receipt: payload and transcripts were removed by retention. */
+  historyPruned?: true;
   status: "running" | "settled" | "stopped";
   suborks: PersistedSuborkBranch[];
   refused: PersistedSuborkRefusal[];
@@ -181,6 +183,23 @@ export class SuborksRepository {
     );
   }
 
+  /** Retains identity and outcome for retries while discarding the large payload. */
+  async pruneSuborkBatch(batchId: string): Promise<void> {
+    const receipt = this.updateSuborkBatch(batchId, (batch) => {
+      if (batch.status === "running" || batch.delivery === "waiting") return undefined;
+      return {
+        ...batch,
+        workspaceBaseline: undefined,
+        historyPruned: true,
+        suborks: [],
+        refused: [],
+      };
+    });
+    if (receipt?.historyPruned) {
+      await this.repos.buildPipelines.deleteGraphRunTranscripts(transcriptOwner(batchId));
+    }
+  }
+
   /** Removes one call with its transcripts. */
   async deleteSuborkBatch(batchId: string): Promise<void> {
     this.context.updateStoreRow<boolean>(this.file(), batchId, (current) =>
@@ -247,6 +266,7 @@ export type SuborksStorage = Pick<
   | "createSuborkBatch"
   | "saveSuborkBatch"
   | "updateSuborkBatch"
+  | "pruneSuborkBatch"
   | "deleteSuborkBatch"
   | "deleteSuborkBatchesByEnvironment"
   | "commitSuborkTranscript"

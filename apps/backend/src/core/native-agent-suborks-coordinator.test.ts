@@ -121,6 +121,25 @@ describe("ask_agents from a coordinator conversation", () => {
     expect(body).toContain("codex says hi");
   });
 
+  test("muted inbound mail refuses a consultation before creating a home", async () => {
+    const { w, homes, ask } = await coordinatorWorld();
+    await w.storage.updateAgentMailboxPolicy(RUNTIME, "coordinator-tab", { mutedInbound: true });
+    await expect(ask({ targets: [{ agent: "codex" }], prompt: "Look." })).rejects.toThrow("muted");
+    expect(homes).toHaveLength(0);
+    expect(await w.storage.suborks.listSuborkBatches()).toHaveLength(0);
+  });
+
+  test("delivery Off tells the coordinator answers wait in its inbox", async () => {
+    const { w, ask } = await coordinatorWorld();
+    await w.storage.updateAgentMailboxPolicy(RUNTIME, "coordinator-tab", { inject: "off" });
+    const started = await ask({ targets: [{ agent: "codex" }], prompt: "Look." });
+    expect(started.next).toContain("will not wake you");
+    await w.drive(started.batchId);
+    const mailbox = await w.storage.getAgentMailMailbox(RUNTIME, "coordinator-tab", { limit: 10 });
+    expect(mailbox.messages).toHaveLength(1);
+    expect(mailbox.messages[0]!.placement).toBe("stored");
+  });
+
   test("deleting the project home clears live views and frees admission for the surviving caller", async () => {
     const { w, conversation, ask } = await coordinatorWorld();
     const sessionKey = nativeAgentSessionStorageKey(

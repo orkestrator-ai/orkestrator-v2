@@ -513,6 +513,54 @@ describe("depth and limits", () => {
     expect(mail!.body).toContain(`of ${200 * 1024} bytes kept`);
   });
 
+  test("request receipts survive retention and restart without new work or mail", async () => {
+    const w = await world();
+    const args = { targets: [{ agent: "codex" }], prompt: "Look.", requestId: "retained-retry" };
+    const first = handle(await w.ask(args));
+    await w.drive(first.batchId);
+    for (let i = 0; i < SUBORK_LIMITS.retainedBatchesPerSession; i++) {
+      const next = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Next." }));
+      await w.drive(next.batchId);
+    }
+    expect(w.storage.suborks.getSuborkBatch(first.batchId)).toMatchObject({
+      historyPruned: true,
+      suborks: [],
+      refused: [],
+    });
+    const turns = w.provider("codex").turns().length;
+    const mail = (await w.mail()).length;
+    for (const restart of [false, true]) {
+      if (restart) await w.restart();
+      const retry = handle(await w.ask(args));
+      expect(retry.batchId).toBe(first.batchId);
+      expect(retry.next).toContain("already settled");
+      await w.service.advanceNow(first.batchId);
+      expect(w.provider("codex").turns()).toHaveLength(turns);
+      expect(await w.mail()).toHaveLength(mail);
+      expect(w.service.views(SESSION_KEY)?.some((batch) => batch.id === first.batchId)).toBe(false);
+    }
+  });
+
+  test("delivery uses saved-default labels consistently", async () => {
+    const w = await world({ tiers: { global: {} }, service: { modelCatalog: async () => [] } });
+    const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+    await w.drive(started.batchId);
+    expect((await w.mail())[0]!.body).toContain("Codex · saved default");
+    expect((await w.mail())[0]!.body).not.toContain("(Codex");
+  });
+
+  test("delivery does not repeat a pinned model missing from the catalogue", async () => {
+    const w = await world({
+      tiers: { global: { platforms: { codex: { model: "custom-model" } } } },
+      service: { modelCatalog: async () => [] },
+    });
+    const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+    await w.drive(started.batchId);
+    const body = (await w.mail())[0]!.body;
+    expect(body).toContain("Codex · custom-model");
+    expect(body).not.toContain("(Codex");
+  });
+
   test("repeating a requestId is the same call", async () => {
     const w = await world();
     const args = { targets: [{ agent: "codex" }], prompt: "Look.", requestId: "again" };
@@ -627,6 +675,35 @@ describe("stopping and lifecycle", () => {
     expect(w.service.views(SESSION_KEY)![0]!.status).toBe("stopped");
     const session = [...w.provider("codex").sessions.values()][0];
     if (session) expect(session.aborted).toBeGreaterThan(0);
+  });
+
+  test("Stop drains independently delayed parallel sends before final abort", async () => {
+    const w = await world({ script: () => () => new Promise<"idle">(() => {}) });
+    const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    for (const [i, agent] of (["codex", "claude"] as const).entries()) {
+      w.provider(agent).beforeSend = async () => {
+        entered[i]!.resolve();
+        await release[i]!.promise;
+      };
+    }
+    const started = handle(
+      await w.ask({ targets: [{ agent: "codex" }, { agent: "claude" }], prompt: "Look." }),
+    );
+    const pass = w.service.advanceNow(started.batchId);
+    await Promise.all(entered.map((gate) => gate.promise));
+    await w.service.stopForSession(SESSION_KEY);
+    release[0]!.resolve();
+    // Let the first send hit its fence while its peer is still blocked.
+    for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    release[1]!.resolve();
+    await pass;
+    for (const agent of ["codex", "claude"] as const) {
+      const session = [...w.provider(agent).sessions.values()][0]!;
+      expect(session.status).toBe("idle");
+      expect(session.aborted).toBeGreaterThan(1);
+    }
+    expect(await w.mail()).toHaveLength(0);
   });
 
   test("a late mail publication cannot be claimed after Stop or restart", async () => {

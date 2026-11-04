@@ -69,6 +69,17 @@ export function registerCoordinatorSuborkActions(
     if (!conversation.agent) {
       throw new Error("This conversation has no agent yet, so there is no one to answer.");
     }
+    const runtimeId = coordinatorRuntimeId(caller.coordinatorId, caller.conversationId);
+    const { descriptor } = await context.storage.getAgentMailMailbox(
+      runtimeId,
+      conversation.tabId,
+      { limit: 1 },
+    );
+    if (descriptor.mutedInbound) {
+      throw new Error(
+        "This tab's inbound mail is muted, and suborks answer by mail. Unmute it first.",
+      );
+    }
     const ensureHome = dependencies.commands.get("ensure_project_home_environment");
     if (!ensureHome) throw new Error("The project home is unavailable on this backend");
     let home: { id?: unknown };
@@ -88,7 +99,8 @@ export function registerCoordinatorSuborkActions(
     const requestId = optionalText(input.requestId, "requestId", 256)?.trim();
     return context.suborks.ask(
       {
-        environmentId: coordinatorRuntimeId(caller.coordinatorId, caller.conversationId),
+        environmentId: runtimeId,
+        ...(descriptor.injectOverride === "off" ? { inboxOnly: true } : {}),
         projectId: caller.projectId,
         tabId: conversation.tabId,
         agent: conversation.agent,

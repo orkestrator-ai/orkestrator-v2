@@ -19,7 +19,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
 | S2 | [security/0040-s2-bridge-credential.md](security/0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` |
 | S5 | [security/0140-s5-release-chain.md](security/0140-s5-release-chain.md) | `0140`, `0240` |
-| C1 | [coordinator/0010-c1-wake-reliability.md](coordinator/0010-c1-wake-reliability.md) | `0010`, `0050`, `0090`, `0290`, `0300`, `0270` |
 | C5 | [coordinator/0030-c5-prompt-and-context.md](coordinator/0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` |
 | C4 | [coordinator/0040-c4-tool-surface.md](coordinator/0040-c4-tool-surface.md) | `0040`, `0130`, `0150`, `0160` |
 | C2 | [coordinator/0080-c2-workflow-records.md](coordinator/0080-c2-workflow-records.md) | `0080`, `0100`, `0380` |
@@ -59,7 +58,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 
 | Lane | Run order | Code it protects |
 | --- | --- | --- |
-| Coordinator backend | 1. C1 (Wake reliability)<br>2. C5 (Prompt and context)<br>3. C4 (Tool surface)<br>4. X1 (Coordinator trust boundary)<br>5. C2 (Workflow records)<br>6. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
+| Coordinator backend | 1. C5 (Prompt and context)<br>2. C4 (Tool surface)<br>3. X1 (Coordinator trust boundary)<br>4. C2 (Workflow records)<br>5. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C9 (Panel split)<br>2. C7 (Work panel and navigation)<br>3. C8 (Tab strip)<br>4. C6 (Errors and dead ends)<br>5. C10 (Explanations)<br>6. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E8 (Agent tab polling)<br>2. E9 (Transcript reads)<br>3. E10 (Conditional reads and deltas)<br>4. E11 (Projection hashing)<br>5. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
@@ -101,8 +100,6 @@ Don't run these pairs at the same time.
 
 | Batch | Batch | Shared code |
 | --- | --- | --- |
-| C1 (Wake reliability) | C6 (Errors and dead ends) | `coordinator-service.ts`, protocol `coordinator.ts` |
-| C1 (Wake reliability) | C7 (Work panel and navigation) | `coordinator-service.ts`, protocol `coordinator.ts` |
 | C3 (Sweep and reads) | C6 (Errors and dead ends) | `coordinator-service.ts`, `control-mcp-server.ts` |
 | C5 (Prompt and context) | C6 (Errors and dead ends) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
 | C5 (Prompt and context) | C7 (Work panel and navigation) | `CoordinatorPanel.tsx`, `coordinator-service.ts`, protocol `coordinator.ts` |
@@ -138,7 +135,7 @@ These files are named by several batches that can still run together. The report
 
 | File | Batches |
 | --- | --- |
-| `apps/backend/src/core/index.ts` | C1, C5, C9, E9, E13, E15, S-0170 |
+| `apps/backend/src/core/index.ts` | C5, C9, E9, E13, E15, S-0170 |
 | `gateway-support-core.ts` | E15, E17, E18, E24, E-0120 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4, C5 and X1 |

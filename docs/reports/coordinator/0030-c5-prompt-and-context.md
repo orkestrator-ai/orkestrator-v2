@@ -206,5 +206,5 @@ Whether over-delegation happens in practice. No transcript was read for this fil
 - [Coordinator report, 4.3 (A6)](../2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
 - [1021-coordinator-gap-tools-follow-ups.md](../../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md)
 - [Coordinator report, 4.3 (A1)](../2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)
-- [C1 part 0010](0010-c1-wake-reliability.md#0010-one-failing-delegation-stops-wakes-for-every-project): `messaging-disabled` also aborts the wake pass
+- `messaging-disabled` no longer aborts the wake pass: such a wake is held and goes out when messaging returns (`wakeHeldByUserState` in `apps/backend/src/core/coordinator-service.ts`)
 - [Coordinator report, 4.3 (A7)](../2026-10-27-coordinator.md#43-agent-experience-prompt-and-tools)

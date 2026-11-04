@@ -56,5 +56,4 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`.
 
 ## Replaces
 
-The Needs verification of part 0090, and the differences part 0270 asked to settle, in coordinator report C1 (Wake reliability), whose file was deleted when it was built. Read the original at its base commit:
-`git show e198fd4a7:docs/reports/coordinator/0010-c1-wake-reliability.md`.
+The Needs verification of part 0090, and the differences part 0270 asked to settle, in coordinator report C1 (Wake reliability). Its file was deleted when it was built; it is in the history at `e198fd4a7`.

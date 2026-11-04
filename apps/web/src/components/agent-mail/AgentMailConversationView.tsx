@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, RotateCcw, Send, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -14,10 +14,7 @@ import {
   type AgentMailMessage,
   type AgentMailParticipant,
 } from "@orkestrator/protocol/agent-mail";
-import {
-  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
-  MessageMarkdown,
-} from "@/components/chat/MessageMarkdown";
+import { MARKDOWN_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,22 +30,23 @@ import {
   deliverNowNotice,
   formatAgentMailTime,
 } from "./agent-mail-ui";
-import { mailMarkdownComponents } from "./mail-markdown-components";
+
+// The mail panel is mounted at startup; the Markdown renderer is not needed until mail is read.
+const LazyAgentMailMarkdown = lazy(async () => ({
+  default: (await import("./AgentMailMarkdown")).AgentMailMarkdown,
+}));
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 export function AgentMailBody({ body }: { body: string }) {
-  if (body.length > MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS) {
-    return <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
-  }
+  const plainBody = <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
+  if (body.length > MARKDOWN_POLICY.blockParserCharacters) return plainBody;
   return (
-    <MessageMarkdown
-      content={body}
-      components={mailMarkdownComponents}
-      className="break-words text-xs prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
-    />
+    <Suspense fallback={plainBody}>
+      <LazyAgentMailMarkdown body={body} />
+    </Suspense>
   );
 }
 

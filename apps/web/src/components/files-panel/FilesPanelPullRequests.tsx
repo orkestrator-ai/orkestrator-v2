@@ -1,16 +1,24 @@
-import { useCallback, useMemo } from "react";
+import { lazy, useCallback, useMemo } from "react";
 import { Maximize2 } from "lucide-react";
 import {
   parseGitHubPullRequestLink,
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
-import { PullRequestList, PullRequestView } from "@/components/pull-requests";
+import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { PullRequestOpenerProvider } from "@/lib/pull-request-opener";
 import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
 import type { FilesPanelPullRequestTab } from "@/stores/filesPanelStore";
+
+// The panel mounts at startup; the pull request views and their Markdown wait for these tabs.
+const LazyPullRequestView = lazy(async () => ({
+  default: (await import("@/components/pull-requests/PullRequestView")).PullRequestView,
+}));
+const LazyPullRequestList = lazy(async () => ({
+  default: (await import("@/components/pull-requests/PullRequestList")).PullRequestList,
+}));
 
 const EMPTY_TABS: FilesPanelPullRequestTab[] = [];
 
@@ -90,47 +98,52 @@ export function FilesPanelPullRequests({ targetId }: { targetId: string | null }
 
   return (
     <PullRequestOpenerProvider open={open}>
-      {active ? (
-        <PullRequestView
-          // A new open request re-applies the requested view to a mounted tab.
-          key={`${active.key}:${active.openRequest}`}
-          className="min-h-0 flex-1"
-          pullRequest={active.ref}
-          initialView={active.view}
-          layout="sidebar"
-          onSummaryLoaded={(summary) => updatePullRequestTab(targetId, active.key, summary)}
-          headerActions={
-            canExpand ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    aria-label="Open in main area"
-                    onClick={() => expand(active)}
-                  >
-                    <Maximize2 className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Open in main area</TooltipContent>
-              </Tooltip>
-            ) : undefined
-          }
-        />
-      ) : projectId ? (
-        <PullRequestList
-          className="min-h-0 flex-1"
-          projectId={projectId}
-          layout="sidebar"
-          highlightNumber={environmentPullRequestNumber}
-          onOpenPullRequest={(ref) => open(ref)}
-        />
-      ) : (
-        <div className="p-4 text-sm text-muted-foreground">
-          Select a project to see its pull requests.
-        </div>
-      )}
+      <LazyLoadBoundary
+        loadingFallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}
+        renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
+      >
+        {active ? (
+          <LazyPullRequestView
+            // A new open request re-applies the requested view to a mounted tab.
+            key={`${active.key}:${active.openRequest}`}
+            className="min-h-0 flex-1"
+            pullRequest={active.ref}
+            initialView={active.view}
+            layout="sidebar"
+            onSummaryLoaded={(summary) => updatePullRequestTab(targetId, active.key, summary)}
+            headerActions={
+              canExpand ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      aria-label="Open in main area"
+                      onClick={() => expand(active)}
+                    >
+                      <Maximize2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Open in main area</TooltipContent>
+                </Tooltip>
+              ) : undefined
+            }
+          />
+        ) : projectId ? (
+          <LazyPullRequestList
+            className="min-h-0 flex-1"
+            projectId={projectId}
+            layout="sidebar"
+            highlightNumber={environmentPullRequestNumber}
+            onOpenPullRequest={(ref) => open(ref)}
+          />
+        ) : (
+          <div className="p-4 text-sm text-muted-foreground">
+            Select a project to see its pull requests.
+          </div>
+        )}
+      </LazyLoadBoundary>
     </PullRequestOpenerProvider>
   );
 }

@@ -18,15 +18,13 @@ import {
   LazyLoadInlineErrorFallback,
   type LazyLoadErrorDetails,
 } from "@/components/LazyLoadBoundary";
+import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
 
 const LazyDesignCanvasTab = lazy(async () => ({
   default: (await import("@/components/design/DesignCanvasTab")).DesignCanvasTab,
 }));
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
-}));
-const LazyAgentNativeTab = lazy(async () => ({
-  default: (await import("@/components/native-agent")).AgentNativeTab,
 }));
 const LazyClaudeTmuxChatTab = lazy(async () => ({
   default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,

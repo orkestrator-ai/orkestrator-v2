@@ -3,7 +3,7 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@/lib/native/events";
 import { exit, restart } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
@@ -11,7 +11,8 @@ import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
-import { ProjectLauncher, ProjectWorkspace } from "@/components/projects";
+import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
@@ -111,6 +112,11 @@ import { readStoredWorkspace } from "@/lib/portal/workspace-target-storage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.app");
+
+// Kanban, issues, pull requests and the coordinator: nothing there is needed until a project board opens.
+const LazyProjectWorkspace = lazy(async () => ({
+  default: (await import("@/components/projects/ProjectWorkspace")).ProjectWorkspace,
+}));
 
 export const DOCKER_AVAILABILITY_POLL_INTERVAL_MS = 60_000;
 export const DOCKER_STARTUP_CONFIRMATION_DELAY_MS = 1_500;
@@ -1278,11 +1284,15 @@ function ConnectedApp() {
                   )}
                   {showProjectBoard && selectedProjectId && (
                     <div className="absolute inset-0 z-20 bg-background">
-                      <ProjectWorkspace
-                        projectId={selectedProjectId}
-                        homeError={projectHomeActivation.error}
-                        onRetryHome={projectHomeActivation.retry}
-                      />
+                      <LazyLoadBoundary
+                        renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}
+                      >
+                        <LazyProjectWorkspace
+                          projectId={selectedProjectId}
+                          homeError={projectHomeActivation.error}
+                          onRetryHome={projectHomeActivation.retry}
+                        />
+                      </LazyLoadBoundary>
                     </div>
                   )}
                 </div>

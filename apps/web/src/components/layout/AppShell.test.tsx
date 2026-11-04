@@ -74,7 +74,13 @@ function selectState<TState, TResult>(
 
 mock.module("@/components/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ResizablePanel: ({
+    children,
+    elementRef,
+  }: {
+    children: React.ReactNode;
+    elementRef?: (element: HTMLDivElement | null) => void;
+  }) => <div ref={elementRef}>{children}</div>,
   ResizableHandle: ({ disabled }: { disabled?: boolean }) => (
     <div data-testid="resize-handle" data-disabled={String(disabled ?? false)} />
   ),
@@ -558,7 +564,7 @@ describe("AppShell", () => {
     expect(startDraggingMock).toHaveBeenCalledTimes(1);
   });
 
-  test("hides the left panel once the sidebar is toggled closed", () => {
+  test("hides the left panel once the sidebar is toggled closed", async () => {
     isMobile = false;
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
@@ -567,7 +573,7 @@ describe("AppShell", () => {
 
     act(() => uiStore.setState({ sidebarOpen: false }));
     rerender(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByText("Sidebar") === null).toBe(true);
+    await waitFor(() => expect(screen.queryByText("Sidebar") === null).toBe(true));
     expect(screen.queryByTestId("resize-handle") === null).toBe(true);
 
     act(() => uiStore.setState({ sidebarOpen: true }));
@@ -598,6 +604,20 @@ describe("AppShell", () => {
     cleanup();
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("search during closing reopens the sidebar and survives settling", async () => {
+    isMobile = false;
+    mountSearch = true;
+    render(<AppShell>Workspace</AppShell>);
+    act(() => uiStore.setState({ sidebarOpen: false }));
+    expect(screen.getByText("Sidebar")).toBeTruthy();
+    act(() => requestAppShortcut("search-projects"));
+    expect(uiStore.getState().sidebarOpen).toBe(true);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(screen.getByTestId("project-search-dialog")).toBeTruthy();
   });
 
   test("compact disables the sidebar resize handle", () => {

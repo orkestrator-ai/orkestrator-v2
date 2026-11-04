@@ -269,3 +269,15 @@ describe("restoring the width", () => {
     expect(resize).not.toHaveBeenCalled();
   });
 });
+
+for (const destination of ["compact", "hidden"] as const) {
+  test(`repeated full/${destination} reversals preserve the settled width`, () => {
+    const props = { sidebar: element(344), main: element(900) };
+    const { rerender } = render(<Harness mode="full" {...props} />);
+    rerender(<Harness mode={destination} {...props} />);
+    rerender(<Harness mode="full" {...props} />);
+    panelWidth = 300;
+    rerender(<Harness mode={destination} {...props} />);
+    expect(useUIStore.getState().sidebarWidth).toBe(344);
+  });
+}

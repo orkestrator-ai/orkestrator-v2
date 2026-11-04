@@ -398,7 +398,7 @@ describe("the keyboard", () => {
     await findCompactIcons(2);
   });
 
-  test("Up, Down, Home and End move focus; Enter opens", async () => {
+  test("Up, Down, Home and End move focus", async () => {
     installTwoMachines();
     renderSidebar();
     const icons = await findCompactIcons(2);
@@ -415,7 +415,7 @@ describe("the keyboard", () => {
     expect(document.activeElement).toBe(tools);
     fireEvent.keyDown(tools, { key: "ArrowUp" });
     expect(document.activeElement).toBe(app);
-    // A native button: Enter clicks it.
+    // Native Enter activation is asserted in e2e/SidebarMotion.spec.ts.
     expect(app.tagName).toBe("BUTTON");
     expect(app.className).toContain("focus-visible:ring-2");
   });

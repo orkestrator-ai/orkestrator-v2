@@ -1,3 +1,4 @@
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { onCreateEnvironmentRequest, openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
@@ -339,7 +340,7 @@ export function HierarchicalSidebar() {
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
 
   const {
     projects,

@@ -26,6 +26,7 @@ import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
@@ -383,6 +384,13 @@ export function ProjectSearchBar({
   useEffect(
     () =>
       onAppShortcut("search-projects", () => {
+        // Closing content remains mounted until motion settles. Reopen its
+        // desktop panel before the search can be unmounted by that timer.
+        const ui = useUIStore.getState();
+        if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches && !ui.sidebarOpen) {
+          ui.toggleSidebar();
+          openRef.current = false;
+        }
         if (!openRef.current) setNow(new Date());
         openRef.current = !openRef.current;
         setOpen(openRef.current);
@@ -448,6 +456,7 @@ export function ProjectSearchBar({
         const grouping = realmGroupingFor(
           useUIStore.getState().environmentSortMode,
           useMachineViewStore.getState().grouping,
+          window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
         );
         const boardTab = projectLandingBoardTab(grouping, false);
         openMachineWorkspace({

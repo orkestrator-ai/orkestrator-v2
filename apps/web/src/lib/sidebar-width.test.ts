@@ -80,3 +80,14 @@ describe("the widths content is held at while panels animate", () => {
     });
   });
 });
+
+for (const zoom of [0.8, 1.25, 1.5]) {
+  test(`motion pins convert viewport measurements at zoom ${zoom}`, () => {
+    expect(
+      sidebarMotionPins({ sidebarFrom: 320 * zoom, sidebarTo: 56, mainFrom: 900 * zoom, zoom }),
+    ).toEqual({ sidebar: 320, main: 1164 });
+    expect(
+      sidebarMotionPins({ sidebarFrom: 56 * zoom, sidebarTo: 320, mainFrom: 1164 * zoom, zoom }),
+    ).toEqual({ sidebar: 320, main: 1164 });
+  });
+}

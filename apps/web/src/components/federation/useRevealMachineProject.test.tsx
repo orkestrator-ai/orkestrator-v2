@@ -171,8 +171,9 @@ describe("useRevealMachineProject", () => {
     expect(useMachineViewStore.getState().revealedProject).toBeNull();
   });
 
-  test("immediately shows an environment-less project when sorted by activity", async () => {
+  test("reveals a compact project paired with activity sort in the machine list", async () => {
     useUIStore.setState({ environmentSortMode: "activity" });
+    useMachineViewStore.setState({ grouping: "compact" });
     await revealIn();
     expect(useUIStore.getState().environmentSortMode).toBe("project");
     expect(useMachineViewStore.getState().grouping).toBe("machine");

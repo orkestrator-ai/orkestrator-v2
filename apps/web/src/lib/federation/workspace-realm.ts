@@ -86,8 +86,10 @@ function isRealmGrouping(value: unknown): value is RealmGrouping {
 export function realmGroupingFor(
   sortMode: "project" | "activity",
   grouping: Exclude<RealmGrouping, "activity"> | "compact",
+  phoneLayout = false,
 ): RealmGrouping {
-  if (grouping === "compact") return "repository";
+  if (grouping === "compact")
+    return phoneLayout && sortMode === "activity" ? "activity" : "repository";
   return sortMode === "activity" ? "activity" : grouping;
 }
 

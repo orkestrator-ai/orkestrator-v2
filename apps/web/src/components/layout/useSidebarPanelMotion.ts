@@ -70,7 +70,9 @@ export function useSidebarPanelMotion(input: {
     const ui = useUIStore.getState();
     const panel = panelRef.current;
     let remembered = ui.sidebarWidth;
-    if (previous === "full" && panel) {
+    // Reversals can revisit logical full while the visible width is still in
+    // flight. Only a settled full panel represents the user's chosen width.
+    if (previous === "full" && panel && settleTimer.current === null) {
       // A panel that mounts with this change (a window widening out of the
       // phone layout) registers with its group after this effect, and reading
       // its size before then throws. It has no width of the user's to keep yet.
@@ -93,6 +95,13 @@ export function useSidebarPanelMotion(input: {
       setPins(
         sidebarMotionPins({
           sidebarFrom: sidebarElement.getBoundingClientRect().width,
+          zoom: (() => {
+            const value = getComputedStyle(document.documentElement).zoom;
+            const parsed = Number.parseFloat(value);
+            return Number.isFinite(parsed) && parsed > 0
+              ? parsed / (value.endsWith("%") ? 100 : 1)
+              : 1;
+          })(),
           sidebarTo: target,
           // The content may still be pinned by an interrupted transition.
           // Its panel is the authoritative available width.

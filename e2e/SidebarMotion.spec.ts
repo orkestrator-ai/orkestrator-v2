@@ -7,9 +7,12 @@ test("real panels restore width, bound reversal pins and release once", async ({
   await page.goto("/sidebar-motion");
   const sidebar = page.locator("[data-panel]").first();
   const main = page.getByTestId("main-content");
+  await expect(main).toBeVisible({ timeout: 20_000 });
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(344);
   await page.screenshot({
-    path: path.resolve("output/visual-previews/sidebar-before-" + testInfo.project.name + ".png"),
+    path: path.resolve(
+      "output/visual-previews/sidebar-round3-before-" + testInfo.project.name + ".png",
+    ),
   });
   await main.evaluate((element) => {
     (window as unknown as { contentSizes: number[] }).contentSizes = [];
@@ -34,7 +37,9 @@ test("real panels restore width, bound reversal pins and release once", async ({
   await expect(icon).toHaveAttribute("aria-current", "page");
   expect(Math.round((await sidebar.boundingBox())!.width)).toBe(56);
   await page.screenshot({
-    path: path.resolve("output/visual-previews/sidebar-after-" + testInfo.project.name + ".png"),
+    path: path.resolve(
+      "output/visual-previews/sidebar-round3-after-" + testInfo.project.name + ".png",
+    ),
   });
   await page.getByRole("button", { name: "full", exact: true }).click();
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(344);
@@ -51,6 +56,12 @@ test("real panels restore width, bound reversal pins and release once", async ({
   await page.mouse.move(box.x + 25, box.y + 50, { steps: 4 });
   await page.mouse.up();
   expect((await sidebar.boundingBox())!.width).toBeGreaterThan(350);
+  const draggedWidth = (await sidebar.boundingBox())!.width;
+  await page.getByRole("button", { name: "compact", exact: true }).click();
+  await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+  await page.getByRole("button", { name: "full", exact: true }).click();
+  await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(draggedWidth, 0);
   // A pointer can take over a full panel while it is still expanding.
   await page.getByRole("button", { name: "compact", exact: true }).click();
   await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
@@ -66,3 +77,31 @@ test("real panels restore width, bound reversal pins and release once", async ({
   await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(56);
 });
+
+for (const zoom of [0.8, 1.25]) {
+  test(`root CSS zoom ${zoom} keeps pins in layout pixels`, async ({ page }) => {
+    await page.goto("/sidebar-motion");
+    const sidebar = page.locator("[data-panel]").first();
+    const main = page.getByTestId("main-content");
+    await expect(main).toBeVisible({ timeout: 20_000 });
+    await page.evaluate((scale) => {
+      document.documentElement.style.zoom = String(scale);
+    }, zoom);
+    // Changing root zoom also changes the panel group's available layout width.
+    // Keep the resulting user width, rather than assuming its original allocation.
+    await page.waitForTimeout(300);
+    const fullWidth = Math.round((await sidebar.boundingBox())!.width / zoom);
+    expect(fullWidth).toBeGreaterThanOrEqual(280);
+    expect(fullWidth).toBeLessThanOrEqual(400);
+    await page.getByRole("button", { name: "compact", exact: true }).click();
+    const pin = await main.evaluate((element) => Number.parseFloat(element.style.width));
+    expect(pin).toBeLessThanOrEqual(page.viewportSize()!.width / zoom);
+    await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width / zoom)).toBe(56);
+    await page.getByRole("button", { name: "full", exact: true }).click();
+    await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+    await expect
+      .poll(async () => Math.round((await sidebar.boundingBox())!.width / zoom))
+      .toBe(fullWidth);
+  });
+}

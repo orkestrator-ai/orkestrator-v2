@@ -534,7 +534,8 @@ sidebar one large icon wide (56px), listing only top-level repositories.
 - **Status** is `compactRepositoryStatus` over each member's facts, read from what
   its project row reads: this window's stores for its own, the node summary for
   another machine's, which has no coordinator activity. The ring spins while a
-  coordinator or project home works and halos while one waits. The spinner wins,
+  coordinator, project home, or ordinary repository environment (including an active
+  build) works and halos while one waits. The spinner wins,
   as on a row, and the badge then carries the wait. The badge is a dot, never a
   count: amber for unread work, a failed agent message or that hidden wait, cyan
   for unread agent mail.
@@ -545,7 +546,8 @@ sidebar one large icon wide (56px), listing only top-level repositories.
 - **Sorting by activity** does not replace compact, which lists no environments.
   Both are kept: `groupingBeforeCompact` is what leaving compact restores there.
 - **The phone layout's** overlay has no compact form. It falls back to the
-  repository list, and the choice is kept for desktop widths.
+  repository list (or activity list when sorted by activity), and the choice is
+  kept for desktop widths. Realm grouping follows the displayed list.
 
 **Rotating modes.** ⌘⇧D / Ctrl+Shift+D (`rotate-sidebar-grouping`) walks **By
 machine → By project → By repository → Compact** and back

@@ -72,9 +72,14 @@ export function sidebarMotionPins(input: {
   sidebarFrom: number;
   sidebarTo: number;
   mainFrom: number;
+  /** Bounding rectangles are viewport pixels; pins are CSS layout pixels. */
+  zoom?: number;
 }): { sidebar: number; main: number } {
+  const zoom = input.zoom ?? 1;
+  const sidebarFrom = input.sidebarFrom / zoom;
+  const mainFrom = input.mainFrom / zoom;
   return {
-    sidebar: Math.max(input.sidebarFrom, input.sidebarTo),
-    main: Math.max(input.mainFrom, input.mainFrom + input.sidebarFrom - input.sidebarTo),
+    sidebar: Math.max(sidebarFrom, input.sidebarTo),
+    main: Math.max(mainFrom, mainFrom + sidebarFrom - input.sidebarTo),
   };
 }

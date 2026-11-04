@@ -1027,9 +1027,10 @@ Recorded 2026-10-25, while implementing items 1–7.
   removal while task 2 was still partly done, overriding this file's
   recommended order. Linux Engine has CI evidence, though task 1's decision
   to count it is still open. The rootless tamper and gateway-restart checks
-  and the default host-loopback-disabled daemon stay unproved. The cost is
-  the one task 4 named: a gateway problem on a host now needs a release
-  instead of a setting.
+  and the default host-loopback-disabled daemon were unproved at that point;
+  task 2's 2026-11-04 result has since covered them, leaving a rootless daemon
+  restart. The cost is the one task 4 named: a gateway problem on a host now
+  needs a release instead of a setting.
 - **Task 4: in-container live coverage kept, selected by image.** The readiness
   scenarios run on derived images whose manifest no longer declares
   `egress-gateway`, which is the condition an older image takes through
@@ -1154,6 +1155,8 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).
+- [4220-disposable-docker-daemon-for-live-suites.md](4220-disposable-docker-daemon-for-live-suites.md):
+  a repo-owned daemon for task 2's rootless restart.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Environment
   networks", "Agent tools reachability" and "Portable inputs".
 

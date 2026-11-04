@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   JsonlRpcClient,
   SerialQueue,
@@ -753,12 +753,8 @@ describe("SerialQueue", () => {
   test("runs a synchronous backlog without chaining promises", async () => {
     const queue = new SerialQueue();
     const ran: number[] = [];
-    const nativeThen = Promise.prototype.then;
+    const then = spyOn(Promise.prototype, "then");
     let thens = 0;
-    Promise.prototype.then = function (this: Promise<unknown>, ...args: [never, never]) {
-      thens += 1;
-      return nativeThen.apply(this, args);
-    } as typeof Promise.prototype.then;
     try {
       for (let index = 0; index < 1_000; index += 1) {
         queue.run("k", () => {
@@ -766,8 +762,9 @@ describe("SerialQueue", () => {
         });
       }
       await new Promise<void>((resolve) => queueMicrotask(resolve));
+      thens = then.mock.calls.length;
     } finally {
-      Promise.prototype.then = nativeThen;
+      then.mockRestore();
     }
     expect(ran).toEqual(Array.from({ length: 1_000 }, (_, index) => index));
     expect(thens).toBeLessThan(10);

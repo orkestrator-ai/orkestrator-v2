@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  NativeAbortController,
+  nativeFetch,
+  spawnBridge,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
   test("reports an ACP agent without session listing instead of showing an empty history", async () => {
@@ -158,7 +164,7 @@ describe("ACP bridge", () => {
       headers: bridge.headers,
     }).then((response) => response.json())) as { sessions: Array<{ id: string; title?: string }> };
     const external = listed.sessions.find((session) => session.title === "Previous ACP work")!;
-    const controller = new AbortController();
+    const controller = new NativeAbortController();
     const first = nativeFetch(`${bridge.base}/session/resume`, {
       method: "POST",
       headers: bridge.headers,

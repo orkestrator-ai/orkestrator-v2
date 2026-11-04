@@ -39,7 +39,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E2 | [efficiency-logging-database/0700-e2-measurement-rows.md](efficiency-logging-database/0700-e2-measurement-rows.md) | `0700`, `0710` |
 | E3 | [efficiency-logging-database/0540-e3-retention-and-deletion.md](efficiency-logging-database/0540-e3-retention-and-deletion.md) | `0730`, `0540`, `0840` |
 | E4 | [efficiency-logging-database/0430-e4-object-store.md](efficiency-logging-database/0430-e4-object-store.md) | `0430`, `0480`, `0530`, `0550` |
-| E6 | [efficiency-logging-database/0230-e6-store-writes.md](efficiency-logging-database/0230-e6-store-writes.md) | `0230`, `0470`, `0870` |
 | E5 | [efficiency-logging-database/0760-e5-database-upkeep.md](efficiency-logging-database/0760-e5-database-upkeep.md) | `0760`, `0800`, `0910`, `0920` |
 | E7 | [efficiency-logging-database/0420-e7-diff-scans.md](efficiency-logging-database/0420-e7-diff-scans.md) | `0420`, `0440`, `0450`, `0460`, `0570` |
 | E26 | [efficiency-logging-database/0400-e26-local-desktop-transport.md](efficiency-logging-database/0400-e26-local-desktop-transport.md) | `0400`, `0860` |
@@ -64,7 +63,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E8 (Agent tab polling)<br>2. E9 (Transcript reads)<br>3. E10 (Conditional reads and deltas)<br>4. E11 (Projection hashing)<br>5. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E2 (Measurement rows)<br>2. E3 (Retention and deletion)<br>3. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
-| Storage | 1. E6 (Store writes)<br>2. E5 (Database upkeep)<br>3. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
+| Storage | 1. E5 (Database upkeep)<br>2. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
 | Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E19 (Terminal WebSocket)<br>2. E-0120 (Bearer terminal streams)<br>3. S-0200 (Workspace grant allowlist)<br>4. E18 (Gateway events)<br>5. E24 (Gateway static and preview)<br>6. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
@@ -145,9 +144,9 @@ These files are named by several batches that can still run together. The report
 | `commands-files.ts` | S2, E7, E-0580 |
 | `commands-servers.ts` | C6, E3, E13, E20 |
 | `GlobalSettings.sections.tsx` | C6, E15, E17 |
-| `native-agent-display-tail-store.ts` | E5, E6, E11 |
+| `native-agent-display-tail-store.ts` | E5, E11 |
 | `change-tracking/capture.ts` | E4, E7 |
-| `usage-history-store.ts` | E6, E15, E-0580 |
+| `usage-history-store.ts` | E15, E-0580 |
 | `App.tsx`, `MailTile.tsx` | E-0520 with E23 (`App.tsx`) and C7 (`MailTile.tsx`) |
 
 ## How this was worked out

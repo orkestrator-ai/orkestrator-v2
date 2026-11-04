@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { failedStepTarget } from "./build-pipeline-restart-targets.js";
-import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { isCancelledBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
@@ -212,7 +212,7 @@ describe("restart_build_pipeline_step at the service", () => {
   });
 });
 
-test.each(["building", "fixing"] as const)(
+test.each(["building", "fixing", "reviewing"] as const)(
   "changes selection after a pre-session %s failure and deduplicates saved restarts",
   async (phase) => {
     await withService(async (service, storage, provider) => {
@@ -226,7 +226,9 @@ test.each(["building", "fixing"] as const)(
         snapshot.failureContext = { phase, kind: "stage-transition" };
       });
       const earlier = (await pipeline(storage, started.id)).sessions;
-      provider.runningPhases.add(phase === "building" ? "build" : "fix");
+      provider.runningPhases.add(
+        phase === "building" ? "build" : phase === "reviewing" ? "review" : "fix",
+      );
       const selection = { agent: "claude" as const, model: "sonnet" };
       const first = await service.restartForCoordinator(
         started.id,
@@ -234,8 +236,13 @@ test.each(["building", "fixing"] as const)(
         selection,
         "durable-request",
       );
-      expect(first.pipeline.sessions.at(-1)?.model).toBe("sonnet");
-      expect(provider.created.at(-1)?.options).toMatchObject({ model: "sonnet" });
+      expect(first.pipeline.sessions.at(-1)?.model).toBe(
+        phase === "reviewing" ? "claude-sonnet-5-5" : "sonnet",
+      );
+      if (phase === "reviewing") expect(first.pipeline.steps?.review?.model).toBe("sonnet");
+      expect(provider.created.at(-1)?.options).toMatchObject({
+        model: phase === "reviewing" ? "claude-sonnet-5-5" : "sonnet",
+      });
       for (const session of earlier)
         expect(first.pipeline.sessions.find((s) => s.sessionKey === session.sessionKey)).toEqual(
           session,
@@ -290,3 +297,79 @@ test("failed targets ignore a session from another phase and distinguish validat
     });
   });
 });
+
+test("refuses ambiguous pre-session fan-out review selection without mutation", async () => {
+  await withService(async (service, storage) => {
+    const { started } = await startBuilding(service, storage);
+    await mutateStored(storage, started.id, (snapshot) => {
+      snapshot.phase = "failed";
+      snapshot.failureContext = { phase: "reviewing", kind: "stage-transition" };
+      snapshot.reviewers = [
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "sonnet" },
+      ];
+    });
+    const before = await pipeline(storage, started.id);
+    await expect(
+      service.restartForCoordinator(started.id, undefined, { agent: "claude", model: "sonnet" }),
+    ).rejects.toThrow("different agent or model");
+    expect(await pipeline(storage, started.id)).toEqual({
+      ...before,
+      backendRevision: expect.any(Number),
+    });
+  });
+});
+
+test("capacity refuses new restart identities but still replays an existing identity", async () => {
+  await withService(async (service, storage, provider) => {
+    const { started } = await startBuilding(service, storage);
+    await failCurrentStep(storage, started.id, "usage limit");
+    await service.restartForCoordinator(started.id, undefined, undefined, "first");
+    await mutateStored(storage, started.id, (snapshot) => {
+      const entry = snapshot.coordinatorRestarts![0]!;
+      snapshot.coordinatorRestarts = Array.from({ length: 1024 }, (_, index) => ({
+        ...entry,
+        key: index === 0 ? entry.key : index.toString(16).padStart(64, "0"),
+      }));
+    });
+    const before = await pipeline(storage, started.id);
+    const created = provider.created.length;
+    await expect(
+      service.restartForCoordinator(started.id, undefined, undefined, "overflow"),
+    ).rejects.toThrow("history capacity");
+    expect(await pipeline(storage, started.id)).toEqual({
+      ...before,
+      backendRevision: expect.any(Number),
+    });
+    expect(
+      (await service.restartForCoordinator(started.id, undefined, undefined, "first"))
+        .alreadyRestarted,
+    ).toBe(true);
+    expect(provider.created.length).toBe(created);
+  });
+});
+
+test.each(["stage", "interaction"] as const)(
+  "%s retry clears cancellation before a later genuine failure",
+  async (kind) => {
+    await withService(async (service, storage) => {
+      const { started } = await startBuilding(service, storage);
+      await failCurrentStep(storage, started.id, "usage limit");
+      if (kind === "interaction")
+        await mutateStored(storage, started.id, (snapshot) => {
+          snapshot.failureContext!.kind = "interactive-request";
+        });
+      await service.cancel(started.id);
+      const retried =
+        kind === "stage"
+          ? await service.retryStage(started.id)
+          : await service.retryInteractionFailure(started.id);
+      expect(retried.cancelledAt).toBeUndefined();
+      await failCurrentStep(storage, started.id, "genuine failure");
+      expect(isCancelledBuildPipeline(await pipeline(storage, started.id))).toBe(false);
+      expect(
+        (await service.restartForCoordinator(started.id, undefined)).pipeline.cancelledAt,
+      ).toBeUndefined();
+    });
+  },
+);

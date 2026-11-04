@@ -135,6 +135,7 @@ async function reopenPipelineFollows(
   caller: CoordinatorCaller,
   pipelineId: string,
   nodeId: string | undefined,
+  episode: string,
 ): Promise<boolean> {
   const follows = (
     await context.storage.coordinators.listCoordinatorWorkflowAssociations(caller.projectId)
@@ -150,7 +151,8 @@ async function reopenPipelineFollows(
     await context.storage.coordinators.updateCoordinatorWorkflowAssociation(
       follow.id,
       (association) => {
-        if (!association.terminalNotifiedAt && !association.statusNotice) return false;
+        if (association.statusWakeEpisode === episode) return false;
+        association.statusWakeEpisode = episode;
         delete association.terminalNotifiedAt;
         delete association.lastNotifiedRevision;
         delete association.statusNotice;
@@ -214,6 +216,7 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
           caller,
           restart.pipelineId,
           remote?.nodeId,
+          requestKey(caller, requestId),
         );
         return { ...result, followed };
       },

@@ -1117,7 +1117,8 @@ export class BuildPipelineLifecycle {
       if (options.selection) {
         selectionSlot = named
           ? pipelineRestartSlot(candidate, named)
-          : target.kind === "session" && target.phase !== "review"
+          : target.kind === "session" &&
+              (target.phase !== "review" || (candidate.reviewers?.length ?? 0) <= 1)
             ? pipelineRestartSlot(candidate, { phase: target.phase, label: "" })
             : null;
         if (!selectionSlot) {
@@ -1586,6 +1587,7 @@ export class BuildPipelineLifecycle {
         delete candidate.pauseCause;
         delete candidate.error;
         delete candidate.failureContext;
+        delete candidate.cancelledAt;
         delete candidate.reconnectAttempt;
         delete candidate.stageRetryRequested;
         delete candidate.completionCommentStatus;
@@ -1623,6 +1625,7 @@ export class BuildPipelineLifecycle {
       }
       delete candidate.error;
       delete candidate.failureContext;
+      delete candidate.cancelledAt;
       delete candidate.reconnectAttempt;
       delete candidate.pendingPromptAttempt;
       delete candidate.activePromptContext;
@@ -1659,6 +1662,7 @@ export class BuildPipelineLifecycle {
       candidate.interactionRetryRequested = true;
       delete candidate.error;
       delete candidate.failureContext;
+      delete candidate.cancelledAt;
       delete candidate.pendingInteractionResolution;
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;

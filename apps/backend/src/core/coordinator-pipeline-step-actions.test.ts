@@ -79,7 +79,7 @@ async function savePipeline(
 }
 
 beforeEach(async () => {
-  world = await MailWorld.create();
+  world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   await world.storage.updateProject(world.projectId, {
     gitUrl: "https://github.com/acme/site.git",
   });
@@ -368,4 +368,90 @@ test("a follow update failure after restart remains safe to retry", async () => 
   } finally {
     spy.mockRestore();
   }
+});
+
+test("a restarted follow delivers a distinct second failure and retry/reconciliation do not duplicate it", async () => {
+  const main = await world.main();
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "failure-follow",
+    projectId: world.projectId,
+    coordinatorId: world.coordinatorId,
+    conversationId: scope.conversationId,
+    kind: "build-pipeline",
+    resourceId: "pipe-local",
+    requestId: "build",
+    createdAt: new Date().toISOString(),
+  });
+  const reconcile = async () => {
+    await world.coordinator.reconcileWorkflowNotifications();
+    await world.coordinator.statusWakes.settled();
+    await world.deliver();
+  };
+  await reconcile();
+  expect(world.wakes(main)).toBe(1);
+  await world.finishTurn(main);
+  const first = (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages;
+  const input = { pipelineId: "pipe-local", requestId: "restart-failure" };
+  // Simulate a crash window after the episode was persisted but before receipt completion.
+  const update = world.storage.coordinators.updateCoordinatorWorkflowAssociation.bind(
+    world.storage.coordinators,
+  );
+  const publication = spyOn(
+    world.storage.coordinators,
+    "updateCoordinatorWorkflowAssociation",
+  ).mockImplementationOnce(async (...args) => {
+    await update(...args);
+    throw new Error("lost answer after episode publication");
+  });
+  try {
+    expect((await tool("restart_build_pipeline_step", input)).isError).toBe(true);
+  } finally {
+    publication.mockRestore();
+  }
+  const episode = (
+    await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
+  )[0]!.statusWakeEpisode;
+  expect(episode).toBeTruthy();
+  await savePipeline(world.storage, world.projectId, "pipe-local");
+  await reconcile();
+  expect(world.wakes(main)).toBe(2);
+  await world.finishTurn(main);
+  expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
+  await reconcile();
+  expect(world.wakes(main)).toBe(2);
+  const messages = (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId))
+    .messages;
+  expect(messages).toHaveLength(first.length + 1);
+  expect(new Set(messages.map((message) => message.id)).size).toBe(messages.length);
+});
+
+test("remote restart reopens only the matching node follow and preserves its episode on replay", async () => {
+  for (const nodeId of ["bk_leaf", "bk_other"]) {
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: nodeId,
+      projectId: world.projectId,
+      coordinatorId: world.coordinatorId,
+      conversationId: scope.conversationId,
+      kind: "build-pipeline",
+      resourceId: "pipe-remote",
+      nodeId,
+      requestId: nodeId,
+      createdAt: new Date().toISOString(),
+      terminalNotifiedAt: new Date().toISOString(),
+    });
+  }
+  const input = { pipelineId: "pipe-remote", nodeId: "bk_leaf", requestId: "remote-follow" };
+  expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
+  const before = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
+  expect(before.find((entry) => entry.id === "bk_leaf")).toMatchObject({
+    statusWakeEpisode: expect.any(String),
+  });
+  expect(before.find((entry) => entry.id === "bk_leaf")!.terminalNotifiedAt).toBeUndefined();
+  expect(before.find((entry) => entry.id === "bk_other")!.terminalNotifiedAt).toBeDefined();
+  expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
+  expect(
+    await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId),
+  ).toEqual(before);
 });

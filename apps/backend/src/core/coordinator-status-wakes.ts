@@ -1968,7 +1968,7 @@ export class CoordinatorStatusWakes {
           resourceId: association.resourceId,
         },
         {
-          requestId: `status:${association.id}:${main.id}:${hash(status.key)}`,
+          requestId: `status:${association.id}:${main.id}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
           toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
           toTabId: main.tabId,
           subject,

@@ -423,6 +423,8 @@ export interface CoordinatorWorkflowAssociation {
   createdAt: string;
   lastNotifiedRevision?: number;
   terminalNotifiedAt?: string;
+  /** Durable restart episode; absent on follows created before the first restart. */
+  statusWakeEpisode?: string;
   /** Last status wake sent for this resource; see `coordinator-status-wakes.ts`. */
   statusNotice?: CoordinatorStatusNoticeRecord;
   adoptedByConversationId?: string;

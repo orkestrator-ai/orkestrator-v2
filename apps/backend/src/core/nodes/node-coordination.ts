@@ -1,4 +1,7 @@
-import { AGENT_MAIL_MAX_THREAD_HOPS } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_THREAD_HOPS,
+  normalizeAgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -337,9 +340,12 @@ export class NodeCoordination {
       notices: {
         // The repositories whose coordinator here can take a leaf's notice.
         repositoryHints: async () =>
-          (await storage.loadProjects())
-            .map((project) => repositoryHint(project.gitUrl))
-            .filter((hint): hint is string => Boolean(hint)),
+          !normalizeAgentMessagingSettings((await storage.loadConfig()).global.agentMessaging)
+            .enabled
+            ? []
+            : (await storage.loadProjects())
+                .map((project) => repositoryHint(project.gitUrl))
+                .filter((hint): hint is string => Boolean(hint)),
         deliver: (item, node) => {
           if (!this.coordinatorNotices) throw new Error("Coordinator notices are not ready.");
           return this.coordinatorNotices.deliverFromLeaf(item, node);

@@ -172,15 +172,16 @@ describe("a watched pull request", () => {
       gitUrl: "https://github.com/acme/app.git",
     });
     let now = Date.parse("2030-01-01T10:00:00.000Z");
-    const state = { checksState: "pending" };
+    const state = { checksState: "pending", fail: false };
     const watches = new CoordinatorPullRequestWatches({
       storage: target.storage,
       noticeRouter: router,
       coalesceMs: 0,
       now: () => now,
       token: async () => "token",
-      readStatus: async () =>
-        ({
+      readStatus: async () => {
+        if (state.fail) throw new Error("temporary read failure");
+        return {
           title: "Add the watch",
           htmlUrl: "https://github.com/acme/app/pull/7",
           state: "open",
@@ -188,7 +189,8 @@ describe("a watched pull request", () => {
           checksState: state.checksState,
           mergeability: "blocked",
           reviewDecision: "none",
-        }) as never,
+        } as never;
+      },
       confirmDeleted: async () => false,
     });
     await watches.watch(target.projectId, { owner: "acme", repo: "app", number: 7 }, "rendered");
@@ -232,10 +234,44 @@ describe("a watched pull request", () => {
     await target.closeMain();
 
     const after = await watching(target, target.coordinator.noticeRouter);
+    // A no-op sweep must not consume this watch's startup baseline.
+    await after.watches.sweep();
     before.advance();
     after.advance();
     after.state.checksState = "success";
     await after.watches.sweep();
     expect(await openMains(target)).toBe(0);
+    after.advance();
+    after.state.checksState = "failure";
+    await after.watches.sweep();
+    expect(await openMains(target)).toBe(1);
+  });
+  test("failed and capped startup reads keep a separate baseline for every watch", async () => {
+    const target = await world();
+    const before = await watching(target, target.coordinator.noticeRouter);
+    for (let number = 8; number <= 22; number++)
+      await before.watches.watch(
+        target.projectId,
+        { owner: "acme", repo: "app", number },
+        "rendered",
+      );
+    await before.watches.sweep();
+    before.advance();
+    await before.watches.sweep();
+    await target.closeMain();
+    const after = await watching(target, target.coordinator.noticeRouter);
+    after.advance();
+    after.state.fail = true;
+    await after.watches.sweep();
+    after.advance();
+    after.state.fail = false;
+    after.state.checksState = "success";
+    await after.watches.sweep();
+    await after.watches.sweep();
+    expect(await openMains(target)).toBe(0);
+    after.advance();
+    after.state.checksState = "failure";
+    await after.watches.sweep();
+    expect(await openMains(target)).toBe(1);
   });
 });

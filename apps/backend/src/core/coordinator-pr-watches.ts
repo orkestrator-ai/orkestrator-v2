@@ -246,7 +246,7 @@ export class CoordinatorPullRequestWatches {
   private readonly now: () => number;
   private readonly coalesceMs: number;
   private sweeping: Promise<void> | null = null;
-  private firstSweepDone = false;
+  private readonly baselined = new Set<string>();
   private readonly router: CoordinatorNoticeRouter;
 
   constructor(options: CoordinatorPullRequestWatchOptions) {
@@ -310,7 +310,6 @@ export class CoordinatorPullRequestWatches {
   sweep(): Promise<void> {
     this.sweeping ??= this.sweepOnce().finally(() => {
       this.sweeping = null;
-      this.firstSweepDone = true;
     });
     return this.sweeping;
   }
@@ -402,6 +401,7 @@ export class CoordinatorPullRequestWatches {
       );
       if (delivered) notices += 1;
     }
+    this.baselined.add(`${projectId}:${entry.key}:${entry.incarnationId ?? ""}`);
     const checkedAt = new Date(this.now()).toISOString();
     this.storage.watchedPullRequests.updateWatchedPullRequest(
       projectId,
@@ -538,7 +538,7 @@ export class CoordinatorPullRequestWatches {
     const key = `${entry.key}:${entry.incarnationId ? `${entry.incarnationId}:` : ""}${entry.notices + 1}:${signature}`;
     return this.router.deliver({
       projectId,
-      createSession: this.firstSweepDone,
+      createSession: this.baselined.has(`${projectId}:${entry.key}:${entry.incarnationId ?? ""}`),
       resourceId: entry.key,
       requestId: (mainId) => `pr-watch:${mainId}:${key}`,
       upwardRequestId: `pr-watch:${projectId}:${key}`,

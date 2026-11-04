@@ -331,19 +331,27 @@ export class CoordinatorUsageLimitNotices {
   }
 
   private schedule(id: string, at: number): void {
-    if (this.stopped || this.timers.has(id)) return;
+    if (this.stopped || this.timers.has(id) || this.flushes.has(id)) return;
     const timer = setTimeout(
       () => {
         this.timers.delete(id);
+        let failed = false;
         const flush = this.flush(id)
           .catch((error: unknown) => {
             // It stays in the ledger and goes again under the same request id,
             // while the window it is about still matters, and on the next start.
             log.warn("limit-stop.notice-failed", { error: formatLogError(error) });
-            this.retry(id);
+            failed = true;
           })
           .finally(() => {
             if (this.flushes.get(id) === flush) this.flushes.delete(id);
+            if (failed) this.retry(id);
+            else {
+              const next = this.update(id, (group) =>
+                unsent(group).length ? group.flushAt : undefined,
+              );
+              if (next !== undefined) this.schedule(id, next);
+            }
           });
         this.flushes.set(id, flush);
       },
@@ -510,9 +518,10 @@ export class CoordinatorUsageLimitNotices {
     | { kind: "kept"; reason: CoordinatorAccountKeptReason }
   > {
     if (!main.agent) return { kind: "unaffected" };
-    const key = await this.deps
-      .coordinatorAccountKey(coordinatorRuntimeId(coordinatorId, main.id), main.agent)
-      .catch(() => null);
+    const key = await this.deps.coordinatorAccountKey(
+      coordinatorRuntimeId(coordinatorId, main.id),
+      main.agent,
+    );
     if (key !== group.accountKey) return { kind: "unaffected" };
     const platform = group.stops[0]!.account.platform;
     const move = await this.deps.moveOff(platform, group.accountKey, {

@@ -241,25 +241,59 @@ export class CoordinatorNoticeRouter {
     options: { quietProjectId?: string; coalesceMs?: number } = {},
   ): Promise<void> {
     const up = await this.route(null);
+    const routed = new Map<
+      string,
+      { route: Extract<CoordinatorNoticeRoute, { kind: "command-node" }>; hints: string[] }
+    >();
+    const excluded: string[] = [];
     if (up.kind === "command-node") {
+      for (const project of await this.storage.loadProjects()) {
+        const route = await this.route(project.id);
+        const hint = repositoryHint(project.gitUrl);
+        if (route.kind !== "command-node" || route.controllerId === up.controllerId || !hint)
+          continue;
+        excluded.push(hint);
+        const entry = routed.get(route.controllerId) ?? { route, hints: [] };
+        entry.hints.push(hint);
+        routed.set(route.controllerId, entry);
+      }
       const queued = await this.sendUp(up, {
         requestId: `account-auto-switch:${event.platform}:${event.at}`.slice(0, 200),
         fromEnvironmentId: "machine",
         fromTabId: "notice",
         subject: `Automatic switch on ${machineName}`,
         body: `${event.platform} moved from ${event.from} to ${event.to}.`,
-        coordinatorNotice: { kind: "auto-switch", event },
+        coordinatorNotice: { kind: "auto-switch", event, excludedRepositoryHints: excluded },
       });
       if (!queued) {
         await mailAutoSwitchNotice(this.storage, event, machineName, options);
         return;
       }
     }
+    const forwarded = new Set<string>();
+    for (const { route, hints } of routed.values()) {
+      if (
+        await this.sendUp(route, {
+          requestId: `account-auto-switch:${event.platform}:${event.at}`.slice(0, 200),
+          fromEnvironmentId: "machine",
+          fromTabId: "notice",
+          body: `${event.platform} moved from ${event.from} to ${event.to}.`,
+          coordinatorNotice: { kind: "auto-switch", event, repositoryHints: hints },
+        })
+      )
+        hints.forEach((hint) => forwarded.add(hint));
+    }
     await mailAutoSwitchNotice(this.storage, event, machineName, {
       ...options,
       ...(up.kind === "command-node"
         ? {
-            hearsHere: async (projectId: string) => (await this.route(projectId)).kind === "local",
+            hearsHere: async (projectId: string) => {
+              const selected = await this.route(projectId);
+              if (selected.kind === "local") return true;
+              if (selected.controllerId === up.controllerId) return false;
+              const project = await this.storage.getProject(projectId);
+              return !forwarded.has(repositoryHint(project?.gitUrl) ?? "");
+            },
           }
         : {}),
     });
@@ -281,12 +315,23 @@ export class CoordinatorNoticeRouter {
     item: OutboxItem,
     node: { nodeId: string; name: string },
   ): Promise<"delivered" | "declined" | "deferred"> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.storage.loadConfig()).global.agentMessaging,
+    );
+    if (!settings.enabled) return "declined";
     const notice = parseUpwardCoordinatorNotice(item.coordinatorNotice);
     // Nothing a newer leaf sent is understood here, so its own coordinator takes it.
     if (!notice) return "declined";
     if (notice.kind === "auto-switch") {
       await mailAutoSwitchNotice(this.storage, notice.event, noticeText(node.name) ?? node.nodeId, {
         requireDelivery: true,
+        hearsHere: async (projectId) => {
+          const hint = repositoryHint((await this.storage.getProject(projectId))?.gitUrl);
+          return Boolean(
+            (!notice.repositoryHints || Boolean(hint && notice.repositoryHints.includes(hint))) &&
+            (!hint || !notice.excludedRepositoryHints?.includes(hint)),
+          );
+        },
       });
       return "delivered";
     }
@@ -333,7 +378,11 @@ export class CoordinatorNoticeRouter {
     node: { nodeId: string; name: string },
     projectId: string,
   ): Promise<"delivered" | "deferred"> {
-    const target = await this.mainFor(projectId, notice.createSession);
+    const settings = normalizeAgentMessagingSettings(
+      (await this.storage.loadConfig()).global.agentMessaging,
+    );
+    const quiet = settings.coordinatorStatusWakes === "off";
+    const target = await this.mainFor(projectId, notice.createSession && !quiet);
     // Older state with nobody to read it: it stays on the leaf until someone can.
     if (!target) return "deferred";
     try {
@@ -358,6 +407,7 @@ export class CoordinatorNoticeRouter {
         {
           nodePrefix: describeRelayedNotice(node),
           relayedNotice: true,
+          ...(quiet ? { keepWithoutWake: "Coordinator status wakes are off." } : {}),
           ...(notice.statusBudgetKey
             ? { statusBudgetKey: `node:${node.nodeId}:resource:${notice.statusBudgetKey}` }
             : {}),
@@ -377,7 +427,15 @@ export class CoordinatorNoticeRouter {
     const notice = parseUpwardCoordinatorNotice(item.coordinatorNotice);
     if (!notice) return;
     if (notice.kind === "auto-switch") {
-      await mailAutoSwitchNotice(this.storage, notice.event, "this machine");
+      await mailAutoSwitchNotice(this.storage, notice.event, "this machine", {
+        hearsHere: async (projectId) => {
+          const hint = repositoryHint((await this.storage.getProject(projectId))?.gitUrl);
+          return Boolean(
+            (!notice.repositoryHints || Boolean(hint && notice.repositoryHints.includes(hint))) &&
+            (!hint || !notice.excludedRepositoryHints?.includes(hint)),
+          );
+        },
+      });
       return;
     }
     const projectId = item.noticeProjectId;

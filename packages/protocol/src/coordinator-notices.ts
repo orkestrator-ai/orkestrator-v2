@@ -176,7 +176,12 @@ export type UpwardCoordinatorNotice =
   | { kind: "usage-limit-stop"; stop: UsageLimitStop }
   /** A status or pull request notice the leaf wrote; it stays an agent's untrusted text. */
   | { kind: "repository"; createSession: boolean; statusBudgetKey?: string; coalesceMs?: number }
-  | { kind: "auto-switch"; event: AgentAccountAutoSwitchedEvent };
+  | {
+      kind: "auto-switch";
+      event: AgentAccountAutoSwitchedEvent;
+      repositoryHints?: string[];
+      excludedRepositoryHints?: string[];
+    };
 
 export function parseUpwardCoordinatorNotice(value: unknown): UpwardCoordinatorNotice | null {
   if (!value || typeof value !== "object") return null;
@@ -206,6 +211,20 @@ export function parseUpwardCoordinatorNotice(value: unknown): UpwardCoordinatorN
     const { event } = record;
     return {
       kind: "auto-switch",
+      ...Object.fromEntries(
+        ["repositoryHints", "excludedRepositoryHints"].flatMap((key) =>
+          Array.isArray(record[key])
+            ? [
+                [
+                  key,
+                  record[key]
+                    .filter((v): v is string => typeof v === "string" && v.length <= 512)
+                    .slice(0, 1000),
+                ],
+              ]
+            : [],
+        ),
+      ),
       event: {
         ...event,
         from: noticeText(event.from) ?? "another account",

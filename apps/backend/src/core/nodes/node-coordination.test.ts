@@ -19,6 +19,7 @@ afterEach(async () => {
 
 function coordination(world: MailWorld, controllers: Array<{ id: string; name: string }>) {
   const nodes = {
+    mode: () => "leaf",
     listControllers: () =>
       controllers.map((entry) => ({
         controllerId: entry.id,
@@ -777,4 +778,44 @@ test("an approved account switch keeps its account fields and runs the Settings 
   });
   notice.mockRestore();
   instance.collector.dispose();
+});
+
+test("production take-back pass retries from the 60-second recovery timer", async () => {
+  const world = await MailWorld.create();
+  worlds.push(world);
+  const { instance } = coordination(world, []);
+  let minute: (() => void) | undefined;
+  const interval = globalThis.setInterval;
+  const timers = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    ms: number,
+  ) => {
+    if (ms === 60_000) minute = callback;
+    return interval(callback, ms);
+  }) as typeof setInterval);
+  const take = mock(async () => {
+    throw new Error("temporary");
+  });
+  instance.setCoordinatorNotices({ deliverFromLeaf: async () => "delivered", takeBack: take });
+  await instance.leafMail.enqueue("bk_gone" as never, {
+    requestId: "recover",
+    fromEnvironmentId: "machine",
+    fromTabId: "notice",
+    body: "notice",
+    coordinatorNotice: { kind: "repository", createSession: true },
+  });
+  try {
+    instance.start();
+    await instance.takeBackNotices();
+    expect(take).toHaveBeenCalledTimes(1);
+    take.mockImplementation(async () => undefined as never);
+    expect(minute).toBeDefined();
+    minute!();
+    await instance.takeBackNotices();
+    expect(take).toHaveBeenCalledTimes(2);
+    expect(await instance.leafMail.pending("bk_gone" as never)).toBe(0);
+  } finally {
+    timers.mockRestore();
+    instance.dispose();
+  }
 });

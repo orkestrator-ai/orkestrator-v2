@@ -232,7 +232,7 @@ export class NodeMailCollector {
       after = batch.items.at(-1)?.seq ?? after;
       if (failed) this.retry(nodeId);
       if (!batch.more) {
-        if (!failed) this.delays.delete(nodeId);
+        if (!failed && !deferred) this.delays.delete(nodeId);
         return !failed;
       }
     }

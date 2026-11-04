@@ -224,12 +224,20 @@ usage-limit notices are rendered there from checked fields, with every name quot
 as data. A notice does not use the pair budget that bounds two coordinators
 talking, so an exhausted budget cannot hold it. An automatic switch reaches the
 command node's open coordinators once, and on the leaf only the coordinators of
-repositories the command node lacks.
+repositories the command node lacks. With several attached command nodes, each
+repository follows its selected controller; recipient filters prevent the
+machine-wide destination from also notifying another controller's repositories.
 
 **A command node that stays gone.** A brief drop holds the notice and never falls
 back, so nothing is delivered twice. After `NOTICE_HOLD_MAX_MS` (one hour) with no
 contact from that command node at all, or as soon as it is detached, the notice
-leaves the outbox and the leaf's own coordinator takes it. An hour is short against
+leaves the outbox and the leaf's own coordinator takes it, **only if it has not
+been collected**. Collection transfers ownership of the whole batch before any
+delivery attempt. Collected items (including deferred or unattempted ones) may
+already have reached a mailbox after a lost response, so they never fall back.
+On detach or after an hour of silence they are retired with the content-free
+`notice.collected-retired` warning. This deliberately accepts possible notice
+loss to preserve at-most-once wakes; collection is not delivery confirmation. An hour is short against
 limits that reset in hours and long against a restart. A status notice from a sweep
 that finds no coordinator open at that point is logged and dropped.
 

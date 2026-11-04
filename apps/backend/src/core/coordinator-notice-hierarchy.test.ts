@@ -81,15 +81,19 @@ function repositoryNotice(world: MailWorld, overrides: Partial<RepositoryNotice>
   } satisfies RepositoryNotice;
 }
 
-function memoryStore(): NodeMailStore & { state: NodeMailState } {
+function memoryStore(): NodeMailStore & { state: NodeMailState; writes: number } {
   const holder = {
     state: emptyNodeMailState(),
+    writes: 0,
     async load() {
       return structuredClone(holder.state);
     },
     async mutate<T>(mutate: (state: NodeMailState) => { next: NodeMailState | null; result: T }) {
       const { next, result } = mutate(structuredClone(holder.state));
-      if (next) holder.state = structuredClone(next);
+      if (next) {
+        holder.state = structuredClone(next);
+        holder.writes++;
+      }
       return result;
     },
   };
@@ -101,6 +105,7 @@ function stopNotices(
   target: MailWorld,
   options: {
     coordinatorKey?: string | null;
+    lookup?: () => Promise<string | null>;
     staysBound?: boolean;
     move?: LimitedAccountMove;
     machineKey?: string;
@@ -116,10 +121,12 @@ function stopNotices(
       key: options.machineKey ?? "machine-a",
       name: options.machineName ?? "Machine A",
     }),
-    coordinatorAccountKey: async () =>
-      moves.length && !options.staysBound && options.move?.moved !== false
-        ? null
-        : (options.coordinatorKey ?? null),
+    coordinatorAccountKey:
+      options.lookup ??
+      (async () =>
+        moves.length && !options.staysBound && options.move?.moved !== false
+          ? null
+          : (options.coordinatorKey ?? null)),
     moveOff: async (platform, key, moveOptions) => {
       moves.push({ platform, key, quiet: moveOptions.quietProjectId });
       return options.move ?? { moved: true, to: "other@example.com" };
@@ -1402,4 +1409,206 @@ test("a collected failed notice is retired on detach without duplicate local del
   expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(0);
   expect(f.taken.taken).toBe(0);
   f.dispose();
+});
+
+test("receiver wake policy prevents relayed starts and files quietly with an open main", async () => {
+  const f = await fleet();
+  try {
+    await f.collect();
+    const config = await f.command.storage.loadConfig();
+    await f.command.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, coordinatorStatusWakes: "off" },
+    });
+    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+    await f.collect();
+    await f.command.deliver();
+    expect(f.command.wakes(await f.command.main())).toBe(0);
+    expect(await inbox(f.command, await f.command.main())).toHaveLength(1);
+    await f.command.closeMain();
+    await f.leaf.coordinator.noticeRouter.deliver(
+      repositoryNotice(f.leaf, { upwardRequestId: "other" }),
+    );
+    await f.collect();
+    expect(await openMains(f.command)).toHaveLength(0);
+  } finally {
+    f.dispose();
+  }
+});
+
+test("disabled receiver declines repository, switch and stop notices for leaf fallback", async () => {
+  const f = await fleet();
+  try {
+    await f.collect();
+    const config = await f.command.storage.loadConfig();
+    await f.command.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, enabled: false },
+    });
+    const stops = stopNotices(f.leaf);
+    await f.leaf.coordinator.noticeRouter.deliverAutoSwitch(
+      {
+        platform: "codex",
+        from: "a@example.com",
+        to: "b@example.com",
+        reason: "limit",
+        at: "2030-01-01T10:00:00.000Z",
+      },
+      "Leaf",
+    );
+    const worker = await f.leaf.addEnvironment("worker");
+    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+    await stops.notices.noteStop(report(worker.environmentId));
+    await f.collect();
+    await f.takeBack();
+    await stops.settle();
+    expect(await inbox(f.command, await f.command.main())).toHaveLength(0);
+    expect((await inbox(f.leaf, await f.leaf.main())).length).toBeGreaterThanOrEqual(3);
+    stops.notices.stop();
+  } finally {
+    f.dispose();
+  }
+});
+
+test("identity lookup failure retains the flush for retry without waking", async () => {
+  const w = await world();
+  const worker = await w.addEnvironment("worker");
+  const n = stopNotices(w, {
+    lookup: async () => {
+      throw new Error("lookup unavailable");
+    },
+  });
+  await n.notices.noteStop(report(worker.environmentId));
+  await n.settle();
+  expect(await inbox(w, await w.main())).toHaveLength(0);
+  expect(n.moves).toHaveLength(0);
+  n.notices.stop();
+  const retry = stopNotices(w, { coordinatorKey: "claude:email:limited@example.com" });
+  retry.notices.start();
+  await retry.settle();
+  expect(retry.moves).toHaveLength(1);
+  expect(await inbox(w, await w.main())).toHaveLength(1);
+  retry.notices.stop();
+});
+
+test("stops arriving during a blocked flush are all filed without overlapping account moves", async () => {
+  const w = await world();
+  const worker = await w.addEnvironment("worker");
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = false;
+  const send = w.storage.sendAgentMail.bind(w.storage);
+  const intercepted = spyOn(w.storage, "sendAgentMail").mockImplementation(async (...args) => {
+    entered = true;
+    await blocked;
+    return send(...args);
+  });
+  const n = stopNotices(w, { coordinatorKey: "claude:email:limited@example.com" });
+  try {
+    await n.notices.noteStop(report(worker.environmentId));
+    for (let i = 0; i < 100 && !entered; i++)
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(entered).toBe(true);
+    await n.notices.noteStop(report(worker.environmentId, { requestId: "second" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(intercepted).toHaveBeenCalledTimes(1);
+    release();
+    await n.settle();
+    await n.settle();
+    expect(n.moves).toHaveLength(1);
+    const groups = w.storage.coordinatorNotices.updateUsageLimitNoticeLedger((l) => l.groups);
+    expect(groups[0]!.sentStopIds).toHaveLength(2);
+    expect(await inbox(w, await w.main())).toHaveLength(2);
+  } finally {
+    release();
+    n.notices.stop();
+    intercepted.mockRestore();
+  }
+});
+
+test("a collected batch is explicitly retired after silent ownership expires", async () => {
+  const f = await fleet();
+  try {
+    await f.collect();
+    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+    // Collection alone claims ownership even without any mailbox delivery.
+    const mail = new LeafNodeMail(
+      f.store,
+      {
+        attachedControllers: () => [
+          {
+            controllerId: COMMAND,
+            displayName: "Command",
+            lastContactAt: "2030-01-01T10:00:00.000Z",
+          },
+        ],
+        mostRecentControllerId: () => COMMAND,
+      },
+      () => undefined,
+      () => Date.parse("2030-01-01T12:00:00.000Z"),
+    );
+    await mail.collect(COMMAND, 0, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
+    expect(await mail.noticesToTakeBack()).toHaveLength(0);
+    expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(0);
+  } finally {
+    f.dispose();
+  }
+});
+
+test("automatic switch reaches the other selected controller exactly once", async () => {
+  const leaf = await world();
+  const a = await world();
+  const b = await world();
+  for (const w of [leaf, b]) await w.storage.updateProject(w.projectId, { gitUrl: GIT_URL });
+  await a.storage.updateProject(a.projectId, { gitUrl: "https://example.invalid/acme/other.git" });
+  const queued: Array<{ controller: string; item: Partial<OutboxItem> }> = [];
+  leaf.coordinator.noticeRouter.setOutbox({
+    routeNotice: async (projectId) => ({
+      kind: "command-node",
+      controllerId: projectId ? "B" : "A",
+      controllerName: projectId ? "B" : "A",
+    }),
+    queueNotice: async (controller, item) => {
+      queued.push({ controller, item });
+    },
+  });
+  await leaf.coordinator.noticeRouter.deliverAutoSwitch(
+    {
+      platform: "codex",
+      from: "a@example.com",
+      to: "b@example.com",
+      reason: "limit",
+      at: "2030-01-01T10:00:00.000Z",
+    },
+    "Leaf",
+  );
+  expect(queued.map((q) => q.controller)).toEqual(["A", "B"]);
+  for (const q of queued) {
+    await (q.controller === "A" ? a : b).coordinator.noticeRouter.fromLeaf.deliverFromLeaf(
+      q.item as OutboxItem,
+      { nodeId: "leaf", name: "Leaf" },
+    );
+  }
+  expect(await inbox(b, await b.main())).toHaveLength(1);
+  expect(await inbox(leaf, await leaf.main())).toHaveLength(0);
+});
+
+test("recollecting a parked batch does not rewrite unchanged leaf state", async () => {
+  const f = await fleet();
+  try {
+    await f.collect();
+    await f.command.closeMain();
+    await f.leaf.coordinator.noticeRouter.deliver(
+      repositoryNotice(f.leaf, { createSession: false }),
+    );
+    await f.collect();
+    const writes = f.store.writes;
+    await f.collect();
+    await f.collect();
+    expect(f.store.writes).toBe(writes);
+  } finally {
+    f.dispose();
+  }
 });

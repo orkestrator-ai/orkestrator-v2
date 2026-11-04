@@ -248,3 +248,22 @@ test("every leaf supplied identifier remains quoted data", () => {
   });
   expect(body.split(JSON.stringify(instruction)).length - 1).toBe(5);
 });
+
+test("automatic switch recipient filters are bounded and checked", () => {
+  const notice = parseUpwardCoordinatorNotice({
+    kind: "auto-switch",
+    event: {
+      platform: "codex",
+      from: "a@example.com",
+      to: "b@example.com",
+      reason: "limit",
+      at: "2030-01-01T10:00:00.000Z",
+    },
+    repositoryHints: ["github.com/acme/app", 42, "x".repeat(513)],
+    excludedRepositoryHints: ["github.com/acme/other"],
+  });
+  expect(notice).toMatchObject({
+    repositoryHints: ["github.com/acme/app"],
+    excludedRepositoryHints: ["github.com/acme/other"],
+  });
+});

@@ -412,7 +412,9 @@ export class LeafNodeMail {
       );
       const items = eligible.slice(0, MAX_COLLECT);
       const claimed = new Set(
-        items.filter((entry) => entry.coordinatorNotice).map((entry) => entry.seq),
+        items
+          .filter((entry) => entry.coordinatorNotice && !entry.collected)
+          .map((entry) => entry.seq),
       );
       return {
         next:
@@ -513,7 +515,12 @@ export class LeafNodeMail {
             .filter((item) => {
               // A collected item may already have been delivered: never reroute it.
               // Once its controller detaches, retire that ambiguous ownership explicitly.
-              if (item.coordinatorNotice && item.collected && !controller && !item.handedBack) {
+              if (
+                item.coordinatorNotice &&
+                item.collected &&
+                (!controller || silent) &&
+                !item.handedBack
+              ) {
                 retired = true;
                 createLogger("nodes").warn("notice.collected-retired", {
                   error: "collected-notice-controller-detached",

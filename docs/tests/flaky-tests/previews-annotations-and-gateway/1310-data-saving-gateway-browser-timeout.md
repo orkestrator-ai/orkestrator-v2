@@ -134,3 +134,14 @@ viewports alone with one worker in 38.7 s:
 
 Original evidence: `.orkestrator/review-artifacts/review-validation-2c183b1f-33d1-45e1-b1fe-0f5647dd9025/validation-05.stderr.txt`.
 No assertion or timeout changed. Host contention remains a hypothesis.
+
+
+## Workflow vocabulary review — 2026-11-04
+
+- **Reviewed head:** `f735aabd0b4cbd3b3c38da602c3aa8b79b8357d0`.
+- **Original command:** `ORKESTRATOR_E2E_PORT=55208 mise run test:logged -- --name review-browser-isolated-port -- mise run test:browser`.
+- **Worker configuration and result:** nine component Playwright workers; 1,274 passed, 122 skipped and four failed in 24.4 minutes. The public-site stage did not run because the component stage failed.
+- **Failure evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fFxacM/review-browser-isolated-port.log.gz` and the validation summary `output/agent-testing/review-validation-f735aabd0.md`.
+- **Failure:** mobile `data saving survives reload, stays client-local and preserves event latency through resume and reconnect` (`e2e/DataSavingGateway.spec.ts:18`) exceeded its 60-second deadline; cleanup at `:170` reported `browserContext.close: Target page, context or browser has been closed`.
+- **Complete unchanged owner:** `ORKESTRATOR_E2E_PORT=54832 mise run test:logged -- --name review-data-saving-diagnostic -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts --project mobile-chromium --workers=1 --output output/playwright/review-data-saving-diagnostic` passed. Passing counts and duration were not retained by the logged wrapper.
+- **Assessment:** unchanged isolated passes confirm intermittent recurrence. The cause of this run is unconfirmed; no implementation, assertion, timeout or skip changed in these owners. The original aggregate remains failed.

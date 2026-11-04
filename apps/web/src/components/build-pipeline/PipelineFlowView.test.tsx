@@ -976,7 +976,7 @@ describe("Notes node labels and selection", () => {
       renderPipelineTab(
         build({
           phase: "complete",
-          delivery: { policy },
+          delivery: { policy, decidedAt: "2026-11-04T00:00:00.000Z" },
           sessions: [
             session("build", "build", 0),
             session("verify", "verify", 60),

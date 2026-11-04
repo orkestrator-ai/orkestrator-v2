@@ -430,8 +430,17 @@ export function registerControllerWorkflowCommands(
         "Multi-review can start only after the associated build pipeline completed successfully",
       );
     }
+    const requested = canonicalMultiReview(args.input);
+    // Validate explicit automation before defaults: the resolver treats an
+    // omitted flag as a saved preference, which must not repair malformed input.
+    if (
+      (requested.autoFix !== undefined && typeof requested.autoFix !== "boolean") ||
+      (requested.autoPr !== undefined && typeof requested.autoPr !== "boolean")
+    ) {
+      throw new Error("Invalid multi-review request");
+    }
     const input = await multiReviewInputWithDefaults(
-      { ...canonicalMultiReview(args.input), projectId: environment.projectId },
+      { ...requested, projectId: environment.projectId },
       savedLaunchSettings(await context.storage.loadConfig(), environment.projectId, environment),
       () =>
         readLaunchModelCatalog(

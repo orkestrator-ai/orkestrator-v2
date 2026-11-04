@@ -1766,7 +1766,7 @@ describe("per-step execution modes", () => {
       expect(addressFindingsDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(addressFindingsDispatch?.prompt).toContain("Off-by-one");
       expect(addressFindingsDispatch?.prompt).toContain(
-        "Report your work in the fix result you submit",
+        "Report your work in the Address Findings result you submit",
       );
       // The verifier judges the Address Findings stage's own typed report instead of
       // rerunning its checks, and never its last assistant text.

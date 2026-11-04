@@ -16,6 +16,8 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -79,6 +81,42 @@ describe("build pipeline read model", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
+  });
+
+  test("normalizes future wire vocabulary in live updates and rehydrates it after a reload", async () => {
+    const { pipeline, futurePipeline } = workflowVocabularyFixtures();
+    expect(isBuildPipeline(pipeline)).toBe(true);
+    expect(isBuildPipeline(futurePipeline)).toBe(false);
+    // The transport is unknown at runtime; its static type describes this build's vocabulary.
+    const incoming = JSON.parse(JSON.stringify(futurePipeline)) as BuildPipeline;
+    useBuildPipelineStore.getState().replacePipeline(incoming);
+    expect<unknown>(useBuildPipelineStore.getState().pipelines.get(pipeline.id)).toEqual(pipeline);
+
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    const restored = await hydrateBuildPipeline(pipeline.id, async () => record(incoming, 8));
+    expect(restored).toEqual({ ...pipeline, backendRevision: 8 });
+    expect(isBuildPipeline(restored)).toBe(true);
+    expect<unknown>(useBuildPipelineStore.getState().pipelines.get(pipeline.id)).toEqual(restored);
+
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    const listed = await hydrateBuildPipelinesForProject(pipeline.projectId, async () => [
+      record(incoming, 9),
+    ]);
+    expect(listed).toEqual([{ ...pipeline, backendRevision: 9 }]);
+    expect<unknown>(incoming).toEqual(futurePipeline);
+  });
+
+  test("future vocabulary does not bypass snapshot validation", async () => {
+    const { futurePipeline } = workflowVocabularyFixtures();
+    const incoming = {
+      ...futurePipeline,
+      sessions: [{ ...futurePipeline.sessions[0], status: "invalid" }],
+    } as unknown as BuildPipeline;
+    expect(() => useBuildPipelineStore.getState().replacePipeline(incoming)).toThrow(
+      "Invalid backend build pipeline snapshot",
+    );
+    expect(await hydrateBuildPipeline(incoming.id, async () => record(incoming, 8))).toBeNull();
+    expect(useBuildPipelineStore.getState().pipelines.has(incoming.id)).toBe(false);
   });
 
   test("hydrates an authoritative backend snapshot", async () => {

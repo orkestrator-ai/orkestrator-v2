@@ -1,6 +1,11 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { MultiReviewPhase } from "@orkestrator/protocol/multi-review";
+import {
+  isMultiReviewWorkflow,
+  type MultiReviewPhase,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { workflowVocabularyFixtures } from "./workflow-vocabulary.test-support";
 
 // Other suites import the real command wrappers, so snapshot and restore per
 // the Bun mock rules in AGENTS.md rather than leaving this module faked.
@@ -9,17 +14,23 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 const listMultiReviewWorkflowsMock = mock(async (_environmentId: string): Promise<unknown[]> => []);
+const getMultiReviewWorkflowMock = mock(async (_workflowId: string): Promise<unknown> => null);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
+  getMultiReviewWorkflow: getMultiReviewWorkflowMock,
 }));
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-const { findActiveMultiReviewWorkflow } = await import("./multi-review-persistence");
+const {
+  findActiveMultiReviewWorkflow,
+  hydrateMultiReviewWorkflow,
+  hydrateMultiReviewWorkflowsForEnvironment,
+} = await import("./multi-review-persistence");
 const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 
 const ENVIRONMENT_ID = "env-1";
@@ -119,10 +130,58 @@ function entry(id: string, phase: MultiReviewPhase, revision = 1) {
 beforeEach(() => {
   listMultiReviewWorkflowsMock.mockReset();
   listMultiReviewWorkflowsMock.mockImplementation(async () => []);
+  getMultiReviewWorkflowMock.mockReset();
+  getMultiReviewWorkflowMock.mockImplementation(async () => null);
   useMultiReviewStore.setState({ workflows: new Map() });
 });
 
 describe("findActiveMultiReviewWorkflow", () => {
+  test("normalizes future live snapshots and restores authoritative state after reload", async () => {
+    const { review, futureReview } = workflowVocabularyFixtures();
+    expect(isMultiReviewWorkflow(review)).toBe(true);
+    expect(isMultiReviewWorkflow(futureReview)).toBe(false);
+    const incoming = JSON.parse(JSON.stringify(futureReview)) as MultiReviewWorkflow;
+    useMultiReviewStore.getState().replaceWorkflow(incoming);
+    const projected = useMultiReviewStore.getState().workflows.get(review.id);
+    expect(projected).toEqual(review);
+    expect(isMultiReviewWorkflow(projected)).toBe(true);
+
+    const persisted = {
+      id: review.id,
+      environmentId: review.environmentId,
+      version: 1,
+      revision: 8,
+      updatedAt: TIMESTAMP,
+      snapshot: incoming,
+    };
+    useMultiReviewStore.setState({ workflows: new Map() });
+    getMultiReviewWorkflowMock.mockResolvedValue(persisted);
+    const restored = await hydrateMultiReviewWorkflow(review.id);
+    expect(restored).toEqual({ ...review, backendRevision: 8 });
+    expect(isMultiReviewWorkflow(restored)).toBe(true);
+    expect<unknown>(useMultiReviewStore.getState().workflows.get(review.id)).toEqual(restored);
+
+    useMultiReviewStore.setState({ workflows: new Map() });
+    listMultiReviewWorkflowsMock.mockResolvedValue([{ ...persisted, revision: 9 }]);
+    expect(await hydrateMultiReviewWorkflowsForEnvironment(review.environmentId)).toEqual([
+      { ...review, backendRevision: 9 },
+    ]);
+    expect<unknown>(incoming).toEqual(futureReview);
+  });
+
+  test("future vocabulary still rejects malformed authoritative snapshots", async () => {
+    const { review, futureReview } = workflowVocabularyFixtures();
+    getMultiReviewWorkflowMock.mockResolvedValue({
+      id: review.id,
+      environmentId: review.environmentId,
+      version: 1,
+      revision: 8,
+      updatedAt: TIMESTAMP,
+      snapshot: { ...futureReview, reviewers: "invalid" },
+    });
+    expect(await hydrateMultiReviewWorkflow(review.id)).toBeNull();
+    expect(useMultiReviewStore.getState().workflows.has(review.id)).toBe(false);
+  });
   test("reports no active workflow for an environment that has none", async () => {
     expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
   });

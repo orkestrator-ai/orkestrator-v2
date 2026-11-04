@@ -187,7 +187,7 @@ launcher's child. The four failures:
 | `cli-ui.spec.ts`, `a CLI-initialized project…` | Flake [0901](../../tests/flaky-tests/web-ui/0901-cli-ui-fixture-project-hydration.md): a blank page after a second navigation. | Fixed; 10 of 10 across both cases that share the helper |
 | `terminal-input-resume.spec.ts`, `a lost terminal write…` | The host has no `vim`. | Fixed 2026-11-04; see [4222](4222-browser-failures-left-after-headless-qualification.md) |
 
-`project Home retains…` ([4220](4220-project-home-terminal-check-vs-shell-osc-context.md))
+`project Home retains…` ([4741](4741-project-home-terminal-check-vs-shell-osc-context.md))
 and the design canvas cases ([4221](4221-design-canvas-spec-reachability-dialog.md))
 passed. So did `capped file tree…`, in 71 s; flake
 [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)
@@ -249,4 +249,4 @@ branch to anything they load; see [4222](4222-browser-failures-left-after-headle
 ## Related
 
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
-- [4220](4220-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md), [4222](4222-browser-failures-left-after-headless-qualification.md) and [4223](4223-terminal-history-drops-burst-output.md), found while qualifying this.
+- [4741](4741-project-home-terminal-check-vs-shell-osc-context.md), [4221](4221-design-canvas-spec-reachability-dialog.md), [4222](4222-browser-failures-left-after-headless-qualification.md) and [4223](4223-terminal-history-drops-burst-output.md), found while qualifying this.

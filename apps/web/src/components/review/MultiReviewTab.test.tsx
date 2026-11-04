@@ -4292,9 +4292,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
     expect(screen.getByText("The Address Findings model is working interactively")).toBeTruthy();
     const node = flowNode("Address Findings,");
-    expect(node.getAttribute("aria-label")).toStartWith(
-      "Address Findings, Interactive session",
-    );
+    expect(node.getAttribute("aria-label")).toStartWith("Address Findings, Interactive session");
     expect(node.querySelector(".animate-spin")).toBeTruthy();
   });
 

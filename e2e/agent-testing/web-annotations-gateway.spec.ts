@@ -13,6 +13,7 @@
  * with agent credentials; otherwise they are reported as skipped, never as
  * passed. Each prints how its request settled (`[annotation-live] outcome`).
  */
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Browser, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -728,6 +729,7 @@ test("a desktop capture is reviewable from the web client with capture shown as 
       },
     });
     const page = setup.page;
+    await acknowledgeDockerReachabilityWarning(page);
     await page.setViewportSize({ width: 1440, height: 960 });
     await page.goto(status.browserUrl!);
     const environment = await setup.invoke<{ name: string }>("get_environment", {

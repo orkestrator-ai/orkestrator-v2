@@ -32,34 +32,45 @@ export const ELECTRON_TEST_SWITCHES: readonly string[] = [
 ];
 
 /**
- * Switches that start Electron with no display on Linux: Chromium's headless
- * Ozone platform with the GPU off, as `dev:test --headless-electron` does
- * (`electronLaunch` in apps/desktop/scripts/dev/lifecycle.ts). Playwright
- * drives the page over CDP, which needs no display. `--password-store=basic`
- * keeps `safeStorage` off the signed-in user's keyring.
+ * The switches and environment that start Electron with no display on Linux,
+ * as `dev:test --headless` does. Playwright drives the page over CDP, which
+ * needs no display.
  */
-export const HEADLESS_ELECTRON_SWITCHES: readonly string[] = [
-  "--ozone-platform=headless",
-  "--disable-gpu",
-  "--password-store=basic",
-];
-
-/** `env` without the variables that would put a window on the signed-in desktop. */
-export function withoutDisplay(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const result = { ...env };
-  delete result.DISPLAY;
-  delete result.WAYLAND_DISPLAY;
-  delete result.ELECTRON_OZONE_PLATFORM_HINT;
-  return result;
-}
+export {
+  HEADLESS_ELECTRON_SWITCHES,
+  withoutDisplay,
+} from "../../apps/desktop/electron/runtime-profile";
 
 /**
  * Whether a spec that supports it should launch Electron headless: Linux with
- * `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`, the same opt-in `dev:test` reads.
+ * `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`. `dev:test`'s own
+ * `ORKESTRATOR_AGENT_TEST_HEADLESS` and its no-terminal default deliberately do
+ * not apply: these specs launch their own Electron and most assert on a real
+ * window, so a variable meant for a profile must not take theirs away.
  */
 export function headlessElectronRequested(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return platform === "linux" && env.ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON === "1";
+}
+
+/**
+ * What `playwright.electron.config.ts` needs and this host lacks, or `null`.
+ * Without a display Electron exits at launch and every spec reports a launch
+ * timeout that names nothing, so the run says it up front.
+ */
+export function electronSpecDisplayProblem(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  headlessOnly = false,
+): string | null {
+  if (platform !== "linux" || env.DISPLAY || env.WAYLAND_DISPLAY) return null;
+  if (headlessOnly && headlessElectronRequested(platform, env)) return null;
+  return [
+    "The Electron specs open a real window, and this run has neither DISPLAY nor WAYLAND_DISPLAY.",
+    "Give them a disposable display: xvfb-run -a mise run test:agent:electron.",
+    "dev:test --headless does not apply to them; they launch their own Electron.",
+    "For headless design-canvas only, set ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 and use playwright.electron-headless.config.ts.",
+  ].join("\n");
 }

@@ -1,5 +1,6 @@
-import type { Reporter } from "@playwright/test/reporter";
+import type { FullConfig, Reporter } from "@playwright/test/reporter";
 import { sanitizeRunArtifacts } from "./global-teardown";
+import { networkChurnReport } from "./network-churn-report";
 
 /**
  * Redacts the suite's artifacts once every reporter has written its output.
@@ -20,7 +21,15 @@ export default class ArtifactSanitizingReporter implements Reporter {
     return false;
   }
 
+  private artifactsDirectory = "";
+
+  onBegin(config: FullConfig): void {
+    this.artifactsDirectory = config.projects[0]?.outputDir ?? "";
+  }
+
   async onExit(): Promise<void> {
     await sanitizeRunArtifacts(this.suite);
+    const report = this.artifactsDirectory ? networkChurnReport(this.artifactsDirectory) : null;
+    if (report) console.log(report);
   }
 }

@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test, type Page } from "@playwright/test";
 import { pendingInteractionIds, waitPastResolved } from "./cli-ui-waits";
 import { spawnSync } from "node:child_process";
@@ -146,7 +147,10 @@ async function login(page: Page) {
   if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
   const { loginUrl } = JSON.parse(command.stdout) as { loginUrl?: unknown };
   if (typeof loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
+  // `load` waits for the renderer's module graph. Callers navigate again right
+  // away, and doing that mid-graph gets the next document's entry modules a 502
+  // from the gateway, which leaves a blank page (flake 0901).
+  const response = await page.goto(loginUrl, { waitUntil: "load" });
   expect(response?.ok() ?? false).toBe(true);
 }
 
@@ -240,6 +244,8 @@ async function prBaseBranchInDialog(page: Page, projectName: string): Promise<st
   await expect(field).toHaveCount(0);
   return value;
 }
+
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 test("CLI changes reach an open renderer and survive a reload", async ({ page }) => {
   const status = profileStatus();

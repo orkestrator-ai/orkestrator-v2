@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { CoordinatorErrorDetails, CoordinatorIsolationBadge } from "./CoordinatorPanelNotices";
 
@@ -41,18 +40,20 @@ function gitSummary(status: ProjectGitStatus | null): string {
 }
 
 interface CoordinatorToolbarProps {
-  projectId: string;
   snapshot: CoordinatorSnapshot;
   git: ProjectGitStatus | null;
-  setGit: (status: ProjectGitStatus) => void;
-  operation: "fetch" | "sync" | "switch" | "conversation" | null;
-  setOperation: (operation: "fetch" | "sync" | "switch" | "conversation" | null) => void;
+  gitBusy: boolean;
+  fetching: boolean;
+  conversationBusy: boolean;
   error: string | null;
-  setError: (error: string | null) => void;
   runGit: (
     kind: "fetch" | "sync" | "switch",
     ref?: string,
     confirmation?: ProjectGitSwitchConfirmation,
+  ) => Promise<void>;
+  prepareSwitch: (
+    ref: string,
+    onReady: (confirmation: ProjectGitSwitchConfirmation) => void,
   ) => Promise<void>;
   coordinatorTurnActive: boolean;
   /** The agent of the conversation in front, once it has one. */
@@ -63,15 +64,14 @@ interface CoordinatorToolbarProps {
 
 /** The panel's header: the isolation badge, the checkout's Git controls, and their notices. */
 export function CoordinatorToolbar({
-  projectId,
   snapshot,
   git,
-  setGit,
-  operation,
-  setOperation,
+  gitBusy,
+  fetching,
+  conversationBusy,
   error,
-  setError,
   runGit,
+  prepareSwitch,
   coordinatorTurnActive,
   selectedAgent,
   paused,
@@ -90,7 +90,7 @@ export function CoordinatorToolbar({
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-  const branchSwitchDisabled = operation !== null || switchBlocked || coordinatorTurnActive;
+  const branchSwitchDisabled = gitBusy || switchBlocked || coordinatorTurnActive;
   const syncDisabled = branchSwitchDisabled || dirty;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
   // The badge speaks for the conversation in front: its platform's read-only
@@ -123,21 +123,7 @@ export function CoordinatorToolbar({
                 void runGit("switch", value);
                 return;
               }
-              setOperation("switch");
-              setError(null);
-              void backend
-                .prepareProjectGitBranchSwitch(projectId, value)
-                .then(setPendingSwitch)
-                .catch((cause) => {
-                  setError(
-                    cause instanceof Error ? cause.message : "Could not prepare branch switch",
-                  );
-                  void backend
-                    .getProjectGitStatus(projectId)
-                    .then(setGit)
-                    .catch(() => undefined);
-                })
-                .finally(() => setOperation(null));
+              void prepareSwitch(value, setPendingSwitch);
             }}
             disabled={branchSwitchDisabled}
           >
@@ -194,14 +180,14 @@ export function CoordinatorToolbar({
             variant="ghost"
             aria-label="Refresh repository status"
             title="Fetch and refresh"
-            disabled={operation !== null}
+            disabled={gitBusy}
             onClick={() => void runGit("fetch")}
           >
-            <RefreshCw className={cn("size-4", operation === "fetch" && "animate-spin")} />
+            <RefreshCw className={cn("size-4", fetching && "animate-spin")} />
           </Button>
           {/* While paused, the banner below the header offers Resume. */}
           {paused ? null : (
-            <Button size="sm" variant="outline" disabled={operation !== null} onClick={onPause}>
+            <Button size="sm" variant="outline" disabled={conversationBusy} onClick={onPause}>
               <Pause className="size-3.5" />
               Pause
             </Button>

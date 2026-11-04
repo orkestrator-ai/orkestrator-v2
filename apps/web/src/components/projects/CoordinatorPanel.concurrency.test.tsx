@@ -341,3 +341,96 @@ describe("first sends in two tab groups", () => {
     expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1");
   });
 });
+
+describe("Git and conversation actions", () => {
+  const behindGit = () => ({ ...gitStatus, upstream: "origin/main", behind: 1, ahead: 0 });
+  const refresh = () => screen.getByRole("button", { name: "Refresh repository status" });
+  const newSideAgent = () =>
+    screen
+      .getAllByRole("button")
+      .find((button) => button.textContent?.includes("New side agent")) as HTMLButtonElement;
+  const pauseButton = () => screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (cause: Error) => void;
+    const promise = new Promise<T>((settle, fail) => {
+      resolve = settle;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function renderSettled() {
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    await waitFor(() => expect(fetchGit).toHaveBeenCalled());
+    await waitFor(() => expect(refresh().hasAttribute("disabled")).toBe(false));
+  }
+
+  test("a fetch in flight leaves the conversation controls enabled", async () => {
+    ensuredGit = behindGit();
+    await renderSettled();
+    const fetch = deferred<ProjectGitStatus>();
+    fetchGit.mockImplementationOnce(() => fetch.promise);
+    fireEvent.click(refresh());
+
+    await waitFor(() => expect(refresh().hasAttribute("disabled")).toBe(true));
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Sync" }).hasAttribute("disabled")).toBe(true);
+    expect(newSideAgent().disabled).toBe(false);
+    expect(pauseButton().disabled).toBe(false);
+
+    await act(async () => fetch.resolve(ensuredGit));
+    await waitFor(() => expect(refresh().hasAttribute("disabled")).toBe(false));
+  });
+
+  test("a conversation action in flight leaves the Git controls enabled", async () => {
+    ensuredGit = behindGit();
+    ensuredSnapshot = snapshotOf([mainConversation, sideConversation(1)]);
+    await renderSettled();
+    const close = deferred<CoordinatorSnapshot>();
+    closeConversation.mockImplementationOnce(() => close.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
+
+    await waitFor(() => expect(newSideAgent().disabled).toBe(true));
+    expect(pauseButton().disabled).toBe(true);
+    expect(refresh().hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("combobox").hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Sync" }).hasAttribute("disabled")).toBe(false);
+
+    await act(async () => close.resolve(ensuredSnapshot));
+    await waitFor(() => expect(newSideAgent().disabled).toBe(false));
+  });
+
+  test("the first of two overlapping actions to finish does not release the other", async () => {
+    ensuredSnapshot = snapshotOf([mainConversation, sideConversation(1), sideConversation(2)]);
+    await renderSettled();
+    const first = deferred<CoordinatorSnapshot>();
+    const second = deferred<CoordinatorSnapshot>();
+    closeConversation.mockImplementationOnce(() => first.promise);
+    closeConversation.mockImplementationOnce(() => second.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close Side 2" }));
+    await waitFor(() => expect(closeConversation).toHaveBeenCalledTimes(2));
+
+    await act(async () => first.resolve(ensuredSnapshot));
+    expect(newSideAgent().disabled).toBe(true);
+    await act(async () => second.resolve(ensuredSnapshot));
+    await waitFor(() => expect(newSideAgent().disabled).toBe(false));
+  });
+
+  test("closing a conversation clears the error an earlier action left", async () => {
+    ensuredSnapshot = snapshotOf([mainConversation, sideConversation(1)]);
+    await renderSettled();
+    fetchGit.mockImplementationOnce(async () => {
+      throw new Error("fetch went wrong");
+    });
+    fireEvent.click(refresh());
+    expect(await screen.findByText("fetch went wrong")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
+    await waitFor(() => expect(closeConversation).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("fetch went wrong")).toBeNull());
+  });
+});

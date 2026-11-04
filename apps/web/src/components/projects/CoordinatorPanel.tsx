@@ -12,6 +12,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { useCoordinatorActions } from "./useCoordinatorActions";
 import { useCoordinatorGitActions } from "./useCoordinatorGitActions";
 import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
 import { useCoordinatorSelection } from "./useCoordinatorSelection";
@@ -74,23 +75,26 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     invalidateView,
     refreshView,
   } = useCoordinatorPanelData(projectId);
-  const [operation, setOperation] = useState<"fetch" | "sync" | "switch" | "conversation" | null>(
-    null,
-  );
+  const {
+    runAction,
+    actionError,
+    setActionError: setError,
+    gitBusy,
+    fetching,
+    conversationBusy,
+  } = useCoordinatorActions();
   // Closing the main conversation is confirmed; side agents close at once.
   const [pendingMainClose, setPendingMainClose] = useState<{ id: string; title: string } | null>(
     null,
   );
-  const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
 
-  const { runGit, confirmUpstreamMerge } = useCoordinatorGitActions({
+  const { runGit, prepareSwitch, confirmUpstreamMerge } = useCoordinatorGitActions({
     projectId,
     snapshot,
     setGit,
     refreshView,
-    setOperation,
-    setError,
+    runAction,
   });
 
   // The main coordinator first, then side agents in number order.
@@ -305,8 +309,6 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
 
   const conversationById = new Map(conversations.map((item) => [item.id, item]));
   const createConversation = () => {
-    setOperation("conversation");
-    setError(null);
     // Empty, unassigned side agents close as the new one opens, so unused
     // composers cannot use up the open-conversation limit.
     const closeUnused = unusedCoordinatorConversationIds(
@@ -314,39 +316,35 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       useNativeComposeStore.getState().drafts,
       pendingLaunches,
     );
-    void backend
-      .createCoordinatorConversation(projectId, undefined, closeUnused)
-      .then((createdSnapshot) => {
+    void runAction(
+      "conversation",
+      async () => {
+        const createdSnapshot = await backend.createCoordinatorConversation(
+          projectId,
+          undefined,
+          closeUnused,
+        );
         setSnapshot(createdSnapshot);
         const createdId = createdSnapshot.workspace.selectedConversationId;
         if (createdId && selectionPending()) selectConversation(createdId);
-      })
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not create conversation"),
-      )
-      .finally(() => setOperation(null));
+      },
+      { failureMessage: "Could not create conversation" },
+    );
   };
   const paused = snapshot.workspace.lifecycleState === "paused";
   const setPaused = (pause: boolean) => {
-    setOperation("conversation");
-    setError(null);
     const action = pause ? backend.pauseProjectCoordinator : backend.resumeProjectCoordinator;
-    void action(projectId)
-      .then(setSnapshot)
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not update Coordinator"),
-      )
-      .finally(() => setOperation(null));
+    void runAction("conversation", async () => setSnapshot(await action(projectId)), {
+      failureMessage: "Could not update Coordinator",
+    });
   };
   const closeConversation = (conversationId: string) => {
-    setOperation("conversation");
-    void backend
-      .closeCoordinatorConversation(projectId, conversationId)
-      .then(setSnapshot)
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : "Could not close conversation"),
-      )
-      .finally(() => setOperation(null));
+    void runAction(
+      "conversation",
+      async () =>
+        setSnapshot(await backend.closeCoordinatorConversation(projectId, conversationId)),
+      { failureMessage: "Could not close conversation" },
+    );
   };
   const clearFinishedWork = (associationIds: string[]) => {
     setError(null);
@@ -367,15 +365,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         className="flex h-full min-h-0 flex-col bg-background"
       >
         <CoordinatorToolbar
-          projectId={projectId}
           snapshot={snapshot}
           git={git}
-          setGit={setGit}
-          operation={operation}
-          setOperation={setOperation}
+          gitBusy={gitBusy}
+          fetching={fetching}
+          conversationBusy={conversationBusy}
           error={error}
-          setError={setError}
           runGit={runGit}
+          prepareSwitch={prepareSwitch}
           coordinatorTurnActive={coordinatorTurnActive}
           selectedAgent={selected?.agent}
           paused={paused}
@@ -406,7 +403,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={operation !== null}
+                disabled={conversationBusy}
                 onClick={() => setPaused(false)}
               >
                 <Play className="size-3.5" />
@@ -505,7 +502,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                     size="sm"
                     variant="ghost"
                     className="ml-1 shrink-0"
-                    disabled={operation !== null}
+                    disabled={conversationBusy}
                     onClick={(event) => {
                       // The new conversation joins the focused group, so focus
                       // this one without selecting the tab it is about to replace.
@@ -533,7 +530,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
                       startConversation={startConversation}
                       confirmUpstreamMerge={confirmUpstreamMerge}
-                      conversationBusy={operation !== null}
+                      conversationBusy={conversationBusy}
                       newConversationLabel={newConversationLabel}
                       onCreateConversation={createConversation}
                       onRetry={() => void load()}

@@ -10,6 +10,7 @@ import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
 import { createSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import type { RunCoordinatorAction } from "./useCoordinatorActions";
 
 /** How long a message waits on the pre-send fetch before it is sent without merging. */
 const UPSTREAM_CHECK_TIMEOUT_MS = 5_000;
@@ -19,8 +20,7 @@ interface UseCoordinatorGitActionsOptions {
   snapshot: CoordinatorSnapshot | null;
   setGit: (status: ProjectGitStatus) => void;
   refreshView: () => Promise<void>;
-  setOperation: (operation: "fetch" | "sync" | "switch" | "conversation" | null) => void;
-  setError: (error: string | null) => void;
+  runAction: RunCoordinatorAction;
 }
 
 /** What the panel does to the project's checkout: fetch, sync, switch, and fast-forward before a send. */
@@ -29,8 +29,7 @@ export function useCoordinatorGitActions({
   snapshot,
   setGit,
   refreshView,
-  setOperation,
-  setError,
+  runAction,
 }: UseCoordinatorGitActionsOptions) {
   const upstreamCheckLifetimeRef = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -43,43 +42,53 @@ export function useCoordinatorGitActions({
   useLayoutEffect(() => {
     snapshotRef.current = snapshot;
   });
+  // The refused or failed action may have left the status it read stale.
+  const rereadStatus = useCallback(() => {
+    void backend
+      .getProjectGitStatus(projectId)
+      .then(setGit)
+      .catch(() => undefined);
+  }, [projectId, setGit]);
   const runGit = useCallback(
-    async (
+    (
       kind: "fetch" | "sync" | "switch",
       ref?: string,
       confirmation?: ProjectGitSwitchConfirmation,
-    ) => {
-      setOperation(kind);
-      setError(null);
-      try {
-        const next =
-          kind === "fetch"
-            ? await backend.fetchProjectGit(projectId, true)
-            : kind === "sync"
-              ? await backend.syncProjectGit(projectId)
-              : await backend.switchProjectGitBranch(
-                  projectId,
-                  ref!,
-                  confirmation
-                    ? {
-                        confirmationToken: confirmation.token,
-                        includeNestedRepositories: confirmation.requiresEnhancedConfirmation,
-                      }
-                    : {},
-                );
-        setGit(next);
-        await refreshView();
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : `Git ${kind} failed`);
-        void backend
-          .getProjectGitStatus(projectId)
-          .then(setGit)
-          .catch(() => undefined);
-      } finally {
-        setOperation(null);
-      }
-    },
-    [projectId, refreshView, setError, setGit, setOperation],
+    ) =>
+      runAction(
+        kind,
+        async () => {
+          const next =
+            kind === "fetch"
+              ? await backend.fetchProjectGit(projectId, true)
+              : kind === "sync"
+                ? await backend.syncProjectGit(projectId)
+                : await backend.switchProjectGitBranch(
+                    projectId,
+                    ref!,
+                    confirmation
+                      ? {
+                          confirmationToken: confirmation.token,
+                          includeNestedRepositories: confirmation.requiresEnhancedConfirmation,
+                        }
+                      : {},
+                  );
+          setGit(next);
+          await refreshView();
+        },
+        { failureMessage: `Git ${kind} failed`, onFailure: rereadStatus },
+      ),
+    [projectId, refreshView, rereadStatus, runAction, setGit],
+  );
+  /** Asks the backend what switching would discard; `onReady` receives the answer to confirm. */
+  const prepareSwitch = useCallback(
+    (ref: string, onReady: (confirmation: ProjectGitSwitchConfirmation) => void) =>
+      runAction(
+        "switch",
+        async () => onReady(await backend.prepareProjectGitBranchSwitch(projectId, ref)),
+        { failureMessage: "Could not prepare branch switch", onFailure: rereadStatus },
+      ),
+    [projectId, rereadStatus, runAction],
   );
   /*
    * The main coordinator reads this checkout, so a message sent while the
@@ -171,34 +180,29 @@ export function useCoordinatorGitActions({
           return lifetime.signal.aborted ? false : undefined;
         }
         if (!check?.offer) return;
-        setOperation("sync");
-        setError(null);
-        try {
-          const synced = await backend.syncProjectGit(projectId);
-          if (lifetime.signal.aborted) return false;
-          setGit(synced);
-          await refreshView();
-          if (lifetime.signal.aborted) return false;
-        } catch (cause) {
-          if (lifetime.signal.aborted) return false;
-          if (
-            cause instanceof Error &&
-            cause.message === "Stop the active coordinator turn before changing the checkout"
-          )
-            return;
-          setError(cause instanceof Error ? cause.message : "Could not merge the upstream commits");
-          void backend
-            .getProjectGitStatus(projectId)
-            .then(setGit)
-            .catch(() => undefined);
-        } finally {
-          if (!lifetime.signal.aborted) setOperation(null);
-        }
+        await runAction(
+          "sync",
+          async () => {
+            const synced = await backend.syncProjectGit(projectId);
+            if (lifetime.signal.aborted) return;
+            setGit(synced);
+            await refreshView();
+          },
+          {
+            failureMessage: "Could not merge the upstream commits",
+            ignoreFailure: (cause) =>
+              lifetime.signal.aborted ||
+              (cause instanceof Error &&
+                cause.message === "Stop the active coordinator turn before changing the checkout"),
+            onFailure: rereadStatus,
+          },
+        );
+        return lifetime.signal.aborted ? false : undefined;
       } finally {
         lifetime.signal.removeEventListener("abort", cancel);
       }
     },
-    [projectId, refreshView, setError, setGit, setOperation],
+    [projectId, refreshView, rereadStatus, runAction, setGit],
   );
-  return { runGit, confirmUpstreamMerge };
+  return { runGit, prepareSwitch, confirmUpstreamMerge };
 }

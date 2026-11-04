@@ -1,3 +1,4 @@
+import { HtmlPreviewFixture } from "./HtmlPreviewFixture";
 import { ProjectHomeMessageApprovalFixture } from "./ProjectHomeMessageApprovalFixture";
 import { WorkerQuestionApprovalFixture } from "./WorkerQuestionApprovalFixture";
 import { DiffBaseFixture, installDiffBaseFixture } from "./DiffBaseFixture";
@@ -1835,6 +1836,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/html-preview") return <HtmlPreviewFixture />;
   if (window.location.pathname === "/annotation-destination-layout")
     return <AnnotationDestinationLayoutFixture />;
   if (window.location.pathname === "/structured-review-layout")

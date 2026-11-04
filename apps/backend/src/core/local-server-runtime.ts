@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { lowPriorityCommand } from "./process-priority.js";
 import { spawnCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
@@ -77,6 +78,12 @@ export type LocalServerLaunch = {
   loginless?: boolean;
 };
 
+/** Everything a bridge runs inherits this priority: agent CLIs, tools, builds. */
+const spawnLowPriority: typeof spawnCommand = (command, args, options) => {
+  const lowered = lowPriorityCommand(command, args);
+  return spawnCommand(lowered.command, lowered.args, options);
+};
+
 export type LocalServerRuntimeOptions = {
   /** Launches bridge and probe processes; tests substitute a fake child. */
   spawn?: typeof spawnCommand;
@@ -144,7 +151,7 @@ export class LocalServerRuntime {
   private shutdownPromise: Promise<void> | null = null;
 
   constructor(options: LocalServerRuntimeOptions = {}) {
-    this.spawn = options.spawn ?? spawnCommand;
+    this.spawn = options.spawn ?? spawnLowPriority;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
     this.openCodeAgentTools = new OpenCodeAgentToolsReconciler(options.openCodeAgentTools);
     this.openCodeHostStart = new OpenCodeHostStartGate(options.openCodeLockedStartRetryDelaysMs);

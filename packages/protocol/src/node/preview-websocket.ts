@@ -47,6 +47,8 @@ export interface PreviewWebSocketOptions {
   closeTimeoutMs?: number;
   /** Bound on flushing queued bytes and the close frame to a peer that stopped reading. */
   closeDrainTimeoutMs?: number;
+  /** The negotiated subprotocol. */
+  protocol?: string;
 }
 
 export interface PreviewWebSocketEvents {
@@ -98,6 +100,11 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
     if (this.buffer.length) this.onData(Buffer.alloc(0));
     this.socket.resume();
     return this;
+  }
+
+  /** The negotiated subprotocol, or "" when none was recorded. */
+  get protocol(): string {
+    return this.options.protocol ?? "";
   }
 
   get isOpen(): boolean {
@@ -342,12 +349,17 @@ export function acceptPreviewWebSocket(
       "",
     ].join("\r\n"),
   );
-  return new PreviewWebSocket(socket, { role: "server", maxPayload: options.maxPayload }, head);
+  return new PreviewWebSocket(
+    socket,
+    { role: "server", maxPayload: options.maxPayload, protocol: options.protocol },
+    head,
+  );
 }
 
 export interface PreviewWebSocketClientOptions {
   url: string;
-  protocol: string;
+  /** One subprotocol, or several in preference order; the server picks one. */
+  protocol: string | readonly string[];
   maxPayload: number;
   connectTimeoutMs: number;
   handshakeTimeoutMs: number;
@@ -412,6 +424,7 @@ export async function connectPreviewWebSocket(
   });
   socket.on("error", () => undefined);
   const key = randomBytes(16).toString("base64");
+  const offered = typeof options.protocol === "string" ? [options.protocol] : [...options.protocol];
   const response = await http1Request(socket, {
     method: "GET",
     path: `${url.pathname}${url.search}`,
@@ -421,7 +434,7 @@ export async function connectPreviewWebSocket(
       ["connection", "Upgrade"],
       ["sec-websocket-key", key],
       ["sec-websocket-version", "13"],
-      ["sec-websocket-protocol", options.protocol],
+      ["sec-websocket-protocol", offered.join(", ")],
       ...(options.headers ?? []),
     ],
     headersTimeoutMs: options.handshakeTimeoutMs,
@@ -443,13 +456,13 @@ export async function connectPreviewWebSocket(
   }
   const accept = headerValues(response.headers, "sec-websocket-accept")[0];
   const protocol = headerValues(response.headers, "sec-websocket-protocol")[0];
-  if (accept !== webSocketAccept(key) || protocol !== options.protocol) {
+  if (accept !== webSocketAccept(key) || protocol === undefined || !offered.includes(protocol)) {
     socket.destroy();
     throw new PreviewWebSocketHandshakeError(101, "Invalid handshake response");
   }
   return new PreviewWebSocket(
     socket,
-    { role: "client", maxPayload: options.maxPayload },
+    { role: "client", maxPayload: options.maxPayload, protocol },
     response.upgradeHead,
   );
 }

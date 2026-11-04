@@ -146,3 +146,29 @@ test("recency is bounded to 64 newest keys across repeated updates and oversized
     ...keys.slice(0, MAX_RECENT_KEYS - 1),
   ]);
 });
+
+test("compact persists across a reload, with what it replaced", async () => {
+  localStorage.removeItem(storageKey);
+  useMachineViewStore.getState().setGrouping("repository");
+  useMachineViewStore.getState().setGrouping("compact");
+  const stored = JSON.parse(localStorage.getItem(storageKey)!) as {
+    state: { grouping: string; groupingBeforeCompact: string };
+  };
+  expect(stored.state.grouping).toBe("compact");
+  expect(stored.state.groupingBeforeCompact).toBe("repository");
+
+  useMachineViewStore.setState({ grouping: "machine", groupingBeforeCompact: "machine" });
+  localStorage.setItem(storageKey, JSON.stringify({ state: stored.state, version: 0 }));
+  await useMachineViewStore.persist.rehydrate();
+  expect(useMachineViewStore.getState().grouping).toBe("compact");
+  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("repository");
+});
+
+test("choosing compact twice keeps what it replaced", () => {
+  useMachineViewStore.getState().setGrouping("project");
+  useMachineViewStore.getState().setGrouping("compact");
+  useMachineViewStore.getState().setGrouping("compact");
+  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("project");
+  useMachineViewStore.getState().setGrouping("machine");
+  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("machine");
+});

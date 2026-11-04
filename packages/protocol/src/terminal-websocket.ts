@@ -79,7 +79,21 @@ export type TerminalWebSocketClientControlFrame =
       cols: number;
       rows: number;
     }
-  | { type: "ack"; channelId: number; generation: number; revision: number };
+  | { type: "ack"; channelId: number; generation: number; revision: number }
+  /**
+   * Liveness probe, answered by a `pong` carrying the same nonce. Send it only
+   * to a server whose `ready` frame listed the `ping` feature: an older server
+   * treats an unknown frame type as a fatal protocol error.
+   */
+  | { type: "ping"; nonce: number };
+
+/**
+ * Optional behaviour a server advertises in its `ready` frame. A client must
+ * ignore names it does not know, so a server can add one without a version bump.
+ */
+export const TERMINAL_WEBSOCKET_FEATURES = ["ping"] as const;
+export type TerminalWebSocketFeature = (typeof TERMINAL_WEBSOCKET_FEATURES)[number];
+const MAX_ADVERTISED_FEATURES = 32;
 
 type TerminalSubscribedFrameBase = {
   type: "subscribed";
@@ -113,8 +127,11 @@ export type TerminalWebSocketServerControlFrame =
       type: "ready";
       version: typeof TERMINAL_WEBSOCKET_PROTOCOL_VERSION;
       socketId: string;
+      /** Absent from servers that predate it; unknown names are dropped on parse. */
+      features?: TerminalWebSocketFeature[];
     }
   | TerminalSubscribedFrame
+  | { type: "pong"; nonce: number }
   | { type: "unsubscribed"; channelId: number }
   | {
       type: "operation-result";
@@ -287,6 +304,27 @@ const readRevision = (object: JsonObject, key = "revision"): number =>
   readInteger(object, key, 0, Number.MAX_SAFE_INTEGER) as number;
 const readRequestId = (object: JsonObject): number =>
   readInteger(object, "requestId", 0, Number.MAX_SAFE_INTEGER) as number;
+const readNonce = (object: JsonObject): number =>
+  readInteger(object, "nonce", 0, Number.MAX_SAFE_INTEGER) as number;
+
+function readFeatures(object: JsonObject): TerminalWebSocketFeature[] | undefined {
+  const value = object.features;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_ADVERTISED_FEATURES) {
+    return malformed("features must be an array of at most 32 names");
+  }
+  const features: TerminalWebSocketFeature[] = [];
+  for (const name of value) {
+    if (typeof name !== "string") return malformed("features must contain only names");
+    if (
+      (TERMINAL_WEBSOCKET_FEATURES as readonly string[]).includes(name) &&
+      !features.includes(name as TerminalWebSocketFeature)
+    ) {
+      features.push(name as TerminalWebSocketFeature);
+    }
+  }
+  return features;
+}
 
 /** Parse and validate one complete client-to-server JSON control frame. */
 export function parseTerminalWebSocketClientControlFrame(
@@ -299,6 +337,7 @@ export function parseTerminalWebSocketClientControlFrame(
     "unsubscribe",
     "resize",
     "ack",
+    "ping",
   ]);
   switch (type) {
     case "authenticate": {
@@ -349,6 +388,8 @@ export function parseTerminalWebSocketClientControlFrame(
         generation: readGeneration(object),
         revision: readRevision(object),
       };
+    case "ping":
+      return { type, nonce: readNonce(object) };
   }
 }
 
@@ -376,14 +417,20 @@ export function parseTerminalWebSocketServerControlFrame(
     "lifecycle",
     "desync",
     "error",
+    "pong",
   ]);
   switch (type) {
-    case "ready":
+    case "ready": {
+      const features = readFeatures(object);
       return {
         type,
         version: readVersion(object),
         socketId: readString(object, "socketId", TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES) as string,
+        ...(features === undefined ? {} : { features }),
       };
+    }
+    case "pong":
+      return { type, nonce: readNonce(object) };
     case "subscribed": {
       const common: TerminalSubscribedFrameBase = {
         type,

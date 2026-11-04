@@ -44,7 +44,7 @@ function normalizedBillingError(
   provider?: AcpProvider,
 ): string | undefined {
   const grok = provider === "grok" || /\bgrok build\b/i.test(text);
-  const label = grok ? "Grok Build" : provider === "cursor" ? "Cursor Agent" : "The agent";
+  const label = grok ? "Grok Build" : "The agent";
   if (GROK_USAGE_EXHAUSTED.test(text) || USAGE_EXHAUSTED.test(text)) {
     return grok
       ? GROK_USAGE_EXHAUSTED_MESSAGE

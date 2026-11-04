@@ -17,6 +17,7 @@ import {
   normalizedMessageSnapshotChars,
   type ReleasedAssistantRow,
   type RuntimeSseEvent,
+  type PublishedRowContent,
   type ThreadRuntimeState,
 } from "./app-server-runtime-base.js";
 import {
@@ -125,6 +126,7 @@ export function openAssistantRow(
   state.historicalAssistantSegments.set(previousId, {
     render: state.render,
     publishedParts: state.publishedParts,
+    ...(state.publishedContent ? { publishedContent: state.publishedContent } : {}),
     ...(state.publishedModelId ? { publishedModelId: state.publishedModelId } : {}),
     announced: state.publishedMessageId === previousId,
     ...(options.keepsRenderedItems && state.renderedRow?.id === previousId
@@ -420,9 +422,11 @@ export async function publishAssistantRows(
     const isCurrent = id === turn.assistantMessageId;
     const historical = isCurrent ? undefined : state.historicalAssistantSegments.get(id);
     if (!isCurrent && !historical) continue;
-    const row: { publishedParts: NormalizedPart[]; publishedModelId?: string } = isCurrent
-      ? state
-      : historical!;
+    const row: {
+      publishedParts: NormalizedPart[];
+      publishedContent?: PublishedRowContent;
+      publishedModelId?: string;
+    } = isCurrent ? state : historical!;
     message.parts = rendered.parts;
     message.content = rendered.content;
     options.onRendered(message);
@@ -446,6 +450,7 @@ export async function publishAssistantRows(
       if (isCurrent) state.publishedMessageId = id;
       else historical!.announced = true;
       row.publishedParts = message.parts.slice();
+      row.publishedContent = { messageId: message.id, content: message.content };
       row.publishedModelId = message.modelId;
       message.revision = (message.revision ?? 0) + 1;
       options.bumpMessageRevision(context, [message]);
@@ -468,13 +473,17 @@ export async function publishAssistantRows(
     }
 
     row.publishedParts = message.parts.slice();
+    const contentUnchanged =
+      row.publishedContent?.messageId === message.id &&
+      row.publishedContent.content === message.content;
+    row.publishedContent = { messageId: message.id, content: message.content };
     message.revision = (message.revision ?? 0) + 1;
     options.bumpMessageRevision(context, [message]);
     const patch = {
       messageId: message.id,
       partCount: message.parts.length,
       changedParts,
-      content: message.content,
+      ...(contentUnchanged ? {} : { content: message.content }),
       createdAt: message.createdAt,
       turnId: message.turnId,
       revision: message.revision,

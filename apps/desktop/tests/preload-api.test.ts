@@ -1,8 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+  createBrowserPreviewCaptureApi,
   createOrkestratorElectronApi,
   createPortalApi,
   exposeActiveConnectionGateway,
+  exposeDesktopApi,
   exposePortal,
   type IpcRendererLike,
 } from "../electron/preload-api";
@@ -32,7 +34,81 @@ function createIpcMock() {
   };
 }
 
+describe("capture images across IPC", () => {
+  const png = new Uint8Array(0x8000 + 3).map((_, index) => index % 251);
+  const dataUrl = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
+
+  test("a pending capture's bytes become the data URL the renderer reads", async () => {
+    const invoke = mock(async () => ({
+      descriptor: { captureId: "c" },
+      capture: {},
+      imageBytes: png,
+    }));
+    const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+    const pending = await capture.readPendingCapture("c");
+    expect(pending?.imageDataUrl).toBe(dataUrl);
+    expect(pending && "imageBytes" in pending).toBe(false);
+  });
+
+  test("a capture with no image, or none at all, stays that way", async () => {
+    const invoke = mock(async (): Promise<unknown> => ({ capture: {}, imageBytes: null }));
+    const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+    expect((await capture.readPendingCapture("c"))?.imageDataUrl).toBeNull();
+    invoke.mockImplementation(async () => null);
+    expect(await capture.readPendingCapture("c")).toBeNull();
+  });
+
+  test("a redacted image goes to main as bytes; anything malformed is main's to refuse", async () => {
+    const invoke = mock(async (..._args: unknown[]) => ({}));
+    const capture = createBrowserPreviewCaptureApi({ invoke, on: () => undefined } as never);
+    await capture.replacePendingCaptureImage("c", { imageDataUrl: dataUrl, manualRegions: 1 });
+    const sent = invoke.mock.calls[0]![2] as { imageDataUrl: unknown; imageBytes: Uint8Array };
+    expect(sent.imageDataUrl).toBeNull();
+    expect(Array.from(sent.imageBytes)).toEqual(Array.from(png));
+
+    for (const imageDataUrl of ["data:text/plain;base64,AAAA", "data:image/png;base64,***"]) {
+      invoke.mockClear();
+      await capture.replacePendingCaptureImage("c", { imageDataUrl, manualRegions: 0 });
+      expect(invoke.mock.calls[0]![2]).toEqual({ imageDataUrl, manualRegions: 0 });
+    }
+  });
+});
+
 describe("preload API factory", () => {
+  test("a local window on the direct transport gets the API as a host, with no credential", () => {
+    const { ipc } = createIpcMock();
+    const exposeInMainWorld = mock((_key: string, _value: unknown) => undefined);
+    const sendSync = mock(() => ({
+      connectionId: "local",
+      backendId: "backend-1",
+      legacyOrigin: null,
+      baseUrl: null,
+      localGatewayBaseUrl: "http://127.0.0.1:50123",
+    }));
+    exposeDesktopApi({ exposeInMainWorld }, { ...ipc, sendSync });
+
+    expect(exposeInMainWorld).toHaveBeenCalledTimes(1);
+    const [key, value] = exposeInMainWorld.mock.calls[0]!;
+    expect(key).toBe("orkestratorDesktopHost");
+    const host = value as { api: { invoke: unknown }; baseUrl: string };
+    expect(Object.keys(host).sort()).toEqual(["api", "baseUrl"]);
+    expect(host.baseUrl).toBe("http://127.0.0.1:50123");
+    expect(typeof host.api.invoke).toBe("function");
+  });
+
+  test("every other window keeps the relay API at window.orkestrator", () => {
+    const { ipc } = createIpcMock();
+    for (const answer of [
+      { connectionId: "local", backendId: null, legacyOrigin: null, baseUrl: null },
+      { connectionId: "remote-1", baseUrl: "https://desk.example" },
+      null,
+    ]) {
+      const exposeInMainWorld = mock((_key: string, _value: unknown) => undefined);
+      exposeDesktopApi({ exposeInMainWorld }, { ...ipc, sendSync: () => answer });
+      expect(exposeInMainWorld.mock.calls.map(([key]) => key)).toEqual(["orkestrator"]);
+    }
+  });
+
   test("exposes the active remote gateway from the synchronous bootstrap snapshot", () => {
     const exposeInMainWorld = mock(() => undefined);
     const sendSync = mock(() => ({
@@ -352,7 +428,6 @@ describe("preload API factory", () => {
       [capture.getCaptureStatus("browser-1"), "capture-status", ["browser-1"]],
       [capture.cancelCapture("browser-1"), "capture-cancel", ["browser-1"]],
       [capture.listPendingCaptures(), "capture-pending-list", []],
-      [capture.readPendingCapture(captureId), "capture-pending-read", [captureId]],
       [
         capture.replacePendingCaptureImage(captureId, { imageDataUrl: null, manualRegions: 1 }),
         "capture-pending-replace-image",

@@ -43,9 +43,13 @@ export const COORDINATOR_LOG_AREAS = defineLogAreas({
       "checkout.merge-follow-failed":
         "Fast-forwarding the project checkout failed, after an environment's PR merged or before mail woke the main coordinator.",
       "checkout.mail-follow":
-        "Before mail woke the main coordinator, the project checkout was fast-forwarded, or `outcome` says why not (`timed-out`, `failed`).",
+        "Before mail woke the main coordinator, the project checkout was fast-forwarded (`fast-forwarded-fetched` when the fetch was slow or failed and the upstream commit already fetched was merged), or `outcome` says why not (`timed-out`, `failed`).",
       "checkout.mail-follow-failed":
         "Before mail woke the main coordinator, checking whether to fast-forward the project checkout failed; the mail was delivered anyway.",
+      "checkout.message-check":
+        "Before a typed message to the main coordinator, the backend answered whether to fast-forward the project checkout: `outcome` (`offer`, `fast-forwarded`, `turn-running`, `not-behind`, `blocked`, `no-status`), `fetch` (`fetched`, `failed`, `timed-out`, `skipped`) and `durationMs`.",
+      "checkout.message-check-failed":
+        "Before a typed message to the main coordinator, fast-forwarding to the upstream commit already fetched failed after a slow or failed fetch; the message was sent anyway.",
     },
   },
 });

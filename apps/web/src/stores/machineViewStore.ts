@@ -37,6 +37,8 @@ interface MachineViewState {
   /** `"all"` or a machine identity. Filters presentation, never connections. */
   machineFilter: string;
   grouping: Exclude<SidebarGrouping, "activity">;
+  /** What `grouping` was before compact, where leaving compact returns to the activity list. */
+  groupingBeforeCompact: Exclude<SidebarGrouping, "activity" | "compact">;
   /** Show just the dot (plus tooltip) instead of the machine name label. */
   compactMachineLabels: boolean;
   /**
@@ -111,6 +113,7 @@ export const useMachineViewStore = create<MachineViewState>()(
     (set) => ({
       machineFilter: "all",
       grouping: "machine",
+      groupingBeforeCompact: "machine",
       compactMachineLabels: false,
       collapsedMachines: [],
       collapsedProjectKeys: [],
@@ -122,7 +125,14 @@ export const useMachineViewStore = create<MachineViewState>()(
       revealedProject: null,
       openedRepository: null,
       setMachineFilter: (machineFilter) => set({ machineFilter }),
-      setGrouping: (grouping) => set({ grouping }),
+      setGrouping: (grouping) =>
+        set((state) =>
+          grouping !== "compact"
+            ? { grouping, groupingBeforeCompact: grouping }
+            : state.grouping === "compact"
+              ? state
+              : { grouping, groupingBeforeCompact: state.grouping },
+        ),
       setCompactMachineLabels: (compactMachineLabels) => set({ compactMachineLabels }),
       setMachineCollapsed: (machineId, collapsed) =>
         set((state) => ({
@@ -193,6 +203,7 @@ export const useMachineViewStore = create<MachineViewState>()(
       partialize: (state) => ({
         machineFilter: state.machineFilter,
         grouping: state.grouping,
+        groupingBeforeCompact: state.groupingBeforeCompact,
         compactMachineLabels: state.compactMachineLabels,
         collapsedMachines: state.collapsedMachines,
         collapsedProjectKeys: state.collapsedProjectKeys,

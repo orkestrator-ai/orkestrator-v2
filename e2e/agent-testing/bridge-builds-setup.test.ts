@@ -69,6 +69,7 @@ describe("agent-test bridge freshness setup", () => {
   });
 
   test("the Electron config has its documented independent startup", () => {
-    expect(electron.globalSetup).toBeUndefined();
+    expect(electron.globalSetup).toBe(path.join(import.meta.dirname, "electron-display-setup.ts"));
+    expect(electron.globalSetup).not.toBe(browser.globalSetup);
   });
 });

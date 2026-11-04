@@ -31,7 +31,11 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
-import { pipelineDeliverySummary } from "@orkestrator/protocol/build-pipeline";
+import {
+  pipelineDeliverySummary,
+  type ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import { sessionPhaseForBuildPhase } from "./build-pipeline-stages.js";
 import { isDeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import {
   observePublicationAttempt,
@@ -571,6 +575,15 @@ export function buildPipelineStatus(
     };
   }
   if (phase === "failed") {
+    // A step failure (not a cancel, not setup) can be carried on from that step.
+    const failure = record(snapshot.failureContext)
+      ? text(snapshot.failureContext.phase)
+      : undefined;
+    const restartable =
+      !snapshot.cancelledAt &&
+      !(text(snapshot.error)?.startsWith("Build cancelled") ?? false) &&
+      failure !== undefined &&
+      sessionPhaseForBuildPhase(failure as ResumableBuildPhase) !== null;
     return {
       key: "failed",
       state: "failed",
@@ -578,7 +591,9 @@ export function buildPipelineStatus(
       terminal: true,
       headline: "failed",
       details: [...task, ...errorLine],
-      tools: [read],
+      tools: restartable
+        ? [read, `restart_build_pipeline_step { "pipelineId": "${pipelineId}", "requestId": "…" }`]
+        : [read],
       mode: "off",
     };
   }
@@ -1953,7 +1968,7 @@ export class CoordinatorStatusWakes {
           resourceId: association.resourceId,
         },
         {
-          requestId: `status:${association.id}:${main.id}:${hash(status.key)}`,
+          requestId: `status:${association.id}:${main.id}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
           toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
           toTabId: main.tabId,
           subject,

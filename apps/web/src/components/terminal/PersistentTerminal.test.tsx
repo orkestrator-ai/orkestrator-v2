@@ -418,6 +418,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@orkestrator/protocol/git-workflow-prompts";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import { ROOT_TERMINAL_USER } from "@/constants/terminal";
+import { createXtermTerminal } from "@/lib/terminal-xterm";
 
 const { PersistentTerminal } = await import("./PersistentTerminal");
 
@@ -3674,7 +3675,11 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(portalStoreActions.recreateTerminal).toHaveBeenCalledWith("env-1", "tab-1");
+      expect(portalStoreActions.recreateTerminal).toHaveBeenCalledWith(
+        "env-1",
+        "tab-1",
+        createXtermTerminal,
+      );
     });
   });
 

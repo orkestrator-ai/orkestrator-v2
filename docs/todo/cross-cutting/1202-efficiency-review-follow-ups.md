@@ -28,20 +28,20 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052).
-12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: open.
+12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
 15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12 and DK-15 done; DK-13 and DK-14 open).
-16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: open (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, left open).
+16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
 
@@ -133,7 +133,7 @@ governs, marked "Decided".
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the live-head merge has no identity shortcut (WEB-6), the startup bundle (WEB-9), find re-indexing (WEB-10), WebSocket channel rebuilds on visibility change (WEB-11), and the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below). WEB-2's third fix, subscribing `AgentNativeTab.controller` to the fields it reads, is not done. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below). No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -192,6 +192,115 @@ No React Profiler run was made; the numbers are render counts from tests.
   - **The selected environment's entry.**
     - Pros: what the report suggested; the selector is a single `get`.
     - Cons: still re-renders on every change inside that environment.
+
+#### WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix (done 2026-11-04)
+
+Re-checked against `main` at `96ee1eb3e` first. All five still applied, in places differently from the report. Each landed as its own commit. Every change has a test that fails on the previous code, except the WEB-9 sizes and the timings, which are measurements.
+
+**WEB-9, startup bundle.** Measured from a production build's manifest: `index.html`'s static imports plus `renderer-entry` (which `main.tsx` always imports) and its static imports. To reproduce: `bunx vite build --manifest && bun scripts/startup-closure.ts` in `apps/web`.
+
+| Startup closure | Chunks | JavaScript | Gzip | CSS |
+| --- | --- | --- | --- | --- |
+| Before (`96ee1eb3e`) | 94 | 4,231,413 bytes (4.23 MB) | 1,281,858 bytes (1.28 MB) | 291,857 bytes |
+| After `AgentNativeTab` alone went lazy | 95 | about 3.90 MB (sum of chunk code) | not measured | not measured |
+| After | 89 | 2,547,787 bytes (2.55 MB) | 796,120 bytes (0.80 MB) | 287,918 bytes |
+
+The report's 3.76 MB came from an older build, so the 4.23 MB baseline replaces it. A module graph dump of the real build showed the causes differ from the report's:
+
+- `native-message-search` was held by `AppShell -> BugReportSheet -> native-agent/index.ts -> AgentNativeTab`, and by `ProjectWorkspace -> CoordinatorPanel`. Vite's `INEFFECTIVE_DYNAMIC_IMPORT` warning names this. Both now use `LazyAgentNativeTab`; no find-specific lazy loading was needed, and the warning is gone.
+- Removing the `terminalPortalStore` re-export alone would not have moved xterm: `paneLayoutStore` and `App -> terminal/index.ts -> PersistentTerminal` also reached it. xterm's runtime moved to `lib/terminal-xterm.ts`, the store takes that factory as an argument, and `LazyTerminalPortalHost` loads the host the first time an environment has a terminal tab.
+- The Markdown stack had three more paths, each now behind a boundary: the mail conversation view (`AgentMailMarkdown`, with the plain body as its fallback), the files panel's pull request views, and `TerminalContainerOverlays -> SetupPendingOverlay -> NativeMessage`. `App` also lazy-loads `ProjectWorkspace` (Kanban, GitHub, Linear, pull requests, coordinator).
+
+`startup-closure.test.ts` walks the static graph from the entries in under a second and fails, naming the import chain, when xterm, `dompurify`, `marked`, `react-markdown`, `react-virtuoso`, `NativeMessage`, `MessageMarkdown` and six other named modules are reachable. On the old source tree it fails with those chains. In headless Chromium the production build requested exactly the 89 closure chunks at launch with no page error, and importing the terminal host, native agent, project workspace, mail Markdown, setup overlay, pull request view and pull request list entries raised none. `manualChunks` was not needed. What remains in the closure is not chat code: `react-dom` (530 KB), `@dnd-kit/core`, `CreateEnvironmentDialog` (70 KB), the action bar and `AgentInfoButton`, and `packages/protocol` (about 820 KB across its modules, not examined here).
+
+**WEB-6, live-head merge.** `preferCompleteLiveHead` moved to `hooks/native-agent-live-head.ts` so it can be tested. It returns the incoming rows early when the held and incoming rows share their parts, and compares the rest with `sameTranscriptJson` (`lib/chat/same-transcript-json.ts`), which matches comparing `JSON.stringify` output, key order included, without building it. `native-agent-live-head.test.ts`: `JSON.stringify` runs in a verbatim copy of the old merge and never in the new one, and the two agree over 4,000 random heads, including which row object survives. The 0510 note that the early return should match the `:301` path was wrong: identical parts reach the incoming-only path (`restoredPrefix: false`), and the test pins that. Median per merge on a 200-part row (about 700 KB), one local run:
+
+| Case | Before | After |
+| --- | --- | --- |
+| Same row object | 0.195 ms | 0.000 ms |
+| Reparsed trimmed head, ids unchanged | 0.299 ms | 0.058 ms |
+| Reparsed trimmed head, ids reissued | 0.288 ms | 0.034 ms |
+
+These are small absolute costs, which matches the report's reasoning-only impact rating: the fix removes garbage per update rather than a visible stall. Found on the way and not changed: [4520](../transcripts-and-observation/4520-live-head-omitted-count-duplicate-part.md).
+
+**WEB-10, find indexing.** `AgentChatSearchIndex` (`components/chat/agent-chat-search-index.ts`) keeps each row's text while find is open, reused until the row changes, and is cleared on close and with protected rich content. `matches` also ignored `isOpen`, so a closed bar with a query left in it kept indexing on every update; it is now gated (every consumer already checked `isOpen`). `AgentChatFind.indexing.test.tsx`: an update over 1,000 reparsed rows called `getSearchText` 1,000 times before and 0 now, one changed row calls it once, and typing another query reads nothing again. Five of its six tests fail on the old hook. Local measurement of the real `getNativeMessageSearchText` over Markdown rows:
+
+| Rows | Re-index per update before | Comparison per update after |
+| --- | --- | --- |
+| 300 (under the 512-entry cache) | 0.4–0.5 ms | 0.8 ms |
+| 1,000 | 320–366 ms | 2.5 ms |
+| 3,000 | 1,012–1,192 ms | 2.4 ms |
+
+The first pass after opening find still reads every row once (179–1,197 ms at those sizes); only later passes and further typing improve. The comparison timings ran once each on one reparsed copy.
+
+**WEB-11, terminal socket.** A first attempt (keep the socket unless a mobile host was hidden for 5 s) was reverted in review: an OPEN socket that answered earlier can stall on its own while the main event stream keeps heartbeating, and only this socket can prove it is live. The terminal protocol now has that proof. A server lists `features: ["ping"]` in its `ready` frame and answers `{ type: "ping", nonce }` with `{ type: "pong", nonce }` through its bounded control queue (`terminal-websocket-server.ts`; parsers in `packages/protocol/src/terminal-websocket.ts`, which drop feature names they do not know). On a return to the page with channels open, `TerminalWebSocketClient` sends one ping to a ready OPEN socket whose server advertised the feature, and keeps it when the matching pong arrives: no channel is unsubscribed, reconciled or re-snapshotted. With no matching pong within 2.5 s (`DEFAULT_FOREGROUND_PROBE_TIMEOUT_MS`), the socket is replaced and every channel reconciles, as before. A socket not yet answered, not OPEN, or from a server without the feature is replaced at once, so a new renderer against an older backend behaves exactly as before and never sends it a frame type it would reject as fatal. If the page is hidden again before the answer, nothing is replaced and the next return probes afresh; hiding alone never touches the socket. Tests (`terminal-websocket-client.visibility.test.ts`): a socket that answers is kept after a 10 min hide and still delivers ordered output, which fails on the previous code (it opened a second socket); a socket that stays OPEN but never answers is replaced and recovers; a pong for an earlier nonce does not count; a second return during a probe sends no second ping; disposing during a probe leaves nothing to fire; and a server without the feature still has its OPEN socket replaced after 0 ms to 10 min hides, with resubscription and resumed output. `gateway-terminal-liveness.test.ts` checks the real gateway advertises the feature, answers two pings in order and refuses a ping before authentication; protocol parser tests cover the frames and the feature list's bounds. Cost on return: one ~30-byte frame each way instead of closing the socket, re-subscribing each channel and fetching an HTTP snapshot per channel. A stalled socket is now replaced up to 2.5 s later than before.
+
+**WEB-2's third fix.** The target was the hook rather than the controller, as 0590 found: the controller's only projection store subscription is its own turn-stop marker. `useNativeAgentSession` subscribed to its whole sync and progressive cache entries, whose every use is a `useState` or `useRef` initial value. It now reads them with `getState()`; the shared projection stays subscribed because an effect follows it. `useNativeAgentSession.store-subscriptions.test.tsx`: one cache write cost one hook render before and none now; a new projection still arrives and a remount still restores the cached transcript token. `useNativeAgentSession.background-flags.test.tsx` ("a manual read still raises and clears the flags") only saw the flag because the removed subscription forced a render mid-read, so it now holds the read open.
+
+**Real stack.** On a credential-free `dev:test` profile (`web9-lazy-bundles`, since stopped and reset), which serves the Vite dev renderer rather than the production bundle: launch and opening the mail panel requested no xterm, `PersistentTerminal`, `AgentNativeTab`, `ProjectWorkspace` or `MessageMarkdown` module. The project board then loaded its own code and showed the coordinator. A terminal tab took input, showed its output again after a reload and re-selecting the environment, and closing a second terminal disposed it. The bug report sheet opened with no failure surface. No page error throughout. Not exercised live: rendering a mail body, the failed-setup overlay and the files panel's pull request tabs, which unit tests cover; a real agent turn, as the profile had no credentials; and a real mobile WebView (see "Needs verification").
+
+**Terminal links after the factory change.** Both callers outside the app that create a terminal through the store now pass `createXtermTerminal`. `e2e/TerminalLinks.spec.ts` passed 14 of 14 in mobile and desktop Chromium, and the Electron test "a remote terminal link opens the native localhost forward in a separate browser" (`service-preview-electron.spec.ts`, its own disposable profile) passed, 1 expected, 0 skipped. The 48 design tests that fail in this branch's default suite all come from `design-frame-source.ts` on `main` throwing `Invalid URL` under Happy DOM's `about:blank`, a file this work does not touch; see [4521](../design-canvas/4521-design-frame-source-about-blank.md).
+
+**Decisions.**
+
+- **How to take xterm out of the store (WEB-9)?**
+  - **The caller passes an xterm factory to `createTerminal` and `recreateTerminal` (recommended, done).**
+    - Pros: the store has type-only xterm imports; no hidden module state; the only callers already sit in the lazily loaded host.
+    - Cons: a new required argument on two store methods.
+  - **Make `createTerminal` asynchronous and import xterm inside it.**
+    - Pros: callers need no factory.
+    - Cons: the host creates terminals in a layout effect and reads them back in the same pass; it would have to handle terminals that do not exist yet.
+- **What should the terminal host do when an environment's last terminal tab closes (WEB-9)?**
+  - **Stay mounted once loaded (recommended, done).**
+    - Pros: it is what disposes the terminals of removed tabs, so nothing leaks.
+    - Cons: one idle host per environment that has ever had a terminal tab.
+  - **Unmount with the last tab.**
+    - Pros: nothing left mounted.
+    - Cons: the closing tab's terminal would never be disposed.
+- **Lazy-load the whole `AgentMailPanel`, or only the Markdown in a mail body (WEB-9)?**
+  - **Only the Markdown, with the plain body as the fallback (recommended, done).**
+    - Pros: the panel still opens at once; it was the analysis file's recommendation.
+    - Cons: a body can show raw Markdown briefly the first time a thread is read.
+  - **The whole panel.**
+    - Pros: removes more from the closure.
+    - Cons: it is mounted in two places in `AppShell`, and a boundary has to work around its open state.
+- **How to compare parts in the merge (WEB-6)?** This replaces the analysis file's recommendation.
+  - **A comparison with the same answer as comparing the JSON, without serializing (recommended, done).**
+    - Pros: no second copy of the text to bound; stops at the first difference; also covers the incoming part, which is always newly parsed.
+    - Cons: assumes JSON-shaped values; a non-JSON value such as `NaN` compares differently from its serialization, and transcript parts have none.
+  - **A WeakMap from part object to its serialized string.**
+    - Pros: small change; the analysis file's recommendation.
+    - Cons: every incoming part misses, so each merge still serializes them, and the cached strings add to what the projection store's byte ceiling does not count.
+- **Where to reuse search text (WEB-10)?** This replaces the report's WeakMap and debounce.
+  - **A per-hook index by row id, reused when the row is the same object or has the same content (recommended, done).**
+    - Pros: covers reparsed rows, which are new objects; independent of the window-wide text cache that thrashes; bounded by the current rows and dropped on close.
+    - Cons: compares every row per update (2.5 ms at 1,000 to 3,000 rows here), and a second holder of derived text, so it registers with the protected rich cache reset.
+  - **A WeakMap from message object to projection.**
+    - Pros: one lookup per row.
+    - Cons: `normalizeNativeMessages` kept row identity only when re-normalising the same raw copy; a reparsed copy misses every row.
+  - **Debounce the recomputation.**
+    - Pros: trivial.
+    - Cons: every pass still re-parses everything above 512 rows, and matches lag behind the text.
+- **What decides a socket rebuild on return (WEB-11)?**
+  - **An application-level ping on the terminal socket, rebuilding only if unanswered (recommended, done).**
+    - Pros: tests the terminal socket itself, so an independently stalled one is still caught on every host; a healthy one keeps every channel without reconciling.
+    - Cons: a protocol addition, gated on a `ready` feature so older servers keep the old behaviour; a stalled socket is replaced up to 2.5 s later.
+  - **Rebuild on every foreground return while channels exist.**
+    - Pros: recovers stalled sockets at once with the existing protocol.
+    - Cons: every return closes the socket and reconciles every channel from a snapshot, which is the cost WEB-11 names.
+  - **Keep the socket unless a mobile host was hidden for 5 s.**
+    - Pros: no protocol change.
+    - Cons: OPEN and an earlier `ready` do not prove liveness; a desktop socket that stalled on its own was never recovered. Reverted in review.
+- **How to read the two caches without subscribing (WEB-2)?**
+  - **`getState()` on each render (recommended, done).**
+    - Pros: removes the subscriptions; holds no reference to an entry, so an evicted cache can be freed.
+    - Cons: a later render relying on the value would silently see whatever is current, so the test pins the render count.
+  - **Capture them once in `useState`.**
+    - Pros: makes "only at mount" explicit.
+    - Cons: keeps a cache entry, including its retained history messages, alive for the hook's whole life.
+  - **Select individual fields with `useShallow`.**
+    - Pros: no change to how the values are read.
+    - Cons: subscribes to values only used as initial state, and a token that moves still re-renders.
 
 ### 4. Live agent view requests
 
@@ -254,7 +363,18 @@ Done 2026-11-03 (against `main` at `b68b6e71`), Codex half: BR-2 and BR-11.
 - BR-2: `getConfig`'s `durable` check (`isSessionConfigPersisted` in `app-server-runtime-sessions.ts`) now calls `BridgeSessionStore.loadRecord(id)` (`sessions/persistence.ts`) instead of `load()`. It reads only `recordPath(id)`, with `load()`'s validation (`isPersistedBridgeSession`, cwd hash, retention cutoff, a tombstone is not persisted, and the record must name the session asked about). It does no legacy migration, login-record adoption, directory listing, chmod or sweep. Only when no record file exists does it look, read-only, where `load()` would first have published one: the former aggregate file, then the login's own records directory. Tests: `sessions/persistence-load-record.test.ts` (one `readFile` out of 50 records, no `readdir`/`chmod`/`mkdir`/write/`load()`; agreement with `load()` for valid, tombstoned, expired, wrong-cwd, invalid, corrupt, foreign-id, legacy-only and absent records; a login record found without being moved) and `app-server-runtime-config-durable.test.ts` (`getConfig` on one of 50 persisted sessions reads one record file and never calls `load()`, which fails on the old code; `durable` false for a changed config, a tombstone, a missing and an expired record).
 - BR-11: `history/session-index-cache.ts` keeps `session_index.jsonl` parsed per path, keyed by size, mtime, ctime and `dev:ino` from the descriptor's `fstat`, as `transcript-cache.ts` does. Unchanged means no read. Growth on the same inode whose 64 bytes before the old boundary are unchanged parses only the appended bytes. A shrink, a replacement, a same-size rewrite or a changed anchor re-reads from scratch. An unterminated last line is parsed on each read but never committed. Both `findSessionIndexEntry` (hydrate) and the cwd listing read through it; the listing still visits every line in file order, so its result is unchanged. Bounds (invariant 11): 50,000 entries, 16 MiB estimated and 4 paths across the cache, least recently used evicted first; an index too large on its own is parsed uncached on every read, as before. `readTranscriptLines` and `PersistedSessionIndexEntry`, used only for this, were removed. Tests: `history/session-index-cache.test.ts` (parsing parity, unchanged read once, append read as tail only, shorter rewrite, inode replacement, in-place rewrite with growth, same-size rewrite, pending tail, snapshot stability, concurrent readers, path/entry/byte bounds) and `history/rollout-session-index.test.ts` (two hydrates read the index once, an appended rename is found after one tail read, a shorter rewrite is fully re-read, the listing shares the cache).
 
-**Investigation.** Not re-checked since the report: BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-04 (against `main` at `96ee1eb3`), the remainder apart from the SSE replay rings. Each item was re-checked against that commit first, and all six still applied. Every test named below was also run against the old sources and failed there.
+
+- BR-7, Codex. `TurnRenderState.runningItemParts` keeps a running item's parts while its accumulator `version` stands still, so an unchanged card keeps its object and `isSamePublishedPart` no longer lists it. The version is sampled with the item in `collectTurnItems`, because a delta can land while a render awaits an earlier item. Patches carry `content` only when it changed (`publishedContent`, named by message, so a path that swaps the row sends the body again). Tests: `messages/render-turn.test.ts` ("running items across publish ticks": identity across ticks, only the moved item rebuilt, progress lines, measurements, a raw patch shown at turn end, a delta during a render, and 300 random steps rendering what a fresh state renders); `app-server-runtime-rows.test.ts` ("publishing running tool cards": a patch lists only the moved card, a client applying the frames holds exactly the transcript's row).
+- BR-10, Pi. `session-list-cache.ts` keeps the list against a sha256 of each `.jsonl` file's name, size, mtime, ctime and inode; unchanged costs one `readdir` and a `stat` per file. A timeout aborts the read through the SDK's `signal` and answers 504 with a fixed message, which `assertOkWithErrorDetail` already passes on and the resume dialog already shows. Any other failure still reads as no sessions, as before, now with a log line. Tests: `session-list-cache.test.ts`, `http.test.ts` ("a session list that timed out"), and `http-bridge-provider-archive.test.ts` in the backend.
+- BR-12, ACP. `acp-jsonl-framer.ts` searches only the new chunk and joins held bytes once per frame. A 2.1 MB frame written in 32 pieces copied 36.7 MB before and copies under 2.3 MB now. Tests: `acp-jsonl-framer.test.ts` (500 random chunkings against a verbatim copy of the old loop, both limits, and a real `AcpProcess` whose copies are counted).
+- BR-13, Codex. `SerialQueue` holds an array per key and drains it in one microtask, so a synchronous task allocates no promise. It has count (100,000) and byte (256 MiB, by line length) bounds. Past either it drops what has not started and calls `AppServerSupervisor.restartNow`, without awaiting it on the read loop. Tests: `jsonl-rpc-client.test.ts` (no promise chain over 1,000 tasks, both bounds, order, drain and clear), `process-supervisor.test.ts` (replaced child, new generation, nothing started during shutdown) and `app-server-runtime-lifecycle.test.ts` (a running turn past the bound fails as a restart, the status a workflow can continue from, and the dropped deltas never reach the transcript).
+- BR-14, Pi. `encodeStateWithinBudget` encodes each record once and splices them into the envelope with exact byte accounting; shedding re-encodes only the records it trims. Tests: `persistence.test.ts` (300 random states and budgets against a verbatim copy of the old code, byte for byte; forty 1 MB sessions encode under 80 MiB in all, where the old code encoded about 810 MB).
+- BR-16, ACP. The replay is removed: `reconcileCursorToolMetadata`, its scheduler, collector and join, the session fields, constants and `ACP_MAX_LIVE_CURSOR_TOOL_REPLAYS`, and the provider labels in `acp-errors.ts` and `session-config.ts`. No launch reaches it: `commands-servers.ts` handles `cursor` in its own branch and only Grok falls through to `ACP_PROVIDER = kind`, `host-model-catalog-refresh.ts` does the same, and the container entrypoint (`commands-registry-servers.ts:585`) exports `ACP_PROVIDER=grok`. The harness moved to a neutral `acp-fixture` id; the expectations that changed for it changed only in that name. Test: `acp-context.test.ts` ("a turn's generic tool calls spawn no replay child"), with the provider id set to `cursor` by hand. On the old code it sees a second child. The `cursor/*` method handlers are not provider-gated and stayed: [4540](../agent-engines/4540-acp-bridge-cursor-extension-leftovers.md).
+
+**Investigation.** Not re-checked since the report: BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`).
+
+What the 2026-11-04 fixes do not remove. A Pi history too large to parse within 30 s now reports a timeout on every attempt instead of showing an empty list; it never fills the cache, because Pi does not export its per-file step. An ordinary Pi state write still encodes every session once: only the repeated encoding while shedding went away. Nothing was measured on real workloads (task 1); the BR-12 and BR-14 figures come from the tests' own fixtures.
 
 What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
@@ -291,6 +411,34 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
   - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
     - Pros: closes BR-15.
     - Cons: a behaviour change to Claude's SSE replay in a task meant to leave output unchanged.
+- **Change the wire shape of Codex's `message.patched` (BR-7)?** Done 2026-11-04 with the first option.
+  - **Make `content` optional, and omit it when unchanged (recommended, taken).**
+    - Pros: smaller frames; a patch applies only at `revision - 1`, where the recipient already holds the body, so absent means unchanged and a missed frame is still a revision gap.
+    - Cons: a client reading `content` unconditionally would blank the body. None exists: nothing in `apps`, `packages` or `e2e` reads these frames, and the backend uses the content-free `?observe=1` stream.
+  - **Leave it.**
+    - Pros: no contract change.
+    - Cons: frames keep the duplicate.
+- **What happens at the notification queue's bound (BR-13)?** Done 2026-11-04 with the first option.
+  - **Drop the backlog and replace the child through the existing restart path (recommended, taken).**
+    - Pros: a stream with a dropped notification cannot be trusted, and generation recovery re-reads authoritative state; the running turn fails as a restart, which a workflow can continue.
+    - Cons: running turns are interrupted, so the limit sits far above what one stdout chunk can hold.
+  - **Only measure.**
+    - Pros: no new failure mode.
+    - Cons: keeps the breach of invariant 11.
+- **What should a timed-out Pi session list answer (BR-10)?** Done 2026-11-04 with the first option.
+  - **504 with a short fixed message, and abort the read (recommended, taken).**
+    - Pros: the existing path shows the reason; no orphaned read.
+    - Cons: a list that looked empty now shows an error.
+  - **Keep `[]` and log.**
+    - Pros: no behaviour change.
+    - Cons: the silent failure stays.
+- **Where does the ACP harness's default provider go (BR-16)?** Done 2026-11-04 with the first option.
+  - **A neutral `acp-fixture` id (recommended, taken).**
+    - Pros: nothing implies a Cursor provider on this bridge; the fixture has none of Grok's launch quirks, so existing cases keep testing generic ACP.
+    - Cons: a wider diff, though only in that name.
+  - **Grok.**
+    - Pros: the one real provider.
+    - Cons: fixtures would pick up Grok's auth check, read-only profile and model handling, which changes what those cases test.
 
 ### 7. Change tracking and git scans
 
@@ -618,6 +766,43 @@ Not re-checked: GW-5, GW-6 (terminal WebSocket flush ignores `bufferedAmount`), 
 
 **Investigation.** `backend-process.ts` opens `/__orkestrator/events` with only a cursor (confirmed 2026-11-01). The browser path filters terminal output (`web-gateway.ts`). `installRemoteGatewayRequestAuth` already exists for remote windows. DK-5 and DK-6 are smaller IPC costs.
 
+Re-checked and built 2026-11-04 on branch `desktop-window-transport-e6e965c2f004-r1` (based on `main` at `96ee1eb3e`). All four items still held as the report describes. How it works now is in [remote-gateway.md](../../architecture/remote-gateway.md).
+
+**Before and after.** `e2e/agent-testing/local-gateway-transport-electron.spec.ts` drives a real Electron window in a disposable agent-test profile and writes these counts to `output/agent-testing/local-transport-counts/`. The load is one window and one local terminal printing 300 lines, one every 10 ms or more (`seq` with `sleep 0.01`). The table is one run, and counts are for that load only. Across repeated runs the relay stayed within 302–304 events and 13–15 commands, and the gateway within 303–304 frames and 13–14 commands.
+
+| Measured during the load | Relay (setting off) | Gateway (setting on) |
+| --- | --- | --- |
+| Backend events main relayed to the window (`orkestrator:event`) | 304 | 0 |
+| Of those, terminal output | 304 | 0 |
+| Bytes main read from its own event stream | 53,080 | 0 |
+| Main's event stream query | none | `excludeEvents=terminal-output-` |
+| Terminal frames the page received | 304 | 303 |
+| Commands through main | 14 | 0 |
+| Commands the page sent itself | 0 | 14 |
+
+| Per `invoke`, from the code path | Relay | Gateway |
+| --- | --- | --- |
+| Renderer to main, structured clone | 1 | 0 |
+| `JSON.stringify` | 1, in main | 1, in the renderer |
+| `response.json()` | 1, in main | 1, in the renderer |
+| Main to renderer, structured clone | 1 | 0 |
+| **Serialisations per invoke** | **4** | **2** |
+| Crossings of the context bridge (copied, on top of the above) | 2 | 0 |
+
+These count events and serialisations. Electron main's CPU, the baseline [0400](../../reports/efficiency-logging-database/0400-e26-local-desktop-transport.md) recommends, was not measured.
+
+**DK-5 (fixed for full images, 2026-11-04).** A spooled capture image now crosses IPC as bytes in both directions (`BrowserPreviewPendingCaptureWire`, `imageBytes`), at its PNG size rather than a third larger, and main no longer base64-encodes it to read it. The preload makes and parses the data URLs, so `BrowserPreviewCaptureApi` and its consumers did not change. A region crop still crosses as a data URL. "Up to 12 PNG encodes" is the loop's safety cap: a screenshot whose size follows its area settled in two encodes at 2.2, 4 and 8 bytes a pixel, so the loop was left alone. Tests: `preload-api.test.ts` ("capture images across IPC"), `browser-preview-capture-store.test.ts`, `browser-preview-capture-image.test.ts`; `web-annotations-electron.spec.ts` still passes through a real window.
+
+**DK-6 (fixed, 2026-11-04).** Re-checked first: `openPreviewTunnel` opened one WebSocket, with HELLO and OPEN, per upstream connection. The pool (`preview-transport-manager.ts`, in since 2026-09-23, so before the report) reused an idle connection for 2 s and kept up to six, which spared sequential requests but not parallel ones, upgrades, or requests after an idle gap. It is not an IPC cost: these sockets run from Electron main to the backend. Fixed as the report proposes, by multiplexing: tunnel v2 (`orkestrator.preview-tunnel.v2`, contract in `packages/protocol/src/preview-tunnel-mux.ts`) carries every upstream connection of an attachment as a stream on one authenticated WebSocket, with per-stream credit so a stopped reader stalls only its own stream. The desktop's `PreviewTunnelConnector` (`preview-tunnel-session.ts`) keeps that session; the backend's `preview-tunnel-mux-server.ts` serves it beside v1. Attachments advertise v2 (`multiplexSubprotocol`), so a desktop on an older backend keeps v1, and an older desktop on this backend still gets v1 (counted as `preview.tunnel-v1` in the [version-compatibility register](../../architecture/version-compatibility.md#register)). Details and decisions are in [4500](4500-preview-tunnel-one-socket-per-connection.md).
+
+| One page's burst of N parallel upstream connections | v1 (before) | v2 (after) |
+| --- | --- | --- |
+| WebSocket handshakes (TCP, TLS on HTTPS, upgrade) | N | 1 per attachment (a second session past 32 streams) |
+| HELLO and credential checks | N | 1 |
+| OPEN round trips | N, pipelined with HELLO | N, on the open socket |
+
+Counted by tests, not timed: `preview-transport-manager.test.ts` ("parallel connections share one authenticated tunnel socket": five parallel requests, one upgrade, five admitted upstreams; "against a backend without tunnel v2, each connection opens its own socket": three requests, three upgrades), `preview-tunnel-session.test.ts` and `preview-tunnel-mux-server.test.ts` (sharing, a stopped stream stalling at its window while another completes, uploads past the window, revocation, capacity, protocol violations, v1 fallback). `service-preview-electron.spec.ts` drove real Electron windows over v2 in disposable profiles. Page-load time over a remote route was not measured.
+
 **Decisions.**
 
 - **Rollback switch scope?**
@@ -864,7 +1049,9 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
 
 **Context.** `packages/cli/src/client/commands/session.ts`, `packages/cli/src/client/transport.ts`, `packages/protocol/src/node/application-logging.ts`. A `knownToken` on the public API is a contract change (`docs/architecture/public-cli.md`).
 
-DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of this change's scope and is still open.
+DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `knownToken` (`apps/backend/src/core/public-api/actions-transcript.ts`): while the live window still has that token it answers `{sessionId, status: "unchanged", token}` with no messages (`PublicTranscriptUnchanged` in `public-api-resources.ts`). It is refused with `before`. The backend advertises it as `features.transcriptKnownToken`; `--follow` reads capabilities once and sends the held token only when the answering backend (the `--node` leaf when routed) advertises it, because an older backend refuses unknown input. Against an older backend it keeps the old full read and token comparison. The CLI transport now reads the bounded body once inside the request deadline and decodes those bytes directly; it no longer wraps them in a second `Response` and reads them again, and a refused answer (redirect, 401, 403) has its body cancelled unread. `readStreamBounded` hands back a single chunk without copying. Tests: `public-api-launch.test.ts` (unchanged, stale token, moved transcript, `before` refusal, the feature flag), `client-waits.test.ts` (tokens sent where advertised, never otherwise), `client-transport.test.ts` (chunked decoding, refused body unread). DK-18 was out of that change's scope.
+
+DK-18 done on 2026-11-04. The writer (`installProductionApplicationLogging` in `application-logging.ts`) queues lines and each link of its one write chain appends everything queued, on the next event-loop turn, in pieces of at most `maxBatchBytes` (256 KiB). `mkdir` runs before the first write and again only after a failed write. Lines logged during an append share the next one, so `flush` and `stop` still await the chain's tail. The 4 MiB `maxPendingBytes` bound and its drop markers are unchanged, and it now has a count bound beside it, `maxPendingEntries` (65,536 entries), as the invariants require of every queue. `ENOENT` on an append means the folder was removed: the unwritten lines get one retry through a fresh `mkdir`, and the file index is rescanned from what is on disk. Any other failure loses that batch, writes one `write.failed` line to the console with its `entries` and `bytes`, and never rejects the chain. Tests: `apps/desktop/electron/application-logging.test.ts` ("production application log batching": a counted burst, order across batches, the batch bound, the flush bound in event-loop turns, stop and the quit hold, a removed folder, failed `mkdir` and append, a report that throws, the byte and count bounds) and `apps/backend/src/standalone-logging.test.ts` (shutdown keeps every queued line).
 
 **Investigation.** Re-checked 2026-11-03 against `main` at `7b48c23f`. The backend still reads the window fresh (`forceSnapshot: true`) on an unchanged answer; the saving is the page's mapping, serialisation and transfer, not the provider read. `attention --follow` already pages runs and setups by `cursor`, but each poll re-sends every pending question and approval; not changed here.
 
@@ -886,11 +1073,47 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
     - Pros: no whole-body buffer at all.
     - Cons: needs a streaming parser; responses are at most 8 MiB, so the saving is small.
   - Done with the recommended option.
+- **DK-18: when does the log sink write?**
+  - **Coalesce on the next event-loop turn into one append (recommended).**
+    - Pros: no timer; a lone line waits for nothing but an append already in flight, which suits 0880's note that a line logged before a hold reaches the file late; under load the batch grows by itself while the previous append runs.
+    - Cons: a slow trickle still makes one append per line, so the saving is on bursts.
+  - **A timer of about 100 ms, flushing `error` at once.**
+    - Pros: fewer appends under a sustained trickle.
+    - Cons: every line waits, a timer has to be cleared on stop, and a crash loses up to one interval.
+  - Done with the recommended option.
+- **DK-18: keep the file handle open between batches?**
+  - **No: one `appendFile` per batch, with `mkdir` only after a failure (recommended).**
+    - Pros: no descriptor to close on rollover and quit; a removed folder or file recovers on the next write.
+    - Cons: still one open and close per batch.
+  - **Yes, while the day and index are unchanged.**
+    - Pros: no open per batch.
+    - Cons: a deleted file goes on being written unseen, and rollover and quit each have a handle to close.
+  - Done with the recommended option.
+- **DK-18: what happens to a batch whose write fails?**
+  - **Lose it and report it, retrying only `ENOENT` (recommended).**
+    - Pros: as before a batch cannot grow memory or wedge the chain; `ENOENT` is raised at open, so its retry cannot write a line twice.
+    - Cons: a failed batch loses more lines than one failed line did. They are reported on the console but not marked in the file.
+  - **Requeue it and retry every failure.**
+    - Pros: survives a short `ENOSPC`.
+    - Cons: a partial write would be repeated, and old lines would compete with new ones for the queue bound.
+  - Done with the recommended option.
 
 ## Assumptions and decisions
 
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
+
+### Task 3: what counts as the WEB-9 startup closure (2026-11-04)
+
+Counted `src/renderer-entry.tsx` and its static imports with `index.html`'s, because `main.tsx` always imports it dynamically. Counting strict static imports alone gives 2 chunks and 0.13 MB, which measures nothing useful. The report's own figure is not comparable either way: it came from an older build by a method the report does not spell out.
+
+### Task 3: scope of the WEB-9 boundaries (2026-11-04)
+
+Stopped once the chat, Markdown and xterm code had left the closure, which is what the finding names. `CreateEnvironmentDialog`, the action bar and other non-chat code stay eager; no sidebar component was touched, because a compact sidebar build was running at the same time. Added `apps/web/scripts/startup-closure.ts` and `startup-closure.test.ts` beyond the report's list, so the sizes can be repeated and a stray static import fails a test instead of silently undoing the work.
+
+### Task 3: mobile host detection for WEB-11 (2026-11-04, superseded)
+
+The mobile-host policy this recorded was reverted in review and then replaced by the terminal ping (see "Task 3: terminal liveness probe for WEB-11" below).
 
 ### Task 14: preserve unrelated task records (review, 2026-11-02)
 
@@ -1041,6 +1264,18 @@ Made on 2026-11-03.
 - **One behaviour change.** The old listing threw a `TypeError` on an index
   line that parsed to `null` (`entry.id` of null); the cache skips that line,
   as hydrate always did.
+
+### Task 6: BR-7, BR-10, BR-12 to BR-14 and BR-16 (2026-11-04)
+
+- **BR-7, the cache key.** Keyed on `accumulator.version` alone. Every mutator already moves it through `ensureItem` or `touch`, a measurement and the turn ending around an unsettled item included, so a second check on `commandChanges` would add nothing. Kept apart from `completedItemParts`, whose key is the immutable source item.
+- **BR-7, a tick with nothing new.** A running card that did not change now produces no patch and moves no revision. Rendering a running card reads no clock, so an unchanged version means unchanged output.
+- **BR-10, what is hashed.** Name, size, mtime, ctime and inode, as BR-11 did, rather than the report's path, size and mtime: a same-size replacement should re-read. A digest keeps the entry a fixed size for any directory. A list over 2 MiB, the backend's own body limit, is not kept.
+- **BR-10, the directory.** Asked of `SessionManager.create(...).getSessionDir()`, because `getDefaultSessionDir` is not exported and the directory's name is Pi's own format. It writes no file; the directory creation is what `SessionManager.list` did anyway.
+- **BR-12, a module of its own.** `acp-context.ts` is close to the 2,000-line limit, and a pure framer can be tested against the old loop without a child process.
+- **BR-13, the bounds.** Tasks run synchronously between stdout chunks today, so depth is about one chunk's lines and no real high-water mark was read. 100,000 is far above any chunk. The byte bound was added beyond the report's count bound, because invariant 11 names both and a count alone allows 64 MiB per line. It is a line-length estimate, not a heap measurement.
+- **BR-13, order across keys.** A key's backlog now drains before the next key's starts, where promise chains interleaved them. Keys were already independent: account proof compares its own `sequence` because of that, and the engine's "a start delayed on another queue" tests cover it.
+- **BR-14, no fragment cache.** Followed the recommended option: no per-session cache of clean records. As with ACP's BR-1 remainder, a missed revision would write stale state, and writes only happen at turn and request edges.
+- **BR-16, how far it goes.** Removed what the report names and what only it used. The `cursor/*` handlers stayed because they are gated by method, not provider, so this change's evidence does not cover them.
 
 ### Task 7: stat-stamp settle window
 
@@ -1212,6 +1447,21 @@ rather than sending the token and retrying without it on refusal. The check
 reads capabilities once per follow, through the same routing as the read,
 and never depends on matching the server's error prose.
 
+### Task 16: a count bound beside the log sink's byte bound (DK-18)
+
+Made on 2026-11-04. The queue used to be a promise chain bounded by bytes alone.
+AGENTS.md invariant 11 asks every queue for both bounds, so the array that
+replaced it has `maxPendingEntries` as well. At 65,536 entries it stays out of
+the way at a typical line length, where the 4 MiB byte bound is reached first.
+A line over it is dropped and announced exactly as one over the byte bound is.
+
+### Task 16: test seam for the log sink's file calls (DK-18)
+
+Made on 2026-11-04. `installProductionApplicationLogging` takes an optional
+`files` with `mkdir` and `appendFile`, as it already takes `now` and `bounds`.
+The tests need to count and fail those calls, and `mock.module` on
+`node:fs/promises` would be global across the suite.
+
 ### Task 16: unchanged still reads the window fresh (DK-16)
 
 Made on 2026-11-03. The action keeps `forceSnapshot: true` and compares the
@@ -1248,6 +1498,26 @@ what one hint does at once on a clock that does not advance. The "minimum scan
 gap" cases and the real-Git case in `worktree-snapshots-git.test.ts` use the
 real value.
 
+### Task 12: a renderer-side composition rather than a preload-side stream (DK-1, DK-2)
+
+Chose to compose `window.orkestrator` in the renderer from a preload host and the existing gateway client. Running the stream in the preload needs no renderer change, but each event and command would still be copied across the context bridge, and it would duplicate the gateway client's reconnect and terminal recovery. Cost: the preload exposes `orkestratorDesktopHost` instead of `orkestrator` for these windows, and `waitForDesktopConnection` has to look at both.
+
+### Task 12: commands move with events (DK-2)
+
+Moved commands too, as 0400 recommends, since that is what removes the serialisations. Terminal input ordering is preserved by the gateway client's own `TerminalInputSequencer`, the one browser clients use, which passes the shared terminal input contract in `web-gateway-local-desktop.test.ts`. Its ambiguous-send fence now lives in the page, so a reload clears it, as it does in a browser tab. Under the relay it lived in main and survived a reload.
+
+### Task 12: one shared terminal stream, and a command sent as the page goes
+
+A gateway client with a `baseUrl` opens one fetch per terminal, which on a plain-HTTP listener would exhaust Chromium's six connections and stall commands, so `sharedTerminalStream` keeps them on one. Widening that stream reopens it, which costs each mounted terminal a snapshot read, as in a browser. A fetch ends with its page, unlike a command held by main, so `keepaliveOnPageHide` sets `keepalive` on commands sent during `pagehide` that fit its 64 KiB limit (a final pane layout write). A larger one is lost if the page goes first.
+
+### Task 12: DK-6 by multiplexing rather than a measurement first (2026-11-04)
+
+The ticket's criterion is "fixed with a test or recorded as no longer applying", and DK-6 still applied, so 4500's first recommendation (measure, then decide) could not meet it. Built the report's fix, tunnel v2. Raising `poolIdleMs` alone would not have helped parallel requests, which are the case the pool misses. Cost: a second protocol version to keep until the support window passes v1, registered in version-compatibility.md. Choices inside v2 are in 4500's Assumptions and decisions.
+
+### Task 12: the setting
+
+Read per window at creation from `config.json`, off by default, on Settings → Experimental for a local desktop window only, as the ticket decides. The switch is not offered in a browser or on a remote window, where it would edit a config this app does not read.
+
 ## Current state
 
 Done on 2026-11-01 (see each task's Context): ST-7, ST-8, WEB-2 (partly),
@@ -1267,6 +1537,7 @@ browser and real-stack suites were not run.
 
 ## Needs verification
 
+- Task 12 on a packaged `file://` window: the Electron spec uses the dev renderer, so the packaged Content Security Policy and origin are unexercised on the new transport (read from code: `connect-src` allows `http:`, and main rewrites `Origin`). Tracked in [4501](4501-local-window-transport-default.md).
 - Before-and-after numbers for every landed item (task 1).
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.
@@ -1275,9 +1546,31 @@ browser and real-stack suites were not run.
   macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
   a real install was not measured.
 
+- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
+
 ## Related
 
 - [Efficiency report](../../reports/2026-10-27-efficiency.md).
 - [0052 remote client bandwidth](../transcripts-and-observation/0052-remote-client-bandwidth.md), D14.
 - [0048 recurring work qualification](../transcripts-and-observation/0048-recurring-work-qualification.md).
 - [Flake 1314](../../tests/flaky-tests/design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md).
+
+## Assumptions and decisions
+
+### Task 3: terminal foreground recovery after review
+
+Chose unconditional foreground replacement until terminal-specific liveness was
+available. The main stream heartbeat cannot establish terminal socket health.
+Superseded the same day by the liveness probe below.
+
+### Task 3: terminal liveness probe for WEB-11 (2026-11-04)
+
+Added `ping`/`pong` to terminal WebSocket protocol version 1 rather than
+bumping the version: the server advertises it in `ready.features`, an older
+client ignores the field, and the client sends a ping only to a server that
+listed it, because an older server closes the socket on an unknown frame type.
+The pong goes through the server's bounded control queue, so it needs no new
+bound. The 2.5 s timeout is a judgment, not a measurement: long enough for a
+round trip over a slow remote link, short enough that a dead mobile socket is
+replaced soon after the page returns. A probe whose page is hidden again before
+it settles replaces nothing, so hiding alone never cuts background work.

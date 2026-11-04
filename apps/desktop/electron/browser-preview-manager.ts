@@ -21,6 +21,7 @@ import type {
   BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewOpenLinkEvent,
   BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewPinSnapshot,
   BrowserPreviewPinsInput,
@@ -881,6 +882,10 @@ export class BrowserPreviewManager {
 
   readPendingCapture(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
     return this.captures.readPending(captureId);
+  }
+
+  readPendingCaptureWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
+    return this.captures.readPendingWire(captureId);
   }
 
   replacePendingCaptureImage(

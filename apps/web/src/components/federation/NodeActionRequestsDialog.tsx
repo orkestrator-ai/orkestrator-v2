@@ -175,6 +175,7 @@ export function NodeActionRequestsDialog() {
           <AlertDialogDescription>
             The project coordinator asked for this. Nothing happens unless you approve it.
             {request.reason ? ` Its reason: “${request.reason}”` : ""}
+            {request.askedBecause ? ` You are asked because: ${request.askedBecause}` : ""}
             {request.kind === "delete-environment"
               ? " Deleting removes the environment, its container, storage and recovery copies on that node. It cannot be undone."
               : request.kind === "switch-agent-account"

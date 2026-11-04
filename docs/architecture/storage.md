@@ -211,13 +211,17 @@ from that.
   every connection and process; no lease or queue is involved. Use it whenever
   the mutation does not await (sessions, project notes, feature plans,
   completion comments).
-- **`updateStoreRow(file, key, mutate, { collection })`**: the same for one row
-  of a `record` store or of one `envelope` collection. It neither parses nor
-  rewrites the other rows, so a write costs O(row) and holders of different
-  keys' leases cannot overwrite each other. `updateSensitiveStoreRow` is the
-  same for a record store holding sensitive content: it also prunes what the
-  row's new value drops from the retired JSON archive, as `saveSensitiveJson`
-  does (see "Retired JSON archive").
+- **`updateStoreRow(file, key, mutate, { collection, archiveCleanup })`**: the
+  same for one row of a `record` store, of a keyed `array` store or of one
+  `envelope` collection. It neither parses nor rewrites the other rows, so a
+  write costs O(row) and holders of different keys' leases cannot overwrite each
+  other. An array item keeps its position when updated, a new one goes last, and
+  its value must carry the row's key in the layout's key field. A store held
+  whole as a document falls back to a whole-value read-modify-write.
+  `archiveCleanup` commits an attributable archive cleanup with the row.
+  `updateSensitiveStoreRow` is the same for a record store holding sensitive
+  content: it also prunes what the row's new value drops from the retired JSON
+  archive, as `saveSensitiveJson` does (see "Retired JSON archive").
 - **`serialize(target, description, operation, options)`**: an
   asynchronous critical section. An in-process FIFO per target plus a
   cross-process **lease** in the `leases` table (owner token and heartbeat;
@@ -249,6 +253,18 @@ from that.
   draft's `revision` in its own transaction, so typing never decodes or
   rewrites the other drafts. An owner sweep is one `updateStore` that removes
   only that owner's rows and writes nothing when the owner has none.
+
+  Environments keep their store lease too, because a write awaits between its
+  read and its commit (a caller's `shouldUpdate` observation, the removal's
+  usage label) and must stay ordered against other writers and against
+  deletion. Inside it a writer reads its environment's row and commits it with
+  `updateStoreRow`. A writer of several environments (a reorder, the activity
+  lease sweeps, a container status change) commits only the rows it changed, in
+  one transaction. A row write also refuses a row that has gone since the read,
+  so a holder whose lease was taken over cannot bring back a removed environment.
+  `storage-writer-guards.test.ts` requires the lease on every row write of this
+  store (`LEASED_ROW_STORES`), since a row transaction alone would not serialize
+  the read before it.
 
   Looped and Multi Review workflows keep **one lease per store for writers**:
   a save awaits its environment check, and launch and the environment sweep
@@ -520,11 +536,20 @@ The archive stays that pre-migration copy, except that deletes reach it:
   are matched by `id`, else by equal content, so an item without an `id` that
   was edited in place counts as removed.
 - `deleteStore` removes every archived copy of the store.
-- Deleting boundaries that know exactly what they removed (environments,
-  drafts, handoffs, prompt queues, reviews, build pipelines) scrub with an
-  attributable predicate through `scrubSensitiveJsonBackups` or
-  `scrubLegacyJsonStore`. Writes through `updateStore` or `updateStoreRow`
-  never touch the archive, so a delete made that way must scrub explicitly.
+- Deleting boundaries that know exactly what they removed (drafts, handoffs,
+  prompt queues, reviews, build pipelines) scrub with an attributable predicate
+  through `scrubSensitiveJsonBackups` or `scrubLegacyJsonStore`. Writes through
+  `updateStore` or `updateStoreRow` touch the archive only when asked, so a
+  delete made that way must scrub explicitly.
+- Environments commit their scrub with the row: `updateStoreRow`'s
+  `archiveCleanup` journals `delete-item` (a removed environment) or
+  `drop-item-field` (its superseded launch attachments) in the row's transaction
+  through `commitWithLegacyJsonCleanup`. The intent names the row and holds none
+  of its content, and it replays on reopen after a crash. A routine row write
+  leaves the archive byte-identical. A build that predates these two kinds
+  removes the store's archived copies if it replays one, which it can see only
+  after a crash followed by a downgrade: the deletion holds and only that
+  recovery copy is lost.
   `updateSensitiveStoreRow` commits a keyed pruning intent with the row
   mutation, including inside `atomically()`. After commit it prunes what the
   row's new value drops from that record's archived copies; when it replaced

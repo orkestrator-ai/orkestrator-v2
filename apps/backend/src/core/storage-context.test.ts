@@ -33,6 +33,106 @@ afterEach(async () => {
 });
 
 describe("StorageContext", () => {
+  test("buffers keyed array inserts, updates and deletes until atomic commit", async () => {
+    const { context, dataDir } = await open();
+    const file = context.file("environments.json");
+    const original = [
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ];
+    await context.saveJson(file, original);
+
+    await context.atomically(async () => {
+      expect(
+        context.updateStoreRow(file, "c", (current) => {
+          expect(current).toBeUndefined();
+          return { value: { id: "c", name: "C" }, result: "inserted" };
+        }),
+      ).toBe("inserted");
+      expect(
+        context.updateStoreRow(file, "b", (current) => {
+          expect(current).toEqual(original[1]);
+          return { value: { id: "b", name: "updated" }, result: "updated" };
+        }),
+      ).toBe("updated");
+      expect(
+        context.updateStoreRow(file, "a", (current) => ({
+          delete: true,
+          result: current,
+        })),
+      ).toEqual(original[0]);
+      expect(context.updateStoreRow(file, "c", (current) => ({ result: current }))).toEqual({
+        id: "c",
+        name: "C",
+      });
+      expect(context.updateStoreRow(file, "a", (current) => ({ result: current }))).toBeUndefined();
+      expect(await context.loadJson<unknown[]>(file, () => [])).toEqual([
+        { id: "b", name: "updated" },
+        { id: "c", name: "C" },
+      ]);
+      expect(readStoredValue(dataDir, "environments.json")).toEqual(original);
+    });
+
+    expect(readStoredValue(dataDir, "environments.json")).toEqual([
+      { id: "b", name: "updated" },
+      { id: "c", name: "C" },
+    ]);
+  });
+
+  test("atomic keyed array no-ops neither create a store nor advance its revision", async () => {
+    const { context, dataDir } = await open();
+    const file = context.file("environments.json");
+    const noOp = async () => {
+      await context.atomically(async () => {
+        expect(
+          context.updateStoreRow(file, "missing", (current) => ({ result: current })),
+        ).toBeUndefined();
+        expect(
+          context.updateStoreRow(file, "missing", () => ({ delete: true, result: "absent" })),
+        ).toBe("absent");
+      });
+    };
+    const absentRevision = context.database.storeRevision("environments");
+    await noOp();
+    expect(readStoredValue(dataDir, "environments.json")).toBeUndefined();
+    expect(context.database.storeRevision("environments")).toBe(absentRevision);
+
+    const original = [{ id: "a", name: "A" }];
+    await context.saveJson(file, original);
+    const revision = context.database.storeRevision("environments");
+    await noOp();
+    await context.atomically(async () => {
+      expect(context.updateStoreRow(file, "a", (current) => ({ result: current }))).toEqual(
+        original[0],
+      );
+      context.updateStoreRow(file, "a", () => ({ value: original[0], result: undefined }));
+    });
+    expect(readStoredValue(dataDir, "environments.json")).toEqual(original);
+    expect(context.database.storeRevision("environments")).toBe(revision);
+  });
+
+  test("rolls back buffered keyed array mutations when an atomic scope fails", async () => {
+    const { context, dataDir } = await open();
+    const file = context.file("environments.json");
+    const original = [{ id: "a" }, { id: "b" }];
+    await context.saveJson(file, original);
+    const revision = context.database.storeRevision("environments");
+    await expect(
+      context.atomically(async () => {
+        context.updateStoreRow(file, "c", () => ({ value: { id: "c" }, result: undefined }));
+        context.updateStoreRow(file, "a", () => ({ delete: true, result: undefined }));
+        expect(await context.loadJson<unknown[]>(file, () => [])).toEqual([
+          { id: "b" },
+          { id: "c" },
+        ]);
+        throw new Error("rollback array");
+      }),
+    ).rejects.toThrow("rollback array");
+    expect(readStoredValue(dataDir, "environments.json")).toEqual(original);
+    expect(await context.loadJson<unknown[]>(file, () => [])).toEqual(original);
+    expect(context.database.storeRevision("environments")).toBe(revision);
+  });
+
   test("commits an atomic scope whole and announces only after the commit", async () => {
     const { context, dataDir } = await open();
     const seen: ResourceChange[] = [];

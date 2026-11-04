@@ -19,6 +19,7 @@ import {
 import { StorageChanges } from "./storage-changes.js";
 import {
   StoreCorruptError,
+  applyArrayRowUpdate,
   type RowUpdate,
   type SerializedStore,
   type StorageDatabase,
@@ -26,6 +27,7 @@ import {
 import {
   commitWithLegacyJsonCleanup,
   type LegacyJsonCleanup,
+  type LegacyJsonItemCleanup,
   databaseStoreForPath,
   hasLegacyJsonStore,
   openBackendDatabase,
@@ -185,7 +187,7 @@ export class StorageContext {
       scope.closed = true;
     }
     const writes = [...scope.writes];
-    if (writes.length > 0) {
+    if (writes.length > 0 || scope.archiveCleanups.length > 0) {
       commitWithLegacyJsonCleanup(
         this.database,
         this.dataDir,
@@ -277,20 +279,57 @@ export class StorageContext {
 
   /**
    * Synchronous read-modify-write of one row of a database store (a record
-   * store's key, or a key in an envelope collection); see
-   * {@link StorageDatabase.updateStoreRow}. Inside an atomic scope it applies
-   * to the buffered whole value instead.
+   * store's key, an item of a keyed array store, or a key in an envelope
+   * collection); see {@link StorageDatabase.updateStoreRow}. Inside an atomic
+   * scope it applies to the buffered whole value instead.
+   *
+   * `archiveCleanup` is what this row's change removes from the store's retired
+   * JSON copies. It commits with the row and replays after a failure or a crash,
+   * even when `mutate` leaves the row alone, so a retry can finish a cleanup the
+   * row no longer shows a need for. Nothing is journaled once no copy is left.
    */
   updateStoreRow<T>(
     filePath: string,
     key: string,
     mutate: (current: unknown) => RowUpdate<T>,
-    options: { collection?: string } = {},
+    options: { collection?: string; archiveCleanup?: LegacyJsonItemCleanup } = {},
   ): T {
     const store = this.storeForFile(filePath);
     if (store === null) throw new Error("updateStoreRow requires a database store");
+    const { archiveCleanup, collection } = options;
+    if (archiveCleanup && hasLegacyJsonStore(this.dataDir, archiveCleanup.store)) {
+      const scope = this.openAtomicScope();
+      if (scope) {
+        const result = this.updateStoreRow(filePath, key, mutate, { collection });
+        scope.archiveCleanups.push(archiveCleanup);
+        return result;
+      }
+      let result!: T;
+      commitWithLegacyJsonCleanup(
+        this.database,
+        this.dataDir,
+        () => {
+          result = this.updateStoreRow(filePath, key, mutate, { collection });
+        },
+        [archiveCleanup],
+      );
+      return result;
+    }
     const scope = this.openAtomicScope();
     if (scope) {
+      const layout = storeLayout(store);
+      if (layout.kind === "array") {
+        const held = this.loadStore<unknown>(store, () => []);
+        const items = Array.isArray(held) ? held : [];
+        const applied = applyArrayRowUpdate(store, layout, items, key, mutate);
+        if (applied.changed) {
+          scope.writes.set(store, {
+            value: items,
+            maxBytes: bufferedMaxBytes(scope.writes.get(store)),
+          });
+        }
+        return applied.result;
+      }
       const whole = this.loadStore<unknown>(store, () => ({}));
       const value: Record<string, unknown> = isRecord(whole) ? whole : {};
       const records: Record<string, unknown> = options.collection
@@ -425,7 +464,8 @@ export class StorageContext {
    *
    * A lease only excludes other holders of the same lease. Every whole-value
    * writer of a store (`saveJson`, `saveSensitiveJson`, `deleteStore`) must
-   * hold that store's lease; `storage-writer-guards.test.ts` enforces it.
+   * hold that store's lease, and so must every row writer of the environment
+   * store; `storage-writer-guards.test.ts` enforces both.
    */
   serialize<T>(
     target: string,
@@ -755,9 +795,8 @@ export class StorageContext {
       // The retired JSON archive stays the pre-migration copy a downgrade
       // restores from. A save that removes content prunes only that content
       // from every archived copy; one that removes nothing leaves the archive
-      // untouched. Environment copies have an attributable scrub at the
-      // deleting boundary.
-      const archived = store !== "environments" && hasLegacyJsonStore(this.dataDir, store);
+      // untouched.
+      const archived = hasLegacyJsonStore(this.dataDir, store);
       let previous: unknown = MISSING_PREVIOUS;
       if (archived) {
         try {

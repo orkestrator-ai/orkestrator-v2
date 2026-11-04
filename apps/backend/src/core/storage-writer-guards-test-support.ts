@@ -18,10 +18,12 @@ import { parseSync, visitorKeys, type CallExpression, type Node } from "oxc-pars
  *    (`StorageContext.serialize` or a wrapper that hands it its `operation`),
  *    directly or through helpers whose every caller does;
  * 2. all whole-value writers of one store share at least one lease;
- * 3. no store has both whole-value and transactional writers.
+ * 3. no store has both whole-value and transactional writers;
+ * 4. every row write of a store in {@link LEASED_ROW_STORES} holds a store-wide
+ *    lease too, exactly as a whole-value write must.
  *
  * A call is resolved through the declared types of the fields it goes through:
- * `this.repos.projects.saveEnvironments()` is `ProjectsRepository`'s method,
+ * `this.repos.projects.saveEnvironment()` is `ProjectsRepository`'s method,
  * `this.context.saveJson()` is the `StorageContext` primitive. A whole-value
  * write is `saveJson`, `saveSensitiveJson`, `deleteStore`, a raw
  * `database.writeStore*`/`deleteStore*`, or an `updateStore`/`updateStoreRow`
@@ -50,6 +52,14 @@ const backendSrc = path.resolve(coreDir, "..");
 export const repoRoot = path.resolve(backendSrc, "../../..");
 
 type WriteKind = "whole" | "transactional";
+
+/**
+ * Stores whose row writers still read under the store's lease, because they
+ * await other work between the read and the write and must stay ordered against
+ * each other and against deletion. A row transaction alone would not serialize
+ * that read.
+ */
+const LEASED_ROW_STORES = new Set(["environmentsFile"]);
 
 /**
  * What a call of a member of a class the analysis does not read means. These
@@ -160,7 +170,7 @@ type WriteSite = {
 
 type StoreSummary = {
   kind: WriteKind | "mixed";
-  /** Store-wide leases held on every path to every whole-value write. */
+  /** Store-wide leases held on every path to every write that must hold one. */
   leases: string[];
   sites: number;
   paths: number;
@@ -1149,7 +1159,10 @@ export function analyzeStorageWriters(
       store,
       kind,
       reason,
-      paths: kind === "whole" ? pathsFrom(site.call, site.ancestors, file, [], new Set()) : [],
+      paths:
+        kind === "whole" || LEASED_ROW_STORES.has(store)
+          ? pathsFrom(site.call, site.ancestors, file, [], new Set())
+          : [],
     });
   }
 
@@ -1158,8 +1171,9 @@ export function analyzeStorageWriters(
     const ofStore = sites.filter((site) => site.store === store);
     const whole = ofStore.filter((site) => site.kind === "whole");
     const transactional = ofStore.filter((site) => site.kind === "transactional");
+    const leased = LEASED_ROW_STORES.has(store) ? ofStore : whole;
     const leaseSets: Array<Set<string>> = [];
-    for (const site of whole) {
+    for (const site of leased) {
       for (const writePath of site.paths) {
         const route = writePath.via.length > 0 ? ` via ${writePath.via.join(" ← ")}` : "";
         const label = `${site.location}: ${site.call}(${store})${site.reason ? ` (${site.reason})` : ""}${route}`;
@@ -1186,7 +1200,7 @@ export function analyzeStorageWriters(
       ? leaseSets.reduce((shared, held) => new Set([...shared].filter((name) => held.has(name))))
       : null;
     if (common !== null && common.size === 0) {
-      const detail = whole
+      const detail = leased
         .flatMap((site) =>
           site.paths.map(
             (writePath) =>
@@ -1210,7 +1224,7 @@ export function analyzeStorageWriters(
             : "transactional",
       leases: common ? [...common].sort() : [],
       sites: ofStore.length,
-      paths: whole.reduce((total, site) => total + site.paths.length, 0),
+      paths: leased.reduce((total, site) => total + site.paths.length, 0),
     });
   }
 

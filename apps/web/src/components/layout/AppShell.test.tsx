@@ -14,6 +14,7 @@ import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
@@ -253,6 +254,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useMachineViewStore.setState({ grouping: "machine" });
   useActiveCoordinatorConversationStore.setState({ active: null });
   uiStore.setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
@@ -594,6 +596,42 @@ describe("AppShell", () => {
     cleanup();
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("in compact, search stays closed and is not delivered when compact is left", async () => {
+    isMobile = false;
+    mountSearch = true;
+    uiStore.setState({ sidebarOpen: false });
+    useMachineViewStore.setState({ grouping: "compact" });
+    render(<AppShell>Workspace</AppShell>);
+    fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
+    expect(uiStore.getState().sidebarOpen).toBe(false);
+
+    act(() => {
+      useMachineViewStore.setState({ grouping: "machine" });
+      uiStore.setState({ sidebarOpen: true });
+    });
+    await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());
+    expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("the rotate shortcut shows a hidden sidebar and is delivered to it once", async () => {
+    isMobile = false;
+    uiStore.setState({ sidebarOpen: false });
+    let rotated = 0;
+    function Rotator() {
+      useEffect(() => onAppShortcut("rotate-sidebar-grouping", () => rotated++), []);
+      return null;
+    }
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    fireEvent.keyDown(document.body, { key: "D", code: "KeyD", metaKey: true, shiftKey: true });
+    expect(uiStore.getState().sidebarOpen).toBe(true);
+    rerender(
+      <AppShell>
+        <Rotator />
+      </AppShell>,
+    );
+    await waitFor(() => expect(rotated).toBe(1));
   });
 
   test("a closed mobile drawer drops search without opening or replaying it", () => {

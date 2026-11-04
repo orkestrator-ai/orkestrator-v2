@@ -62,7 +62,7 @@ function Harness() {
       <MergedProjectList
         machines={machines}
         shownIds={new Set(machines.filter(isMachineShown).map((m) => m.connectionId))}
-        mode={grouping}
+        mode={grouping === "compact" ? "repository" : grouping}
         renderBoundProject={() => null}
         onBoundEnvironmentDragEnd={() => {}}
       />

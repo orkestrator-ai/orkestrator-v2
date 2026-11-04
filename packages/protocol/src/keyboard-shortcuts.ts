@@ -1,6 +1,6 @@
 /**
  * The app-level keyboard shortcuts (⌘K search, ⌘⇧/ shortcuts dialog, ⌘,
- * settings) and the shortcuts dialog's desktop menu event, shared by the renderer (which owns
+ * settings, ⌘⇧D sidebar group-by) and the shortcuts dialog's desktop menu event, shared by the renderer (which owns
  * the UI they open), Electron main (which owns the View menu item and the
  * native views that keys can land in instead) and the design frame runtime.
  */
@@ -48,7 +48,8 @@ export interface ShortcutChord {
 }
 
 /** The app shortcuts: see `APP_SHORTCUTS`. */
-export type AppShortcutId = "show-shortcuts" | "search-projects" | "open-settings";
+export type AppShortcutId =
+  "show-shortcuts" | "search-projects" | "open-settings" | "rotate-sidebar-grouping";
 
 /** The platform a chord was typed on: macOS, or anything else. */
 export type ShortcutPlatform = "mac" | "other";
@@ -125,6 +126,17 @@ export const APP_SHORTCUTS: readonly AppShortcut[] = [
     shift: false,
     owner: "window",
     fromPreviews: true,
+    ctrlEditsText: false,
+  },
+  {
+    // ⌘⇧G is the run-script dialog, and Monaco binds ⌘⇧L; ⌘⇧D is free in the
+    // app, Monaco and the desktop menus. It stays with a previewed page, and
+    // taking it there would also move keyboard focus out of the page.
+    id: "rotate-sidebar-grouping",
+    key: "d",
+    shift: true,
+    owner: "window",
+    fromPreviews: false,
     ctrlEditsText: false,
   },
 ];

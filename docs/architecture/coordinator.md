@@ -289,8 +289,8 @@ on `self` and on each node:
 
 A command node's window reaching a leaf's project shows the leaf's
 coordinator directly when the sidebar is grouped by machine or project.
-Grouped by repository it leads to the command node's coordinator for that
-repository instead, when the command node has one
+Grouped by repository, or in the compact sidebar, it leads to the command node's
+coordinator for that repository instead, when the command node has one
 ([command-nodes.md](command-nodes.md#leaf-mode)).
 
 ### Tickets on other machines

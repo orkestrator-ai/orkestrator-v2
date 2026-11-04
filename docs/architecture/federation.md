@@ -456,6 +456,9 @@ with `MachinesFilter`:
   **By repository**. **By activity** gives one list across the selected machines,
   with an **Order** radio group. The projections live in `aggregate.ts` and never
   merge records.
+- **Compact** is one more group-by mode, also offered in a window that names no
+  machines (whose menu calls its ordinary list **Full list**). See
+  [Compact sidebar](#compact-sidebar).
 - Repository grouping uses only a sanitized `host/owner/name` hint derived
   from the project's Git URL (`repositoryHint`), or an explicit mapping
   argument. Names, paths and branches never group projects.
@@ -508,6 +511,63 @@ with `MachinesFilter`:
   **Backend: name** for everything else, which always targets the window's
   bound machine.
 
+### Compact sidebar
+
+Compact (`grouping: "compact"`, persisted like the other modes) makes the
+sidebar one large icon wide (56px), listing only top-level repositories.
+
+- **The list** is `compactRepositories`: the "by repository" tree, one icon per
+  group, so a repository on several machines is one icon. A project that reports
+  no repository is its own icon. A window that names no machines lists its own
+  projects, folders flattened away. Every connected machine counts: the machine
+  filter's control is not on screen, so it does not apply here (it is kept for
+  the other modes).
+- **An icon** reuses `CommandNodeHomeIcon` (the command node's colour and icon for
+  the project, as a repository heading has; a repository with none shows the
+  house tile) inside `CoordinatorActivityIcon`. The name is a tooltip and the
+  accessible name, and there is no other text.
+- **Opening** a repository goes where its heading goes (`openRepository`), and a
+  project with no repository where its row goes. The icon of whatever project is
+  shown is marked selected, and the sidebar stays compact. To another node's
+  realm compact is reported as `repository` (`realmGroupingFor`), since it links
+  a repository's projects the same way and an older realm refuses unknown values.
+- **Status** is `compactRepositoryStatus` over each member's facts, read from what
+  its project row reads: this window's stores for its own, the node summary for
+  another machine's, which has no coordinator activity. The ring spins while a
+  coordinator or project home works and halos while one waits. The spinner wins,
+  as on a row, and the badge then carries the wait. The badge is a dot, never a
+  count: amber for unread work, a failed agent message or that hidden wait, cyan
+  for unread agent mail.
+- **The header** is only the sort icon, whose menu has no sort section and offers
+  every list, including **By activity**, so compact can be left with a mouse. The
+  search bar is not mounted, so ⌘K does nothing and is not held for later. The
+  footer actions stay, stacked. A multi-selection is cleared, having no rows.
+- **Sorting by activity** does not replace compact, which lists no environments.
+  Both are kept: `groupingBeforeCompact` is what leaving compact restores there.
+- **The phone layout's** overlay has no compact form. It falls back to the
+  repository list, and the choice is kept for desktop widths.
+
+**Rotating modes.** ⌘⇧D / Ctrl+Shift+D (`rotate-sidebar-grouping`) walks **By
+machine → By project → By repository → Compact** and back
+(`nextSidebarView`). It skips what would change nothing: the merged modes while
+no other machine is shown, and compact in the phone layout. Sorted by activity,
+when the groupings are not on screen, it moves between the activity list and
+compact.
+
+**Width.** `useSidebarPanelMotion` moves the panel between full, compact and
+hidden, so showing and hiding animate too and the panel stays mounted. `index.css`
+transitions the panels' `flex-grow` for 180ms, only while the group carries
+`data-sidebar-width-animating`; a held resize handle turns that off, as does
+`prefers-reduced-motion`. For the duration, the sidebar's and the main column's
+content are held at the larger of their start and end widths and clipped by
+their panels (`sidebarMotionPins`). So a terminal or editor is laid out at most
+twice instead of on every frame, and a realm moves without resizing. Release fires
+one `resize`, because a native preview follows its host only on a resize. A native
+preview therefore stays put during the transition and moves when it ends.
+The handle is disabled in compact. The full width is kept in
+`uiStore.sidebarWidth` while compact or hidden, so it returns on leaving, across
+reloads too.
+
 ### One presentation for both paths
 
 A machine's projects and environments look the same whether the window is
@@ -521,6 +581,7 @@ component with two thin adapters:
 | Delete confirmation | `EnvironmentDeleteDialog` | through `EnvironmentRow` | through `EnvironmentRow` |
 | Project header | `ProjectGroupHeader` | `SortableProjectGroup` | `RemoteProjectGroup` |
 | Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectGroup`, `RemoteActivityHome` |
+| Compact icon status | `compactRepositoryStatus`, `projectHomeStatus` | `useCompactStatuses` | `remoteMemberFacts` |
 | Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
 | Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineBody` |
 | Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `MergedProjectList`, `RemoteMachineTree` |

@@ -5,6 +5,7 @@ import {
   parseShellMessage,
   projectLandingBoardTab,
   projectLandingTab,
+  realmGroupingFor,
   readFrameEnvelope,
   realmCoordinatorDefers,
   realmInitialRequest,
@@ -291,3 +292,12 @@ test.each(["worker-tab", "build", "review", "graph-run"])(
     ).not.toHaveProperty("workTarget");
   },
 );
+
+test("the window reports compact as repository grouping, which a realm of any age accepts", () => {
+  expect(realmGroupingFor("project", "compact")).toBe("repository");
+  // Compact lists no environments, so sorting them changes nothing about it.
+  expect(realmGroupingFor("activity", "compact")).toBe("repository");
+  expect(parseShellMessage({ type: "grouping", grouping: "compact" })).toBeNull();
+  expect(realmGroupingFor("project", "machine")).toBe("machine");
+  expect(realmGroupingFor("activity", "repository")).toBe("activity");
+});

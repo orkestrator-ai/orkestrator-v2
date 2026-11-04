@@ -28,6 +28,8 @@ import {
   type TaskSnapshotItem,
 } from "@orkestrator/protocol/task-list";
 import {
+  coalesceAdjacentToolMessages,
+  type CoalescedRowAliases,
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
@@ -438,7 +440,35 @@ function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
   return raw.parts.some((part) => startsWithAgentHandoffCarrier(asRecord(part)?.content));
 }
 
+/**
+ * A stored transcript as display rows, with adjacent tool-only rows merged the
+ * way the agent tabs merge them.
+ *
+ * The merge runs after the interactions are interleaved: a merged row takes its
+ * latest member's time, so merging first would move a decline from inside a
+ * tool run to after it. `aliases` keeps a merged row's id across updates; these
+ * rows are parsed afresh on every read, so the view that renders them owns it.
+ */
 export function toPipelineTranscript(
+  messages: unknown[] | undefined,
+  agentType: BuildPipelineAgent,
+  fallbackCreatedAt: string,
+  interactions: readonly PipelineInteractionTranscriptEntry[] = [],
+  aliases?: CoalescedRowAliases,
+): NativeMessage[] {
+  return coalesceAdjacentToolMessages(
+    toPipelineTranscriptRows(messages, agentType, fallbackCreatedAt, interactions),
+    aliases,
+  );
+}
+
+/**
+ * The rows of {@link toPipelineTranscript} before tool runs are merged, for a
+ * view that hides rows first. Hiding can leave two runs newly adjacent, and a
+ * merge is safest as one pass over the final list: a second pass sharing an
+ * alias map would prune the members the first pass recorded.
+ */
+export function toPipelineTranscriptRows(
   messages: unknown[] | undefined,
   agentType: BuildPipelineAgent,
   fallbackCreatedAt: string,

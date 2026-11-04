@@ -28,7 +28,9 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
       {header}
       {messages.length === 0 ? emptyState : null}
       {messages.map((message: unknown, index: number) => (
-        <div key={index}>{renderMessage(index, message, null)}</div>
+        <div key={index} data-testid="transcript-row">
+          {renderMessage(index, message, null)}
+        </div>
       ))}
       {footer}
     </div>
@@ -185,6 +187,55 @@ describe("BuildChatTab referenced transcripts", () => {
       {},
       "verify-key",
     ]);
+  });
+
+  test("tool runs either side of a withheld document render as one block", async () => {
+    const toolEntry = (id: string) => ({
+      id,
+      role: "assistant",
+      content: "",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Read",
+          toolUseId: `${id}-call`,
+          toolArgs: { file_path: `${id}.ts` },
+          toolState: "success",
+        },
+      ],
+    });
+    const draft = '{"status":"pass","criteria":[]}';
+    const messages = [
+      toolEntry("read-1"),
+      { id: "draft", role: "assistant", content: draft, parts: [{ type: "text", content: draft }] },
+      toolEntry("read-2"),
+      {
+        id: "answer",
+        role: "assistant",
+        content: "All criteria pass",
+        parts: [{ type: "text", content: "All criteria pass" }],
+      },
+    ];
+    getBuildPipelineConditionalMock.mockImplementation(async () => ({
+      unchanged: false,
+      record: {
+        version: 2,
+        id: pipeline.id,
+        projectId: pipeline.projectId,
+        environmentId: pipeline.environmentId,
+        snapshot: pipeline,
+        revision: 8,
+        updatedAt: "2026-07-29T00:00:00.000Z",
+      },
+      messagePatches: [{ sessionKey: "verify-key", startIndex: 0, revision: 2, messages }],
+    }));
+
+    renderTab();
+
+    await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
+    expect(screen.queryByText(draft)).toBeNull();
+    expect(screen.getAllByTestId("transcript-row")).toHaveLength(2);
   });
 
   test("reports an unreadable stored transcript once instead of re-requesting it", async () => {

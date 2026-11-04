@@ -381,7 +381,7 @@ export interface CredentialStatus {
 }
 
 export interface GitHubCredentialStatus {
-  source: "host-cli" | "pat";
+  source: "none" | "host-cli" | "pat";
   available: boolean;
 }
 

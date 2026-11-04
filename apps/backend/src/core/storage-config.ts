@@ -351,6 +351,9 @@ export class ConfigRepository {
         kept.logDetail === undefined && own.global.logDetail !== undefined
           ? { ...kept, logDetail: own.global.logDetail }
           : kept;
+      // Older clients must not erase the user's container credential choice.
+      if (ownGlobal.containerGitHubCredential === undefined)
+        ownGlobal.containerGitHubCredential = own.global.containerGitHubCredential;
       const next = current
         ? {
             ...validated,
@@ -797,6 +800,9 @@ export class ConfigRepository {
     // A settings save that predates the engine setting keeps the stored one.
     if (validated.multiReviewEngine === undefined && config.global.multiReviewEngine !== undefined)
       validated.multiReviewEngine = config.global.multiReviewEngine;
+    // Omission (including a patch unset) preserves the explicit sharing choice.
+    if (validated.containerGitHubCredential === undefined)
+      validated.containerGitHubCredential = config.global.containerGitHubCredential;
     // Likewise a save that predates the split of the logging setting.
     if (validated.logDetail === undefined && config.global.logDetail !== undefined)
       validated.logDetail = config.global.logDetail;

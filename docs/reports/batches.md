@@ -17,7 +17,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Batch | File | Parts |
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
-| S1 | [security/0070-s1-github-token.md](security/0070-s1-github-token.md) | `0070`, `0220` |
 | S2 | [security/0040-s2-bridge-credential.md](security/0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` |
 | S3 | [security/0050-s3-electron-renderer.md](security/0050-s3-electron-renderer.md) | `0050`, `0130`, `0060` |
 | S5 | [security/0140-s5-release-chain.md](security/0140-s5-release-chain.md) | `0140`, `0240` |
@@ -63,7 +62,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | --- | --- | --- |
 | Coordinator backend | 1. C1 (Wake reliability)<br>2. C5 (Prompt and context)<br>3. C4 (Tool surface)<br>4. X1 (Coordinator trust boundary)<br>5. C2 (Workflow records)<br>6. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C9 (Panel split)<br>2. C7 (Work panel and navigation)<br>3. C8 (Tab strip)<br>4. C6 (Errors and dead ends)<br>5. C10 (Explanations)<br>6. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
-| Containers | 1. S1 (GitHub token)<br>2. S2 (Bridge credential)<br>3. S-0080 (Legacy host mounts)<br>4. S-0100 (Egress SNI and DNS)<br>5. S-0170 (Agent-tools bind address)<br>6. E14 (Docker logs)<br>7. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
+| Containers | 1. S2 (Bridge credential)<br>2. S-0080 (Legacy host mounts)<br>3. S-0100 (Egress SNI and DNS)<br>4. S-0170 (Agent-tools bind address)<br>5. E14 (Docker logs)<br>6. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
 | Transcript | 1. E8 (Agent tab polling)<br>2. E9 (Transcript reads)<br>3. E10 (Conditional reads and deltas)<br>4. E11 (Projection hashing)<br>5. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Change tracking | 1. E2 (Measurement rows)<br>2. E3 (Retention and deletion)<br>3. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E6 (Store writes)<br>2. E5 (Database upkeep)<br>3. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
@@ -112,7 +111,6 @@ Don't run these pairs at the same time.
 | C6 (Errors and dead ends) | E8 (Agent tab polling) | `useNativeAgentSession.ts` |
 | C6 (Errors and dead ends) | E12 (Renderer store) | `useNativeAgentSession.ts`, `AgentNativeTab.controller.tsx` |
 | C7 (Work panel and navigation) | E23 (Renderer polling) | `useUserCommands.ts` |
-| S1 (GitHub token) | E17 (Dead code) | `app-config-defaults.ts`, `GlobalSettings.sections.tsx`, `storage-shared-config.ts` |
 | S2 (Bridge credential) | E13 (Silent failures) | Bridge `http.ts` files, `acp-context.ts`, `acp-server.ts`, `commands-registry-servers.ts` |
 | S2 (Bridge credential) | E20 (ACP bridge) | `acp-context.ts` |
 | S2 (Bridge credential) | E21 (Pi bridge) | `bridges/pi-bridge/src/http.ts` |
@@ -147,9 +145,9 @@ These files are named by several batches that can still run together. The report
 | `gateway-support-core.ts` | E15, E17, E18, E24, E-0120 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
 | `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3, C4, C5 and X1 |
-| `commands-files.ts` | S1, S2, E7, E-0580 |
+| `commands-files.ts` | S2, E7, E-0580 |
 | `commands-servers.ts` | C6, E3, E13, E20 |
-| `GlobalSettings.sections.tsx` | S1, C6, E15, E17 |
+| `GlobalSettings.sections.tsx` | C6, E15, E17 |
 | `native-agent-display-tail-store.ts` | E5, E6, E11 |
 | `change-tracking/capture.ts` | E4, E7 |
 | `usage-history-store.ts` | E6, E15, E-0580 |

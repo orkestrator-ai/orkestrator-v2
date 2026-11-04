@@ -465,18 +465,23 @@ export function CreateEnvironmentFlowDialog({
     }
   };
 
+  const warningSource = pendingCredentialWarning?.status?.source;
   const warningTitle =
-    pendingCredentialWarning?.status?.source === "host-cli"
-      ? "No GitHub CLI credentials found"
-      : pendingCredentialWarning?.status?.source === "pat"
-        ? "No GitHub token configured"
-        : "GitHub credentials could not be verified";
+    warningSource === "none"
+      ? "This container will have no GitHub access"
+      : warningSource === "host-cli"
+        ? "No GitHub CLI credentials found"
+        : warningSource === "pat"
+          ? "No GitHub token configured"
+          : "GitHub credentials could not be verified";
   const warningDescription =
-    pendingCredentialWarning?.status?.source === "host-cli"
-      ? "Orkestrator could not read an active GitHub CLI login from the host running Orkestrator. Private repositories will not clone until you sign in to GitHub or switch to a personal access token under GitHub authentication in Settings → Version control."
-      : pendingCredentialWarning?.status?.source === "pat"
-        ? "Personal access token mode is selected, but no token is stored. Private repositories will not clone until you add a token in Settings → Version control or switch to host GitHub CLI credentials."
-        : "Orkestrator could not confirm that GitHub credentials are available. Private repositories may fail to clone.";
+    warningSource === "none"
+      ? "Containers get no GitHub credential unless you choose one, so private repositories will not clone, and the agent cannot push or open pull requests. Choose one under GitHub access for containers in Settings → Version control."
+      : warningSource === "host-cli"
+        ? "Orkestrator could not read an active GitHub CLI login from the host running Orkestrator. Private repositories will not clone until you sign in to GitHub or choose a personal access token under GitHub access for containers in Settings → Version control."
+        : warningSource === "pat"
+          ? "Containers are set to use a personal access token, but no token is stored. Private repositories will not clone until you add a token in Settings → Version control."
+          : "Orkestrator could not confirm that GitHub credentials are available. Private repositories may fail to clone.";
 
   return (
     <>

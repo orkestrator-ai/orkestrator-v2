@@ -366,15 +366,27 @@ trust_agent_test_git_remote() {
     fi
 }
 trust_agent_test_git_remote
+# Sync may have installed this already; clearing credential.helper above can
+# have appended an empty value after it, which would switch it off. Install it
+# again at the end of the file. The helper reads the token file per request, so
+# the token never enters this config. `""` drops any helper a copied host config
+# names for GitHub. No token leaves SSH remotes on SSH.
+# Copied configs and earlier images may still carry a token in a URL rewrite.
+# Remove it before any clone, including when credentials are withheld.
+git config --global --name-only --get-regexp '^url\.https://x-access-token:' 2>/dev/null |
+    sed 's/\.[^.]*$//' |
+    sort -u |
+    while IFS= read -r section; do
+        git config --global --remove-section "$section" 2>/dev/null || true
+    done
+
+git config --global --remove-section credential.https://github.com 2>/dev/null || true
+git config --global --unset-all url.https://github.com/.insteadOf '^git@github\.com:$' 2>/dev/null || true
 if [ -n "$TOKEN" ]; then
-    echo -e "${BLUE}>>> Configuring GitHub token for HTTPS <<<${NC}"
-    # Credential synchronization may already have installed this multi-valued
-    # rewrite before setup starts. Replace the first value explicitly, then add
-    # the remaining URL forms so rerunning setup stays idempotent.
-    git config --global --replace-all url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com"
-    # Also rewrite SSH URLs to use token auth (belt and suspenders)
-    git config --global --add url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
+    echo -e "${BLUE}>>> Configuring GitHub credential for HTTPS <<<${NC}"
+    git config --global --add credential.https://github.com.helper ""
+    git config --global --add credential.https://github.com.helper /usr/local/bin/orkestrator-git-credential
+    git config --global --add url.https://github.com/.insteadOf "git@github.com:"
 fi
 
 print_workspace_disk_status() {
@@ -476,16 +488,9 @@ if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
     fi
     print_workspace_disk_status
 
-    # Prepare clone URL - inject token directly for more reliable auth
-    # Note: We avoid logging the URL with token to prevent credential exposure
+    # The credential helper authenticates this. A token in the URL would stay
+    # in origin for as long as the workspace lasts.
     CLONE_URL="$GIT_URL"
-    if [ -n "$TOKEN" ] && [[ "$GIT_URL" == https://github.com/* ]]; then
-        # Replace https://github.com/ with https://x-access-token:TOKEN@github.com/
-        # Disable shell tracing temporarily to avoid token exposure in logs
-        { set +x; } 2>/dev/null
-        CLONE_URL="${GIT_URL/https:\/\/github.com\//https://x-access-token:${TOKEN}@github.com/}"
-        echo -e "${BLUE}Using token-authenticated URL${NC}"
-    fi
 
     # Keep the volume's storage marker in place throughout the clone. A
     # partial clone is discarded on the next start without losing the marker.
@@ -519,11 +524,7 @@ if [ -n "$GIT_URL" ] && { [ ! -d "/workspace/.git" ] || \
         echo ""
         echo -e "${GREEN}Repository ready:${NC}"
         echo "  Branch: $(git branch --show-current)"
-        REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo 'none')
-        if [ -n "$TOKEN" ]; then
-            REMOTE_URL=$(echo "$REMOTE_URL" | sed -E 's#https://x-access-token:[^@]+@github.com#https://github.com#g')
-        fi
-        echo "  Remote: ${REMOTE_URL}"
+        echo "  Remote: $(git config --get remote.origin.url 2>/dev/null | sed -E 's#(https?://)[^/@]*@#\1[REDACTED]@#g' || echo 'none')"
     else
         echo -e "${RED}Clone failed! Trying fallback...${NC}"
 

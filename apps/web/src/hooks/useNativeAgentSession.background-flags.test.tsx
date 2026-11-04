@@ -341,12 +341,28 @@ describe("useNativeAgentSession background read flags", () => {
     await waitFor(() => expect(result.current.sessionStateAvailability).toBe("current"));
     reset();
 
-    await act(async () => {
-      await result.current.refresh({ manual: true });
+    // Held open, as a real read is: one that settles at once clears the flags in
+    // the batch that raised them, so no render would ever show them.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
-
+    transcriptUpdates = [
+      () => gate.then(() => transcriptSnapshot("transcript-2", [{ id: "m1", text: "one" }])),
+    ];
+    stateUpdates = [() => gate.then(() => stateSnapshot("state-2"))];
+    let read!: Promise<unknown>;
+    await act(async () => {
+      read = result.current.refresh({ manual: true });
+      await Promise.resolve();
+    });
     expect(seen.refreshing).toContain(true);
     expect(seen.stateRefreshing).toContain(true);
+
+    await act(async () => {
+      release();
+      await read;
+    });
     expect(result.current.isRefreshing).toBe(false);
     expect(result.current.sessionStateRefreshing).toBe(false);
   });

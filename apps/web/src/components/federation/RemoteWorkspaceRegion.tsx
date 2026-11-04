@@ -19,7 +19,7 @@ import {
   parseRealmMessage,
   readFrameEnvelope,
   realmSearchParams,
-  type RealmGrouping,
+  realmGroupingFor,
   type RealmSelectRequest,
   type ShellToRealmMessage,
 } from "@/lib/federation/workspace-realm";
@@ -169,7 +169,7 @@ function useRealmRequests(nodeId: string, send: ((message: ShellToRealmMessage) 
   const phoneLayout = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const storedGrouping = useMachineViewStore((state) => state.grouping);
   const sortMode = useUIStore((state) => state.environmentSortMode);
-  const grouping: RealmGrouping = sortMode === "activity" ? "activity" : storedGrouping;
+  const grouping = realmGroupingFor(sortMode, storedGrouping, phoneLayout);
   const delivered = useRef(0);
   const ready = useRef(false);
   const selection = useRef<Omit<RealmSelectRequest, "type">>({});

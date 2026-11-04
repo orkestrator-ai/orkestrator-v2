@@ -281,6 +281,38 @@ describe("browser preview capture spool", () => {
     await expect(spool.store.discard("not-a-capture")).rejects.toThrow("Invalid capture id");
   });
 
+  test("a read for IPC carries the spooled PNG as bytes, and a replacement can too", async () => {
+    const spool = harness();
+    const image = pngBytes(64, 40, 1);
+    const created = await spool.store.create(createInput("browser-1", { image }));
+
+    const wire = await spool.store.readWire(created.captureId);
+    expect(Buffer.from(wire!.imageBytes!).equals(image)).toBe(true);
+    expect(wire && "imageDataUrl" in wire).toBe(false);
+    expect((await spool.store.read(created.captureId))!.imageDataUrl).toBe(
+      `data:image/png;base64,${image.toString("base64")}`,
+    );
+
+    const redacted = pngBytes(64, 40, 2);
+    await spool.store.replaceImage(created.captureId, {
+      imageDataUrl: null,
+      imageBytes: redacted,
+      manualRegions: 1,
+    });
+    const replaced = await spool.store.readWire(created.captureId);
+    expect(Buffer.from(replaced!.imageBytes!).equals(redacted)).toBe(true);
+
+    await expect(
+      spool.store.replaceImage(created.captureId, {
+        imageDataUrl: null,
+        imageBytes: new Uint8Array([1, 2, 3]),
+        manualRegions: 0,
+      }),
+    ).rejects.toThrow("Expected a PNG image");
+    const unchanged = await spool.store.readWire(created.captureId);
+    expect(Buffer.from(unchanged!.imageBytes!).equals(redacted)).toBe(true);
+  });
+
   test("replacing the image drops the unredacted bytes from disk", async () => {
     const spool = harness();
     const original = pngBytes(64, 40, 0xab);

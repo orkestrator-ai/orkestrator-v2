@@ -218,6 +218,54 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
+Terminal input and resizes wait on one ordering tail per session, owned by the
+gateway rather than the socket, so a plain disconnect still delivers what was
+already accepted and a reconnect cannot overtake it. Revocation is the
+deliberate exception: credential rotation and gateway stop refuse everything
+still queued, including what a disconnected socket left behind, and so do
+browser-session revocation and credential expiry on an open socket. The one
+operation already running in the backend cannot be recalled. Two gaps remain:
+a disconnected socket loses its credential expiry/revocation watchers, and explicit client-grant revocation does not notify even an open
+socket. A revoked grant can continue admitting input and running queued work
+until its original expiry (up to 15 minutes). Both are tracked
+in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
+
+A local desktop window normally takes everything through Electron main: every
+backend event, terminal output included, is parsed in main and relayed to each
+window, and each command is cloned, stringified, fetched, parsed and cloned back.
+With `global.localWindowGatewayTransport` on (Settings → Experimental, off by
+default, read once as each window is created), a new local window uses this
+gateway itself instead:
+
+- `readLocalWindowGatewayTransport` decides at creation, and `gateway-sync` hands
+  the preload the backend's origin. The preload then exposes
+  `orkestratorDesktopHost` instead of `orkestrator`, because a context-bridge
+  property cannot be replaced. `installLocalDesktopGateway` composes
+  `window.orkestrator` from that host and a gateway client, so commands and events
+  cross no bridge. File-draft saves and deletes are an exception: they are
+  handed immediately to a bounded main-owned IPC queue with per-client CAS
+  revision tracking. Queued writes survive renderer reload or close, including
+  payloads above fetch keepalive limits; a failed revision fences its successors.
+  Native APIs and events main raises itself (menus, connection
+  lists, `local-backend-unavailable`) stay on IPC. The window sets no
+  `orkestratorGateway`: it is still a local client.
+- It talks to the control listener, the origin main already uses, which never
+  compresses. All of its terminals share one filtered SSE stream, even though it
+  has a `baseUrl`: the listener is plain HTTP, about six connections per origin,
+  and one stream per terminal would leave commands queueing behind them. The
+  terminal WebSocket stays a separate choice.
+- The page never holds the token. `directTransportAuthorization` lets main's
+  `webRequest` hook add it for exactly this origin and the `invoke` and `events`
+  routes, and the request presents the backend's own origin, which any launch
+  answers whatever `--allowed-origins` lists.
+- Main relays no backend event to such a window (`relayBackendEvent`), and asks for
+  its own stream with `excludeEvents=terminal-output-` while no open window takes
+  terminal output from it (`setTerminalOutputRelay`). A window's transport stays as
+  it was created, so mixed windows are normal: a relay window keeps main's stream
+  unfiltered, and a change restarts that stream from its cursor. Opening it again
+  announces `terminal-event-stream-connected`, so a relay window reads its exact
+  snapshot.
+
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
 rollback. The terminal transport default has not changed. The evidence and the
@@ -243,6 +291,18 @@ compression on, so a client that sends **no** `Accept-Encoding` still costs a
 streaming gzip context: the gateway sees Go's `gzip`, and Go decodes it again for
 the client. Browsers always send the header, and an explicit `identity` is not
 overridden, so only non-browser clients that omit it are affected.
+
+The gateway's keep-alive timeout (`GATEWAY_KEEP_ALIVE_TIMEOUT_MS`, 120 s) must
+outlast Serve's 90 s idle timeout for upstream connections, so that Serve is
+always the side that closes. When the gateway closed first (Bun's default closes
+at about 6 s), a POST that Serve had just put on that connection could fail, and
+Go does not replay a POST. Serve then answers with an empty-bodied 502, which the
+desktop client reports as `Backend request failed with HTTP 502`, and its log
+shows `http: proxy error` with a connection reset, `EOF` or a closed connection.
+CPU load widens that race but does not create it. Invoke is not retried to hide
+this, because terminal input sent twice would type twice. The evidence, and the
+live runs still to do, are in
+[4400-gateway-502-under-load-live-evidence.md](../todo/cross-cutting/4400-gateway-502-under-load-live-evidence.md).
 
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
@@ -411,6 +471,13 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   source and clock (`eventReconnectRandom`, `eventReconnectNow`). When it asks
   again for the HTTP fallback, that request waits for the fallback's pending
   retry.
+- The main stream's watchdog cannot see a terminal WebSocket that stalls on
+  its own, so on each return to the page the client asks the socket itself: a
+  server that lists `ping` in its `ready` frame's `features` answers
+  `{ type: "ping", nonce }` with a matching `pong`, and the socket is kept when
+  that arrives within 2.5 s. Otherwise, or when the server does not list the
+  feature, the socket is replaced and every terminal reconciles from a
+  snapshot. Hiding the page never touches the socket.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
   backed-off retries until a stream opens. The renderer uses it

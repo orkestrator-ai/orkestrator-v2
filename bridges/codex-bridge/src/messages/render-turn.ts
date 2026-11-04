@@ -70,6 +70,16 @@ export interface TurnRenderState {
       parts: NormalizedPart[];
     }
   >;
+  /**
+   * A running item's parts, kept while its accumulator `version` stands still,
+   * so a publish tick neither rebuilds them nor lists them as changed. Every
+   * accumulator mutation moves the version, the progress line, a measurement and
+   * the turn ending around an unsettled item included.
+   */
+  runningItemParts: Map<
+    string,
+    { version: number; parts: NormalizedPart[]; progress?: NormalizedPart }
+  >;
   /** Machine-output classification cached by the accumulator mutation version. */
   machineOutputByItem: Map<
     string,
@@ -124,6 +134,7 @@ export function createTurnRenderState(): TurnRenderState {
   return {
     timelineOrder: [],
     completedItemParts: new Map(),
+    runningItemParts: new Map(),
     machineOutputByItem: new Map(),
     subagentParts: new Map(),
     subagentFingerprints: new Map(),
@@ -158,6 +169,7 @@ export function beginAssistantRowRenderState(previous: TurnRenderState): TurnRen
 export function releaseTurnRenderState(state: TurnRenderState): void {
   state.timelineOrder.length = 0;
   state.completedItemParts.clear();
+  state.runningItemParts.clear();
   state.machineOutputByItem.clear();
   state.subagentParts.clear();
   state.subagentFingerprints.clear();
@@ -720,11 +732,14 @@ function collectTurnItems(
   items: EngineItem[];
   itemsByKey: Map<string, EngineItem>;
   accumulatorsByKey: Map<string, ItemAccumulator>;
+  /** Each accumulator's version when its item was read, before any later await. */
+  versionsByKey: Map<string, number>;
   itemKeys: string[];
 } {
   const items: EngineItem[] = [];
   const itemsByKey = new Map<string, EngineItem>();
   const accumulatorsByKey = new Map<string, ItemAccumulator>();
+  const versionsByKey = new Map<string, number>();
   const itemKeys: string[] = [];
 
   for (const accumulator of turn.orderedForAssistantSegment(segment?.assistantMessageId)) {
@@ -733,13 +748,14 @@ function collectTurnItems(
     // at its original position rather than being appended after newer activity.
     itemKeys.push(`${CODEX_TIMELINE_ITEM_PREFIX}${accumulator.id}`);
     accumulatorsByKey.set(accumulator.id, accumulator);
+    versionsByKey.set(accumulator.id, accumulator.version);
     const item = effectiveItem(turn, accumulator);
     if (!item) continue;
     items.push(item);
     itemsByKey.set(accumulator.id, item);
   }
 
-  return { items, itemsByKey, accumulatorsByKey, itemKeys };
+  return { items, itemsByKey, accumulatorsByKey, versionsByKey, itemKeys };
 }
 
 export async function renderTurn(
@@ -803,7 +819,7 @@ export async function renderTurn(
   // The loader performs filesystem I/O. Parent events can arrive while it is
   // awaited, so take the render snapshot only after it settles. This prevents a
   // newer sub-agent fingerprint from being committed against stale parent keys.
-  const { items, itemsByKey, accumulatorsByKey, itemKeys } = collectTurnItems(
+  const { items, itemsByKey, accumulatorsByKey, versionsByKey, itemKeys } = collectTurnItems(
     turn,
     options.segment,
   );
@@ -824,6 +840,11 @@ export async function renderTurn(
   for (const itemId of options.state.machineOutputByItem.keys()) {
     if (!currentItemKeys.has(`${CODEX_TIMELINE_ITEM_PREFIX}${itemId}`)) {
       options.state.machineOutputByItem.delete(itemId);
+    }
+  }
+  for (const itemId of options.state.runningItemParts.keys()) {
+    if (!currentItemKeys.has(`${CODEX_TIMELINE_ITEM_PREFIX}${itemId}`)) {
+      options.state.runningItemParts.delete(itemId);
     }
   }
   const timelineOrder = options.state.timelineOrder.filter(
@@ -871,41 +892,62 @@ export async function renderTurn(
         ) {
           if (!suppressDraft) parts.push(...cached.parts);
         } else {
-          const itemParts = withCommandChanges(
-            await itemToParts(item, options.cwd, options.state.fileChange),
-            itemId,
-            accumulator?.commandChanges,
-          );
-          const createdAt =
-            typeof accumulator?.startedAt === "number" && Number.isFinite(accumulator.startedAt)
-              ? new Date(accumulator.startedAt).toISOString()
-              : undefined;
-          const measuredDurationMs = measuredToolDurationMs(item, accumulator);
-          const stampedParts =
-            createdAt || measuredDurationMs !== undefined
-              ? itemParts.map((part) => stampPart(part, createdAt, measuredDurationMs))
-              : itemParts;
-          if (accumulator?.completed) {
-            options.state.completedItemParts.set(itemId, {
-              source: accumulator.item,
-              ...(accumulator.commandChanges ? { commandChanges: accumulator.commandChanges } : {}),
-              parts: stampedParts,
-            });
+          const version = versionsByKey.get(itemId);
+          let running = accumulator?.completed
+            ? undefined
+            : options.state.runningItemParts.get(itemId);
+          if (running?.version !== version) running = undefined;
+          if (running) {
+            if (!suppressDraft) parts.push(...running.parts);
+            if (running.progress) parts.push(running.progress);
           } else {
-            options.state.completedItemParts.delete(itemId);
-          }
-          if (!suppressDraft) parts.push(...stampedParts);
-          // A live progress line for a still-running item, in the same message
-          // as the row it describes so the backend projection can fold it on.
-          // Only for uncompleted items: the accumulator clears `progress` when
-          // an item settles, and a settled row must not claim to be busy.
-          if (accumulator?.progress && !accumulator.completed) {
-            parts.push({
-              type: "progress",
-              content: accumulator.progress,
-              toolUseId: itemId,
-              ...(createdAt ? { createdAt } : {}),
-            });
+            const itemParts = withCommandChanges(
+              await itemToParts(item, options.cwd, options.state.fileChange),
+              itemId,
+              accumulator?.commandChanges,
+            );
+            const createdAt =
+              typeof accumulator?.startedAt === "number" && Number.isFinite(accumulator.startedAt)
+                ? new Date(accumulator.startedAt).toISOString()
+                : undefined;
+            const measuredDurationMs = measuredToolDurationMs(item, accumulator);
+            const stampedParts =
+              createdAt || measuredDurationMs !== undefined
+                ? itemParts.map((part) => stampPart(part, createdAt, measuredDurationMs))
+                : itemParts;
+            if (!suppressDraft) parts.push(...stampedParts);
+            if (accumulator?.completed) {
+              options.state.runningItemParts.delete(itemId);
+              options.state.completedItemParts.set(itemId, {
+                source: accumulator.item,
+                ...(accumulator.commandChanges
+                  ? { commandChanges: accumulator.commandChanges }
+                  : {}),
+                parts: stampedParts,
+              });
+            } else {
+              options.state.completedItemParts.delete(itemId);
+              // A live progress line for a still-running item, in the same message
+              // as the row it describes so the backend projection can fold it on.
+              // Only for uncompleted items: the accumulator clears `progress` when
+              // an item settles, and a settled row must not claim to be busy.
+              const progress: NormalizedPart | undefined = accumulator?.progress
+                ? {
+                    type: "progress",
+                    content: accumulator.progress,
+                    toolUseId: itemId,
+                    ...(createdAt ? { createdAt } : {}),
+                  }
+                : undefined;
+              if (progress) parts.push(progress);
+              if (version !== undefined) {
+                options.state.runningItemParts.set(itemId, {
+                  version,
+                  parts: stampedParts,
+                  ...(progress ? { progress } : {}),
+                });
+              }
+            }
           }
         }
       }

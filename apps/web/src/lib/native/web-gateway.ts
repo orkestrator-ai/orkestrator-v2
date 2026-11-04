@@ -57,6 +57,8 @@ export const BROWSER_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 /** How long a shared-stream filter narrowing waits for its siblings. */
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
+/** Chromium refuses a `keepalive` request body beyond 64 KiB. */
+const KEEPALIVE_MAX_BODY_BYTES = 64 * 1024;
 
 type EventCallback<T> = (payload: T) => unknown;
 /**
@@ -75,6 +77,7 @@ type GatewayWindow = Pick<
   Window,
   | "location"
   | "orkestrator"
+  | "orkestratorDesktopHost"
   | "orkestratorGateway"
   | "orkestratorPortal"
   | "orkestratorWorkspaceTarget"
@@ -144,6 +147,17 @@ export interface BrowserGatewayOptions {
   terminalTransport?: "http-sse" | "websocket";
   terminalWebSocketFactory?: (url: string, protocols: string | string[]) => WebSocket;
   terminalWebSocketReconnectDelayMs?: number;
+  /**
+   * Carry every terminal on one stream even with a `baseUrl`. A plain-HTTP
+   * gateway has about six connections per origin, so one stream per terminal
+   * would leave commands waiting behind them.
+   */
+  sharedTerminalStream?: boolean;
+  /**
+   * Let a command sent while the page goes away finish after it, as one
+   * through Electron main always did (a final pane layout write, for example).
+   */
+  keepaliveOnPageHide?: boolean;
 }
 
 function normalizedBaseUrl(value: string | undefined): string | undefined {
@@ -300,6 +314,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let browserTerminalEventSourceOpen = false;
   let bearerToken = options.token?.trim() || undefined;
   const baseUrl = normalizedBaseUrl(options.baseUrl);
+  const usesSharedTerminalStream = () =>
+    options.sharedTerminalStream === true || (!bearerToken && !baseUrl);
   const apiUrl = (pathname: string): string => {
     if (options.unavailableReason) throw new Error(options.unavailableReason);
     return baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
@@ -1050,7 +1066,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       }
 
       const source = new EventSource(apiUrl(eventStreamPath(events)), {
-        withCredentials: true,
+        withCredentials: credentials !== "omit",
       });
       browserTerminalEventSource = source;
       browserTerminalSubscribedEvents = events;
@@ -1089,7 +1105,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     // failed terminal WebSocket attempt would restart the fetch at once and
     // the fallback would retry at the socket's pace instead of its own.
     if (stream.source || stream.controller || stream.reconnectTimer) return;
-    if (bearerToken || baseUrl) {
+    if (!usesSharedTerminalStream()) {
       const controller = new AbortController();
       stream.controller = controller;
       stream.fetchOpen = false;
@@ -1161,7 +1177,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.fetchOpen = false;
     if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
     stream.reconnectTimer = null;
-    if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource({ defer: true });
+    if (usesSharedTerminalStream()) refreshBrowserTerminalEventSource({ defer: true });
   };
 
   const stopTerminalEventFallbacks = () => {
@@ -1333,7 +1349,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     // Unlike a channel moving to the WebSocket, closing a terminal is a
     // discrete user action rather than one of a burst, so it is not deferred:
     // the socket should stop carrying a terminal nobody is watching at once.
-    if (stream.fallbackActive && !bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
+    if (stream.fallbackActive && usesSharedTerminalStream()) refreshBrowserTerminalEventSource();
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -1355,17 +1371,32 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return payload;
   };
 
+  let pageHiding = false;
+  if (options.keepaliveOnPageHide && typeof window !== "undefined") {
+    // Registered as the API is built, so before any listener that flushes.
+    window.addEventListener("pagehide", () => {
+      pageHiding = true;
+    });
+    window.addEventListener("pageshow", () => {
+      pageHiding = false;
+    });
+  }
+
   const invokeImmediately = async <T = unknown>(
     command: string,
     args?: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> => {
+    const body = JSON.stringify({ command, args: args ?? {} });
     const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
       method: "POST",
       credentials,
       headers: requestHeaders({ "content-type": "application/json" }),
-      body: JSON.stringify({ command, args: args ?? {} }),
+      body,
       signal,
+      // A UTF-16 unit is at most three UTF-8 bytes. A larger body goes as usual,
+      // and ends with the page like any other request.
+      ...(pageHiding && body.length * 3 <= KEEPALIVE_MAX_BODY_BYTES ? { keepalive: true } : {}),
     });
     const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
     return payload.result as T;
@@ -1609,6 +1640,47 @@ export function installBrowserGatewayApi(
 }
 
 /**
+ * A local Electron window on the direct gateway transport (the
+ * `localWindowGatewayTransport` setting). Commands and backend events go
+ * straight to the local backend, with terminal output on its own filtered
+ * stream; main adds the credential at the network layer, so the page never
+ * holds it. Everything else stays the preload's: native APIs, and the events
+ * main raises itself (menus, connection lists, a stopped backend).
+ *
+ * This window is still a local client, so it sets no `orkestratorGateway`.
+ */
+export function installLocalDesktopGateway(
+  targetWindow: GatewayWindow = window,
+  overrides: BrowserGatewayOptions = {},
+): void {
+  const host = targetWindow.orkestratorDesktopHost;
+  if (!host || targetWindow.orkestrator) return;
+  const gateway = createBrowserGatewayApi({
+    baseUrl: host.baseUrl,
+    // Not tied to the terminal WebSocket: to-do 1202 task 12 starts with SSE.
+    terminalTransport: "http-sse",
+    sharedTerminalStream: true,
+    keepaliveOnPageHide: true,
+    ...overrides,
+  });
+  targetWindow.orkestrator = {
+    ...host.api,
+    invoke: gateway.invoke,
+    listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {
+      const unlistenGateway = gateway.listen(event, callback);
+      if (event.startsWith(TERMINAL_OUTPUT_EVENT_PREFIX)) return unlistenGateway;
+      const unlistenHost = host.api.listen(event, callback);
+      return () => {
+        unlistenHost();
+        unlistenGateway();
+      };
+    },
+    eventStreamReady: gateway.eventStreamReady,
+    eventStreamConnection: gateway.eventStreamConnection,
+  };
+}
+
+/**
  * Browser and iOS: a workspace realm (a frame showing another node's
  * workspace in the window's central region) is that node's client —
  * directly with the workspace's client grant, or through the command node's
@@ -1640,5 +1712,6 @@ export function workspaceTargetGatewayOptions(
 }
 
 if (typeof window !== "undefined") {
+  installLocalDesktopGateway(window);
   installBrowserGatewayApi(window, workspaceTargetGatewayOptions());
 }

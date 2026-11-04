@@ -254,6 +254,38 @@ function harness(
   };
 }
 
+describe("notification queue overflow", () => {
+  test("replaces the child and reports the new generation", async () => {
+    const h = harness({ supervisor: { notificationQueueMaxDepth: 1 } });
+    await h.supervisor.ensureReady();
+    const stuck = Promise.withResolvers<void>();
+    h.supervisor.notificationQueue.run("t1", () => stuck.promise);
+
+    h.supervisor.notificationQueue.run("t1", () => undefined);
+
+    expect(h.supervisor.isReady()).toBe(false);
+    expect(h.supervisor.getHealth().lastError).toBe("notification queue overflowed");
+    await h.supervisor.ensureReady();
+    expect(h.children).toHaveLength(2);
+    expect(h.children[0]!.killed).toContain("SIGTERM");
+    expect(h.generationReady).toEqual([{ generation: 2, previous: 1 }]);
+    expect(h.supervisor.notificationQueue.pendingDepth).toBe(0);
+    stuck.resolve();
+    await h.supervisor.stop();
+  });
+
+  test("starts nothing while the bridge is shutting down", async () => {
+    const h = harness({ supervisor: { notificationQueueMaxDepth: 1 } });
+    await h.supervisor.ensureReady();
+    const stopping = h.supervisor.stop();
+    h.supervisor.notificationQueue.run("t1", () => new Promise(() => undefined));
+    h.supervisor.notificationQueue.run("t1", () => undefined);
+    await stopping;
+    expect(h.children).toHaveLength(1);
+    expect(h.supervisor.getState()).toBe("stopped");
+  });
+});
+
 describe("startup", () => {
   test("completes the initialize handshake and reaches ready", async () => {
     const h = harness();

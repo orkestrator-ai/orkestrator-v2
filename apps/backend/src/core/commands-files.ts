@@ -2484,6 +2484,8 @@ export function buildSyncContainerClaudeCredentialCommand(
   credential_dir="$(dirname "$credential_file")"
   umask 077
   mkdir -p "$credential_dir"
+  exec 9> "$credential_file.orkestrator-lock"
+  flock -x 9
   payload="$(cat)"
   # An empty payload means the host had nothing to offer. Leave any credential
   # already inside the container alone rather than logging the agent out. The
@@ -2500,6 +2502,8 @@ export function buildSyncContainerClaudeCredentialCommand(
     trap - EXIT
   fi
   unset payload
+  flock -u 9
+  exec 9>&-
 `;
 }
 

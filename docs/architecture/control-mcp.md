@@ -525,7 +525,8 @@ read/send/ack operations. A self-timer is `create_schedule` with action type
 (`get_usage_limits`, capability `environments`) and lists and switches
 provider accounts (`list_provider_accounts`, `switch_provider_account`,
 capability `accounts`, main role only); a switch is a user-approved request
-unless a self-timer carries the user's permission (see
+unless a self-timer carries the user's permission or the user lets coordinators
+switch without asking in Settings (see
 [agent-accounts.md](agent-accounts.md#coordinator-switching)). It can also change
 the automatic-switching ticks (`set_account_auto_switch`, same capability), which
 needs no approval because the backend does the switching (see

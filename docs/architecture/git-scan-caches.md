@@ -19,6 +19,25 @@ A new local environment worktree gets `core.untrackedCache=true` in its own
 Container workspaces get it in their throwaway clone's config
 (`docker/workspace-setup.sh`). Nothing else is turned on.
 
+## Minimum gap between local scans
+
+A worktree under constant writes (an install, a build) settles a watcher burst
+every 400 ms, and each burst used to start a diff scan of several git processes.
+`DiffStatsService` now keeps `LOCAL_SCAN_MIN_GAP_MS` (2 s) between the end of one
+local scan and the start of the next watcher-driven one. A hint inside the gap,
+and the rerun a hint queues during a running scan, is counted as coalesced and
+arms one timer; later hints do not push that timer back, so the counts keep moving
+while the writes last. The scan it starts begins after every change the gap
+absorbed, so it reports them. A first edit in a quiet worktree still scans at once.
+
+Only hints and their reruns wait. A file-list read, an explicit refresh, a known
+workspace mutation, a new target, a periodic tick and a failure retry all scan
+straight away, and any scan that starts cancels the timer. Containers are not
+gapped here because their signal already spaces hints by the same 2 s
+(`CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS`). The gap limits how often git runs
+while a burst lasts; it does not make a single scan cheaper, and hints under
+ignored directories still count, because a build directory can hold tracked files.
+
 ## Why fsmonitor is off
 
 Until 2026-10-28 `enableGitScanCaches` also wrote `core.fsmonitor=true`. On

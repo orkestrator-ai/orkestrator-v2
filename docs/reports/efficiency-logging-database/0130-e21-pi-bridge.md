@@ -19,8 +19,8 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Avoid re-parsing unchanged session files**: answer `/session/list` without reading every file when nothing changed. Status: open.
-2. **Report a timed-out list**: stop answering a timeout with an empty list. Status: open.
+1. **Avoid re-parsing unchanged session files**: answer `/session/list` without reading every file when nothing changed. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
+2. **Report a timed-out list**: stop answering a timeout with an empty list. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 #### 1. Avoid re-parsing unchanged session files
 
@@ -72,7 +72,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Encode each record once**: follow Cursor's budget code so a write and its shedding do not re-serialise everything. Status: open.
+1. **Encode each record once**: follow Cursor's budget code so a write and its shedding do not re-serialise everything. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 #### 1. Encode each record once
 

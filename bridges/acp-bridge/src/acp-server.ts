@@ -13,7 +13,6 @@ import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } fr
 import {
   HttpError,
   PARENT_WATCHDOG_INTERVAL_MS,
-  cursorToolReplayProcesses,
   hostname,
   port,
   provider,
@@ -22,7 +21,6 @@ import {
 } from "./acp-context.js";
 import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
-import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.acp");
@@ -72,12 +70,8 @@ export function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     for (const state of sessions.values()) {
       for (const approval of Array.from(state.approvals.values())) approval.respond();
-      cancelCursorToolMetadataReconcile(state);
     }
-    await Promise.allSettled([
-      ...[...sessions.values()].map((state) => state.child?.close()),
-      ...[...cursorToolReplayProcesses].map((child) => child.close()),
-    ]);
+    await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
     await flushStreamingPersist();
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();

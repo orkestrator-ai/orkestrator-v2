@@ -362,8 +362,20 @@ export interface BrowserPreviewExpiredCaptureNotice {
   whileClosed: boolean;
 }
 
+/**
+ * A pending capture as it crosses IPC: the spooled PNG as bytes. A data URL is a
+ * third larger and costs the main thread a base64 pass and a string clone per
+ * read, so the preload makes it, on the renderer's side of the boundary.
+ */
+export type BrowserPreviewPendingCaptureWire = Omit<
+  BrowserPreviewPendingCapture,
+  "imageDataUrl"
+> & { imageBytes: Uint8Array | null };
+
 export interface BrowserPreviewReplaceImageInput {
   imageDataUrl: string | null;
+  /** Set by the preload in place of `imageDataUrl`, so the PNG crosses IPC as bytes. */
+  imageBytes?: Uint8Array;
   /**
    * Regions redacted in THIS pass (not a running total); the spool
    * accumulates them into `capture.redaction.manualRegions`, clamped to

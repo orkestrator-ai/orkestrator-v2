@@ -147,6 +147,7 @@ export class ChangeTrackingService {
       root: path.join(root, "objects"),
       durable: options.durable,
       hardBudgetBytes: () => this.policies.policy.snapshotHardBudgetBytes,
+      orphanGraceMs: () => this.policies.policy.orphanGraceMs,
     });
     this.bodies = new EvidenceBodyStore(
       path.join(root, "evidence-bodies"),

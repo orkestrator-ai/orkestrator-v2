@@ -14,6 +14,7 @@ import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import * as realRealmTitleBar from "@/components/federation/RealmTitleBar";
 import * as realAgentMailPanel from "@/components/agent-mail/AgentMailPanel";
+import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
@@ -73,8 +74,16 @@ function selectState<TState, TResult>(
 
 mock.module("@/components/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ResizableHandle: () => <div data-testid="resize-handle" />,
+  ResizablePanel: ({
+    children,
+    elementRef,
+  }: {
+    children: React.ReactNode;
+    elementRef?: (element: HTMLDivElement | null) => void;
+  }) => <div ref={elementRef}>{children}</div>,
+  ResizableHandle: ({ disabled }: { disabled?: boolean }) => (
+    <div data-testid="resize-handle" data-disabled={String(disabled ?? false)} />
+  ),
 }));
 
 mock.module("@/components/files-panel", () => ({
@@ -253,6 +262,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useMachineViewStore.setState({ grouping: "machine" });
   useActiveCoordinatorConversationStore.setState({ active: null });
   uiStore.setState({ projectBoardTab: INITIAL_PROJECT_BOARD_TAB });
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE, true);
@@ -554,7 +564,7 @@ describe("AppShell", () => {
     expect(startDraggingMock).toHaveBeenCalledTimes(1);
   });
 
-  test("hides the left panel once the sidebar is toggled closed", () => {
+  test("hides the left panel once the sidebar is toggled closed", async () => {
     isMobile = false;
     const { rerender } = render(<AppShell>Workspace</AppShell>);
     expect(screen.getByText("Sidebar")).toBeTruthy();
@@ -563,7 +573,7 @@ describe("AppShell", () => {
 
     act(() => uiStore.setState({ sidebarOpen: false }));
     rerender(<AppShell>Workspace</AppShell>);
-    expect(screen.queryByText("Sidebar") === null).toBe(true);
+    await waitFor(() => expect(screen.queryByText("Sidebar") === null).toBe(true));
     expect(screen.queryByTestId("resize-handle") === null).toBe(true);
 
     act(() => uiStore.setState({ sidebarOpen: true }));
@@ -594,6 +604,65 @@ describe("AppShell", () => {
     cleanup();
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("search during closing reopens the sidebar and survives settling", async () => {
+    isMobile = false;
+    mountSearch = true;
+    render(<AppShell>Workspace</AppShell>);
+    act(() => uiStore.setState({ sidebarOpen: false }));
+    expect(screen.getByText("Sidebar")).toBeTruthy();
+    act(() => requestAppShortcut("search-projects"));
+    expect(uiStore.getState().sidebarOpen).toBe(true);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(screen.getByTestId("project-search-dialog")).toBeTruthy();
+  });
+
+  test("compact disables the sidebar resize handle", () => {
+    isMobile = false;
+    useMachineViewStore.setState({ grouping: "compact" });
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("true");
+    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("false");
+  });
+
+  test("in compact, search stays closed and is not delivered when compact is left", async () => {
+    isMobile = false;
+    mountSearch = true;
+    uiStore.setState({ sidebarOpen: false });
+    useMachineViewStore.setState({ grouping: "compact" });
+    render(<AppShell>Workspace</AppShell>);
+    fireEvent.keyDown(document.body, { key: "k", code: "KeyK", metaKey: true });
+    expect(uiStore.getState().sidebarOpen).toBe(false);
+
+    act(() => {
+      useMachineViewStore.setState({ grouping: "machine" });
+      uiStore.setState({ sidebarOpen: true });
+    });
+    await waitFor(() => expect(screen.getByText("Sidebar")).toBeTruthy());
+    expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("the rotate shortcut shows a hidden sidebar and is delivered to it once", async () => {
+    isMobile = false;
+    uiStore.setState({ sidebarOpen: false });
+    let rotated = 0;
+    function Rotator() {
+      useEffect(() => onAppShortcut("rotate-sidebar-grouping", () => rotated++), []);
+      return null;
+    }
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    fireEvent.keyDown(document.body, { key: "D", code: "KeyD", metaKey: true, shiftKey: true });
+    expect(uiStore.getState().sidebarOpen).toBe(true);
+    rerender(
+      <AppShell>
+        <Rotator />
+      </AppShell>,
+    );
+    await waitFor(() => expect(rotated).toBe(1));
   });
 
   test("a closed mobile drawer drops search without opening or replaying it", () => {

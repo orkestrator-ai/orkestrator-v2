@@ -58,6 +58,7 @@ export interface CoreFieldsSnapshot {
   terminalHistoryRetentionDays: number;
   experimentalCodexRawEventLogging: boolean;
   experimentalScheduling: boolean;
+  localWindowGatewayTransport: boolean;
   experimentalGraphs: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
@@ -95,6 +96,7 @@ const STORED_AS_IS = [
   "terminalHistoryRetentionDays",
   "experimentalCodexRawEventLogging",
   "experimentalScheduling",
+  "localWindowGatewayTransport",
   "experimentalGraphs",
   "debugLogging",
   "debugLogRetentionDays",

@@ -358,7 +358,8 @@ A command node attached to another command node operates in leaf mode:
   across machines, so the leaf's coordinator is replaced by the same
   warning, with a link to the command node's coordinator for that
   repository; if the command node has no copy of it, the leaf's
-  coordinator opens directly. Grouped by machine or project, the machines
+  coordinator opens directly. Compact links them the same way and is reported
+  to the realm as repository grouping. Grouped by machine or project, the machines
   are not linked and the leaf's coordinator opens directly. The window
   sends its grouping to the realm (`grouping` message,
   `realmCoordinatorDefers`), since a realm cannot read the window's

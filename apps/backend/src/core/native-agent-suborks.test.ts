@@ -3,6 +3,7 @@
  * MCP, targets run on the shared branch runner, and the answers reach the
  * caller's mailbox. No test here reaches a real provider.
  */
+import { AgentMailService } from "./agent-mail-service.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -54,6 +55,56 @@ type Handle = {
 };
 
 const handle = (value: Record<string, unknown>) => value as unknown as Handle;
+
+test("settled answers wake the same caller only after its turn ends through the real mail drain", async () => {
+  const w = await world();
+  let working = true;
+  const continuations: Array<{ environmentId: string; logicalSessionKey: string; prompt: string }> =
+    [];
+  const mail = new AgentMailService(
+    w.storage,
+    {
+      sessionActivitySnapshot: () => (working ? "working" : "idle"),
+      mailInjectPresence: async () => (working ? "working" : "idle"),
+      reconcileMailInject: async () => "not-dispatched",
+      dispatchMailInject: async (input) => {
+        continuations.push(input);
+        working = true;
+        return { outcome: "accepted", requestId: input.requestId };
+      },
+    },
+    {
+      dispatchMailInject: async () => {
+        throw new Error("unexpected terminal dispatch");
+      },
+    },
+  );
+  try {
+    const handle = await w.ask({
+      targets: [{ agent: "claude" }, { agent: "codex" }],
+      prompt: "Look.",
+    });
+    await w.drive(String(handle.batchId));
+    await mail.drainInjects();
+    expect(continuations).toHaveLength(0);
+    working = false;
+    await mail.drainInjects();
+    expect(continuations).toHaveLength(1);
+    expect(continuations[0]).toMatchObject({
+      environmentId: "e1",
+      logicalSessionKey: "env-e1:agent",
+    });
+    expect(continuations[0]!.prompt).toContain("Claude Code · Opus");
+    expect(continuations[0]!.prompt).toContain("claude says hi");
+    expect(continuations[0]!.prompt).toContain("Codex · GPT-6.1 Sol");
+    expect(continuations[0]!.prompt).toContain("codex says hi");
+    expect((await w.mail())[0]!.placement).toBe("injected");
+    await mail.drainInjects();
+    expect(continuations).toHaveLength(1);
+  } finally {
+    await mail.shutdown();
+  }
+});
 
 describe("the tool", () => {
   test("is offered with the same name, description and shape, and says when to use it", async () => {

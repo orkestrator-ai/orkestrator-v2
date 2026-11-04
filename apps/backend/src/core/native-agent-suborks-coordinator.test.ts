@@ -121,6 +121,34 @@ describe("ask_agents from a coordinator conversation", () => {
     expect(body).toContain("codex says hi");
   });
 
+  test("deleting the project home clears live views and frees admission for the surviving caller", async () => {
+    const { w, conversation, ask } = await coordinatorWorld();
+    const sessionKey = nativeAgentSessionStorageKey(
+      RUNTIME,
+      "claude",
+      conversation.logicalSessionKey,
+    );
+    const input = {
+      targets: Array.from({ length: 4 }, () => ({ agent: "codex" })),
+      prompt: "Look.",
+    };
+    const first = await ask(input);
+    const second = await ask(input);
+    expect(w.service.views(sessionKey)).toHaveLength(2);
+    await w.service.advanceNow(first.batchId);
+    await w.settleProviders();
+    expect(w.provider("codex").turns().length).toBeGreaterThan(0);
+    await w.storage.suborks.deleteSuborkBatchesByEnvironment("e1");
+    const announcements = w.announced.length;
+    await w.service.advanceNow(first.batchId);
+    await w.service.advanceNow(second.batchId);
+    expect(w.service.views(sessionKey)).toBeUndefined();
+    expect(w.announced.slice(announcements)).toEqual([sessionKey, sessionKey]);
+    // The coordinator still exists; a replacement home can accept all four targets.
+    const next = await ask(input);
+    expect(next.suborks.map((branch) => branch.status)).toEqual(Array(4).fill("starting"));
+  });
+
   test("Stop on the conversation stops its calls", async () => {
     const { w, conversation, ask } = await coordinatorWorld();
     const started = await ask({ targets: [{ agent: "codex" }], prompt: "Look." });

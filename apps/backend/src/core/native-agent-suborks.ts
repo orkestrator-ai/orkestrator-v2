@@ -961,7 +961,18 @@ export class NativeAgentSuborkService {
     if (this.stopped) return;
     const batch = this.batches.getSuborkBatch(batchId);
     if (!batch) {
+      const sessionKey = this.live.get(batchId);
       this.live.delete(batchId);
+      this.clearTimer(batchId);
+      this.passFailures.delete(batchId);
+      this.deliveryFailures.delete(batchId);
+      if (sessionKey) {
+        const calls = this.bySession.get(sessionKey);
+        if (calls?.delete(batchId)) {
+          if (calls.size === 0) this.bySession.delete(sessionKey);
+          this.options.announce(sessionKey);
+        }
+      }
       return;
     }
     try {

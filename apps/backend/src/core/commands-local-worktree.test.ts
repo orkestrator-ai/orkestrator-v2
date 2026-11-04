@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test, mock, spyOn } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { removeLocalWorktree, cleanupFailedLocalWorktree } from "./commands-environment.js";
+import {
+  createLocalWorktree,
+  removeLocalWorktree,
+  cleanupFailedLocalWorktree,
+} from "./commands-environment.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 
@@ -76,3 +80,54 @@ for (const cleanup of [false, true]) {
     });
   }
 }
+
+test("cleans a worktree and branch when add succeeds but output capture rejects", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worktree-output-"));
+  tempDirectories.push(root);
+  const project = path.join(root, "repo");
+  await runCommand("git", ["init", "-b", "main", project]);
+  await runCommand("git", [
+    "-C",
+    project,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "initial",
+  ]);
+  const realRun = shell.runCommand;
+  const failure = new shell.CommandFailedError("lost output", {
+    timedOut: true,
+    outputCloseTimedOut: true,
+    exitCode: 0,
+  });
+  const run = spyOn(shell, "runCommand").mockImplementation(async (command, args = [], options) => {
+    const result = await realRun(command, args, options);
+    if (args.includes("worktree") && args.includes("add")) throw failure;
+    return result;
+  });
+  try {
+    await expect(
+      createLocalWorktree(
+        project,
+        "app",
+        "feature",
+        "main",
+        [],
+        path.join(root, "trees"),
+        undefined,
+        true,
+      ),
+    ).rejects.toBe(failure);
+    expect(await fs.stat(path.join(root, "trees", "app-feature")).catch(() => null)).toBeNull();
+    expect(
+      (await realRun("git", ["-C", project, "worktree", "list", "--porcelain"])).stdout,
+    ).not.toContain("app-feature");
+    expect((await realRun("git", ["-C", project, "branch", "--list", "feature"])).stdout).toBe("");
+  } finally {
+    run.mockRestore();
+  }
+});

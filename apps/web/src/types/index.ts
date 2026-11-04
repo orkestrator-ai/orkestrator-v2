@@ -584,8 +584,10 @@ export interface GlobalConfig {
   openCodeZenApiKeySource?: "config" | "host-env" | "none";
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
-  /** Reuse the host's active `gh auth login` token for container GitHub access. */
+  /** The backend's own GitHub credential: the host's `gh auth login`, or else the stored token. */
   useHostGitHubCredentials?: boolean;
+  /** What containers receive, independent of the backend's credential. Absent means none. */
+  containerGitHubCredential?: "none" | "host-cli" | "pat";
   /** The user asked not to be reminded at startup to set up the GitHub CLI. */
   githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */

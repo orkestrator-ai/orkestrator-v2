@@ -6865,6 +6865,168 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(currentSelectedEnvironmentId).toBe("env-2");
   });
 
+  describe("the red trash button", () => {
+    const trashButton = () => screen.getByRole("button", { name: "Delete environment" });
+    const queryTrashButton = () => screen.queryByRole("button", { name: "Delete environment" });
+    const withoutPr = () => {
+      currentEnvironment = { ...selectedEnvironment, prUrl: null, prState: null };
+    };
+
+    test("sits to the right of Create PR, before the file panel toggle", () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      const button = trashButton();
+      expect(button.getAttribute("data-variant")).toBe("destructive");
+      const createPr = screen.getByRole("button", { name: "Create PR" });
+      const filePanel = screen.getByRole("button", { name: "Show file panel" });
+      expect(
+        createPr.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        button.compareDocumentPosition(filePanel) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    test("asks with the row's confirmation before deleting", async () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+
+      const dialog = screen.getByTestId("alert-dialog-content");
+      expect(dialog.textContent).toContain("Are you sure you want to delete feature-env?");
+      expect(dialog.textContent).toContain("It will be stopped before deletion.");
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+    });
+
+    test("cancelling keeps the environment", () => {
+      withoutPr();
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    });
+
+    test("keeps the confirmation on the environment it was opened for", async () => {
+      withoutPr();
+      currentOtherEnvironments = [{ ...selectedEnvironment, id: "env-2", name: "second-env" }];
+      const { rerender } = render(<ActionBar />);
+      fireEvent.click(trashButton());
+
+      currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+      currentOtherEnvironments = [{ ...selectedEnvironment, prUrl: null, prState: null }];
+      currentSelectedEnvironmentId = "env-2";
+      rerender(<ActionBar />);
+
+      expect(screen.getByTestId("alert-dialog-content").textContent).toContain("feature-env");
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+      expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("dismisses confirmation when its target disappears from the store", () => {
+      withoutPr();
+      const { rerender } = render(<ActionBar />);
+      fireEvent.click(trashButton());
+      expect(screen.getByTestId("alert-dialog-content")).toBeTruthy();
+
+      // Another environment remains selected, but the original target is gone.
+      currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
+      currentSelectedEnvironmentId = "env-2";
+      currentOtherEnvironments = [];
+      rerender(<ActionBar />);
+
+      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    });
+
+    test("disables deletion and explains why while a merge is in progress", async () => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prState: "open",
+        lifecycleOperation: "merging",
+      };
+      await withTooltipClocks(async ({ open }) => {
+        render(<ActionBar />);
+        const button = trashButton() as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        fireEvent.click(button);
+        expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+        expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+
+        fireEvent.mouseEnter(button.parentElement!);
+        await fireTooltipTimer(open);
+        expect(screen.getByText("Merge in progress...")).toBeTruthy();
+        expect(screen.queryByText("Delete this environment")).toBeNull();
+      });
+    });
+
+    test("stays available beside an open PR", () => {
+      currentEnvironment = { ...selectedEnvironment, prState: "open" };
+      render(<ActionBar />);
+
+      expect((trashButton() as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    test("gives way to Clean Up once the PR is finished", () => {
+      render(<ActionBar />);
+
+      expect(screen.getByRole("button", { name: "Clean Up" })).toBeTruthy();
+      expect(queryTrashButton() === null).toBe(true);
+    });
+
+    test("is not offered on the project home", () => {
+      withoutPr();
+      currentEnvironment = { ...currentEnvironment, projectHome: true };
+      render(<ActionBar />);
+
+      expect(queryTrashButton() === null).toBe(true);
+    });
+
+    test("is disabled while this window is already deleting the environment", () => {
+      withoutPr();
+      currentDeletingEnvironments.add("env-1");
+      render(<ActionBar />);
+
+      expect((trashButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    test("is a labelled tile in the mobile toolbar", async () => {
+      withoutPr();
+      render(<ActionBar presentation="grid" />);
+
+      const button = trashButton();
+      expect(button.textContent).toContain("Delete environment");
+      fireEvent.click(button);
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    });
+
+    test("swallows a failed deletion, which deleteEnvironment already reported", async () => {
+      withoutPr();
+      deleteEnvironmentMock.mockRejectedValueOnce(new Error("delete failed"));
+      render(<ActionBar />);
+
+      fireEvent.click(trashButton());
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1));
+      expect(queryTrashButton() !== null).toBe(true);
+    });
+  });
+
   describe("a row's Merge PR menu item", () => {
     beforeEach(() => {
       useMergePrRequestStore.setState({ request: null });

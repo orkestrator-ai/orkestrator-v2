@@ -1147,8 +1147,10 @@ export interface AppConfig {
     /** OpenCode Zen (Go) plan key, used to read plan usage in Settings. */
     openCodeZenApiKey?: string;
     githubToken?: string;
-    /** Reuse the host's active `gh auth login` token for container GitHub access. */
+    /** The backend's own GitHub credential: the host's `gh auth login`, or else `githubToken`. */
     useHostGitHubCredentials?: boolean;
+    /** What containers receive, independent of the backend's credential. Absent means none. */
+    containerGitHubCredential?: "none" | "host-cli" | "pat";
     /**
      * The user asked not to be reminded at startup to set up the GitHub CLI.
      * Written only by `setGitHubCliReminderDismissed`; the settings form never

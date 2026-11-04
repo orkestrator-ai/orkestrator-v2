@@ -143,7 +143,8 @@ export function MachineHomeIcon({
 /**
  * A repository group's leading home, two text lines tall, outlined in the
  * command node's colour: the group belongs to the machine that commands the
- * others. The command node's own icon for the project replaces the home.
+ * others. The command node's own icon for the project replaces the home and
+ * fills the outline edge to edge, clipped to its rounded corners.
  */
 export function CommandNodeHomeIcon({
   colorToken,
@@ -160,12 +161,12 @@ export function CommandNodeHomeIcon({
       data-machine-color={colorToken ?? "neutral"}
       aria-hidden="true"
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-lg border bg-white/[0.06]",
+        "flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-white/[0.06]",
         machineOutlineClass(colorToken),
       )}
     >
       {icon ? (
-        <ProjectIconImage src={icon} className="h-5 w-5 rounded-[4px]" />
+        <ProjectIconImage src={icon} className="size-full rounded-none" />
       ) : (
         <House className={cn("h-4 w-4", machineTextClass(colorToken))} />
       )}

@@ -501,6 +501,22 @@ describe("TerminalWebSocketClient", () => {
     expect(retry.knownRevision).toBeUndefined();
   });
 
+  test("authentication close 4003 falls back to HTTP and retries authentication", async () => {
+    const { client, sockets, fallback } = createHarness({ token: "gateway-token" });
+    client.subscribe("session-a", () => undefined);
+    sockets[0]!.open();
+    sockets[0]!.close(4003, "Authentication required");
+    expect(fallback).toHaveBeenCalledTimes(1);
+    await tick();
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    expect(sentControls(sockets[1]!)[0]).toMatchObject({
+      type: "authenticate",
+      token: "gateway-token",
+    });
+    expect(sentControls(sockets[1]!).some((frame) => frame.type === "subscribe")).toBe(false);
+  });
+
   test("authenticates, waits for ready before subscribing, rotates tokens, and rebuilds when visible", async () => {
     const { client, sockets } = createHarness({ token: "old-token" });
     client.subscribe("session-a", () => undefined);

@@ -76,7 +76,7 @@ import {
 } from "./container-project-seed-files.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
-import { pathExists, runCommand } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
@@ -145,10 +145,10 @@ import {
   resolveRemoteWorktreeStartPoint,
   gitRefExists,
   enableGitScanCaches,
-  syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { resolveGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
+import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
+import { resolveContainerGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,
@@ -1679,10 +1679,13 @@ export async function startEnvironmentOnce(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      const githubToken = await resolveGitHubToken(config.global);
+      const githubToken = await resolveContainerGitHubToken(config.global);
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
-        () => syncContainerGitHubCredential(containerId, githubToken),
+        async () => {
+          const current = await storage.getEnvironment(environment.id);
+          await syncRuntimeGitHubCredential(current, containerId, githubToken, context);
+        },
       );
     }
     await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);
@@ -2288,7 +2291,16 @@ export async function createLocalWorktree(
   ];
   assertWorktreePathUnlinked(worktreePath);
   recheckBase();
-  await runCommand("git", args, { timeoutMs: 120_000 });
+  try {
+    await runCommand("git", args, { timeoutMs: 120_000 });
+  } catch (error) {
+    // Exit zero proves add created our allocation even if output was lost.
+    // Ordinary add failures may be collisions; never delete their resources.
+    if (error instanceof CommandFailedError && error.exitCode === 0) {
+      await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
+    }
+    throw error;
+  }
 
   try {
     await configureSameNamedOriginPush(worktreePath);

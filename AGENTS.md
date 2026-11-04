@@ -1292,9 +1292,10 @@ else is rejected outright. `full` mode skips the firewall entirely.
   holds `NET_ADMIN`, the environment network, the published ports and the
   firewall (`apps/backend/src/core/egress-gateway.ts`); the runtime gets no
   capability, so nothing in it, a root terminal included, can change the
-  rules. Older runtimes, and any created with `ORKESTRATOR_EGRESS=in-container`
-  (a rollout cap), keep the firewall inside the runtime with `NET_ADMIN`,
-  where a root terminal (`orkroot`) can change it. Full-mode containers get
+  rules. Runtimes created without one, from an older image or before the
+  `ORKESTRATOR_EGRESS=in-container` rollout cap was removed, keep the firewall
+  inside the runtime with `NET_ADMIN` until they are rebuilt, and a root
+  terminal (`orkroot`) can change it there. Full-mode containers get
   neither `NET_ADMIN` nor a gateway. Do not describe a runtime with an
   in-container firewall as unable to change it.
 

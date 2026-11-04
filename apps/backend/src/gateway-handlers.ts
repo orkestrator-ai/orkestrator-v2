@@ -316,7 +316,7 @@ export class GatewayHandlers {
       this.ctx.metrics.recordStreamClosed();
     };
     const scheduleCredentialExpiry = () => {
-      if (!this.auth.gatewayCredentialMatches(credential)) {
+      if (!this.auth.gatewayCredentialMatches(credential, request)) {
         close();
         return;
       }

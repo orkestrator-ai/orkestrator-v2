@@ -200,6 +200,15 @@ for bridge in $bridges; do
     echo "ok   $bridge /global/health"
 done
 
+# The GitHub credential helper answers from the token file, for github.com only.
+in_container 'f="$(mktemp)"; printf smoke-token > "$f"; export ORKESTRATOR_GITHUB_CREDENTIAL_FILE="$f"
+    allowed="$(printf "protocol=https\nhost=github.com\n\n" | orkestrator-git-credential get)"
+    refused="$(printf "protocol=https\nhost=example.com\n\n" | orkestrator-git-credential get)"
+    rm -f "$f"
+    [ "$allowed" = "$(printf "username=x-access-token\npassword=smoke-token")" ] && [ -z "$refused" ]' \
+    || fail "orkestrator-git-credential did not answer from the token file"
+echo "ok   github credential helper"
+
 # Chromium, as the image's own verifier runs it.
 in_container 'NODE_PATH=/usr/local/share/npm-global/lib/node_modules node /usr/local/share/verify-playwright.cjs' >/dev/null \
     || fail "Chromium did not launch for node"

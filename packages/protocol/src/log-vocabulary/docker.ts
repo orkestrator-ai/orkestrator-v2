@@ -33,6 +33,10 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
         "An automatic host port collided on start, so it is retried once with fresh ports.",
+      "writer-lease.lost":
+        "This backend lost the registry writer lease, for the fixed `reason` given. Schedules stop and container changes are refused until it restarts.",
+      "writer-lease.not-acquired":
+        "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",
     },
   },
   "docker.reachability": {

@@ -58,8 +58,13 @@ session").
 `__Host-`, with an XCTest case. It was written on Linux and not compiled or
 run there.
 
-**Investigation.** Not started: needs the iOS build and the support window
-for the iOS app.
+**Investigation.** Tried on 2026-11-04 on a Mac with Xcode 27.2, without a
+result. `mise run test:ios` printed nothing while `xcodebuild -runFirstLaunch`
+ran; it was stopped after 15 minutes, so the Swift change has still never been
+compiled. Complete Xcode's first launch by hand first, because it installs
+system components. The commit with the change (`4f9cf3b32`) is in the tags
+`v2.35.5-beta`, `v2.36.0` and `v2.36.1`. Whether an iOS build has shipped from
+them, and how long the iOS support window is, were not established.
 
 **Decisions.**
 

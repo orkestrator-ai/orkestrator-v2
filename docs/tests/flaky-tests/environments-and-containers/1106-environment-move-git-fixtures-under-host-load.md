@@ -188,3 +188,13 @@ this case named no longer exists. The test became `a file write admitted first
 blocks copying until its acknowledged edit is present` and writes through the
 environment's own root; its deadline behaviour is unchanged. It passed in an
 owner-alone run of `environment-move.test.ts` on that branch.
+
+## CI recurrence of `cleanup retries preserve a new directory at the source pathname` (2026-11-03)
+
+Failed in the `Tests (backend)` shard on `main` at
+[`0bd2cea99`](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41735714522/job/126264255468)
+(225.91 ms) and at `b7f41b692` (178.68 ms), with `ENOENT` at
+`environment-move.test.ts:1158`. These are not five-second deadlines, unlike the
+rest of this case. The owning file passed alone on 2026-11-04 at `a44641cbc` plus
+this change's edits (`bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`,
+exit zero, 11.3 s). The cause was not investigated.

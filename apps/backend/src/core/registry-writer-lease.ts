@@ -3,6 +3,9 @@ import { promises as fs } from "node:fs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { formatContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
 
 /**
  * Exclusive right of one backend process to mutate a registry's containers.
@@ -130,8 +133,7 @@ export class RegistryWriterLease {
     if (token !== this.token) {
       // Reclaimed by another process while this one was stalled (for example
       // across machine sleep). Stop writing rather than fight over it.
-      this.lost = true;
-      clearInterval(this.heartbeat);
+      this.markLost(token === null ? "unreadable" : "reclaimed");
       return;
     }
     const time = new Date();
@@ -140,15 +142,28 @@ export class RegistryWriterLease {
 
   isHeld(): boolean {
     if (this.released || this.lost) return false;
+    let reason: "reclaimed" | "unreadable" = "unreadable";
     try {
       const parsed = JSON.parse(readFileSync(this.leasePath, "utf8")) as Partial<LeaseDocument>;
       if (parsed.token === this.token) return true;
+      if (typeof parsed.token === "string") reason = "reclaimed";
     } catch {
       // A missing or malformed lease is never proof of ownership.
     }
+    this.markLost(reason);
+    return false;
+  }
+
+  /**
+   * The one held-to-lost transition. Losing the lease is final for this
+   * process, so there is no regained case to report. A refresh that was reading
+   * while `release` removed the file has found its own release, not a loss.
+   */
+  private markLost(reason: "reclaimed" | "unreadable"): void {
+    if (this.lost || this.released) return;
     this.lost = true;
     clearInterval(this.heartbeat);
-    return false;
+    log.warn("writer-lease.lost", { reason });
   }
 
   /** Throws unless this process still holds the lease. */
@@ -300,11 +315,17 @@ export async function openRegistryWriter(
   options: RegistryWriterLeaseOptions = {},
 ): Promise<RegistryWriter> {
   const schema = await checkRegistrySchemaMarker(dataDir);
-  if (!schema.compatible) return new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+  if (!schema.compatible) {
+    log.info("writer-lease.not-acquired", { reason: "schema-incompatible" });
+    return new BlockedRegistryWriter(new RegistrySchemaBlockedError());
+  }
   try {
     return await RegistryWriterLease.acquire(dataDir, options);
   } catch (error) {
-    if (error instanceof RegistryWriterLeaseBusyError) return new BlockedRegistryWriter(error);
+    if (error instanceof RegistryWriterLeaseBusyError) {
+      log.info("writer-lease.not-acquired", { reason: "busy" });
+      return new BlockedRegistryWriter(error);
+    }
     throw error;
   }
 }

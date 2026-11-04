@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, mock, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { BuildPipelineKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
+import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf, TabInfo } from "@/types/paneLayout";
@@ -191,6 +192,50 @@ describe("PipelineKeyInformationTab", () => {
       within(section(tab, "Update history")).getByText(/Verify · round 1 · verification/),
     ).toBeTruthy();
     expect(within(tab).getByText(/Key information · Updated .* by Verify · round 1/)).toBeTruthy();
+  });
+
+  test.each(["problem", "objective"] as const)(
+    "keeps the legacy %s first and lead styled when summary is absent",
+    (framing) => {
+      const legacy = { ...keyInformation, framing };
+      delete legacy.summary;
+      const tab = renderTab({ ...pipeline, keyInformation: legacy });
+      const title = framing === "objective" ? "Objective" : "Problem";
+      const statement = section(tab, title);
+      expect(within(tab).getAllByRole("region")[0]).toBe(statement);
+      expect(within(tab).queryByRole("region", { name: "Summary" })).toBeNull();
+      const prose = within(statement).getByText(legacy.statement!);
+      expect(prose.classList.contains("text-[15px]")).toBe(true);
+      expect(prose.classList.contains("leading-7")).toBe(true);
+      expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+      const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+      expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
+      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(nav.querySelector('[aria-current="location"]')?.textContent).toBe(title);
+    },
+  );
+
+  test("renders a summary-only brief as the lead section", () => {
+    const summary = "The pipeline now explains its progress in plain language.";
+    const tab = renderTab({
+      ...pipeline,
+      keyInformation: { ...emptyKeyInformation(keyInformation.updatedAt), summary },
+    });
+    const regions = within(tab).getAllByRole("region");
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(section(tab, "Summary"));
+    const prose = within(regions[0]!).getByText(summary);
+    expect(prose.classList.contains("text-[15px]")).toBe(true);
+    expect(prose.classList.contains("leading-7")).toBe(true);
+    expect(prose.parentElement!.classList.contains("border-amber-400/60")).toBe(true);
+    expect(within(tab).queryByText("Nothing has been recorded yet")).toBeNull();
+    const nav = within(tab).getByRole("navigation", { name: "Key information sections" });
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Summary"]);
+    expect(nav.querySelector('[aria-current="location"]')?.textContent).toBe("Summary");
   });
 
   test("summarises tests, issues and the latest verification", () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { emptyKeyInformation } from "@orkestrator/protocol/build-pipeline-key-information";
 import { KeyInformationBody } from "./PipelineKeyInformation";
 import { keyInformation } from "./key-information-test-fixture";
 
@@ -83,6 +84,47 @@ describe("Key information panel section list", () => {
       "Verification",
     ]);
     expect(scroller.contains(nav)).toBe(false);
+    expect(current(nav)).toBe("Summary");
+  });
+
+  test.each(["problem", "objective"] as const)(
+    "keeps the legacy %s first when summary is absent",
+    (framing) => {
+      const legacy = { ...keyInformation, framing };
+      delete legacy.summary;
+      render(<KeyInformationBody keyInformation={legacy} />);
+      const title = framing === "objective" ? "Objective" : "Problem";
+      const nav = screen.getByRole("navigation", { name: "Key information sections" });
+      const scroller = screen.getByTestId("pipeline-key-information-scroller");
+      const statement = within(scroller).getByRole("region", { name: title });
+      expect(within(scroller).getAllByRole("region")[0]).toBe(statement);
+      expect(within(statement).getByText(legacy.statement!)).toBeTruthy();
+      expect(within(scroller).queryByRole("region", { name: "Summary" })).toBeNull();
+      expect(within(nav).getAllByRole("button")[0]!.textContent).toBe(title);
+      expect(within(nav).queryByRole("button", { name: "Summary" })).toBeNull();
+      expect(current(nav)).toBe(title);
+    },
+  );
+
+  test("renders a summary-only brief with just its Summary section and navigation entry", () => {
+    const summary = "The pipeline now explains its progress in plain language.";
+    render(
+      <KeyInformationBody
+        keyInformation={{ ...emptyKeyInformation(keyInformation.updatedAt), summary }}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Key information sections" });
+    const scroller = screen.getByTestId("pipeline-key-information-scroller");
+    const regions = within(scroller).getAllByRole("region");
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toBe(within(scroller).getByRole("region", { name: "Summary" }));
+    expect(within(regions[0]!).getByText(summary)).toBeTruthy();
+    expect(screen.queryByText(/Nothing has been recorded yet/)).toBeNull();
+    expect(
+      within(nav)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Summary"]);
     expect(current(nav)).toBe("Summary");
   });
 

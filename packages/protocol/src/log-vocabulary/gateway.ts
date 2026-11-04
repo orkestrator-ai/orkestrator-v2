@@ -20,6 +20,10 @@ export const GATEWAY_LOG_AREAS = defineLogAreas({
       "loopback.unavailable": "The loopback client listener could not start.",
       "auth-token.stored": "The gateway token's file was written. The path only, never the token.",
       "auth-token.persist-failed": "The gateway token could not be saved.",
+      "auth-guess.throttled":
+        "A listener saw enough different wrong tokens that it now pauses new ones. Never the values.",
+      "host.refused":
+        "A request named a host this gateway does not answer to. Logged once per name, up to a limit.",
       "port.fallback": "The preferred port was taken, so a nearby one is used.",
       "port.fallback-distant":
         "The preferred port and those nearby were taken, so another is used.",

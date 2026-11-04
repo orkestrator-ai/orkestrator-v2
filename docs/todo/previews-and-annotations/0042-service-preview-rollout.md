@@ -1631,6 +1631,23 @@ running.
   helper (a no-op with telemetry disabled) exits by itself. No container,
   profile or Docker network was created.
 
+2026-11-04, seeded restart inside the verification window
+([3230](3230-restart-inside-verification-window.md)), branch
+`verification-restart-process-1dad5f1b3e75-r1` based on `96ee1eb3e`; macOS
+27.0 arm64, Bun 1.4.4. Disposable agent-test profile under a temporary root
+with `ORKESTRATOR_PREVIEW_TRANSPORT=1`, as the spec sets it; no other opt-in
+variables. Command, once per run:
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-seeded-electron.spec.ts`.
+
+| Run | Backend | Passed | Failed | Skipped |
+| --- | --- | --- | --- | --- |
+| 1 to 4 | with the fix | 6 | 0 | 0 |
+| Control | in-window recheck temporarily disabled | 3 | 1 (check 6: generation unchanged) | 2 (serial, after the failure) |
+
+No dev server process was left running after the runs. The spec removes its
+temporary root in `afterAll`; its private temporary directory was not inspected
+separately.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner

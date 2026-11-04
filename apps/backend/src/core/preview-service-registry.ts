@@ -51,6 +51,12 @@ export interface ResolvedPreviewTarget {
   tls: { servername: string } | null;
   /** Relay-backed targets connect through the supervisor instead of TCP. */
   relay?: { environmentId: string; containerId: string; port: number };
+  /**
+   * Process-keyed (`managed-process`) targets only: the listener pids, sorted,
+   * at the last full check. Inside the verification window a new connection
+   * compares them with a port lookup instead of trusting the port.
+   */
+  listenerPids?: readonly number[];
 }
 
 export type PreviewResolution =
@@ -73,6 +79,8 @@ export interface PreviewTargetResolverPort {
   ): Promise<PreviewResolution>;
   /** Drop cached inspection for an environment after a lifecycle change. */
   invalidate(environmentId: string, containerId?: string | null): void;
+  /** Who listens on a target's port now, sorted; `null` when that cannot be told. */
+  listenerPids(target: ResolvedPreviewTarget): Promise<readonly number[] | null>;
 }
 
 export interface PreviewReadinessPort {
@@ -110,7 +118,10 @@ export interface PreviewRegistryOptions {
   now?: () => number;
   /** Event coalescing window. Revocations are never lost to coalescing. */
   eventDelayMs?: number;
-  /** A verified binding older than this is re-resolved before a new connection. */
+  /**
+   * A verified binding older than this is re-resolved before a new connection.
+   * Younger, a process-keyed target still has its listener pids checked.
+   */
   verificationTtlMs?: number;
   /** Readiness retry schedule while a service is starting. */
   probeBackoffMs?: readonly number[];
@@ -156,6 +167,10 @@ const DEFAULT_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000] as const
 
 function newServiceId(): string {
   return `svc_${randomBytes(12).toString("base64url")}`;
+}
+
+function samePids(a: readonly number[] | undefined, b: readonly number[]): boolean {
+  return a?.length === b.length && a.every((pid, index) => pid === b[index]);
 }
 
 function lifecycleFingerprint(environment: Environment | null): string {
@@ -1337,28 +1352,63 @@ export class PreviewServiceRegistry {
   /**
    * Target for a new upstream connection. Rejects a stale generation and
    * re-verifies a binding older than the verification TTL, so a reused host
-   * port cannot be reached with an old attachment.
+   * port cannot be reached with an old attachment. Inside the TTL a
+   * process-keyed target's listener is still looked up, unless the caller only
+   * reuses a socket it already holds, which stays on the process it was opened to.
    */
-  async acquireTarget(serviceId: string, generation: number): Promise<ResolvedPreviewTarget> {
-    const check = () => {
-      const entry = this.runtime.get(serviceId);
-      const definition = this.definitions.get(serviceId);
-      if (!entry || !definition) throw previewFailure("not-found");
-      if (!definition.enabled)
-        throw previewFailure("forbidden", { message: "This service is disabled." });
-      if (entry.endpoint.endpointGeneration !== generation)
-        throw previewFailure("generation-changed");
-      return entry;
-    };
-    let entry = check();
+  async acquireTarget(
+    serviceId: string,
+    generation: number,
+    options: { reusingConnection?: boolean } = {},
+  ): Promise<ResolvedPreviewTarget> {
+    let entry = this.currentEntry(serviceId, generation);
     if (!entry.target || this.now() - entry.verifiedAt > this.verificationTtlMs) {
       await this.resolveNow(serviceId);
-      entry = check();
+      entry = this.currentEntry(serviceId, generation);
+    } else if (entry.target.listenerPids && !options.reusingConnection) {
+      entry = await this.recheckListener(serviceId, generation, entry.target);
     }
     if (!entry.target || entry.endpoint.state !== "available") {
       throw previewFailure(entry.endpoint.failure?.category ?? "target-unmapped");
     }
     return entry.target;
+  }
+
+  private currentEntry(serviceId: string, generation: number): RuntimeEntry {
+    const entry = this.runtime.get(serviceId);
+    const definition = this.definitions.get(serviceId);
+    if (!entry || !definition) throw previewFailure("not-found");
+    if (!definition.enabled)
+      throw previewFailure("forbidden", { message: "This service is disabled." });
+    if (entry.endpoint.endpointGeneration !== generation)
+      throw previewFailure("generation-changed");
+    return entry;
+  }
+
+  /**
+   * Port lookup only (no process walk): the same pids mean the same process,
+   * short of pid reuse. Anything else, an unanswered lookup included, goes
+   * through the full check, which rebinds if the process really changed. This
+   * does not extend `verifiedAt`, so the full check still runs on its schedule.
+   */
+  private async recheckListener(
+    serviceId: string,
+    generation: number,
+    verified: ResolvedPreviewTarget,
+  ): Promise<RuntimeEntry> {
+    const listening = await this.options.resolver.listenerPids(verified);
+    let entry = this.currentEntry(serviceId, generation);
+    const agrees = () => listening !== null && samePids(entry.target?.listenerPids, listening);
+    if (agrees()) return entry;
+    if (entry.job) {
+      // That resolve may have looked before this change, so it cannot vouch for
+      // what was just seen unless its answer matches.
+      await entry.job;
+      entry = this.currentEntry(serviceId, generation);
+      if (listening === null || agrees()) return entry;
+    }
+    await this.resolveNow(serviceId);
+    return this.currentEntry(serviceId, generation);
   }
 
   /** Current generation for a service that is available right now. */

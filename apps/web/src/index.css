@@ -958,3 +958,18 @@ body[data-orkestrator-dev-profile]::before {
   outline-offset: 3px;
   border-radius: 0.75rem;
 }
+
+/*
+ * The sidebar's width between its full, compact and hidden states
+ * (`useSidebarPanelMotion`). The attribute is set only for that change, and a
+ * resize handle held by the pointer turns it off, so a drag follows the pointer.
+ */
+[data-sidebar-width-animating]:not(:has(> [data-separator="active"])) > [data-panel] {
+  transition: flex-grow 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-width-animating] > [data-panel] {
+    transition: none !important;
+  }
+}

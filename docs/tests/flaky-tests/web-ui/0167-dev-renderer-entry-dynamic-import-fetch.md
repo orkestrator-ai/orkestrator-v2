@@ -64,3 +64,13 @@ fetches are shown to fail for another reason.
   result at `output/agent-testing/qa-auth-review-fc70c794-complete/browser/results.json`.
 - **Assessment:** the trace matches this existing dev-module-fetch failure;
   status remains environmental. Both disposable profiles were stopped and reset.
+
+## 2026-11-04: a mechanism seen on a host with a firewalled Docker
+
+In `workspace-realm-electron.spec.ts` on Linux (host ufw drops Docker's traffic),
+the renderer logged repeated `Failed to load resource: net::ERR_NETWORK_CHANGED`
+around the backend's boot-time `docker.reachability` probe, which creates a Docker
+network, and the page then showed "Orkestrator couldn’t connect". This run shows
+those two together on one host, not that the probe causes every case here. That
+spec now reloads when this page appears at startup, as `loadAppWithDevRetry` does
+in the browser specs.

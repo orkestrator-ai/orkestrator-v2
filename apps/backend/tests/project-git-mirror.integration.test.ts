@@ -1,0 +1,532 @@
+/**
+ * The host side of a project's Git mirror, with real Git against real local
+ * repositories: how it is built, refreshed, bounded and removed. The container
+ * side is `tests/unit/workspace-setup-git-mirror.test.ts`, and the mount is
+ * `project-git-mirror-docker.test.ts`.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawn, spawnSync } from "node:child_process";
+import { promises as fs, existsSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { cleanupProjectForRemoval } from "../src/core/commands-registry-projects";
+import type { CommandContext } from "../src/core/commands-context";
+import {
+  CONTAINER_GIT_MIRROR_MOUNT,
+  CONTAINER_GIT_MIRROR_PATH,
+  GIT_MIRROR_REFRESH_INTERVAL_MS,
+  gitMirrorContainerArguments,
+  noteGitMirrorCloneOutcome,
+  refreshProjectGitMirror,
+  removeProjectGitMirror,
+  sweepOrphanedProjectGitMirrors,
+  type GitMirrorRefreshOptions,
+} from "../src/core/project-git-mirror";
+import { runCommand } from "../src/core/shell";
+import { StorageService } from "../src/core/storage";
+
+const setupScript = path.join(import.meta.dir, "..", "..", "..", "docker", "workspace-setup.sh");
+const PROJECT_ID = "project-1";
+
+let root: string;
+let dataDir: string;
+let remote: string;
+let work: string;
+let storage: StorageService;
+let context: Pick<CommandContext, "storage">;
+const savedEnv = { ...process.env };
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function commit(name: string, content: string): void {
+  writeFileSync(path.join(work, name), content);
+  git(work, ["add", "."]);
+  git(work, ["commit", "-qm", `change ${name}`]);
+  git(work, ["push", "-q", "origin", "main"]);
+}
+
+const project = () => ({ id: PROJECT_ID, gitUrl: `file://${remote}` });
+const projectDir = () => path.join(dataDir, "git-mirrors", PROJECT_ID);
+const mirrorPath = () => path.join(projectDir(), "mount", "mirror.git");
+const refresh = (options: GitMirrorRefreshOptions = {}, target = project()) =>
+  refreshProjectGitMirror(context, target, { force: true, ...options });
+const mirrorRefs = () =>
+  git(root, [`--git-dir=${mirrorPath()}`, "for-each-ref", "--format=%(refname)"]).split("\n");
+
+/** Every file in the mirror that is not an object: anything Git could have written a URL to. */
+async function nonObjectFiles(directory: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== "objects") files.push(...(await nonObjectFiles(target)));
+    } else {
+      files.push(target);
+    }
+  }
+  return files;
+}
+
+beforeEach(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-project-git-mirror-"));
+  process.env.GIT_CONFIG_GLOBAL = path.join(root, "gitconfig");
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  await fs.writeFile(
+    process.env.GIT_CONFIG_GLOBAL,
+    "[user]\n\tname = T\n\temail = t@example.com\n",
+  );
+  dataDir = path.join(root, "data");
+  remote = path.join(root, "remote.git");
+  work = path.join(root, "work");
+  storage = new StorageService(dataDir);
+  await storage.init();
+  context = { storage };
+  git(root, ["init", "-q", "--bare", "--initial-branch=main", remote]);
+  git(root, ["clone", "-q", remote, work]);
+  git(work, ["checkout", "-qb", "main"]);
+  commit("one.txt", "one\n");
+});
+
+afterEach(async () => {
+  process.env.GIT_CONFIG_GLOBAL = savedEnv.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_NOSYSTEM = savedEnv.GIT_CONFIG_NOSYSTEM;
+  if (savedEnv.GIT_CONFIG_GLOBAL === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  if (savedEnv.GIT_CONFIG_NOSYSTEM === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("building and refreshing", () => {
+  test("builds a bare mirror of the branches, readable by any user in a container", async () => {
+    git(work, ["tag", "v1"]);
+    git(work, ["push", "-q", "origin", "v1"]);
+    git(work, ["push", "-q", "origin", "HEAD:refs/pull/1/head"]);
+
+    expect(await refresh()).toBe("built");
+
+    expect(mirrorRefs()).toEqual(["refs/heads/main"]);
+    expect(git(root, [`--git-dir=${mirrorPath()}`, "rev-parse", "--is-bare-repository"])).toBe(
+      "true",
+    );
+    expect(await nonObjectFiles(mirrorPath())).not.toContainEqual(expect.stringContaining("hooks"));
+    // Everything a clone reads is world-readable, directories traversable.
+    const walk = async (directory: string): Promise<void> => {
+      const mode = (await fs.stat(directory)).mode;
+      expect(mode & 0o005).toBe(0o005);
+      for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entry.name);
+        if (entry.isDirectory()) await walk(target);
+        else expect((await fs.stat(target)).mode & 0o004).toBe(0o004);
+      }
+    };
+    await walk(path.join(projectDir(), "mount"));
+    // Only the bind source is open; no other host user can traverse to it.
+    expect((await fs.stat(path.join(dataDir, "git-mirrors"))).mode & 0o077).toBe(0);
+    expect((await fs.stat(projectDir())).mode & 0o077).toBe(0);
+  });
+
+  test("a refresh fetches new work and prunes deleted branches in place", async () => {
+    git(work, ["push", "-q", "origin", "HEAD:refs/heads/feature"]);
+    expect(await refresh()).toBe("built");
+    expect(mirrorRefs()).toContain("refs/heads/feature");
+    const { ino } = await fs.stat(mirrorPath());
+
+    commit("two.txt", "two\n");
+    git(work, ["push", "-q", "origin", "--delete", "feature"]);
+    expect(await refresh()).toBe("fetched");
+
+    expect((await fs.stat(mirrorPath())).ino).toBe(ino);
+    expect(mirrorRefs()).toEqual(["refs/heads/main"]);
+    expect(git(root, [`--git-dir=${mirrorPath()}`, "log", "-1", "--format=%s", "main"])).toBe(
+      "change two.txt",
+    );
+  });
+
+  test("launches inside the refresh interval do not contact the remote", async () => {
+    let fetches = 0;
+    const run: typeof runCommand = (command, args, options) => {
+      if (args?.includes("fetch")) fetches += 1;
+      return runCommand(command, args, options);
+    };
+    let clock = 1_000_000;
+    const options = { force: false, run, now: () => clock };
+
+    expect(await refresh(options)).toBe("built");
+    expect(fetches).toBe(1);
+    clock += GIT_MIRROR_REFRESH_INTERVAL_MS - 1;
+    expect(await refresh(options)).toBe("skipped-recent");
+    expect(fetches).toBe(1);
+    clock += 1;
+    expect(await refresh(options)).toBe("fetched");
+    expect(fetches).toBe(2);
+  });
+
+  test("a changed project URL rebuilds instead of mixing two remotes", async () => {
+    expect(await refresh()).toBe("built");
+    const other = path.join(root, "other.git");
+    git(root, ["clone", "-q", "--bare", remote, other]);
+
+    expect(await refresh({}, { id: PROJECT_ID, gitUrl: `file://${other}` })).toBe("built");
+  });
+
+  test("an empty remote publishes nothing", async () => {
+    const empty = path.join(root, "empty.git");
+    git(root, ["init", "-q", "--bare", "--initial-branch=main", empty]);
+
+    expect(await refresh({}, { id: PROJECT_ID, gitUrl: `file://${empty}` })).toBe("empty");
+    expect(existsSync(mirrorPath())).toBe(false);
+  });
+});
+
+describe("credentials", () => {
+  const secret = "s3cret-token-value";
+
+  /** Sends the transfer to the local remote; everything else is what Git would have been given. */
+  function redirecting(url: string, calls: { args: string[]; env: NodeJS.ProcessEnv }[]) {
+    const run: typeof runCommand = (command, args = [], options = {}) => {
+      if (!args.includes("fetch")) return runCommand(command, args, options);
+      calls.push({ args: [...args], env: { ...options.env } });
+      const real = args
+        .map((arg) => (arg === url ? `file://${remote}` : arg))
+        .filter(
+          (arg, index, all) => !arg.includes("nsteadOf") && !all[index + 1]?.includes("nsteadOf"),
+        );
+      return runCommand(command, real, options);
+    };
+    return run;
+  }
+
+  async function expectNoSecretInMirror() {
+    const config = await fs.readFile(path.join(mirrorPath(), "config"), "utf8");
+    for (const forbidden of ["url", "remote", "credential", "extraheader", "insteadOf"]) {
+      expect(config.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+    expect(existsSync(path.join(mirrorPath(), "FETCH_HEAD"))).toBe(false);
+    for (const file of await nonObjectFiles(path.join(projectDir()))) {
+      expect(await fs.readFile(file, "utf8")).not.toContain(secret);
+    }
+  }
+
+  test("a token in the project URL reaches neither the mirror nor its state", async () => {
+    // The rewrite stands in for the remote host; Git still sees the credential URL.
+    const url = `https://user:${secret}@github.invalid/acme/repo.git`;
+    await fs.appendFile(
+      process.env.GIT_CONFIG_GLOBAL!,
+      `[url "file://${remote}"]\n\tinsteadOf = ${url}\n`,
+    );
+
+    expect(await refresh({}, { id: PROJECT_ID, gitUrl: url })).toBe("built");
+
+    await expectNoSecretInMirror();
+  });
+
+  test("a selected PAT goes per transfer, by helper and environment, never by argument", async () => {
+    const url = "https://github.com/acme/repo.git";
+    const load = storage.loadConfig.bind(storage);
+    storage.loadConfig = async () => {
+      const config = await load();
+      return {
+        ...config,
+        global: { ...config.global, useHostGitHubCredentials: false, githubToken: secret },
+      };
+    };
+    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+
+    expect(await refresh({ run: redirecting(url, calls) }, { id: PROJECT_ID, gitUrl: url })).toBe(
+      "built",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.env.ORKESTRATOR_GITHUB_TOKEN).toBe(secret);
+    expect(calls[0]!.args.join(" ")).not.toContain(secret);
+    expect(calls[0]!.args.join(" ")).toContain("credential.https://github.com.helper=");
+    await expectNoSecretInMirror();
+  });
+});
+
+describe("what never stops a launch", () => {
+  test("a remote that cannot be reached leaves no partial mirror and does not throw", async () => {
+    const outcome = await refresh({}, { id: PROJECT_ID, gitUrl: `file://${root}/absent.git` });
+
+    expect(outcome).toBe("failed");
+    expect(existsSync(mirrorPath())).toBe(false);
+    expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+  });
+
+  test("a failed fetch keeps the mirror it had", async () => {
+    expect(await refresh()).toBe("built");
+    const before = mirrorRefs();
+    const away = `${remote}.away`;
+    await fs.rename(remote, away);
+
+    expect(await refresh()).toBe("failed");
+
+    expect(mirrorRefs()).toEqual(before);
+    await fs.rename(away, remote);
+    expect(await refresh()).toBe("fetched");
+  });
+
+  test("a mirror left locked by a crash is rebuilt after repeated failures", async () => {
+    expect(await refresh()).toBe("built");
+    commit("two.txt", "two\n");
+    // What a killed `git fetch` can leave behind: the ref it was updating.
+    await fs.writeFile(path.join(mirrorPath(), "refs", "heads", "main.lock"), "");
+
+    for (let attempt = 0; attempt < 3; attempt += 1) expect(await refresh()).toBe("failed");
+    expect(await refresh()).toBe("built");
+
+    expect(existsSync(path.join(mirrorPath(), "refs", "heads", "main.lock"))).toBe(false);
+    expect(git(root, [`--git-dir=${mirrorPath()}`, "log", "-1", "--format=%s", "main"])).toBe(
+      "change two.txt",
+    );
+  });
+
+  test("a clone's report of a corrupt mirror has the next refresh check and replace it", async () => {
+    expect(await refresh()).toBe("built");
+    const packDir = path.join(mirrorPath(), "objects");
+    await fs.rm(packDir, { recursive: true, force: true });
+    await fs.mkdir(packDir);
+
+    await noteGitMirrorCloneOutcome(
+      "\x1eORKESTRATOR_GIT_MIRROR:corrupt\x1f\n",
+      dataDir,
+      PROJECT_ID,
+    );
+    expect(await refresh()).toBe("built");
+
+    git(root, [`--git-dir=${mirrorPath()}`, "fsck", "--full"]);
+  });
+
+  test("a clone's report that the mirror was only missing marks nothing", async () => {
+    expect(await refresh()).toBe("built");
+    await noteGitMirrorCloneOutcome(
+      "\x1eORKESTRATOR_GIT_MIRROR:missing\x1f\n",
+      dataDir,
+      PROJECT_ID,
+    );
+    const state = JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8"));
+    expect(state.suspect).toBeFalsy();
+    expect(await refresh()).toBe("fetched");
+  });
+});
+
+describe("disk bounds", () => {
+  test("a repository past the limit gets no mirror and is not tried again for a week", async () => {
+    let clock = 1_000_000;
+    const options = { force: false, now: () => clock };
+    expect(await refresh({ ...options, maxBytes: 1 })).toBe("oversized");
+    expect(existsSync(mirrorPath())).toBe(false);
+    expect((await fs.readdir(projectDir())).filter((name) => name.startsWith("."))).toEqual([]);
+
+    clock += GIT_MIRROR_REFRESH_INTERVAL_MS * 2;
+    expect(await refresh({ ...options, maxBytes: 1 })).toBe("skipped-oversized");
+    clock += 7 * 24 * 60 * 60_000;
+    expect(await refresh(options)).toBe("built");
+  });
+
+  test("a mirror that grows past the limit is removed by its own refresh", async () => {
+    expect(await refresh()).toBe("built");
+
+    expect(await refresh({ maxBytes: 1 })).toBe("oversized");
+
+    expect(existsSync(mirrorPath())).toBe(false);
+    expect(existsSync(path.join(projectDir(), "mount"))).toBe(true);
+  });
+
+  test("a nearly full disk does not start a build, and keeps an existing mirror", async () => {
+    expect(await refresh({ freeBytes: async () => 2 * 1024 ** 3 })).toBe("skipped-low-disk");
+    expect(existsSync(mirrorPath())).toBe(false);
+
+    expect(await refresh()).toBe("built");
+    expect(await refresh({ freeBytes: async () => 1024 })).toBe("skipped-low-disk");
+    expect(existsSync(mirrorPath())).toBe(true);
+  });
+
+  test("repeated fetches are compacted", async () => {
+    expect(await refresh()).toBe("built");
+    // Above the pack limit, each fetch of even one commit keeps its own pack.
+    await fs.appendFile(path.join(mirrorPath(), "config"), "[fetch]\n\tunpackLimit = 1\n");
+    for (let index = 0; index < 32; index += 1) {
+      commit(`file-${index}.txt`, `${index}\n`);
+      await refresh();
+    }
+    const packs = (await fs.readdir(path.join(mirrorPath(), "objects", "pack"))).filter((name) =>
+      name.endsWith(".pack"),
+    );
+    expect(packs.length).toBeLessThanOrEqual(31);
+    git(root, [`--git-dir=${mirrorPath()}`, "fsck", "--full"]);
+  }, 60_000);
+});
+
+describe("concurrency", () => {
+  /** Runs the setup script's own clone path against the mirror, as a launch does. */
+  function launchClone(dest: string): Promise<{ code: number | null; stdout: string }> {
+    const harness = `
+set -e
+YELLOW=""; NC=""
+eval "$(sed -n '/^git_mirror_problem() {/,/^}$/p; /^report_git_mirror_outcome() {/,/^}$/p; /^clone_from_git_mirror() {/,/^}$/p; /^clone_repository() {/,/^}$/p' "$1")"
+clone_repository "$2" "$3"
+`;
+    return new Promise((resolve, reject) => {
+      const child = spawn("bash", ["-c", harness, "--", setupScript, `file://${remote}`, dest], {
+        env: { ...process.env, ORKESTRATOR_GIT_MIRROR: mirrorPath() },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => (stdout += String(chunk)));
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code, stdout }));
+    });
+  }
+
+  test("launches arriving during a refresh join it", async () => {
+    let fetches = 0;
+    const run: typeof runCommand = (command, args, options) => {
+      if (args?.includes("fetch")) fetches += 1;
+      return runCommand(command, args, options);
+    };
+
+    const outcomes = await Promise.all([refresh({ run }), refresh({ run }), refresh({ run })]);
+
+    expect(outcomes).toEqual(["built", "built", "built"]);
+    expect(fetches).toBe(1);
+  });
+
+  test("two launches and refreshes at once leave a valid mirror and whole clones", async () => {
+    expect(await refresh()).toBe("built");
+    // A real history, so the clones overlap the fetch and the compaction.
+    for (let index = 0; index < 8; index += 1) commit(`seed-${index}.txt`, `${index}\n`);
+    await refresh();
+
+    const clones: Promise<{ code: number | null; stdout: string }>[] = [];
+    const refreshes: Promise<unknown>[] = [];
+    for (let round = 0; round < 6; round += 1) {
+      commit(`round-${round}.txt`, `${round}\n`);
+      clones.push(launchClone(path.join(root, `env-${round}-a`)));
+      clones.push(launchClone(path.join(root, `env-${round}-b`)));
+      refreshes.push(refresh());
+      refreshes.push(refresh());
+      if (round === 3) {
+        refreshes.push(
+          runCommand("git", [`--git-dir=${mirrorPath()}`, "gc", "--quiet"]).catch(() => undefined),
+        );
+      }
+      await refreshes.at(-1);
+    }
+    const results = await Promise.all(clones);
+    await Promise.all(refreshes);
+
+    git(root, [`--git-dir=${mirrorPath()}`, "fsck", "--full"]);
+    expect(git(root, [`--git-dir=${mirrorPath()}`, "log", "-1", "--format=%s", "main"])).toBe(
+      "change round-5.txt",
+    );
+    for (const [index, result] of results.entries()) {
+      expect(result.code).toBe(0);
+      const dest = path.join(root, `env-${Math.floor(index / 2)}-${index % 2 === 0 ? "a" : "b"}`);
+      expect(existsSync(path.join(dest, ".git", "objects", "info", "alternates"))).toBe(false);
+      git(dest, ["fsck"]);
+    }
+    expect(results.some((result) => result.stdout.includes("ORKESTRATOR_GIT_MIRROR:used"))).toBe(
+      true,
+    );
+  }, 120_000);
+});
+
+describe("removal", () => {
+  test("removing the project removes its mirror through the project's cleanup", async () => {
+    expect(await refresh()).toBe("built");
+
+    await cleanupProjectForRemoval(
+      PROJECT_ID,
+      context as unknown as CommandContext,
+      new Map() as never,
+    );
+
+    expect(existsSync(projectDir())).toBe(false);
+  });
+
+  test("a project with no mirror removes cleanly", async () => {
+    await removeProjectGitMirror(context, PROJECT_ID);
+    expect(existsSync(projectDir())).toBe(false);
+  });
+
+  test("a refresh in progress is stopped and leaves nothing behind", async () => {
+    let started: () => void;
+    const fetching = new Promise<void>((resolve) => (started = resolve));
+    const run: typeof runCommand = (command, args, options) => {
+      if (args?.includes("fetch")) {
+        started();
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      return runCommand(command, args, options);
+    };
+    const refreshing = refresh({ run });
+    await fetching;
+
+    await removeProjectGitMirror(context, PROJECT_ID);
+
+    expect(await refreshing).toBe("cancelled");
+    expect(existsSync(projectDir())).toBe(false);
+  });
+
+  test("the sweep removes only mirrors whose project is gone, once settled", async () => {
+    expect(await refresh()).toBe("built");
+    const orphan = path.join(dataDir, "git-mirrors", "project-gone");
+    await fs.mkdir(path.join(orphan, "mount", "mirror.git"), { recursive: true });
+    const stray = path.join(dataDir, "git-mirrors", "not a project id");
+    await fs.mkdir(stray);
+    const live = new Set([PROJECT_ID]);
+
+    expect(await sweepOrphanedProjectGitMirrors(dataDir, live, 60_000)).toBe(0);
+    expect(existsSync(orphan)).toBe(true);
+
+    const later = () => Date.now() + 120_000;
+    expect(await sweepOrphanedProjectGitMirrors(dataDir, live, 60_000, later)).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(mirrorPath())).toBe(true);
+    expect(existsSync(stray)).toBe(true);
+  });
+
+  test("the sweep's owner set comes from a store that exists, or not at all", async () => {
+    await expect(storage.loadProjectIdsForCleanup()).rejects.toThrow("cleanup refused");
+    await storage.addProject({
+      id: PROJECT_ID,
+      gitUrl: `file://${remote}`,
+      name: "p",
+      localPath: null,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    } as never);
+    expect(await storage.loadProjectIdsForCleanup()).toEqual(new Set([PROJECT_ID]));
+  });
+});
+
+describe("container arguments", () => {
+  test("a read-only bind of the mount, and the path the setup script reads", async () => {
+    const args = await gitMirrorContainerArguments(dataDir, { id: PROJECT_ID });
+
+    expect(args).toEqual([
+      "-v",
+      `${path.join(projectDir(), "mount")}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
+      "-e",
+      `ORKESTRATOR_GIT_MIRROR=${CONTAINER_GIT_MIRROR_PATH}`,
+    ]);
+    expect((await fs.stat(path.join(projectDir(), "mount"))).mode & 0o777).toBe(0o755);
+  });
+
+  test("a path `-v` cannot express gives no mount rather than a failed create", async () => {
+    const colon = path.join(root, "da:ta");
+    expect(await gitMirrorContainerArguments(colon, { id: PROJECT_ID })).toEqual([]);
+  });
+
+  test("an unusable data directory gives no mount and does not throw", async () => {
+    const file = path.join(root, "file");
+    await fs.writeFile(file, "");
+    expect(await gitMirrorContainerArguments(file, { id: PROJECT_ID })).toEqual([]);
+  });
+});

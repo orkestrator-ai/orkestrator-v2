@@ -528,6 +528,7 @@ async function restoreRecoveryCopyUnfenced(
         runtimeGeneration,
         imageId: image.imageId,
         storage: copyStorage,
+        reusesWorkspace: true,
       });
       target = {
         containerId,

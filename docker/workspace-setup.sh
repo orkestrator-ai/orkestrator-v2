@@ -15,6 +15,7 @@ ORKESTRATOR_SETUP_CAPABILITIES=prepare-only
 export ORKESTRATOR_SETUP_CAPABILITIES
 # Image manifest contract (docker/image-manifest.ts):
 # ORKESTRATOR_CAPABILITY workspace-prepare=1
+# ORKESTRATOR_CAPABILITY git-mirror=1
 
 PREPARE_ONLY=false
 if [ "${1:-}" = "--prepare-only" ]; then
@@ -394,9 +395,79 @@ print_workspace_disk_status() {
     df -h /workspace /tmp 2>/dev/null | awk 'NR==1 || $6=="/workspace" || $6=="/tmp" {print "  " $0}'
 }
 
+# Prints why the project's Git mirror cannot serve a clone, or nothing when it
+# can. `--git-dir` because the mirror's owner is the host's user, which Git would
+# otherwise refuse to read as dubiously owned. The tip's tree proves the refs
+# reach real objects: a clone given refs without them would quietly download
+# everything instead of failing.
+git_mirror_problem() {
+    local mirror="$1"
+    local tip
+    if [ ! -d "$mirror/objects" ] || [ ! -f "$mirror/HEAD" ]; then
+        echo missing
+        return 0
+    fi
+    if ! tip="$(git --git-dir="$mirror" for-each-ref --count=1 --format='%(objectname)' refs/heads/ 2>/dev/null)"; then
+        echo corrupt
+        return 0
+    fi
+    if [ -z "$tip" ]; then
+        echo empty
+    elif ! git --git-dir="$mirror" cat-file -e "$tip^{tree}" 2>/dev/null; then
+        echo corrupt
+    fi
+    return 0
+}
+
+# The backend reads this line; the reason is one fixed word.
+report_git_mirror_outcome() {
+    printf '\036ORKESTRATOR_GIT_MIRROR:%s\037\n' "$1"
+}
+
+# Clones from the project's read-only mirror when it can. Returns non-zero, with
+# the destination clear and the reason logged, for the ordinary clone to run.
+#
+# No --filter: --dissociate then drops whatever the mirror held, and a mirror
+# behind the remote leaves a partial clone that fetches from the remote again.
+# --reference rather than --reference-if-able, so a mirror removed between the
+# check and the clone fails here instead of downloading the full history.
+clone_from_git_mirror() {
+    local clone_url="$1"
+    local clone_dest="$2"
+    local mirror="${ORKESTRATOR_GIT_MIRROR:-}"
+    local problem
+    if [ -z "$mirror" ]; then
+        return 1
+    fi
+    # One attempt: the caller's own retry goes straight to the remote.
+    ORKESTRATOR_GIT_MIRROR=""
+
+    problem="$(git_mirror_problem "$mirror")"
+    if [ -z "$problem" ]; then
+        echo "Cloning from the project's Git mirror..."
+        if git clone --no-tags --reference "$mirror" --dissociate "$clone_url" "$clone_dest"; then
+            if [ ! -e "$clone_dest/.git/objects/info/alternates" ]; then
+                report_git_mirror_outcome used
+                return 0
+            fi
+            problem=not-self-contained
+        else
+            problem=clone-failed
+        fi
+        rm -rf "$clone_dest"/* "$clone_dest"/.[!.]* 2>/dev/null || true
+    fi
+    echo -e "${YELLOW}Git mirror not used (${problem}); cloning from the remote.${NC}"
+    report_git_mirror_outcome "$problem"
+    return 1
+}
+
 clone_repository() {
     local clone_url="$1"
     local clone_dest="$2"
+
+    if clone_from_git_mirror "$clone_url" "$clone_dest"; then
+        return 0
+    fi
 
     # Try partial clone first to reduce disk usage for large repositories.
     if git clone --filter=blob:none --no-tags "$clone_url" "$clone_dest"; then

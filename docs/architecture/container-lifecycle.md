@@ -1501,6 +1501,91 @@ a fake container, 600 simulated seconds per tab): idle 1.85 execs/s before,
 `apps/backend/tests/tmux-hook-signal-docker.test.ts` proves the image side and
 counts a real idle tab with its transcript bound: 4 execs in 10 s.
 
+## Project Git mirror
+
+A new container environment clones from a bare mirror of its project instead of
+downloading the repository again (`project-git-mirror.ts`,
+`clone_from_git_mirror` in `docker/workspace-setup.sh`). Image capability
+`git-mirror=1`. An image without it gets neither the mount nor the variable, and
+clones as it always did. A runtime over an existing checkout (a rebuild or a
+restored copy, `reusesWorkspace`) never clones, so it gets neither.
+
+The mirror is a cache: **nothing depends on it**. A missing, stale, locked or
+corrupt mirror never stops an environment starting, and an environment does not
+need it once cloned.
+
+| Path | Holds |
+| --- | --- |
+| `<data>/git-mirrors/<project id>/mount/` | The bind source, mounted read-only at `/orkestrator-git-mirror` with `-v` |
+| `.../mount/mirror.git` | The mirror. Appears only by rename, once complete. `ORKESTRATOR_GIT_MIRROR` names it |
+| `.../state.json` | Last attempt, consecutive failures, remote hash, oversized and suspect marks. Outside the mount, so a container cannot read it |
+| `.../.building-*`, `.../.retired-*` | Scratch for a build and for what it replaces, removed by the same refresh or the next |
+
+- **The clone.** The setup script checks the mirror cheaply (the directory exists,
+  its refs can be read, the tip's tree is present), then runs `git clone --no-tags
+  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  and for anything the mirror lacks, so `origin` is still the project's remote and
+  a stale mirror costs only the difference. `--dissociate` copies what the clone
+  needs and drops the link, so the result is self-contained. `--dissociate` walks
+  the history, so a clone also fails on damage the check cannot see.
+- **No `--filter` with a mirror.** `--dissociate` in a partial clone keeps only
+  what it does not attribute to the promisor remote. With a mirror behind the
+  remote, it dropped the history the mirror held (31,276 objects missing on
+  `git/git`) and fetched it back from the remote on demand. A blobless clone also
+  pays for history reads one lazy fetch at a time; see
+  [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
+- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
+  and the clone then fails and falls back to the blobless clone, rather than
+  downloading the full history without saying so.
+- **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
+  run as it always did, after one line saying why, with one fixed reason word:
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
+  (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
+  a project normally reports `missing`. The last three mark the mirror suspect, so
+  the next refresh runs `git fsck --connectivity-only` and rebuilds it if that
+  fails.
+- **Refresh.** `createDockerContainer` starts one in the background when it gives
+  a container the mount, at most every 15 minutes per project, and never waits for
+  it. So a first environment still downloads, and the mirror builds beside it; the
+  second environment is the first to benefit. There is no timer: an idle project
+  makes no network requests. Only branches are fetched: clones use `--no-tags`, and
+  `refs/pull/*` can dwarf a repository.
+- **Writers.** One refresh per mirror in a backend; a launch during a refresh joins
+  it. A second backend on the same data directory holds no writer lease, so it
+  creates no containers. Readers need no lock: Git publishes a pack before the refs
+  that reach it, compaction keeps old packs until new ones exist, and a build is a
+  rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
+  mirror rather than update it.
+- **Credentials.** A refresh runs on the host through `runRemoteGit` and
+  `gitHubGitCredentials`, the path project clones use. The URL and any credential
+  are passed per transfer, and no `remote` section exists, so the config holds
+  neither; `--no-write-fetch-head` keeps the URL out of `FETCH_HEAD`. A container
+  fetches with its own credential, as before, and cannot write to the mirror.
+- **Read-only and readable.** The bind is `:ro`, for root in the container too.
+  Files are `0644` and directories `0755` (`core.sharedRepository`), because under
+  rootless Docker the workload user is not the backend's user; `<data>/git-mirrors`
+  and the project directory are `0700`, so no other host user gets that far. Git
+  allows the foreign owner because everything uses an explicit `--git-dir`. Every
+  environment of a project can read every branch of it through the mount, whatever
+  credential that environment holds; a branch deleted on the remote leaves at the
+  next refresh, and its objects at a later compaction.
+- **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
+  source is gone. With `-v` it recreates the source, so a stopped environment
+  survives its mirror being removed by any route.
+- **Removal.** `cleanupProjectForRemoval` stops any refresh and removes the
+  project's directory; a failure is logged and never blocks removing the project.
+  `sweepOrphanedProjectGitMirrors`, in the admitted pre-ledger sweep, removes
+  whatever that left. A refresh removes its own mirror when the repository passes
+  the limit. Nothing else removes one. Bounds and disk cost are in
+  [disk-usage.md](../development/disk-usage.md#project-git-mirrors).
+
+Qualified by `tests/unit/workspace-setup-git-mirror.test.ts` (the script against
+real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
+credentials, concurrency, removal) and, in real containers,
+`project-git-mirror-docker.test.ts` (read-only mount, foreign owner, removal, a
+restart with the source gone).
+
 ## Container lifecycle events
 
 The backend's `docker events` follower (`container-oom-events.ts`) reports

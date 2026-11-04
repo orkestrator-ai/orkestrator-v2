@@ -35,6 +35,9 @@ have cleaned up by hand until the next new version retries it and finds
 nothing left to do; see
 [environment-deletion.md](../architecture/environment-deletion.md#reconciler).
 
+The `git-mirrors` row is the per-project Git mirrors under that directory of the
+data directory, and how many belong to projects that no longer exist. See [Project Git mirrors](#project-git-mirrors) for what they cost.
+
 A graph run whose replicated builder uses `isolation: "worktree"` (item 403)
 checks out one worktree per branch inside the environment, under
 `.orkestrator/graph-branches/`. Each holds a full checkout (plus whatever the
@@ -117,6 +120,38 @@ ignored files. The project home cannot be moved.
   unrelated directories subsequently created at the old pathname. Legacy
   journals without source identity retain an existing source for manual cleanup.
 
+## Project Git mirrors
+
+Each project with a container environment gets one bare mirror of its branches,
+at `<data dir>/git-mirrors/<project id>/mount/mirror.git`, so that later
+environments do not download the repository again
+([container-lifecycle.md](../architecture/container-lifecycle.md#project-git-mirror)).
+
+What it costs, on the two repositories measured:
+
+| Repository | Mirror on the host | Each environment's Git directory, blobless clone | The same, cloned from the mirror | Each environment's download, blobless | The same, from the mirror |
+| --- | --- | --- | --- | --- | --- |
+| `orkestrator-ai/orkestrator-v2` | 86 MiB | 45 MiB | 87 MiB | 43 MiB | 0.01 MiB |
+| `git/git` | 322 MiB | 131 MiB | 323 MiB | 124 MiB | 0.01 MiB |
+
+- **It saves network, not disk.** A clone from the mirror is self-contained, so
+  every environment holds its own copy of the history, in its workspace volume.
+  That is more than a blobless clone, which leaves file history on the remote and
+  fetches it on demand. Budget one mirror per project, plus one copy per
+  environment.
+- **At most 2 GiB per project** (`GIT_MIRROR_MAX_BYTES`). A larger repository gets
+  no mirror, is looked at again after a week, and its environments keep the
+  blobless clone. A build needs 3 GiB free on the data directory's disk and a
+  fetch 1 GiB; otherwise it is skipped and logged. Fetches compact themselves past
+  30 packs.
+- **It is only a cache.** Deleting a project's directory by hand harms nothing:
+  new clones go to the remote, a stopped environment still starts, and the next
+  container creation builds it again.
+- **Removed with its project**, in the project's own cleanup. The hourly sweep
+  removes any whose project no longer exists, so a failed removal is not
+  permanent. Nothing removes one by age, and Settings > Disk usage does not list
+  them: use `mise run disk:report`.
+
 ## What prunes itself
 
 | Location | Pruned by | When |
@@ -138,6 +173,7 @@ ignored files. The project home cannot be moved.
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |
 | Test processes' private `TMPDIR`, `ork-test-tmp-<pid>-*` in the system temp dir, or `/private/tmp` on macOS (holds the browser profiles and anything else a test leaves) | The process itself when its preload's `afterAll` (Bun) or `exit` (Playwright runner) runs; otherwise the next test process | Once the owner has exited, the directory is over an hour old, and no live process names it on its command line |
 | Managed agent toolchains | `manager.ts` | Superseded versions after 14 days |
+| `<data dir>/git-mirrors/<project id>` | The project's removal; the backend's orphan sweep; its own refresh when it passes 2 GiB | With the project; hourly for one whose project is gone, once over an hour old. See [Project Git mirrors](#project-git-mirrors) |
 
 ## What you clean yourself
 

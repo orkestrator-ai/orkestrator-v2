@@ -536,6 +536,11 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
   ]);
   console.log(`\nPublished ${tag}: https://github.com/${REPOSITORY}/releases/tag/${tag}`);
   if (channel === "unstable") hideOlderAlphas(tag, runtime);
+  if (channel === "stable") {
+    console.log(
+      "\ninstall.sh still runs the previous Stable release. Run `mise run release:pin-installer` and merge the change, which deploys the site.",
+    );
+  }
 }
 
 /**

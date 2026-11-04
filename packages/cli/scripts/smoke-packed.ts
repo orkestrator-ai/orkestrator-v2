@@ -1,6 +1,7 @@
 import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
 import { ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
@@ -189,6 +190,50 @@ try {
     }
     await probePackedBridge(target, bridge.name);
   }
+
+  // The standalone updater installs a release's dependencies from its published
+  // lockfile (`installRelease`). Do the same from the packed files, so a lockfile
+  // the registry no longer satisfies fails here, and run the result.
+  const lockedRelease = path.join(temporaryRoot, "locked-release");
+  await cp(path.join(installedRoot, RELEASE_RUNTIME_PATH), lockedRelease, { recursive: true });
+  await run(
+    [
+      process.execPath,
+      "install",
+      "--frozen-lockfile",
+      "--production",
+      "--linker=hoisted",
+      "--ignore-scripts",
+      "--no-progress",
+      "--no-summary",
+    ],
+    lockedRelease,
+  );
+  const lockedPackage = path.join(lockedRelease, "node_modules", "orkestrator");
+  await cp(await realpath(installedRoot), lockedPackage, {
+    recursive: true,
+    filter: (source) => path.basename(source) !== "node_modules",
+  });
+  const lockedProbe = path.join(lockedPackage, "locked-probe.mjs");
+  await writeFile(
+    lockedProbe,
+    `
+    const { default: sharp } = await import("sharp");
+    await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();
+    await import("playwright-core");
+    await import("@anthropic-ai/claude-agent-sdk");
+  `,
+  );
+  await run([process.execPath, lockedProbe], lockedRelease);
+  const lockedEntry = path.join(lockedPackage, "bin", "orkestrator.js");
+  const lockedVersion = Bun.spawnSync([process.execPath, lockedEntry, "version"], {
+    cwd: lockedRelease,
+    env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: path.join(temporaryRoot, "cli-config") },
+  });
+  if (!lockedVersion.stdout.toString().includes(manifest.version)) {
+    throw new Error("The release installed from its lockfile did not report its version");
+  }
+  console.log("release installed from its published lockfile and ran");
 
   const dataDir = path.join(temporaryRoot, "data");
   const executable = path.join(temporaryRoot, "node_modules", ".bin", "orkestrator");

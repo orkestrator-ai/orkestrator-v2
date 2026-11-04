@@ -36,11 +36,11 @@ const log = createLogger("updater");
  *
  * A check asks the npm registry for the dist-tags of the host's update channel
  * and every more stable one (`latest`, `beta`, `alpha`), and takes the newest
- * of them. An update installs that release beside the running one (Bun
- * verifies the registry integrity), smoke-runs it, installs its pinned
- * toolchain before any downtime, waits for the host to be idle when asked,
- * counts down, then switches `current`, marks the restart and shuts this
- * backend down. The launcher starts the new release; if it never becomes ready
+ * of them. An update installs that release beside the running one, with the
+ * dependency versions its published lockfile names (Bun verifies the integrity
+ * of each tarball), smoke-runs it, installs its pinned toolchain before any
+ * downtime, waits for the host to be idle when asked, counts down, then
+ * switches `current`, marks the restart and shuts this backend down. The launcher starts the new release; if it never becomes ready
  * the launcher rolls back, and the restored backend reports the job failed
  * from the launcher's evidence.
  */

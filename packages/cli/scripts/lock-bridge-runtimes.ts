@@ -1,23 +1,30 @@
 /**
  * Regenerate `bridge-runtimes/<bridge>/{package.json,bun.lock}` for every
- * on-demand bridge.
+ * on-demand bridge, and `release-runtime/{package.json,bun.lock}` for this
+ * package's own dependencies.
  *
- * Run after bumping an SDK an on-demand bridge keeps external, or after
- * changing a patch in `patches/` that targets one of its packages:
+ * Run after bumping an SDK an on-demand bridge keeps external, after changing a
+ * patch in `patches/` that targets one of its packages, or after changing a
+ * dependency of this package:
  *
  *   bun packages/cli/scripts/lock-bridge-runtimes.ts
  *
- * The manifest pins exactly the versions the bridge's own `package.json` builds
- * against, plus the repository's patches for any package in the closure. The
- * lockfile is what makes the backend's install reproducible: it runs
- * `bun install --frozen-lockfile`, so every transitive version and integrity
- * hash is the one committed here. `tests/cli.test.ts` fails when either file
- * drifts from what this script would write.
+ * A bridge's manifest pins exactly the versions the bridge's own `package.json`
+ * builds against, plus the repository's patches for any package in the closure.
+ * The lockfile is what makes the install reproducible: the backend and the
+ * standalone updater run `bun install --frozen-lockfile`, so every transitive
+ * version and integrity hash is the one committed here. `tests/cli.test.ts`
+ * fails when a manifest drifts from what this script would write.
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BRIDGE_RUNTIMES_DIRECTORY, ON_DEMAND_BRIDGES, type OnDemandBridge } from "./bridges.js";
+import {
+  BRIDGE_RUNTIMES_DIRECTORY,
+  ON_DEMAND_BRIDGES,
+  RELEASE_RUNTIME_DIRECTORY,
+  type OnDemandBridge,
+} from "./bridges.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const repositoryRoot = path.resolve(packageRoot, "../..");
@@ -72,6 +79,18 @@ export async function runtimeManifest(
   };
 }
 
+/**
+ * The manifest of the release's dependencies. It leaves out the package itself:
+ * a tarball cannot carry a lockfile naming the tarball's own integrity hash.
+ */
+export function releaseRuntimeManifest(cliManifest: Manifest): Record<string, unknown> {
+  return {
+    name: "orkestrator-release-runtime",
+    private: true,
+    dependencies: cliManifest.dependencies ?? {},
+  };
+}
+
 /** Root patches whose target package is in `names`, keyed the way bun keys them. */
 async function patchesFor(names: Set<string>): Promise<Record<string, string>> {
   const root = await readJson<Manifest>(path.join(repositoryRoot, "package.json"));
@@ -121,6 +140,19 @@ export async function lockBridgeRuntime(bridge: OnDemandBridge): Promise<void> {
   );
 }
 
+export async function lockReleaseRuntime(): Promise<void> {
+  const manifest = releaseRuntimeManifest(
+    await readJson<Manifest>(path.join(packageRoot, "package.json")),
+  );
+  const lockfile = await lock(manifest);
+  const destination = path.join(packageRoot, RELEASE_RUNTIME_DIRECTORY);
+  await mkdir(destination, { recursive: true });
+  await writeFile(path.join(destination, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(path.join(destination, "bun.lock"), lockfile);
+  console.log(path.relative(repositoryRoot, destination));
+}
+
 if (import.meta.main) {
   for (const bridge of ON_DEMAND_BRIDGES) await lockBridgeRuntime(bridge);
+  await lockReleaseRuntime();
 }

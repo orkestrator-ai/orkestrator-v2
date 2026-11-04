@@ -2,11 +2,15 @@ import { afterAll, describe, expect, jest, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { hostUpdateChannelOfVersion } from "../../packages/protocol/src/host-maintenance.js";
+import { pinnedRelease } from "../../scripts/pin-install-script.js";
 
 const root = path.resolve(import.meta.dir, "../..");
 const INSTALL_SCRIPT = path.join(root, "apps/web-public/public/install.sh");
 const INSTALL_URL = "https://orkestrator.dev/install.sh";
 const temporaryDirectories: string[] = [];
+const PINNED = pinnedRelease(await readFile(INSTALL_SCRIPT, "utf8"));
+const PACKAGE = `orkestrator@${PINNED}`;
 
 // Every case launches the real shell script through a sandbox of executable
 // shims. Aggregate process contention must not let Bun interrupt teardown and
@@ -31,6 +35,8 @@ type InstallerScenario = {
   /** Omit BUN_INSTALL so the script has to fall back to ~/.bun. */
   useHomeDefault?: boolean;
   args?: string[];
+  /** The caller's own choice of release. */
+  installVersion?: string;
 };
 
 async function writeStub(file: string, body: string): Promise<void> {
@@ -52,6 +58,7 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
     installed = [],
     useHomeDefault = false,
     args = [],
+    installVersion,
   } = scenario;
 
   const sandbox = await mkdtemp(path.join(os.tmpdir(), "orkestrator-install-sh-"));
@@ -85,6 +92,7 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
       PATH: pathDirectory,
       HOME: home,
       ...(useHomeDefault ? {} : { BUN_INSTALL: bunInstall }),
+      ...(installVersion ? { ORKESTRATOR_INSTALL_VERSION: installVersion } : {}),
     },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -112,6 +120,29 @@ describe("web-public install.sh", () => {
     }
   });
 
+  test("pins a Stable release, not a moving tag or a prerelease", async () => {
+    expect(hostUpdateChannelOfVersion(PINNED)).toBe("stable");
+    // The pin only moves after a release is published, so it trails the repository.
+    const { version } = (await Bun.file(path.join(root, "package.json")).json()) as {
+      version: string;
+    };
+    expect(Bun.semver.order(PINNED, version)).toBeLessThanOrEqual(0);
+    // Every launch line goes through the pin.
+    const script = await readFile(INSTALL_SCRIPT, "utf8");
+    expect(script).not.toMatch(/\borkestrator "\$@"/);
+  });
+
+  test("a Beta or Unstable user can choose another release", async () => {
+    const result = await runInstaller({
+      onPath: ["bunx"],
+      installVersion: "alpha",
+      args: PUBLISHED_ARGS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(`path-bunx orkestrator@alpha ${PUBLISHED_ARGS.join(" ")}`);
+  });
+
   test("refuses to run on an unsupported platform", async () => {
     const result = await runInstaller({ platform: "MINGW64_NT-10.0", onPath: ["bunx"] });
 
@@ -132,7 +163,7 @@ describe("web-public install.sh", () => {
     const result = await runInstaller({ onPath: ["bunx", "bun"], args: PUBLISHED_ARGS });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`path-bunx orkestrator ${PUBLISHED_ARGS.join(" ")}`);
+    expect(result.stdout).toBe(`path-bunx ${PACKAGE} ${PUBLISHED_ARGS.join(" ")}`);
     // Bun was never downloaded, because a launcher was already available.
     expect(result.stderr).not.toContain("installing it now");
   });
@@ -142,14 +173,14 @@ describe("web-public install.sh", () => {
     const result = await runInstaller({ onPath: ["bunx"] });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe("path-bunx orkestrator");
+    expect(result.stdout).toBe(`path-bunx ${PACKAGE}`);
   });
 
   test("falls back to `bun x` when only bun is on PATH", async () => {
     const result = await runInstaller({ onPath: ["bun"], args: PUBLISHED_ARGS });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`path-bun x orkestrator ${PUBLISHED_ARGS.join(" ")}`);
+    expect(result.stdout).toBe(`path-bun x ${PACKAGE} ${PUBLISHED_ARGS.join(" ")}`);
   });
 
   test("installs Bun and launches it from BUN_INSTALL when no launcher is on PATH", async () => {
@@ -157,21 +188,21 @@ describe("web-public install.sh", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("Bun was not found");
-    expect(result.stdout).toBe(`installed-bunx orkestrator ${PUBLISHED_ARGS.join(" ")}`);
+    expect(result.stdout).toBe(`installed-bunx ${PACKAGE} ${PUBLISHED_ARGS.join(" ")}`);
   });
 
   test("uses the installed bun when the install leaves no bunx", async () => {
     const result = await runInstaller({ installed: ["bun"], args: PUBLISHED_ARGS });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`installed-bun x orkestrator ${PUBLISHED_ARGS.join(" ")}`);
+    expect(result.stdout).toBe(`installed-bun x ${PACKAGE} ${PUBLISHED_ARGS.join(" ")}`);
   });
 
   test("defaults BUN_INSTALL to ~/.bun", async () => {
     const result = await runInstaller({ installed: ["bunx"], useHomeDefault: true });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe("installed-bunx orkestrator");
+    expect(result.stdout).toBe(`installed-bunx ${PACKAGE}`);
   });
 
   test("fails loudly when the install leaves no executable behind", async () => {

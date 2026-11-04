@@ -154,7 +154,7 @@ describe("createStandaloneUpdater", () => {
       calls.map((args) =>
         args[1] === "--version" ? "smoke" : args[0] === "install" ? "install" : args[1],
       ),
-    ).toEqual(["install", "smoke", "toolchain"]);
+    ).toEqual(["install", "install", "smoke", "toolchain"]);
   });
 
   test("answers a check request from the registry", async () => {

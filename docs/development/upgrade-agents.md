@@ -491,7 +491,15 @@ time**, and it is easy to miss. That package is the standalone `orkestrator`
 backend published to npm, and its `dependencies` list is deliberately only the
 modules `packages/cli/scripts/build.ts` leaves unbundled — so the Agent SDK
 there is a real
-runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's.
+runtime pin for CLI users, not a stale duplicate. Bump it with the bridge's, then
+regenerate the lockfile standalone services install from, and commit
+`packages/cli/release-runtime/` (`packages/cli/tests/cli.test.ts` fails until it
+matches). The script also re-resolves the on-demand bridge lockfiles; keep only
+the changes this bump needs:
+
+```bash
+bun packages/cli/scripts/lock-bridge-runtimes.ts
+```
 
 `bridges/claude-bridge/src/services/session-manager.ts` is only a barrel. The
 compatibility surface is `services/session-manager-prompt-handlers/*` (one

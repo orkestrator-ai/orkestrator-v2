@@ -20,8 +20,8 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Identity shortcut**: return early when the local and incoming copies are already the same object. Status: open.
-2. **Cache part serialisation**: stop re-serialising unchanged part objects. Status: open.
+1. **Identity shortcut**: return early when the local and incoming copies are already the same object. Status: done (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)). The early return matches the incoming-only path, not the path at `:301` as task 1 below says.
+2. **Cache part serialisation**: stop re-serialising unchanged part objects. Status: done (2026-11-04), by comparing without serialising rather than with the WeakMap recommended below; 1202 records why.
 
 #### 1. Identity shortcut
 
@@ -65,7 +65,7 @@ Incoming parts stay authoritative for everything they cover (`:249-253`). The re
 
 #### Tasks
 
-1. **Narrow the hook's store subscriptions**: stop re-rendering the agent tab when a cache entry changes. Status: open.
+1. **Narrow the hook's store subscriptions**: stop re-rendering the agent tab when a cache entry changes. Status: done (2026-11-04) as recommended below.
 
 #### 1. Narrow the hook's store subscriptions
 

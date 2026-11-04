@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { RepositoryMemberContext } from "@/contexts/RepositoryMemberContext";
 import { MAX_PROJECT_FOLDER_NAME_LENGTH } from "@orkestrator/protocol/project-folders";
 import { parseProjectFolderDragId, projectFolderDragId } from "@/lib/project-folders";
 import { cn } from "@/lib/utils";
@@ -299,7 +300,9 @@ export function SortableProjectFolder({
           className={repository ? "-mx-2" : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
           data-project-folder-content={name}
         >
-          {children}
+          <RepositoryMemberContext.Provider value={repository}>
+            {children}
+          </RepositoryMemberContext.Provider>
         </div>
       )}
 

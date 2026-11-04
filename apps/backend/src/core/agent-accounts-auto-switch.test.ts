@@ -14,6 +14,7 @@ import {
   USAGE_LIMIT_READ_WAIT_MS,
   USAGE_LIMIT_RECHECK_MS,
   type AutoSwitchNotice,
+  type UsageLimitStopReport,
 } from "./agent-accounts-auto-switch.js";
 
 const NOW = Date.parse("2026-11-01T12:00:00Z");
@@ -58,6 +59,9 @@ function harness(options: {
   signedOut?: string[];
   session?: AgentSessionAccount | null;
   busy?: boolean;
+  enabled?: boolean;
+  /** An account's email, where it is not `<id>@example.com`. */
+  emails?: Record<string, string>;
 }) {
   let clock = NOW;
   const state = {
@@ -68,14 +72,15 @@ function harness(options: {
   };
   const reads: Array<{ accountId: string; force: boolean }> = [];
   const notices: AutoSwitchNotice[] = [];
+  const reports: UsageLimitStopReport[] = [];
   const summaries = Object.keys(options.accounts).map((id): AgentAccountSummary => ({
     id,
     platform: "claude",
-    label: `${id}@example.com`,
+    label: options.emails?.[id] ?? `${id}@example.com`,
     isDefault: false,
     isActive: false,
     signedIn: !options.signedOut?.includes(id),
-    identity: { email: `${id}@example.com` },
+    identity: { email: options.emails?.[id] ?? `${id}@example.com` },
   }));
   const switchAccount = mock(
     async (
@@ -124,6 +129,9 @@ function harness(options: {
     notify: (notice) => {
       notices.push(notice);
     },
+    onLimitStop: (report) => {
+      reports.push(report);
+    },
     now: () => clock,
   });
   const stop = (overrides: Record<string, unknown> = {}) =>
@@ -137,9 +145,11 @@ function harness(options: {
     });
   return {
     switcher,
+    summaries,
     state,
     reads,
     notices,
+    reports,
     switchAccount,
     stop,
     advance: (ms: number) => {
@@ -288,6 +298,235 @@ describe("between turns", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await h.switcher.evaluate("claude");
     expect(h.reads.length).toBe(2);
+  });
+});
+
+describe("two entries for one login", () => {
+  const SAME = { a: "same@example.com", twin: "same@example.com" };
+  const sessionOn = (id: string): AgentSessionAccount =>
+    ({
+      platform: "claude",
+      source: "account",
+      account: { id },
+      running: true,
+    }) as AgentSessionAccount;
+
+  test("replaying the rkmbp readings moves nothing across repeated cycles", async () => {
+    // Reset times as read on rkmbp, with the sub-second values trading places.
+    const FIRST = "2026-11-07T17:00:00.404Z";
+    const SECOND = "2026-11-07T17:00:00.464Z";
+    const weekly = (usedPercent: number, resetsAt: string): PlanUsageSnapshot => ({
+      platform: "claude",
+      status: "ok",
+      windows: [{ window: "seven_day", usedPercent, resetsAt }],
+      fetchedAt: inHours(0),
+    });
+    let swapped = false;
+    const h = harness({
+      active: "a",
+      emails: { ...SAME, c: "other@example.com" },
+      accounts: {
+        a: () => weekly(35, swapped ? SECOND : FIRST),
+        twin: () => weekly(35, swapped ? FIRST : SECOND),
+        c: weekly(0, "2026-11-09T21:00:00.485Z"),
+      },
+    });
+    // The gaps between the moves seen on rkmbp, repeated.
+    const gaps = [2_254_000, 1_200_000, 13_000, 587_000, 559_000];
+    for (let cycle = 0; cycle < 30; cycle += 1) {
+      swapped = !swapped;
+      h.advance(gaps[cycle % gaps.length]!);
+      await h.switcher.evaluate("claude");
+    }
+    expect(h.switchAccount).not.toHaveBeenCalled();
+    expect(h.notices).toEqual([]);
+    expect(h.state.active).toBe("a");
+  });
+
+  test("at the threshold it passes over the twin for a different login", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      accounts: {
+        a: usage({ used: 98, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 3 }),
+        c: usage({ used: 5, resetsInHours: 90 }),
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("c");
+    expect(h.notices[0]?.reason).toBe("threshold");
+  });
+
+  test("a confirmed-out login moves to a different one and counts the twin as used up", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 1 }),
+        c: usage({ used: 5, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop()).toBe("resend");
+    expect(h.state.active).toBe("c");
+    expect(h.notices[0]?.reason).toBe("limit");
+  });
+
+  test("a confirmed-out login with only its twin left stays stopped", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 1 }),
+      },
+    });
+    expect(await h.stop()).toBe("stop");
+    expect(h.switchAccount).not.toHaveBeenCalled();
+    expect(h.state.active).toBe("a");
+  });
+
+  test("a limit stop from another login never moves the active entry to its twin", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      session: sessionOn("c"),
+      accounts: {
+        a: usage({ used: 35, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 1 }),
+        c: usage({ used: 100, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop()).toBe("resend");
+    expect(h.switchAccount).not.toHaveBeenCalled();
+  });
+
+  test.each([true, false])(
+    "a stop on the active login's twin excludes the whole login (alternative=%s)",
+    async (hasAlternative) => {
+      const h = harness({
+        active: "a",
+        emails: SAME,
+        session: sessionOn("twin"),
+        accounts: {
+          a: usage({ used: 35, resetsInHours: 1 }),
+          twin: usage({ used: 100, resetsInHours: 3 }),
+          ...(hasAlternative ? { c: usage({ used: 5, resetsInHours: 90 }) } : {}),
+        },
+      });
+      expect(await h.stop()).toBe(hasAlternative ? "resend" : "stop");
+      expect(h.reads[0]).toEqual({ accountId: "twin", force: true });
+      expect(h.state.active).toBe(hasAlternative ? "c" : "a");
+      if (hasAlternative) {
+        expect(h.switchAccount).toHaveBeenCalledTimes(1);
+        expect(h.switchAccount.mock.calls[0]?.[1]).toBe("c");
+        expect(h.notices[0]?.reason).toBe("limit");
+      } else {
+        expect(h.switchAccount).not.toHaveBeenCalled();
+        expect(h.notices).toEqual([]);
+      }
+    },
+  );
+
+  test("a limit stop from another login can move a signed-out active entry to its twin", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      signedOut: ["a"],
+      session: sessionOn("c"),
+      accounts: {
+        a: usage({ used: 35, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 3 }),
+        c: usage({ used: 100, resetsInHours: 90 }),
+      },
+    });
+    expect(await h.stop()).toBe("resend");
+    expect(h.reads[0]).toEqual({ accountId: "c", force: true });
+    expect(h.state.active).toBe("twin");
+    expect(h.switchAccount).toHaveBeenCalledTimes(1);
+    expect(h.switchAccount.mock.calls[0]?.[2]).toEqual({
+      expectedActive: "a",
+      expectedIdentity: JSON.stringify({ email: SAME.twin }),
+      reason: "limit",
+    });
+    expect(h.notices).toEqual([
+      {
+        platform: "claude",
+        from: SAME.a,
+        to: SAME.twin,
+        reason: "limit",
+        at: inHours(0),
+      },
+    ]);
+  });
+
+  test("signed out, the machine can still move to the twin", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      signedOut: ["a"],
+      accounts: {
+        a: usage({ used: 35, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 3 }),
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("twin");
+    expect(h.notices[0]?.reason).toBe("signed-out");
+  });
+
+  test("with its tick off, the machine can still move to the twin", async () => {
+    const h = harness({
+      active: "a",
+      emails: SAME,
+      excluded: ["a"],
+      accounts: {
+        a: usage({ used: 35, resetsInHours: 3 }),
+        twin: usage({ used: 35, resetsInHours: 3 }),
+      },
+    });
+    await h.switcher.evaluate("claude");
+    expect(h.state.active).toBe("twin");
+    expect(h.notices[0]?.reason).toBe("not-included");
+  });
+});
+
+describe("the reset tolerance between turns", () => {
+  test("a different login within the hour stays, and one past it moves", async () => {
+    const within = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 20, resetsInHours: 10 }),
+        b: usage({ used: 50, resetsInHours: 9 }),
+      },
+    });
+    await within.switcher.evaluate("claude");
+    expect(within.switchAccount).not.toHaveBeenCalled();
+
+    const past = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 20, resetsInHours: 10 }),
+        b: usage({ used: 50, resetsInHours: 8.99 }),
+      },
+    });
+    await past.switcher.evaluate("claude");
+    expect(past.state.active).toBe("b");
+    expect(past.notices[0]?.reason).toBe("soonest-reset");
+  });
+
+  test("a limit stop is not held back by it", async () => {
+    const h = harness({
+      active: "a",
+      accounts: {
+        a: usage({ used: 100, resetsInHours: 10 }),
+        b: usage({ used: 50, resetsInHours: 10.5 }),
+      },
+    });
+    expect(await h.stop()).toBe("resend");
+    expect(h.state.active).toBe("b");
+    expect(h.notices[0]?.reason).toBe("limit");
   });
 });
 
@@ -744,4 +983,214 @@ describe("weekly evidence lifetime", () => {
     h.state.busy = false;
     expect(await h.stop({ turnStartedAt: inHours(-1) })).toBe("resend");
   });
+});
+
+describe("a stop reported for the coordinators", () => {
+  test("reports the account the turn ran on, the reset and the verdict, once", async () => {
+    const h = harness({
+      active: "out",
+      accounts: {
+        out: usage({ used: 100, resetsInHours: 8 }),
+        room: usage({ used: 10, resetsInHours: 40 }),
+      },
+    });
+    expect(await h.stop({ session: { tabId: "tab-1" } })).toBe("resend");
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId: "request-1",
+      verdict: "resend",
+      resetsAt: Date.parse(inHours(8)),
+      resetHint: "3pm",
+      session: { tabId: "tab-1" },
+    });
+    expect(h.reports[0]!.account?.id).toBe("out");
+    await h.stop();
+    expect(h.reports).toHaveLength(1);
+  });
+
+  test("a stop that waits is reported as waiting, when the wait starts and not again", async () => {
+    const h = harness({
+      active: "out",
+      accounts: { out: usage("unavailable"), room: usage({ used: 10, resetsInHours: 40 }) },
+    });
+    expect(await h.stop()).toBe("wait");
+    h.advance(USAGE_LIMIT_RECHECK_MS);
+    expect(await h.stop()).toBe("wait");
+    h.advance(USAGE_LIMIT_READ_WAIT_MS);
+    await h.stop();
+    expect(h.reports.map((report) => report.verdict)).toEqual(["wait"]);
+  });
+
+  test("with switching off it is still reported, as staying stopped", async () => {
+    const h = harness({
+      active: "out",
+      mode: "off",
+      accounts: { out: usage({ used: 100, resetsInHours: 8 }) },
+    });
+    expect(await h.stop()).toBe("stop");
+    expect(h.reports.map((report) => report.verdict)).toEqual(["stop"]);
+    expect(h.reports[0]!.account?.id).toBe("out");
+  });
+
+  test("an error that is not a usage limit, such as a transient 429, reports nothing", async () => {
+    const h = harness({ accounts: { out: usage({ used: 100, resetsInHours: 8 }) } });
+    expect(await h.stop({ error: "429 Too Many Requests, retrying" })).toBe("stop");
+    await h.switcher.noteUnresentStop({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId: "request-2",
+      error: "429 Too Many Requests, retrying",
+    });
+    expect(h.reports).toHaveLength(0);
+  });
+
+  test("a stop on a provider with no accounts is reported with no account", async () => {
+    const h = harness({ accounts: { out: usage({ used: 10, resetsInHours: 8 }) } });
+    await h.switcher.noteUnresentStop({
+      platform: "grok",
+      environmentId: "env-1",
+      requestId: "request-3",
+      error: "USAGE_EXHAUSTED",
+    });
+    expect(h.reports).toEqual([
+      {
+        platform: "grok",
+        environmentId: "env-1",
+        requestId: "request-3",
+        verdict: "stop",
+      },
+    ]);
+  });
+
+  test("a failed report retries once without changing the stop decision", async () => {
+    let attempts = 0;
+    const switcher = new AgentAccountAutoSwitcher({
+      settings: async () => ({}),
+      snapshot: async () => ({}) as never,
+      readUsage: async () => usage({ used: 0 }),
+      switchAccount: async () => false,
+      sessionAccount: async () => null,
+      bridgeBusy: async () => false,
+      notify: () => undefined,
+      onLimitStop: () => {
+        if (++attempts === 1) throw new Error("mail is down");
+      },
+    });
+    expect(
+      await switcher.handleLimitStop({
+        platform: "claude",
+        environmentId: "env-1",
+        requestId: "request-1",
+        error: LIMIT_ERROR,
+        resends: 0,
+      }),
+    ).toBe("stop");
+    for (let i = 0; i < 2; i++)
+      await switcher.handleLimitStop({
+        platform: "claude",
+        environmentId: "env-1",
+        requestId: "request-1",
+        error: LIMIT_ERROR,
+        resends: 0,
+      });
+    expect(attempts).toBe(2);
+  });
+});
+
+describe("moving off a limited account for a coordinator", () => {
+  const byEmail = (email: string) => (account: AgentAccountSummary) =>
+    account.identity.email === email;
+
+  test("moves through the automatic path, which never pins, and passes who it was for", async () => {
+    const h = harness({
+      active: "out",
+      accounts: {
+        out: usage({ used: 100, resetsInHours: 8 }),
+        room: usage({ used: 10, resetsInHours: 40 }),
+      },
+    });
+    expect(
+      await h.switcher.moveOffLimitedAccount("claude", byEmail("out@example.com"), {
+        quietProjectId: "project-1",
+      }),
+    ).toEqual({ moved: true, to: "room@example.com" });
+    expect(h.switchAccount.mock.calls[0]?.[2]).toMatchObject({
+      expectedActive: "out",
+      reason: "limit",
+    });
+    expect(h.notices[0]?.quietProjectId).toBe("project-1");
+  });
+
+  test("two entries of one login both count as limited", async () => {
+    const h = harness({
+      active: "out",
+      emails: { out: "same@example.com", copy: "same@example.com" },
+      accounts: {
+        out: usage({ used: 90, resetsInHours: 8 }),
+        copy: usage({ used: 20, resetsInHours: 8 }),
+      },
+    });
+    expect(await h.switcher.moveOffLimitedAccount("claude", byEmail("same@example.com"))).toEqual({
+      moved: false,
+      reason: "no-account-with-headroom",
+    });
+    expect(h.switchAccount).not.toHaveBeenCalled();
+  });
+
+  test("gives way to a pin", async () => {
+    const h = harness({
+      active: "out",
+      mode: "pinned",
+      accounts: { out: usage({ used: 100 }), room: usage({ used: 10 }) },
+    });
+    expect(await h.switcher.moveOffLimitedAccount("claude", byEmail("out@example.com"))).toEqual({
+      moved: false,
+      reason: "account-pinned",
+    });
+    expect(h.switchAccount).not.toHaveBeenCalled();
+  });
+
+  test("gives way to automatic switching being off", async () => {
+    const h = harness({
+      active: "out",
+      mode: "off",
+      accounts: { out: usage({ used: 100 }), room: usage({ used: 10 }) },
+    });
+    expect(await h.switcher.moveOffLimitedAccount("claude", byEmail("out@example.com"))).toEqual({
+      moved: false,
+      reason: "auto-switch-off",
+    });
+  });
+
+  test("says so when a manual switch got in first", async () => {
+    const h = harness({
+      active: "out",
+      accounts: { out: usage({ used: 100 }), room: usage({ used: 10, resetsInHours: 40 }) },
+    });
+    h.state.moved = false;
+    expect(await h.switcher.moveOffLimitedAccount("claude", byEmail("out@example.com"))).toEqual({
+      moved: false,
+      reason: "switch-refused",
+    });
+  });
+});
+
+test("expired and identity-mismatched reset proofs are omitted from stop reports", async () => {
+  for (const changedIdentity of [false, true]) {
+    const h = harness({ accounts: { a: usage({ used: 100 }), b: usage({ used: 0 }) } });
+    await h.stop();
+    h.state.active = "a";
+    if (changedIdentity) {
+      h.summaries[0]!.identity.email = "other@example.com";
+    } else h.advance(8 * 24 * 60 * 60_000);
+    await h.switcher.noteUnresentStop({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId: "later",
+      error: LIMIT_ERROR,
+    });
+    expect(h.reports.at(-1)?.resetsAt).toBeUndefined();
+  }
 });

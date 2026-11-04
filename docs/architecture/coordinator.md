@@ -132,7 +132,15 @@ works across the nodes that node controls:
 
 - `list_nodes` shows the connected nodes, whether each has a copy of this
   project (matched by repository identity) and, for this machine and each
-  node, its OS and load (see [Choosing a machine](#choosing-a-machine));
+  node, its running version and its OS and load (see
+  [Choosing a machine](#choosing-a-machine)). A node's `version` comes from
+  the hello of its current connection, so a leaf needs no update to report
+  it and shows its new version once it reconnects after a restart. It is
+  `null`, never a last-known value, while the node is disconnected, disabled
+  or reconnecting. A version alone does not identify a commit: builds of one
+  version can hold different code, and a running backend does not know the
+  commit it was built from
+  ([4840](../todo/coordinator-and-multi-review/4840-node-build-commit.md));
   `list_environments` lists the project's environments on them as well.
 - Every environment and workflow tool takes an optional `nodeId` and works
   on that node's copy with the same contract as here: launches, jobs,
@@ -168,7 +176,141 @@ command node's coordinator: it answers that coordinator's mail with
 `toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
 but hidden behind a warning in the project's Coordinator tab.
 
-### Coordinators on two nodes
+### Who hears a notice
+
+Status, pull request, automatic switch and usage-limit notices are addressed to
+*the repository's coordinator*, not to one conversation. They all go through
+`CoordinatorNoticeRouter` (`coordinator-notice-router.ts`), which applies one rule
+(`routeCoordinatorNotice` in `@orkestrator/protocol/coordinator-notices`), so a
+notice reaches exactly one coordinator:
+
+| Where the notice starts | Who hears it |
+| --- | --- |
+| A leaf, and its command node has the repository | The command node's main coordinator for that repository, not the leaf's |
+| A leaf, and its command node has no copy of the repository | The leaf's own main coordinator |
+| A leaf whose command node is too old to take it | The leaf's own main coordinator |
+| A standalone machine, or the command node itself | That machine's main coordinator |
+
+With two command nodes attached, it goes to the one with the repository that last
+mailed this project's coordinator, else the most recent.
+
+**Replies are not notices.** A delegating coordinator still gets its own worker's
+close notice, and the status wakes of a delegated worker (`association.kind` is
+`environment`), because it is waiting on that worker. Workers messaging a
+coordinator directly are unchanged too.
+
+**Workflows a leaf's coordinator started** go up with everything else, so that
+coordinator no longer hears about its own pipeline or review from its status wakes;
+the command node's does, and can mail it.
+
+**Starting a coordinator.** With no main coordinator running, a notice about a *new
+event* starts one, creating the project's workspace if it never had one, and then
+delivers to it. With one running it wakes that one and creates nothing. Starts are
+serialized per project, so notices arriving together start one session. Two kinds
+of notice never start a session:
+
+- A sweep of older state: `CoordinatorStatusWakes.reconcile`, and the first
+  `CoordinatorPullRequestWatches.sweep` after a start, which compares against a
+  reading from before the restart. A status sweep finds nobody and sends the state
+  current when one opens; on a leaf the notice waits in the outbox instead.
+- A machine-wide notice with no repository, such as an automatic switch, which
+  would start one coordinator per project on every switch. It goes only to
+  coordinators already open.
+
+Nothing is started while agent messaging is off. A held coordinator stays held:
+notices take the normal mail path, so the unattended budget, Pause and mutes apply
+as they always did. Status and pull request notices keep their per-resource
+budgets.
+
+**Over the node link.** A leaf queues the notice in its durable outbox
+([agent-messaging.md](agent-messaging.md#node-mail)), so it survives a link drop and
+a restart of the leaf and arrives once on reconnect. A retry whose words changed (an
+excerpt, a time) finds the queued notice and keeps its first rendering, so it cannot
+fall back to the leaf's coordinator as well. Text a leaf wrote reaches the
+command node's coordinator as an agent's untrusted mail; automatic switch and
+usage-limit notices are rendered there from checked fields, with every name quoted
+as data. A notice does not use the pair budget that bounds two coordinators
+talking, so an exhausted budget cannot hold it. An automatic switch reaches the
+command node's open coordinators once, and on the leaf only the coordinators of
+repositories the command node lacks. With several attached command nodes, each
+repository follows its selected controller; recipient filters prevent the
+machine-wide destination from also notifying another controller's repositories.
+
+**A command node that stays gone.** A brief drop holds the notice and never falls
+back, so nothing is delivered twice. After `NOTICE_HOLD_MAX_MS` (one hour) with no
+contact from that command node at all, or as soon as it is detached, the notice
+leaves the outbox and the leaf's own coordinator takes it, **only if it has not
+been collected**. Collection transfers ownership of the whole batch before any
+delivery attempt. Collected items (including deferred or unattempted ones) may
+already have reached a mailbox after a lost response, so they never fall back.
+On detach or after an hour of silence they are retired with the content-free
+`notice.collected-retired` warning. This deliberately accepts possible notice
+loss to preserve at-most-once wakes; collection is not delivery confirmation. An hour is short against
+limits that reset in hours and long against a restart. A status notice from a sweep
+that finds no coordinator open at that point is logged and dropped.
+
+## Usage-limit stop notices
+
+Every session that really stops on a usage limit produces a notice: a user-started
+native tab, a delegated worker, a pipeline, review or branch session, and a
+coordinator conversation, on any provider. It names the session, machine, repository,
+account, the reset time when known (else the provider's words for it) and whether the
+session will resend, is waiting, or stays stopped.
+
+"Really stops" means the turn ended failed with a usage-limit error
+(`classifyUsageLimitError`). A transient limit the provider retries while the session
+carries on does not fail the turn, so it sends nothing. Native tabs report from
+`NativeAgentUsageLimitResend`, workflows from `provider.usageLimitStop`, and both reach
+`AgentAccountAutoSwitcher`, whose `onLimitStop` fires once per stopped turn with the
+account the turn ran on, read before any move. A stop that waits counts once, when the
+wait starts.
+
+`CoordinatorUsageLimitNotices` (`coordinator-usage-limit-notices.ts`) keeps a durable
+ledger (the `coordinator-usage-limit-notices` store):
+
+- **Raising.** A stop has an id derived from its environment and request, recorded in
+  `raised`, so a retry or restart raises nothing new.
+- **Grouping.** The machine with the receiving coordinator groups stops per project by
+  account and reset window, with an hour's tolerance between readings of one reset; an
+  unknown reset counts as a five-hour window. A group waits 30 seconds for stops landing
+  together, then sends one wake listing them. A later stop in the window is filed
+  without a wake (`usage-limit-window-already-notified`). A flush is recorded before it
+  is sent, under a fixed request id, so a restart resends it rather than repeating it.
+  A group still unsent after a restart can start a coordinator only while its window is
+  open: once the window has ended it is older state, and it starts nothing. If the main
+  that had the wake has closed, a later stop in the open window starts one and is filed
+  there without a wake, so the stop is not lost and the window still costs one turn.
+- **Naming a leaf's worker.** A worker this command node delegated to a leaf has its
+  delegation here, so the leaf reports it as a tab. `deliverFromLeaf` names it a delegated
+  worker when an environment association for that node, environment and tab matches.
+- **The coordinator on the limited account.** Accounts compare by provider and email,
+  across machines; without an email only the entry on its own machine matches. What is
+  compared is the login the coordinator's next turn runs on: an idle bridge launched on
+  another account is replaced on its next use, so it counts as already on the machine's
+  active account. A coordinator on the limited login has its machine moved off first by
+  `moveOffLimitedAccount`, the automatic switcher's own path: it never pins, and every
+  entry of the login counts as limited. That move's automatic switch notice skips this
+  coordinator, whose own notice says so.
+- **No move possible.** With no account with headroom, an explicit pin, or automatic
+  switching off, the notice is kept (`coordinator-on-limited-account`), no turn starts,
+  and the reason is in the notice and the ledger (`keptReason`). The same happens when the
+  coordinator's bridge has live work on that login, which holds it there until the work
+  ends (`coordinator-busy`). Nothing retries it; the coordinator reads it on its next
+  turn. With status wakes off, a notice is filed without a wake and starts nothing.
+
+**A coordinator's own stop never notifies itself.** A leaf coordinator's goes up to the
+command node's coordinator for that repository. With nobody above, it attempts the same
+move, and the provider's error in its transcript is what the user sees. A side agent's
+stop reaches its main. So a wake that fails on a limit ends there rather than raising
+another wake: a notice cannot trigger another notice about the same stop.
+
+To check this live, with real accounts and two machines: attach a leaf to a command node
+that has the same repository, run a tab on the leaf until the provider refuses it, and
+look for one wake on the command node's coordinator and none on the leaf's. Repeat with
+the link down across a leaf restart, and with the command node's coordinator on the same
+email as the stopped tab, with and without another included account.
+
+## Coordinators on two nodes
 
 A command node's main coordinator and a leaf's main coordinator for the same
 repository exchange ordinary node mail
@@ -289,8 +431,8 @@ on `self` and on each node:
 
 A command node's window reaching a leaf's project shows the leaf's
 coordinator directly when the sidebar is grouped by machine or project.
-Grouped by repository it leads to the command node's coordinator for that
-repository instead, when the command node has one
+Grouped by repository, or in the compact sidebar, it leads to the command node's
+coordinator for that repository instead, when the command node has one
 ([command-nodes.md](command-nodes.md#leaf-mode)).
 
 ### Tickets on other machines
@@ -335,23 +477,25 @@ own until it is needed: the next agent mail to the coordinator, or a worker's
 delegation wake, starts a new main with the repository's default agent
 (`CoordinatorService.ensureMainConversation`) and moves onto it the work the
 closed one still owed a report for (open delegations, unreported workflows).
-A build-pipeline or review notice does not start one by itself — it waits for
-the next main — so finished work from long-closed conversations cannot wake a
-fresh coordinator. With no main open, the toolbar action reads **Start
-coordinator**.
+A notice about a new event starts one too. A sweep of older state does not: it
+waits for the next main, so finished work from long-closed conversations cannot
+wake a fresh coordinator after a restart. See
+[Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
+reads **Start coordinator**.
 
 An open main that has never run has no agent until its first prompt, so it can
 neither read mail nor be woken for it. Mail from an agent in its own project, or
 a delegation wake, assigns it the default agent the same way, and mail already
-filed for it is delivered. A build-pipeline or review notice still does not
-start it. Until it has an agent, the conversation shows a banner saying the mail
-is waiting.
+filed for it is delivered. A new notice does too, but a sweep of older state and
+a machine-wide notice do not. Until it has an agent, the conversation shows a
+banner saying the mail is waiting.
 
 Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
 free number). A side agent reads the project and Orkestrator state (its
 credential carries only the `discovery`, `mail` and `schedules` capabilities
 (`coordinatorRoleCapabilities` in `control-mcp-tools.ts`), so it launches
-nothing, graphs included), and exchanges mail with the main coordinator only:
+nothing, graphs included; `ask_agents` is on `discovery` because a subork is
+read-only and answers only its asker), and exchanges mail with the main coordinator only:
 the mail store refuses side ↔ worker and side ↔ peer mail in both
 directions. The user may still write to it.
 
@@ -880,6 +1024,108 @@ a request body cannot name a root of its own — and it is scoped to the one
 conversation. Deleting the project removes them with the rest of the coordinator
 runtime.
 
+A bridge turns an image attachment into inline image content, so the model sees
+the picture but no path. Each coordinator turn with an image therefore carries a
+marked block naming where it is saved
+(`coordinatorPromptWithAttachmentPaths`); it goes to the provider only, and
+transcripts remove it and draw the file.
+
+### Passing a pasted image on
+
+A coordinator is read-only, so it cannot save a pasted image somewhere another
+agent can read it. It names the image instead, and the backend does the copying
+(`coordinator-mail-attachments.ts`, `mail-attachments.ts`). There is no new write
+access, tool permission or sandbox change on the coordinator's side.
+
+- **`send_message` takes `attachments`**: the paths it was given (a bare file
+  name works too). It reaches anything `send_message` reaches, on any connected
+  node: agent tabs, build pipeline workers by address, containers, the project
+  home, side agents and coordinators. With a `nodeId` it goes across the node
+  link; a leaf's coordinator sends it upward through its outbox
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- **`transfer_files` takes `from: { nodeId, attachments: true }`**, with the same
+  checks and landing place and its normal receipt of sizes and hashes, for a
+  copy with no message. `toDirectory` is refused; a worker can copy the file out
+  of the Git-excluded folder if it belongs in the tree.
+- **Only this conversation's own files.** A reference must be a bare name or an
+  absolute path directly in the calling conversation's attachment directory.
+  Another conversation's file, `..`, a relative path, a symlink or a directory
+  is refused. The scope comes from the credential, never from the tool input.
+- **Images only, by content.** PNG, JPEG, GIF and WebP (what the paste flow
+  accepts), recognised from their bytes on the sending side and again on the
+  receiving side. At most 8 images a message, 8 MiB each, 32 MiB together
+  (`AGENT_MAIL_MAX_ATTACHMENTS` and its neighbours).
+- **The copy comes first.** A refused or failed copy means no message, and the
+  caller is told why, so a message never points at a missing file. A message
+  refused after its copy (a worker that has just ended, say) leaves the file in
+  the same ignored place, with nothing pointing at it.
+- **Retries are safe.** A message's files have one fixed place, derived from the
+  sender and `requestId`. A retry finds them, skips the copy and replays the
+  mail. The same `requestId` with another image is `idempotency-conflict`.
+
+Where a file lands:
+
+| Recipient | Location | Removed |
+| --- | --- | --- |
+| Environment (worktree) | `<worktree>/.orkestrator/mail-attachments/<batch>/` | With the worktree |
+| Environment (container) | `/workspace/.orkestrator/mail-attachments/<batch>/` | With its storage |
+| Project home | `<dataDir>/project-home-mail-attachments/<environmentId>/<batch>/`, outside the user's checkout, copied only once the user approves the message | With the project home (environment deletion, or the next maintenance pass once its record is gone, as when the project is removed), or once past configured mail retention (14 days by default) |
+| Coordinator or side agent | That conversation's attachment directory, the root its read-only rules can read | With the conversation's retention or the project |
+
+`.orkestrator` is Git-excluded in every environment, and the copy first proves
+that for the location (`ensureWorkspaceArtifactIsGitExcluded`) and fails if it
+cannot, so a sent image does not reach a commit or pull request through normal
+staging. The project home is the user's own checkout, which Orkestrator never
+cleans, so nothing is written into it: its images stay in the data directory
+(`projectHomeMailAttachmentDir`, `apps/backend/src/core/mail-attachments.ts`),
+where no repository can stage them. `deleteEnvironment` removes that directory
+with the project home, and every backend's 30-second node maintenance pass
+(`NodeFiles.sweepMailAttachments`) removes the directory of a project home whose
+record is gone and any batch older than mail retention, by which time no
+message names it. A failed record read keeps the files. A stopped container is refused rather than queued: there is nothing to
+write into until it starts.
+
+The message records each file as `attachments` (`AgentMailAttachment`: name,
+path on the recipient's filesystem, media type, size, hash). Its carrier and
+`read_message` give the recipient those paths, and the body stays the sender's
+own words. The mail tile shows each name and size, never the path. It draws no
+thumbnail, because the path is often on another machine or in a container the
+viewer cannot read from.
+
+Workers cannot send images: `send_message` on a worker's Agent Tools has no
+`attachments`, and every check here is about a coordinator conversation's own
+directory.
+
+How it is verified, with no provider turn:
+
+- `coordinator-mail-attachments.test.ts` and
+  `coordinator-mail-attachments-nodes.test.ts` run the real send commands, mail
+  store, transfer framework and Git worktrees, for every recipient kind and both
+  node directions; containers there are a fake `docker exec` running the real
+  writer script.
+- `coordinator-mail-attachments-docker.test.ts` sends into a real container
+  (opt-in: `ORKESTRATOR_TEST_DOCKER_IMAGE=orkestrator-v2:latest`; it runs with
+  `--network none`). It checks the image's `node` user can read the file, that
+  Git ignores it even after `git add -A`, and that a retry adds nothing.
+- `bun scripts/qa-coordinator-image-mail.ts` starts two real backends from
+  source, each blind to the other's files, links them over the real gateway and
+  runs every route with no agent
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- `coordinator-mail-attachments-read-live.test.ts` (slow tier) has the
+  recipient's own agent open the file. It sends through the real commands and
+  injection drain, then hands the exact delivered prompt to the pinned Claude
+  CLI and the pinned Codex CLI, each pointed at a scripted loopback model. The
+  model takes the path from the prompt it received and calls the CLI's own tool
+  (`Read`, `view_image`); the test checks the CLI returned the same bytes as
+  image content. It covers a worker in its worktree and a side agent in its
+  attachment directory, which is outside its working directory: Claude reads
+  there only because the bridge approves `Read` up front for every session,
+  read-only coordinators included (`session-manager-prompt-query.ts`). No
+  provider is called.
+- Not covered: Cursor, Pi and Grok recipients, and an agent reading inside a
+  container
+  ([todo 4420](../todo/coordinator-and-multi-review/4420-coordinator-image-mail-live-qualification.md)).
+
 ## Repository toolbar
 
 The toolbar shows the canonical path, branch, upstream freshness, ahead/behind
@@ -934,7 +1180,16 @@ the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
 at most five seconds). The backend answers without fetching while the
 checkout cannot change, and otherwise runs the cooldown-bound fetch and
 answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
-then fast-forwards with `syncProjectGit` and sends. A fast-forward that fails
+then fast-forwards with `syncProjectGit` and sends. The backend waits for the
+fetch for at most three seconds (`coordinator-message-upstream.ts`). When it
+is slower, or fails, the backend fast-forwards the checkout itself to the
+upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a
+local `git merge --ff-only` under the same rules) and answers
+`{ offer: false, reason: "fast-forwarded" }`; the panel refreshes and sends.
+That merge does not wait in the checkout's Git queue, where the slow fetch
+is, and turn admission waits for it as for a merge sync. The late fetch only
+refreshes the status. Every check logs `checkout.message-check` with its
+outcome, how the fetch went and `durationMs`. A fast-forward that fails
 anyway (the remote moved, the network dropped) is reported in the toolbar's
 error and the message is still sent, since there is no question left from
 which to choose to skip it. Side agents and `!` commands do not merge, and
@@ -953,9 +1208,13 @@ from a snapshot of at most 100 pending entries; each environment retains serial
 delivery and batching. A slow coordinator fetch therefore does not block worker
 mail in the same pass. Mail attempts have a 60-second per-project backoff,
 including failed and timed-out attempts, separate from the successful-fetch
-cooldown. The fetch is cooldown-bound and the wait for it
-is capped at five seconds: past that the mail is delivered without merging,
-and the late fetch does not start a fast-forward afterwards. A fast-forward
+cooldown. Mail held because the checkout was busy (a running turn) does not
+count as an attempt, so its redelivery when the turn ends still tries. The
+fetch is cooldown-bound and the wait for it is capped at five seconds: past
+that the late fetch does not start a fast-forward afterwards, and the
+checkout is fast-forwarded instead to the upstream commit it already has, as
+it is after a failed fetch or sync (`checkout.mail-follow`
+`outcome=fast-forwarded-fetched`), the same rule as a typed message. A fast-forward
 that has begun is finished first, because the turn's admission
 (`beginTurnAfterMergeSync`) waits for it. A running turn, a blocked checkout,
 a side agent, a paused coordinator and a steered message (one taken into a
@@ -1213,8 +1472,10 @@ Every other coordinator action refuses the project home (see
   subjects or reply IDs are refused rather than silently dropped.
 - **Within 3 hours of a sent message** to that project home from this
   coordinator (`COORDINATOR_PROJECT_HOME_MESSAGE_WINDOW_MS`), the message is
-  sent at once and the tool result carries a `warning` that this is
-  discouraged.
+  sent at once if it carries text only, and the tool result carries a `warning`
+  that this is discouraged. Messages with images always need their own approval,
+  even within this window, before their files are given to the project home
+  (outside the checkout; see [Passing a pasted image on](#passing-a-pasted-image-on)).
 - **Otherwise the message is held** as a `message-project-home` node action
   request, shown in the same approval dialog as `request_environment_deletion`
   and `answer_worker_question` (`ProjectHomeMessageApprovalDialog`), with the
@@ -1511,6 +1772,13 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   stage session's committed transcript (`get_build_pipeline_worker_transcript`,
   checkpointed every few seconds while the turn runs). It never touches the
   provider. The `claude-build` tab itself is still not a transcript source.
+  That read returns the stored rows as they are, envelopes included. Only the
+  display changes: `toPipelineTranscript` draws each delivered envelope as the
+  same mail tile a native tab shows, and an envelope it cannot read as a plain
+  notice, so a stage, Multi Review or graph-run transcript never shows the raw
+  markup. Every provider stores mail as its own user row, whether it was steered
+  in or delivered between turns, so the row alone is enough after a reload. What
+  the agent receives is unchanged.
 - **Durability.** Mailboxes and queued mail are rows in the mail store and
   are rebuilt from the pipeline record on start, so they survive a backend
   restart while the pipeline runs. A finished or removed pipeline's worker
@@ -1651,6 +1919,71 @@ Decisions:
   or that a node answers with "idle", removes the mark; a lost node answer
   keeps it, because the stop may have landed.
 
+### Restarting a failed pipeline step
+
+`restart_build_pipeline_step` lets a coordinator carry on a build pipeline
+that stopped for a passing reason (a usage limit, an unreachable agent)
+without the user. It is the UI's step Restart, and with `selection` its
+"Restart in…", through `BuildPipelineService.restartForCoordinator`
+(`build-pipeline-restart-targets.ts` resolves the step inside the pipeline
+lock).
+
+- **Which step.** Omit `stepId` to restart the step a failed pipeline failed
+  in (the session its `failureContext` names, or a fresh run of that step
+  when it failed before its session existed), or the current step of a
+  paused, stalled or running pipeline. Name another with its worker
+  `address` from `get_build_pipeline` (a session key or provider session ID
+  also works).
+- **What it keeps.** The pipeline rewinds to that step's own round: earlier
+  rounds stay as they are, the worktree is not reset, and the step's old
+  session and any after it stay readable as a previous attempt. `selection`
+  (agent, model, optional `reasoningEffort` and `fastMode`) becomes the
+  step's selection from then on, as the UI's does.
+- **Refusals.** A cancelled or completed pipeline, a failure in environment
+  setup (before any step), a failure with no step, an unknown step and a
+  pipeline of another project are refused before anything changes. A
+  refused request leaves no receipt, so the same `requestId` can be sent
+  again once the cause is fixed.
+- **Once per request.** The command node keeps a coordinator receipt
+  (`restart-pipeline-step`), so retrying a `requestId` replays the first
+  answer with `replayed: true`. With `nodeId` the leaf restarts the step
+  through its node-link-only `restart_controller_build_pipeline_step` under
+  its own receipt keyed from that one, so a retry after a lost answer
+  replays there rather than restarting twice. A node without that command is
+  refused with "update it, then retry" (see
+  [version-compatibility.md](version-compatibility.md)).
+- **How the coordinator hears.** A failed pipeline's follow had already sent
+  its terminal notice and stopped observing. The restart reopens this
+  coordinator's follows of the pipeline (clearing the terminal mark and the
+  last notice), so its next completion, failure or pause wakes the
+  coordinator as usual. The result says whether a follow exists and tells
+  the coordinator to finish its turn. A step that fails again at once comes
+  back in the result as `phase: "failed"` with the error.
+
+`resume_build_pipeline` resumes a paused pipeline only. On any other phase
+it refuses, naming the phase. Failed pipelines get restart guidance; active
+pipelines are told they are already running and need no action. A failed pipeline's
+status wake lists `restart_build_pipeline_step` when the failure belongs to
+a step.
+
+Decisions:
+
+- **A new tool rather than widening resume (chosen).** Resume continues the
+  paused session; a failed step needs a fresh session and a rewind to its
+  round. Keeping them apart keeps resume's contract and makes the refusal
+  point at the right call.
+- **Code rewind and skipping a step stay the user's.** Both discard or
+  bypass work, so they are not offered to a coordinator.
+- **A completed pipeline is refused** even though the UI can restart its
+  steps: redoing finished work, possibly reopening a pull request, is the
+  user's call.
+- **Durable restart identity.** The pipeline stores hashed request identity,
+  intent, and resolved step with the restart intent under its mutation lock.
+  Retries reconcile this record before resolving an omitted step, including
+  after a backend crash or follow-update failure. The journal retains up to
+  1024 entries; at capacity new requests are refused rather than evicting
+  evidence of an earlier restart.
+
 ## Scheduled wakes and actions
 
 A coordinator turn cannot wait, so a coordinator that needs to act later
@@ -1694,13 +2027,23 @@ the main coordinator has four tools (capability `accounts`, plus
   `set_active_agent_account`, the Settings switch, machine-wide. Without
   permission it creates a `switch-agent-account` request the user approves
   in the same dialog as `request_environment_deletion`. With the `scheduleId`
-  of a self-timer that carries the user's permission it switches at once.
-  Either way it pins the account if automatic switching is on.
+  of a self-timer that carries the user's permission it switches at once, and
+  so it does when the user ticked "Let coordinators switch accounts without
+  asking" for that provider in Settings on the coordinator's machine (within
+  an hourly limit, never to a signed-out or used-up account; see
+  [agent-accounts.md](agent-accounts.md#switching-without-asking)). The result's
+  `state` says which happened, and the coordinator rule tells the coordinator
+  never to ask the user to approve a switch that already ran. Either way it
+  pins the account if automatic switching is on.
 - `set_account_auto_switch` changes the automatic-switching ticks, with no
   approval, because the backend then does the switching. On a leaf it refuses the
   shared ticks, which its command node holds, and can still end that leaf's pin. Each
-  automatic switch sends the main coordinator a notice. See
+  automatic switch sends the open main coordinators a notice, following
+  [Who hears a notice](#who-hears-a-notice). See
   [agent-accounts.md](agent-accounts.md#automatic-switching).
+
+A session stopping on a usage limit also tells a coordinator by itself; see
+[Usage-limit stop notices](#usage-limit-stop-notices).
 
 A self-timer carries that permission only when the main coordinator sets it
 with `authorizeAccountSwitch` in a turn the user started with their own
@@ -1728,9 +2071,10 @@ delegations `launch_environment`,
 build the user started in the UI has no association and never wakes a
 coordinator. A pull request the user raised is not followed either, but on a
 worker the coordinator owns its merge or close still reaches it, as a
-[worker outcome](#worker-outcomes). Notices go to the main coordinator, like every other report, and
-do not start one: with no main open they wait, and the sweep sends the state
-current when one opens.
+[worker outcome](#worker-outcomes). Notices go to the main coordinator that
+[should hear them](#who-hears-a-notice), like every other report. With no main running,
+a new event starts one. A sweep starts nothing: it waits, and sends the state current
+when one opens.
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association
@@ -1905,7 +2249,8 @@ structured `notice` (resource kind and ids, state, tone), a subject such as
 "Multi Review api-fix is ready to address", a bounded Markdown body (at most
 eight 400-character detail lines) and the calls that read more or act —
 `get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
-`get_build_pipeline`, `resume_build_pipeline`, `get_graph_run`,
+`get_build_pipeline`, `resume_build_pipeline`, `restart_build_pipeline_step`,
+`get_graph_run`,
 `get_tab_state`, `get_tab_transcript`, `get_environment`,
 `resolve_conflicts` — written out with their arguments. In the transcript it
 is a mail tile toned by the notice.
@@ -2265,11 +2610,13 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | Multi Review open / Open fix session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
 | `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Fix publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |
-| `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. |
+| `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. Resume refuses a pipeline that is not paused. |
+| Step Restart / Restart in… | Added `restart_build_pipeline_step`; see [Restarting a failed pipeline step](#restarting-a-failed-pipeline-step). Rewind code and Skip stay user actions. |
 | `launch_environment` / New environment | Existing backend operation owns creation, startup tab/initial-prompt state, and background start. Its accepted/created/error distinction already reports partial startup. |
 | `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
 | `/goal` (composer) | Added `set_worker_goal`, `get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`; see [Worker goals](#worker-goals). The goal service owns the loop and its limits, and the tools add ownership, a required limit, and one wake. |
+| `/subork` (composer) | Added `ask_agents`, the same tool every native tab has, on the `discovery` capability so side agents have it too. Its suborks are read-only and run in the project home (the conversation's own checkout); the answers come back as one mail to the conversation. See [suborks.md](suborks.md). |
 | Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
 
 Repository checkout mutation controls remain unavailable to coordinators.
@@ -2712,6 +3059,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator-surface-actions.test.ts`
+- `restart_build_pipeline_step`: step resolution, kept rounds, selection and
+  refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
+  local and remote restarts, receipts and replays, the older-node refusal,
+  follow reopening and the `resume_build_pipeline` refusal
+  (`coordinator-pipeline-step-actions.test.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a

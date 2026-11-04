@@ -1166,7 +1166,7 @@ describe("NativeAgentService", () => {
   );
 
   test.each(["codex", "claude"] as const)(
-    "keeps the %s placeholder when every user message contains only annotations",
+    "shows no title for %s while every user message contains only annotations",
     async (agent) => {
       const annotationOnly = buildPromptWithTranscriptAnnotations("", [
         { id: "design-1", text: "Frame Hero at revision 3", comment: "", source: "design" },
@@ -1199,7 +1199,7 @@ describe("NativeAgentService", () => {
           };
           await service.ensureSession(identity);
           const projection = await service.getProjection(identity);
-          expect(projection?.title).toBe(title);
+          expect(projection?.title).toBeUndefined();
           // Only a title the backend chose is pushed; the placeholder is
           // already the provider's own.
           expect(stub.setSessionTitle).not.toHaveBeenCalled();
@@ -3865,7 +3865,11 @@ describe("NativeAgentService", () => {
         // A legacy provider list gets a synthetic, clearly-legacy identity; the
         // runtime actions are merged beside it with their own descriptors.
         // Scoped to the rows this test is about; `/goal` has its own coverage.
-        expect(first?.slashCommands?.filter((row) => row.id !== "orkestrator:goal")).toEqual([
+        expect(
+          first?.slashCommands?.filter(
+            (row) => row.id !== "orkestrator:goal" && row.id !== "orkestrator:subork",
+          ),
+        ).toEqual([
           {
             name: "/review",
             description: "Review the current changes",
@@ -3993,6 +3997,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
 
         releaseCatalog();
@@ -4005,6 +4010,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
       },
     );
@@ -4075,6 +4081,7 @@ describe("NativeAgentService", () => {
             "/compact",
             "/goal",
             "/steer",
+            "/subork",
           ]);
 
           now += 30_001;
@@ -4101,6 +4108,7 @@ describe("NativeAgentService", () => {
             "/compact",
             "/goal",
             "/steer",
+            "/subork",
           ]);
 
           // The discarded reads finishing later must not overwrite the catalogue
@@ -4117,6 +4125,7 @@ describe("NativeAgentService", () => {
             "/compact",
             "/goal",
             "/steer",
+            "/subork",
           ]);
         } finally {
           releaseCatalog();
@@ -4179,6 +4188,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
 
         const refreshed = await service.refreshProjectionModels(identity);
@@ -4192,6 +4202,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
       },
     );
@@ -4243,6 +4254,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
 
         // A failed optional endpoint must not be re-probed on every 500ms
@@ -4274,6 +4286,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
 
         now += 2;
@@ -4310,6 +4323,7 @@ describe("NativeAgentService", () => {
           "/compact",
           "/goal",
           "/steer",
+          "/subork",
         ]);
         expect(projection?.capabilities.attachments).toEqual({
           files: false,

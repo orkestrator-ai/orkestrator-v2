@@ -176,7 +176,7 @@ describe("ACP v2 transcript summaries", () => {
         capabilities: { details: true, pages: true },
       },
     });
-    expect(v2.value.generation).toStartWith("cursor:");
+    expect(v2.value.generation).toStartWith("acp-fixture:");
     expect(v2.value.messages.map((m: BridgeMessage) => m.id)).toEqual(["earlier", "tool"]);
     expect(v2.value.messages[1].parts[0].toolOutput).toBeUndefined();
     expect(v2.value.messages[1].parts[0].detail.fields).toEqual(["toolOutput"]);

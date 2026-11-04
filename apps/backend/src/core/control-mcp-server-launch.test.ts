@@ -44,7 +44,7 @@ describe("Orkestrator control MCP server", () => {
     });
     const launch = invocations.find(({ command }) => command === "launch_control_job")?.args;
     expect(launch).toMatchObject({
-      activateTab: true,
+      activateTab: false,
       requestId: "external-job-1",
       environmentId: "env-1",
       agent: "codex",

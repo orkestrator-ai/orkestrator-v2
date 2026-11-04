@@ -99,6 +99,21 @@ describe("matchAppShortcut", () => {
     }
   });
 
+  test("⌘⇧D and Ctrl+Shift+D rotate the sidebar's group-by mode; ⌘⇧G stays the run-script dialog's", () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(matchAppShortcut(chord({ ...modifier, key: "D", code: "KeyD" }))).toBe(
+        "rotate-sidebar-grouping",
+      );
+      expect(matchAppShortcut(chord({ ...modifier, key: "G", code: "KeyG" }))).toBeNull();
+      expect(
+        matchAppShortcut(chord({ ...modifier, shiftKey: false, key: "d", code: "KeyD" })),
+      ).toBeNull();
+    }
+    const rotate = appShortcut("rotate-sidebar-grouping");
+    expect(rotate.owner).toBe("window");
+    expect(rotate.fromPreviews).toBe(false);
+  });
+
   test("needs exactly one of ⌘ and Ctrl, and no Alt", () => {
     expect(matchAppShortcut(chord({ shiftKey: false }))).toBeNull();
     expect(matchAppShortcut(chord({ metaKey: true, ctrlKey: true, shiftKey: false }))).toBeNull();
@@ -109,8 +124,8 @@ describe("matchAppShortcut", () => {
   test("uses the physical key only when the layout types no Latin letter", () => {
     const k = { code: "KeyK", shiftKey: false };
     expect(matchAppShortcut(chord({ ...k, ctrlKey: true, key: "л" }))).toBe("search-projects");
-    // Dvorak: the physical K key types T, and the key typing K sits on KeyV.
-    expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "t" }))).toBeNull();
+    // Dvorak: the physical K key types T, so ⌘ on it is ⌘T; the key typing K sits on KeyV.
+    expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "t" }))).toBe("new-agent-tab");
     expect(matchAppShortcut(chord({ ...k, metaKey: true, key: "k", code: "KeyV" }))).toBe(
       "search-projects",
     );

@@ -123,3 +123,69 @@ Inside the namespace the process is uid 0 in its own user namespace, which
 Playwright's default (`chromiumSandbox: false`) already tolerates. It is not a
 fix for suites that reach Docker or the network. No product or test code was
 changed for this.
+
+## 2026-11-04: subork review validation, component and Electron suites
+
+Branch `subork-agent-command-19d44fc3d0c3-r1` on beelink, beside other
+pipelines' Docker work.
+
+- `e2e/SuborkGroup.spec.ts` had intermittent blank starts in its full-file
+  runs (8 passed, 2 failed in the last of them), with
+  `net::ERR_NETWORK_CHANGED` on fixture module imports in the trace. Rerun on
+  its own port (`ORKESTRATOR_E2E_PORT=1478`, `--repeat-each=5`) it passed all
+  50 cases (31.0 s); inside `unshare -rn` (port 1479, `--repeat-each=3`) it
+  passed all 30 (20.0 s).
+- `mise run test:agent:electron` (review validation for commit `fe32ed945`)
+  failed 16 of 62 cases (23 passed, 1 skipped, 22 did not run; 18.5 min).
+  Thirteen failed at the first `toHaveTitle` with the window still titled
+  `Orkestrator AI`; each one's `electron-diagnostics` attachment holds 56–139
+  `net::ERR_NETWORK_CHANGED` lines and
+  `renderer.load-failed ... Failed to fetch dynamically imported module
+  .../src/renderer-entry.tsx`. `connection-outage-electron.spec.ts` failed at
+  the same title check. The branch changes nothing under `apps/desktop/` or
+  `e2e/agent-testing/`. The two remaining failures were native-view
+  assertions (`web-annotations-electron.spec.ts`, open case 1400, and
+  `service-preview-electron.spec.ts` "a crashed service renderer reports the
+  failure and recovers on reload") and are not attributed to this case.
+- `ip monitor link address route` for 30 s in the same session showed a
+  Docker veth created and removed at interface index 7009; the journal held
+  1,886 veth and bridge lines between 03:40 and 04:05 UTC, the window of the
+  Electron run.
+- The Electron suite was not rerun: those specs open windows on the host
+  display, which on beelink is the user's live desktop. Follow-up is task 5
+  of [to-do 4340](../../../todo/agent-engines/4340-suborks-live-qualification.md).
+
+## 2026-11-04: the to-do 2181 qualification, and a measured way past it
+
+The isolated browser run for to-do
+[2181](../../../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md)
+(44 passed, 6 failed, 94 skipped, at `b16b51da1`) lost four cases to this, each
+ending on the "Orkestrator couldn't connect" screen, which is what a browser client
+shows when its modules fail to load. Their traces held these counts of
+`net::ERR_NETWORK_CHANGED`: `headless-profile.spec.ts` 33,
+`design-canvas.spec.ts:16` 82, `graph-designer.spec.ts:239` 119 and
+`graph-run-view.spec.ts:48` 133. `docker network ls` afterwards showed a network from
+another owner created at 01:33:45 UTC, about a second after the first aborts in the
+graph-designer case; the profile's own reset removed no networks. The other two failures in that run had no such requests
+and were spec problems; see the to-do.
+
+Reproduced on beelink at load average about 1, on a `--headless --fixture` profile,
+with `headless-profile.spec.ts --repeat-each=3 --workers=1`:
+
+- A `docker run --rm` of a labelled container every 0.3 s (veth churn on the default
+  bridge, about 75 link and address events per second by `ip monitor`): the previous
+  spec passed 3 of 3 with no aborts. Veth churn alone does not reproduce this.
+- `docker network create` and `rm` of a labelled network every 0.3 s, with an explicit
+  `--subnet` so the daemon's default address pools were not used: the previous spec
+  failed 3 of 3, with 127, 12 and 96 aborts in its traces.
+- The same network churn with the spec's module requests going through
+  `route.fetch()`: passed 3 of 3 at about 2.7 s each. The previous spec took about
+  1.8 s each when nothing aborted it.
+
+`headless-profile.spec.ts` now does this, because that case is about what the profile
+serves. No other spec changed: fetching modules outside Chromium changes what a real
+browser journey exercises, so the choice for the whole suite is task 3 of to-do
+[4222](../../../todo/cross-cutting/4222-browser-failures-left-after-headless-qualification.md).
+
+A run's output now names the failed cases whose trace has this error
+(`e2e/agent-testing/network-churn-report.ts`). The suite's result does not change.

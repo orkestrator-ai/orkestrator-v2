@@ -11,7 +11,7 @@ import {
 import { useEnvironmentStore, useFilesPanelStore } from "@/stores";
 import type { FilesPanelTab } from "@/stores";
 import { isFilesPanelFileTab } from "@/stores/filesPanelStore";
-import { PullRequestStateIcon } from "@/components/pull-requests";
+import { PullRequestStateIcon } from "@/components/pull-requests/PullRequestStateIcon";
 import { useFilesPanelPullRequestTabs } from "./FilesPanelPullRequests";
 import { useEnvironmentChangeProjection } from "@/hooks/useChangeProjection";
 import { saveDiffBase } from "./DiffBaseDialog";

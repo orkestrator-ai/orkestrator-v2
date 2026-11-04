@@ -170,8 +170,10 @@ qualified live on Claude, Pi and Grok. The only item left is blocked upstream
   against the real SDK runner at 1.4.0
   (`bridges/pi-bridge/src/extension-headless-ui.test.ts`). The turn always ends
   with an outcome row (`settleCommandRun`).
-- Orkestrator's own shortcuts are `/steer` (reserved) and `/compact` (defers to
-  a provider `/compact`), merged by `withSessionActionSlashCommands` in
+- Orkestrator's own shortcuts are `/steer` (reserved), `/compact` (defers to
+  a provider `/compact`), `/goal` (reserved) and `/subork` (reserved,
+  [suborks.md](../../architecture/suborks.md)), merged by
+  `withSessionActionSlashCommands` in
   `packages/protocol/src/agent-slash-commands.ts`. No others are planned.
 - The picker groups rows by `source` (`groupSlashCommandRuns` in
   `apps/web/src/lib/chat/slash-command-search.ts`, rendered by

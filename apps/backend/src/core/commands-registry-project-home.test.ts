@@ -282,21 +282,32 @@ test("toolbar and external switches clear home PR identity before selection, ref
   );
 });
 
-for (const command of ["merge_pr_local", "merge_environment_pr"]) {
-  test(`${command} merges a home from its checkout and preserves every local and remote branch`, async () => {
+for (const [command, cleanup] of [
+  ["merge_pr_local", true],
+  ["merge_environment_pr", false],
+  ["merge_environment_pr", true],
+] as const) {
+  test(`${command} merges a home with cleanup=${cleanup} and preserves every branch`, async () => {
     const home = await ensure();
     await runCommand("git", ["switch", "-c", "feature/A"], { cwd: checkout });
     await ensure();
     await storage.updateEnvironment(home.id, {
       prUrl: "https://github.com/org/repo/pull/1",
       prState: "open",
+      cleanupAfterMergeRequestedAt: cleanup ? new Date().toISOString() : null,
     });
     const gh = await fakeGh();
     try {
       const result = await invoke(command, {
         environmentId: home.id,
-        cleanupAfterMerge: true,
-        deleteBranch: true,
+        cleanupAfterMerge: cleanup,
+        deleteBranch: command === "merge_pr_local",
+        ...(command === "merge_environment_pr"
+          ? {
+              expectedPrUrl: "https://github.com/org/repo/pull/1",
+              expectedHeadSha: "a".repeat(40),
+            }
+          : {}),
       });
       expect(result).toMatchObject({ outcome: "merged" });
       expect(await readFile(path.join(checkout, "README.md"), "utf8")).toBe("fixture\n");
@@ -309,7 +320,8 @@ for (const command of ["merge_pr_local", "merge_environment_pr"]) {
       );
       expect(log).not.toContain("DELETE");
       expect(log).not.toContain("--delete-branch");
-      if (command === "merge_environment_pr") {
+      if (command === "merge_environment_pr") expect(log).toContain(`sha=${"a".repeat(40)}`);
+      if (command === "merge_environment_pr" && cleanup) {
         expect(result).toMatchObject({ cleanupOutcome: "completed" });
         expect(await storage.getEnvironment(home.id)).toBeNull();
       }

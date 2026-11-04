@@ -6,11 +6,13 @@ export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
+export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
+export type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
@@ -35,11 +37,13 @@ import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
+import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
+import type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
 import type { PublicOperationsStorage } from "./storage-public-operations.js";
 import path from "node:path";
@@ -153,6 +157,7 @@ export class StorageService {
   readonly coordinators: CoordinatorsStorage;
   readonly publicOperations: PublicOperationsStorage;
   readonly nodes: NodesStorage;
+  readonly coordinatorNotices: CoordinatorNoticesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
   readonly agentHandoffs: AgentHandoffsStorage;
@@ -161,6 +166,7 @@ export class StorageService {
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
   readonly graphDescribe: GraphDescribeStorage;
+  readonly suborks: SuborksStorage;
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
@@ -172,6 +178,7 @@ export class StorageService {
     this.coordinators = this.repos.coordinators;
     this.publicOperations = this.repos.publicOperations;
     this.nodes = this.repos.nodes;
+    this.coordinatorNotices = this.repos.coordinatorNotices;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
     this.agentHandoffs = this.repos.drafts;
@@ -180,6 +187,7 @@ export class StorageService {
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;
     this.graphDescribe = this.repos.graphDescribe;
+    this.suborks = this.repos.suborks;
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
     this.watchedPullRequests = this.repos.watchedPullRequests;
@@ -393,6 +401,10 @@ export class StorageService {
     ...args: Parameters<ProjectsRepository["arrangeProjectsByIntent"]>
   ): Promise<Project[]> {
     return this.repos.projects.arrangeProjectsByIntent(...args);
+  }
+
+  loadProjectIdsForCleanup(): Promise<Set<string>> {
+    return this.repos.projects.loadProjectIdsForCleanup();
   }
 
   loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
@@ -727,6 +739,13 @@ export class StorageService {
     return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
   }
 
+  setCoordinatorAccountSwitchGrant(
+    platform: import("@orkestrator/protocol/agent-accounts").AgentAccountPlatform,
+    enabled: boolean,
+  ): Promise<AppConfig> {
+    return this.repos.config.setCoordinatorAccountSwitchGrant(platform, enabled);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }
@@ -807,8 +826,13 @@ export class StorageService {
     taskId: string;
     environmentId: string;
     isLocal: boolean;
+    activate?: "setup-handoff";
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureBuildPipelineTab(input);
+  }
+
+  ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
+    return this.repos.sessions.ensureSetupTab(environmentId);
   }
 
   ensureNativeAgentJobTab(input: {
@@ -829,7 +853,7 @@ export class StorageService {
     tabId: string;
     type: BuildPipelineAgent | "plain" | "claude-tmux";
     title?: string;
-    activate?: boolean;
+    activate?: boolean | "setup-handoff";
     terminalSessionId?: string | null;
     existingOnly?: boolean;
   }): Promise<PersistedPaneLayout> {
@@ -1788,6 +1812,8 @@ export class StorageService {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       nodePrefix?: string;
       nodeParent?: { id: string; threadId: string; hopCount: number };
@@ -1804,6 +1830,10 @@ export class StorageService {
        * recipient rather than starting its own.
        */
       coalesceMs?: number;
+      /** File it for its reader without a wake, under this placement reason. */
+      keepWithoutWake?: string;
+      /** A notice a leaf sent up the coordinator hierarchy: no pair budget. */
+      relayedNotice?: boolean;
       /**
        * The coordinator's `deliverNow`: if the message is scheduled for
        * delivery, mark its pending entry `steerRequested`, exactly as Deliver
@@ -1815,6 +1845,13 @@ export class StorageService {
     } = {},
   ): Promise<AgentMailMessage> {
     return this.repos.agentMail.sendAgentMail(sender, input, options);
+  }
+
+  resolveAgentMailRecipient(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<{ environmentId: string; tabId: string }> {
+    return this.repos.agentMail.resolveAgentMailRecipient(sender, input);
   }
 
   startRemoteWorkerBudget(

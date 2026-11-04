@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Download, Loader2, RefreshCw, XCircle } from "lucide-react";
 import type { HostTask } from "@orkestrator/protocol/host-maintenance";
@@ -93,32 +94,30 @@ export function DockerImageStatusPanel() {
   // Refresh image identity when an observed task completes.
   useEffect(() => {
     let active = true;
-    let polling = false;
-    const timer = setInterval(() => {
-      if (polling) return;
-      polling = true;
-      void backend
-        .getHostMaintenance(false, machine)
-        .then((maintenance) => {
-          if (!active) return;
-          const task = maintenance.tasks["image-update"] ?? null;
-          const previous = downloadRef.current;
-          adoptDownload(task);
-          if (
-            task?.state !== "running" &&
-            (previous?.state === "running" || (task && task.id !== previous?.id))
-          ) {
-            void fetchStatus(false);
-          }
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          polling = false;
-        });
-    }, TASK_POLL_MS);
+    const stopPolling = startCoordinatedPoll({
+      resource: "docker-image-task",
+      target: machine ?? "",
+      intervalMs: TASK_POLL_MS,
+      read: () =>
+        backend
+          .getHostMaintenance(false, machine)
+          .then((maintenance) => {
+            if (!active) return;
+            const task = maintenance.tasks["image-update"] ?? null;
+            const previous = downloadRef.current;
+            adoptDownload(task);
+            if (
+              task?.state !== "running" &&
+              (previous?.state === "running" || (task && task.id !== previous?.id))
+            ) {
+              void fetchStatus(false);
+            }
+          })
+          .catch(() => undefined),
+    });
     return () => {
       active = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [adoptDownload, fetchStatus, machine]);
 

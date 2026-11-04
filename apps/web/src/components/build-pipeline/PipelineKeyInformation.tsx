@@ -277,6 +277,13 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
   ]);
   const showRounds = rounds.size > 1;
   const sections: PanelSection[] = [];
+  if (info.summary) {
+    sections.push({
+      key: "summary",
+      title: "Summary",
+      body: <Prose text={info.summary} />,
+    });
+  }
   if (info.statement) {
     sections.push({
       key: "statement",

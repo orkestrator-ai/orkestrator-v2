@@ -24,12 +24,14 @@ export type DevArguments = {
    */
   useDevWorktreeFolder?: boolean;
   /**
-   * `dev:test` only, Linux only: run Electron on Chromium's headless Ozone
-   * platform with no display variables, so the profile opens no window in the
-   * desktop session it was started from. The renderer is still reachable
-   * through `browserUrl`.
+   * `dev:test` only: `true` (`--headless`) runs Electron on Chromium's headless
+   * Ozone platform with no display variables, so the profile opens no window in
+   * the desktop session it was started from; the renderer is still reachable
+   * through `browserUrl`. `false` (`--no-headless`) keeps the window. Absent
+   * leaves it to `resolveElectronHeadless`. Only Linux has Ozone; elsewhere
+   * neither flag changes anything.
    */
-  headlessElectron?: boolean;
+  headless?: boolean;
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -80,11 +82,19 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
         throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
       }
       result.useDevWorktreeFolder = true;
-    } else if (argument === "--headless-electron") {
+    } else if (
+      argument === "--headless" ||
+      argument === "--headless-electron" ||
+      argument === "--no-headless"
+    ) {
       if (!options.agentTest) {
-        throw new Error("--headless-electron is only supported by mise run dev:test");
+        throw new Error(`${argument} is only supported by mise run dev:test`);
       }
-      result.headlessElectron = true;
+      const headless = argument !== "--no-headless";
+      if (result.headless === !headless) {
+        throw new Error("--headless cannot be combined with --no-headless");
+      }
+      result.headless = headless;
     } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {

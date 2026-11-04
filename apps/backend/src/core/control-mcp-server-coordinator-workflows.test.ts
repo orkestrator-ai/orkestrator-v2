@@ -388,6 +388,8 @@ describe("Orkestrator control MCP server", () => {
     const checked = await guarded.coordinatorInvoker(scope);
     // Only the user's approval answers; the coordinator's credential cannot.
     const approvalOnly = [
+      "prepare_node_mail_attachments",
+      "place_node_mail_attachments",
       "answer_project_worker_question",
       "answer_controller_worker_question",
       "resolve_native_agent_interaction",

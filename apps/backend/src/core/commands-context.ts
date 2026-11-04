@@ -9,6 +9,7 @@ import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { JsonRecord, StorageService } from "./storage.js";
 import type { MultiReviewService } from "./multi-review-service.js";
+import type { NativeAgentSuborkService } from "./native-agent-suborks.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { FeaturePlanningService } from "./feature-planning.js";
 import type {
@@ -73,6 +74,7 @@ export type CommandContext = {
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  suborks?: NativeAgentSuborkService;
   multiReviews?: MultiReviewService;
   /** Auto-merge of ready pull requests (`pr-auto-merge.ts`); absent in fixtures. */
   prAutoMerge?: import("./pr-auto-merge.js").PrAutoMergeController;

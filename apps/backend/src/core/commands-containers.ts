@@ -100,6 +100,10 @@ import {
 import { storageMountArguments } from "./container-storage.js";
 import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
+  gitMirrorContainerArguments,
+  scheduleProjectGitMirrorRefresh,
+} from "./project-git-mirror.js";
+import {
   allowedDomainsArgument,
   containerAllowedDomains,
   containerNetworkPolicy,
@@ -141,6 +145,7 @@ import {
 } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
+import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const dockerLog = createLogger("docker");
@@ -185,6 +190,8 @@ export interface CreateContainerIdentity {
   runtimeGeneration?: number;
   /** Persistent storage set to mount; absent keeps the legacy writable layer. */
   storage?: ContainerStorageIdentity;
+  /** The storage already holds a checkout, so this runtime never clones. */
+  reusesWorkspace?: boolean;
 }
 
 /**
@@ -273,6 +280,15 @@ export async function createDockerContainer(
   const imageCapabilitySet = identity.imageId
     ? await imageCapabilities(identity.imageId, context)
     : null;
+  // A runtime that will clone reads the project's Git mirror, read-only, when
+  // its image knows how; an older image never sees the mount or the variable.
+  // A stored local path is no remote a container could clone from.
+  const gitMirrorArguments =
+    !identity.reusesWorkspace &&
+    (imageCapabilitySet?.["git-mirror"] ?? 0) >= 1 &&
+    (agentTestLocalGitRemote || isGitRemoteUrl(project.gitUrl))
+      ? await gitMirrorContainerArguments(context.storage.getDataDir(), project)
+      : [];
   const networkPolicy = identity.imageId
     ? containerNetworkPolicy(
         imageCapabilitySet?.["network-policy"] ?? 0,
@@ -359,6 +375,7 @@ export async function createDockerContainer(
           `ORKESTRATOR_AGENT_TEST_GIT_REMOTE=${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`,
         ]
       : []),
+    ...gitMirrorArguments,
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.
@@ -706,6 +723,9 @@ export async function createDockerContainer(
   }
   rememberNetworkOwner(containerId, gatewayId);
   context.runtime.containerStates.invalidate();
+  // In the background: a clone only pays the remote for what the mirror lacks,
+  // so this launch does not wait for it.
+  if (gitMirrorArguments.length > 0) scheduleProjectGitMirrorRefresh(context, project);
   if (inContainerGithubSeed) await copyGithubRangesSeed(containerId, inContainerGithubSeed);
   if (stagedInputs) {
     // Earlier revisions no container binds any more (recovery copies keep
@@ -750,6 +770,7 @@ export async function startContainerServer(
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
   await dockerExecDetached(containerId, command, redactValues);
+  dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
     const log = await dockerExec(
@@ -863,6 +884,7 @@ export async function startContainerOpenCodeServer(
   `,
     [authToken],
   );
+  dockerLog.info("bridge.launched", { provider: "opencode", containerPort: OPENCODE_SERVER_PORT });
   await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
     async (error) => {
       const log = await dockerExec(

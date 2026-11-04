@@ -393,11 +393,12 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
-| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, brought back in step on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
 
-Provider MCP configuration is never preserved in the container: the
-entrypoint copies it from the staged inputs on every boot. A container
+Provider MCP configuration is never preserved in the container: on every boot
+the entrypoint makes it match the staged inputs again
+([Input stamps](#input-stamps-staged-inputs5)). A container
 environment's own MCP changes live in the backend's environment overlay
 (`mcp-environment-overlays` state root, keyed by environment id), which the
 backend writes back over the fresh copies after every boot, so they survive
@@ -844,6 +845,57 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
   credentials or revokes an account-wide key.
 - Unreferenced input revisions are pruned only after 30 minutes, so a staging
   or container creation still in progress keeps its revision.
+
+### Input stamps (`staged-inputs=5`)
+
+The entrypoint used to copy every input into the home on every start. From
+`staged-inputs=5`, `import_agent_input` in `docker/entrypoint.sh` skips an input
+when copying it would change nothing. The result of a start is the same as a
+full copy's, apart from the removal below.
+
+- **What counts as unchanged.** A tree's content digests and listing match its
+  stamp, and the home still holds those bytes at real paths, with no link at any
+  listed file or directory. A single file only has to match the home byte for
+  byte. So an edited or deleted import comes back, and a damaged or forged stamp
+  can only cause a copy. The check reads contents because neither the revision
+  name nor file times say what changed: the backend rewrites a revision in place
+  (the logins before every start, a revocation's scrub, a refreshed MCP default)
+  and the relay's `tar` keeps whole seconds.
+- **Copying.** Anything else runs the same copy helpers as before, with the same
+  bounds and link rules. A copy that warned is not stamped as complete, so it
+  runs again and warns again. Ownership is recorded only after a helper succeeds;
+  a refused entry never grants deletion authority over local files. Previously
+  owned paths remain tracked across failed imports. If the tools fail, the input is copied.
+- **Removal.** A stamp also lists the paths its input imported, so one that has
+  left the mounts leaves the home: a file, a directory it emptied, or a whole
+  provider's inputs after a revocation. Nothing else is removed, so a CLI's own
+  files beside the imports stay. A path through a link or `..` is refused, and a
+  mount `node` cannot open (a failed relay) removes nothing. Failed file removals
+  warn and keep their ownership history so the next start retries them.
+- **Logins** (`.credentials.json`, Codex's, Grok's, OpenCode's and Pi's
+  `auth.json`) are never skipped, and go through `restrict_imported_login` on every
+  start as before. Their stamp is a digest of the home's copy after the import. If
+  the mount no longer has the login and the copy is still exactly that one, it is
+  removed. A copy that differs was pushed by the backend or made in the container,
+  and stays with the backend's own paths, which race the entrypoint and must keep
+  winning. Claude startup cleanup, publication and digest attribution share an
+  exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
+  publication commands. The lock file stays in place so concurrent writers always
+  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
+  but not removed after a host sign-out, as before
+  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+- **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
+  layer, so a new runtime starts with a full copy. It holds names and digests,
+  never contents. The workload can write it, so it is not a security boundary, and
+  it does not need to be: the workload can already rewrite the imports themselves.
+  A link there is replaced, never written through.
+- **Older images** have no stamps and keep their full copy. The backend stages and
+  binds the same either way, so there is no gate to check.
+
+The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
+relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
+applies. Timings are in
+[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
 
 ### Project seed files
 
@@ -1448,6 +1500,95 @@ a fake container, 600 simulated seconds per tab): idle 1.85 execs/s before,
 1.12/s and 0.52/s; busy 6.50/s and 4.00/s.
 `apps/backend/tests/tmux-hook-signal-docker.test.ts` proves the image side and
 counts a real idle tab with its transcript bound: 4 execs in 10 s.
+
+## Project Git mirror
+
+A new container environment clones from a bare mirror of its project instead of
+downloading the repository again (`project-git-mirror.ts`,
+`clone_from_git_mirror` in `docker/workspace-setup.sh`). Image capability
+`git-mirror=1`. An image without it gets neither the mount nor the variable, and
+clones as it always did. A runtime over an existing checkout (a rebuild or a
+restored copy, `reusesWorkspace`) never clones, so it gets neither.
+
+The mirror is a cache: **nothing depends on it**. A missing, stale, locked or
+corrupt mirror never stops an environment starting, and an environment does not
+need it once cloned.
+
+| Path | Holds |
+| --- | --- |
+| `<data>/git-mirrors/<project id>/mount/` | The bind source, mounted read-only at `/orkestrator-git-mirror` with `-v` |
+| `.../mount/mirror.git` | The mirror. Appears only by rename, once complete. `ORKESTRATOR_GIT_MIRROR` names it |
+| `.../state.json` | Last attempt, consecutive failures, remote hash, oversized and suspect marks. Outside the mount, so a container cannot read it |
+| `.../.building-*`, `.../.retired-*` | Scratch for a build and for what it replaces, removed by the same refresh or the next |
+
+- **The clone.** The setup script checks the mirror cheaply (the directory exists,
+  its refs can be read, the tip's tree is present), then runs `git clone --no-tags
+  --reference <mirror> --dissociate <url>`. The remote is contacted for its refs
+  and for anything the mirror lacks, so `origin` is still the project's remote and
+  a stale mirror costs only the difference. `--dissociate` copies what the clone
+  needs and drops the link, so the result is self-contained. `--dissociate` walks
+  the history, so a clone also fails on damage the check cannot see.
+- **No `--filter` with a mirror.** `--dissociate` in a partial clone keeps only
+  what it does not attribute to the promisor remote. With a mirror behind the
+  remote, it dropped the history the mirror held (31,276 objects missing on
+  `git/git`) and fetched it back from the remote on demand. A blobless clone also
+  pays for history reads one lazy fetch at a time; see
+  [the measurements](../todo/cross-cutting/1202-efficiency-review-follow-ups.md#15-container-data-transfer).
+- **`--reference`, not `--reference-if-able`.** A mirror removed between the check
+  and the clone then fails and falls back to the blobless clone, rather than
+  downloading the full history without saying so.
+- **Fallback.** Anything else leaves the ordinary clone (blobless, then full) to
+  run as it always did, after one line saying why, with one fixed reason word:
+  `missing`, `empty`, `corrupt`, `clone-failed` or `not-self-contained`. The line
+  goes to the setup output, and `prepareContainerWorkspace`'s caller logs it
+  (`git-mirror.clone-fallback`, `git-mirror.clone-used`). The first environment of
+  a project normally reports `missing`. The last three mark the mirror suspect, so
+  the next refresh runs `git fsck --connectivity-only` and rebuilds it if that
+  fails.
+- **Refresh.** `createDockerContainer` starts one in the background when it gives
+  a container the mount, at most every 15 minutes per project, and never waits for
+  it. So a first environment still downloads, and the mirror builds beside it; the
+  second environment is the first to benefit. There is no timer: an idle project
+  makes no network requests. Only branches are fetched: clones use `--no-tags`, and
+  `refs/pull/*` can dwarf a repository.
+- **Writers.** One refresh per mirror in a backend; a launch during a refresh joins
+  it. A second backend on the same data directory holds no writer lease, so it
+  creates no containers. Readers need no lock: Git publishes a pack before the refs
+  that reach it, compaction keeps old packs until new ones exist, and a build is a
+  rename. Three fetch failures in a row (a lock left by a crash, say) rebuild the
+  mirror rather than update it.
+- **Credentials.** A refresh runs on the host through `runRemoteGit` and
+  `gitHubGitCredentials`, the path project clones use. The URL and any credential
+  are passed per transfer, and no `remote` section exists, so the config holds
+  neither; `--no-write-fetch-head` keeps the URL out of `FETCH_HEAD`. A container
+  fetches with its own credential, as before, and cannot write to the mirror.
+- **Read-only and readable.** The bind is `:ro`, for root in the container too.
+  Files are `0644` and directories `0755` (`core.sharedRepository`), because under
+  rootless Docker the workload user is not the backend's user; `<data>/git-mirrors`
+  and the project directory are `0700`, so no other host user gets that far. Git
+  allows the foreign owner because everything uses an explicit `--git-dir`. Every
+  environment of a project can read every branch of it through the mount, whatever
+  credential that environment holds; a branch deleted on the remote leaves at the
+  next refresh, and its objects at a later compaction.
+- **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
+  source is gone. With `-v` it recreates the source, so a stopped environment
+  survives its mirror being removed by any route. If the project parent was
+  removed too, rootful Docker can recreate it as root: automatic rebuild and
+  cleanup then require host ownership repair. For manual cache reclamation,
+  remove only `mount/mirror.git`; see the
+  [ownership recovery instructions](../development/disk-usage.md#project-git-mirrors).
+- **Removal.** `cleanupProjectForRemoval` stops any refresh and removes the
+  project's directory; a failure is logged and never blocks removing the project.
+  `sweepOrphanedProjectGitMirrors`, in the admitted pre-ledger sweep, removes
+  whatever that left. A refresh removes its own mirror when the repository passes
+  the limit. Nothing else removes one. Bounds and disk cost are in
+  [disk-usage.md](../development/disk-usage.md#project-git-mirrors).
+
+Qualified by `tests/unit/workspace-setup-git-mirror.test.ts` (the script against
+real repositories), `project-git-mirror.integration.test.ts` (build, refresh,
+credentials, concurrency, removal) and, in real containers,
+`project-git-mirror-docker.test.ts` (read-only mount, foreign owner, removal, a
+restart with the source gone).
 
 ## Container lifecycle events
 

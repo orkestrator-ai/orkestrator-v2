@@ -15,6 +15,50 @@ import { fixture, type StoredMail } from "./agent-mail-storage-test-support.js";
 import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 
 describe("StorageService agent mail routes", () => {
+  test("a job tab that is promised can be addressed before setup publishes it", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      await storage.addEnvironment({
+        id: "e-setup",
+        projectId: "p1",
+        name: "e-setup",
+        branch: "main",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        setupPhase: "running",
+        pendingAgentLaunch: true,
+        initialAgentPlatform: "claude",
+      });
+      const sender = { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" } as const;
+
+      expect(await storage.getPaneLayout("e-setup")).toBeNull();
+      expect(await storage.resolveAgentMailRecipientTab(sender, "e-setup")).toBe("startup-agent");
+      const sent = await storage.sendAgentMail(sender, {
+        requestId: "during-setup",
+        toEnvironmentId: "e-setup",
+        toTabId: "",
+        body: "waits for the agent",
+      });
+      expect(sent.toTabId).toBe("startup-agent");
+
+      // The tab lands in the same mailbox, so the message is still there for it.
+      await storage.ensureStartupNativeAgentTab({ environmentId: "e-setup", agent: "claude" });
+      await storage.updateEnvironment("e-setup", { pendingAgentLaunch: false });
+      await storage.synchronizeAgentMailboxes();
+      const mailbox = await storage.getAgentMailMailbox("e-setup", "startup-agent");
+      expect(mailbox.messages.map(({ id }) => id)).toContain(sent.id);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   async function peerFixture() {
     const result = await fixture();
     const config = await result.storage.loadConfig();

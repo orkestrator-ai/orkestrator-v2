@@ -117,7 +117,11 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 - Inject batch: 10 messages or 128 KiB of rendered carriers per wake
 - Agent Tools rate limits: read 30/min and 2 000/day; send 20/min and 200/day, per `(environment, tab, kind)`
 
-There are no attachments, no multicast, and no search-over-bodies API. One
+There is no multicast and no search-over-bodies API. The only attachments are
+images a coordinator sends from its own conversation
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)): at most 8, 8 MiB
+each and 32 MiB together, copied for the recipient before the message exists, and
+stored on it as paths rather than content. One
 `requestId` per sender scope is idempotent; retrying the same id with a
 different body is `idempotency-conflict`.
 
@@ -225,6 +229,25 @@ untrusted framing. Mail from a command node's coordinator starts a new pair
 budget on the leaf even to its coordinator; the leaf coordinator's mail
 never resets the command node's, so that side's unattended budget and
 hourly limit stop two coordinators waking each other.
+
+Notices for a repository's coordinator take the same outbox
+(`OutboxItem.coordinatorNotice`; [Who hears a notice](coordinator.md#who-hears-a-notice)),
+but they are not an exchange: they do not use that pair budget, so an exhausted budget
+cannot hold or lose one. A status or pull request notice the leaf wrote arrives from a
+`node` sender with role `agent` and an untrusted frame (`relayedNotice`), and an
+automatic switch or usage-limit notice is rendered on the command node from checked
+fields, as a workflow notice with every name quoted as data. A command node collects
+them only by passing `coordinatorNotices` to `collect_node_outbox`, which also tells the
+leaf the repositories it has; it sends that key only to a leaf advertising
+`coordinator-notices`, and a leaf with no such record from a command node keeps its
+notices on its own coordinator. `ack_node_outbox` can decline a notice for a repository
+the command node lacks, which hands it back. A leaf's own coordinator also takes a notice
+whose command node has gone: detached, or silent for an hour (`NOTICE_HOLD_MAX_MS`). A
+retried notice keeps its request id at both ends.
+
+`sendAgentMail`'s `keepWithoutWake` files a usage-limit notice with no wake under a named
+placement reason: its coordinator could not be moved off the limited account, or the
+window already had its wake.
 
 A waking route ignores the default inject policy and inject depth. Only an
 explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
@@ -453,6 +476,7 @@ Tools (always the same set; enforcement is at call time):
 | `ack_message` | Agent receipt |
 | `reply_message` | Derived destination; acks the parent |
 | `get_message_status` | Placement and receipts for mail this tab sent |
+| `ask_agents` | Ask other agents; the answers come back as mail ([suborks.md](suborks.md)) |
 | `create_schedule`, `list_schedules`, `cancel_schedule` | Mail (or a reminder to this tab) sent later by the backend, as this tab; see [scheduled-jobs.md](scheduled-jobs.md) |
 
 If the resolved mailbox has `canPull: false`, every tool returns
@@ -537,7 +561,9 @@ wins.
 | Cursor | Never asks |
 
 `report_goal` shares the mail tools' footing: it never prompts, and it writes only
-to Orkestrator's own record ([goals.md](goals.md)).
+to Orkestrator's own record ([goals.md](goals.md)). So does `ask_agents`, which
+writes only to that record and starts read-only sessions. Its answers come back as
+a system-route notice ([suborks.md](suborks.md#results-delivery)).
 
 ## How each provider gets the tools
 
@@ -738,6 +764,7 @@ capability row says so.
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
 | Node mail (leaf side, outbox, collection) | `apps/backend/src/core/nodes/node-mail.ts`, `node-mail-collector.ts`, `node-coordination.ts` |
+| Coordinator notices (who hears one, usage-limit stops) | `apps/backend/src/core/coordinator-notice-router.ts`, `coordinator-usage-limit-notices.ts`, `@orkestrator/protocol/coordinator-notices` |
 | Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator-node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator-node-coordinator-mail.test.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |
 | Build pipeline workers | `packages/protocol/src/pipeline-worker-mail.ts`, `apps/backend/src/core/build-pipeline-worker-mail.ts`, `pipeline-worker-identity.ts`, `build-pipeline-worker-transcript.ts` |

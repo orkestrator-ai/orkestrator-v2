@@ -19,7 +19,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Index per message object**: reuse a message's search text until the message changes. Status: open.
+1. **Index per message object**: reuse a message's search text until the message changes. Status: done (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)), with a per-hook index that compares content rather than the WeakMap recommended below, because a reparsed row is a new object.
 
 #### 1. Index per message object
 
@@ -45,7 +45,7 @@ Search projections hold message text, so a new cache must be cleared with the pr
 
 ### Needs verification
 
-- Whether normalised rows keep their identity across updates. I did not trace it through `normalizeNativeMessages`, and it decides whether the WeakMap helps.
+- Answered 2026-11-04: `normalizeNativeMessages` keeps a plain row's identity only when it re-normalises the same raw copy; a reparsed copy has new objects, so the WeakMap would miss on it.
 
 ## 0670: Streaming markdown rebuilds the whole message's tree per update
 

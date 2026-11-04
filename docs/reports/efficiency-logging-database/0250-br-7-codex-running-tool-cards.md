@@ -6,8 +6,8 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Tasks
 
-1. **Cache in-progress item parts by accumulator version**: re-render a running item only when it changed. Status: open.
-2. **Send `content` only when it changed**: stop duplicating it into every `message.patched`. Status: open.
+1. **Cache in-progress item parts by accumulator version**: re-render a running item only when it changed. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
+2. **Send `content` only when it changed**: stop duplicating it into every `message.patched`. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 ### 1. Cache in-progress item parts by accumulator version
 

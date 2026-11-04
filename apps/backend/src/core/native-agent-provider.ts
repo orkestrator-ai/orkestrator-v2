@@ -79,8 +79,8 @@ function applySignInGuidance(
 ): void {
   const interactive = provider.interactiveSnapshot?.bind(provider);
   if (interactive) {
-    provider.interactiveSnapshot = async (sessionId) =>
-      withSignInGuidance(await interactive(sessionId), guidance);
+    provider.interactiveSnapshot = async (sessionId, options) =>
+      withSignInGuidance(await interactive(sessionId, options), guidance);
   }
   const state = provider.sessionStateSnapshot?.bind(provider);
   if (state) {
@@ -99,7 +99,7 @@ export type ProviderDependencies = HttpBridgeProviderDependencies &
     /** Platform-specific dependencies are derived from this; explicit ones win. */
     environment?: NativeAgentProviderEnvironment;
     /** Automatic account switching, which turns a workflow's weekly-limit stop into a resend. */
-    usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop">;
+    usageLimitStops?: Pick<UsageLimitStops, "handleLimitStop" | "noteUnresentStop">;
   };
 
 /** A workflow polls its turns every few seconds; one not looked at for this long is not counted. */
@@ -252,6 +252,12 @@ export function createNativeAgentProvider(
         platform,
         siblingTurnRunning: bridgeRunning,
       });
+  } else if (dependencies.usageLimitStops?.noteUnresentStop) {
+    // A provider without accounts has nothing to move to, but its stop still counts.
+    provider.usageLimitStop = async ({ resends: _resends, ...input }) => {
+      await dependencies.usageLimitStops?.noteUnresentStop?.({ ...input, platform });
+      return "stop";
+    };
   }
   // Codex runs the model its session was created with; the other bridges carry
   // the model on each prompt and keep the configured one.

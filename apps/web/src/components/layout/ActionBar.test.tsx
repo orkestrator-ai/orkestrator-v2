@@ -24,6 +24,8 @@ import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import * as realPaneLayoutAuthoritative from "@/lib/pane-layout-authoritative";
+import { resetTabLaunches } from "@/lib/tab-launch";
+import { useTabLaunchStore } from "@/stores/tabLaunchStore";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
@@ -143,15 +145,8 @@ const launchTerminalJobMock = mock(
     status: "started",
   }),
 );
-const beginPaneTabActivationRequestMock = mock((environmentId: string) =>
-  realPaneLayoutAuthoritativeSnapshot.beginPaneTabActivationRequest(environmentId),
-);
-const requestPaneTabActivationMock = mock(
-  (
-    environmentId: string,
-    tabId: string,
-    request?: Parameters<typeof realPaneLayoutAuthoritativeSnapshot.requestPaneTabActivation>[2],
-  ) => realPaneLayoutAuthoritativeSnapshot.requestPaneTabActivation(environmentId, tabId, request),
+const requestPaneTabActivationMock = mock((environmentId: string, tabId: string) =>
+  realPaneLayoutAuthoritativeSnapshot.requestPaneTabActivation(environmentId, tabId),
 );
 // The controller reaches the pane layout store imperatively, so the real store
 // action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
@@ -824,7 +819,6 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/lib/pane-layout-authoritative", () => ({
   ...realPaneLayoutAuthoritativeSnapshot,
-  beginPaneTabActivationRequest: beginPaneTabActivationRequestMock,
   requestPaneTabActivation: requestPaneTabActivationMock,
 }));
 
@@ -938,13 +932,10 @@ beforeEach(() => {
     sessionId: "terminal-session",
     status: "started" as const,
   }));
+  resetTabLaunches();
   requestPaneTabActivationMock.mockReset();
-  requestPaneTabActivationMock.mockImplementation((environmentId, tabId, request) =>
-    realPaneLayoutAuthoritativeSnapshot.requestPaneTabActivation(environmentId, tabId, request),
-  );
-  beginPaneTabActivationRequestMock.mockReset();
-  beginPaneTabActivationRequestMock.mockImplementation((environmentId) =>
-    realPaneLayoutAuthoritativeSnapshot.beginPaneTabActivationRequest(environmentId),
+  requestPaneTabActivationMock.mockImplementation((environmentId, tabId) =>
+    realPaneLayoutAuthoritativeSnapshot.requestPaneTabActivation(environmentId, tabId),
   );
   enqueuePromptQueueMessageMock.mockReset();
   enqueuePromptQueueMessageMock.mockImplementation(async () => ({}));
@@ -1689,31 +1680,70 @@ describe("ActionBar copy URL", () => {
 });
 
 describe("ActionBar browser tabs", () => {
-  test("opens a browser tab at the selected environment's mapped backend port", async () => {
+  // The tab opens on the press; its address follows once it has been looked up.
+  const installBrowserTabs = () => {
+    const previous = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.setState({
+      environments: new Map(previous).set("env-1", {
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        activePaneId: "default",
+        containerId: "container-1",
+        backendRevision: 0,
+      }),
+    });
+    createTabMock.mockImplementation(((type: string, options?: { tabId?: string }) => {
+      usePaneLayoutStore
+        .getState()
+        .addTab(
+          "default",
+          { id: options?.tabId ?? "tab", type, browserData: { url: "" } } as never,
+          "env-1",
+        );
+      return true;
+    }) as never);
+    return () => usePaneLayoutStore.setState({ environments: previous });
+  };
+  const browserTabUrl = () => {
+    const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;
+    return root?.kind === "leaf" ? root.tabs[0]?.browserData?.url : undefined;
+  };
+
+  test("opens a browser tab at once, then points it at the mapped backend port", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
       hostEntryPort: 49152,
     };
+    const restore = installBrowserTabs();
+    try {
+      render(<ActionBar />);
+      fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
-    render(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
-
-    // Without preview-service support the entry button keeps its legacy target.
-    await waitFor(() =>
+      // Opened in the press itself, before any lookup has answered.
       expect(createTabMock).toHaveBeenCalledWith("browser", {
-        initialUrl: "http://localhost:49152/",
-      }),
-    );
+        tabId: expect.stringMatching(/^tab-/),
+      });
+      // Without preview-service support the entry button keeps its legacy target.
+      await waitFor(() => expect(browserTabUrl()).toBe("http://localhost:49152/"));
+    } finally {
+      restore();
+    }
   });
 
-  test("opens an empty browser tab when the environment has no mapped port", async () => {
-    render(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+  test("leaves the browser tab empty when the environment has no mapped port", async () => {
+    const restore = installBrowserTabs();
+    try {
+      render(<ActionBar />);
+      fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
 
-    await waitFor(() =>
-      expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined }),
-    );
+      expect(createTabMock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(browserTabUrl()).toBe("");
+    } finally {
+      restore();
+    }
   });
 
   test("keeps the browser tab button visible but disabled without an environment", () => {
@@ -1809,11 +1839,7 @@ describe("ActionBar editor and run commands", () => {
         }),
       ),
     );
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "terminal-job-run",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "terminal-job-run");
   });
 
   test("keeps the newest ActionBar launch focused when launches finish out of order", async () => {
@@ -1896,9 +1922,13 @@ describe("ActionBar editor and run commands", () => {
 
       fireEvent.click(runButton);
       fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
+      // Each press has focus at once, and the later press holds it.
       expect(
-        beginPaneTabActivationRequestMock.mock.calls.map(([environmentId]) => environmentId),
-      ).toEqual(["env-1", "env-1"]);
+        useTabLaunchStore
+          .getState()
+          .launches.get("env-1")
+          ?.map(({ focused }) => focused),
+      ).toEqual([false, true]);
 
       await act(async () => {
         finishPush();
@@ -2020,11 +2050,7 @@ describe("ActionBar editor and run commands", () => {
         }),
       ),
     );
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-resolve",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve");
   });
 
   test("opens script configuration with an explanation when launch eligibility is blocked", () => {
@@ -2102,11 +2128,7 @@ describe("ActionBar editor and run commands", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain("could not be created"),
     );
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-script",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-script");
     expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -2119,6 +2141,36 @@ describe("ActionBar editor and run commands", () => {
     await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true),
+    );
+  });
+
+  test("duplicate script submission stays busy without reporting failure", async () => {
+    let finish!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              jobId: "script",
+              environmentId: "env-1",
+              tabId: "script-tab",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:script-tab",
+              status: "accepted",
+            });
+        }),
+    );
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    const submit = screen.getByRole("button", { name: "Create run script" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    finish();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure run script" })).toBeNull(),
     );
   });
 
@@ -2141,7 +2193,6 @@ describe("ActionBar editor and run commands", () => {
       expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
         "env-1",
         "agent-job-script-unknown",
-        expect.any(Object),
       ),
     );
 
@@ -2481,7 +2532,6 @@ describe("ActionBar toolbar interactions", () => {
     expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
       projectHomeEnvironment.id,
       "terminal-job-run",
-      expect.any(Object),
     );
   });
 
@@ -3035,7 +3085,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ description: "backend unavailable" }),
       ),
     );
-    expect(requestPaneTabActivationMock).not.toHaveBeenCalled();
+    expect(useTabLaunchStore.getState().launches.size).toBe(0);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3138,17 +3188,73 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ agent: "codex", title: "Git Push" }),
       ),
     );
-    await waitFor(() => expect(requestPaneTabActivationMock).toHaveBeenCalledTimes(3));
-    expect(
-      requestPaneTabActivationMock.mock.calls.map(([environmentId, tabId]) => [
-        environmentId,
-        tabId,
-      ]),
-    ).toEqual([
+    // Each press asks for its placeholder's focus, then for the tab it landed in.
+    const uuidTab = /^agent-job-[0-9a-f]{8}-/;
+    const landedTabs = () =>
+      requestPaneTabActivationMock.mock.calls
+        .map(([environmentId, tabId]) => [environmentId, tabId])
+        .filter(([, tabId]) => !uuidTab.test(tabId!));
+    await waitFor(() => expect(landedTabs()).toHaveLength(3));
+    expect(landedTabs()).toEqual([
       ["env-1", "agent-job-pr"],
       ["env-1", "agent-job-resolve"],
       ["env-1", "agent-job-push"],
     ]);
+  });
+
+  test("a double press of Run or Push launches once", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    currentWorkspaceReady = true;
+    currentChanges = [{ path: "src/example.ts" }];
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    render(<ActionBar />);
+    const runButton = await screen.findByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+
+    fireEvent.click(runButton);
+    fireEvent.click(runButton);
+    const pushButton = screen.getByRole("button", { name: "Push Changes" });
+    fireEvent.click(pushButton);
+    fireEvent.click(pushButton);
+
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(launchTerminalJobMock).toHaveBeenCalledTimes(1);
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("a launch names its tab, so the placeholder and the tab are one", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open", hasMergeConflicts: false };
+    currentChanges = [{ path: "src/example.ts" }];
+    let finish!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
+      (input: { tabId?: string }) =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              jobId: "job",
+              environmentId: "env-1",
+              tabId: input.tabId!,
+              agent: "codex",
+              logicalSessionKey: "key",
+              status: "accepted",
+            });
+        }),
+    );
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
+
+    const [launch] = useTabLaunchStore.getState().launches.get("env-1") ?? [];
+    expect(launch).toMatchObject({ focused: true, arrived: false, settled: false });
+    await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalled());
+    expect(launchNativeAgentJobMock.mock.calls[0]![0]).toMatchObject({ tabId: launch!.tabId });
+    await act(async () => {
+      finish();
+      await Promise.resolve();
+    });
   });
 
   test("activates rejected and unknown Push jobs but skips activation when launch throws", async () => {
@@ -3190,7 +3296,6 @@ describe("ActionBar workflow tabs", () => {
     expect(requestPaneTabActivationMock).toHaveBeenLastCalledWith(
       "env-1",
       "agent-job-push-rejected",
-      expect.any(Object),
     );
 
     fireEvent.click(pushButton);
@@ -3198,11 +3303,11 @@ describe("ActionBar workflow tabs", () => {
       expect(requestPaneTabActivationMock).toHaveBeenLastCalledWith(
         "env-1",
         "agent-job-push-unknown",
-        expect.any(Object),
       ),
     );
 
-    requestPaneTabActivationMock.mockClear();
+    // An accepted launch holds off a double press; this one is a later press.
+    resetTabLaunches();
     fireEvent.click(pushButton);
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith(
@@ -3210,7 +3315,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({ description: "push backend offline" }),
       ),
     );
-    expect(requestPaneTabActivationMock).not.toHaveBeenCalled();
+    expect(useTabLaunchStore.getState().launches.size).toBe(0);
   });
 
   test("starts one backend-owned Resolve job and suppresses duplicate launches", async () => {
@@ -3370,11 +3475,7 @@ describe("ActionBar workflow tabs", () => {
     // The dialog is the reporting surface here; a toast would repeat the same
     // failure in different words behind a modal the user is already reading.
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-resolve",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve");
 
     // The dialog stays usable: a retry that succeeds clears it.
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
@@ -3403,7 +3504,7 @@ describe("ActionBar workflow tabs", () => {
         description: "backend offline",
       }),
     );
-    expect(requestPaneTabActivationMock).not.toHaveBeenCalled();
+    expect(useTabLaunchStore.getState().launches.size).toBe(0);
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -3433,11 +3534,7 @@ describe("ActionBar workflow tabs", () => {
       ),
     );
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-resolve",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve");
   });
 
   test("warns when Resolve launches without automatic PR refresh", async () => {
@@ -3528,17 +3625,12 @@ describe("ActionBar workflow tabs", () => {
       fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
       await waitFor(() =>
-        expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-          "env-1",
-          "agent-job-resolve",
-          expect.any(Object),
-        ),
+        expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve"),
       );
       expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
         expect.objectContaining({
           tabReuse: "any-agent",
           completionAction: "refresh-pr-after-agent-completion",
-          activateTab: true,
         }),
       );
       expect(toastInfoMock).not.toHaveBeenCalled();
@@ -3678,14 +3770,9 @@ describe("ActionBar workflow tabs", () => {
       expect.objectContaining({
         environmentId: "env-1",
         completionAction: "refresh-pr-after-agent-completion",
-        activateTab: true,
       }),
     );
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-resolve",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-resolve");
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
@@ -4117,11 +4204,7 @@ describe("ActionBar workflow tabs", () => {
     // seconds for a PR that no agent was ever launched to create.
     await waitFor(() => expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1));
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
-    expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
-      "env-1",
-      "agent-job-pr",
-      expect.any(Object),
-    );
+    expect(requestPaneTabActivationMock).toHaveBeenCalledWith("env-1", "agent-job-pr");
   });
 
   test("falls back to main when the repository stores an empty PR base branch", async () => {
@@ -4765,7 +4848,6 @@ describe("ActionBar workflow tabs", () => {
         expect(requestPaneTabActivationMock).toHaveBeenCalledWith(
           "env-1",
           "multi-review:multi-workflow-1",
-          expect.anything(),
         ),
       );
       expect(startMultiReviewMock).not.toHaveBeenCalled();
@@ -8188,6 +8270,32 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
   });
 
+  test("⌘T opens a tab wherever focus is", () => {
+    render(<ActionBar />);
+    const input = document.createElement("input");
+    const terminal = document.createElement("div");
+    terminal.className = "xterm";
+    terminal.tabIndex = 0;
+    document.body.append(input, terminal);
+
+    for (const target of [input, terminal, document.body]) {
+      createTabMock.mockClear();
+      fireEvent.keyDown(target, { key: "t", code: "KeyT", metaKey: true });
+      expect(createTabMock).toHaveBeenCalledWith("agent-native");
+    }
+    input.remove();
+    terminal.remove();
+  });
+
+  test("⌘T waits while environment setup runs", () => {
+    currentSetupScriptsRunning = true;
+    render(<ActionBar />);
+
+    fireEvent.keyDown(document.body, { key: "t", code: "KeyT", metaKey: true });
+
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
   test("ignores workflow shortcuts from editable targets and already-handled events", async () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };
     currentWorkspaceReady = true;
@@ -8205,7 +8313,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     document.body.append(input, editor);
 
     for (const target of [input, editor]) {
-      for (const key of ["t", "r", "m", "g", "p"]) {
+      for (const key of ["r", "m", "g", "p"]) {
         fireEvent.keyDown(target, { key, metaKey: true });
       }
       for (const key of ["r", "m", "g", "u"]) {
@@ -8699,5 +8807,33 @@ describe("ActionBar auto-merge", () => {
     currentEnvironment = { ...currentEnvironment, autoMergeError: null };
     view.rerender(<ActionBar />);
     expect(screen.queryByText("Auto-merge: GitHub refused the merge") === null).toBe(true);
+  });
+
+  test("opens the whole failure in a tooltip from the keyboard", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    render(<ActionBar />);
+    fireEvent.focus(screen.getByText("Auto-merge: GitHub refused the merge"));
+    await waitFor(() =>
+      expect(screen.getAllByText("Auto-merge: GitHub refused the merge")).toHaveLength(2),
+    );
+  });
+
+  test("keeps the failure on its own row in the grid, which has no tooltips", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    render(<ActionBar presentation="grid" />);
+    const label = screen.getByText("Auto-merge: GitHub refused the merge");
+    expect(label.className).toContain("col-span-2");
+    expect(label.className).not.toContain("line-clamp");
+    expect(label.className).not.toContain("truncate");
   });
 });

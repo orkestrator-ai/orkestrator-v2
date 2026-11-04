@@ -229,6 +229,9 @@ run = "bunx playwright install --no-remove --no-progress chromium"
 [tasks."test:browser"]
 description = "Run the component and public-site browser suites"
 depends = ["playwright:install"]
+# An inherited NODE_ENV=production (an agent session the packaged app started)
+# serves React's production build, which the fixtures' retry paths fail under.
+env = { NODE_ENV = false }
 run = "bun check -p e2e/tsconfig.json && bunx playwright test --config e2e/playwright.config.ts && bunx playwright test --config e2e/public-site/playwright.config.ts"
 
 [tasks."test:agent:browser"]
@@ -257,7 +260,6 @@ run = "bun packages/cli/scripts/run-scenarios.ts"
 [tasks."test:agent:docker:isolated"]
 description = "Build and smoke the image, run its live image qualifications, run the credential-free Docker fixture, and reset its disposable profile"
 depends = ["playwright:install"]
-env = { ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON = "1" }
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --docker --no-agent-credentials --agent-platforms codex,grok,opencode"
 
 [tasks."test:agent:docker"]
@@ -365,6 +367,7 @@ env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
 run = [
   "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
+  "bun test --cwd apps/backend src/core/native-agent-suborks-opencode.live.test.ts",
 ]
 
 [tasks."verify:accounts:resend-live"]

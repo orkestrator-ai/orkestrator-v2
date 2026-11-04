@@ -1,4 +1,4 @@
-import { defineLogAreas, THROTTLE_LOG_EVENTS } from "./define.js";
+import { defineLogAreas, ESSENTIAL_ERROR_FIELDS, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const STORAGE_LOG_AREAS = defineLogAreas({
   storage: {
@@ -6,12 +6,30 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
     events: {
       "usage.environment-label-failed":
         "Usage labels could not be retained for a removed environment; deletion continues.",
-      "snapshot.integrity-failed":
-        "An hourly database snapshot failed its integrity check and was discarded.",
+      "migration.failed": {
+        description:
+          "The database could not be brought to this build's schema, so it did not open; `step` says whether the safety copy or the migration itself failed.",
+        essential: true,
+        fields: {
+          fromVersion: "number",
+          toVersion: "number",
+          step: "label",
+          ...ESSENTIAL_ERROR_FIELDS,
+        },
+      },
+      "snapshot.integrity-failed": {
+        description: "A database snapshot failed its integrity check and was discarded.",
+        essential: true,
+        fields: {},
+      },
       "snapshot.skipped-low-disk":
         "The hourly database snapshot was skipped because the disk lacks room; `retryAt` says when it tries again.",
-      "snapshot.failed":
-        "The hourly database snapshot failed; `retryAt` says when it tries again, if known.",
+      "snapshot.failed": {
+        description:
+          "The hourly database snapshot failed; `retryAt` says when it tries again, if known.",
+        essential: true,
+        fields: { retryAt: "label", ...ESSENTIAL_ERROR_FIELDS },
+      },
       "listener.attention-failed":
         "An environment attention listener threw; the committed mutation stands.",
       "listener.change-failed": "A resource change listener threw; the committed mutation stands.",

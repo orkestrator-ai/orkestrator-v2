@@ -147,6 +147,7 @@ export class ChangeTrackingService {
       root: path.join(root, "objects"),
       durable: options.durable,
       hardBudgetBytes: () => this.policies.policy.snapshotHardBudgetBytes,
+      orphanGraceMs: () => this.policies.policy.orphanGraceMs,
     });
     this.bodies = new EvidenceBodyStore(
       path.join(root, "evidence-bodies"),
@@ -206,6 +207,8 @@ export class ChangeTrackingService {
       environmentTarget: options.environmentTarget,
       prBaseBranch: options.prBaseBranch,
       announce: (resourceKey) => this.publisher.announce(resourceKey),
+      resetView: (resourceKey) => this.publisher.reset(resourceKey),
+      demandTtlMs: () => policy().gitScopeDemandTtlMs,
     });
     this.retention = new ChangeRetentionService({
       ledger: this.ledger,
@@ -251,6 +254,7 @@ export class ChangeTrackingService {
 
   shutdown(): void {
     this.stopped = true;
+    this.gitScopes.stop();
     if (this.firstRetentionTimer) clearTimeout(this.firstRetentionTimer);
     this.firstRetentionTimer = null;
     if (this.retentionTimer) clearInterval(this.retentionTimer);

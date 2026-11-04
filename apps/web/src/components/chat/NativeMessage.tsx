@@ -47,6 +47,7 @@ import { TextPart } from "./NativeMessage.file-parts";
 import { MailTile } from "./MailTile";
 import { PullRequestUpdateNotice } from "./PullRequestUpdateNotice";
 import { GoalStatusRow, GoalTurnTile } from "./GoalTile";
+import { SuborkGroup } from "./SuborkGroup";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 import { RichMessageContext } from "@/lib/chat/rich-identity";
@@ -229,6 +230,15 @@ export const NativeMessage = memo(function NativeMessage({
         text={message.content}
         expansionKey={`goal-status:${stableAgentExpansionScope}:${message.id}`}
         timestampLabel={formatTime(message.createdAt)}
+      />
+    );
+  }
+
+  if (message.suborkGroup) {
+    return (
+      <SuborkGroup
+        batch={message.suborkGroup}
+        expansionKey={`subork-group-collapsed:${stableAgentExpansionScope}:${message.id}`}
       />
     );
   }

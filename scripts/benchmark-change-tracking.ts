@@ -30,6 +30,7 @@ import {
   HostCaptureExecutor,
 } from "../apps/backend/src/core/change-tracking/capture";
 import { ObjectStore } from "../apps/backend/src/core/change-tracking/object-store";
+import { CHANGE_TRACKING_POLICY_V1 } from "../apps/backend/src/core/change-tracking/policy-registry";
 import { compareManifests } from "../apps/backend/src/core/change-tracking/snapshot-diff";
 import { SharedScanQueue } from "../apps/backend/src/core/change-tracking/shared-physical-work";
 
@@ -83,6 +84,15 @@ function makeRepo(files: number): string {
   return root;
 }
 
+/** The store as the service opens it, so a reuse sees the real orphan grace. */
+function openStore(root: string): ObjectStore {
+  return new ObjectStore({
+    root,
+    durable: false,
+    orphanGraceMs: () => CHANGE_TRACKING_POLICY_V1.orphanGraceMs,
+  });
+}
+
 type Row = Record<string, string | number>;
 const rows: Row[] = [];
 
@@ -91,7 +101,7 @@ async function benchCapture(files: number) {
   await settle();
   const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
   try {
-    const store = new ObjectStore({ root: storeRoot, durable: false });
+    const store = openStore(storeRoot);
     const executor = new HostCaptureExecutor(repo);
     let started = performance.now();
     const cold = await captureWorktree({ executor, store });
@@ -146,7 +156,7 @@ async function benchAssets() {
   await settle();
   const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
   try {
-    const store = new ObjectStore({ root: storeRoot, durable: false });
+    const store = openStore(storeRoot);
     const executor = new HostCaptureExecutor(repo);
     let started = performance.now();
     let previous = await captureWorktree({ executor, store });
@@ -201,7 +211,7 @@ async function benchLongTurn() {
   await settle();
   const storeRoot = mkdtempSync(path.join(tmpdir(), "ork-bench-store-"));
   try {
-    const store = new ObjectStore({ root: storeRoot, durable: false });
+    const store = openStore(storeRoot);
     const executor = new HostCaptureExecutor(repo);
     const start = await captureWorktree({ executor, store });
     if (start.kind !== "captured") throw new Error(`capture failed: ${start.reason}`);

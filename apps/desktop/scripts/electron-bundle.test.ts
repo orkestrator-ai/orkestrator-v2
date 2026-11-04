@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   bundleElectron,
   ELECTRON_ENTRYPOINTS,
+  ELECTRON_PRELOAD_ENTRYPOINTS,
   formatBuildLogs,
   runElectronBundleCli,
 } from "./electron-bundle.js";
@@ -55,6 +56,21 @@ describe("Electron bundle", () => {
       }
     }
     expect(unresolvable).toEqual([]);
+
+    // A sandboxed preload is a CommonJS function body. `require` loads only
+    // "electron", and since Electron 45 no Node global is in scope.
+    for (const entrypoint of ELECTRON_PRELOAD_ENTRYPOINTS) {
+      const source = await readFile(
+        path.join(outdir!, `${path.basename(entrypoint, ".ts")}.js`),
+        "utf8",
+      );
+      const imports = transpiler.scanImports(source).map((entry) => entry.path);
+      expect(new Set(imports)).toEqual(new Set(["electron"]));
+      expect(source).not.toMatch(/^\s*(import|export)\s/m);
+      expect(source).not.toMatch(/\b(Buffer|setImmediate|clearImmediate)\b|import\.meta/);
+    }
+    const main = await readFile(path.join(outdir!, "main.js"), "utf8");
+    expect(main).toMatch(/^import\s/m);
   }, 60_000);
 
   test("lists every hard-coded BrowserWindow preload as a bundle entrypoint", async () => {

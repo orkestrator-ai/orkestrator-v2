@@ -1,8 +1,17 @@
+import { createLogger } from "@orkestrator/protocol/logger";
+import { createHash } from "node:crypto";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
+import {
+  routeCoordinatorNotice,
+  type CoordinatorNoticeRoute,
+  type UpwardCoordinatorNotice,
+} from "@orkestrator/protocol/coordinator-notices";
+
+import type { MailAttachmentBatch } from "../mail-attachments.js";
 
 /**
  * Mail between a command node's coordinators and agents on its leaves.
@@ -33,6 +42,13 @@ import {
  *   `"command-node-coordinator"` goes to the command node that last mailed
  *   this project's coordinator (else the most recent one), for its main
  *   coordinator of the repository. Both wait in the outbox like worker mail.
+ *
+ * Notices for a repository's coordinator take the same outbox
+ * (`coordinatorNotice`, see `coordinator-notice-router.ts`). They wait there
+ * through a link drop and a restart, and a command node that lacks the
+ * repository, or has been gone for `NOTICE_HOLD_MAX_MS`, hands them back to this
+ * node's coordinator instead. Only a command node that says it takes them
+ * collects them.
  */
 
 export const NODE_OUTBOX_READY_EVENT = "node-outbox-ready";
@@ -41,6 +57,16 @@ export const MAX_OUTBOX_BYTES = 16 * 1024 * 1024;
 const MAX_ORIGINS = 2_000;
 const MAX_THREADS = 5_000;
 const MAX_COLLECT = 50;
+/**
+ * How long a notice waits for a command node nothing has heard from. It is about
+ * a limit that resets in hours, so past this it is more use to this node's own
+ * coordinator. It leaves the outbox when handed back, so it cannot arrive twice.
+ */
+export const NOTICE_HOLD_MAX_MS = 60 * 60_000;
+const MAX_NOTICE_REPOSITORIES = 2_000;
+/** Bytes of images one command node's outbox may hold in the spool at once. */
+export const MAX_OUTBOX_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_ACKNOWLEDGED_ATTACHMENT_REQUESTS = 2_000;
 
 /** Where on the command node a reply goes: one coordinator conversation's mailbox. */
 export interface CoordinatorMailbox {
@@ -73,6 +99,16 @@ export interface OutboxItem {
   /** The leaf message ID of the command node's mail this answers. */
   replyToMessageId?: string;
   nodeParent?: { id: string; threadId: string; hopCount: number };
+  /** A notice for the command node's coordinator, not a message from an agent. */
+  coordinatorNotice?: UpwardCoordinatorNotice;
+  /** The leaf project it concerns, for when it has to come back to this node's coordinator. */
+  noticeProjectId?: string;
+  /** The command node declined it; this node's coordinator takes it next. */
+  handedBack?: true;
+  /** Command owns delivery until an explicit decline; survives ambiguous/lost acknowledgements. */
+  collected?: true;
+  /** Images waiting in this node's spool for the command node to fetch. */
+  attachments?: MailAttachmentBatch;
 }
 
 /** A command node's coordinator's latest contact with one environment. */
@@ -99,6 +135,68 @@ export interface NodeMailState {
   /** Leaf message IDs of incoming coordinator mail → its coordinator mailbox. */
   threads: Record<string, CoordinatorMailbox>;
   outbox: Record<string, { nextSeq: number; items: OutboxItem[] }>;
+  /**
+   * What each command node said on its latest collect: that it takes notices,
+   * and the repositories it has. Optional: an older one never says.
+   */
+  noticeRoutes?: Record<string, { repositoryHints: string[]; at: string }>;
+  /**
+   * Mail with images the command node has acknowledged, so a late retry of the
+   * same requestId is recognised after its item left the outbox instead of
+   * copying and delivering everything again. Bounded, oldest out.
+   */
+  acknowledgedAttachmentMail?: Record<string, AcknowledgedAttachmentMail>;
+}
+
+interface AcknowledgedAttachmentMail {
+  seq: number;
+  createdAt: string;
+  bytes: number;
+  sha256: string[];
+  /** Missing on legacy receipts: refuse unverifiable retries. */
+  fingerprint?: string;
+}
+
+/** Content digest keeps acknowledged receipts bounded without retaining message bodies. */
+function mailRequestFingerprint(item: Omit<OutboxItem, "seq" | "createdAt" | "bytes">): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        item.fromCoordinator ?? false,
+        item.body,
+        item.subject ?? null,
+        item.toCoordinator?.environmentId ?? null,
+        item.toCoordinator?.tabId ?? null,
+        item.replyToMessageId ?? null,
+        item.nodeParent
+          ? [item.nodeParent.id, item.nodeParent.threadId, item.nodeParent.hopCount]
+          : null,
+        item.repositoryHint ?? null,
+        item.attachments
+          ? [
+              item.attachments.batch,
+              item.attachments.files.map((file) => [
+                file.name,
+                file.bytes,
+                file.sha256,
+                file.mediaType,
+              ]),
+            ]
+          : null,
+      ]),
+    )
+    .digest("hex");
+}
+
+function attachmentMailKey(
+  controllerId: string,
+  item: Pick<OutboxItem, "fromEnvironmentId" | "fromTabId" | "requestId">,
+): string {
+  return JSON.stringify([controllerId, item.fromEnvironmentId, item.fromTabId, item.requestId]);
+}
+
+function outboxAttachmentBytes(item: Pick<OutboxItem, "attachments">): number {
+  return item.attachments?.files.reduce((sum, file) => sum + file.bytes, 0) ?? 0;
 }
 
 export function emptyNodeMailState(): NodeMailState {
@@ -115,10 +213,16 @@ export interface NodeMailStore {
 
 export interface LeafMailContext {
   /** Attached command nodes, most recent contact first. */
-  attachedControllers(): Array<{ controllerId: BackendId; displayName: string }>;
+  attachedControllers(): Array<{
+    controllerId: BackendId;
+    displayName: string;
+    lastContactAt?: string;
+  }>;
   mostRecentControllerId(): BackendId | undefined;
   /** This backend's coordinators' contact with an environment's tab. */
   localCoordinatorContact?(environmentId: string, tabId?: string): Promise<LocalCoordinatorContact>;
+  /** A command node handed notices back: this node's coordinator takes them now. */
+  noticesHandedBack?(): void;
 }
 
 export class LeafNodeMail {
@@ -127,6 +231,8 @@ export class LeafNodeMail {
     private readonly context: LeafMailContext,
     private readonly emit: (event: string, payload: unknown) => void,
     private readonly now: () => number = Date.now,
+    /** Items that have left the outbox, whose spooled images can go too. */
+    private readonly onAcknowledged: (items: OutboxItem[]) => void = () => undefined,
   ) {}
 
   /**
@@ -262,6 +368,25 @@ export class LeafNodeMail {
     return { controllerId: recent, ...(name ? { controllerName: name } : {}) };
   }
 
+  /** Whether this request is queued already, or was delivered and acknowledged. */
+  async knownRequest(
+    controllerId: BackendId,
+    item: Pick<OutboxItem, "fromEnvironmentId" | "fromTabId" | "requestId">,
+  ): Promise<boolean> {
+    const state = await this.store.load();
+    return (
+      Boolean(state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)]) ||
+      Boolean(
+        state.outbox[controllerId]?.items.some(
+          (entry) =>
+            entry.requestId === item.requestId &&
+            entry.fromEnvironmentId === item.fromEnvironmentId &&
+            entry.fromTabId === item.fromTabId,
+        ),
+      )
+    );
+  }
+
   /** Queue a message for a command node. Bounded; refused (never dropped) when full. */
   async enqueue(
     controllerId: BackendId,
@@ -277,16 +402,38 @@ export class LeafNodeMail {
           entry.fromTabId === item.fromTabId,
       );
       if (duplicate) {
-        if (
-          duplicate.body !== item.body ||
-          duplicate.subject !== item.subject ||
-          JSON.stringify(duplicate.toCoordinator) !== JSON.stringify(item.toCoordinator) ||
-          duplicate.replyToMessageId !== item.replyToMessageId ||
-          JSON.stringify(duplicate.nodeParent) !== JSON.stringify(item.nodeParent) ||
-          duplicate.repositoryHint !== item.repositoryHint
-        )
+        // A notice keeps its first rendering. A retry's words can differ (an excerpt, a
+        // time), and refusing it would send the sender to this node's coordinator as well.
+        if (duplicate.coordinatorNotice && item.coordinatorNotice) {
+          return { next: null, result: duplicate };
+        }
+        if (mailRequestFingerprint(duplicate) !== mailRequestFingerprint(item))
           throw new Error("Conflicting mail request ID.");
         return { next: null, result: duplicate };
+      }
+      const acknowledged =
+        state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)];
+      if (acknowledged) {
+        if (acknowledged.fingerprint !== mailRequestFingerprint(item))
+          throw new Error("Conflicting mail request ID.");
+        return {
+          next: null,
+          result: {
+            ...item,
+            seq: acknowledged.seq,
+            createdAt: acknowledged.createdAt,
+            bytes: acknowledged.bytes,
+          },
+        };
+      }
+      const attachmentBytes = current.items.reduce(
+        (sum, entry) => sum + outboxAttachmentBytes(entry),
+        outboxAttachmentBytes(item),
+      );
+      if (item.attachments && attachmentBytes > MAX_OUTBOX_ATTACHMENT_BYTES) {
+        throw new Error(
+          "The images waiting for that command node are at the limit; retry once it has collected its mail. Nothing was sent.",
+        );
       }
       const total = current.items.reduce((sum, entry) => sum + entry.bytes, 0);
       if (current.items.length >= MAX_OUTBOX_ITEMS || total + bytes > MAX_OUTBOX_BYTES) {
@@ -315,16 +462,216 @@ export class LeafNodeMail {
     return queued;
   }
 
+  /**
+   * The one routing rule, over what the attached command nodes last said. A
+   * command node with no record is an older one, so its notices stay here.
+   */
+  async routeNotice(input: {
+    contactKey?: string;
+    repositoryHint: string | null | undefined;
+    machineWide?: boolean;
+  }): Promise<CoordinatorNoticeRoute> {
+    const attached = this.context.attachedControllers();
+    if (attached.length === 0) return routeCoordinatorNotice({ ...input, controllers: [] });
+    const state = await this.store.load();
+    const recent = this.context.mostRecentControllerId();
+    const contact = input.contactKey ? state.contacts?.[input.contactKey] : undefined;
+    return routeCoordinatorNotice({
+      ...input,
+      ...(contact ? { preferredControllerId: contact.controllerId } : {}),
+      controllers: [...attached]
+        .sort((a, b) => Number(b.controllerId === recent) - Number(a.controllerId === recent))
+        .map((entry) => {
+          const route = state.noticeRoutes?.[entry.controllerId];
+          return {
+            controllerId: entry.controllerId,
+            displayName: entry.displayName,
+            ...(route ? { repositoryHints: route.repositoryHints } : {}),
+          };
+        }),
+    });
+  }
+
+  /**
+   * `notices` is present when the command node takes coordinator notices, and
+   * says which repositories it has. A collect without it comes from an older
+   * one, including after a downgrade: anything queued for it is handed back.
+   */
   async collect(
     controllerId: BackendId,
     after: number,
     coordinatorMail = false,
+    /** An older command node would deliver the message and drop its images. */
+    attachmentMail = false,
+    notices?: { repositoryHints: string[] },
   ): Promise<{ items: OutboxItem[]; more: boolean }> {
-    const state = await this.store.load();
-    const items = (state.outbox[controllerId]?.items ?? []).filter(
-      (entry) => entry.seq > after && (coordinatorMail || !entry.fromCoordinator),
-    );
-    return { items: items.slice(0, MAX_COLLECT), more: items.length > MAX_COLLECT };
+    if (notices) await this.recordNoticeRoute(controllerId, notices.repositoryHints);
+    else await this.forgetNoticeRoute(controllerId);
+    return this.store.mutate((state) => {
+      const current = state.outbox[controllerId];
+      const eligible = (current?.items ?? []).filter(
+        (entry) =>
+          entry.seq > after &&
+          (coordinatorMail || !entry.fromCoordinator) &&
+          (attachmentMail || !entry.attachments) &&
+          (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
+      );
+      const items = eligible.slice(0, MAX_COLLECT);
+      const claimed = new Set(
+        items
+          .filter((entry) => entry.coordinatorNotice && !entry.collected)
+          .map((entry) => entry.seq),
+      );
+      return {
+        next:
+          current && claimed.size
+            ? {
+                ...state,
+                outbox: {
+                  ...state.outbox,
+                  [controllerId]: {
+                    ...current,
+                    // Capability withdrawal explicitly hands ownership back, including
+                    // batches collected but deferred before the downgrade.
+                    items: current.items.map((entry) =>
+                      claimed.has(entry.seq) ? { ...entry, collected: true as const } : entry,
+                    ),
+                  },
+                },
+              }
+            : null,
+        result: { items, more: eligible.length > MAX_COLLECT },
+      };
+    });
+  }
+
+  private async recordNoticeRoute(
+    controllerId: BackendId,
+    repositoryHints: string[],
+  ): Promise<void> {
+    const hints = [...new Set(repositoryHints)].sort().slice(0, MAX_NOTICE_REPOSITORIES);
+    await this.store.mutate((state) => {
+      const current = state.noticeRoutes?.[controllerId];
+      if (current && JSON.stringify(current.repositoryHints) === JSON.stringify(hints)) {
+        return { next: null, result: undefined };
+      }
+      return {
+        next: {
+          ...state,
+          noticeRoutes: {
+            ...state.noticeRoutes,
+            [controllerId]: {
+              repositoryHints: hints,
+              at: new Date(this.now()).toISOString(),
+            },
+          },
+        },
+        result: undefined,
+      };
+    });
+  }
+
+  private async forgetNoticeRoute(controllerId: BackendId): Promise<void> {
+    const handedBack = await this.store.mutate((state) => {
+      if (!state.noticeRoutes?.[controllerId]) return { next: null, result: false };
+      const { [controllerId]: _forgotten, ...noticeRoutes } = state.noticeRoutes;
+      const current = state.outbox[controllerId];
+      return {
+        next: {
+          ...state,
+          noticeRoutes,
+          ...(current
+            ? {
+                outbox: {
+                  ...state.outbox,
+                  [controllerId]: {
+                    ...current,
+                    // Capability withdrawal explicitly hands ownership back, including
+                    // batches collected but deferred before the downgrade.
+                    items: current.items.map((entry) =>
+                      entry.coordinatorNotice ? { ...entry, handedBack: true as const } : entry,
+                    ),
+                  },
+                },
+              }
+            : {}),
+        },
+        result: true,
+      };
+    });
+    if (handedBack) this.context.noticesHandedBack?.();
+  }
+
+  /**
+   * Notices this node's own coordinator should take now: handed back, or queued
+   * for a command node that has gone (detached, or silent past the bound).
+   */
+  async noticesToTakeBack(): Promise<Array<{ controllerId: BackendId; item: OutboxItem }>> {
+    return this.store.mutate((state) => {
+      const now = this.now();
+      const attached = this.context.attachedControllers();
+      const taken: Array<{ controllerId: BackendId; item: OutboxItem }> = [];
+      let retired = false;
+      const outboxes = { ...state.outbox };
+      for (const [controllerId, outbox] of Object.entries(state.outbox)) {
+        const controller = attached.find((entry) => entry.controllerId === controllerId);
+        const lastContact = Date.parse(controller?.lastContactAt ?? "");
+        const silent = Number.isFinite(lastContact) && now - lastContact >= NOTICE_HOLD_MAX_MS;
+        outboxes[controllerId] = {
+          ...outbox,
+          items: outbox.items
+            .filter((item) => {
+              // A collected item may already have been delivered: never reroute it.
+              // Once its controller detaches, retire that ambiguous ownership explicitly.
+              if (item.coordinatorNotice && item.collected && !controller && !item.handedBack) {
+                retired = true;
+                createLogger("nodes").warn("notice.collected-retired", {
+                  error: "collected-notice-controller-detached",
+                });
+                return false;
+              }
+              return true;
+            })
+            .map((item) => {
+              if (!item.coordinatorNotice) return item;
+              const expired = silent && now - Date.parse(item.createdAt) >= NOTICE_HOLD_MAX_MS;
+              if (item.handedBack || (!item.collected && (!controller || expired))) {
+                const claimed = { ...item, handedBack: true as const };
+                taken.push({ controllerId: controllerId as BackendId, item: claimed });
+                return claimed;
+              }
+              return item;
+            }),
+        };
+      }
+      return {
+        next: taken.length || retired ? { ...state, outbox: outboxes } : null,
+        result: taken,
+      };
+    });
+  }
+
+  /** This node's coordinator has it, so it leaves the outbox. */
+  async settleTakenBack(controllerId: BackendId, seq: number): Promise<void> {
+    await this.store.mutate((state) => {
+      const current = state.outbox[controllerId];
+      if (!current?.items.some((entry) => entry.seq === seq)) {
+        return { next: null, result: undefined };
+      }
+      return {
+        next: {
+          ...state,
+          outbox: {
+            ...state.outbox,
+            [controllerId]: {
+              ...current,
+              items: current.items.filter((entry) => entry.seq !== seq),
+            },
+          },
+        },
+        result: undefined,
+      };
+    });
   }
 
   /** The command node delivered everything up to `upTo`. */
@@ -333,23 +680,71 @@ export class LeafNodeMail {
     upTo: number,
     sequences?: number[],
     coordinatorMail = false,
+    attachmentMail = false,
+    notices?: { declined?: number[] },
   ): Promise<{ remaining: number }> {
-    return this.store.mutate((state) => {
+    const declined = new Set(notices?.declined ?? []);
+    const answer = await this.store.mutate((state) => {
       const current = state.outbox[controllerId];
-      if (!current) return { next: null, result: { remaining: 0 } };
-      const items = current.items.filter(
-        (entry) =>
-          (!coordinatorMail && entry.fromCoordinator) ||
-          (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
-      );
-      if (items.length === current.items.length) {
-        return { next: null, result: { remaining: items.length } };
+      if (!current)
+        return {
+          next: null,
+          result: { remaining: 0, handedBack: false, removed: [] as OutboxItem[] },
+        };
+      let handedBack = false;
+      const items = current.items
+        .map((entry) => {
+          if (!declined.has(entry.seq) || !entry.coordinatorNotice || entry.handedBack) {
+            return entry;
+          }
+          handedBack = true;
+          return { ...entry, handedBack: true as const };
+        })
+        .filter(
+          (entry) =>
+            entry.handedBack ||
+            (notices === undefined && entry.coordinatorNotice) ||
+            (!coordinatorMail && entry.fromCoordinator) ||
+            (!attachmentMail && entry.attachments) ||
+            (sequences ? !sequences.includes(entry.seq) : entry.seq > upTo),
+        );
+      if (!handedBack && items.length === current.items.length) {
+        return {
+          next: null,
+          result: { remaining: items.length, handedBack: false, removed: [] as OutboxItem[] },
+        };
       }
+      const retained = new Set(items.map((entry) => entry.seq));
+      const removed = current.items.filter((entry) => !retained.has(entry.seq));
+      const acknowledged = { ...state.acknowledgedAttachmentMail };
+      for (const entry of removed) {
+        if (!entry.attachments) continue;
+        acknowledged[attachmentMailKey(controllerId, entry)] = {
+          seq: entry.seq,
+          createdAt: entry.createdAt,
+          bytes: entry.bytes,
+          sha256: entry.attachments.files.map((file) => file.sha256),
+          fingerprint: mailRequestFingerprint(entry),
+        };
+      }
+      const keys = Object.keys(acknowledged);
+      for (const key of keys.slice(
+        0,
+        Math.max(0, keys.length - MAX_ACKNOWLEDGED_ATTACHMENT_REQUESTS),
+      ))
+        delete acknowledged[key];
       return {
-        next: { ...state, outbox: { ...state.outbox, [controllerId]: { ...current, items } } },
-        result: { remaining: items.length },
+        next: {
+          ...state,
+          outbox: { ...state.outbox, [controllerId]: { ...current, items } },
+          ...(Object.keys(acknowledged).length ? { acknowledgedAttachmentMail: acknowledged } : {}),
+        },
+        result: { remaining: items.length, removed, handedBack },
       };
     });
+    if (answer.handedBack) this.context.noticesHandedBack?.();
+    if (answer.removed.length) this.onAcknowledged(answer.removed);
+    return { remaining: answer.remaining };
   }
 
   async pending(controllerId: BackendId): Promise<number> {

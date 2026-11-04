@@ -500,25 +500,10 @@ export async function readCoordinatorCodexLogin(
   accounts?: Pick<AgentAccountsRuntime, "refreshLocalCodexLogin">,
 ): Promise<CoordinatorCodexLogin> {
   const home = active.home ?? coordinatorHostCodexHome();
-  let raw = await readCodexAuthFile(home);
-  let login = coordinatorCodexLogin(raw);
-  if (
-    !login.text &&
-    accounts &&
-    codexHasRefreshToken(raw) &&
-    (await accounts.refreshLocalCodexLogin(home))
-  ) {
-    raw = await readCodexAuthFile(home);
-    login = coordinatorCodexLogin(raw);
-  }
-  return login;
-}
-
-function codexHasRefreshToken(raw: string | undefined): boolean {
-  try {
-    const token = JSON.parse(raw ?? "").tokens?.refresh_token;
-    return typeof token === "string" && token.trim() !== "";
-  } catch {
-    return false;
-  }
+  // Join the owning home's refresh before reading. Reading first can observe
+  // a concurrently refreshed file between truncation and write, incorrectly
+  // treating a renewable login as signed out. The refresher rechecks expiry
+  // under its per-home lock, so fresh/API-key logins spend no refresh token.
+  await accounts?.refreshLocalCodexLogin(home);
+  return coordinatorCodexLogin(await readCodexAuthFile(home));
 }

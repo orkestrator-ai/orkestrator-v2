@@ -125,7 +125,9 @@ test("backend init/save/shutdown owns live saving and delivery to a running loca
     expect(heartbeats().length).toBeGreaterThan(0);
     expect(logging!.settings().enabled).toBe(true);
     await logging!.flush();
-    const files = await fs.readdir(logging!.logDirectory);
+    const files = (await fs.readdir(logging!.logDirectory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name);
     const saved = (
       await Promise.all(
         files.map((file) => fs.readFile(path.join(logging!.logDirectory, file), "utf8")),

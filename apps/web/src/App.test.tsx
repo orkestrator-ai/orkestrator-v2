@@ -33,11 +33,13 @@ import { installControlledTimeout } from "../../../tests/helpers/controlled-time
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import type { GatewayEventStreamConnectionState } from "@/lib/native/web-gateway";
 
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import * as realLayout from "@/components/layout";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realTerminal from "@/components/terminal";
 import * as realKanban from "@/components/kanban";
 import * as realProjects from "@/components/projects";
+import * as realProjectWorkspace from "@/components/projects/ProjectWorkspace";
 import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
@@ -58,6 +60,7 @@ const realTooltipSnapshot = { ...realTooltip };
 const realTerminalSnapshot = { ...realTerminal };
 const realKanbanSnapshot = { ...realKanban };
 const realProjectsSnapshot = { ...realProjects };
+const realProjectWorkspaceSnapshot = { ...realProjectWorkspace };
 const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
@@ -194,6 +197,9 @@ mock.module("@/components/projects", () => ({
     projectLauncherProps = props;
     return <div data-testid="project-launcher" />;
   },
+}));
+
+mock.module("@/components/projects/ProjectWorkspace", () => ({
   ProjectWorkspace: ({ projectId }: { projectId: string }) => (
     <div data-testid="project-workspace">{projectId}</div>
   ),
@@ -637,6 +643,7 @@ afterAll(() => {
   mock.module("@/components/terminal", () => realTerminalSnapshot);
   mock.module("@/components/kanban", () => realKanbanSnapshot);
   mock.module("@/components/projects", () => realProjectsSnapshot);
+  mock.module("@/components/projects/ProjectWorkspace", () => realProjectWorkspaceSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
@@ -974,7 +981,7 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
+    expect((await screen.findByTestId("project-workspace")).textContent).toBe("project-1");
     expect(screen.queryByTestId("project-launcher") === null).toBe(true);
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
@@ -995,7 +1002,7 @@ describe("App background processing mounts", () => {
     });
 
     render(<App />);
-    expect(screen.getByTestId("project-workspace").textContent).toBe("project-1");
+    expect((await screen.findByTestId("project-workspace")).textContent).toBe("project-1");
 
     act(() => {
       activateFeatureBuildEnvironment("project-1", {
@@ -2025,16 +2032,13 @@ describe("App Docker availability", () => {
 
   test("does not start the Docker poll while the permission gate is visible", async () => {
     const originalOrkestrator = window.orkestrator;
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const pollCallbacks: Array<() => void> = [];
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     const getMacOsStatus = mock(async () => ({
       supported: true,
       missing: [
@@ -2063,8 +2067,7 @@ describe("App Docker availability", () => {
       expect(mockCheckDocker).not.toHaveBeenCalled();
     } finally {
       cleanup();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
       window.orkestrator = originalOrkestrator;
     }
   });
@@ -2418,16 +2421,13 @@ describe("App Docker availability", () => {
   });
 
   test("polls every 60 seconds and disables then re-enables container functionality", async () => {
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const pollCallbacks: Array<() => void> = [];
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       // Two failures, because one is not enough to declare an outage.
@@ -2481,22 +2481,18 @@ describe("App Docker availability", () => {
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(2);
     } finally {
       cleanup();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
     }
   });
 
   test("keeps container functionality after a single failed probe recovers", async () => {
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const pollCallbacks: Array<() => void> = [];
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       // `docker info` timed out once under load; the confirming probe succeeds.
@@ -2530,23 +2526,19 @@ describe("App Docker availability", () => {
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     } finally {
       cleanup();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
     }
   });
 
   test("keeps the last healthy Docker snapshot when a background poll request fails", async () => {
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const logs = captureLogs();
     const pollCallbacks: Array<() => void> = [];
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       .mockImplementationOnce(async () => {
@@ -2575,23 +2567,19 @@ describe("App Docker availability", () => {
     } finally {
       cleanup();
       logs.restore();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
     }
   });
 
   test("keeps the last healthy Docker snapshot when an outage confirmation request fails", async () => {
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const logs = captureLogs();
     const pollCallbacks: Array<() => void> = [];
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     mockCheckDocker
       .mockImplementationOnce(async () => true)
       .mockImplementationOnce(async () => false)
@@ -2620,8 +2608,7 @@ describe("App Docker availability", () => {
     } finally {
       cleanup();
       logs.restore();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
     }
   });
 
@@ -2699,8 +2686,6 @@ describe("App Docker availability", () => {
   });
 
   test("deduplicates Docker polls while an earlier probe is still in flight", async () => {
-    const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
     const pollCallbacks: Array<() => void> = [];
     let resolveDocker!: (available: boolean) => void;
     mockCheckDocker.mockImplementationOnce(
@@ -2709,13 +2694,12 @@ describe("App Docker availability", () => {
           resolveDocker = resolve;
         }),
     );
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
-        pollCallbacks.push(handler as () => void);
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation((poll) => {
+      if (poll.intervalMs === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
+        pollCallbacks.push(() => void poll.read());
       }
-      return 42;
-    }) as typeof window.setInterval;
-    window.clearInterval = mock(() => {}) as typeof window.clearInterval;
+      return () => undefined;
+    });
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     try {
@@ -2737,8 +2721,7 @@ describe("App Docker availability", () => {
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(2));
     } finally {
       cleanup();
-      window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      polls.mockRestore();
     }
   });
 });

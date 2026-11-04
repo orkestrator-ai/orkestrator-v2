@@ -156,6 +156,12 @@ export interface NodeSummary {
   view: NodeView;
   /** Writes are allowed only while available. */
   available: boolean;
+  /**
+   * The Orkestrator version from the hello of the node's current connection.
+   * `null` while it is not connected: unlike the summaries below, this has no
+   * last-known value. Absent from a command node that predates it.
+   */
+  version?: string | null;
   freshness: SummaryFreshness;
   /** When the summaries were last read from the node (command-node clock, ms). */
   loadedAt: number | null;

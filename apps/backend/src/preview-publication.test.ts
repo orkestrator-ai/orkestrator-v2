@@ -193,6 +193,20 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     expect(counters["upstream.reused"]).toBe(1);
   });
 
+  test("a pooled exchange skips the listener lookup only a new connection needs", async () => {
+    const { cookie, host } = await signIn();
+    const acquire = spyOn(harness.runtime.registry, "acquireTarget");
+    try {
+      await request(host, "/", { headers: { cookie } });
+      await request(host, "/", { headers: { cookie } });
+      const opening = acquire.mock.calls.filter(([, , options]) => !options?.reusingConnection);
+      expect(opening).toHaveLength(1);
+      expect(harness.runtime.metrics.snapshot().counters["upstream.reused"]).toBe(1);
+    } finally {
+      acquire.mockRestore();
+    }
+  });
+
   test("grants are one-use and sessions are bound to their own host", async () => {
     const attachment = await harness.runtime.access.createAttachment({
       serviceId,

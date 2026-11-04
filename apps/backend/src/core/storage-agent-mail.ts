@@ -14,6 +14,7 @@ import {
   agentMailRouteWakes,
   agentMailboxId,
   classifyAgentMailRoute,
+  normalizeAgentMailAttachments,
   normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   type AgentMailConversation,
@@ -81,6 +82,11 @@ function sendFingerprint(input: AgentMailSendInput): string {
         subject: input.subject ?? null,
         body: input.body,
         replyToMessageId: input.replyToMessageId ?? null,
+        // By content: a retry keeps its fingerprint wherever the files landed.
+        // Absent without attachments, so older records still match.
+        ...(input.attachments?.length
+          ? { attachments: input.attachments.map(({ name, sha256 }) => ({ name, sha256 })) }
+          : {}),
       }),
     )
     .digest("hex");
@@ -192,11 +198,106 @@ export class AgentMailRepository {
   }
 
   /**
+   * Which mailbox a send would reach, without sending: an attachment has to be
+   * copied for its recipient before the message exists. Resolving can start a
+   * closed main coordinator, as the send itself would.
+   */
+  async resolveAgentMailRecipient(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<{ environmentId: string; tabId: string }> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.repos.config.loadConfig()).global.agentMessaging,
+    );
+    if (!settings.enabled)
+      throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
+    const resolved = await this.resolveCoordinatorAddress(sender, input);
+    await this.repos.agentMailboxes.ensureAgentMailDirectoryFresh([
+      resolved.toEnvironmentId,
+      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
+    ]);
+    await this.store.enqueue(async () => {
+      this.assertRecipientAllowed(
+        await this.store.load(),
+        sender,
+        resolved,
+        settings.allowCrossProject,
+      );
+    });
+    return { environmentId: resolved.toEnvironmentId, tabId: resolved.toTabId };
+  }
+
+  private assertRecipientAllowed(
+    store: PersistedAgentMailStore,
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+    allowCrossProject: boolean,
+  ): void {
+    const { senderMailbox } = this.authenticateMailSender(store, sender);
+    const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
+    const recipient = store.mailboxes[destinationId];
+    // A pipeline worker that has ended is named, with how it ended; its
+    // mail is never passed on to whichever worker runs now.
+    const worker = recipient?.pipelineWorker;
+    if (worker && (recipient.tombstonedAt || pipelineWorkerEnded(worker.status)))
+      throw new AgentMailError(
+        "recipient-not-found",
+        `That build pipeline worker (${worker.label}, round ${worker.round}) has ${
+          pipelineWorkerEnded(worker.status) ? worker.status : "ended"
+        } and takes no more mail. Nothing is re-routed to another worker: pick a running one from list_mailboxes or get_build_pipeline.`,
+      );
+    if (!recipient || recipient.tombstonedAt)
+      throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
+    // A mailbox is a tab, so a subagent or background task inside that tab
+    // shares its address. Mail it sends "to the parent" would land back in
+    // its own inbox and only surface when the whole tab next goes idle —
+    // usually after the subagent that needed an answer has finished.
+    if (senderMailbox?.mailboxId === destinationId)
+      throw new AgentMailError(
+        "policy-denied",
+        "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
+      );
+    // A side agent talks to its main coordinator and nobody else; only the
+    // main (or the user) may talk to it. Everything else in the project
+    // addresses the main, so a side agent is never a second coordinator.
+    if (
+      senderMailbox?.coordinatorRole === "side" &&
+      !(
+        recipient.ownerKind === "coordinator" &&
+        recipient.coordinatorRole === "main" &&
+        recipient.coordinatorId === senderMailbox.coordinatorId
+      )
+    ) {
+      throw new AgentMailError(
+        "policy-denied",
+        'A side agent can only message the main coordinator. Send to "coordinator".',
+      );
+    }
+    if (
+      recipient.coordinatorRole === "side" &&
+      sender.kind !== "user" &&
+      !(
+        senderMailbox?.coordinatorRole === "main" &&
+        senderMailbox.coordinatorId === recipient.coordinatorId
+      )
+    ) {
+      throw new AgentMailError(
+        "policy-denied",
+        'Side agents only receive mail from the main coordinator. Send to "coordinator" instead.',
+      );
+    }
+    const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
+    if (crossProject && !allowCrossProject)
+      throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
+  }
+
+  /**
    * Give a main coordinator that has never run its default agent, so an agent
    * in its own project can wake it. User, external and cross-project mail wakes
-   * nobody, and a workflow notice does not start a coordinator by itself, so
-   * finished work cannot wake a fresh one. A failure leaves the mail filed for
-   * the unassigned mailbox, where the user can see it.
+   * nobody. A workflow notice does not start one here either: whether a notice
+   * starts a coordinator is decided once, before it is sent, by
+   * `CoordinatorNoticeRouter`. A failure leaves the mail filed for the unassigned
+   * mailbox, where the user can see it.
    */
   private async startUnassignedMain(
     sender: AgentMailSender,
@@ -398,6 +499,8 @@ export class AgentMailRepository {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence, checked under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       /** Backend-owned node transport metadata; never accepted from an agent directly. */
       nodeParent?: { id: string; threadId: string; hopCount: number };
@@ -424,12 +527,33 @@ export class AgentMailRepository {
        * command node's coordinator whose mail its node link delivered.
        */
       steer?: boolean;
+      /**
+       * File this notice for its reader without a wake, under this placement
+       * reason. Backend-owned; a usage-limit notice whose coordinator could not
+       * be moved off the limited account, or a later stop in a notified window.
+       */
+      keepWithoutWake?: string;
+      /**
+       * A notice a leaf sent up the coordinator hierarchy, not a message between
+       * two agents: it wakes without counting against the node's pair budget, so
+       * an exhausted budget cannot hold it. Honoured only for a node sender.
+       */
+      relayedNotice?: boolean;
     } = {},
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
     const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
+    // Only a coordinator's backend copies files for a message; see
+    // `coordinator-mail-attachments.ts`.
+    const attachments =
+      sender.kind === "coordinator" || sender.kind === "node"
+        ? normalizeAgentMailAttachments(input.attachments)
+        : [];
     const statusBudgetKey =
-      sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
+      (sender.kind === "system" || (sender.kind === "node" && options.relayedNotice)) &&
+      options.statusBudgetKey
+        ? options.statusBudgetKey
+        : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const nodeParent = sender.kind === "node" ? options.nodeParent : undefined;
@@ -477,6 +601,8 @@ export class AgentMailRepository {
 
     const placed = await this.store.enqueue(async () => {
       const store = await this.store.load();
+      if (options.isStillWanted && !options.isStillWanted())
+        throw new Error("Mail delivery cancelled");
       const { actor, senderScope, senderMailbox } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
       const fingerprint = sendFingerprint({
@@ -507,61 +633,9 @@ export class AgentMailRepository {
         throw new AgentMailError("store-full", "Agent mail idempotency store is full");
       }
 
+      this.assertRecipientAllowed(store, sender, input, settings.allowCrossProject);
       const destinationId = agentMailboxId(input.toEnvironmentId, input.toTabId);
-      const recipient = store.mailboxes[destinationId];
-      // A pipeline worker that has ended is named, with how it ended; its
-      // mail is never passed on to whichever worker runs now.
-      const worker = recipient?.pipelineWorker;
-      if (worker && (recipient.tombstonedAt || pipelineWorkerEnded(worker.status)))
-        throw new AgentMailError(
-          "recipient-not-found",
-          `That build pipeline worker (${worker.label}, round ${worker.round}) has ${
-            pipelineWorkerEnded(worker.status) ? worker.status : "ended"
-          } and takes no more mail. Nothing is re-routed to another worker: pick a running one from list_mailboxes or get_build_pipeline.`,
-        );
-      if (!recipient || recipient.tombstonedAt)
-        throw new AgentMailError("recipient-not-found", "Recipient mailbox is not active");
-      // A mailbox is a tab, so a subagent or background task inside that tab
-      // shares its address. Mail it sends "to the parent" would land back in
-      // its own inbox and only surface when the whole tab next goes idle —
-      // usually after the subagent that needed an answer has finished.
-      if (senderMailbox?.mailboxId === destinationId)
-        throw new AgentMailError(
-          "policy-denied",
-          "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
-        );
-      // A side agent talks to its main coordinator and nobody else; only the
-      // main (or the user) may talk to it. Everything else in the project
-      // addresses the main, so a side agent is never a second coordinator.
-      if (
-        senderMailbox?.coordinatorRole === "side" &&
-        !(
-          recipient.ownerKind === "coordinator" &&
-          recipient.coordinatorRole === "main" &&
-          recipient.coordinatorId === senderMailbox.coordinatorId
-        )
-      ) {
-        throw new AgentMailError(
-          "policy-denied",
-          'A side agent can only message the main coordinator. Send to "coordinator".',
-        );
-      }
-      if (
-        recipient.coordinatorRole === "side" &&
-        sender.kind !== "user" &&
-        !(
-          senderMailbox?.coordinatorRole === "main" &&
-          senderMailbox.coordinatorId === recipient.coordinatorId
-        )
-      ) {
-        throw new AgentMailError(
-          "policy-denied",
-          'Side agents only receive mail from the main coordinator. Send to "coordinator" instead.',
-        );
-      }
-      const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
-      if (crossProject && !settings.allowCrossProject)
-        throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
+      const recipient = store.mailboxes[destinationId]!;
 
       let parent: AgentMailMessage | undefined;
       if (input.replyToMessageId) {
@@ -682,7 +756,11 @@ export class AgentMailRepository {
       // node mail, or for a workflow status notice the resource it reports on.
       const budgetSenderId =
         senderMailbox?.mailboxId ??
-        (sender.kind === "node" ? nodeMailSenderKey(sender) : statusBudgetKey);
+        (sender.kind === "node"
+          ? options.relayedNotice
+            ? statusBudgetKey
+            : nodeMailSenderKey(sender)
+          : statusBudgetKey);
       const pairDepth =
         routeWakes && budgetSenderId
           ? latestMailboxPairDepth(store, budgetSenderId, destinationId, lineageCutoff)
@@ -761,8 +839,12 @@ export class AgentMailRepository {
             )
           : undefined;
       const heldForDelegation =
-        Boolean(holdingDelegation) && nextThreadDepth < depthLimit && !overHourlyLimit;
+        !options.keepWithoutWake &&
+        Boolean(holdingDelegation) &&
+        nextThreadDepth < depthLimit &&
+        !overHourlyLimit;
       const shouldScheduleInject =
+        !options.keepWithoutWake &&
         (effectivePolicy === "idle" || routeWakes) &&
         !recipient.mutedInbound &&
         !heldForDelegation &&
@@ -773,9 +855,18 @@ export class AgentMailRepository {
         !overHourlyLimit &&
         canInject;
       const heldForLoopBudget =
-        routeWakes && !recipient.mutedInbound && nextThreadDepth >= depthLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        nextThreadDepth >= depthLimit &&
+        canInject;
       const heldForHourlyLimit =
-        routeWakes && !recipient.mutedInbound && !heldForLoopBudget && overHourlyLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        !heldForLoopBudget &&
+        overHourlyLimit &&
+        canInject;
       const message: AgentMailMessage = {
         version: 1,
         id,
@@ -808,6 +899,7 @@ export class AgentMailRepository {
           : {}),
         ...(route ? { route } : {}),
         ...(notice ? { notice } : {}),
+        ...(attachments.length ? { attachments } : {}),
         ...(statusBudgetKey ? { statusBudgetKey } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
@@ -836,7 +928,8 @@ export class AgentMailRepository {
                     // Stored is a decision, not a default: name why nobody will
                     // be woken so the sender and the user can see it.
                     placementReason:
-                      trust === "cross-project" || trust === "external"
+                      options.keepWithoutWake ??
+                      (trust === "cross-project" || trust === "external"
                         ? "untrusted-sender"
                         : !canInject
                           ? "recipient-cannot-inject"
@@ -846,7 +939,7 @@ export class AgentMailRepository {
                               : "inject-policy-off"
                             : injectDepth !== 0 && !routeWakes
                               ? "reply-to-injected-turn"
-                              : "hop-limit",
+                              : "hop-limit"),
                   }),
         revision: 1,
       };

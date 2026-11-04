@@ -6,6 +6,7 @@
  * the review handoff, the Address report, the pull request a restart updates)
  * and appends the user's per-step instructions after the contract.
  */
+import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import {
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -223,6 +224,7 @@ export class BuildPipelineStagePrompts {
         prompt: prPrompt(target, {
           ...(existingPullRequestUrl ? { existingPullRequestUrl } : {}),
           ...(forcePush ? { forcePushUpstream: forcePush } : {}),
+          followUps: pipelineFollowUps(pipeline),
         }),
         images: [],
       };

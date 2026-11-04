@@ -40,6 +40,23 @@ describe("fatal rejection guard", () => {
     target.listeners[0]!(new Error("fixture"));
     expect(warnings[0]).toContain("[worker] Unhandled promise rejection (continuing): fixture");
   });
+  test("tells onRejection after the line, and contains a throw from it", () => {
+    const target = fakeProcess();
+    const order: string[] = [];
+    installFatalRejectionGuard({
+      label: "[worker]",
+      force: true,
+      onProcess: target,
+      warn: () => order.push("warn"),
+      onRejection: (reason) => {
+        order.push(`told ${String(reason)}`);
+        throw new Error("the reporter failed");
+      },
+    });
+    expect(() => target.listeners[0]!("first")).not.toThrow();
+    expect(order).toEqual(["warn", "told first"]);
+  });
+
   test("reports an Error by name, message and stack", () => {
     const target = fakeProcess();
     const warnings: string[] = [];

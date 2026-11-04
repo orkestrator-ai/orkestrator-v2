@@ -13,6 +13,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  Image as ImageIcon,
   Info,
   Mail,
   MessagesSquare,
@@ -35,7 +36,8 @@ import {
 } from "@/components/agent-mail/agent-mail-ui";
 import { agentMailAddressText } from "@/lib/chat/client-only-messages";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
-import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
+import { formatBytes } from "@/lib/chat/rich-markdown/media-types";
+import type { PeerMailAttachment, PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { cn } from "@/lib/utils";
 import { ChatFindActiveContext } from "./chat-find-context";
 import { MessageMarkdown } from "./MessageMarkdown";
@@ -169,6 +171,38 @@ function MailTileSender({
         </span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * The images a message carried, by name. The path is for the agent, which has
+ * it in the carrier; it is on another machine's filesystem as often as not, so
+ * the tile neither shows it nor tries to draw from it.
+ */
+function MailTileAttachments({ attachments }: { attachments: PeerMailAttachment[] }) {
+  return (
+    <ul
+      aria-label="Attached images"
+      data-mail-attachments="true"
+      className="flex min-w-0 flex-wrap gap-1.5 px-3 pb-2.5 pl-[2.125rem]"
+    >
+      {attachments.map((attachment) => (
+        <li
+          key={attachment.name}
+          title={attachment.name}
+          data-mail-attachment="true"
+          className="flex max-w-full min-w-0 items-center gap-1.5 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 text-[11px] text-foreground/80"
+        >
+          <ImageIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="min-w-0 truncate">{attachment.name}</span>
+          {attachment.bytes !== undefined ? (
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {formatBytes(attachment.bytes)}
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -316,6 +350,7 @@ export const MailTile = memo(function MailTile({
             </div>
           </div>
         </div>
+        {mail.attachments?.length ? <MailTileAttachments attachments={mail.attachments} /> : null}
       </div>
     </div>
   );

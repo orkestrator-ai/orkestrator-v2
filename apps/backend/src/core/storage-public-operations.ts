@@ -639,8 +639,7 @@ export class PublicOperationsRepository {
     },
   ): Promise<Environment> {
     return this.repos.projects.enqueueEnvironmentMutation(async () => {
-      const environments = await this.repos.projects.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
+      const environment = await this.repos.projects.getEnvironment(environmentId);
       if (!environment)
         throw new PublicActionError("not-found", `Environment not found: ${environmentId}`);
       if (environment.deletionRequestedAt || environment.lifecycleOperation === "deleting") {
@@ -669,7 +668,7 @@ export class PublicOperationsRepository {
       const tier = next.agentSettings ? normalizeAgentSettings(next.agentSettings) : undefined;
       if (tier && Object.keys(tier).length > 0) environment.agentSettings = tier;
       else delete environment.agentSettings;
-      await this.repos.projects.saveEnvironments(environments);
+      this.repos.projects.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });

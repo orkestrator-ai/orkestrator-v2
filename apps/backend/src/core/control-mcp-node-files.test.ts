@@ -61,6 +61,13 @@ function harness(status: NodeStatus = commandStatus, leafHasProject = true) {
         } as T;
       case "transfer_node_files":
         return { transferId: "t1", status: "completed", bytes: 10, files: [] } as T;
+      case "transfer_coordinator_attachments":
+        return {
+          transferId: "t2",
+          status: "completed",
+          bytes: 12,
+          files: [{ path: "shot.png", destination: "/w/shot.png", bytes: 12, sha256: "ab" }],
+        } as T;
       case "compare_project_files":
         return { files: [".env"], nodes: [] } as T;
       case "create_node_action_request":
@@ -99,6 +106,51 @@ describe("CO-07/FL-01 transfer_files", () => {
       files: ["fixtures/data.json"],
       overwrite: false,
     });
+  });
+
+  test("takes this conversation's attachments as a source, naming its own scope", async () => {
+    const { call, calls } = harness();
+    const output = await call("transfer_files", {
+      from: { nodeId: "bk_self", attachments: true },
+      to: { nodeId: "bk_leaf", environmentId: "e-leaf" },
+      files: ["/data/coordinator-attachments/c1/conv-1/shot.png"],
+      overwrite: false,
+    });
+    expect(output.receipt).toMatchObject({
+      status: "completed",
+      files: [{ path: "shot.png", bytes: 12, sha256: "ab" }],
+    });
+    expect(
+      calls.find((entry) => entry.command === "transfer_coordinator_attachments")!.args,
+    ).toEqual({
+      scope: { projectId: "p-self", coordinatorId: "c1", conversationId: "conv-1" },
+      to: { nodeId: "bk_leaf", scope: { environmentId: "e-leaf" } },
+      files: ["/data/coordinator-attachments/c1/conv-1/shot.png"],
+    });
+    expect(calls.some((entry) => entry.command === "transfer_node_files")).toBe(false);
+  });
+
+  test("an attachment source stays on this node and out of the tracked tree", async () => {
+    const { call, calls } = harness();
+    const base = {
+      from: { nodeId: "bk_self", attachments: true },
+      to: { nodeId: "bk_leaf", environmentId: "e-leaf" },
+      files: ["shot.png"],
+      overwrite: false,
+    };
+    await expect(
+      call("transfer_files", { ...base, from: { nodeId: "bk_leaf", attachments: true } }),
+    ).rejects.toThrow(/on this node/);
+    await expect(call("transfer_files", { ...base, toDirectory: "assets" })).rejects.toThrow(
+      /Git-excluded/,
+    );
+    await expect(
+      call("transfer_files", { ...base, to: { nodeId: "bk_leaf", attachments: true } }),
+    ).rejects.toThrow(/only be the source/);
+    await expect(
+      call("transfer_files", { ...base, to: { nodeId: "bk_leaf", projectRoot: true } }),
+    ).rejects.toThrow(/approval/);
+    expect(calls.some((entry) => entry.command === "transfer_coordinator_attachments")).toBe(false);
   });
 
   test("every file tool refuses in leaf mode", async () => {

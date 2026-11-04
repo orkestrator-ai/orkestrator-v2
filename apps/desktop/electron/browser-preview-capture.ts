@@ -24,6 +24,7 @@ import type {
   BrowserPreviewCapturePurpose,
   BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewReplaceImageInput,
   BrowserPreviewResultCaptureMetadata,
@@ -81,6 +82,7 @@ import {
   BrowserPreviewCaptureSpoolError,
   createBrowserPreviewCaptureId,
   decodePngDataUrl,
+  pendingCaptureWithDataUrl,
   type BrowserPreviewCaptureStore,
 } from "./browser-preview-capture-store.js";
 import {
@@ -119,6 +121,7 @@ export type CaptureStoreLike = Pick<
   | "hasCapacity"
   | "create"
   | "list"
+  | "readWire"
   | "read"
   | "replaceImage"
   | "acknowledge"
@@ -826,15 +829,24 @@ export class BrowserPreviewCaptureSessions {
 
   /** Non-consuming read; region captures include a crop derived from the current image. */
   async readPending(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
-    const pending = await this.store().read(validCaptureId(captureId));
+    const pending = await this.readPendingWire(captureId);
+    return pending && pendingCaptureWithDataUrl(pending);
+  }
+
+  /** The same read with the spooled image as bytes, for IPC. */
+  async readPendingWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
+    const pending = await this.store().readWire(validCaptureId(captureId));
     if (!pending) return null;
     const target = pending.capture.target;
     if (target.kind !== "region") return pending;
     let regionCrop: BrowserPreviewPendingCapture["regionCrop"] = null;
-    if (pending.imageDataUrl && target.imageRect) {
+    if (pending.imageBytes && target.imageRect) {
       try {
-        const source = decodePngDataUrl(pending.imageDataUrl);
-        const cropped = cropPng(source.bytes, target.imageRect, this.options.nativeImage);
+        const cropped = cropPng(
+          Buffer.from(pending.imageBytes),
+          target.imageRect,
+          this.options.nativeImage,
+        );
         if (cropped) {
           regionCrop = {
             imageDataUrl: cropped.dataUrl,

@@ -2,33 +2,37 @@
  * Completed-prefix reuse for streaming Markdown.
  *
  * A streaming answer re-renders up to 20 times a second
- * (`MARKDOWN_POLICY.maxStreamingUpdatesPerSecond`), and a full parse of a long
- * answer costs tens of milliseconds, growing with its length. Everything
- * before the last block boundary that is proven safe cannot change while text
- * is appended after it, so its syntax tree is parsed once and reused; only the
- * tail is parsed again.
+ * (`MARKDOWN_POLICY.maxStreamingUpdatesPerSecond`), and running the whole
+ * pipeline over a long answer costs tens of milliseconds, growing with its
+ * length. Everything before the last block boundary that is proven safe cannot
+ * change while text is appended after it, so it runs through the pipeline once
+ * and its React elements are kept. React skips an element it has already
+ * rendered, so only the tail costs anything per update.
  *
  * Correctness comes first and is conservative:
  *
  * - A boundary is the start of a line that follows a blank line, outside any
  *   fenced code, whose first character cannot continue or join the block
  *   before it (no indentation, list marker, block quote, table row, HTML or
- *   bracket). Splitting there and parsing both sides gives the same tree as
- *   parsing the whole, which the equivalence tests check for every prefix of
+ *   bracket). Rendering both sides on their own gives the same output as
+ *   rendering the whole, which the equivalence tests check for every prefix of
  *   their fixtures.
  * - Constructs with document-wide meaning disable reuse for the whole text:
  *   link reference definitions and footnotes, raw HTML blocks (including the
  *   custom disclosures), and carriage returns.
  * - Reuse requires the new text to extend the cached prefix exactly; any
  *   other change resets the cache.
- * - Positions (line, column, offset) are shifted into document coordinates,
- *   so block identities derived from source offsets are unchanged.
- * - The cached nodes stay pristine: every parse hands out a deep copy, because
- *   later transforms mutate their input.
+ * - Positions (line, column, offset) are shifted into document coordinates and
+ *   the plugins still see the whole document, so block identities derived from
+ *   source offsets are unchanged.
+ * - Keys match a whole render's (`p-0`, `p-1`, counted per tag name among
+ *   siblings), so the final render updates these elements in place rather than
+ *   remounting them.
  *
- * Only the parse step is replaced. Every remark/rehype transform, the URL
- * policy and sanitisation still run over the whole tree, exactly as before.
+ * Every remark/rehype transform, the URL policy and sanitisation still run over
+ * every block; each block just runs once.
  */
+import { cloneElement, isValidElement, type ReactNode } from "react";
 import type { Processor } from "unified";
 
 interface Point {
@@ -125,91 +129,114 @@ function shift(node: MdNode, lines: number, offset: number): void {
   if (node.children) for (const child of node.children) shift(child, lines, offset);
 }
 
-type Parse = (document: string) => Root;
+/** One stretch of the document to render on its own. */
+export interface MarkdownRange {
+  start: number;
+  end: number;
+  /** Lines before `start`, to move positions into document coordinates. */
+  lines: number;
+}
+
+const TOP_LEVEL_KEY = /^(.*)-(\d+)$/;
 
 /**
- * Per text part, owned by its renderer. Holds the parsed nodes of the safe
- * prefix in document coordinates; bounded by that part's text.
+ * Moves one stretch's top-level keys past the blocks before it. `seen` holds how
+ * many of each tag name came before, and is advanced when `commit` is set.
+ */
+function continueKeys(
+  nodes: readonly ReactNode[],
+  seen: Map<string, number>,
+  commit: boolean,
+): ReactNode[] {
+  const added = new Map<string, number>();
+  const continued = nodes.map((node) => {
+    if (!isValidElement(node) || node.key === null) return node;
+    const match = TOP_LEVEL_KEY.exec(node.key);
+    if (!match) return node;
+    const name = match[1]!;
+    const index = Number(match[2]);
+    added.set(name, index + 1);
+    const before = seen.get(name) ?? 0;
+    return before === 0 ? node : cloneElement(node, { key: `${name}-${before + index}` });
+  });
+  if (commit) {
+    for (const [name, count] of added) seen.set(name, (seen.get(name) ?? 0) + count);
+  }
+  return continued;
+}
+
+/** Blocks at the root of a rendered Markdown document are separated by a newline. */
+function appendBlocks(blocks: readonly ReactNode[], next: readonly ReactNode[]): ReactNode[] {
+  return blocks.length > 0 && next.length > 0 ? [...blocks, "\n", ...next] : [...blocks, ...next];
+}
+
+/**
+ * Per text part, owned by its renderer. Holds the elements of the safe prefix;
+ * bounded by that part's text, and released when the part stops streaming.
  */
 export class IncrementalMarkdownCache {
   /**
-   * @param configuration The plugin configuration the cached trees were
-   *   parsed under; a cache is only ever used with that one configuration.
+   * @param configuration The plugins and components the elements were rendered
+   *   with; a cache is only ever used with that one configuration.
    */
   constructor(readonly configuration?: unknown) {}
 
   private prefix = "";
   private prefixLines = 0;
-  private children: MdNode[] = [];
-  /** Parses served and the characters actually parsed, for tests and diagnostics. */
-  parses = 0;
-  parsedCharacters = 0;
+  private blocks: ReactNode[] = [];
+  private seenTags = new Map<string, number>();
+  /** Characters actually rendered and renders reusing a prefix, for tests. */
+  renderedCharacters = 0;
   reused = 0;
 
   reset(): void {
     this.prefix = "";
     this.prefixLines = 0;
-    this.children = [];
+    this.blocks = [];
+    this.seenTags = new Map();
   }
 
-  /** The tree for `document`, parsing only what the cache does not hold. */
-  parse(document: string, parseSegment: Parse): Root {
-    this.parses += 1;
+  /** The top-level nodes for `document`, rendering only what the cache does not hold. */
+  render(
+    document: string,
+    renderRange: (range: MarkdownRange) => readonly ReactNode[],
+  ): ReactNode[] {
     if (!document.startsWith(this.prefix) || DOCUMENT_WIDE.test(document)) this.reset();
     const boundary = lastSafeBoundary(document);
     if (boundary > this.prefix.length) {
-      // Extend the cache by the newly completed segment, parsed on its own.
-      const segment = document.slice(this.prefix.length, boundary);
-      const tree = parseSegment(segment);
-      this.parsedCharacters += segment.length;
-      for (const child of tree.children) shift(child, this.prefixLines, this.prefix.length);
-      this.children.push(...tree.children);
+      // Extend the cache by the newly completed segment, rendered on its own.
+      const range = { start: this.prefix.length, end: boundary, lines: this.prefixLines };
+      this.blocks = appendBlocks(
+        this.blocks,
+        continueKeys(renderRange(range), this.seenTags, true),
+      );
+      this.renderedCharacters += boundary - range.start;
       this.prefix = document.slice(0, boundary);
-      this.prefixLines += countLines(segment);
+      this.prefixLines += countLines(document.slice(range.start, boundary));
     } else if (boundary < this.prefix.length) {
       // The prefix is no longer a safe split of this document.
       this.reset();
     }
-    if (this.prefix.length === 0) {
-      this.parsedCharacters += document.length;
-      return parseSegment(document);
-    }
+    const tail = { start: this.prefix.length, end: document.length, lines: this.prefixLines };
+    this.renderedCharacters += tail.end - tail.start;
+    if (tail.start === 0) return [...renderRange(tail)];
     this.reused += 1;
-    const tailText = document.slice(this.prefix.length);
-    const tail = parseSegment(tailText);
-    this.parsedCharacters += tailText.length;
-    for (const child of tail.children) shift(child, this.prefixLines, this.prefix.length);
-    const children = [...structuredClone(this.children), ...tail.children];
-    const end = tail.position?.end;
-    return {
-      type: "root",
-      children,
-      position: {
-        start: { line: 1, column: 1, offset: 0 },
-        end: end
-          ? {
-              line: end.line + this.prefixLines,
-              column: end.column,
-              offset: (end.offset ?? 0) + this.prefix.length,
-            }
-          : { line: this.prefixLines + 1, column: 1, offset: this.prefix.length },
-      },
-    };
+    return appendBlocks(this.blocks, continueKeys(renderRange(tail), this.seenTags, false));
   }
 }
 
 /**
- * Replaces the processor's parser with one that serves `cache`. Must follow
+ * Makes the processor parse only `range` of its document. Must follow
  * `remark-parse` (react-markdown adds it first): the parse configuration —
  * micromark and mdast extensions registered by later plugins such as GFM —
  * is still read by the original parser at call time.
  */
-export function remarkIncrementalParse(this: Processor, cache: IncrementalMarkdownCache): void {
+export function remarkParseRange(this: Processor, range: MarkdownRange): void {
   const original = this.parser;
   if (!original) return;
-  this.parser = ((document: string, file: Parameters<typeof original>[1]) =>
-    cache.parse(
-      String(document),
-      (segment) => original(segment, file) as unknown as Root,
-    )) as never;
+  this.parser = ((document: string, file: Parameters<typeof original>[1]) => {
+    const tree = original(String(document).slice(range.start, range.end), file) as unknown as Root;
+    for (const child of tree.children) shift(child, range.lines, range.start);
+    return tree;
+  }) as never;
 }

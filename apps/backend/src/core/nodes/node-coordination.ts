@@ -1,4 +1,8 @@
-import { AGENT_MAIL_MAX_THREAD_HOPS } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_MAX_THREAD_HOPS,
+  normalizeAgentMessagingSettings,
+  type AgentMailAttachment,
+} from "@orkestrator/protocol/agent-mail";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -10,12 +14,22 @@ import { parseAgentsMdChanges } from "@orkestrator/protocol/agents-md-orkestrato
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
+import type { CoordinatorNoticeRoute } from "@orkestrator/protocol/coordinator-notices";
 import { parseProjectHomeMessage } from "@orkestrator/protocol/project-home-message";
 import {
   parseWorkerQuestionRelay,
   workerQuestionAnswerProblem,
 } from "@orkestrator/protocol/worker-question-relay";
 
+import type { MailAttachmentRecipient } from "../coordinator-mail-attachments.js";
+import {
+  outboxMailAttachmentBatch,
+  parseMailAttachmentBatch,
+  removeMailAttachmentBatch,
+  stageMailAttachments,
+  type MailAttachmentBatch,
+  type OwnAttachment,
+} from "../mail-attachments.js";
 import type { StorageService } from "../storage.js";
 import { agentsMdBranchName, agentsMdRequestKey, type AgentsMdPrResult } from "../agents-md-pr.js";
 import {
@@ -71,6 +85,12 @@ function parseMailState(value: unknown): NodeMailState {
     ...(root.contacts && typeof root.contacts === "object" ? { contacts: root.contacts } : {}),
     threads: root.threads && typeof root.threads === "object" ? root.threads : {},
     outbox: root.outbox && typeof root.outbox === "object" ? root.outbox : {},
+    ...(root.noticeRoutes && typeof root.noticeRoutes === "object"
+      ? { noticeRoutes: root.noticeRoutes }
+      : {}),
+    ...(root.acknowledgedAttachmentMail && typeof root.acknowledgedAttachmentMail === "object"
+      ? { acknowledgedAttachmentMail: root.acknowledgedAttachmentMail }
+      : {}),
   };
 }
 
@@ -133,6 +153,17 @@ export async function localCoordinatorContact(
   return { ...(at ? { at } : {}), hasCoordinator: Boolean(workspace) };
 }
 
+/** What node mail needs from the coordinator notices; set once both exist. */
+export interface NodeCoordinatorNotices {
+  /** A leaf's notice, collected by this command node. */
+  deliverFromLeaf(
+    item: OutboxItem,
+    node: { nodeId: string; name: string },
+  ): Promise<"delivered" | "declined" | "deferred">;
+  /** A notice this node queued that its own coordinator should take after all. */
+  takeBack(item: OutboxItem): Promise<void>;
+}
+
 export class NodeCoordination {
   readonly leafMail: LeafNodeMail;
   readonly collector: NodeMailCollector;
@@ -142,11 +173,73 @@ export class NodeCoordination {
   readonly files: NodeFiles;
   readonly projectFiles: NodeProjectFiles;
   readonly copies: NodeProjectCopies;
+  // Keep lookup, staging and enqueue in one admission section. A single tail
+  // avoids retaining a growing registry of request keys after sends settle.
+  private outboxSendTail: Promise<void> = Promise.resolve();
   private recoveryStarted = false;
+  private sweepingAttachments = false;
   private recoveryTimer: ReturnType<typeof setInterval> | undefined;
   private unsubscribeNodes: (() => void) | undefined;
   private unsubscribeKanban: (() => void) | undefined;
   private ticketSyncTimer: ReturnType<typeof setInterval> | undefined;
+  private coordinatorNotices: NodeCoordinatorNotices | null = null;
+  private takingBack: Promise<void> | null = null;
+
+  setCoordinatorNotices(notices: NodeCoordinatorNotices): void {
+    this.coordinatorNotices = notices;
+  }
+
+  /**
+   * Where a notice for this repository goes from this node, by the one rule.
+   * A null project is a machine-wide notice.
+   */
+  async routeNotice(projectId: string | null): Promise<CoordinatorNoticeRoute> {
+    const project = projectId
+      ? await this.options.storage.getProject(projectId).catch(() => null)
+      : null;
+    return this.leafMail.routeNotice({
+      ...(projectId ? { contactKey: coordinatorContactKey(projectId) } : {}),
+      repositoryHint: repositoryHint(project?.gitUrl) ?? null,
+      machineWide: projectId === null,
+    });
+  }
+
+  /** Queue a notice for a command node's coordinator; refused, not dropped, when full. */
+  async queueNotice(
+    controllerId: BackendId,
+    item: Omit<OutboxItem, "seq" | "createdAt" | "bytes" | "repositoryHint">,
+  ): Promise<void> {
+    const project = item.noticeProjectId
+      ? await this.options.storage.getProject(item.noticeProjectId).catch(() => null)
+      : null;
+    const hint = repositoryHint(project?.gitUrl);
+    await this.leafMail.enqueue(controllerId, {
+      ...item,
+      ...(hint ? { repositoryHint: hint } : {}),
+    });
+  }
+
+  /** Hand this node's coordinator the notices no command node will take. One pass at a time. */
+  takeBackNotices(): Promise<void> {
+    this.takingBack ??= this.takeBackNoticesOnce().finally(() => {
+      this.takingBack = null;
+    });
+    return this.takingBack;
+  }
+
+  private async takeBackNoticesOnce(): Promise<void> {
+    const notices = this.coordinatorNotices;
+    if (!notices) return;
+    for (const { controllerId, item } of await this.leafMail.noticesToTakeBack()) {
+      try {
+        await notices.takeBack(item);
+        await this.leafMail.settleTakenBack(controllerId, item.seq);
+      } catch (error) {
+        // It stays in the outbox, and the next pass tries again.
+        log.warn("notices.take-back-failed", { error: formatLogError(error, { message: false }) });
+      }
+    }
+  }
 
   /** Called after backend recovery, links and portal storage are ready. */
   start(): void {
@@ -158,14 +251,37 @@ export class NodeCoordination {
     // A last resort for anything an event did not trigger; a node with nothing
     // new costs a cursor read and an empty collect.
     this.ticketSyncTimer = setInterval(() => {
-      if (this.options.nodes.mode() === "command")
+      if (this.options.nodes.mode() === "command") {
         void this.ticketSync.syncAll().catch(() => undefined);
+        // A collect also tells each leaf which repositories this node has now.
+        void this.options.nodes
+          .listNodes()
+          .then((list) => {
+            for (const node of list.nodes) {
+              if (node.connection.state === "connected") void this.collector.collect(node.nodeId);
+            }
+          })
+          .catch(() => undefined);
+      }
+      void this.takeBackNotices();
     }, 60_000);
     this.ticketSyncTimer.unref?.();
+    // What a previous run queued or was handed back is still in the outbox.
+    void this.takeBackNotices();
   }
 
   private resumeActions(): void {
     if (!this.recoveryStarted) return;
+    if (!this.sweepingAttachments) {
+      this.sweepingAttachments = true;
+      void this.files
+        .sweepMailAttachments()
+        // Best-effort maintenance; the next backend pass retries.
+        .catch(() => undefined)
+        .finally(() => {
+          this.sweepingAttachments = false;
+        });
+    }
     void this.actions.resumeInterrupted().catch(() => {
       log.warn("actions.resume-failed");
     });
@@ -207,12 +323,25 @@ export class NodeCoordination {
           nodes.listControllers().map((entry) => ({
             controllerId: entry.controllerId,
             displayName: entry.displayName,
+            lastContactAt: entry.lastContactAt,
           })),
         mostRecentControllerId: () => nodes.mostRecentControllerId(),
         localCoordinatorContact: (environmentId, tabId) =>
           localCoordinatorContact(storage, environmentId, tabId),
+        noticesHandedBack: () => void this.takeBackNotices(),
       },
       options.emit,
+      Date.now,
+      // Fetched and acknowledged: the spooled copies are no longer anyone's.
+      (items) => {
+        for (const item of items) {
+          if (!item.attachments) continue;
+          void removeMailAttachmentBatch(
+            storage.getDataDir(),
+            outboxMailAttachmentBatch(item.attachments.batch),
+          ).catch(() => undefined);
+        }
+      },
     );
     storage.nodeMailRouter = {
       route: (input) => this.leafMail.route(input),
@@ -246,6 +375,20 @@ export class NodeCoordination {
       nodeName: async (nodeId) =>
         (await nodes.getNode(nodeId).catch(() => null))?.displayName ?? nodeId,
       deliver: (input) => this.deliverToCoordinator(input),
+      notices: {
+        // The repositories whose coordinator here can take a leaf's notice.
+        repositoryHints: async () =>
+          !normalizeAgentMessagingSettings((await storage.loadConfig()).global.agentMessaging)
+            .enabled
+            ? []
+            : (await storage.loadProjects())
+                .map((project) => repositoryHint(project.gitUrl))
+                .filter((hint): hint is string => Boolean(hint)),
+        deliver: (item, node) => {
+          if (!this.coordinatorNotices) throw new Error("Coordinator notices are not ready.");
+          return this.coordinatorNotices.deliverFromLeaf(item, node);
+        },
+      },
     });
     this.ticketSync = new NodeTicketSync({
       selfId: () => nodes.selfIdentity(),
@@ -391,6 +534,7 @@ export class NodeCoordination {
     placement: string;
     placementReason?: string;
     injectedVia?: "steer";
+    attachments?: AgentMailAttachment[];
   }> {
     const controllerId = args.controllerId;
     if (!isBackendId(controllerId)) throw new Error("Expected controllerId.");
@@ -415,6 +559,10 @@ export class NodeCoordination {
     }
     const environment = await this.options.storage.getEnvironment(toEnvironmentId);
     if (!environment) throw new Error("That environment does not exist on this node.");
+    // Before the message exists: if the files cannot be placed, there is no mail.
+    const attachments = await this.placeIncomingAttachments(args.attachments, {
+      environmentId: toEnvironmentId,
+    });
     // The attached command node's coordinator, authenticated by the node link:
     // its mail is a delegation in this environment's project and wakes the
     // agent, as a coordinator's on this node would.
@@ -435,6 +583,7 @@ export class NodeCoordination {
         toTabId: typeof args.toTabId === "string" ? args.toTabId : "",
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: describeCoordinatorMail(body, controller.displayName),
+        ...(attachments.length ? { attachments } : {}),
       },
       { newDelegation: true, steer: args.steer === true },
     );
@@ -456,7 +605,21 @@ export class NodeCoordination {
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
       ...(message.injectedVia ? { injectedVia: message.injectedVia } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     };
+  }
+
+  /** Put images a command node already pushed where this mail's recipient reads them. */
+  private async placeIncomingAttachments(
+    value: unknown,
+    to: MailAttachmentRecipient,
+  ): Promise<AgentMailAttachment[]> {
+    if (value === undefined) return [];
+    const placed = await this.options.invoke<{ attachments: AgentMailAttachment[] }>(
+      "place_node_mail_attachments",
+      { to, attachments: parseMailAttachmentBatch(value) },
+    );
+    return placed.attachments;
   }
 
   /**
@@ -480,6 +643,7 @@ export class NodeCoordination {
     toTabName?: string;
     placement: string;
     placementReason?: string;
+    attachments?: AgentMailAttachment[];
   }> {
     const storage = this.options.storage;
     const projectId = typeof args.projectId === "string" ? args.projectId : "";
@@ -491,6 +655,7 @@ export class NodeCoordination {
         `This node has no coordinator for ${project.name}; message a worker here instead, or ask the user to open one on this node.`,
       );
     }
+    const attachments = await this.placeIncomingAttachments(args.attachments, { projectId });
     const message = await storage.sendAgentMail(
       {
         kind: "node",
@@ -508,6 +673,7 @@ export class NodeCoordination {
         toTabId: "",
         ...(typeof args.subject === "string" ? { subject: args.subject.slice(0, 200) } : {}),
         body: input.body,
+        ...(attachments.length ? { attachments } : {}),
       },
       {
         newDelegation: true,
@@ -530,6 +696,7 @@ export class NodeCoordination {
       ...(toTabName ? { toTabName } : {}),
       placement: message.placement,
       ...(message.placementReason ? { placementReason: message.placementReason } : {}),
+      ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     };
   }
 
@@ -560,6 +727,9 @@ export class NodeCoordination {
     subject?: string;
     body: string;
     replyToMessageId?: string;
+    /** The images in this batch, read and checked; spooled only if this is a new request. */
+    attachments?: MailAttachmentBatch;
+    own?: readonly OwnAttachment[];
   }): Promise<{ item: OutboxItem; controllerId: BackendId; controllerName?: string }> {
     const destination = await this.leafMail.routeCoordinator({
       contactKey: coordinatorContactKey(input.projectId),
@@ -582,40 +752,78 @@ export class NodeCoordination {
       : undefined;
     if (parent && (parent.hopCount ?? 0) >= AGENT_MAIL_MAX_THREAD_HOPS)
       throw new Error("Thread hop limit reached");
-    const item = await this.leafMail.enqueue(destination.controllerId, {
-      requestId: input.requestId,
-      fromEnvironmentId: input.coordinatorEnvironmentId,
-      fromTabId: input.coordinatorTabId,
-      fromEnvironmentName: "Coordinator",
-      ...(tabName ? { fromTabName: tabName } : {}),
-      ...(hint ? { repositoryHint: hint } : {}),
-      ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
-        ? {
-            toCoordinator: {
-              environmentId: mailbox.coordinatorEnvironmentId,
-              tabId: mailbox.coordinatorTabId,
-            },
-          }
-        : {}),
-      ...(input.subject ? { subject: input.subject } : {}),
-      body: input.body,
-      fromCoordinator: true,
-      ...(parent
-        ? {
-            nodeParent: {
-              id: parent.id,
-              threadId: parent.threadId,
-              hopCount: parent.hopCount ?? 0,
-            },
-          }
-        : {}),
-      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+    const previous = this.outboxSendTail;
+    let release!: () => void;
+    this.outboxSendTail = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    return {
-      item,
-      controllerId: destination.controllerId,
-      ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
-    };
+    await previous;
+    try {
+      // A retry finds its request queued, or already delivered, and copies nothing.
+      const spooled =
+        input.attachments && input.own
+          ? !(await this.leafMail.knownRequest(destination.controllerId, {
+              requestId: input.requestId,
+              fromEnvironmentId: input.coordinatorEnvironmentId,
+              fromTabId: input.coordinatorTabId,
+            }))
+          : false;
+      try {
+        if (spooled) {
+          await stageMailAttachments(
+            this.options.storage.getDataDir(),
+            outboxMailAttachmentBatch(input.attachments!.batch),
+            input.own!,
+          );
+        }
+        const item = await this.leafMail.enqueue(destination.controllerId, {
+          requestId: input.requestId,
+          fromEnvironmentId: input.coordinatorEnvironmentId,
+          fromTabId: input.coordinatorTabId,
+          fromEnvironmentName: "Coordinator",
+          ...(tabName ? { fromTabName: tabName } : {}),
+          ...(hint ? { repositoryHint: hint } : {}),
+          ...(mailbox.coordinatorEnvironmentId && mailbox.coordinatorTabId
+            ? {
+                toCoordinator: {
+                  environmentId: mailbox.coordinatorEnvironmentId,
+                  tabId: mailbox.coordinatorTabId,
+                },
+              }
+            : {}),
+          ...(input.subject ? { subject: input.subject } : {}),
+          body: input.body,
+          fromCoordinator: true,
+          ...(parent
+            ? {
+                nodeParent: {
+                  id: parent.id,
+                  threadId: parent.threadId,
+                  hopCount: parent.hopCount ?? 0,
+                },
+              }
+            : {}),
+          ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+          ...(input.attachments ? { attachments: input.attachments } : {}),
+        });
+        return {
+          item,
+          controllerId: destination.controllerId,
+          ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
+        };
+      } catch (error: unknown) {
+        // Staging and admission both own this new batch until enqueue succeeds.
+        if (spooled) {
+          await removeMailAttachmentBatch(
+            this.options.storage.getDataDir(),
+            outboxMailAttachmentBatch(input.attachments!.batch),
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
+    } finally {
+      release();
+    }
   }
 
   async recordOrigin(args: Record<string, unknown>): Promise<{ recorded: true }> {
@@ -665,6 +873,8 @@ export class NodeCoordination {
     nodePrefix?: string;
     nodeParent?: { id: string; threadId: string; hopCount: number };
     requestId: string;
+    /** Images waiting on the sender's node; absent for this node's own notices. */
+    attachments?: MailAttachmentBatch;
     /** A leaf agent; absent for this node's own notices. */
     from?: {
       nodeId: string;
@@ -723,6 +933,18 @@ export class NodeCoordination {
       }
       projectId = workspace.projectId;
     }
+    // Fetched and placed first: a failure leaves the item in the leaf's outbox
+    // for the next attempt, and nothing delivered points at a missing file.
+    const attachments =
+      input.attachments && input.from && projectId
+        ? await this.fetchLeafAttachments(
+            input.attachments,
+            input.from.nodeId,
+            address.environmentId === COORDINATOR_MAIL_ADDRESS
+              ? { projectId }
+              : { environmentId: address.environmentId },
+          )
+        : [];
     // A worker on a node this one controls reports like a worker here: the
     // node link authenticates it, it wakes the coordinator, and while the
     // coordinator waits on that worker its report is held for the turn's end.
@@ -750,9 +972,46 @@ export class NodeCoordination {
         toTabId: address.tabId,
         ...(input.subject ? { subject: input.subject } : {}),
         body: input.body,
+        ...(attachments.length ? { attachments } : {}),
       },
       { nodePrefix: input.nodePrefix, nodeParent: input.nodeParent },
     );
+  }
+
+  /** The other half of a leaf coordinator's images: copy them here, then place them. */
+  private async fetchLeafAttachments(
+    batch: MailAttachmentBatch,
+    nodeId: string,
+    to: MailAttachmentRecipient,
+  ): Promise<AgentMailAttachment[]> {
+    const attachments = parseMailAttachmentBatch(batch);
+    const { missing } = await this.options.invoke<{ missing: string[] }>(
+      "prepare_node_mail_attachments",
+      { to, attachments },
+    );
+    if (missing.length) {
+      const receipt = await this.projectFiles.transfer.transfer({
+        from: {
+          nodeId,
+          scope: { mailAttachments: outboxMailAttachmentBatch(attachments.batch) },
+        },
+        to: {
+          nodeId: await this.options.nodes.selfIdentity(),
+          scope: { mailAttachments: attachments.batch },
+        },
+        files: missing,
+        overwrite: true,
+        actor: `node mail from ${nodeId}`,
+      });
+      if (receipt.status !== "completed") {
+        throw new Error(receipt.error?.message ?? "The images could not be fetched.");
+      }
+    }
+    const placed = await this.options.invoke<{ attachments: AgentMailAttachment[] }>(
+      "place_node_mail_attachments",
+      { to, attachments },
+    );
+    return placed.attachments;
   }
 
   async createActionRequest(args: Record<string, unknown>): Promise<NodeActionRequest> {
@@ -800,6 +1059,8 @@ export class NodeCoordination {
         "platform",
         "accountId",
         "accountLabel",
+        "previousAccountId",
+        "previousAccountLabel",
       ] as const) {
         if (typeof target[key] === "string") clean[key] = (target[key] as string).slice(0, 1024);
       }
@@ -833,6 +1094,7 @@ export class NodeCoordination {
         projectId: by.projectId,
       },
       ...(typeof args.reason === "string" ? { reason: args.reason } : {}),
+      ...(typeof args.askedBecause === "string" ? { askedBecause: args.askedBecause } : {}),
       ...(kind === "update-agents-md"
         ? { agentsMd: { changes: parseAgentsMdChanges(agentsMdPayload(args.agentsMd)) } }
         : {}),

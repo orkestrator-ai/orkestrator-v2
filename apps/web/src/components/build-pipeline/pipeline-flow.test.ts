@@ -579,6 +579,7 @@ describe("pipelineFlowModel", () => {
       ["Verify:running"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
   });
 
@@ -699,6 +700,7 @@ describe("pipelineFlowModel", () => {
       ["Verify:not-started~"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     // Address, Fix and conflict resolution only appear once they start.
     expect(model.nodes.some((node) => ["address", "fix", "conflicts"].includes(node.kind))).toBe(
@@ -724,6 +726,7 @@ describe("pipelineFlowModel", () => {
       ["Verify:not-started~"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     const placeholderReviewer = model.nodes.find((node) => node.title === "Reviewer 2");
     expect(placeholderReviewer).toMatchObject({ agent: "codex", model: "gpt-6.1" });
@@ -762,6 +765,7 @@ describe("pipelineFlowModel", () => {
       ["Verify 2:running"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     expect(model.columns.map((column) => column.label)).toEqual([
       "Ticket",
@@ -775,6 +779,7 @@ describe("pipelineFlowModel", () => {
       "Verify 2",
       "Ship",
       "PR",
+      "Notes",
     ]);
     // Every edge runs from one column to the next one.
     const columnOf = new Map<string, number>();
@@ -835,6 +840,7 @@ describe("pipelineFlowModel", () => {
       ["Verify:not-started~"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     const prepare = model.nodes.find((node) => node.kind === "prepare")!;
     expect(prepare.hasValidation).toBe(true);
@@ -1224,6 +1230,7 @@ describe("pipelineFlowModel", () => {
         "verify",
         "ship",
         "pr",
+        "notes",
       ]);
       expect(model.nodes.some((node) => node.kind === "build" && node.placeholder)).toBe(false);
     },
@@ -1264,7 +1271,7 @@ describe("pipelineFlowModel", () => {
       build({ phase: "building", sessions: [session("build", "build", 0)] }),
       pullRequest,
     );
-    expect(early.nodes.at(-1)).toMatchObject({
+    expect(early.nodes.findLast((node) => node.kind === "pr")).toMatchObject({
       kind: "pr",
       state: "not-started",
       placeholder: true,
@@ -1284,12 +1291,13 @@ describe("pipelineFlowModel", () => {
       ["Build:complete"],
       ["Ship:complete"],
       ["PR:complete"],
+      ["Notes:complete"],
     ]);
     const closed = pipelineFlowModel(
       build({ phase: "complete", sessions: [session("pr", "pr", 0)] }),
       { ...pullRequest, state: "closed" },
     );
-    expect(closed.nodes.at(-1)?.state).toBe("cancelled");
+    expect(closed.nodes.findLast((node) => node.kind === "pr")?.state).toBe("cancelled");
   });
 
   describe("a run that ends without a pull request", () => {
@@ -1308,7 +1316,7 @@ describe("pipelineFlowModel", () => {
       const model = pipelineFlowModel(
         build({ sessions: [session("build", "build", 0)], deliveryPolicy: "push-no-pr" }),
       );
-      const last = model.nodes.slice(-2);
+      const last = model.nodes.slice(-3, -1);
       expect(last.map((node) => node.title)).toEqual(["Push", "No PR"]);
       expect(last.every((node) => node.placeholder)).toBe(true);
       expect(last[1]?.noPullRequest).toBe("push-no-pr");
@@ -1320,7 +1328,10 @@ describe("pipelineFlowModel", () => {
         build({ sessions: [session("build", "build", 0)], deliveryPolicy: "commit-only" }),
       );
       expect(model.nodes.some((node) => node.kind === "ship")).toBe(false);
-      expect(model.nodes.at(-1)).toMatchObject({ title: "No PR", noPullRequest: "commit-only" });
+      expect(model.nodes.findLast((node) => node.kind === "pr")).toMatchObject({
+        title: "No PR",
+        noPullRequest: "commit-only",
+      });
     });
 
     test("a finished push reads as complete with no pull request", () => {
@@ -1330,8 +1341,8 @@ describe("pipelineFlowModel", () => {
         delivery: { policy: "push-no-pr", decidedAt },
       });
       const model = pipelineFlowModel(pipeline, pullRequest);
-      expect(line(model).slice(-2)).toEqual([["Push:complete"], ["No PR:complete"]]);
-      const node = model.nodes.at(-1)!;
+      expect(line(model).slice(-3, -1)).toEqual([["Push:complete"], ["No PR:complete"]]);
+      const node = model.nodes.findLast((node) => node.kind === "pr")!;
       expect(
         pipelineNodeView({
           node,
@@ -1355,8 +1366,47 @@ describe("pipelineFlowModel", () => {
           delivery: { policy: "open-pr", decidedAt },
         }),
       );
-      expect(model.nodes.at(-1)).toMatchObject({ title: "PR" });
-      expect(model.nodes.at(-1)?.noPullRequest).toBeUndefined();
+      expect(model.nodes.findLast((node) => node.kind === "pr")).toMatchObject({ title: "PR" });
+      expect(model.nodes.findLast((node) => node.kind === "pr")?.noPullRequest).toBeUndefined();
+    });
+  });
+
+  describe("the Notes step", () => {
+    const notes = (model: ReturnType<typeof pipelineFlowModel>) =>
+      model.nodes.find((node) => node.kind === "notes");
+
+    test("is always last, ahead of the run until the run is done", () => {
+      const model = pipelineFlowModel(build({ sessions: [session("build", "build", 0)] }));
+      expect(model.nodes.at(-1)).toMatchObject({
+        kind: "notes",
+        state: "not-started",
+        placeholder: true,
+      });
+      expect(model.edges.at(-1)?.to).toBe(model.nodes.at(-1)!.id);
+    });
+
+    test("is done when the run is, whether or not it opened a pull request", () => {
+      for (const delivery of ["open-pr", "commit-only"] as const) {
+        const model = pipelineFlowModel(
+          build({
+            phase: "complete",
+            sessions: [session("build", "build", 0)],
+            delivery: { policy: delivery, decidedAt: CREATED },
+          }),
+        );
+        expect(notes(model)).toMatchObject({ state: "complete", placeholder: false });
+      }
+    });
+
+    test("stays readable on a failed run, and a cancelled run that never shipped has none", () => {
+      const failed = pipelineFlowModel(
+        build({ phase: "failed", error: "Verify failed", sessions: [session("verify", "v", 0)] }),
+      );
+      expect(notes(failed)).toMatchObject({ state: "not-started", placeholder: true });
+      const cancelled = pipelineFlowModel(
+        build({ phase: "failed", error: "Build cancelled", sessions: [session("build", "b", 0)] }),
+      );
+      expect(notes(cancelled)).toBeUndefined();
     });
   });
 
@@ -1379,6 +1429,7 @@ describe("pipelineFlowModel", () => {
       ["Ship:complete"],
       ["Resolve conflicts:running"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
   });
 
@@ -1771,6 +1822,7 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
       ["Verify:running"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     const attempt = model.nodes.find((node) => node.kind === "attempt")!;
     expect(attempt).toMatchObject({
@@ -1809,6 +1861,7 @@ describe("pipelineFlowModel after a restart rewound the pipeline", () => {
       ["Verify:running"],
       ["Ship:not-started~"],
       ["PR:not-started~"],
+      ["Notes:not-started~"],
     ]);
     const superseded = model.nodes.filter((node) => node.superseded && node.kind !== "attempt");
     expect(superseded.map((node) => node.id)).toEqual([

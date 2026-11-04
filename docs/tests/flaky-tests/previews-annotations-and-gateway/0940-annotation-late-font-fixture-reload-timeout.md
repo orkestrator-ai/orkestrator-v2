@@ -13,3 +13,13 @@
 - **Hypothesis:** the late font and the reload's load event take longer than 20 s on a saturated host. Not established. No assertion, timeout or skip changed.
 - **Recurrence (2026-10-28):** `Timeout 20000ms exceeded while waiting on the predicate` again in a full `mise run test:agent:electron` on branch `uniform-app-keyboard-shortcuts-376ba22a2bd4` (based on `6a6009a09`, keyboard shortcut routing), host load averages 11 to 35; the unchanged owner then passed alone (`rerun-web-annotations-electron`, 143.8 s).
 - **Recurrence (2026-10-31):** the same `Timeout 20000ms exceeded while waiting on the predicate` in `reloadFixtureScript` (`e2e/agent-testing/web-annotations-electron.spec.ts:437`, test at `:1878`), in a full `mise run test:logged -- --name agent-electron-0880 -- mise run test:agent:electron` on branch `todo-0880-desktop-modal-dialogs-4539ddba3d6a` (based on `931e55417`), with other workers' suites running: 40 passed, 1 failed, 2 skipped, 4 not run. The test alone then passed 1/1, and the complete owner file passed 14/14 twice. That branch changes preview dialogs and `beforeunload`, but no fixture here uses either.
+
+
+## Recurrence during essential-log fixes (2026-11-04)
+
+- **Commit:** `7a32a2d5851205e641b39f858dc8f31e645a07e7`, branch `event-log-e9e5ce34a69b-r1`, macOS arm64; one Playwright worker.
+- **Original command:** `mise run test:logged -- --name essential-electron -- mise run test:agent:electron`.
+- **Failure:** `Timeout 20000ms exceeded while waiting on the predicate` at `reloadFixtureScript` (`e2e/agent-testing/web-annotations-electron.spec.ts:446`, called at `:2137`; case begins at `:2044`). Offscreen and modal checks finished before the late-font document reload failed. The full suite reported 46 passed, 3 failed, 3 skipped and 10 not run in 552.0 seconds; the other failures were the legacy preview Back case and workspace-realm startup.
+- **Complete unchanged owner rerun:** `mise run test:logged -- --name essential-annotations-isolated -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts web-annotations-electron.spec.ts` passed with 14 passed and 1 skipped in 122.3 seconds. Neither the test file nor preview/pin implementation was edited by this branch. The full suite remains failed; this isolated pass does not qualify the other scenarios.
+- **Evidence:** `output/agent-testing/essential-review-fixes/validation/essential-electron.log.gz`; the isolated Playwright results are `output/agent-testing/essential-review-fixes/validation/annotations-isolated-results.json`.
+- **Attribution:** this matches the existing reload-deadline symptom. No cause is established from this recurrence, and no assertion, timeout or skip was changed.

@@ -2427,6 +2427,14 @@ describe("OpenCode workflow-result tool masks", () => {
   test("only a reviewer's turn exposes report_finding, and ordinary turns hide it", () => {
     const finding = openCodeWorkflowResultToolId("report_finding");
     expect(openCodeWorkflowResultTurnTools("submit_review_report")[finding]).toBe(true);
+    // The connection is environment-wide, so a subork's turn must not see the tool.
+    expect(openCodeWorkflowResultTurnTools("submit_subork_answer").orkestrator_ask_agents).toBe(
+      false,
+    );
+    expect(openCodeWorkflowResultTurnTools("submit_subork_answer")).toMatchObject({
+      orkestrator_workflow_result_submit_subork_answer: true,
+    });
+    expect(openCodeWorkflowResultTurnTools()).not.toHaveProperty("orkestrator_ask_agents");
     expect(openCodeWorkflowResultTurnTools("submit_fix_result")[finding]).toBe(false);
     expect(openCodeWorkflowResultTurnTools()[finding]).toBe(false);
     const allowed = (tool: string) =>
@@ -2437,5 +2445,26 @@ describe("OpenCode workflow-result tool masks", () => {
     expect(
       openCodeWorkflowResultDenyPermissionRules().find((rule) => rule.permission === finding),
     ).toEqual({ permission: finding, pattern: "*", action: "deny" });
+  });
+
+  test("a subork's permission rules deny ask_agents and the environment-wide tools", () => {
+    // A subork runs in a reviewer session, which gets no per-turn tool map, so
+    // OpenCode's last-match-wins permission rules are its whole boundary.
+    const subork = openCodeWorkflowResultPermissionRules("submit_subork_answer");
+    const action = (rules: typeof subork, tool: string) => actionFor({ permission: rules }, tool);
+    expect(action(subork, "orkestrator_ask_agents")).toBe("deny");
+    expect(action(subork, "orkestrator_update_ticket")).toBe("deny");
+    expect(action(subork, "orkestrator_create_artifact")).toBe("deny");
+    expect(action(subork, openCodeWorkflowResultToolId("submit_subork_answer"))).toBe("allow");
+    expect(action(subork, openCodeWorkflowResultToolId("validate_workflow_result"))).toBe("allow");
+    expect(action(subork, openCodeWorkflowResultToolId("submit_review_report"))).toBe("deny");
+    // Other workflow turns keep the environment's tools but still cannot start suborks.
+    const review = openCodeWorkflowResultPermissionRules("submit_review_report");
+    expect(action(review, "orkestrator_ask_agents")).toBe("deny");
+    expect(action(review, "orkestrator_update_ticket")).toBeUndefined();
+    // An ordinary turn adds no rule for the tool: a native tab keeps it.
+    expect(
+      action(openCodeWorkflowResultDenyPermissionRules(), "orkestrator_ask_agents"),
+    ).toBeUndefined();
   });
 });

@@ -719,8 +719,9 @@ export interface AgentSessionProvider {
   readonly agent: ProviderAgent;
   /**
    * What a workflow's turn that ended in an error does next, under automatic
-   * account switching (`AgentAccountAutoSwitcher.handleLimitStop`). Absent for a
-   * provider without accounts, and answering `stop` for every other failure.
+   * account switching (`AgentAccountAutoSwitcher.handleLimitStop`). A provider
+   * without accounts always answers `stop`. It answers `stop` for every other
+   * failure too. A usage-limit stop is also reported to the coordinators.
    */
   usageLimitStop?(input: {
     environmentId: string;
@@ -729,6 +730,8 @@ export interface AgentSessionProvider {
     resends: number;
     /** When the turn is known to have been running by; see `UsageLimitStopInput`. */
     turnStartedAt?: string;
+    /** The workflow's own name for the session, for the coordinator's notice. */
+    session?: { label?: string };
   }): Promise<import("@orkestrator/protocol/agent-account-auto-switch").UsageLimitStopVerdict>;
   /**
    * Register a session restored from durable workflow state. Providers that
@@ -941,7 +944,14 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * configuration.
    */
   resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
-  interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
+  /**
+   * `limit` asks for only the newest messages. A provider with its own history
+   * bound may ignore it, so the caller still applies its own window.
+   */
+  interactiveSnapshot?(
+    sessionId: string,
+    options?: { limit?: number },
+  ): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,
     update: NativeAgentControlUpdate,

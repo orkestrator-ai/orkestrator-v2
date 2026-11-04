@@ -1,5 +1,7 @@
+import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
+import type { MailAttachmentBatch } from "../mail-attachments.js";
 import {
   describeLeafCoordinatorMail,
   describeLeafMail,
@@ -42,6 +44,8 @@ export interface CollectorDeps {
     nodePrefix?: string;
     nodeParent?: { id: string; threadId: string; hopCount: number };
     requestId: string;
+    /** Images to fetch from the sender's node before delivering it. */
+    attachments?: MailAttachmentBatch;
     /** The agent that sent it, on its node: node mail is authenticated by the link. */
     from: {
       nodeId: string;
@@ -54,6 +58,18 @@ export interface CollectorDeps {
       coordinator?: boolean;
     };
   }): Promise<void>;
+  /**
+   * This node's side of coordinator notices. `declined` hands one back to the
+   * leaf's own coordinator: this node has no copy of its repository. A throw
+   * leaves it in the leaf's outbox for the next attempt.
+   */
+  notices?: {
+    repositoryHints(): Promise<string[]>;
+    deliver(
+      item: OutboxItem,
+      node: { nodeId: string; name: string },
+    ): Promise<"delivered" | "declined" | "deferred">;
+  };
 }
 
 export class NodeMailCollector {
@@ -140,6 +156,12 @@ export class NodeMailCollector {
     let after = 0;
     let failed = false;
     let deliveredPrefix = 0;
+    let deferred = false;
+    // An older leaf refuses keys it does not know, so this goes only to one that says it takes it.
+    const notices = link.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices]
+      ? this.deps.notices
+      : undefined;
+    const repositoryHints = notices ? await notices.repositoryHints() : [];
     for (let round = 0; round < 20; round += 1) {
       const batch = await link.invoke<{ items: OutboxItem[]; more: boolean }>(
         "collect_node_outbox",
@@ -147,12 +169,29 @@ export class NodeMailCollector {
           controllerId,
           after,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
+          ...(notices ? { coordinatorNotices: { repositoryHints } } : {}),
+          ...(link.hello?.capabilities?.["node-mail-attachments"] ? { attachmentMail: true } : {}),
         },
       );
       if (!batch?.items?.length) return !batch?.more && !failed;
       const delivered: number[] = [];
+      const declined: number[] = [];
       for (const item of batch.items) {
         try {
+          if (item.coordinatorNotice) {
+            if (!notices) throw new Error("This node does not take coordinator notices.");
+            const outcome = await notices.deliver(item, { nodeId, name });
+            if (outcome === "deferred") {
+              this.retry(nodeId);
+              // Do not acknowledge this item or advance the contiguous prefix across it.
+              deferred = true;
+              continue;
+            }
+            if (outcome === "declined") declined.push(item.seq);
+            else delivered.push(item.seq);
+            if (!failed && !deferred) deliveredPrefix = item.seq;
+            continue;
+          }
           await this.deps.deliver({
             ...(item.toCoordinator ? { toCoordinator: item.toCoordinator } : {}),
             ...(item.repositoryHint ? { repositoryHint: item.repositoryHint } : {}),
@@ -166,6 +205,7 @@ export class NodeMailCollector {
               : {}),
             // Stable per item, so a redelivery after a lost ack is deduplicated.
             requestId: `node:${nodeId}:${item.seq}`,
+            ...(item.attachments ? { attachments: item.attachments } : {}),
             from: {
               nodeId,
               nodeName: name,
@@ -177,26 +217,28 @@ export class NodeMailCollector {
             },
           });
           delivered.push(item.seq);
-          if (!failed) deliveredPrefix = item.seq;
+          if (!failed && !deferred) deliveredPrefix = item.seq;
         } catch (error) {
           log.warn("mail.delivery-deferred", { error: formatLogError(error, { message: false }) });
           failed = true;
         }
       }
-      if (delivered.length) {
+      if (delivered.length || declined.length) {
         // Older leaves understand only upTo. Retain the safe contiguous
         // acknowledgement while newer leaves can also remove later successes.
         await link.invoke("ack_node_outbox", {
           controllerId,
           upTo: deliveredPrefix,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
+          ...(notices ? { coordinatorNotices: { declined } } : {}),
+          ...(link.hello?.capabilities?.["node-mail-attachments"] ? { attachmentMail: true } : {}),
           sequences: delivered,
         });
       }
       after = batch.items.at(-1)?.seq ?? after;
       if (failed) this.retry(nodeId);
       if (!batch.more) {
-        if (!failed) this.delays.delete(nodeId);
+        if (!failed && !deferred) this.delays.delete(nodeId);
         return !failed;
       }
     }

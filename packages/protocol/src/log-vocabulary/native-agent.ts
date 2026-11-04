@@ -49,6 +49,7 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A turn failed again after automatic recovery and is left for the user.",
       "turn-recovery.retrying":
         "An incomplete or provider-failed turn is being retried automatically.",
+      "usage-limit.notice-failed": "A usage-limit stop's outcome could not be read for its notice.",
       "usage-limit.resend-failed":
         "Resending after a usage limit failed. An unknown send stays in the journal.",
       "title.strategy-failed":
@@ -66,6 +67,16 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A verifier failed to finish; the goal stays verifying, so the next sweep runs it again.",
       "verifier.stop-failed": "An earlier verifier could not be stopped.",
       "recover.failed": "Goals could not be recovered at startup.",
+    },
+  },
+  "native-agent.subork": {
+    description: "Suborks: the ask_agents calls a native agent makes. Content-free.",
+    events: {
+      "pass.failed": "A pass over a call failed, so a later pass retries. Counts only.",
+      "delivery.failed":
+        "A call's answers could not be placed in the caller's mailbox yet. Error class only.",
+      "retention.failed": "An old call could not be removed.",
+      "sweep.failed": "A running call's caller could not be checked; the next sweep looks again.",
     },
   },
   "native-agent.opencode": {

@@ -31,4 +31,13 @@ describe("held project-home message validation", () => {
     expect(parseProjectHomeMessage(message)).toEqual(message);
     expect(parseProjectHomeMessage({ ...message, subject: "" })).toEqual(message);
   });
+  test("keeps a held message's attachment names and refuses unsafe ones", () => {
+    expect(parseProjectHomeMessage({ ...message, attachments: ["shot.png"] })).toMatchObject({
+      attachments: ["shot.png"],
+    });
+    expect(parseProjectHomeMessage({ ...message, attachments: [] })).toEqual(message);
+    for (const attachments of ["shot.png", ["../up.png"], Array(9).fill("shot.png")]) {
+      expect(parseProjectHomeMessage({ ...message, attachments })).toBeNull();
+    }
+  });
 });

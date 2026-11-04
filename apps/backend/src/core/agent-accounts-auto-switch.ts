@@ -22,11 +22,14 @@ import {
 } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
+  isAgentAccountPlatform,
   type AgentAccountPlatform,
+  type AgentAccountSummary,
   type AgentAccountsSnapshot,
   type AgentSessionAccount,
 } from "@orkestrator/protocol/agent-accounts";
 import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
+import type { CoordinatorAccountKeptReason } from "@orkestrator/protocol/coordinator-notices";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -65,7 +68,32 @@ export interface AutoSwitchNotice {
   to: string;
   reason: AutoSwitchReason;
   at: string;
+  /** The coordinator this move was made for, whose own notice already says so. */
+  quietProjectId?: string;
 }
+
+/** A session stopped on a usage limit, as `CoordinatorUsageLimitNotices` hears of it. */
+export interface UsageLimitStopReport {
+  platform: string;
+  environmentId: string;
+  requestId: string;
+  verdict: UsageLimitStopVerdict;
+  /** The login the turn ran on; absent for one this machine's accounts do not cover. */
+  account?: AgentAccountSummary;
+  resetsAt?: number;
+  resetHint?: string;
+  session?: UsageLimitStopSession;
+}
+
+/** What the caller knows about the stopped session. */
+export interface UsageLimitStopSession {
+  tabId?: string;
+  /** A workflow's own name for the session, such as "Build Session". */
+  label?: string;
+}
+
+export type LimitedAccountMove =
+  { moved: true; to: string } | { moved: false; reason: CoordinatorAccountKeptReason };
 
 export interface AgentAccountAutoSwitcherDeps {
   settings(): Promise<AgentAccountAutoSwitchSettings>;
@@ -94,6 +122,8 @@ export interface AgentAccountAutoSwitcherDeps {
   /** Whether other turns are keeping this environment's bridge from being replaced. */
   bridgeBusy(environmentId: string, platform: AgentAccountPlatform): Promise<boolean>;
   notify(notice: AutoSwitchNotice): Promise<void> | void;
+  /** Called once per stopped turn, whatever happens to it next. */
+  onLimitStop?(report: UsageLimitStopReport): Promise<void> | void;
   now?(): number;
 }
 
@@ -110,6 +140,7 @@ export interface UsageLimitStopInput {
   turnStartedAt?: string;
   /** Whether a sibling turn this machine's bridge view cannot see is still running on the bridge. */
   siblingTurnRunning?: () => boolean;
+  session?: UsageLimitStopSession;
 }
 
 function label(snapshot: AgentAccountsSnapshot, platform: string, id: string): string {
@@ -124,7 +155,7 @@ export class AgentAccountAutoSwitcher {
   /** Accounts a fresh reading proved used up, keyed `<platform>:<id>`. */
   private readonly confirmed = new Map<
     string,
-    { until: number; reset: number; identity: string }
+    { until: number; reset: number; resetsAt?: number; identity: string }
   >();
   /** The last move, per provider. */
   private readonly recentMoves = new Map<
@@ -136,6 +167,8 @@ export class AgentAccountAutoSwitcher {
     string,
     { since: number; checkedAt: number; bridgeSince?: number; confirmedUntil?: number }
   >();
+  /** Stopped turns already reported, so a turn that waits is reported once. */
+  private readonly reportedStops = new Set<string>();
   /** When each account's sign-in may next be renewed, and the failures in a row. */
   private readonly renewals = new Map<string, { next: number; failures: number }>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -219,12 +252,144 @@ export class AgentAccountAutoSwitcher {
    * below that and the turn stays stopped, as does one with nowhere to go.
    */
   async handleLimitStop(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
-    if (!classifyUsageLimitError(input.error) || input.resends >= MAX_USAGE_LIMIT_RESENDS) {
-      return "stop";
-    }
-    const verdict = await this.serialized(input.platform, () => this.decideStop(input));
+    const limit = classifyUsageLimitError(input.error);
+    if (!limit) return "stop";
+    // Read before deciding, because a move changes what the session reads next.
+    const account = this.reportedStops.has(input.requestId)
+      ? undefined
+      : await this.stoppedOnAccount(input).catch(() => undefined);
+    const verdict =
+      input.resends >= MAX_USAGE_LIMIT_RESENDS
+        ? ("stop" as const)
+        : await this.serialized(input.platform, () => this.decideStop(input));
     if (verdict !== "wait") this.waitingSince.delete(input.requestId);
+    await this.reportStop(input, verdict, account, limit.resetHint);
     return verdict;
+  }
+
+  /**
+   * A turn a limit stopped that nothing here will resend: a coordinator's own,
+   * one on a provider without accounts, or one on a machine not switching. It
+   * still happened, so whoever should hear about it does.
+   */
+  async noteUnresentStop(input: {
+    platform: string;
+    environmentId: string;
+    requestId: string;
+    error: string | undefined;
+    turnStartedAt?: string;
+    session?: UsageLimitStopSession;
+  }): Promise<void> {
+    const limit = classifyUsageLimitError(input.error);
+    if (!limit) return;
+    const account =
+      !this.reportedStops.has(input.requestId) && isAgentAccountPlatform(input.platform)
+        ? await this.stoppedOnAccount({ ...input, platform: input.platform }).catch(() => undefined)
+        : undefined;
+    await this.reportStop(input, "stop", account, limit.resetHint);
+  }
+
+  /** The login a stopped turn ran on, allowing for a move a sibling's stop already made. */
+  private async stoppedOnAccount(
+    input: Pick<UsageLimitStopInput, "platform" | "environmentId" | "turnStartedAt">,
+  ): Promise<AgentAccountSummary | undefined> {
+    const session = await this.deps.sessionAccount(input.environmentId, input.platform);
+    if (session?.source !== "account" || !session.account) return undefined;
+    const move = this.recentMoves.get(input.platform);
+    if (
+      move?.to !== session.account.id ||
+      this.now() - move.at >= RECENT_MOVE_MS ||
+      !(Date.parse(input.turnStartedAt ?? "") < move.at)
+    ) {
+      return session.account;
+    }
+    const snapshot = await this.deps.snapshot();
+    return (
+      snapshot.accounts.find(
+        (entry) => entry.platform === input.platform && entry.id === move.from,
+      ) ?? session.account
+    );
+  }
+
+  private async reportStop(
+    input: {
+      platform: string;
+      environmentId: string;
+      requestId: string;
+      session?: UsageLimitStopSession;
+    },
+    verdict: UsageLimitStopVerdict,
+    account: AgentAccountSummary | undefined,
+    resetHint: string | undefined,
+  ): Promise<void> {
+    if (this.reportedStops.has(input.requestId)) return;
+    if (this.reportedStops.size >= MAX_TRACKED_STOPS) {
+      const oldest = this.reportedStops.values().next().value;
+      if (oldest !== undefined) this.reportedStops.delete(oldest);
+    }
+    this.reportedStops.add(input.requestId);
+    const proof = account ? this.confirmed.get(`${input.platform}:${account.id}`) : undefined;
+    const resetsAt =
+      proof &&
+      proof.identity === JSON.stringify(account?.identity) &&
+      proof.resetsAt !== undefined &&
+      proof.resetsAt > this.now()
+        ? proof.resetsAt
+        : undefined;
+    try {
+      await this.deps.onLimitStop?.({
+        platform: input.platform,
+        environmentId: input.environmentId,
+        requestId: input.requestId,
+        verdict,
+        ...(account ? { account } : {}),
+        ...(resetsAt !== undefined ? { resetsAt } : {}),
+        ...(resetHint ? { resetHint } : {}),
+        ...(input.session ? { session: input.session } : {}),
+      });
+    } catch {
+      this.reportedStops.delete(input.requestId);
+      // What the turn does next never depends on who could be told.
+      log.warn("limit-stop-notice.failed", { platform: input.platform });
+    }
+  }
+
+  /**
+   * Move this machine off a limited account so a coordinator can run, through
+   * the same path as every automatic switch: it never pins, and it gives way to
+   * a pin, to automatic switching being off, and to having nowhere to go.
+   * `isLimited` matches by identity, so every entry of one login counts as limited.
+   */
+  moveOffLimitedAccount(
+    platform: AgentAccountPlatform,
+    isLimited: (account: AgentAccountSummary) => boolean,
+    options: { quietProjectId?: string } = {},
+  ): Promise<LimitedAccountMove> {
+    return this.serialized(platform, async (): Promise<LimitedAccountMove> => {
+      const settings = await this.deps.settings();
+      if (settings[platform]?.enabled !== true) return { moved: false, reason: "auto-switch-off" };
+      const snapshot = await this.deps.snapshot();
+      const mode = snapshot.autoSwitch?.[platform]?.mode;
+      if (mode === "pinned") return { moved: false, reason: "account-pinned" };
+      if (mode !== "automatic") return { moved: false, reason: "auto-switch-off" };
+      const activeId = snapshot.active[platform];
+      const limited = new Set(
+        snapshot.accounts
+          .filter((account) => account.platform === platform && isLimited(account))
+          .map((account) => account.id),
+      );
+      const accounts = await this.readings(platform, { snapshot, activeId }, limited, false);
+      const best = rankAutoSwitchAccounts(accounts, activeId)[0];
+      if (!best) return { moved: false, reason: "no-account-with-headroom" };
+      const to = label(snapshot, platform, best.account.id);
+      if (best.account.id === activeId) return { moved: true, to };
+      const moved = await this.moveTo(platform, snapshot, activeId, {
+        accountId: best.account.id,
+        reason: "limit",
+        ...(options.quietProjectId ? { quietProjectId: options.quietProjectId } : {}),
+      });
+      return moved ? { moved: true, to } : { moved: false, reason: "switch-refused" };
+    });
   }
 
   private async decideStop(input: UsageLimitStopInput): Promise<UsageLimitStopVerdict> {
@@ -341,6 +506,7 @@ export class AgentAccountAutoSwitcher {
     this.confirmed.set(key, {
       until: Math.min(this.now() + CONFIRMATION_REUSE_MS, reading.resetsAt ?? Infinity),
       reset: reading.resetsAt ?? this.now() + USAGE_LIMIT_BRIDGE_WAIT_MS,
+      ...(reading.resetsAt !== undefined ? { resetsAt: reading.resetsAt } : {}),
       identity,
     });
     return "used-up";
@@ -350,7 +516,7 @@ export class AgentAccountAutoSwitcher {
     platform: AgentAccountPlatform,
     snapshot: AgentAccountsSnapshot,
     activeId: string,
-    target: { accountId: string; reason: AutoSwitchReason },
+    target: { accountId: string; reason: AutoSwitchReason; quietProjectId?: string },
   ): Promise<boolean> {
     const moved = await this.deps.switchAccount(platform, target.accountId, {
       expectedActive: activeId,
@@ -370,6 +536,7 @@ export class AgentAccountAutoSwitcher {
         to: label(snapshot, platform, target.accountId),
         reason: target.reason,
         at: new Date(this.now()).toISOString(),
+        ...(target.quietProjectId ? { quietProjectId: target.quietProjectId } : {}),
       });
     } catch {
       // The switch stands. `lastSwitch` still records it for anyone who looks.

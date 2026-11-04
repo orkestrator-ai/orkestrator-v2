@@ -1,6 +1,10 @@
 # Coordinator activity browser fixture startup
 
-Status: open. Observed 2026-11-04.
+Renumbered from 4043 to 4311 to preserve the HTML preview case on main.
+
+- **ID:** 4311
+- **Status:** open
+- **Date observed:** 2026-11-04
 
 In `e2e/CoordinatorActivity.spec.ts` (desktop Chromium), `a coordinator's activity shows on its tab and its project heading` and `the tab's spinner follows its outline, unclipped, on the shared timeline` timed out waiting for the coordinator working outline (5 seconds). The tests were unchanged by this focus repair.
 

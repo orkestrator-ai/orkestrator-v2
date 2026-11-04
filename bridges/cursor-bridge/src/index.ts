@@ -23,6 +23,7 @@ export * from "./http.js";
 export { server, shutdown, start } from "./server.js";
 
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { runLogin } from "./login-cli.js";
 import { start } from "./server.js";
@@ -33,7 +34,7 @@ configureBridgeLogger();
 
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[cursor-bridge]" });
+installFatalRejectionGuard({ label: "[cursor-bridge]", onRejection: logUnhandledRejection });
 
 // `--login` runs the interactive sign-in and exits, instead of serving. The
 // backend uses it so a login needs no environment and no running session: the

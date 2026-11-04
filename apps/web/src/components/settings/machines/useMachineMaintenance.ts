@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   HOST_MAINTENANCE_EVENT,
@@ -133,8 +134,11 @@ export function useMachineMaintenance(
   }, [client, reload, role]);
   useEffect(() => {
     if (!client || role === "self") return;
-    const timer = setInterval(() => void read(false), working ? BUSY_POLL_MS : IDLE_POLL_MS);
-    return () => clearInterval(timer);
+    return startCoordinatedPoll({
+      resource: "machine-maintenance",
+      intervalMs: working ? BUSY_POLL_MS : IDLE_POLL_MS,
+      read: () => read(false),
+    });
   }, [client, read, role, working]);
 
   // A finished task changed what the live readings report.

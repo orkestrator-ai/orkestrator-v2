@@ -1,7 +1,7 @@
 /**
  * One routing path for the app-level keyboard shortcuts (`APP_SHORTCUTS`:
- * ⌘K search, ⌘⇧/ shortcuts dialog, ⌘, settings), so they work wherever focus
- * is in the window.
+ * ⌘K search, ⌘⇧/ shortcuts dialog, ⌘, settings, ⌘T new agent tab, and
+ * ⌘⇧D sidebar group-by), so they work wherever focus is in the window.
  *
  * Every app document (the window's shell and each workspace realm) runs one
  * capture-phase key router. It claims an app shortcut before the focused

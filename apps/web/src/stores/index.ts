@@ -12,8 +12,6 @@ export { useFilesPanelStore } from "./filesPanelStore";
 export type { FilesPanelTab } from "./filesPanelStore";
 export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
 export { useTerminalSessionStore, createSessionKey } from "./terminalSessionStore";
-export { useTerminalPortalStore } from "./terminalPortalStore";
-export type { PersistentTerminalData, CreateTerminalOptions } from "./terminalPortalStore";
 export { formatErrorContext, useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorContext, ErrorDetails } from "./errorDialogStore";
 export { useFileDirtyStore } from "./fileDirtyStore";

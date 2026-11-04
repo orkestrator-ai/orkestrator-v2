@@ -347,3 +347,31 @@ describe("transcript artifact tools", () => {
     expect(part!.toolError).toContain(RECORDED_ARTIFACT_ERROR_CODE);
   });
 });
+
+describe("a sub-agent's model", () => {
+  const assistant = (parent: string | null, model: string) =>
+    ({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { id: `${parent}-${model}`, model, content: [] },
+    }) as never;
+  const launch = {
+    type: "assistant",
+    parent_tool_use_id: null,
+    message: {
+      id: "root",
+      model: "claude-root",
+      content: [{ type: "tool_use", id: "task-1", name: "Agent", input: {} }],
+    },
+  } as never;
+
+  test("comes from its own responses, never the parent's or a synthetic one", () => {
+    const tracker = new ToolTracker();
+    parseMessageContent(launch, tracker);
+    expect(tracker.getTool("task-1")?.subagentModelId).toBeUndefined();
+    parseMessageContent(assistant("task-1", "<synthetic>"), tracker);
+    expect(tracker.getTool("task-1")?.subagentModelId).toBeUndefined();
+    parseMessageContent(assistant("task-1", "claude-haiku"), tracker);
+    expect(tracker.getTool("task-1")?.subagentModelId).toBe("claude-haiku");
+  });
+});

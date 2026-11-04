@@ -1,6 +1,7 @@
 /**
  * The app-level keyboard shortcuts (⌘K search, ⌘⇧/ shortcuts dialog, ⌘,
- * settings) and the shortcuts dialog's desktop menu event, shared by the renderer (which owns
+ * settings, ⌘T new agent tab, ⌘⇧D sidebar group-by) and the shortcuts dialog's
+ * desktop menu event, shared by the renderer (which owns
  * the UI they open), Electron main (which owns the View menu item and the
  * native views that keys can land in instead) and the design frame runtime.
  */
@@ -48,7 +49,12 @@ export interface ShortcutChord {
 }
 
 /** The app shortcuts: see `APP_SHORTCUTS`. */
-export type AppShortcutId = "show-shortcuts" | "search-projects" | "open-settings";
+export type AppShortcutId =
+  | "show-shortcuts"
+  | "search-projects"
+  | "open-settings"
+  | "new-agent-tab"
+  | "rotate-sidebar-grouping";
 
 /** The platform a chord was typed on: macOS, or anything else. */
 export type ShortcutPlatform = "mac" | "other";
@@ -81,9 +87,11 @@ export interface AppShortcut {
    * Which document opens the UI. `window`: the window's shell renderer,
    * which owns the sidebar; a realm forwards the shortcut to it. `document`:
    * the app document that has focus, realm included (each one renders its
-   * own copy of the UI).
+   * own copy of the UI). `workspace`: the app document holding the focused
+   * workspace, realm included, with no dialog involved; a key typed in a native
+   * view is handed to the renderer that owns that view.
    */
-  owner: "window" | "document";
+  owner: "window" | "document" | "workspace";
   /**
    * Whether the shortcut is taken from a page shown in a browser preview.
    * The previewed page is the user's own product; ⌘K is the web's usual
@@ -125,6 +133,26 @@ export const APP_SHORTCUTS: readonly AppShortcut[] = [
     shift: false,
     owner: "window",
     fromPreviews: true,
+    ctrlEditsText: false,
+  },
+  {
+    // Ctrl+T is transpose in a shell and a macOS text field; ⌘T is always ours.
+    id: "new-agent-tab",
+    key: "t",
+    shift: false,
+    owner: "workspace",
+    fromPreviews: true,
+    ctrlEditsText: true,
+  },
+  {
+    // ⌘⇧G is the run-script dialog, and Monaco binds ⌘⇧L; ⌘⇧D is free in the
+    // app, Monaco and the desktop menus. It stays with a previewed page, and
+    // taking it there would also move keyboard focus out of the page.
+    id: "rotate-sidebar-grouping",
+    key: "d",
+    shift: true,
+    owner: "window",
+    fromPreviews: false,
     ctrlEditsText: false,
   },
 ];

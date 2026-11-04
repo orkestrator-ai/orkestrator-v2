@@ -42,9 +42,13 @@ export const IMAGE_CAPABILITIES = {
    * mount the workload user cannot read, as under rootless Docker, through
    * the root entrypoint (`STAGED_INPUT_RELAY_VERSION`). Version 4 copies the
    * shared `~/.agents/skills` from `/agents-skills`
-   * (`SHARED_SKILLS_STAGED_INPUTS_VERSION`).
+   * (`SHARED_SKILLS_STAGED_INPUTS_VERSION`). Version 5 leaves an input alone
+   * at boot when copying it would change nothing, and removes what an earlier
+   * boot imported once it leaves the mounts. That is all inside the image's
+   * entrypoint, so the backend stages the same for every version and an older
+   * image simply keeps its full copy.
    */
-  "staged-inputs": 4,
+  "staged-inputs": 5,
   /**
    * Per-environment network with explicit host service rules and IPv6 policy
    * (step 09, version 2); allowed traffic as address, protocol and port tuples
@@ -91,6 +95,12 @@ export const IMAGE_CAPABILITIES = {
    * An older image keeps the token-bearing `insteadOf` rewrite.
    */
   "github-git-credential": 1,
+  /**
+   * `workspace-setup.sh` clones from the project's read-only mirror named by
+   * `ORKESTRATOR_GIT_MIRROR`, and falls back to its ordinary clone. An older
+   * image gets neither the mount nor the variable.
+   */
+  "git-mirror": 1,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

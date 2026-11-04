@@ -66,6 +66,10 @@ Developer tooling:
   helper; root terminals have the CLI but do not load the interactive hook.
 - Playwright CLI plus its pinned Chromium build (see below).
 - ripgrep, fzf, jq, tmux, nano, vim, less, curl, wget, and `en_US.UTF-8`.
+- `workspace-setup.sh` clones from the project's read-only Git mirror when the
+  backend names one in `ORKESTRATOR_GIT_MIRROR` (`git-mirror=1`). It must never
+  stop setup: any problem falls through to the ordinary clone
+  ([container-lifecycle.md](../docs/architecture/container-lifecycle.md#project-git-mirror)).
 - inotify-tools, for `orkestrator-worktree-signal`: the backend starts it per
   tracking lineage to ring when `/workspace` changes
   (`container-worktree-signal=1`, see
@@ -77,7 +81,12 @@ Users and isolation:
   shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
   `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
   Git aliases plus native Zsh completion without Oh My Zsh.
-- Staged inputs (`staged-inputs=4`, which adds `/agents-skills`): the backend's staged mounts are
+- Staged inputs (`staged-inputs=5`; 4 added `/agents-skills`, and 5 skips an input when
+  copying it would change nothing, through `import_agent_input`): a new input goes through
+  that wrapper unless it is a login, which uses `forget_unchanged_agent_login` and
+  `remember_agent_login` around its copy
+  ([container-lifecycle.md](../docs/architecture/container-lifecycle.md#input-stamps-staged-inputs5)).
+  The backend's staged mounts are
   owner-only and belong to its user, so `node` cannot read them under
   rootless Docker (they are container root's) or on a rootful daemon whose
   host user is not uid 1000 (GitHub's runners). The root entrypoint relays

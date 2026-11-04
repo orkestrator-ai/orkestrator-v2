@@ -4369,6 +4369,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         error: statusDetail,
         resends: request.usageLimitResends ?? 0,
         turnStartedAt: request.createdAt,
+        session: { label: "Multi Review session" },
       });
       await this.assertFence(workflow.id, token);
       if (verdict === "wait") return;

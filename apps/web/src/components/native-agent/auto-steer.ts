@@ -1,7 +1,4 @@
-import {
-  nativeAgentSteerRejectionMessage,
-  type NativeAgentSessionActionOutcome,
-} from "@orkestrator/protocol/native-agent";
+import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 
 /**
  * Auto-steer (Settings → General) sends a message typed while a turn is running
@@ -36,6 +33,82 @@ export function shouldAutoSteer(input: {
   );
 }
 
+/**
+ * Current queue blockers and historical steer refusals, shown on the row.
+ * Recovery remains visible even after a turn ends; otherwise an idle or
+ * steerable row without a refusal needs no note.
+ *
+ * A refusal is historical context, not a claim that another steer cannot run.
+ * Current recovery, provider and item requirements take priority over that history.
+ */
+export function queuedSteerNote(input: {
+  /** A turn is running: the queue's rows would otherwise be steerable. */
+  running: boolean;
+  /** The provider reports `actions.steer` for this session. */
+  providerSteers: boolean;
+  /** A dispatch or steer is parked awaiting recovery. */
+  parked: boolean;
+  /** The row passes the per-item checks (text only, not a command). */
+  steerable: boolean;
+  attachmentCount: number;
+  command: boolean;
+  /** What happened when this row was last steered, if it was refused. */
+  refusal?: string;
+  label: string;
+}): string | undefined {
+  if (input.parked) {
+    return "Waiting for the earlier message to be resolved. If prompted, use the recovery controls to retry or discard it.";
+  }
+  if (!input.running) return undefined;
+  if (!input.providerSteers) {
+    return `${input.label} cannot be steered here, so this is sent when the turn ends.`;
+  }
+  if (input.steerable) return input.refusal;
+  if (input.attachmentCount > 0) {
+    return "Steering carries text only, so this is sent with its attachments when the turn ends.";
+  }
+  if (input.command) return "Commands run as their own turn, so this runs when the turn ends.";
+  return undefined;
+}
+
+/**
+ * The row note for a steer that left the message queued, or `undefined` when
+ * the message was delivered or is owned by the recovery card. Pairs with
+ * {@link autoSteerNotice}: the toast reports the moment, the row keeps the
+ * reason for as long as the message waits.
+ */
+export function steerRefusalNote(
+  outcome: NativeAgentSessionActionOutcome | null,
+  label: string,
+): string | undefined {
+  if (outcome === null) return undefined;
+  switch (outcome.outcome) {
+    case "applied":
+    case "unknown":
+      return undefined;
+    case "rejected":
+      return `${queuedSteerRejectionReason(outcome.reason)} This message remains queued.`;
+    case "mismatch":
+      return "The last steer attempt missed the active turn. This message remains queued.";
+    default:
+      return `${label} finished the turn before the last steer attempt. This message remains queued.`;
+  }
+}
+
+/** Queue guidance must never reuse direct-send instructions to resend. */
+function queuedSteerRejectionReason(
+  reason: Extract<NativeAgentSessionActionOutcome, { outcome: "rejected" }>["reason"],
+): string {
+  switch (reason) {
+    case "steer-capacity-exceeded":
+      return "The last steer attempt was refused because steering was full at the time.";
+    case "steer-history-unavailable":
+      return "The last steer attempt was refused because steering history is unavailable.";
+    case "steer-not-recorded":
+      return "The last steer attempt could not be recorded.";
+  }
+}
+
 export type AutoSteerNotice = { tone: "success" | "info"; message: string } | null;
 
 /**
@@ -62,7 +135,7 @@ export function autoSteerNotice(
     case "rejected":
       return {
         tone: "info",
-        message: `${nativeAgentSteerRejectionMessage(outcome)} Your message was queued instead.`,
+        message: `${queuedSteerRejectionReason(outcome.reason)} Your message remains queued.`,
       };
     case "mismatch":
       return {
@@ -76,4 +149,18 @@ export function autoSteerNotice(
         message: `${label} finished the turn before it could be steered, so your message is queued.`,
       };
   }
+}
+
+/** Keep the most recent 32 refusals; a confirmed transfer clears its old note. */
+export function updateSteerRefusals(
+  current: ReadonlyMap<string, string>,
+  messageId: string,
+  note: string | undefined,
+): ReadonlyMap<string, string> {
+  if (!note && !current.has(messageId)) return current;
+  const next = new Map(current);
+  next.delete(messageId);
+  if (note) next.set(messageId, note);
+  while (next.size > 32) next.delete(next.keys().next().value!);
+  return next;
 }

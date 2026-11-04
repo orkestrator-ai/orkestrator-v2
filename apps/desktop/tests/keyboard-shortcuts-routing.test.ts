@@ -80,6 +80,25 @@ describe("native shortcut routing", () => {
     },
   );
 
+  test.each(["darwin", "linux"] as const)(
+    "workspace new tab from native child reaches its realm on %s",
+    (platform) => {
+      const { register, realm, shell } = harness(platform);
+      const event = { preventDefault: mock(() => {}) };
+      register(43).emit("before-input-event", event, {
+        ...chord,
+        key: "t",
+        code: "KeyT",
+        shift: false,
+        meta: platform === "darwin",
+        control: platform !== "darwin",
+      });
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(realm.send).toHaveBeenCalledWith("orkestrator:event", "app-shortcut", "new-agent-tab");
+      expect(shell.send).not.toHaveBeenCalled();
+    },
+  );
+
   test("ignores stale ownership and clears a destroyed window's remembered child", () => {
     const { routing, register, owners, shell, realm } = harness();
     register(42).emit("focus");

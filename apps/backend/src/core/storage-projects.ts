@@ -122,6 +122,7 @@ import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { FrozenStoreSnapshot } from "./storage-frozen-snapshot.js";
 import type { StorageRepositories } from "./storage-repositories.js";
+import type { LegacyJsonItemCleanup } from "./storage-stores.js";
 
 /**
  * Writes a folder assignment onto a project record.
@@ -316,6 +317,7 @@ export type StorageLayerTypes = [
 ];
 
 const MAX_PROJECT_REMOVAL_FENCES = 1_000;
+const ENVIRONMENTS_STORE = "environments";
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
 
 /**
@@ -587,6 +589,22 @@ export class ProjectsRepository {
     return projects;
   }
 
+  /** Every project id, or a throw: a sweep must not read a lost store as "no projects". */
+  async loadProjectIdsForCleanup(): Promise<Set<string>> {
+    const snapshot = this.context.loadStoreStrict<unknown>(this.files.projectsFile());
+    if (!snapshot || !Array.isArray(snapshot.value)) {
+      throw new Error("Project store is missing or invalid; cleanup refused");
+    }
+    const ids = new Set<string>();
+    for (const project of snapshot.value) {
+      if (!isRecord(project) || !isNonBlankString(project.id)) {
+        throw new Error("Project owner is invalid; cleanup refused");
+      }
+      ids.add(project.id);
+    }
+    return ids;
+  }
+
   /** Destructive reconciliation needs a complete owner set, never a fallback. */
   async loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
     const snapshot = this.context.loadStoreStrict<unknown>(this.files.environmentsFile());
@@ -612,35 +630,60 @@ export class ProjectsRepository {
     return environments.sort((a, b) => a.order - b.order);
   }
 
-  async saveEnvironments(
-    environments: Environment[],
-    options: { backup?: boolean } = {},
-  ): Promise<void> {
-    // Launch attachments can contain full base64 image payloads. Treat the
-    // complete environment store and every rotated backup as sensitive.
-    await this.context.saveSensitiveJson(this.files.environmentsFile(), environments, options);
+  /**
+   * Commits one environment as its own row, for a writer holding the environment
+   * lease that read it under that lease. Launch attachments can contain full
+   * base64 image payloads, so `archiveCleanup` names what the write removes from
+   * the store's retired JSON copies. A row gone since the read stays gone.
+   */
+  saveEnvironment(environment: Environment, archiveCleanup?: LegacyJsonItemCleanup): void {
+    this.context.updateStoreRow(
+      this.files.environmentsFile(),
+      environment.id,
+      (current) => {
+        if (current === undefined) throw new Error(`Environment not found: ${environment.id}`);
+        return { result: undefined, value: environment };
+      },
+      { archiveCleanup },
+    );
+  }
+
+  /** {@link saveEnvironment} for several environments, committed together. */
+  private saveEnvironments(environments: readonly Environment[]): void {
+    if (environments.length === 0) return;
+    this.context.database.transaction(() => {
+      for (const environment of environments) this.saveEnvironment(environment);
+    });
+  }
+
+  /** The archive cleanup for a superseded attachment or a deleted environment. */
+  private environmentArchiveCleanup(
+    environmentId: string,
+    removeEnvironment: boolean,
+  ): LegacyJsonItemCleanup {
+    return removeEnvironment
+      ? { store: ENVIRONMENTS_STORE, kind: "delete-item", key: environmentId }
+      : {
+          store: ENVIRONMENTS_STORE,
+          kind: "drop-item-field",
+          key: environmentId,
+          field: "initialPromptAttachments",
+        };
   }
 
   /**
-   * Makes superseded launch attachments (or a deleted environment record)
-   * unrecoverable after the environment write that removed them committed.
-   * Runs while the environment mutation lock is held.
+   * Finishes making superseded launch attachments (or a deleted environment
+   * record) unrecoverable when the row write that removed them already
+   * committed, so a retry has nothing left to write: the archive cleanup commits
+   * alone, then the WAL frames that still hold the old row are discarded.
    */
-  private async scrubEnvironmentBackups(
-    environmentId: string,
-    removeEnvironment: boolean,
-  ): Promise<void> {
-    this.context.scrubLegacyArchive("environments", (value) => {
-      if (!Array.isArray(value)) throw new Error("Unattributable environment archive");
-      return value
-        .filter((entry) => !removeEnvironment || !isRecord(entry) || entry.id !== environmentId)
-        .map((entry) => {
-          if (!isRecord(entry) || entry.id !== environmentId) return entry;
-          const next = { ...entry };
-          delete next.initialPromptAttachments;
-          return next;
-        });
-    });
+  private finishEnvironmentScrub(environmentId: string, removeEnvironment: boolean): void {
+    this.context.updateStoreRow(
+      this.files.environmentsFile(),
+      environmentId,
+      () => ({ result: undefined }),
+      { archiveCleanup: this.environmentArchiveCleanup(environmentId, removeEnvironment) },
+    );
     this.context.scrubDeletedDatabaseContent();
   }
 
@@ -656,6 +699,22 @@ export class ProjectsRepository {
     const environment = stored as unknown as Environment;
     normalizeStoredEnvironment(environment);
     return environment;
+  }
+
+  private async requireEnvironment(environmentId: string): Promise<Environment> {
+    const environment = await this.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return environment;
+  }
+
+  /** One project's environments, sorted, read without decoding the other projects'. */
+  private loadProjectEnvironments(projectId: string): Environment[] {
+    const environments = this.context.loadStoreRowsByOwner<Environment>(
+      this.files.environmentsFile(),
+      projectId,
+    );
+    for (const environment of environments) normalizeStoredEnvironment(environment);
+    return environments.sort((a, b) => a.order - b.order);
   }
 
   private projectRemovalFencesFile(): string {
@@ -687,10 +746,7 @@ export class ProjectsRepository {
    */
   async fenceEmptyProjectForRemoval(projectId: string): Promise<void> {
     await this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const count = environments.filter(
-        (environment) => environment.projectId === projectId,
-      ).length;
+      const count = this.loadProjectEnvironments(projectId).length;
       if (count > 0) throw new ProjectHasEnvironmentsError(projectId, count);
       const fences = await this.loadProjectRemovalFences();
       if (fences[projectId]) return;
@@ -714,12 +770,10 @@ export class ProjectsRepository {
 
   async addEnvironment(environment: Environment): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
+      const siblings = this.loadProjectEnvironments(environment.projectId);
       if (environment.controlRequestId) {
-        const existing = environments.find(
-          (candidate) =>
-            candidate.projectId === environment.projectId &&
-            candidate.controlRequestId === environment.controlRequestId,
+        const existing = siblings.find(
+          (candidate) => candidate.controlRequestId === environment.controlRequestId,
         );
         if (existing) {
           // Legacy records carry no fingerprint and cannot prove the intent
@@ -737,15 +791,11 @@ export class ProjectsRepository {
       if ((await this.loadProjectRemovalFences())[environment.projectId]) {
         throw new Error(`Project is being removed: ${environment.projectId}`);
       }
-      environment.order =
-        Math.max(
-          -1,
-          ...environments
-            .filter((item) => item.projectId === environment.projectId)
-            .map((item) => item.order),
-        ) + 1;
-      environments.push(environment);
-      await this.saveEnvironments(environments);
+      environment.order = Math.max(-1, ...siblings.map((item) => item.order)) + 1;
+      this.context.updateStoreRow(this.files.environmentsFile(), environment.id, (current) => {
+        if (current !== undefined) throw new Error(`Environment exists: ${environment.id}`);
+        return { result: undefined, value: environment };
+      });
       this.context.changes.announce("environment", environment.id, environment.projectId);
       return environment;
     });
@@ -798,18 +848,16 @@ export class ProjectsRepository {
 
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const removed = environments.find((environment) => environment.id === environmentId);
-      const filtered = environments.filter((environment) => environment.id !== environmentId);
-      if (filtered.length === environments.length) {
+      const removed = await this.getEnvironment(environmentId);
+      if (!removed) {
         // A previous attempt may have committed the primary removal and then
         // failed while sanitizing retained backups. Keep deletion idempotent so
         // retrying can finish the privacy cleanup before preserving the public
         // not-found contract.
-        await this.scrubEnvironmentBackups(environmentId, true);
+        this.finishEnvironmentScrub(environmentId, true);
         throw new Error(`Environment not found: ${environmentId}`);
       }
-      if (removed?.prUrl && (removed.prState === "merged" || removed.prState === "closed")) {
+      if (removed.prUrl && (removed.prState === "merged" || removed.prState === "closed")) {
         const file = this.files.environmentFinalPrFile();
         const rows = await this.context.loadJson<Array<Record<string, unknown>>>(file, () => []);
         const final = {
@@ -825,13 +873,20 @@ export class ProjectsRepository {
           final,
         ]);
       }
-      if (removed) await this.labelRemovedEnvironmentUsage(removed);
-      await this.saveEnvironments(filtered);
-      await this.scrubEnvironmentBackups(environmentId, true);
+      await this.labelRemovedEnvironmentUsage(removed);
+      // The archive cleanup commits with the removal, so a crash before it ran
+      // replays it on the next open.
+      this.context.updateStoreRow(
+        this.files.environmentsFile(),
+        environmentId,
+        () => ({ result: undefined, delete: true }),
+        { archiveCleanup: this.environmentArchiveCleanup(environmentId, true) },
+      );
+      this.context.scrubDeletedDatabaseContent();
       this.context.changes.announce(
         "environment",
         environmentId,
-        removed?.projectId,
+        removed.projectId,
         undefined,
         true,
       );
@@ -844,9 +899,7 @@ export class ProjectsRepository {
     shouldUpdate?: (environment: Readonly<Environment>) => boolean | Promise<boolean>,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       // Fence observations against mutations (for example a PR becoming merged)
       // under the same cross-process lock as the write. A caller-side read alone
       // leaves a gap while this mutation waits for admission.
@@ -1256,23 +1309,27 @@ export class ProjectsRepository {
           : undefined;
       }
 
-      // A merge that changed nothing persists nothing. Rewriting the whole
-      // store — and announcing a change that makes every client refetch every
-      // project — for a field-equal record is pure churn.
+      // A merge that changed nothing persists nothing. Writing the row — and
+      // announcing a change that makes every client refetch every project — for
+      // a field-equal record is pure churn.
       if (JSON.stringify(environment) === beforeJson) {
         // Attachment cleanup is a retryable two-step operation: the primary
         // may already be clean while a retained backup still contains the
         // payload. Explicit attachment updates must therefore finish scrubbing
         // even when the primary record no longer changes.
         if ("initialPromptAttachments" in updates) {
-          await this.scrubEnvironmentBackups(environmentId, false);
+          this.finishEnvironmentScrub(environmentId, false);
         }
         return environment;
       }
 
-      await this.saveEnvironments(environments);
       if ("initialPromptAttachments" in updates) {
-        await this.scrubEnvironmentBackups(environmentId, false);
+        // The archive cleanup commits with the row, so a crash before it ran
+        // replays it on the next open.
+        this.saveEnvironment(environment, this.environmentArchiveCleanup(environmentId, false));
+        this.context.scrubDeletedDatabaseContent();
+      } else {
+        this.saveEnvironment(environment);
       }
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -1298,14 +1355,12 @@ export class ProjectsRepository {
       throw new Error("Tab teardown intent is malformed");
     }
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       environment.tabTeardownIntents = {
         ...environment.tabTeardownIntents,
         [intent.tabId]: intent,
       };
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1320,14 +1375,13 @@ export class ProjectsRepository {
   ): Promise<void> {
     if (!isNonBlankString(resumableSessionId)) throw new Error("Resume identity is blank");
     await this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
+      const environment = await this.getEnvironment(environmentId);
       const intent = environment?.tabTeardownIntents?.[tabId];
-      if (!intent || intent.createdAt !== expectedCreatedAt)
+      if (!environment || !intent || intent.createdAt !== expectedCreatedAt)
         throw new Error("Tab teardown changed before identity capture");
       if (intent.resumableSessionId) return;
       intent.resumableSessionId = resumableSessionId;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
     });
   }
 
@@ -1338,15 +1392,13 @@ export class ProjectsRepository {
     expectedCreatedAt: string,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       const current = environment.tabTeardownIntents?.[tabId];
       if (!current || current.createdAt !== expectedCreatedAt) return environment;
       const intents = { ...environment.tabTeardownIntents };
       delete intents[tabId];
       environment.tabTeardownIntents = Object.keys(intents).length > 0 ? intents : undefined;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1368,9 +1420,7 @@ export class ProjectsRepository {
     },
   ): Promise<{ environment: Environment; armedAt: string | null; previousArmedAt?: string }> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       if (
         !environment.prUrl ||
         environment.prState !== "open" ||
@@ -1403,7 +1453,7 @@ export class ProjectsRepository {
       environment.prRecheckAfterAgentCompletionArmedAt = new Date(
         Number.isFinite(previous) && previous >= now ? previous + 1 : now,
       ).toISOString();
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return {
         environment,
@@ -1420,13 +1470,11 @@ export class ProjectsRepository {
     previousArmedAt?: string,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       if (environment.prRecheckAfterAgentCompletionArmedAt !== armedAt) return environment;
 
       environment.prRecheckAfterAgentCompletionArmedAt = previousArmedAt;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1443,9 +1491,7 @@ export class ProjectsRepository {
     startedAt: string | undefined,
   ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       const startupSession = environment.startupAgentSession;
       if (!startupSession) return environment;
       if (
@@ -1458,7 +1504,7 @@ export class ProjectsRepository {
         return environment;
       }
       environment.startupAgentSession = undefined;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1472,9 +1518,7 @@ export class ProjectsRepository {
     const normalizedActivityAt = new Date(activityTime).toISOString();
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
 
       const previousTime = environment.lastActivityAt
         ? Date.parse(environment.lastActivityAt)
@@ -1484,9 +1528,7 @@ export class ProjectsRepository {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
-      // Activity timestamps churn constantly and are reconstructed from live
-      // observation anyway; rotating five backups for each refresh is waste.
-      await this.saveEnvironments(environments, { backup: false });
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1534,9 +1576,7 @@ export class ProjectsRepository {
     }
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       const structureBefore = agentActivityStructureFingerprint(environment);
       const previousAggregate = environment.agentActivityState ?? "idle";
 
@@ -1656,9 +1696,8 @@ export class ProjectsRepository {
         if (nextAggregate === "waiting") environment.unreadReason = "agent_waiting";
         else if (!unreadFailure) environment.unreadReason = "agent_finished";
       }
-      // The lease itself must persist (its expiry is enforced from disk), but
-      // the backup rotation is skipped: only volatile activity fields changed.
-      await this.saveEnvironments(environments, { backup: failedEnd || completionTransition });
+      // The lease itself must persist: its expiry is enforced from disk.
+      this.saveEnvironment(environment);
       // A pure lease renewal — same aggregate, same per-source and observer
       // states, only timestamps refreshed — is not announced. Announcing it
       // made every connected client refetch every project on each renewal
@@ -1690,9 +1729,8 @@ export class ProjectsRepository {
     if (!hasObserverLeases) return [];
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const changed: string[] = [];
-      for (const environment of environments) {
+      const changed: Environment[] = [];
+      for (const environment of await this.loadEnvironments()) {
         const storedObservers = environment.frontendAgentActivityObservers;
         if (!isRecord(storedObservers) || Object.keys(storedObservers).length === 0) {
           continue;
@@ -1709,18 +1747,13 @@ export class ProjectsRepository {
           environment.agentActivityUpdatedAt,
           referenceTime,
         );
-        changed.push(environment.id);
+        changed.push(environment);
       }
-      if (changed.length === 0) return changed;
-      await this.saveEnvironments(environments, { backup: false });
-      for (const environmentId of changed) {
-        this.context.changes.announce(
-          "environment",
-          environmentId,
-          environments.find((environment) => environment.id === environmentId)?.projectId,
-        );
+      this.saveEnvironments(changed);
+      for (const environment of changed) {
+        this.context.changes.announce("environment", environment.id, environment.projectId);
       }
-      return changed;
+      return changed.map((environment) => environment.id);
     });
   }
 
@@ -1730,10 +1763,9 @@ export class ProjectsRepository {
    */
   async clearFrontendAgentActivity(): Promise<string[]> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
       const referenceTime = Date.now();
-      const changed: string[] = [];
-      for (const environment of environments) {
+      const changed: Environment[] = [];
+      for (const environment of await this.loadEnvironments()) {
         const hasLegacyFrontend = Boolean(environment.agentActivitySources?.frontend);
         const hasObservers =
           isRecord(environment.frontendAgentActivityObservers) &&
@@ -1748,18 +1780,13 @@ export class ProjectsRepository {
           environment.agentActivityUpdatedAt,
           referenceTime,
         );
-        changed.push(environment.id);
+        changed.push(environment);
       }
-      if (changed.length === 0) return changed;
-      await this.saveEnvironments(environments, { backup: false });
-      for (const environmentId of changed) {
-        this.context.changes.announce(
-          "environment",
-          environmentId,
-          environments.find((environment) => environment.id === environmentId)?.projectId,
-        );
+      this.saveEnvironments(changed);
+      for (const environment of changed) {
+        this.context.changes.announce("environment", environment.id, environment.projectId);
       }
-      return changed;
+      return changed.map((environment) => environment.id);
     });
   }
 
@@ -1774,9 +1801,7 @@ export class ProjectsRepository {
     const normalizedActivityAt = new Date(activityTime).toISOString();
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
 
       const previousTime = environment.lastActivityAt
         ? Date.parse(environment.lastActivityAt)
@@ -1789,7 +1814,7 @@ export class ProjectsRepository {
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
       environment.unreadReason = "terminal_finished";
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);
       return environment;
@@ -1823,9 +1848,7 @@ export class ProjectsRepository {
     const occurredTime = Date.parse(occurredAt);
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
 
       // Keep request dedupe and the badge in the same durable write.
       if (completionKey) {
@@ -1851,7 +1874,7 @@ export class ProjectsRepository {
       const unreadFailure = unreadBefore && environment.unreadReason === "agent_failed";
       environment.hasUnreadWork = true;
       if (reason !== "agent_finished" || !unreadFailure) environment.unreadReason = reason;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);
       return environment;
@@ -1887,9 +1910,7 @@ export class ProjectsRepository {
     const occurredTime = Date.parse(occurredAt);
 
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
       const known = new Set(
         (Array.isArray(environment.agentAttentionKeys) ? environment.agentAttentionKeys : [])
           .filter(
@@ -1911,7 +1932,7 @@ export class ProjectsRepository {
       const unreadBefore = environment.hasUnreadWork === true;
       environment.hasUnreadWork = true;
       environment.unreadReason = reason;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       if (!unreadBefore) this.notifyAttention(environment);
       return { environment, recorded: true };
@@ -1948,9 +1969,7 @@ export class ProjectsRepository {
       throw new Error("expectedLastActivityAt must be a string or null");
     }
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      const environment = environments.find((candidate) => candidate.id === environmentId);
-      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const environment = await this.requireEnvironment(environmentId);
 
       if (
         !unread &&
@@ -1964,7 +1983,7 @@ export class ProjectsRepository {
       environment.hasUnreadWork = unread;
       if (unread) environment.unreadReason = "marked_unread";
       else delete environment.unreadReason;
-      await this.saveEnvironments(environments);
+      this.saveEnvironment(environment);
       this.context.changes.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -1972,25 +1991,20 @@ export class ProjectsRepository {
 
   async reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
+      const environments = this.loadProjectEnvironments(projectId);
       const provided = new Set(environmentIds);
       for (const [index, id] of environmentIds.entries()) {
-        const environment = environments.find(
-          (candidate) => candidate.id === id && candidate.projectId === projectId,
-        );
+        const environment = environments.find((candidate) => candidate.id === id);
         if (environment) environment.order = index;
       }
 
       let order = environmentIds.length;
       for (const environment of environments) {
-        if (environment.projectId === projectId && !provided.has(environment.id))
-          environment.order = order++;
+        if (!provided.has(environment.id)) environment.order = order++;
       }
 
-      await this.saveEnvironments(environments);
-      const reordered = environments
-        .filter((environment) => environment.projectId === projectId)
-        .sort((a, b) => a.order - b.order);
+      this.saveEnvironments(environments);
+      const reordered = environments.sort((a, b) => a.order - b.order);
       for (const environment of reordered) {
         this.context.changes.announce("environment", environment.id, environment.projectId);
       }
@@ -2003,15 +2017,11 @@ export class ProjectsRepository {
     status: EnvironmentStatus,
   ): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
-      const environments = await this.loadEnvironments();
-      let changed = false;
-      for (const environment of environments) {
-        if (environment.containerId === containerId) {
-          environment.status = status;
-          changed = true;
-        }
-      }
-      if (changed) await this.saveEnvironments(environments);
+      const matching = (await this.loadEnvironments()).filter(
+        (environment) => environment.containerId === containerId,
+      );
+      for (const environment of matching) environment.status = status;
+      this.saveEnvironments(matching);
     });
   }
 }

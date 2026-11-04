@@ -220,12 +220,14 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
     id: "tabs",
     title: "Tabs and panels",
     shortcuts: [
-      {
-        id: "new-agent-tab",
+      appShortcutEntry("rotate-sidebar-grouping", {
+        description: "Rotate the sidebar's group-by mode",
+        keywords: ["compact", "machine", "project", "repository", "cycle", "view"],
+      }),
+      appShortcutEntry("new-agent-tab", {
         description: "New agent tab",
-        mac: ["⌘", "T"],
         keywords: ["chat", "claude", "codex"],
-      },
+      }),
       {
         id: "new-terminal-tab",
         description: "New terminal tab",

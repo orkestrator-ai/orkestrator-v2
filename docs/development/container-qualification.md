@@ -46,6 +46,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Live start recovery | same command, `./tests/container-start-docker.test.ts` | Fixed-port collision and two detached automatic-port failures, then network and HTTP publication recovery. Add `RUN_ROOTLESS_MOUNT_TESTS=1` on rootless to exercise read-only file mounts; use `TMPDIR` on `nosuid,nodev` for that topology. |
 | Claude config allowlist (M8) | same command, `./tests/claude-config-filter-docker.test.ts`; also run by `mise run test:agent:docker:isolated` | A fake host `~/.claude.json` staged from a throwaway HOME reaches `node` only as its allowlist, and interactive Claude starts in `/workspace` on it with no network and fake credentials |
 | All staged mount consumers | same command, `./tests/staged-input-relay-docker.test.ts` | Every declared mount through the full root bootstrap, node entrypoint and workspace setup; rootless raw-mount denial, relayed imports and unchanged owner-only host files. |
+| Project Git mirror | same command, `./tests/project-git-mirror-docker.test.ts` | Clone from the mirror, read-only mount, a foreign owner, fallback, a start with the source gone |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
 | Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
@@ -1113,10 +1114,10 @@ disposable profile with container fixtures and never starts an agent
 session.
 
 ```bash
-# In its own long-lived terminal; --headless-electron keeps the profile's
+# In its own long-lived terminal; --headless keeps the profile's
 # window out of the desktop session on Linux.
 mise run dev:test --profile ui-load --fixture-environments container \
-  --no-agent-credentials --agent-platforms claude --headless-electron
+  --no-agent-credentials --agent-platforms claude --headless
 # Once `mise run dev:status --profile ui-load --json` reports ready:
 mise exec -- bun e2e/perf/multi-environment-ui-perf.ts --profile ui-load \
   [--environments 3] [--workers 2] [--memory-mib 0] [--phases idle,busy,idle] \

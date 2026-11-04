@@ -348,6 +348,24 @@ A command node attached to another command node operates in leaf mode:
   that coordinator's request, or a new message to
   `"command-node-coordinator"`, both through the outbox. Every other node
   tool still refuses.
+- Notices for a repository's coordinator (status, pull request, automatic switch,
+  usage-limit stop) go to the command node's main coordinator for that repository, not
+  to its own, through the same outbox. It keeps the ones for repositories the command
+  node lacks, those a command node too old to take them would miss, and those whose
+  command node has been gone for an hour. Fallback claims the notice durably
+  before delivery, excluding concurrent collection. Once collected, the command
+  node owns delivery until it acknowledges or explicitly declines: a lost ack
+  is ambiguous, so timeout or detach cannot safely send a second copy locally.
+  Collected notices remain pending through silence, including outages longer than
+  an hour, while that controller stays attached. A capability downgrade explicitly
+  hands collected, deferred notices back to the leaf. Once the controller
+  detaches, ambiguous collected notices are retired with `notice.collected-retired`
+  rather than silently occupying the outbox or risking duplicate local delivery.
+  A policy-parked notice (no open main and creation disallowed) stays queued but
+  does not block the ordinary mail drain used to close worker delegations.
+  A worker's close notice still reaches the
+  coordinator that delegated to it. See
+  [Who hears a notice](coordinator.md#who-hears-a-notice).
 - Its coordinator conversations are kept, because they may hold important
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the
@@ -358,7 +376,8 @@ A command node attached to another command node operates in leaf mode:
   across machines, so the leaf's coordinator is replaced by the same
   warning, with a link to the command node's coordinator for that
   repository; if the command node has no copy of it, the leaf's
-  coordinator opens directly. Grouped by machine or project, the machines
+  coordinator opens directly. Compact links them the same way and is reported
+  to the realm as repository grouping. Grouped by machine or project, the machines
   are not linked and the leaf's coordinator opens directly. The window
   sends its grouping to the realm (`grouping` message,
   `realmCoordinatorDefers`), since a realm cannot read the window's
@@ -586,6 +605,9 @@ Coordinators run on the top-level command node only. A coordinator can:
   read-only link: status, activity, transcripts, diffs, files, test results.
 - **Transfer files** to and from environments on connected nodes through a
   bounded, audited file-transfer framework (no content in logs).
+- **Send a pasted image** to anyone it can message on any connected node, or
+  copy one to an environment with `transfer_files`; see
+  [Images between nodes](#images-between-nodes).
 
 Coordinators keep their existing per-project ownership and read-only
 boundary on their own checkout.
@@ -639,6 +661,87 @@ remain and use the same paths.
   included) make this prompt; the maintenance sweep covers
   missed events, and an unreachable node changes nothing
   (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
+
+### Images between nodes
+
+A coordinator's `send_message` with `attachments`
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)) works across a node
+link in both directions, under the `node-mail-attachments` hello capability. A
+batch of images waits in a private spool on each machine
+(`<dataDir>/mail-attachment-spool/<batch>/`, the node file scope
+`{ mailAttachments }`) and moves through the file-transfer framework, verified by
+size and hash, with no content in a log or receipt.
+
+- **Down (command node to leaf).** The command node reads and checks the images,
+  and asks the leaf `prepare_node_mail_attachments` which it still needs. That
+  also refuses a recipient that cannot take them (a stopped container, an
+  environment with no workspace) before any bytes move. It transfers those, then
+  calls `deliver_node_mail` with `attachments`. The leaf places the files
+  (`place_node_mail_attachments`) before storing the mail. A failure at any step
+  means no message, and the coordinator is told why.
+- **Up (leaf to command node).** A command node reaches its leaves, never the
+  reverse, so the leaf cannot push. The leaf's main coordinator copies the images
+  into `outbox-<batch>` in its spool and queues the mail with their description
+  (`OutboxItem.attachments`). When the command node collects its mail it fetches
+  the files, places them in the destination conversation's attachment directory,
+  and only then delivers and acknowledges. A failed fetch leaves the item queued
+  for the next attempt. The spooled copy goes on acknowledgement. A retry after
+  that is recognised (`acknowledgedAttachmentMail`, bounded), so it neither
+  copies nor delivers again. Spooled images are capped at 256 MiB per command
+  node; past that a new send is refused, never dropped.
+- **Who may read a batch.** The scope is not a coordinator's: only the backend's
+  own commands use it, and a coordinator's command invoker refuses
+  `prepare_node_mail_attachments` and `place_node_mail_attachments`. Workspace
+  grants exclude both.
+- **A disconnected node is refused,** as for other node operations, before
+  anything moves. A leaf with mail queued for a disconnected command node keeps
+  it until that node next collects.
+- **Older nodes.** A leaf without the capability is refused with "update that
+  machine", counted as `node-mail-attachments.older-node`, because it would
+  reject the unknown key or drop the images. A command node without it does not
+  collect mail with images and cannot acknowledge it: the item stays queued until
+  that node is updated. Its plain mail is unaffected.
+- **Abandoned batches** (a process that stopped between staging and placing) are
+  swept after a day; an `outbox-` batch never is, since it is the only copy.
+  The same maintenance pass, which runs on every backend, removes images placed
+  for a project home whose record is gone or that are past mail retention. Those
+  are kept in `<dataDir>/project-home-mail-attachments/`, never in the user's
+  checkout. A connected node's project home cannot be messaged, so they are only
+  ever placed on the sender's own node.
+  `transfer_files` follows the same path as the down direction, with the normal
+  receipt and no mail.
+
+`bun scripts/qa-coordinator-image-mail.ts` checks this on the real stack. It
+starts a command node and a leaf from source, each with a temporary data
+directory, an ephemeral loopback port, a private token and an isolated `HOME`,
+and has the command node attach the leaf over its gateway. Each backend runs in
+its own unprivileged user and mount namespace in which the other node's
+directory is an empty tmpfs (`start(node, { hide })`), so the two share no
+files, as on two machines: an image found on the other node got there over the
+link. The script checks that blindness first. No agent runs: each
+coordinator is created with no session and an image is pasted through
+`write_coordinator_attachment`. It then checks that:
+
+- a worker's agent tab on the same node, a side agent, a worker on the leaf and
+  the leaf's coordinator each receive the image, and the leaf's coordinator's
+  image reaches the command node's coordinator through the outbox;
+- the leaf drops its outbox copy once the command node has collected the mail;
+- `transfer_files` from attachments returns a completed receipt;
+- a retry adds nothing, the copy is Git-excluded, and deleting the worker
+  removes it;
+- every refusal leaves no message: another conversation's file, traversal, a
+  symlink, a non-image, too many images or too large an image, and a
+  disconnected node.
+
+The script shares its harness with `qa-command-nodes.ts`
+(`scripts/qa-command-nodes-support.ts`). Both backends still share one kernel
+and talk over loopback: a slow, SSH-forwarded or dropped link is not exercised.
+
+That a recipient's agent can open what arrives is checked on the landing places
+themselves, which are the same on every route
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)):
+`coordinator-mail-attachments-read-live.test.ts` runs the pinned Claude and
+Codex CLIs against a scripted loopback model.
 
 ## Tickets across nodes
 

@@ -5,7 +5,8 @@
  * Each model call returns the next scripted turn; a call past the script fails,
  * so a CLI that retries or loops shows up as an error rather than a hang.
  * `/unlisted` is a fixture URL a command can try to reach, counted in
- * `networkHits`.
+ * `networkHits`. The script is built at the first model call and may read that
+ * call's request; `requests()` returns every scripted call's request body.
  */
 export type ScriptedBlock =
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
@@ -15,13 +16,15 @@ export interface ScriptedAnthropicEndpoint {
   url: URL;
   modelCalls(): number;
   networkHits(): number;
+  requests(): unknown[];
   stop(): void;
 }
 
 export function scriptedAnthropicEndpoint(
-  script: (origin: string) => ScriptedBlock[][],
+  script: (origin: string, firstRequest: unknown) => ScriptedBlock[][],
 ): ScriptedAnthropicEndpoint {
   let modelCalls = 0;
+  const requests: unknown[] = [];
   let networkHits = 0;
   let turns: ScriptedBlock[][] | undefined;
   const server = Bun.serve({
@@ -35,10 +38,12 @@ export function scriptedAnthropicEndpoint(
       const body = (await request.json()) as { stream?: boolean };
       if (!new URL(request.url).pathname.endsWith("/messages"))
         return Response.json({ input_tokens: 1 });
-      turns ??= script(server.url.origin);
+      turns ??= script(server.url.origin, body);
       modelCalls += 1;
       const content = turns[modelCalls - 1];
       if (!content) return new Response("Unexpected model retry", { status: 400 });
+      // Bounded by the script: a call past it is refused above.
+      requests.push(body);
       const toolTurn = content.some((block) => block.type === "tool_use");
       const message = {
         id: `msg_${modelCalls}`,
@@ -94,6 +99,7 @@ export function scriptedAnthropicEndpoint(
     url: server.url,
     modelCalls: () => modelCalls,
     networkHits: () => networkHits,
+    requests: () => [...requests],
     stop: () => server.stop(true),
   };
 }

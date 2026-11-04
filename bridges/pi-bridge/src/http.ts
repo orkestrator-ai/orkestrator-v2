@@ -88,6 +88,7 @@ import {
   DISPATCH_OUTCOME_LOST_KIND,
   isNativeAgentExecutionPolicy,
   parseCompactInstructionsBody,
+  type NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -104,7 +105,7 @@ import {
 } from "./commands.js";
 import { awaitCommandPreview, startCommandPreview } from "./command-preview.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
-import { withTimeout } from "./timeout.js";
+import { TimeoutError, withTimeout } from "./timeout.js";
 import { closeSessionRetaining } from "./session-close.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
@@ -387,7 +388,14 @@ async function routeGlobal(
     return true;
   }
   if (url.pathname === "/session/list" && request.method === "GET") {
-    const listed = await listResumableSessions();
+    let listed: NativeAgentResumeEntry[];
+    try {
+      listed = await listResumableSessions();
+    } catch (error) {
+      if (!(error instanceof TimeoutError)) throw error;
+      json(response, 504, { error: error.message });
+      return true;
+    }
     // The provider reads `id`, not `sessionId`: this is the resumable-session
     // wire shape, which predates the typed entry the provider maps it into.
     json(response, 200, {

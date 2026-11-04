@@ -68,6 +68,7 @@ import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { promises as fs } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
+import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
 import {
@@ -691,16 +692,17 @@ export async function spawnSetupTerminal(
       cols: 80,
       rows: 24,
     });
+    // Use an interactive login shell (-i) so PATH entries that tool installers
+    // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
+    // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
+    // so a plain `-lc` login shell never sees those exports and `bun` etc. are
+    // "command not found". This mirrors what fix-path.ts does when recovering
+    // the login-shell PATH.
+    const lowered = lowPriorityCommand(shellPath, ["-ilc", setupCommand]);
     spawnTerminalProcess(
       sessionId,
-      shellPath,
-      // Use an interactive login shell (-i) so PATH entries that tool installers
-      // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
-      // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
-      // so a plain `-lc` login shell never sees those exports and `bun` etc. are
-      // "command not found". This mirrors what fix-path.ts does when recovering
-      // the login-shell PATH.
-      ["-ilc", setupCommand],
+      lowered.command,
+      lowered.args,
       {
         cwd: environment.worktreePath,
         cols: 80,
@@ -896,6 +898,15 @@ export interface EnvironmentSetupStartOptions {
   approvedSetupHash?: string;
 }
 
+/** A layout write that fails costs the view of setup, never setup itself. */
+async function publishSetupTab(environmentId: string, context: CommandContext): Promise<void> {
+  try {
+    await context.storage.ensureSetupTab(environmentId);
+  } catch (error) {
+    log.warn("setup.tab-publish-failed", { environmentId, error: formatLogError(error) });
+  }
+}
+
 export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
@@ -949,6 +960,9 @@ export async function startEnvironmentSetupOnce(
   const preparationSessionId = running.createdFromCommit
     ? undefined
     : beginSetupPreparationSession(running, context);
+  // Preparation streams to the setup terminal, so it needs its tab now. Without
+  // preparation the tab waits for commands: nothing to run means no tab at all.
+  if (preparationSessionId) await publishSetupTab(running.id, context);
   try {
     return await startEnvironmentSetupAfterPreparation(
       running,
@@ -1046,6 +1060,7 @@ export async function startEnvironmentSetupAfterPreparation(
     }
   }
 
+  await publishSetupTab(current.id, context);
   const { sessionId, completion } = await spawnSetupTerminal(current, commands, context, {
     continuesPreparationSession: preparationSessionId !== undefined,
   });
@@ -1680,10 +1695,11 @@ export async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveContainerGitHubToken(config.global);
+      const credentialEnvironmentId = environment.id;
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
         async () => {
-          const current = await storage.getEnvironment(environment.id);
+          const current = await storage.getEnvironment(credentialEnvironmentId);
           await syncRuntimeGitHubCredential(current, containerId, githubToken, context);
         },
       );

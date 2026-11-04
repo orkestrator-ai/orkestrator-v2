@@ -61,6 +61,7 @@ import {
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import {
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
@@ -2208,7 +2209,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 // graceful drain a SIGTERM would have triggered.
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[codex-bridge]" });
+installFatalRejectionGuard({ label: "[codex-bridge]", onRejection: logUnhandledRejection });
 
 /**
  * How long a dead backend's running turns get to stop before the drain ends

@@ -209,6 +209,25 @@ describe("onResourceChanged", () => {
 });
 
 describe("dispatchResourceChange coalescing", () => {
+  test("pane layouts deliver immediately and trail only repeated revisions", async () => {
+    const seen: number[] = [];
+    onResourceChanged("pane-layout", (received) => seen.push(received.revision));
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 5 }));
+    expect(seen).toEqual([5]);
+    await tick(COALESCED);
+    expect(seen).toEqual([5]);
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 6 }));
+    expect(seen).toEqual([5, 6]);
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 2 }));
+    await tick(COALESCED);
+    expect(seen).toEqual([5, 6, 6]);
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 8 }));
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 9 }));
+    dispatchResourceChange(change({ resource: "pane-layout", revision: 7 }));
+    await tick(COALESCED);
+    expect(seen).toEqual([5, 6, 6, 8, 9]);
+  });
+
   test("collapses a burst for one id into a single delivery", async () => {
     const seen: ResourceChange[] = [];
     onResourceChanged("environment", (received) => seen.push(received));

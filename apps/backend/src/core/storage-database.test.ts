@@ -968,9 +968,8 @@ describe("StorageDatabase.updateStoreRow on a keyed array store", () => {
     expect(db.readStore("items")?.value).toEqual([item("a", 7), item("b"), item("d"), item("e")]);
     // A connection with no cached copy assembles the same order from the rows.
     const fresh = database(path.dirname(db.path));
-    expect((fresh.readStore("items")?.value as Array<{ id: string }>).map((row) => row.id)).toEqual(
-      ["a", "b", "d", "e"],
-    );
+    const ids = (fresh.readStore("items")!.value as Array<{ id: string }>).map((row) => row.id);
+    expect(ids).toEqual(["a", "b", "d", "e"]);
   });
 
   test("touches only its own row and keeps the owner column current", async () => {
@@ -1095,14 +1094,10 @@ describe("StorageDatabase.updateStoreRow on a keyed array store", () => {
     db.updateStoreRow("items", "b", () => ({ result: null, delete: true }));
     db.updateStoreRow("items", "d", () => ({ result: null, value: item("d") }));
     // The gap the delete left does not disturb a whole-value write after it.
-    const current = db.readStore("items")?.value as unknown[];
+    const current = db.readStore("items")!.value as Array<{ id: string }>;
     db.writeStore("items", [...current, item("e")]);
-    expect((db.readStore("items")?.value as Array<{ id: string }>).map((row) => row.id)).toEqual([
-      "a",
-      "c",
-      "d",
-      "e",
-    ]);
+    const ids = (db.readStore("items")!.value as Array<{ id: string }>).map((row) => row.id);
+    expect(ids).toEqual(["a", "c", "d", "e"]);
   });
 });
 

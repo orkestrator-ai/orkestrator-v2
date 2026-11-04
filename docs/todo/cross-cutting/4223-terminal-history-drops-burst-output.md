@@ -1,8 +1,5 @@
 # Terminal history loses the end of a fast burst
 
-Found on 2026-11-04 while qualifying
-[2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink.
-
 ## Task analysis
 
 Analysed 2026-11-04 against `main` at `a2827f52f`.
@@ -13,7 +10,7 @@ Analysed 2026-11-04 against `main` at `a2827f52f`.
 
 ### 1. Keep burst output in the terminal history archive
 
-**Problem.** A command that prints more than 256 lines before the archive's queue drains loses the rest of those lines from terminal history, including the last ones. The terminal itself is unaffected: its state snapshot still holds the output.
+**Problem.** Found on 2026-11-04 while qualifying [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink. A command that prints more than 256 lines before the archive's queue drains loses the rest of those lines from terminal history, including the last ones. The terminal itself is unaffected: its state snapshot still holds the output.
 
 **Context.** `enqueueHistoryRecord` in `apps/backend/src/core/terminal-history.ts` admits at most `TERMINAL_HISTORY_PENDING_RECORDS` (256) queued records per session and marks a gap when full. `flushPending` starts on a 250 ms timer and awaits an `appendFile` and a `chmod` for each record, so the queue drains slowly. The bound and the gap flag are deliberate: output may be dropped only under bounded backpressure, with an explicit signal. The history panel shows "Archive has a gap". What is open is how low the bound is for ordinary output.
 
@@ -35,3 +32,10 @@ Analysed 2026-11-04 against `main` at `a2827f52f`.
 ## Related
 
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found this.
+
+## Assumptions and decisions
+
+### Task 1: Review metadata layout (2026-11-04)
+
+Moved the qualification provenance into the Problem paragraph so Task analysis
+is the first section. Task scope and evidence are unchanged.

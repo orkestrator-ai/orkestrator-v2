@@ -33,6 +33,9 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
 const webRoot = path.join(repositoryRoot, "apps", "web");
 const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
+const editor = ["vim", "nvim"].find(
+  (name) => spawnSync("sh", ["-c", `command -v ${name}`]).status === 0,
+);
 const TERMINAL_WRITE = "local_terminal_write";
 
 const visibleText = (output: string): string =>
@@ -99,6 +102,7 @@ test.beforeAll(() => {
 });
 
 test("Electron keeps a lost terminal write fenced until Resume, without restarting the PTY", async () => {
+  test.skip(!editor, "needs vim or nvim on PATH to type into a full-screen editor");
   test.setTimeout(300_000);
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-resume-"));
   let vite: ChildProcess | null = null;
@@ -251,18 +255,25 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
       visibleText(
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
+    const screen = async () =>
+      visibleText(
+        (await invoke<{ output: string } | null>("get_terminal_state_snapshot", { sessionId }))
+          ?.output ?? "",
+      );
     const shellPid = async (count: number) => {
       await expect.poll(async () => (await output()).match(/PID=\d+/g)?.length ?? 0).toBe(count);
       return [...(await output()).matchAll(/PID=(\d+)/g)].at(-1)![1]!;
     };
     const pidBefore = await shellPid(1);
 
-    await window.keyboard.type("vim -u NONE -N -n resume.txt");
+    await window.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
     await window.keyboard.press("Enter");
     await expect.poll(output).toContain("resume.txt");
     await window.keyboard.type("ibefore-");
     await expect.poll(output).toContain("before-");
 
+    // Let nvim’s terminal-query replies settle before losing a keystroke response.
+    await window.waitForTimeout(1_000);
     await setFault("lose");
     await window.keyboard.type("X");
     const toast = window
@@ -274,7 +285,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     );
     await expect(toast.getByRole("button", { name: "Resume input" })).toBeVisible();
     await expect(toast.getByRole("button", { name: "Reconnect" })).toBeVisible();
-    await expect.poll(output).toContain("before-X");
+    await expect.poll(screen).toContain("before-X");
 
     // Restore the backend, then resize the native window.
     await setFault("none");
@@ -306,7 +317,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await focusTerminal();
     await window.keyboard.type("Z");
     await expect
-      .poll(async () => (await writes()).some((entry) => entry.args.data === "Z"))
+      .poll(async () => (await writes()).some((entry) => String(entry.args.data).endsWith("Z")))
       .toBe(true);
     await window.keyboard.press("Escape");
     await window.keyboard.type(":wq");

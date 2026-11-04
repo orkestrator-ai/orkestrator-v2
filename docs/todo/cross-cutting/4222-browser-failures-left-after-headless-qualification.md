@@ -1,8 +1,5 @@
 # Browser cases still failing on beelink after the headless qualification
 
-Found on 2026-11-03 while qualifying
-[2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink.
-
 ## Task analysis
 
 Analysed 2026-11-03 against `main` at `a2827f52f`.
@@ -14,7 +11,7 @@ Analysed 2026-11-03 against `main` at `a2827f52f`.
 
 ### 1. Two Multi Review layout assertions in `test:browser`
 
-**Problem.** Three results fail every time on beelink: `puts a running node's elapsed time and tokens on its own third row` (`e2e/MultiReviewFlow.spec.ts:107`, mobile project, at the check that a detail row's `scrollWidth` exceeds its `clientWidth`) and `package validation and transcript fit a 1408px container` (`e2e/MultiReviewPackageLayout.spec.ts:4`, both projects, `footerBox.y - geometry.log.bottom` is -25 where at least 0 is expected).
+**Problem.** Found on 2026-11-03 while qualifying [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink. Three results fail every time on beelink: `puts a running node's elapsed time and tokens on its own third row` (`e2e/MultiReviewFlow.spec.ts:107`, mobile project, at the check that a detail row's `scrollWidth` exceeds its `clientWidth`) and `package validation and transcript fit a 1408px container` (`e2e/MultiReviewPackageLayout.spec.ts:4`, both projects, `footerBox.y - geometry.log.bottom` is -25 where at least 0 is expected).
 
 **Context.** These are component specs on a mocked fixture. On the 2181 branch, `git diff main...HEAD` is empty for `apps/web`, `e2e/fixture`, `packages/protocol`, `e2e/playwright.config.ts` and both spec files, so that branch cannot have changed what they render.
 
@@ -65,3 +62,12 @@ On a `--fixture` profile the case passed 6 of 6 with `--repeat-each=6 --workers=
 
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found these.
 - [2921](2921-component-browser-failures-on-main.md), other `test:browser` failures.
+
+## Assumptions and decisions
+
+### Task 2: Electron editor parity (2026-11-04)
+
+Applied the browser journey’s vim/nvim selection, terminal state snapshot reads,
+and terminal-query settling to the Electron counterpart. The saved buffer and
+shell identity assertions remain strict. Native Electron evidence still needs a
+disposable display; this host has no Xvfb.

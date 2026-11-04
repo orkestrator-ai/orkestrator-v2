@@ -1,8 +1,5 @@
 # `design-canvas.spec.ts` does not dismiss the Docker reachability dialog
 
-Found on 2026-11-03 while qualifying
-[2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink.
-
 ## Task analysis
 
 Analysed 2026-11-03 against `main` at `4d9ff8690`.
@@ -13,7 +10,7 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
 
 ### 1. Close the reachability dialog in the design canvas browser spec
 
-**Problem.** `mise run test:agent:design:isolated` failed all three cases of `e2e/agent-testing/design-canvas.spec.ts` on beelink. The first failed at `New file: designs/preview.orkdes will be created.` not being visible (line 161), and the page snapshot at each of the three failures shows the "Docker containers can't reach Orkestrator" modal.
+**Problem.** Found on 2026-11-03 while qualifying [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink. `mise run test:agent:design:isolated` failed all three cases of `e2e/agent-testing/design-canvas.spec.ts` on beelink. The first failed at `New file: designs/preview.orkdes will be created.` not being visible (line 161), and the page snapshot at each of the three failures shows the "Docker containers can't reach Orkestrator" modal.
 
 **Context.** The backend's boot-time reachability check opens that modal a few seconds after startup on a host whose firewall drops Docker's traffic to the host, as beelink's ufw does (`firewall=ufw`, `status=blocked` in the backend log). `browser-gateway.spec.ts:123` and `container-wiring-support.ts:100` close it, and `electron-startup-dialogs.ts` does so for the Electron specs after to-do 0036 hit the same thing. `design-canvas.spec.ts` has no handler for it.
 
@@ -53,3 +50,10 @@ profile with one worker.
 
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found this.
 - Flake [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md), the same modal in the Electron journey, though there it has a handler.
+
+## Assumptions and decisions
+
+### Task 1: Review metadata layout (2026-11-04)
+
+Moved the qualification provenance into the Problem paragraph so Task analysis
+is the first section. Task scope and evidence are unchanged.

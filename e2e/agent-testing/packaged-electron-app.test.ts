@@ -174,10 +174,18 @@ test("headless config selects only the supported journey", async () => {
 test("global setup keeps a mixed Electron suite guarded despite the opt-in", () => {
   const problem = spyOn(switches, "electronSpecDisplayProblem").mockReturnValue(null);
   try {
-    const config = (testMatch: string[]) =>
+    const config = (testMatch: string | RegExp | (string | RegExp)[]) =>
       ({ projects: [{ testMatch }] }) as unknown as Parameters<typeof displaySetup>[0];
     displaySetup(config(["design-canvas-electron.spec.ts", "electron-main.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
+    for (const match of [
+      "design-canvas-electron.spec.ts",
+      /design-canvas-electron/,
+      [/design-canvas-electron/],
+    ]) {
+      displaySetup(config(match));
+      expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, false);
+    }
     displaySetup(config(["design-canvas-electron.spec.ts"]));
     expect(problem).toHaveBeenLastCalledWith(process.platform, process.env, true);
   } finally {

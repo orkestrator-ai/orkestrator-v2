@@ -1,8 +1,5 @@
 # Project Home browser spec fails on hosts whose shell emits OSC context sequences
 
-Found on 2026-11-03 while qualifying
-[2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink.
-
 ## Task analysis
 
 Analysed 2026-11-03 against `main` at `4d9ff8690`.
@@ -13,7 +10,7 @@ Analysed 2026-11-03 against `main` at `4d9ff8690`.
 
 ### 1. Make the Home terminal check ignore terminal control sequences
 
-**Problem.** `project Home retains background work and unread attention beneath the board` (`e2e/agent-testing/browser-gateway.spec.ts:429`) fails every time on beelink. It polls `get_terminal_output_snapshot` and looks for a line exactly equal to `home-background-finished` (line 493), and that never matches within the 5 s poll.
+**Problem.** Found on 2026-11-03 while qualifying [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) on beelink. `project Home retains background work and unread attention beneath the board` (`e2e/agent-testing/browser-gateway.spec.ts:429`) fails every time on beelink. It polls `get_terminal_output_snapshot` and looks for a line exactly equal to `home-background-finished` (line 493), and that never matches within the 5 s poll.
 
 **Context.** The snapshot is raw terminal output, escape sequences included. The local terminal runs the user's login shell, which on beelink is bash with systemd's `/etc/profile.d/80-systemd-osc-context.sh` (systemd 262.1). That script sets `PS0`, so bash writes an OSC 3008 sequence, with no newline, after a command is read and before it runs. The `sleep 1; printf …` command's output therefore starts on the same line as that sequence.
 
@@ -50,3 +47,10 @@ command cannot match it. The case passed in the isolated suite on beelink on
 ## Related
 
 - [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md), whose qualification found this.
+
+## Assumptions and decisions
+
+### Task 1: Review metadata layout (2026-11-04)
+
+Moved the qualification provenance into the Problem paragraph so Task analysis
+is the first section. Task scope and evidence are unchanged.

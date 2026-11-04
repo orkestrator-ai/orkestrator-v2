@@ -1404,27 +1404,48 @@ describe("remote gateway", () => {
     expect(exitCode).toBe(0);
   });
 
-  test("a client disconnect after its upstream finished leaves the next request on that socket alone", async () => {
-    // Runs in a child for the same reason as the disconnect test above. Request A's
-    // upstream has ended while the gateway still compresses its body, so A's
-    // keep-alive socket is back in the pool when A's client leaves. Request B
-    // takes that socket and must not inherit A's disconnect.
-    const dataDir = await createTempDir("ork-gateway-pooled-disconnect-");
-    const rendererRoot = await createRendererRoot(dataDir);
-    const scriptPath = path.join(dataDir, "pooled-disconnect-scenario.ts");
-    const gatewayModule = path.resolve(import.meta.dir, "../../../apps/backend/src/gateway.ts");
-    await writeFile(
-      scriptPath,
-      `
+  for (const streaming of [false, true]) {
+    test(`a client disconnect after its upstream finished leaves the next request on that socket alone (${streaming ? "streaming" : "buffered"})`, async () => {
+      // Runs in a child for the same reason as the disconnect test above. Request A's
+      // upstream has ended while the gateway still compresses its body, so A's
+      // keep-alive socket is back in the pool when A's client leaves. Request B
+      // takes that socket and must not inherit A's disconnect.
+      const dataDir = await createTempDir("ork-gateway-pooled-disconnect-");
+      const rendererRoot = await createRendererRoot(dataDir);
+      const scriptPath = path.join(dataDir, "pooled-disconnect-scenario.ts");
+      const gatewayModule = path.resolve(import.meta.dir, "../../../apps/backend/src/gateway.ts");
+      await writeFile(
+        scriptPath,
+        `
       import { randomBytes } from "node:crypto";
-      import { createServer, request as httpRequest } from "node:http";
+      import { createServer, request as httpRequest, ServerResponse } from "node:http";
       import { connect } from "node:net";
       import { OrkestratorGateway } from ${JSON.stringify(gatewayModule)};
 
       setTimeout(() => { console.log("TIMED_OUT"); process.exit(1); }, 25000);
 
       // Base64 compresses slowly enough to hold request A in the codec.
-      const body = randomBytes(12 * 1024 * 1024).toString("base64");
+      const body = randomBytes(${streaming ? 256 * 1024 : 12 * 1024 * 1024}).toString("base64");
+      let downstreamFinished = false;
+      let downstreamDelayed = false;
+      // Delay downstream finalization to model a slow drain independently of
+      // kernel socket-buffer sizes. The actual HTTP upstream and pool stay real.
+      const originalEnd = ServerResponse.prototype.end;
+      ServerResponse.prototype.end = function (...args) {
+        if (${streaming} && this.socket?.localPort === Number(gatewayUrl.port) && this.req.url?.endsWith("/big")) {
+          downstreamDelayed = true;
+          setTimeout(() => { if (!this.destroyed) originalEnd.apply(this, args); }, 1000);
+          return this;
+        }
+        return originalEnd.apply(this, args);
+      };
+      const originalWriteHead = ServerResponse.prototype.writeHead;
+      ServerResponse.prototype.writeHead = function (...args) {
+        if (this.socket?.localPort === Number(gatewayUrl.port) && this.req.url?.endsWith("/big")) {
+          this.once("finish", () => { downstreamFinished = true; });
+        }
+        return originalWriteHead.apply(this, args);
+      };
       let onBig = () => {};
       let onHeld = () => {};
       let bigPort = 0;
@@ -1434,7 +1455,7 @@ describe("remote gateway", () => {
         if (request.url === "/big") {
           bigPort = request.socket.remotePort;
           response.writeHead(200, {
-            "content-type": "text/javascript",
+            "content-type": ${JSON.stringify(streaming ? "text/event-stream" : "text/javascript")},
             "content-length": Buffer.byteLength(body),
           });
           response.end(body, () => onBig());
@@ -1456,7 +1477,7 @@ describe("remote gateway", () => {
         rendererRoot: ${JSON.stringify(rendererRoot)},
         bindAddress: "127.0.0.1",
         port: 0,
-        compression: "body",
+        compression: ${JSON.stringify(streaming ? "on" : "body")},
         env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
         allowNonTailscaleBind: true,
       });
@@ -1467,6 +1488,8 @@ describe("remote gateway", () => {
       // Timing decides whether the scenario's preconditions hold, never its verdict.
       for (let attempt = 0; attempt < 5; attempt += 1) {
         let answered = false;
+        downstreamFinished = false;
+        downstreamDelayed = false;
         const finishedBig = new Promise((resolve) => { onBig = resolve; });
         const clientA = connect({ host: gatewayUrl.hostname, port: Number(gatewayUrl.port) }, () => {
           clientA.write([
@@ -1478,6 +1501,7 @@ describe("remote gateway", () => {
             "",
           ].join("\\r\\n"));
         });
+        if (${streaming}) clientA.pause();
         clientA.on("data", () => { answered = true; });
         clientA.on("error", () => undefined);
         await finishedBig;
@@ -1499,7 +1523,7 @@ describe("remote gateway", () => {
           request.end();
         });
         await heldArrived;
-        const preconditions = heldPort === bigPort && !answered;
+        const preconditions = heldPort === bigPort && !answered && !downstreamFinished && (!${streaming} || downstreamDelayed);
         clientA.destroy();
         await Bun.sleep(50);
         releaseHeld();
@@ -1513,21 +1537,22 @@ describe("remote gateway", () => {
       console.log("PRECONDITIONS_NEVER_HELD");
       process.exit(1);
     `,
-    );
+      );
 
-    const scenario = Bun.spawn([process.execPath, scriptPath], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      scenario.exited,
-      new Response(scenario.stdout).text(),
-      new Response(scenario.stderr).text(),
-    ]);
-    expect(stderr).toBe("");
-    expect(stdout).toContain("SECOND_REQUEST_SERVED");
-    expect(exitCode).toBe(0);
-  }, 30_000);
+      const scenario = Bun.spawn([process.execPath, scriptPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        scenario.exited,
+        new Response(scenario.stdout).text(),
+        new Response(scenario.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(stdout).toContain("SECOND_REQUEST_SERVED");
+      expect(exitCode).toBe(0);
+    }, 30_000);
+  }
 
   test("serves renderer requests through a configured dev server proxy", async () => {
     const devServer = createServer((request, response) => {

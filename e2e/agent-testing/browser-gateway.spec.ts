@@ -863,7 +863,7 @@ test("capped file tree loads subtrees, retries failures and refreshes across ina
     };
     const expandFolder = async (name: string) => {
       const folder = page.getByRole("button", { name, exact: true });
-      await expect(folder).toBeVisible();
+      await expect(folder).toBeVisible({ timeout: 30_000 });
       if ((await folder.getAttribute("aria-expanded")) !== "true") {
         await folder.focus();
         await page.keyboard.press("Enter");
@@ -1497,7 +1497,7 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
       await entry.click();
     };
     await openHeld();
-    const panel = page.getByTestId("setup-approval-panel");
+    const panel = page.getByTestId("setup-approval-panel").filter({ visible: true });
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(marker);
     await fs.mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });

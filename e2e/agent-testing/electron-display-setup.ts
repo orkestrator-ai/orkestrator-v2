@@ -7,7 +7,9 @@ export default function globalSetup(config?: FullConfig): void {
     !!config?.projects.length &&
     config.projects.every(
       (project) =>
-        project.testMatch.length === 1 && project.testMatch[0] === "design-canvas-electron.spec.ts",
+        Array.isArray(project.testMatch) &&
+        project.testMatch.length === 1 &&
+        project.testMatch[0] === "design-canvas-electron.spec.ts",
     );
   const problem = electronSpecDisplayProblem(process.platform, process.env, headlessOnly);
   if (problem) throw new Error(problem);

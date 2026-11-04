@@ -85,6 +85,10 @@ test("recognized child errors cannot persist arbitrary label-shaped strings with
           event: "turn.failed",
           level: "error",
           fields: {
+            [secret + "-number"]: 1,
+            [secret + "-boolean"]: true,
+            [secret + "-null"]: null,
+            [secret + "-error"]: { name: "TypeError", errno: -2 },
             reason: secret,
             kind: secret,
             code: secret,

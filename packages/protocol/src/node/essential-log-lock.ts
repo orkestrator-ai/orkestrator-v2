@@ -2,35 +2,43 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
 import path from "node:path";
 
-const OWNER = /^(\d+)-[0-9a-f-]{36}$/;
+/** Self-contained so the identical lock runs in the I/O worker and exit fallback. */
+export function essentialLogLockFactory(
+  fs: Pick<typeof import("node:fs"), "mkdirSync" | "readdirSync" | "renameSync" | "rmdirSync">,
+  path: typeof import("node:path"),
+  randomUUID: () => string,
+  directory: string,
+): () => (() => void) | null {
+  const { mkdirSync, readdirSync, renameSync, rmdirSync } = fs;
+  const OWNER = /^(\d+)-[0-9a-f-]{36}$/;
 
-function alive(pid: number): boolean {
-  if (pid <= 0) return true;
-  try {
-    process.kill(pid, 0); // Existence probe only; never terminates a process.
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  function alive(pid: number): boolean {
+    if (pid <= 0) return true;
+    try {
+      process.kill(pid, 0); // Existence probe only; never terminates a process.
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
   }
-}
 
-function removeEmpty(directory: string): void {
-  try {
-    rmdirSync(directory);
-  } catch (error) {
-    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? ""))
-      throw error;
+  function removeEmpty(directory: string): void {
+    try {
+      rmdirSync(directory);
+    } catch (error) {
+      if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? ""))
+        throw error;
+    }
   }
-}
 
-/**
- * Atomically publishes a nonempty lock directory. A contender can reclaim only
- * a dead owner's uniquely named empty child, then rmdir the root. A racing
- * contender can never remove a replacement owner's child or nonempty root.
- * No clock expiry can steal a lock from a slow but live process. PID reuse
- * conservatively leaves it busy. Staging directories contain no file bytes.
- */
-export function createEssentialLogLock(directory: string): () => (() => void) | null {
+  /**
+   * Atomically publishes a nonempty lock directory. A contender can reclaim only
+   * a dead owner's uniquely named empty child, then rmdir the root. A racing
+   * contender can never remove a replacement owner's child or nonempty root.
+   * No clock expiry can steal a lock from a slow but live process. PID reuse
+   * conservatively leaves it busy. Staging directories contain no file bytes.
+   */
+
   const token = `${process.pid}-${randomUUID()}`;
   const lock = path.join(directory, ".writer-lock");
   const stage = path.join(directory, `.writer-stage-${token}`);
@@ -82,4 +90,13 @@ export function createEssentialLogLock(directory: string): () => (() => void) | 
       removeEmpty(lock);
     };
   };
+}
+
+export function createEssentialLogLock(directory: string): () => (() => void) | null {
+  return essentialLogLockFactory(
+    { mkdirSync, readdirSync, renameSync, rmdirSync },
+    path,
+    randomUUID,
+    directory,
+  );
 }

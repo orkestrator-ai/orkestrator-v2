@@ -413,7 +413,9 @@ when the holder crashed. `snapshot.skipped-low-disk` stays out as a skip
 rather than a failure, and the transcript artifact warnings stay silent.
 
 An `error` that is not flagged was not reviewed for this file, so it keeps less: its
-numbers, booleans, an error's identity, and a string only under `site`, `kind`, `step`,
+numbers and booleans under the fixed names `attempts`, `retried`, `exitCode`,
+`errno`, `suppressed`, `windowSeconds` and `droppedFields`, an error's identity
+only under the `error` prefix, and a string only under `site`, `kind`, `step`,
 `reason`, `signal` or `code`, and only if its value passes the same explicit classifier. Everything else is dropped and
 counted. This is what makes `error` safe to include by default, and a throttle's
 summary at `error` keeps which site it is about.
@@ -462,11 +464,13 @@ takes records.
 ### When it cannot write
 
 Logging calls enqueue without doing filesystem work. One deferred loop drains the
-bounded queue, waiting asynchronously for the cross-process lock. Each size check,
-rotation and append forms a small synchronous transaction, so our own exit drain
-cannot interrupt an in-flight rotation. This trades a short filesystem pause in the
-owner process for safe coordination with immediate native exits. The 4 KiB entry
-bound limits each append; physical disk latency remains outside the writer's control.
+bounded queue, sending one transaction at a time to a dedicated worker. Lock
+acquisition, directory reads, size checks, rotation and append all run off the
+owning event loop. The worker and exit fallback share the same lock and transaction
+implementation. A shared atomic completion word lets an exit cancel an unstarted
+write or acknowledge a committed one without replaying it. An executing write gets
+a bounded 100 ms wait; an ambiguous append is never replayed. A physically stalled
+disk can still lose exit records, but routine I/O cannot stall the application.
 
 - **A write that fails** (a full disk, a read-only directory) loses its entry. The loss
   is counted, reported once as `logging` `essential.write-failed` at `warn`, throttled
@@ -479,6 +483,8 @@ bound limits each append; physical disk latency remains outside the writer's con
   what is left synchronously, one bounded entry at a time under the same lock.
   Immediate `app.exit()` explicitly drains first because Electron skips `will-quit`.
   A crash or immediate exit emits no orderly `essential.stopped` marker.
+  Standalone ownership is installed before startup awaits, so toolchain lease
+  failures are captured too.
 
 ### A repeating fault
 

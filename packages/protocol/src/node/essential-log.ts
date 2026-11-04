@@ -3,6 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createEssentialLogLock } from "./essential-log-lock.js";
 import path from "node:path";
 
+import { essentialLogTransactionFactory } from "./essential-log-transaction.js";
+import { createEssentialLogWorker } from "./essential-log-worker.js";
+
 import { projectEssentialRecord } from "../log-essential.js";
 import {
   configureLogger,
@@ -22,9 +25,9 @@ import {
  * docs/architecture/logging.md, "The essential event log", is the guide.
  *
  * A caller only enqueues. One deferred loop drains the bounded queue, waiting
- * asynchronously for the cross-process lock. Each small filesystem transaction
- * is synchronous so process exit cannot interrupt our own rotation and race its
- * exit drain. The exit drain uses the same lock and per-write size limits.
+ * in a dedicated worker for the cross-process lock and filesystem transaction.
+ * A shared completion word coordinates a bounded synchronous exit fallback;
+ * both paths use the same lock and per-write size limits.
  */
 
 /** The directory under `logs/`. The retention sweep and **Clean up logs** skip it. */
@@ -83,10 +86,6 @@ type DropReason = "queue-full" | "write-failed" | "rate-limited";
 type DropCount = { entries: number; bytes: number };
 type EventAllowance = { tokens: number; updatedAt: number; suppressed: number };
 
-function missingIsFine(error: unknown): void {
-  if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-}
-
 export function installEssentialLog(options: {
   dataDir: string;
   owner: EssentialLogOwner;
@@ -95,14 +94,14 @@ export function installEssentialLog(options: {
   io?: Partial<EssentialLogIo>;
   /** Test barrier before acquiring the file lock; no filesystem write has started. */
   beforeWrite?: () => Promise<void>;
+  /** Deterministic test seam after the drain observes an empty queue. */
+  onDrainIdle?: () => void;
 }): InstalledEssentialLog {
   const directory = path.join(options.dataDir, "logs", ESSENTIAL_LOG_DIRECTORY_NAME);
   const bounds: EssentialLogBounds = { ...DEFAULT_ESSENTIAL_LOG_BOUNDS, ...options.bounds };
   const now = options.now ?? (() => new Date());
   const io: EssentialLogIo = { appendFileSync, renameSync, statSync, unlinkSync, ...options.io };
   const tryLock = createEssentialLogLock(directory);
-  const fileAt = (index: number) =>
-    path.join(directory, index === 0 ? "essential.jsonl" : `essential.${index}.jsonl`);
   const logs = createLogger("logging");
 
   const queue: Buffer[] = [];
@@ -127,7 +126,7 @@ export function installEssentialLog(options: {
   };
 
   /** A marker for each kind of loss since the last one that reached the file. */
-  const takeDropMarkers = (): { payload: Buffer[]; restore: () => void } => {
+  const takeDropMarkers = (): { payload: Buffer[]; restore: (committed: number) => void } => {
     const taken = Array.from(drops);
     drops.clear();
     return {
@@ -141,8 +140,9 @@ export function installEssentialLog(options: {
           fields: { entries, bytes, reason },
         }),
       ),
-      restore: () => {
-        for (const [reason, { entries, bytes }] of taken) countDrop(reason, entries, bytes);
+      restore: (committed) => {
+        for (const [reason, { entries, bytes }] of taken.slice(committed))
+          countDrop(reason, entries, bytes);
       },
     };
   };
@@ -157,37 +157,17 @@ export function installEssentialLog(options: {
     if (entries > 0) countDrop("rate-limited", entries, 0);
   };
 
-  // Called only while holding the cross-process lock; never awaits midway.
-  const writeLocked = (payload: Buffer) => {
-    if (payload.byteLength > bounds.maxFileBytes)
-      throw new Error("Essential log entry exceeds file bound");
-    let size = 0;
-    try {
-      size = io.statSync(fileAt(0)).size;
-    } catch (error) {
-      missingIsFine(error);
-    }
-    if (size > 0 && size + payload.byteLength > bounds.maxFileBytes) {
-      // Remove the oldest destination first. Every remaining rename now targets
-      // an absent path on Windows as well as POSIX.
-      try {
-        io.unlinkSync(fileAt(bounds.rotatedFiles));
-      } catch (error) {
-        missingIsFine(error);
-      }
-      for (let index = bounds.rotatedFiles; index >= 1; index -= 1) {
-        try {
-          io.renameSync(fileAt(index - 1), fileAt(index));
-        } catch (error) {
-          missingIsFine(error);
-        }
-      }
-    }
-    io.appendFileSync(fileAt(0), payload, { mode: 0o600 });
-  };
-
+  const writeLocked = essentialLogTransactionFactory(io, path, directory, bounds);
+  // Injectable synchronous operations are a test-only transaction seam. Production
+  // always uses a worker, including lock acquisition and directory enumeration.
+  const worker = options.io ? null : createEssentialLogWorker(directory, bounds);
   const writeAsync = async (payload: Buffer, stillPending = () => true, committed = () => {}) => {
     await options.beforeWrite?.();
+    if (!stillPending()) return;
+    if (worker) {
+      await worker.write(payload, committed);
+      return;
+    }
     const deadline = Date.now() + 2_000;
     for (;;) {
       if (!stillPending()) return;
@@ -238,21 +218,27 @@ export function installEssentialLog(options: {
     while (queue.length > 0) {
       const entry = queue[0]!;
       const markers = takeDropMarkers();
+      let committedMarkers = 0;
       try {
-        for (const marker of markers.payload) await writeAsync(marker);
+        for (const marker of markers.payload)
+          await writeAsync(marker, undefined, () => {
+            committedMarkers += 1;
+          });
         // An immediate exit flush may have consumed the queue while we waited.
         if (queue[0] !== entry) continue;
         await writeAsync(
           entry,
           () => queue[0] === entry,
           () => {
-            queue.shift();
-            pendingBytes -= entry.byteLength;
+            if (queue[0] === entry) {
+              queue.shift();
+              pendingBytes -= entry.byteLength;
+            }
           },
         );
         logs.recovered("essential.write-failed");
       } catch (error) {
-        markers.restore();
+        markers.restore(committedMarkers);
         countDrop("write-failed", 1, entry.byteLength);
         reportWriteFailure(error);
       }
@@ -261,12 +247,14 @@ export function installEssentialLog(options: {
         pendingBytes -= entry.byteLength;
       }
     }
+    options.onDrainIdle?.();
   };
 
   const startDrain = () => {
     if (draining) return;
     draining = drain().finally(() => {
       draining = null;
+      if (queue.length > 0) startDrain();
     });
   };
 
@@ -334,9 +322,13 @@ export function installEssentialLog(options: {
    * left to be reported.
    */
   const drainOnExit = () => {
+    // Complete or cancel the worker transaction before touching its queue entry.
+    // An executing filesystem call may outlive this bounded exit wait; never
+    // replay that ambiguous append from the fallback.
+    const ambiguous = worker?.settleSync(writeSync);
     collectUnreportedSuppressions();
     const markers = takeDropMarkers();
-    const entries = queue.splice(0);
+    const entries = queue.splice(0).filter((entry) => entry !== ambiguous);
     pendingBytes = 0;
     try {
       if (markers.payload.length > 0 || entries.length > 0) {
@@ -352,7 +344,10 @@ export function installEssentialLog(options: {
   writeLifecycle("essential.started");
 
   const flush = async () => {
-    while (draining) await draining;
+    while (queue.length > 0 || draining) {
+      if (!draining) startDrain();
+      await draining;
+    }
   };
 
   return {
@@ -364,13 +359,14 @@ export function installEssentialLog(options: {
       writeLifecycle("essential.stopped");
       stopped = true;
       configureLogger({ essentialSink: null });
-      process.off("exit", drainOnExit);
       await flush();
       collectUnreportedSuppressions();
       const markers = takeDropMarkers();
       if (markers.payload.length > 0) {
         for (const marker of markers.payload) await writeAsync(marker).catch(() => undefined);
       }
+      process.off("exit", drainOnExit);
+      worker?.close();
     },
   };
 }

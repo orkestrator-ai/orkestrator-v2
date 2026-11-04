@@ -75,6 +75,9 @@ fixPath();
 const initialParentPid = process.ppid;
 const options = parseOptions(process.argv.slice(2));
 assertProxiedModeHost(options);
+// Establish persistence before any fallible startup await (including toolchain
+// lease inspection). Supervised backends still relay to their desktop owner.
+const standaloneLogging = installStandaloneBackendLogging(options);
 await mkdir(options.dataDir, { recursive: true });
 loadAgentTestHostCursorApiKey({
   dataDir: options.dataDir,
@@ -82,9 +85,6 @@ loadAgentTestHostCursorApiKey({
   credentialSources: new Set(options.credentialSources),
 });
 await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
-// Installed before startup logs anything worth keeping. A no-op under Electron,
-// which already records this process's output.
-const standaloneLogging = installStandaloneBackendLogging(options);
 // Before anything logs at a level the settings may turn off. The backend's log
 // policy service keeps this live from here on.
 applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);

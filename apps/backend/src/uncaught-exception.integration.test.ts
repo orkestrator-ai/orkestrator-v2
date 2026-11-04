@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseLogRecordLine, type LogRecord } from "@orkestrator/protocol/logger";
@@ -226,4 +226,32 @@ describe("the backend's uncaught exception log", () => {
     expect(written.map((record) => record.event)).not.toContain("uncaught-exception");
     expect(text).not.toContain("secret");
   });
+});
+
+test("real standalone startup retains a toolchain lease failure before backend initialization", async () => {
+  const dataDir = await temporaryDirectory();
+  const toolchains = path.join(dataDir, "toolchains");
+  const bin = path.join(toolchains, "bin", "fixture");
+  const target = path.join(toolchains, "codex", "fixture", "bin", "codex");
+  await mkdir(path.dirname(target), { recursive: true });
+  await mkdir(bin, { recursive: true });
+  await writeFile(target, "fixture");
+  await symlink(target, path.join(bin, "codex"));
+  // Force acquireVersionLease's mkdir to fail while logs/ remains writable.
+  await writeFile(path.join(toolchains, ".leases"), "block lease creation");
+  const result = await run(`
+    delete process.env.ORKESTRATOR_DESKTOP_SUPERVISED;
+    process.argv = [process.execPath, ${JSON.stringify(path.join(import.meta.dir, "main.ts"))},
+      "--data-dir", ${JSON.stringify(dataDir)}, "--toolchain-bin-dir", ${JSON.stringify(bin)},
+      "--runtime-flavor", "production", "--port", "0", "--control-port", "0"];
+    await import(${JSON.stringify(path.join(import.meta.dir, "main.ts"))});
+  `);
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("ENOTDIR");
+  const text = await readFile(path.join(dataDir, "logs", "essential", "essential.jsonl"), "utf8");
+  const crash = records(text).filter((record) => record.event === "uncaught-exception");
+  expect(crash).toHaveLength(1);
+  expect(crash[0]?.fields?.["error.code"]).toBe("ENOTDIR");
+  expect(text).not.toContain(dataDir);
+  expect(text).not.toContain("block lease creation");
 });

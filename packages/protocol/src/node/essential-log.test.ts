@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { existsSync, renameSync } from "node:fs";
+import { appendFileSync, existsSync, renameSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -705,4 +705,51 @@ describe("retention leaves it alone", () => {
     await pruneExpiredApplicationLogs(logs, 7);
     expect(await readdir(logs)).toEqual([]);
   });
+});
+
+test("flush and stop cover an enqueue at the final drain handoff", async () => {
+  const directory = await dataDir();
+  configureLogger({ sink: () => {} });
+  let atIdle = false;
+  const essential = install({
+    dataDir: directory,
+    owner: "backend",
+    onDrainIdle: () => {
+      if (atIdle) return;
+      atIdle = true;
+      createLogger("backend").info("shutdown.finished", { code: 71 });
+    },
+  });
+  await essential.flush();
+  expect((await entries(directory)).at(-1)?.fields?.code).toBe(71);
+  await essential.stop();
+  expect((await entries(directory)).at(-1)?.event).toBe("essential.stopped");
+});
+
+test("a committed drop marker is not restored when the following entry fails", async () => {
+  const directory = await dataDir();
+  configureLogger({ sink: () => {} });
+  let failed = false;
+  const essential = install({
+    dataDir: directory,
+    owner: "backend",
+    bounds: { maxPendingBytes: 600, eventBurst: 1000 },
+    io: {
+      appendFileSync: (file, payload, options) => {
+        const text = String(payload);
+        if (!failed && text.includes('"event":"essential.started"')) {
+          failed = true;
+          throw new Error("injected append failure");
+        }
+        appendFileSync(file, payload, options);
+      },
+    },
+  });
+  for (let code = 0; code < 30; code++) createLogger("backend").info("shutdown.finished", { code });
+  await essential.flush();
+  createLogger("backend").info("shutdown.finished", { code: 99 });
+  await essential.flush();
+  const markers = (await entries(directory)).filter((r) => r.event === "entries.dropped");
+  expect(markers.filter((r) => r.fields?.reason === "queue-full")).toHaveLength(1);
+  expect(markers.filter((r) => r.fields?.reason === "write-failed")).toHaveLength(1);
 });

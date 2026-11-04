@@ -36,6 +36,17 @@ const UNDECLARED_ERROR_LABELS: ReadonlySet<string> = new Set([
   "code",
 ]);
 
+// Fixed names only: scalar values do not make an arbitrary key content-free.
+const UNDECLARED_ERROR_SCALARS: Readonly<Record<string, EssentialFieldKind>> = {
+  attempts: "number",
+  retried: "boolean",
+  exitCode: "number",
+  errno: "number",
+  suppressed: "number",
+  windowSeconds: "number",
+  droppedFields: "number",
+};
+
 const ERROR_IDENTITY_KINDS: Readonly<Partial<Record<keyof LogErrorDetails, EssentialFieldKind>>> = {
   name: "label",
   code: "label",
@@ -117,12 +128,26 @@ export function projectEssentialRecord(record: LogRecord, fallbackTs: string): L
       if (Object.hasOwn(declared.fields, name)) admit(name, declared.fields[name], value);
     } else if (typeof value === "string") {
       admit(name, UNDECLARED_ERROR_LABELS.has(name) ? "label" : undefined, value);
-    } else kept[name] = value;
+    } else {
+      admit(
+        name,
+        Object.hasOwn(UNDECLARED_ERROR_SCALARS, name)
+          ? UNDECLARED_ERROR_SCALARS[name]
+          : UNDECLARED_ERROR_LABELS.has(name)
+            ? "label"
+            : undefined,
+        value,
+      );
+    }
   };
 
   for (const [name, value] of Object.entries(record.fields ?? {})) {
     if (typeof value !== "object" || value === null) {
       admitScalar(name, value);
+      continue;
+    }
+    if (!declared && name !== "error") {
+      unfit += 1;
       continue;
     }
     for (const key of Object.keys(ERROR_IDENTITY_KINDS) as Array<keyof LogErrorDetails>) {

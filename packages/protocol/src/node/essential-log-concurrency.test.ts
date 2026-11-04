@@ -104,3 +104,98 @@ test("two standalone processes serialize size checks and rotation within the dir
     await rm(root, { recursive: true, force: true });
   }
 }, 15_000);
+
+test("a worker blocked inside append leaves the owner event loop responsive", async () => {
+  if (process.platform === "win32") return; // POSIX FIFO fixture, not a production requirement.
+  const root = await mkdtemp(path.join(os.tmpdir(), "essential-worker-io-"));
+  const { mkdir } = await import("node:fs/promises");
+  const { existsSync, createReadStream } = await import("node:fs");
+  const { installEssentialLog } = await import("./essential-log.js");
+  const { configureLogger, resetLogger } = await import("../logger.js");
+  const directory = path.join(root, "logs", "essential");
+  const fifo = path.join(directory, "essential.jsonl");
+  await mkdir(directory, { recursive: true });
+  const child = Bun.spawn(["mkfifo", fifo], { stdout: "ignore", stderr: "pipe" });
+  expect(await child.exited).toBe(0);
+  configureLogger({ sink: () => {} });
+  const log = installEssentialLog({ dataDir: root, owner: "backend" });
+  let finished = false;
+  const flushing = log.flush().then(() => {
+    finished = true;
+  });
+  try {
+    const deadline = Date.now() + 5000;
+    // The lock is held before stat/append. With no FIFO reader, append's open
+    // blocks in the kernel, rather than at a test barrier before physical I/O.
+    while (!existsSync(path.join(directory, ".writer-lock"))) {
+      if (Date.now() > deadline) throw new Error("worker did not acquire lock");
+      await Bun.sleep(5);
+    }
+    let callbacks = 0;
+    for (let index = 0; index < 5; index++) {
+      await new Promise<void>((resolve) =>
+        setTimeout(() => {
+          callbacks++;
+          resolve();
+        }, 10),
+      );
+    }
+    expect(callbacks).toBe(5);
+    expect(finished).toBe(false);
+  } finally {
+    // Release the real blocked append, then restore an ordinary log file.
+    const reader = createReadStream(fifo);
+    const content = new Promise<string>((resolve, reject) => {
+      let text = "";
+      reader.setEncoding("utf8");
+      reader.on("data", (chunk) => {
+        text += chunk;
+      });
+      reader.on("end", () => resolve(text));
+      reader.on("error", reject);
+    });
+    await flushing;
+    const written = await content;
+    expect(written).toContain('"event":"essential.started"');
+    await rm(fifo);
+    await log.stop();
+    resetLogger();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 10_000);
+
+test.each([false, true])(
+  "exit handoff commits a worker transaction exactly once (already written: %s)",
+  async (written) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "essential-worker-exit-"));
+    const { appendFileSync, existsSync } = await import("node:fs");
+    const { createEssentialLogWorker } = await import("./essential-log-worker.js");
+    const { DEFAULT_ESSENTIAL_LOG_BOUNDS } = await import("./essential-log.js");
+    const worker = createEssentialLogWorker(root, DEFAULT_ESSENTIAL_LOG_BOUNDS);
+    let commits = 0;
+    const pending = worker.write(Buffer.from("one\n"), () => {
+      commits++;
+    });
+    try {
+      if (written) {
+        // Allow the worker's syscall to finish while deliberately withholding its
+        // message callback on this event loop. Exit must consume the shared commit.
+        const deadline = Date.now() + 5000;
+        while (!existsSync(path.join(root, "essential.jsonl"))) {
+          if (Date.now() > deadline) throw new Error("worker append did not start");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+      expect(
+        worker.settleSync((payload) => appendFileSync(path.join(root, "essential.jsonl"), payload)),
+      ).toBeUndefined();
+      await pending;
+      expect(commits).toBe(1);
+      expect(await readFile(path.join(root, "essential.jsonl"), "utf8")).toBe("one\n");
+    } finally {
+      worker.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -152,7 +152,7 @@ describe("what is kept", () => {
         step: "gateway",
         attempts: 3,
         retried: true,
-        nothing: null,
+        exitCode: null,
         directory: SECRET,
         id: "6e0a6a7e-1111-4e95-817f-084f44d18e8f",
         error: formatLogError(new TypeError(SECRET)),
@@ -163,7 +163,7 @@ describe("what is kept", () => {
       step: "gateway",
       attempts: 3,
       retried: true,
-      nothing: null,
+      exitCode: null,
       "error.name": "TypeError",
       droppedFields: 2,
     });
@@ -220,3 +220,22 @@ describe("what is kept", () => {
     expect(projectEssentialRecord(record("backend", "ssh-socket.missing", "warn"), TS)).toBeNull();
   });
 });
+
+test.each([1, true, null, { name: "TypeError", errno: -2 }])(
+  "undeclared error rejects secret-bearing keys with value %j",
+  (value) => {
+    const projected = projectEssentialRecord(
+      record("bridge.pi", "turn.failed", "error", {
+        "sk-ant-private-key": value,
+        error: { name: "TypeError", code: "ENOENT" },
+      }),
+      TS,
+    );
+    expect(JSON.stringify(projected)).not.toContain("sk-ant-private-key");
+    expect(projected?.fields).toEqual({
+      "error.name": "TypeError",
+      "error.code": "ENOENT",
+      droppedFields: 1,
+    });
+  },
+);

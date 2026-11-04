@@ -84,6 +84,8 @@ export const COMPATIBILITY_PATH_IDS = [
    * on a leaf that does not advertise `ticket-sync`.
    */
   "ticket-sync.older-node",
+  /** A terminal WebSocket client offered no input-results subprotocol: a frame per input. */
+  "terminal-websocket.per-input-results",
   /**
    * `/compact` sent instructions and the bridge compacted without confirming
    * them: it predates compaction instructions and ignored the body.

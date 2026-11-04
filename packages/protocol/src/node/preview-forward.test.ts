@@ -1107,3 +1107,99 @@ describe("forwardPreviewRequest with idle connection reuse", () => {
     expect(calls.connect).toBe(1);
   });
 });
+
+describe("forwardPreviewRequest body idle deadline", () => {
+  const IDLE_MS = 400;
+  const servers: Server[] = [];
+
+  afterEach(async () => {
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  async function listen(server: Server): Promise<number> {
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return (server.address() as AddressInfo).port;
+  }
+
+  async function forwarding(handler: (response: ServerResponse) => void | Promise<void>) {
+    const upstreamPort = await listen(
+      createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/plain" });
+        void handler(response);
+      }),
+    );
+    return listen(
+      createServer((request, response) => {
+        void forwardPreviewRequest(
+          request,
+          response,
+          policyFor(upstreamPort, "http://preview.test"),
+          { ...DEFAULT_PREVIEW_FORWARD_LIMITS, bodyIdleTimeoutMs: IDLE_MS },
+          {
+            connect: async () => {
+              const socket = connect(upstreamPort, "127.0.0.1");
+              await new Promise((resolve) => socket.once("connect", resolve));
+              return socket;
+            },
+          },
+        );
+      }),
+    );
+  }
+
+  function read(port: number): Promise<{ body: string; ended: boolean }> {
+    return new Promise((resolve) => {
+      let body = "";
+      const request = httpRequest({ host: "127.0.0.1", port, path: "/" }, (response) => {
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () => resolve({ body, ended: true }));
+        response.on("close", () => resolve({ body, ended: false }));
+        response.on("error", () => resolve({ body, ended: false }));
+      });
+      request.on("error", () => resolve({ body, ended: false }));
+      request.end();
+    });
+  }
+
+  test("a steady body outlasts the deadline on one timer, and silence still ends it", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    let idleTimers = 0;
+    globalThis.setTimeout = ((handler: () => void, delay?: number) => {
+      if (delay === IDLE_MS) idleTimers += 1;
+      return realSetTimeout(handler, delay);
+    }) as typeof setTimeout;
+    try {
+      const steady = await forwarding(async (response) => {
+        for (let chunk = 0; chunk < 10; chunk += 1) {
+          response.write("x");
+          await Bun.sleep(60);
+        }
+        response.end();
+      });
+      // Ten chunks 60 ms apart run past the 400 ms deadline only if each one moved it.
+      expect(await read(steady)).toEqual({ body: "x".repeat(10), ended: true });
+      expect(idleTimers).toBe(1);
+
+      idleTimers = 0;
+      const stalled = await forwarding(async (response) => {
+        response.write("x");
+        await Bun.sleep(60);
+        response.write("y");
+      });
+      const started = Date.now();
+      const outcome = await read(stalled);
+      expect(outcome).toEqual({ body: "xy", ended: false });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(IDLE_MS);
+      expect(idleTimers).toBe(1);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+});

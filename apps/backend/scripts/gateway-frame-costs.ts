@@ -66,7 +66,7 @@ type GatewayInternals = {
   };
 };
 
-type StartedGateway = {
+export type StartedGateway = {
   gateway: OrkestratorGateway;
   internals: GatewayInternals;
   url: URL;
@@ -84,14 +84,17 @@ const terminalBackend = {
   },
 };
 
-async function startGateway(): Promise<StartedGateway> {
+export async function startGateway(
+  backend: ConstructorParameters<typeof OrkestratorGateway>[0]["backend"] = terminalBackend,
+  options: Partial<ConstructorParameters<typeof OrkestratorGateway>[0]> = {},
+): Promise<StartedGateway> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "ork-gateway-frame-costs-"));
   const rendererRoot = path.join(dataDir, "dist");
   await mkdir(rendererRoot);
   await writeFile(path.join(rendererRoot, "index.html"), '<div id="root"></div>');
   const token = randomBytes(24).toString("hex");
   const gateway = new OrkestratorGateway({
-    backend: terminalBackend,
+    backend,
     dataDir,
     rendererRoot,
     bindAddress: "127.0.0.1",
@@ -99,6 +102,7 @@ async function startGateway(): Promise<StartedGateway> {
     env: { ORKESTRATOR_GATEWAY_TOKEN: token },
     allowNonTailscaleBind: true,
     legacyPreviewPortAccess: async () => "allowed" as const,
+    ...options,
   });
   const info = await gateway.start();
   if (!info) throw new Error("Gateway did not start");

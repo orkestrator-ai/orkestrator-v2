@@ -44,12 +44,14 @@ function suborkGroupRow(batch: NativeAgentSuborkBatchView): NativeMessage {
  * Places each call where it happened. A call older than the loaded window stays
  * out until its turn is paged in, rather than appearing at the top.
  */
-export function withSuborkGroupRows(
-  messages: readonly NativeMessage[],
+export function withSuborkGroupRows<T extends readonly NativeMessage[]>(
+  messages: T,
   batches: readonly NativeAgentSuborkBatchView[] | undefined,
   options: { canLoadEarlier?: boolean } = {},
-): NativeMessage[] {
-  if (!batches || batches.length === 0) return [...messages];
+): T | NativeMessage[] {
+  // The same array when there is nothing to add, so a transcript with no calls
+  // keeps every reference it had before suborks existed.
+  if (!batches || batches.length === 0) return messages;
   const firstAt = Date.parse(messages[0]?.createdAt ?? "");
   const rows = batches
     .filter(

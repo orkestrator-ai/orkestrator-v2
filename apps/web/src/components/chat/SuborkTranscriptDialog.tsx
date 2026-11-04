@@ -178,13 +178,15 @@ export function SuborkTranscriptDialog({
     subork.modelLabel ?? subork.model,
     subork.tokens !== undefined ? `${subork.tokens.toLocaleString()} tokens` : undefined,
     subork.readOnly === "advisory" ? "read-only is advisory on this agent" : undefined,
+    subork.guarded ? "a change to the workspace fails its answer" : undefined,
   ].filter(Boolean);
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent size="3xl" className="flex h-[85dvh] flex-col gap-3">
         <DialogHeader className="min-w-0">
           <DialogTitle className="truncate">{subork.name}</DialogTitle>
-          <DialogDescription className="truncate">
+          {/* Wraps: the read-only facts are the part a narrow window must not cut. */}
+          <DialogDescription className="break-words">
             {facts.join(" · ") || "Subork"}
           </DialogDescription>
         </DialogHeader>

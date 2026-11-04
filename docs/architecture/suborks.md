@@ -8,13 +8,16 @@ resolution, carrier, delivery body),
 [`native-agent-subork-host.ts`](../../apps/backend/src/core/native-agent-subork-host.ts)
 (the branch host),
 [`agent-tools-suborks.ts`](../../apps/backend/src/core/agent-tools-suborks.ts)
-(the tool) and
+(the tool on native tabs),
+[`control-mcp-coordinator-suborks.ts`](../../apps/backend/src/core/control-mcp-coordinator-suborks.ts)
+and [`coordinator-subork-actions.ts`](../../apps/backend/src/core/coordinator-subork-actions.ts)
+(the same tool in coordinator conversations) and
 [`storage-suborks.ts`](../../apps/backend/src/core/storage-suborks.ts) (the store).
 Outstanding live checks:
 [4340](../todo/agent-engines/4340-suborks-live-qualification.md).
 
-From any native agent tab, the active agent asks one or several other agents and
-gets their answers back. A subork runs on Orkestrator's own agent machinery
+From any native agent tab, an environment's or a coordinator conversation, the
+active agent asks one or several other agents and gets their answers back. A subork runs on Orkestrator's own agent machinery
 (`AgentBranchRunner`), not the provider's sub-agent framework, so it behaves the
 same whichever agent is asking and whichever is asked.
 
@@ -78,10 +81,13 @@ Mail details that follow from this:
 
 ## The tool
 
-`ask_agents`, on the general agent tools server, with the same name, shape and
-behaviour on every provider. It is listed for every tab because a provider may
-cache its tool list, and like `report_goal` it never prompts for approval: it
-writes only to Orkestrator's own store and starts read-only sessions. Its
+`ask_agents`, with the same name, shape and behaviour on every provider. An
+environment's tabs get it from the general agent tools server; a coordinator
+conversation, which has no agent tools server, gets it from its control MCP
+(`ask_coordinator_suborks` behind it). Both register the one schema and
+description in `agent-tools-subork-schema.ts`. It is listed for every tab because
+a provider may cache its tool list, and like `report_goal` it never prompts for
+approval: it writes only to Orkestrator's own store and starts read-only sessions. Its
 description (`SUBORK_TOOL_DESCRIPTION`) is what the plain-text form depends on, so
 it says when to use the tool, that it replaces the agent's own sub-agents for these
 requests, that a subork sees only the prompt, and to end the turn after calling.
@@ -118,6 +124,9 @@ and never guesses.
 - **Same environment, read-only.** It runs in the caller's environment and
   working directory as a plan turn with `readOnly: true`, the same boundary a
   goal's verifier and a reviewer use, and interactions are declined unattended.
+  A coordinator's working directory is the project's own checkout, so its
+  suborks run in the project home, the environment for that checkout
+  (`runEnvironmentId` on the row).
 - **It answers once.** The result is `submit_subork_answer` (result kind
   `subork-answer`). A turn that ends without submitting gets the runner's one
   reminder; if it replies in prose after that, the prose is the answer, because a
@@ -126,20 +135,46 @@ and never guesses.
   environment's tool connection.
 
 Read-only is held as strongly as each provider holds it, and each row records the
-tier:
+tier. Below `enforced`, Orkestrator adds its own check, the workspace read-only
+guard (`workspace-read-only-guard.ts`, the one build pipeline reviews and graph
+nodes use), so on every provider a subork that changed the workspace does not
+return an answer:
 
-| Provider | Tier | What holds it |
-| --- | --- | --- |
-| Claude | `enforced` | The Agent SDK's sandbox and read-only allowlist. `provider-configured` where the sandbox cannot run commands |
-| Codex | `enforced` | Its read-only sandbox |
-| Pi | `enforced` | The bridge's tool gate |
-| Cursor | `provider-configured` | Sandbox and tool restrictions, which the SDK offers no way to verify |
-| OpenCode | `provider-configured` | Its permission rules; it always loads the checkout's project configuration |
-| Grok | `advisory` | Write, edit and shell tools are removed and permission requests denied; a tool that does not ask is not stopped |
+| Provider | Tier | What the provider holds | Orkestrator's guard |
+| --- | --- | --- | --- |
+| Claude | `enforced` | The Agent SDK's sandbox and read-only allowlist | Only where the sandbox cannot run commands, which makes it `provider-configured` |
+| Codex | `enforced` | Its read-only sandbox | None needed |
+| Pi | `enforced` | The bridge's tool gate | None needed |
+| Cursor | `provider-configured` | Sandbox and tool restrictions, which the SDK offers no way to verify | Yes |
+| OpenCode | `provider-configured` | Its permission rules; it always loads the checkout's project configuration | Yes |
+| Grok | `advisory` | Write, edit and shell tools are removed and permission requests denied; a tool that does not ask is not stopped | Yes |
 
-A subork on Grok is therefore not a hard boundary. The tier comes from the shared
-enforcement matrix (`agentPolicyEnforcement`), and the transcript dialog says so
-when it is advisory.
+The guard, for a call with any guarded subork:
+
+1. **Before anything is sent**, it records HEAD and the Git-visible uncommitted
+   paths of the environment the suborks run in, once per call
+   (`workspaceBaseline` on the row), because they share the workspace. If that
+   state cannot be read (not a Git worktree, a failing probe), the guarded
+   targets fail on their own with that reason and never start; the others run.
+2. **When a guarded subork submits**, a change since the baseline is refused as a
+   correctable `worktree_changed` error naming the paths, so the subork can put
+   the tree back within its own turn.
+3. **When its answer is consumed**, the tree is compared again. A change fails
+   that subork with the paths named, its answer is dropped, and the delivery says
+   so. Nothing is reset: the workspace is the evidence. `certified` on the branch
+   makes this happen once, also when a restart falls between the answer and the
+   check.
+
+What remains, named: the guard **detects; it does not prevent**. A guarded subork
+can still write, and what it wrote stays until a person removes it. It sees only
+what `git status` sees plus HEAD: ignored files, `.git/` internals and paths
+outside the worktree are invisible, and so is a further edit to a path that was
+already uncommitted at the baseline. It cannot tell who changed the tree, so
+anything else writing the workspace while a guarded subork runs (the caller, a
+person, another tab) fails it too; the tool's result tells the caller not to
+change files until the answers arrive. The tier comes from the shared enforcement
+matrix (`agentPolicyEnforcement`) and is unchanged by the guard; the transcript
+dialog names an advisory tier and says when a change fails the answer.
 
 ## Limits
 
@@ -179,9 +214,32 @@ own tab can be the caller on one.
   failed. Deleting an environment removes its calls and transcripts.
 - **Metering.** Each target's token count is on its row, and its turns are recorded
   in the usage history in the caller's environment.
-- **Coordinators.** A coordinator conversation has no agent tools, so `/subork`
-  there is refused with that reason. Pipeline workers and terminal tabs are not
-  offered a way to be woken, so the tool refuses them too.
+- **Coordinators.** `/subork` and `ask_agents` work in main and side
+  conversations alike. The control MCP tool's command revalidates the
+  conversation's scope, runs the suborks in the project home (created on first
+  use, as the toolbar does) and sends the answers to the conversation's own
+  mailbox; its session's rows and Stop find them under the conversation's session
+  key. Closing the conversation stops its calls, because mail to a closed
+  conversation is redirected to the coordinator's current main. A project with no
+  local checkout has no project home, so the call is refused with that reason.
+  Deleting the project home removes the calls that ran in it.
+
+## Where `/subork` does not apply
+
+`/subork` is a composer command of native agent tabs, and it works in every one,
+on all six providers. Two kinds of session are not native agent tabs, and each
+gives its reason:
+
+- **Sessions Orkestrator runs itself**: pipeline workers, reviewers, goal
+  verifiers and suborks. Nobody types into them, and their turns are driven by
+  their owner, so a mail that woke one would start a turn its owner never asked
+  for. `/subork` sent to one is refused before anything reaches the provider
+  ("This session is run by Orkestrator itself…"), `ask_agents` refuses a pipeline
+  tab's credential ("a pipeline tab cannot be woken with the answers"), and a
+  subork's own credential refuses the tool (depth 1).
+- **Terminal tabs.** A provider's CLI in a terminal reads `/subork` as its own
+  input; Orkestrator does not see it. `ask_agents` refuses a terminal tab's
+  credential for the same reason as a pipeline's.
 
 ## Transcript
 
@@ -208,5 +266,7 @@ The `/subork` row shows the person's words (`withSuborkRequestText`), not the ca
 
 Both use the same path: the bridge is reached through `graphAgentBridgeConnection`
 and the tool connection names `host` or `container`, with the reachability check a
-container turn needs. Provider fakes cover both paths. Neither has live evidence yet
+container turn needs. The guard's probe is the backend's
+`get_environment_uncommitted_paths` command, which answers for both kinds. Provider
+fakes cover both paths. Neither has live evidence yet
 ([4340](../todo/agent-engines/4340-suborks-live-qualification.md)).

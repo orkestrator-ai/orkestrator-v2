@@ -11,6 +11,8 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 3. **Container run**: repeat one sweep in a container environment. Status: open.
 4. **Backend restart with real turns**: kill the backend mid-subork and confirm delivery. Status: open.
 5. **Electron agent suite on a quiet host**: rerun `test:agent:electron` for this branch where Docker is not churning the host's interfaces. Status: open.
+6. **Coordinator conversations**: run `/subork` from a main and a side coordinator conversation on real agents. Status: open.
+7. **Read-only guard on a real Grok subork**: confirm a Grok subork that writes is refused at submit and failed at consumption. Status: open.
 
 ### 1. Live six-provider sweep
 
@@ -28,7 +30,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Problem.** "Ask opus 5.5 and grok 4.7 to rate this" relies on the model choosing the tool from its description. A test proves the tool and description are offered, not what a model does with them.
 
-**Context.** `SUBORK_TOOL_DESCRIPTION` in `apps/backend/src/core/agent-tools-suborks.ts`. Some providers have their own sub-agent tools competing for the same request.
+**Context.** `SUBORK_TOOL_DESCRIPTION` in `apps/backend/src/core/agent-tools-subork-schema.ts`, shared by the agent tools server and the coordinator's control MCP. Some providers have their own sub-agent tools competing for the same request.
 
 **Investigation.** Not run.
 
@@ -67,6 +69,38 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 **Decisions.** Where to rerun it:
 - On a host with no concurrent Docker work, or on macOS with Docker Desktop (recommended). Pros: removes the 2340 cause without changing any test. Cons: needs a quiet window on a host whose desktop may be used.
 - Add headless launch to every Electron spec, as `design-canvas-electron.spec.ts` has. Pros: avoids the live desktop on beelink. Cons: unrelated test work, and it does not by itself avoid network churn.
+
+### 6. Coordinator conversations
+
+**Problem.** A coordinator conversation gets `ask_agents` from its control MCP, and its suborks run in the project home. Only provider fakes and a command-level test cover it.
+
+**Context.** `control-mcp-coordinator-suborks.ts`, `coordinator-subork-actions.ts`, and `native-agent-suborks-coordinator.test.ts`. Each platform's coordinator admits control MCP tools its own way: Claude by the `mcp__orkestrator__*` allowlist, Pi and OpenCode by `COORDINATOR_CONTROL_TOOL_NAMES`, Cursor by listing the server, Codex by server-level approval, and Grok under its deny policy.
+
+**Investigation.** Not run live. The command test shows the row on the conversation's session key, the run in the project home, and the mail in the conversation's mailbox.
+
+**Decisions.** No material choice: run task 1's two examples from a Claude or Codex main conversation and from a side conversation, then confirm the answers wake the conversation and the group appears in its transcript.
+
+### 7. Read-only guard on a real Grok subork
+
+**Problem.** Grok's read-only tier is `advisory`, so a Grok subork's answer stands only while the workspace's Git state matches the call's baseline. The guard is tested with a scripted probe, not against a real Grok turn and a real worktree.
+
+**Context.** `NativeAgentSuborkService.certifyGuarded` and `guardedAttempt`, `workspace-read-only-guard.ts`, and `native-agent-suborks-guard.test.ts`.
+
+**Investigation.** Not run live. A Grok subork that never writes is the expected case; the profile already removes its write, edit and shell tools.
+
+**Decisions.** How to provoke a write:
+- Ask a Grok subork, in a fixture environment, to create a file through any tool that still runs (recommended). Pros: shows the real refusal text reaching the model and its repair. Cons: spends real turns.
+- Write the file from a terminal while the subork runs. Pros: deterministic. Cons: shows only the consumption-time failure, which the fake test already covers.
+
+## Assumptions and decisions
+
+### Coordinator suborks run in the project home (task 6)
+
+A coordinator has no environment, and suborks need one for their sessions, transcripts and guard. The project home is the environment whose working directory is the coordinator's own checkout, so a subork reads exactly what the coordinator reads. Suborks are read-only, so this does not let a coordinator delegate writes into its checkout, the reason a coordinator credential may not otherwise target the home.
+
+### The guard covers every tier below `enforced` (task 7)
+
+Grok's gap was the reason, but Cursor, OpenCode and an unsandboxed Claude are also only provider-configured, so the same check applies to them. Codex, Pi and a sandboxed Claude are not guarded: their providers already block writes, and a guard there would only add a false failure when something else edits the workspace.
 
 ## Related
 

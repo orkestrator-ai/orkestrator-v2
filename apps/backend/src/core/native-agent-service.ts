@@ -3472,9 +3472,16 @@ export class NativeAgentService {
             }
           : planned;
       if (planned.kind === "subork") {
-        if (!session.logicalSessionKey.startsWith(`env-${session.environmentId}:`)) {
+        // Environment tabs and coordinator conversations (whose key is a tab key
+        // on their runtime id) each have `ask_agents` and a mailbox the answers
+        // wake. A session Orkestrator runs itself (a pipeline worker, a reviewer,
+        // a subork) has neither, so the request would only fail inside the turn.
+        if (
+          !session.logicalSessionKey.startsWith(`env-${session.environmentId}:`) &&
+          session.owner?.kind !== "coordinator"
+        ) {
           throw new PromptRejectedError(
-            "/subork works in an environment's agent tabs only: a coordinator has no agent tools to start one with.",
+            "/subork works in agent tabs and coordinator conversations. This session is run by Orkestrator itself (a pipeline, review or subork), which has no mailbox for the answers to wake.",
           );
         }
         input = { ...input, prompt: renderSuborkRequestCarrier(planned.request) };

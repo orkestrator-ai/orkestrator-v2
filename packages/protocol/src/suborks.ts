@@ -71,6 +71,11 @@ export interface NativeAgentSuborkView {
   endedAt?: string;
   tokens?: number;
   readOnly?: SuborkReadOnlyTier;
+  /**
+   * Below `enforced`: the backend checks the workspace's Git state before and
+   * after, and a change fails the subork.
+   */
+  guarded?: boolean;
   /** Moves whenever a newer transcript is stored. Absent: none stored yet. */
   transcriptRevision?: number;
 }

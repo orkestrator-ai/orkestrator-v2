@@ -1,5 +1,6 @@
 import type { PipelineTranscriptReference } from "@orkestrator/protocol/build-pipeline";
 import type { SuborkDeliveryState, SuborkReadOnlyTier } from "@orkestrator/protocol/suborks";
+import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 import type { AgentBranchRecord } from "./agent-branch-types.js";
 import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline-transcript-store.js";
 import type { StorageContext } from "./storage-context.js";
@@ -26,6 +27,13 @@ export interface PersistedSuborkBranch extends AgentBranchRecord {
   latestAction?: string;
   transcript?: PipelineTranscriptReference;
   readOnly?: SuborkReadOnlyTier;
+  /**
+   * Its tier is below `enforced`, so its answer is accepted only while the
+   * workspace still matches the call's `workspaceBaseline`.
+   */
+  guarded?: true;
+  /** A guarded subork's answer was checked against the baseline once. */
+  certified?: true;
 }
 
 /** A target that never started: unknown, ambiguous, disabled or over a limit. */
@@ -40,7 +48,19 @@ export interface PersistedSuborkRefusal {
 export interface PersistedSuborkBatch {
   version: typeof SUBORK_BATCH_VERSION;
   id: string;
+  /** The caller's environment: its mailbox, its projection and its usage. */
   environmentId: string;
+  /**
+   * Where the suborks run, when that is not the caller's environment: a
+   * coordinator conversation's suborks run in its project home, the
+   * environment whose working directory is the coordinator's own checkout.
+   */
+  runEnvironmentId?: string;
+  /**
+   * HEAD and the Git-visible uncommitted paths before any guarded subork was
+   * sent, captured once because every subork of the call shares the workspace.
+   */
+  workspaceBaseline?: WorkspaceGitBaseline;
   projectId: string;
   /** The caller's native session storage key. */
   sessionKey: string;
@@ -173,8 +193,11 @@ export class SuborksRepository {
 
   /** Environment deletion: removes every call it owned. */
   async deleteSuborkBatchesByEnvironment(environmentId: string): Promise<void> {
+    // Both ends: the caller's environment and the one its suborks ran in.
     for (const batch of await this.listSuborkBatches()) {
-      if (batch.environmentId === environmentId) await this.deleteSuborkBatch(batch.id);
+      if (batch.environmentId === environmentId || batch.runEnvironmentId === environmentId) {
+        await this.deleteSuborkBatch(batch.id);
+      }
     }
   }
 

@@ -63,6 +63,15 @@ import type { StorageService } from "./storage.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import type { RecordUsageTurnsInput } from "./usage-history-store.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import type { WorkflowResultService } from "./workflow-result-service.js";
+import {
+  readOnlyAcceptanceCheck,
+  WorkspaceBaselineUnavailableError,
+  WorkspaceReadOnlyGuard,
+  WorkspaceReadOnlyViolationError,
+  type ReadOnlyGuardSubject,
+  type WorkspaceSnapshotProbe,
+} from "./workspace-read-only-guard.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent.subork");
@@ -87,12 +96,23 @@ export class SuborkRefusedError extends Error {
   }
 }
 
+/** How a guarded subork is named in the guard's errors and refusals. */
+export const SUBORK_READ_ONLY_SUBJECT: ReadOnlyGuardSubject = {
+  stage: "This subork's answer",
+  activity: "the subork",
+};
+
 /** Who is asking, as the tool's credential established. */
 export interface SuborkCaller {
+  /** The caller's own environment: a coordinator conversation's runtime id for a coordinator. */
   environmentId: string;
   projectId: string;
   tabId: string;
   agent: AgentPlatform;
+  /** Where the suborks run, when not in `environmentId`: a coordinator's project home. */
+  runEnvironmentId?: string;
+  /** The caller's logical session key, when it is not the tab key `env-<environment>:<tab>`. */
+  logicalSessionKey?: string;
   /** This tab's delivery is Off: its mail waits in the inbox and does not wake it. */
   inboxOnly?: boolean;
 }
@@ -114,6 +134,8 @@ export interface SuborkAskResult {
     status: SuborkStatus;
     error?: string;
     readOnly?: string;
+    /** Its answer stands only if the workspace's Git state is unchanged afterwards. */
+    guarded?: boolean;
   }[];
   next: string;
 }
@@ -142,6 +164,14 @@ export interface NativeAgentSuborkServiceOptions {
   settingsTiers(environment: Environment): Promise<AgentSettingsTiers>;
   /** What the read-only tier may assume about the host. */
   enforcementHost(environment: Environment): AgentEnforcementHost;
+  /**
+   * Observes an environment's Git state for the read-only guard on suborks
+   * whose provider cannot enforce read-only itself. Without one, no subork is
+   * guarded.
+   */
+  workspaceProbe?: WorkspaceSnapshotProbe;
+  /** Where the guard's submit-time check is registered. */
+  acceptanceChecks?: Pick<WorkflowResultService, "addAcceptanceCheck">;
   /** The caller's projection changed: a view should read it again. */
   announce(sessionKey: string): void;
   pollIntervalMs?: number;
@@ -196,6 +226,7 @@ function branchView(branch: PersistedSuborkBranch): NativeAgentSuborkView {
     ...(branch.completedAt ? { endedAt: branch.completedAt } : {}),
     ...(branch.tokenCount !== undefined ? { tokens: branch.tokenCount } : {}),
     ...(branch.readOnly ? { readOnly: branch.readOnly } : {}),
+    ...(branch.guarded ? { guarded: true } : {}),
     ...(branch.transcript ? { transcriptRevision: branch.transcript.manifestRevision } : {}),
   };
 }
@@ -266,6 +297,11 @@ function batchIdForRequest(sessionKey: string, requestId: string): string {
 
 const READ_ONLY_POLICY = coordinatorEnforcementPolicy();
 
+/** The environment a call's suborks run in. */
+function runEnvironmentOf(batch: Pick<PersistedSuborkBatch, "environmentId" | "runEnvironmentId">) {
+  return batch.runEnvironmentId ?? batch.environmentId;
+}
+
 export class NativeAgentSuborkService {
   private readonly bySession = new Map<string, Map<string, NativeAgentSuborkBatchView>>();
   /** Suborks each session has started. Survives retention through each row's total. */
@@ -285,8 +321,19 @@ export class NativeAgentSuborkService {
   private readonly captureTranscript;
   private stopped = false;
   private lastSweepAt = 0;
+  private readonly guard: WorkspaceReadOnlyGuard | undefined;
 
   constructor(private readonly options: NativeAgentSuborkServiceOptions) {
+    if (options.workspaceProbe) {
+      const guard = new WorkspaceReadOnlyGuard(options.workspaceProbe);
+      this.guard = guard;
+      // At submit time the subork gets a correctable refusal, so it can put the
+      // tree back within its own turn before its answer is certified.
+      options.acceptanceChecks?.addAcceptanceCheck(
+        SUBORK_RESULT_KIND,
+        readOnlyAcceptanceCheck(guard, async (attempt) => this.guardedAttempt(attempt.resultKey)),
+      );
+    }
     const gate = new ElapsedPollGate(this.pollIntervalMs);
     this.pollGate = {
       count: (scope) => gate.count(scope, "explicit"),
@@ -376,7 +423,7 @@ export class NativeAgentSuborkService {
     const sessionKey = nativeAgentSessionStorageKey(
       caller.environmentId,
       caller.agent,
-      `env-${caller.environmentId}:${caller.tabId}`,
+      caller.logicalSessionKey ?? `env-${caller.environmentId}:${caller.tabId}`,
     );
     const token = { cancelled: false };
     const pending = this.pendingAdmissions.get(sessionKey) ?? new Set();
@@ -422,7 +469,8 @@ export class NativeAgentSuborkService {
     const batchId = input.requestId ? batchIdForRequest(sessionKey, input.requestId) : randomUUID();
     const repeated = input.requestId ? this.batches.getSuborkBatch(batchId) : null;
     if (repeated) return this.askResult(repeated, caller);
-    const environment = await this.options.storage.getEnvironment(caller.environmentId);
+    const runEnvironmentId = caller.runEnvironmentId ?? caller.environmentId;
+    const environment = await this.options.storage.getEnvironment(runEnvironmentId);
     if (!environment || environment.deletionRequestedAt) {
       throw new SuborkRefusedError("This environment no longer exists.");
     }
@@ -440,7 +488,7 @@ export class NativeAgentSuborkService {
     await rollout?.refresh().catch(() => undefined);
     const enabledAgents = normalizeAgentPlatforms(config.global.enabledAgentPlatforms, []);
     const [models, tiers] = await Promise.all([
-      this.options.modelCatalog(caller.environmentId).catch(() => [] as AgentModel[]),
+      this.options.modelCatalog(runEnvironmentId).catch(() => [] as AgentModel[]),
       this.options.settingsTiers(environment),
     ]);
     const context = {
@@ -513,6 +561,7 @@ export class NativeAgentSuborkService {
       }
       active += 1;
       total += 1;
+      const readOnly = agentPolicyEnforcement(READ_ONLY_POLICY, resolved.agent, host).tier;
       suborks.push({
         id,
         position,
@@ -524,10 +573,19 @@ export class NativeAgentSuborkService {
         ...(resolved.modelLabel ? { modelLabel: resolved.modelLabel } : {}),
         ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}),
         ...(resolved.fastMode !== undefined ? { fastMode: resolved.fastMode } : {}),
-        readOnly: agentPolicyEnforcement(READ_ONLY_POLICY, resolved.agent, host).tier,
+        readOnly,
+        ...(this.guard && readOnly !== "enforced" ? { guarded: true as const } : {}),
         status: "pending",
       });
     });
+    // A guarded subork whose starting state cannot be recorded could never be
+    // certified, so it does not start; the others still run.
+    const { baseline: workspaceBaseline, unstarted } = await this.captureBaseline(
+      runEnvironmentId,
+      suborks,
+      refused,
+    );
+    total -= unstarted;
     if (token.cancelled || this.stopped) {
       throw new SuborkRefusedError("This subork request was stopped before it could start.");
     }
@@ -539,6 +597,8 @@ export class NativeAgentSuborkService {
       projectId: caller.projectId,
       sessionKey,
       tabId: caller.tabId,
+      ...(runEnvironmentId !== caller.environmentId ? { runEnvironmentId } : {}),
+      ...(workspaceBaseline ? { workspaceBaseline } : {}),
       status: nothingStarted ? "settled" : "running",
       suborks,
       refused,
@@ -558,6 +618,90 @@ export class NativeAgentSuborkService {
     return this.askResult(created, caller);
   }
 
+  /**
+   * The read-only guard's baseline, captured once before any guarded subork is
+   * sent. Guarded targets are moved to `refused` when it cannot be observed.
+   */
+  private async captureBaseline(
+    environmentId: string,
+    suborks: PersistedSuborkBranch[],
+    refused: PersistedSuborkRefusal[],
+  ): Promise<{ baseline?: PersistedSuborkBatch["workspaceBaseline"]; unstarted: number }> {
+    const guarded = suborks.filter((branch) => branch.guarded);
+    if (!this.guard || guarded.length === 0) return { unstarted: 0 };
+    try {
+      return {
+        baseline: (await this.guard.capture(environmentId, SUBORK_READ_ONLY_SUBJECT)).baseline,
+        unstarted: 0,
+      };
+    } catch (error) {
+      if (!(error instanceof WorkspaceBaselineUnavailableError)) throw error;
+      for (const branch of guarded) {
+        suborks.splice(suborks.indexOf(branch), 1);
+        refused.push({
+          id: branch.id,
+          position: branch.position,
+          name: branch.name,
+          error:
+            `${AGENT_PLATFORM_LABELS[branch.agent]} cannot be stopped from writing, so its answer is accepted only if the workspace's Git state is unchanged afterwards, and that state could not be read: ${error.reason}. This target was not started.`.slice(
+              0,
+              SUBORK_LIMITS.errorMaxChars,
+            ),
+        });
+      }
+      return { unstarted: guarded.length };
+    }
+  }
+
+  /** The guarded subork a submitted answer belongs to, or null to let it through. */
+  private guardedAttempt(resultKey: string) {
+    if (this.stopped) return null;
+    for (const batchId of this.live.keys()) {
+      const batch = this.batches.getSuborkBatch(batchId);
+      if (batch?.status !== "running" || !batch.workspaceBaseline) continue;
+      const branch = batch.suborks.find((candidate) => candidate.requestId === resultKey);
+      if (!branch) continue;
+      return branch.guarded
+        ? {
+            environmentId: runEnvironmentOf(batch),
+            baseline: batch.workspaceBaseline,
+            subject: SUBORK_READ_ONLY_SUBJECT,
+          }
+        : null;
+    }
+    return null;
+  }
+
+  /**
+   * A guarded subork's answer stands only while the workspace still matches the
+   * call's baseline. A change fails it with the paths named; nothing is reset,
+   * so the workspace is the evidence. Every guarded subork of the call is judged
+   * on the same tree, because they share it and Git cannot say which one wrote.
+   */
+  private async certifyGuarded(batch: PersistedSuborkBatch): Promise<boolean> {
+    if (!this.guard) return false;
+    let changed = false;
+    for (const branch of batch.suborks) {
+      if (!branch.guarded || branch.certified || branch.status !== "completed") continue;
+      try {
+        await this.guard.certify(
+          runEnvironmentOf(batch),
+          batch.workspaceBaseline ?? null,
+          SUBORK_READ_ONLY_SUBJECT,
+        );
+      } catch (error) {
+        if (!(error instanceof WorkspaceReadOnlyViolationError)) throw error;
+        branch.status = "failed";
+        branch.error = error.message.slice(0, SUBORK_LIMITS.errorMaxChars);
+        delete branch.answer;
+        delete branch.answerBytes;
+      }
+      branch.certified = true;
+      changed = true;
+    }
+    return changed;
+  }
+
   private askResult(batch: PersistedSuborkBatch, caller: SuborkCaller): SuborkAskResult {
     const view = suborkBatchView(batch);
     const started = batch.suborks.length;
@@ -572,15 +716,21 @@ export class NativeAgentSuborkService {
               ...(entry.model && !entry.modelUnpinned ? { model: entry.model } : {}),
               status: rowStatus(entry),
               ...(entry.readOnly ? { readOnly: entry.readOnly } : {}),
+              ...(entry.guarded ? { guarded: true } : {}),
             }
           : { id: entry.id, name: entry.name, status: "failed" as const, error: entry.error },
       ),
       next:
-        started === 0
+        (started === 0
+          ? ""
+          : batch.suborks.some((entry) => entry.guarded)
+            ? "Do not change files in this workspace until the answers arrive: an agent marked guarded cannot be stopped from writing, so its answer is refused if the workspace's Git state changes while it runs. "
+            : "") +
+        (started === 0
           ? "None of the targets started, for the reasons listed. No message will follow: correct the targets and call again, or tell the person."
           : caller.inboxOnly
             ? `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. This tab's delivery is off, so the answers will wait in your inbox and will not wake you: read them with check_inbox on your next turn.`
-            : `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. End your turn now if you have nothing else to do. All the answers arrive together in a new message that wakes you, and you continue from there. Do not poll, and do not do the same work yourself.`,
+            : `${view.suborks.length === 1 ? "The subork is" : "The suborks are"} running. End your turn now if you have nothing else to do. All the answers arrive together in a new message that wakes you, and you continue from there. Do not poll, and do not do the same work yourself.`),
     };
   }
 
@@ -689,7 +839,7 @@ export class NativeAgentSuborkService {
 
   private async abortSessions(batch: PersistedSuborkBatch): Promise<void> {
     const environment = await this.options.storage
-      .getEnvironment(batch.environmentId)
+      .getEnvironment(runEnvironmentOf(batch))
       .catch(() => null);
     if (!environment) return;
     await Promise.all(
@@ -847,7 +997,7 @@ export class NativeAgentSuborkService {
   }
 
   private async advance(batch: PersistedSuborkBatch): Promise<void> {
-    const environment = await this.options.storage.getEnvironment(batch.environmentId);
+    const environment = await this.options.storage.getEnvironment(runEnvironmentOf(batch));
     if (!environment || environment.deletionRequestedAt || environment.status !== "running") {
       await this.failRemaining(batch.id, "The environment stopped before the subork answered.");
       Object.assign(batch, this.batches.getSuborkBatch(batch.id) ?? batch);
@@ -880,6 +1030,7 @@ export class NativeAgentSuborkService {
       }),
     );
     await runner.flushObservations();
+    if (await this.certifyGuarded(batch)) await host.save();
     for (const branch of batch.suborks) {
       if (agentBranchSettled(branch)) this.releaseBranch(batch, branch);
     }
@@ -894,7 +1045,7 @@ export class NativeAgentSuborkService {
   private releaseBranch(batch: PersistedSuborkBatch, branch: PersistedSuborkBranch): void {
     if (branch.providerSessionId) this.progress.forget(branch.providerSessionId);
     this.actionReadAt.delete(branch.id);
-    this.options.providers.release(batch.environmentId, branch.agent, branch.id);
+    this.options.providers.release(runEnvironmentOf(batch), branch.agent, branch.id);
   }
 
   /** Every target still running resolves as failed, so the caller still hears back. */

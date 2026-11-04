@@ -128,3 +128,22 @@ test("Stop failure gives feedback and keeps retry available", async ({ page }) =
     path: path.resolve("output/visual-previews/subork-stop-error-after.png"),
   });
 });
+
+test("a guarded subork's transcript says a workspace change fails its answer", async ({ page }) => {
+  await page.goto("/subork-group?paging=1");
+  await page.getByRole("button", { name: /Council r12: Sol review/ }).click();
+  const description = page
+    .getByRole("dialog")
+    .getByText(/a change to the workspace fails its answer/);
+  await expect(description).toBeVisible();
+  const preview = path.resolve("output/visual-previews");
+  const layout = test.info().project.name;
+  await page.screenshot({
+    path: path.join(preview, `subork-guarded-dialog-after-wrapped-${layout}.png`),
+  });
+  // An enforced subork is not guarded, and says nothing of it.
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /Council r12: Opus review/ }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("dialog").getByText(/fails its answer/)).toHaveCount(0);
+});

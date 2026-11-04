@@ -203,8 +203,9 @@ The backend merges runtime actions into the provider list
   platform). It needs a request and takes no attachments. Unlike `/goal` it is a
   turn: a busy agent queues it, and dispatch rewrites it to a literal carrier
   asking the current agent to call `ask_agents`, so a retry resends that text. It
-  is refused outside an environment's agent tab, and while a handoff waits for its
-  first message. See [suborks.md](suborks.md).
+  works in environment tabs and coordinator conversations, and is refused in a
+  session Orkestrator runs itself (a pipeline worker, reviewer or subork) and
+  while a handoff waits for its first message. See [suborks.md](suborks.md).
 
 Deduplication is by identity, never by lower-cased display name.
 

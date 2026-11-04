@@ -174,7 +174,8 @@ export class SuborkBranchHost implements AgentBranchHost<PersistedSuborkBranch> 
     actionReadAt: Map<string, number>,
   ) {
     this.workflowId = `subork:${batch.id}`;
-    this.environmentId = batch.environmentId;
+    // Where the turns run: a coordinator caller's suborks run in its project home.
+    this.environmentId = environment.id;
     this.progress = dependencies.progress;
     this.actionReadAt = actionReadAt;
     if (dependencies.pollGate) this.pollGate = dependencies.pollGate;
@@ -488,7 +489,7 @@ export class SuborkBranchHost implements AgentBranchHost<PersistedSuborkBranch> 
     if (!turns || turns.length === 0) return;
     this.dependencies.recordUsage({
       sessionKey: `${this.batch.sessionKey}\0subork\0${branch.id}`,
-      environmentId: this.environmentId,
+      environmentId: this.batch.environmentId,
       platform: branch.agent,
       providerSessionId: sessionId,
       turns,

@@ -60,6 +60,8 @@ export interface SuborkWorldOptions {
   rolloutAllows?: (agent: AgentPlatform) => boolean;
   environmentType?: "local" | "container";
   service?: Partial<NativeAgentSuborkServiceOptions>;
+  /** The read-only guard's probe; its submit-time check goes on the world's result service. */
+  workspaceProbe?: NativeAgentSuborkServiceOptions["workspaceProbe"];
   /** What a fake transcript holds. */
   messages?: () => unknown[];
   contextUsage?: () => Record<string, unknown> | undefined;
@@ -75,6 +77,8 @@ export interface SuborkWorld {
   agentTools: AgentToolsServer;
   reachabilityChecks: string[];
   connectionTargets: string[];
+  /** The environment each subork turn's tool connection was issued for. */
+  connectionEnvironments: string[];
   provider(agent: AgentPlatform): FakeAgentProvider;
   /** Calls `ask_agents` as the caller and returns the handle. */
   ask(args: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -117,6 +121,7 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
   const announced: string[] = [];
   const reachabilityChecks: string[] = [];
   const connectionTargets: string[] = [];
+  const connectionEnvironments: string[] = [];
   const container = options.environmentType === "container";
   // A container turn's URL names the host from inside Docker, which a test cannot
   // reach, so the target is recorded and the call stays on loopback.
@@ -139,6 +144,7 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
       agentTools: {
         workflowResultConnection: (environmentId, projectId, target, resultKey, provider) => {
           connectionTargets.push(target);
+          connectionEnvironments.push(environmentId);
           return agentTools.workflowResultConnection(
             environmentId,
             projectId,
@@ -162,6 +168,9 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
       announce: (sessionKey) => announced.push(sessionKey),
       autoAdvance: false,
       pollIntervalMs: 0,
+      ...(options.workspaceProbe
+        ? { workspaceProbe: options.workspaceProbe, acceptanceChecks: workflowResults }
+        : {}),
       ...options.service,
     });
   const config = await storage.loadConfig();
@@ -190,6 +199,7 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
     agentTools,
     reachabilityChecks,
     connectionTargets,
+    connectionEnvironments,
     provider: (agent) => providers.get(agent)!,
     ask: async (args) => {
       const result = await tools.call("ask_agents", args);

@@ -37,6 +37,7 @@ const BATCH: NativeAgentSuborkBatchView = {
       line: "Read src/components/chat/SuborkGroup.tsx",
       startedAt: ago(292),
       readOnly: "provider-configured",
+      guarded: true,
     },
     {
       id: "grok",
@@ -132,7 +133,7 @@ export function SuborkGroupFixture() {
             environmentId="fixture"
             containerId={undefined}
             batchId="batch-1"
-            subork={BATCH.suborks[0]!}
+            subork={BATCH.suborks.find((subork) => subork.id === opened) ?? BATCH.suborks[0]!}
             onClose={() => setOpened("")}
           />
         )}

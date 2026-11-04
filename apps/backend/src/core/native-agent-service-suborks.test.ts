@@ -57,7 +57,7 @@ describe("/subork", () => {
     });
   }
 
-  test("is refused outside an environment's agent tab, with why", async () => {
+  test("is refused in a session Orkestrator runs itself, with why", async () => {
     const stub = createProviderStub("claude", {
       interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
     });
@@ -77,7 +77,7 @@ describe("/subork", () => {
             requestId: "request-1",
             command: { kind: "typed" },
           }),
-        ).rejects.toThrow("agent tabs only");
+        ).rejects.toThrow("agent tabs and coordinator conversations");
         expect(stub.send).not.toHaveBeenCalled();
       },
     );

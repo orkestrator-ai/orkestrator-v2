@@ -6,6 +6,7 @@ import { goalStatusSummary, sessionGoal } from "@orkestrator/protocol/native-age
 import { goalWorkspaceFingerprint, runGoalCheck } from "./native-agent-goal-check.js";
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
 import { NativeAgentSuborkService } from "./native-agent-suborks.js";
+import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
@@ -1655,6 +1656,9 @@ export class OrkestratorBackend {
           ? defaultCoordinatorHostCapabilities()
           : { claudeSandbox: false },
       announce: (sessionKey) => this.nativeAgents.announceSuborks(sessionKey),
+      // Below `enforced`, a subork's answer is certified against the workspace.
+      workspaceProbe: commandWorkspaceProbe(invokeCommand),
+      acceptanceChecks: this.workflowResults,
     });
     context.suborks = this.suborks;
     this.agentTools.setSuborkToolHost?.(this.suborks);

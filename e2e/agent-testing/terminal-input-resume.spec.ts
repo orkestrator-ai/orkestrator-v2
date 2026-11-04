@@ -204,7 +204,7 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     await page.keyboard.press("Enter");
     await expect.poll(output).toContain("resume.txt");
     await page.keyboard.type("ibefore-");
-    await expect.poll(output).toContain("before-");
+    await expect.poll(screen).toContain("before-");
     // nvim's terminal queries are answered as writes. Let them finish so the
     // write lost below is the keystroke.
     await page.waitForTimeout(1_000);

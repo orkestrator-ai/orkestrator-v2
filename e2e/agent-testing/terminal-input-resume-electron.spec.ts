@@ -270,7 +270,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await window.keyboard.press("Enter");
     await expect.poll(output).toContain("resume.txt");
     await window.keyboard.type("ibefore-");
-    await expect.poll(output).toContain("before-");
+    await expect.poll(screen).toContain("before-");
 
     // Let nvim’s terminal-query replies settle before losing a keystroke response.
     await window.waitForTimeout(1_000);

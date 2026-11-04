@@ -1188,3 +1188,35 @@ test("a realm's command coordinator link selects that project and Coordinator in
   expect(useUIStore.getState().selectedProjectId).toBe("command-project");
   expect(useUIStore.getState().projectBoardTab).toBe("coordinator");
 });
+
+test("phone compact sends activity or repository grouping according to the displayed sort", async () => {
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    matches: query === MOBILE_SHELL_MEDIA_QUERY,
+    addEventListener() {},
+    removeEventListener() {},
+  })) as unknown as typeof window.matchMedia;
+  try {
+    const fake = install(true);
+    useMachineViewStore.setState({ grouping: "compact" });
+    useUIStore.setState({ environmentSortMode: "activity" });
+    renderRegion(anchorElement());
+    act(() => useRemoteWorkspaceStore.getState().open("bk_a", {}));
+    await waitFor(() => expect(fake.workspaceViews.setVisible).toHaveBeenCalled());
+    act(() =>
+      fake.emitViewEvent({ viewId: "view-1", type: "message", message: { type: "ready" } }),
+    );
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+      type: "grouping",
+      grouping: "activity",
+    });
+    act(() => useUIStore.setState({ environmentSortMode: "project" }));
+    expect(fake.workspaceViews.send).toHaveBeenCalledWith("view-1", {
+      type: "grouping",
+      grouping: "repository",
+    });
+  } finally {
+    cleanup();
+    window.matchMedia = originalMatchMedia;
+  }
+});

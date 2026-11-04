@@ -2912,6 +2912,8 @@ test("a remote terminal link opens the native localhost forward in a separate br
     try {
       await second.evaluate(
         async ({ environmentId, url }) => {
+          const factoryPath = "/src/lib/terminal-xterm.ts";
+          const { createXtermTerminal } = await import(factoryPath);
           const terminalPath = "/src/stores/terminalPortalStore.ts";
           const environmentPath = "/src/stores/environmentStore.ts";
           const capabilitiesPath = "/src/stores/previewServiceStore.ts";
@@ -2937,7 +2939,10 @@ test("a remote terminal link opens the native localhost forward in a separate br
           document.body.append(host);
           const { terminal } = useTerminalPortalStore
             .getState()
-            .createTerminal({ environmentId, tabId: "external-preview-link", containerId: null });
+            .createTerminal(
+              { environmentId, tabId: "external-preview-link", containerId: null },
+              createXtermTerminal,
+            );
           terminal.open(host);
           terminal.resize(40, 3);
           await new Promise<void>((resolve) =>

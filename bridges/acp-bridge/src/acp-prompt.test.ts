@@ -508,7 +508,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_000,
       cacheWriteTokens: 45,
       costUsd: 0.042,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage?.percentage).toBeCloseTo(7.8375);
 
@@ -525,7 +525,7 @@ describe("ACP bridge", () => {
       cacheReadTokens: 5_000,
       cacheWriteTokens: 45,
       costUsd: 0.042,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(restored.contextUsage?.percentage).toBeCloseTo(7.8375);
   });
@@ -570,73 +570,11 @@ describe("ACP bridge", () => {
       // frame that closes the turn omits it, so this value proves the two
       // reports merged instead of the later one replacing the earlier.
       cacheWriteTokens: 20,
-      source: "cursor",
+      source: "acp-fixture",
     });
     expect(session.contextUsage).not.toHaveProperty("maximumTokens");
     expect(session.contextUsage).not.toHaveProperty("percentage");
     expect(session.contextUsage).not.toHaveProperty("costUsd");
-  });
-
-  test("leaves a structured turn dispatched during a Cursor replay intact", async () => {
-    const bridge = await spawnBridge({
-      env: {
-        ACP_MAX_TRANSCRIPT_BYTES: String(1024 * 1024),
-        FAKE_ACP_LOAD_DELAY_MS: "600",
-        FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA: "1",
-      },
-    });
-    const created = (await nativeFetch(`${bridge.base}/session/create`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({ clientSessionKey: "env-cursor-structured:tab-1" }),
-    }).then((response) => response.json())) as { id: string };
-
-    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({ prompt: "CURSOR_OVERSIZED_REPLAY" }),
-    });
-    await waitFor(
-      async () =>
-        nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
-          (response) => response.json(),
-        ) as Promise<{ status: string }>,
-      (value) => value.status === "idle",
-    );
-
-    // Enrichment re-bounds the transcript, and a trim there must never be read
-    // as *this* turn overflowing: a structured turn that failed would cancel
-    // the live child and hand the caller an error for someone else's growth.
-    const structuredResponse = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({
-        prompt: 'DIRECT:{"ok":true}',
-        requestId: "cursor-structured-1",
-        outputSchema: { type: "object" },
-      }),
-    });
-    expect(structuredResponse.status).toBe(202);
-
-    const settled = await waitFor(
-      async () =>
-        nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
-          (response) => response.json(),
-        ) as Promise<{ status: string; error?: string }>,
-      (value) => value.status === "idle" || value.status === "error",
-    );
-    expect(settled.status).toBe("idle");
-    expect(settled.error).toBeUndefined();
-
-    const structured = await waitFor(
-      async () =>
-        nativeFetch(
-          `${bridge.base}/session/${created.id}/structured-output?requestId=cursor-structured-1`,
-          { headers: bridge.headers },
-        ).then((response) => response.json()) as Promise<{ structuredOutput: unknown }>,
-      (value) => value.structuredOutput !== null,
-    );
-    expect(structured.structuredOutput).toMatchObject({ ok: true, value: { ok: true } });
   });
 
   test("fails a structured turn when one response exhausts the per-message limit", async () => {

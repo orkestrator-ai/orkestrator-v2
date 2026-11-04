@@ -1,3 +1,4 @@
+import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import type { ConnectionManager } from "./connection-manager.js";
 import { PORTAL_EVENT_CHANNEL } from "./federation-ipc.js";
 import { rebindWindowPreviews, type WindowPreviewRuntime } from "./preview-connection-backend.js";
@@ -20,6 +21,11 @@ export interface DesktopWindowContextRecord
   contents: RendererContents;
   slot: number;
   artifactHosts: { dispose(): void };
+  /**
+   * Read when the window was created: on Local it takes backend events and
+   * commands over the gateway itself. Never set on a workspace realm.
+   */
+  localGatewayTransport?: boolean;
 }
 
 /** The part of `ConnectionManager` the window bookkeeping uses. */
@@ -116,11 +122,41 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     return context;
   }
 
+  /** An event main itself raises for a connection; it reaches every renderer on it. */
   emitToConnection(connectionId: string, event: string, payload: unknown): void {
+    this.sendToConnection(connectionId, event, payload, false);
+  }
+
+  /**
+   * An event from a connection's backend. A window on the direct gateway
+   * transport already has it from its own stream, so relaying it again would
+   * deliver it twice.
+   */
+  relayBackendEvent(connectionId: string, event: string, payload: unknown): void {
+    this.sendToConnection(connectionId, event, payload, connectionId === LOCAL_CONNECTION_ID);
+  }
+
+  /** Whether any open window would take terminal output from main's local stream. */
+  needsLocalTerminalRelay(): boolean {
+    for (const context of this.contexts.values()) {
+      if (!context.localGatewayTransport) return true;
+    }
+    return false;
+  }
+
+  private sendToConnection(
+    connectionId: string,
+    event: string,
+    payload: unknown,
+    skipDirectTransport: boolean,
+  ): void {
     const connections = this.options.connections();
     if (!connections) return;
     for (const context of this.renderers()) {
-      if (connections.getConnectionId(context.scope) === connectionId) {
+      if (
+        connections.getConnectionId(context.scope) === connectionId &&
+        !(skipDirectTransport && context.localGatewayTransport)
+      ) {
         emitToContents(context.contents, event, payload);
       }
       // The portal channel of a realm: its window's command node.

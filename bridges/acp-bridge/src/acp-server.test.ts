@@ -5,11 +5,9 @@ import { resolve } from "node:path";
 
 import {
   children,
-  here,
   nativeFetch,
   NativeAbortController,
   spawnBridge,
-  stopChild,
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
@@ -200,49 +198,6 @@ describe("ACP bridge", () => {
     );
   });
 
-  test("closes an outstanding Cursor replay process when the bridge shuts down", async () => {
-    const directory = await temporaryDirectory();
-    const lifecycleFile = resolve(directory, "cursor-replay-shutdown.log");
-    const bridge = await spawnBridge({
-      env: {
-        FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
-        FAKE_ACP_LOAD_DELAY_MS: "5000",
-        FAKE_ACP_REPLAY_CURSOR_TOOL_METADATA: "1",
-      },
-    });
-    const created = (await nativeFetch(`${bridge.base}/session/create`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({ clientSessionKey: "env-cursor-shutdown:tab-1" }),
-    }).then((response) => response.json())) as { id: string };
-
-    await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers: bridge.headers,
-      body: JSON.stringify({ prompt: "CURSOR_GENERIC_TOOLS" }),
-    });
-    // The replay child is parked in `session/load` and is not reachable from
-    // any session's `child`, so only its own registry can close it.
-    const started = await waitFor(
-      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
-      (value) => value.includes("load:"),
-    );
-    expect(started.match(/^start:/gm)?.length ?? 0).toBe(2);
-
-    await stopChild(bridge.child);
-    const stopped = await waitFor(
-      () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
-      (value) => (value.match(/^stop:/gm)?.length ?? 0) === 2,
-    );
-    const startedPids = new Set(
-      (stopped.match(/^start:(\d+)$/gm) ?? []).map((line) => line.slice("start:".length)),
-    );
-    const stoppedPids = new Set(
-      (stopped.match(/^stop:(\d+)$/gm) ?? []).map((line) => line.slice("stop:".length)),
-    );
-    expect(stoppedPids).toEqual(startedPids);
-  });
-
   test("settles a tool left in flight when the agent process dies mid-turn", async () => {
     const { base, headers } = await spawnBridge();
     const created = (await nativeFetch(`${base}/session/create`, {
@@ -321,7 +276,9 @@ describe("ACP bridge", () => {
         headers: hung.headers,
       });
       expect(response.status).toBe(500);
-      expect(await response.json()).toMatchObject({ error: "cursor ACP initialize timed out" });
+      expect(await response.json()).toMatchObject({
+        error: "acp-fixture ACP initialize timed out",
+      });
     }
     expect((await nativeFetch(`${hung.base}/global/health`)).ok).toBe(true);
 
@@ -331,7 +288,9 @@ describe("ACP bridge", () => {
       headers: malformed.headers,
     });
     expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({ error: "cursor ACP emitted malformed JSON" });
+    expect(await response.json()).toMatchObject({
+      error: "acp-fixture ACP emitted malformed JSON",
+    });
   });
 
   test("counts in-flight creation reservations against the session cap", async () => {

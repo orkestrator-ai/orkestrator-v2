@@ -101,6 +101,11 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
       toTabId: worker.tabId,
       body: "Please report your status.",
     });
+    // Admitted as ordinary mail waiting to wake the agent.
+    expect(delivered.placement).toBe("pending-inject");
+    // Storing the mail wakes the backend's drain in the background, so the
+    // stored placement races it. Settle the drain before reading it back.
+    await world.deliver();
     const incoming = await world.storage.getAgentMailMessage(
       worker.environmentId,
       worker.tabId,
@@ -117,8 +122,8 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     });
     expect(incoming.trust).toBe("same-project");
     expect(incoming.route).toBe("coordinator");
-    expect(incoming.placement).toBe("pending-inject");
-    expect(delivered.placement).toBe("pending-inject");
+    expect(incoming.placement).toBe("injected");
+    expect(world.received(worker)).toEqual([incoming.body]);
     // The command node's transcript names the recipient by environment and tab.
     const tabName = (await world.storage.getAgentMailMailbox(worker.environmentId, worker.tabId))
       .descriptor.displayName;
@@ -438,6 +443,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     });
     await instance.collector.collect("bk_leaf" as never);
     expect(acks).toEqual([7]);
+    // Storing the mail wakes the backend's drain in the background, so the
+    // stored placement races it. Settle the drain before reading it back.
+    await world.deliver();
     const mailbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId, {
       limit: 10,
     });
@@ -464,7 +472,8 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
       title: "Claude 2",
     });
     expect(message.trust).toBe("same-project");
-    expect(message.placement).toBe("pending-inject");
+    expect(message.placement).toBe("injected");
+    expect(world.received(main)).toEqual([message.body]);
   });
 
   test("a report from a leaf worker the coordinator is waiting on is held until the delegation settles", async () => {

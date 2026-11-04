@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
 import { AutoSwitchBadge } from "@/components/settings/AutoSwitchBadge";
+import { CoordinatorAccountSwitchGrant } from "@/components/settings/CoordinatorAccountSwitchGrant";
 import { useAccountMachine } from "@/components/settings/account-machine";
 import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
 import { useAgentAccountsChanged } from "@/hooks/useAgentAccountsChanged";
@@ -520,6 +521,16 @@ export function AgentAccountsSection({
               ),
             )
           }
+        />
+      ) : null}
+
+      {snapshot ? (
+        <CoordinatorAccountSwitchGrant
+          platform={platform}
+          platformLabel={platformLabel}
+          machine={machine}
+          machineName={machineName}
+          refreshKey={`${reloadToken}:${snapshot.active[platform] ?? ""}`}
         />
       ) : null}
 

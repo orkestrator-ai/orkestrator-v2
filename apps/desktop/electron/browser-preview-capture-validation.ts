@@ -140,7 +140,7 @@ export function startCaptureInput(value: unknown): BrowserPreviewStartCaptureInp
 
 export function replaceImageInput(value: unknown): BrowserPreviewReplaceImageInput {
   if (!isRecord(value)) throw new Error("Expected image replacement details");
-  const { imageDataUrl, manualRegions, regions } = value;
+  const { imageDataUrl, imageBytes, manualRegions, regions } = value;
   if (
     regions !== undefined &&
     (!Array.isArray(regions) ||
@@ -156,6 +156,12 @@ export function replaceImageInput(value: unknown): BrowserPreviewReplaceImageInp
     throw new Error("Expected a bounded PNG data URL or null");
   }
   if (
+    imageBytes !== undefined &&
+    (!(imageBytes instanceof Uint8Array) || imageBytes.length > WEB_ANNOTATION_LIMITS.imageBytes)
+  ) {
+    throw new Error("Expected bounded PNG bytes");
+  }
+  if (
     typeof manualRegions !== "number" ||
     !Number.isSafeInteger(manualRegions) ||
     manualRegions < 0 ||
@@ -165,6 +171,7 @@ export function replaceImageInput(value: unknown): BrowserPreviewReplaceImageInp
   }
   return {
     imageDataUrl,
+    ...(imageBytes ? { imageBytes } : {}),
     manualRegions,
     ...(regions
       ? {

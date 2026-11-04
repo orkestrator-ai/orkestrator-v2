@@ -309,6 +309,17 @@ are swept only after `orphanGraceMs`. Soft-budget pressure releases the
 oldest archived turn endpoints; the hard budget refuses new captures with an
 explicit reason. A removed body answers `body-expired` with retained counts.
 
+An object's mtime is its orphan fence: it protects an object a capture has
+adopted but no ledger row names yet. `ObjectStore.reuse` reads the fence with
+one `lstatSync` and leaves it alone while it is younger than half the grace,
+which leaves at least the other half for the capture's deadline and the sweep's
+walk of the ledger. An older fence is renewed under the store lock, so a renewal
+can never land between a sweep's `lstat` and its `rm`. The capture's closure
+check skips objects it wrote or proved present in the same pass, unless
+`removedObjects` shows a sweep removed something since the pass began.
+`capture-orphan-fence.test.ts` races retention against a capture on both sides
+of the half-grace boundary.
+
 Measurements are pruned too. Every re-measurement stores its whole file list
 (an environment's net diff against its base can be thousands of files), so
 superseded ones would otherwise grow `change_measurement_files` without bound.

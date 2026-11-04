@@ -4,6 +4,10 @@ import {
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+} from "@orkestrator/protocol/coordinator-account-switch-grant";
 
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -28,6 +32,7 @@ import {
   submitAgentAccountLoginCode,
 } from "./agent-accounts.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
+import { accountSwitchGrantState } from "./nodes/index.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
@@ -156,6 +161,36 @@ export function registerAgentAccountCommands(
     const snapshot = await resumeAgentAccountAutoSwitch(context, platform);
     context.accountAutoSwitch?.nudge(platform);
     return snapshot;
+  });
+  /**
+   * The standing permission for this machine's coordinators to switch accounts
+   * without asking, and the switches it allowed. Separate from
+   * `update_global_config`, which never writes it.
+   */
+  register(GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND, async (args, context) => {
+    assertOnlyKeys(args, ["platform"], "arguments");
+    return accountSwitchGrantState(
+      {
+        loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
+        actions: context.nodeCoordination?.actions ?? null,
+      },
+      args.platform === undefined ? undefined : asAccountPlatform(args.platform),
+    );
+  });
+  register(SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND, async (args, context) => {
+    assertOnlyKeys(args, ["platform", "enabled"], "arguments");
+    const platform = asAccountPlatform(args.platform);
+    await context.storage.setCoordinatorAccountSwitchGrant(
+      platform,
+      asRequiredBoolean(args.enabled, "enabled"),
+    );
+    return accountSwitchGrantState(
+      {
+        loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
+        actions: context.nodeCoordination?.actions ?? null,
+      },
+      platform,
+    );
   });
   register("rename_agent_account", async (args, context) => {
     assertOnlyKeys(args, ["platform", "accountId", "label"], "arguments");

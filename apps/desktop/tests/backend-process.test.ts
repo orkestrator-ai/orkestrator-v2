@@ -1258,6 +1258,18 @@ sleep 5
     stubFetch(async () => new Response("upstream exploded", { status: 503 }));
     await expect(client.invoke("fail")).rejects.toThrow("Backend request failed with HTTP 503");
 
+    // A proxy's own 502 has an empty body. It reports the failure and never
+    // resends, because the command may already have run.
+    let attempts = 0;
+    stubFetch(async () => {
+      attempts += 1;
+      return new Response("", { status: 502 });
+    });
+    await expect(client.invoke("send_prompt")).rejects.toThrow(
+      "Backend request failed with HTTP 502",
+    );
+    expect(attempts).toBe(1);
+
     stubFetch(async () => new Response("not json", { status: 200 }));
     await expect(client.setWebClientEnabled(true)).rejects.toThrow();
   });

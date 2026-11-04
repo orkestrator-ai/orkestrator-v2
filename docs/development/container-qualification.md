@@ -1113,10 +1113,10 @@ disposable profile with container fixtures and never starts an agent
 session.
 
 ```bash
-# In its own long-lived terminal; --headless-electron keeps the profile's
+# In its own long-lived terminal; --headless keeps the profile's
 # window out of the desktop session on Linux.
 mise run dev:test --profile ui-load --fixture-environments container \
-  --no-agent-credentials --agent-platforms claude --headless-electron
+  --no-agent-credentials --agent-platforms claude --headless
 # Once `mise run dev:status --profile ui-load --json` reports ready:
 mise exec -- bun e2e/perf/multi-environment-ui-perf.ts --profile ui-load \
   [--environments 3] [--workers 2] [--memory-mib 0] [--phases idle,busy,idle] \

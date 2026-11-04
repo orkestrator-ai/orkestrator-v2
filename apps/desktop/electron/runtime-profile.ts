@@ -302,6 +302,28 @@ export function chromiumSwitchesForRuntime(
   return flavor === "agent-test" && platform === "darwin" ? ["use-mock-keychain"] : [];
 }
 
+/**
+ * Switches that start Electron with no display on Linux: Chromium's headless
+ * Ozone platform with the GPU off. `--password-store=basic` keeps `safeStorage`
+ * off the signed-in user's keyring, whose unlock prompt would open on their
+ * desktop. These have to be on Electron's command line: appended from the main
+ * script (`chromiumSwitchesForRuntime`), the Ozone platform is read too late.
+ */
+export const HEADLESS_ELECTRON_SWITCHES: readonly string[] = [
+  "--ozone-platform=headless",
+  "--disable-gpu",
+  "--password-store=basic",
+];
+
+/** `env` without the variables that would put a window on the signed-in desktop. */
+export function withoutDisplay(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result = { ...env };
+  delete result.DISPLAY;
+  delete result.WAYLAND_DISPLAY;
+  delete result.ELECTRON_OZONE_PLATFORM_HINT;
+  return result;
+}
+
 /** When a window's preview partition retention passes run (`PreviewPartitionRetention.schedule`). */
 export const PREVIEW_RETENTION_TIMING = { delayMs: 60_000, intervalMs: 30 * 60_000 } as const;
 

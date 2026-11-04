@@ -67,6 +67,21 @@ describe("desktop startup connection", () => {
     expect(bridge.invoke).toHaveBeenCalledTimes(2);
   });
 
+  test("a window on the direct transport proves the connection through its preload host", async () => {
+    const time = clock();
+    const bridge = api();
+    const original = window.orkestrator;
+    window.orkestrator = undefined;
+    window.orkestratorDesktopHost = { api: bridge as never, baseUrl: "http://127.0.0.1:50123" };
+    try {
+      expect(await waitForDesktopConnection({ timer: time.timer })).toBe("ready");
+      expect(bridge.invoke).toHaveBeenCalledWith("get_config");
+    } finally {
+      window.orkestrator = original;
+      window.orkestratorDesktopHost = undefined;
+    }
+  });
+
   test("a missing preload expires without leaving retries running", async () => {
     const time = clock();
     const ready = waitForDesktopConnection({ getApi: () => undefined, timer: time.timer });

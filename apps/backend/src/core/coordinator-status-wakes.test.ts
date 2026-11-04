@@ -1478,6 +1478,33 @@ describe("status classification and bounds", () => {
     });
   }
 
+  test("a step failure names the restart tool; a cancel or setup failure does not", () => {
+    const tools = (snapshot: Record<string, unknown>) =>
+      buildPipelineStatus({ phase: "failed", ...snapshot }, "p")?.tools.join(" ");
+    expect(
+      tools({
+        error: "Claude usage limit reached",
+        failureContext: { phase: "fixing", kind: "stage-transition" },
+      }),
+    ).toContain('restart_build_pipeline_step { "pipelineId": "p"');
+    expect(
+      tools({
+        error: "Build cancelled",
+        failureContext: { phase: "fixing", kind: "stage-transition" },
+      }),
+    ).not.toContain("restart_build_pipeline_step");
+    expect(
+      tools({
+        cancelledAt: new Date().toISOString(),
+        failureContext: { phase: "fixing", kind: "stage-transition" },
+      }),
+    ).not.toContain("restart_build_pipeline_step");
+    expect(tools({ error: "Build cancelled" })).not.toContain("restart_build_pipeline_step");
+    expect(
+      tools({ failureContext: { phase: "creating-environment", kind: "stage-transition" } }),
+    ).not.toContain("restart_build_pipeline_step");
+  });
+
   test("a finished build tells the coordinator how it was delivered", () => {
     const decidedAt = "2026-11-02T00:00:00.000Z";
     expect(

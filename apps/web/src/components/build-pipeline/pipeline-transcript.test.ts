@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
-import { toPipelineTranscript } from "./pipeline-transcript";
+import type { PipelineInteractionTranscriptEntry } from "@orkestrator/protocol/build-pipeline";
+import type { CoalescedRowAliases } from "@/lib/chat/native-message-adapters";
+import { toPipelineTranscript, toPipelineTranscriptRows } from "./pipeline-transcript";
 
 const FALLBACK = "2026-07-29T00:00:00.000Z";
 
@@ -1485,6 +1487,172 @@ quoted context
 function unreadableEntry(id: string, text: string) {
   return { id, kind: "display-row-v3", row: { text } };
 }
+
+function toolEntry(
+  id: string,
+  createdAt: string,
+  toolName = "Read",
+  toolArgs: Record<string, unknown> = { file_path: `${id}.ts` },
+) {
+  return {
+    id,
+    role: "assistant",
+    content: "",
+    createdAt,
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName,
+        toolUseId: `${id}-call`,
+        toolArgs,
+        toolState: "success",
+      },
+    ],
+  };
+}
+
+function toolCallIds(message: NativeMessage): (string | undefined)[] {
+  return flattenedParts([message]).map((part) =>
+    part.type === "tool-invocation" ? part.toolUseId : undefined,
+  );
+}
+
+describe("toPipelineTranscript tool runs", () => {
+  const at = (second: number) => `2026-07-29T00:00:0${second}.000Z`;
+
+  for (const agent of ["claude", "codex", "opencode"] as const) {
+    test(`merges adjacent tool-only entries into one row for ${agent}`, () => {
+      const transcript = toPipelineTranscript(
+        [toolEntry("a", at(1)), toolEntry("b", at(2)), toolEntry("c", at(3))],
+        agent,
+        FALLBACK,
+      );
+
+      expect(transcript).toHaveLength(1);
+      expect(transcript[0]!.id).toBe("a");
+      expect(transcript[0]!.createdAt).toBe(at(3));
+      expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["tool-group"]);
+      expect(toolCallIds(transcript[0]!)).toEqual(["a-call", "b-call", "c-call"]);
+    });
+  }
+
+  test("keeps text between two tool runs as a boundary", () => {
+    const transcript = toPipelineTranscript(
+      [
+        toolEntry("a", at(1)),
+        {
+          id: "prose",
+          role: "assistant",
+          content: "Looking closer.",
+          createdAt: at(2),
+          parts: [{ type: "text", content: "Looking closer." }],
+        },
+        toolEntry("b", at(3)),
+      ],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual(["a", "prose", "b"]);
+  });
+
+  test("an interaction notice inside a tool run splits it and stays in place", () => {
+    const interaction = {
+      id: "declined",
+      provider: "codex",
+      kind: "question",
+      phase: "build",
+      requestedAt: Date.parse(at(1)),
+      resolvedAt: Date.parse(at(2)),
+      outcome: "auto-declined-headless",
+      title: "Pick one",
+      questions: [],
+    } satisfies PipelineInteractionTranscriptEntry;
+
+    const transcript = toPipelineTranscript(
+      [toolEntry("a", at(1)), toolEntry("b", at(3)), toolEntry("c", at(4))],
+      "codex",
+      FALLBACK,
+      [interaction],
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual([
+      "a",
+      "pipeline-interaction:declined",
+      "b",
+    ]);
+    expect(toolCallIds(transcript[0]!)).toEqual(["a-call"]);
+    expect(toolCallIds(transcript[2]!)).toEqual(["b-call", "c-call"]);
+  });
+
+  test("a merged row keeps its id when its first member leaves the stored window", () => {
+    const aliases: CoalescedRowAliases = new Map();
+    const entries = [toolEntry("a", at(1)), toolEntry("b", at(2)), toolEntry("c", at(3))];
+
+    const first = toPipelineTranscript(entries, "codex", FALLBACK, [], aliases);
+    const trimmed = toPipelineTranscript(entries.slice(1), "codex", FALLBACK, [], aliases);
+
+    expect(first.map((message) => message.id)).toEqual(["a"]);
+    expect(trimmed.map((message) => message.id)).toEqual(["a"]);
+    const singleton = toPipelineTranscript(entries.slice(2), "codex", FALLBACK, [], aliases);
+    expect(singleton.map((message) => message.id)).toEqual(["a"]);
+    expect(singleton[0]!.earliestSourceMessageId).toBe("c");
+    expect(singleton[0]!.latestSourceMessageId).toBe("c");
+    const grown = toPipelineTranscript(
+      [...entries.slice(2), toolEntry("d", at(4))],
+      "codex",
+      FALLBACK,
+      [],
+      aliases,
+    );
+    expect(grown.map((message) => message.id)).toEqual(["a"]);
+    expect(toolCallIds(grown[0]!)).toEqual(["c-call", "d-call"]);
+  });
+
+  test("keeps a mail call out of the collapsed tool group and mail rows out of the run", () => {
+    const transcript = toPipelineTranscript(
+      [
+        toolEntry("a", at(1)),
+        toolEntry("mail", at(2), "mcp__orkestrator__send_message", {
+          toEnvironmentId: "coordinator",
+          body: "Finished.",
+        }),
+        toolEntry("b", at(3)),
+        {
+          id: "inbound",
+          role: "user",
+          content: "A message arrived.",
+          createdAt: at(4),
+          parts: [{ type: "text", content: "A message arrived." }],
+        },
+        toolEntry("c", at(5)),
+      ],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual(["a", "inbound", "c"]);
+    expect(transcript[0]!.parts.map((part) => part.type)).toEqual([
+      "tool-group",
+      "tool-invocation",
+      "tool-group",
+    ]);
+    expect(toolCallIds({ ...transcript[0]!, parts: [transcript[0]!.parts[1]!] })).toEqual([
+      "mail-call",
+    ]);
+  });
+
+  test("the unmerged rows leave each entry its own row for a view that hides some first", () => {
+    const rows = toPipelineTranscriptRows(
+      [toolEntry("a", at(1)), toolEntry("b", at(2))],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(rows.map((message) => message.id)).toEqual(["a", "b"]);
+  });
+});
 
 describe("toPipelineTranscript across backend versions", () => {
   test("renders display rows from a current backend without a notice", () => {

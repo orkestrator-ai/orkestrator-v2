@@ -17,6 +17,9 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { useMediaQuery } from "@/hooks";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { sidebarPanelConstraints, sidebarPanelMode } from "@/lib/sidebar-width";
+import { useSidebarPanelMotion } from "./useSidebarPanelMotion";
 import {
   PULL_REQUEST_PANEL_MIN_WIDTH_PX,
   PULL_REQUEST_PANEL_WIDTH_PX,
@@ -166,6 +169,17 @@ export function AppShell({ children }: AppShellProps) {
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const filesPanelRef = useFilesPanelPullRequestWidth(filesPanelOpen);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
+  // The phone layout's drawer stays a full list; the choice is kept for desktop widths.
+  const compactSidebar = useMachineViewStore((state) => state.grouping === "compact") && !isMobile;
+  const sidebarMode = sidebarPanelMode({ sidebarOpen, compact: compactSidebar });
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const [sidebarPanelElement, setSidebarPanelElement] = useState<HTMLDivElement | null>(null);
+  const sidebarMotion = useSidebarPanelMotion({
+    mode: sidebarMode,
+    reducedMotion,
+    sidebarElement: sidebarPanelElement,
+    mainElement: centralColumn,
+  });
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   // Only the selected environment's active tab: a pane-layout change in any
@@ -237,7 +251,12 @@ export function AppShell({ children }: AppShellProps) {
     if (workspaceRealm || isMobile) return;
     return setUnhandledAppShortcut((id) => {
       const ui = useUIStore.getState();
-      if (id !== "search-projects" || ui.sidebarOpen) return false;
+      if (ui.sidebarOpen) return false;
+      if (id !== "search-projects" && id !== "rotate-sidebar-grouping") return false;
+      // Compact has no search to wait for, and it must not open on leaving compact.
+      if (id === "search-projects" && useMachineViewStore.getState().grouping === "compact") {
+        return false;
+      }
       ui.toggleSidebar();
       return true;
     });
@@ -398,21 +417,47 @@ export function AppShell({ children }: AppShellProps) {
               </div>
             </div>
           </div>
-          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-            {/* Sidebar Panel */}
-            {sidebarOpen && (
-              <>
-                <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className="min-h-0 flex-1"
+            data-sidebar-width-animating={sidebarMotion.animating || undefined}
+            onPointerDownCapture={(event) => {
+              if ((event.target as Element).closest?.("[data-separator]"))
+                sidebarMotion.settleNow();
+            }}
+          >
+            {/* Sidebar Panel: stays mounted so that showing and hiding it can animate. */}
+            <ResizablePanel
+              defaultSize={28}
+              {...sidebarPanelConstraints(sidebarMode)}
+              panelRef={sidebarMotion.panelRef}
+              elementRef={setSidebarPanelElement}
+              style={sidebarMotion.pins ? { overflow: "hidden" } : undefined}
+            >
+              {sidebarMotion.contentShown ? (
+                <div
+                  className="h-full"
+                  style={sidebarMotion.pins ? { width: sidebarMotion.pins.sidebar } : undefined}
+                >
                   <Sidebar />
-                </ResizablePanel>
+                </div>
+              ) : null}
+            </ResizablePanel>
 
-                {/* Resize Handle */}
-                <ResizableHandle />
-              </>
-            )}
+            {/* Resize Handle: compact's width is fixed. */}
+            {sidebarMotion.contentShown ? (
+              <ResizableHandle
+                disabled={sidebarMode !== "full"}
+                className={sidebarMode !== "full" ? "cursor-default" : undefined}
+              />
+            ) : null}
 
             {/* Main Content Panel */}
-            <ResizablePanel defaultSize={filesPanelOpen && !remoteShown ? 50 : 78} minSize={30}>
+            <ResizablePanel
+              defaultSize={filesPanelOpen && !remoteShown ? 50 : 78}
+              minSize={30}
+              style={sidebarMotion.pins ? { overflow: "hidden" } : undefined}
+            >
               {/*
                 Under another node's workspace this window's own stays mounted
                 (its selection cleared), hidden; that workspace covers it.
@@ -421,7 +466,11 @@ export function AppShell({ children }: AppShellProps) {
                 ref={setCentralColumn}
                 className={cn("flex h-full flex-col", remoteShown && "invisible")}
                 aria-hidden={remoteShown || undefined}
-                style={centralPanelThemeVars}
+                style={
+                  sidebarMotion.pins
+                    ? { ...centralPanelThemeVars, width: sidebarMotion.pins.main }
+                    : centralPanelThemeVars
+                }
               >
                 <ActionBar />
                 <main className={cn("flex-1 overflow-hidden bg-background")}>

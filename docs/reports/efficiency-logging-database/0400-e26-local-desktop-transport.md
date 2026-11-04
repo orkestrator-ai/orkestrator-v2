@@ -21,9 +21,9 @@ The report's fix for DK-2 is DK-1's transport change, so both findings share thi
 
 #### Tasks
 
-1. **Capture the baseline**: measure main-process CPU and IPC volume with terminal output running before changing the transport. Status: open.
-2. **Filtered event stream for local windows**: move local windows onto the direct gateway transport with filtered SSE, behind a per-window rollback switch. Status: open (depends on 1).
-3. **Local `invoke` off the main-process hop**: send a local window's commands over the same direct transport. Status: open (depends on 2).
+1. **Capture the baseline**: measure main-process CPU and IPC volume with terminal output running before changing the transport. Status: partly done (2026-11-04: event, byte and command counts in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 12; main-process CPU was not measured).
+2. **Filtered event stream for local windows**: move local windows onto the direct gateway transport with filtered SSE, behind a per-window rollback switch. Status: done (2026-11-04, off by default; the default flip is [4501](../../todo/cross-cutting/4501-local-window-transport-default.md)).
+3. **Local `invoke` off the main-process hop**: send a local window's commands over the same direct transport. Status: done (2026-11-04, with task 2).
 
 #### 1. Capture the baseline
 
@@ -53,7 +53,7 @@ The report's fix for DK-2 is DK-1's transport change, so both findings share thi
 
 **Decisions.**
 
-- **Rollback switch scope?** (1202 recommends the first; not yet decided.)
+- **Rollback switch scope?** (Decided 2026-11-01 in 1202: the first.)
   - **A per-window setting read at window creation, defaulting to the new transport after one release behind it (recommended).**
     - Pros: a user with a broken window can fall back without a new build.
     - Cons: two transports to keep working for a release.
@@ -81,7 +81,7 @@ The report's fix for DK-2 is DK-1's transport change, so both findings share thi
 
 ### Current state
 
-No part of this is built. `backend-process.ts` still opens the unfiltered stream, and local windows still invoke through IPC.
+Parts 0400's tasks 2 and 3 are built behind `global.localWindowGatewayTransport`, off by default. With it off, `backend-process.ts` opens the unfiltered stream and local windows invoke through IPC, as before. Part 0860 is not built.
 
 ### Constraints and rationale
 
@@ -90,7 +90,7 @@ The report's [invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-
 ### Needs verification
 
 - Real main-process cost; the report's impact is reasoned, not measured.
-- 1202 infers from code that local desktop traffic never compresses because `backend-process.ts` calls control-only routes. A move to the direct transport may change that, so check it.
+- 1202 infers from code that local desktop traffic never compresses because `backend-process.ts` calls control-only routes. The direct transport uses the same control listener, and `compressionModeForListener` never compresses there, so this still holds (read from code, not tested).
 
 ## 0860: Finish the Electron relay and file writer
 
@@ -98,7 +98,7 @@ The report's [invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-
 
 #### Tasks
 
-1. **Batch file appends**: one write per burst, with `mkdir` only when needed. Status: open.
+1. **Batch file appends**: one write per burst, with `mkdir` only when needed. Status: done (2026-11-04, with the recommended options; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16).
 2. **Bound relay line length**: `readline` buffers a whole line. Status: open.
 3. **Skip the relay when nothing consumes it**: packaged app with saving off. Status: open.
 
@@ -106,7 +106,7 @@ The report's [invariants](../2026-10-27-efficiency.md#invariants-every-fix-must-
 
 **Problem.** Each entry does `mkdir` plus `appendFile` (open, write, close) in a strict chain, so a burst is capped at filesystem latency and the 4 MiB queue starts dropping.
 
-**Context.** This is efficiency finding DK-18, tracked as open in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16. That analysis is not repeated here. The sampled log was 12.5k lines in a day on one machine, which the report calls fine.
+**Context.** This is efficiency finding DK-18, tracked in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16. That analysis is not repeated here. The sampled log was 12.5k lines in a day on one machine, which the report calls fine.
 
 **Investigation.** `packages/protocol/src/node/application-logging.ts:438-447` is the chain, and `MAX_PENDING_LOG_BYTES` is 4 MiB (`:30`). Standalone backends use the same writer. `flush` returns the pending chain (`:545`), which the quit path relies on (`:568-577`). `resolveTarget` chooses the file per entry, rolling on the day, the format and `maxFileBytes` (`:395-425`). The shared logger migration (#1558, #1583, #1619) did not change this.
 

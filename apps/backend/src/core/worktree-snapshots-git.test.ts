@@ -3,7 +3,7 @@ import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import { getLocalGitStatusDetailed } from "./commands-files.js";
-import { DiffStatsService } from "./diff-stats-service.js";
+import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "./diff-stats-service.js";
 import { createGitFetchScheduler } from "./diff-stats-tracking.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
@@ -182,6 +182,29 @@ describe("real Git through the shared owner", () => {
     // would be a watcher hint of its own, invalidating the result it had just
     // published and making the read above join a redundant rescan (case 0180).
     expect((await fs.stat(index)).mtimeMs).toBe(indexBefore);
+  });
+
+  test("a file written inside the minimum gap reaches the following scan unasked", async () => {
+    if (!watchingSupported) return;
+    let before = latestRevision();
+    await fs.writeFile(path.join(linked, "gap-first.txt"), "one\n");
+    await until(() => latestRevision() > before);
+    const firstPublished = Date.now();
+
+    before = latestRevision();
+    await fs.writeFile(path.join(linked, "gap-second.txt"), "two\n");
+    await until(() => latestRevision() > before);
+    // Half the gap: `until` polls, so the first scan ended a little earlier.
+    expect(Date.now() - firstPublished).toBeGreaterThanOrEqual(LOCAL_SCAN_MIN_GAP_MS / 2);
+    const hits = metrics.snapshot().kinds["file-list-read"]?.cacheHits ?? 0;
+    const rows = await readRows();
+    expect(rows).toContainEqual({ path: "gap-second.txt", status: "?", additions: 1 });
+    expect(metrics.snapshot().kinds["file-list-read"]?.cacheHits).toBe(hits + 1);
+
+    before = latestRevision();
+    await fs.rm(path.join(linked, "gap-first.txt"));
+    await fs.rm(path.join(linked, "gap-second.txt"));
+    await until(() => latestRevision() > before);
   });
 
   test("staging in a linked worktree (index outside the root) is detected", async () => {

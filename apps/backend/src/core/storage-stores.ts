@@ -481,11 +481,23 @@ export function pruneRemovedContent(archived: unknown, next: unknown): unknown {
   return archived;
 }
 
+/**
+ * What one row of an array store removed from its retired copies, attributed
+ * without holding any of the row's content: the item itself, or one field of
+ * it. A build that predates these kinds removes the store's archived copies
+ * when it replays one (it can only see an unknown kind after a crash followed
+ * by a downgrade), which keeps the deletion and loses only that recovery copy.
+ */
+export type LegacyJsonItemCleanup =
+  | { store: string; kind: "delete-item"; key: string }
+  | { store: string; kind: "drop-item-field"; key: string; field: string };
+
 export type LegacyJsonCleanup =
   | { store: string; kind: "delete" }
   | { store: string; kind: "prune"; next: unknown }
   | { store: string; kind: "prune-row"; key: string; next: unknown }
-  | { store: string; kind: "delete-row"; key: string };
+  | { store: string; kind: "delete-row"; key: string }
+  | LegacyJsonItemCleanup;
 
 const LEGACY_CLEANUPS_STORE = "storage-legacy-json-cleanups";
 const MAX_LEGACY_CLEANUPS = 1024;
@@ -554,11 +566,28 @@ function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boo
                   [cleanup.key]: pruneRemovedContent(copy[cleanup.key], cleanup.next),
                 };
               }
-            : undefined,
+            : cleanup.kind === "delete-item" || cleanup.kind === "drop-item-field"
+              ? (copy) => scrubArchivedItem(copy, cleanup)
+              : undefined,
     );
   }
   database.deleteStoreInTransaction(LEGACY_CLEANUPS_STORE);
   return true;
+}
+
+/** An array copy without the cleanup's item or field; other items stay as archived. */
+function scrubArchivedItem(copy: unknown, cleanup: LegacyJsonItemCleanup): unknown[] {
+  if (!Array.isArray(copy)) throw new Error("Unattributable legacy backup");
+  const layout = storeLayout(cleanup.store);
+  const field = layout.kind === "array" ? (layout.key ?? "id") : "id";
+  const isItem = (item: unknown) => isJsonRecord(item) && item[field] === cleanup.key;
+  if (cleanup.kind === "delete-item") return copy.filter((item) => !isItem(item));
+  return copy.map((item) => {
+    if (!isItem(item)) return item;
+    const next = { ...(item as Record<string, unknown>) };
+    delete next[cleanup.field];
+    return next;
+  });
 }
 
 function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {

@@ -27,7 +27,7 @@ governs, marked "Decided".
 ### Tasks
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
-2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
+2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
@@ -71,7 +71,16 @@ governs, marked "Decided".
 - ST-10, compose drafts: a save or single delete reads and writes only its row (`updateSensitiveStoreRow`, which keeps `saveSensitiveJson`'s archive pruning by journaling a keyed `prune-row` cleanup in the row's transaction); owner sweeps are one `updateStore` that writes nothing when the owner has no draft. The store lease stays.
 - ST-11: `store_rows_position` on `(store, collection, position)`, created on open.
 
-**Investigation.** Re-checked 2026-11-02. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest), `updateStoreRow` throwing for keyed array layouts (`storage-database.ts`), and the record-store writers the report names under ST-10 (`storage-projects.ts`, `storage-sessions.ts`). Environments are an array store written whole under the environment lease by many paths, with attributable archive scrubs, so moving one writer to row writes breaks the one-kind-of-writer rule (`storage-writer-guards.test.ts`); every writer of the store has to move together, and array row writes have to exist first. Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
+Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked against `main` at `96ee1eb3e`), ST-10's environment writers:
+
+- `updateStoreRow` takes keyed array layouts (`storage-database.ts`): an update keeps the item's position, an insert goes last, a delete leaves the others in order, and a value must carry the row's key. A store held as a document falls back to the whole value, and an atomic scope applies the update to its buffered array (`applyArrayRowUpdate`).
+- Every environment writer moved together. Each still holds the environment lease, reads its row (`getEnvironment`) and commits one row (`saveEnvironment`); writers of several environments commit only the rows they changed, in one transaction. `addEnvironment`, `fenceEmptyProjectForRemoval` and `reorderEnvironments` read one project's rows through the owner column. `saveEnvironments` as a whole-store write is gone, and so is `saveSensitiveJson`'s environment special case.
+- Archive scrubs are now journaled with the row, closing a real gap: before this, a crash after the commit and before the scrub left the removed content in the archive until a caller happened to retry. The two new cleanup kinds, `delete-item` and `drop-item-field`, hold no row content.
+- `storage-writer-guards.test.ts` reports the store as transactional and requires the environment lease on every row write (`LEASED_ROW_STORES`). A row write refuses a row that has gone since its read.
+- Tests: `storage-database.test.ts` (array rows: insert, update, delete, order, owner, no-ops, key refusal, document fallback, rollback, mixing with whole-value writes); `storage-environment-row-writes.test.ts` (one field writes one row, counted by temporary SQLite triggers, with no whole-store read or write; each single-environment writer; concurrent connections; deletion fences; a SIGKILL between commit and scrub followed by a reopen; an older reader and writer on the same database).
+- Older build, checked by hand on 2026-11-04 with `HEAD` code from `96ee1eb3e` in a temporary worktree against a temporary data directory: it opened a database this branch had written (schema version 6, unchanged), listed the environments in order, updated and added one, and this branch reopened the result. No before-and-after timing was taken (task 1).
+
+**Investigation.** Re-checked 2026-11-02 and, for environments, 2026-11-04. Still whole-store: the lease-held native session mutations in `storage-native.ts` (22 call sites still load the whole store inside the key's lease, TX-4's rest) and the record-store writers the report names under ST-10 (`storage-projects.ts` for projects, `storage-sessions.ts`). Background callers not moved to the snapshot either mutate what they read or pass it on to code not checked yet: `reconcilePendingLaunches` (launches environments), environment cleanup, the local-server reaper, diff stats, the PR monitor and the coordinator, goal and sign-in services. Mail presence was checked: it already reads one row per mailbox (`mailInjectPresence`). ST-9's remainder (pending injects as their own collection, a body-free mailbox list) was not re-checked.
 
 **Decisions.**
 
@@ -113,13 +122,20 @@ governs, marked "Decided".
   - **A numbered migration, or the next position kept in `stores`.**
     - Pros: a migration follows the documented pattern.
     - Cons: a new version locks every older build out of the database, and a stored counter is new stored data to keep consistent.
-- **ST-10's remaining writers: next step?**
+- **ST-10's remaining writers: next step?** Environments done 2026-11-04 with the first option.
   - **Add array-layout `updateStoreRow` with tests, then move every environment writer at once (recommended).**
     - Pros: environments are the largest store written whole for one field.
     - Cons: one large change touching every environment mutation, its archive scrubs and the deletion fences.
   - **Move the record stores (sessions, projects) first.**
     - Pros: `updateStoreRow` already supports them.
     - Cons: smaller stores, so less gained.
+- **ST-10, sessions and projects: next step?** Open.
+  - **Move sessions next, then projects, each with its writer guard change (recommended).**
+    - Pros: array row writes now exist for both; sessions change more often than projects.
+    - Cons: sessions need a check of what `updateStore` callers rely on; a project reorder still writes many rows.
+  - **Leave them whole.**
+    - Pros: no risk to two stores that are small on most installs.
+    - Cons: the report's remaining ST-10 writers stay O(store) per field.
 
 ### 3. Renderer re-renders and refetches
 
@@ -822,6 +838,29 @@ DK-16 and DK-17 done on 2026-11-03. `session.transcript` takes an optional `know
 
 Made on 2026-11-01 while doing the first batch. Uncommitted at the time of
 writing, on the worktree branch `20261101-012617-580e11a7c62c`.
+
+### Task 2: how environment archive scrubs keep their recovery guarantee (2026-11-04)
+
+Chose two content-free journal kinds committed with the row (`delete-item`,
+`drop-item-field`), following the compose-draft pattern. `prune-row` was not
+used because it expects record-shaped copies and stores a copy of the row's
+new value, which for an environment can hold base64 attachments. A build that
+predates the kinds removes the store's archived copies if it replays one. That
+needs a crash followed by a downgrade before the next start, keeps the deletion
+and loses only the recovery copy; observed with `HEAD` code against a crashed
+temporary data directory.
+
+### Task 2: environment writers stay under the lease (2026-11-04)
+
+Kept the lease, as the ticket decided, and made the writer guard require it on
+every row write of this store. The guard's rule 3 alone would have accepted a
+row writer with no lease, whose read would then race the others.
+
+### Task 2: a type error fixed on the way (2026-11-04)
+
+`commands-environment.ts` failed `bun check` on a clean `96ee1eb3e`: a closure
+read `environment.id` from a reassigned `let`. It now uses the `environmentId`
+parameter, the same value, so the backend typecheck can pass.
 
 ### Task 14: preserve unrelated task records (review, 2026-11-02)
 

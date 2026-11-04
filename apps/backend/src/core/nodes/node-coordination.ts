@@ -108,14 +108,14 @@ async function workflowEnvironmentId(
   storage: StorageService,
   association: CoordinatorWorkflowAssociation,
 ): Promise<string | undefined> {
+  if (association.kind === "build-pipeline")
+    return storage.getBuildPipelineEnvironmentId(association.resourceId).catch(() => undefined);
   const snapshot =
-    association.kind === "build-pipeline"
-      ? (await storage.getBuildPipeline(association.resourceId).catch(() => null))?.snapshot
-      : association.kind === "multi-review"
-        ? (await storage.getMultiReviewWorkflow(association.resourceId).catch(() => null))?.snapshot
-        : association.kind === "graph-run"
-          ? await storage.graphRuns.getGraphRun(association.resourceId).catch(() => null)
-          : undefined;
+    association.kind === "multi-review"
+      ? (await storage.getMultiReviewWorkflow(association.resourceId).catch(() => null))?.snapshot
+      : association.kind === "graph-run"
+        ? await storage.graphRuns.getGraphRun(association.resourceId).catch(() => null)
+        : undefined;
   const environmentId = (snapshot as { environmentId?: unknown } | null | undefined)?.environmentId;
   return typeof environmentId === "string" ? environmentId : undefined;
 }
@@ -146,18 +146,26 @@ export async function localCoordinatorContact(
   const consider = (value: string | undefined) => {
     if (value && (!at || value > at)) at = value;
   };
+  for (const message of mailbox?.messages ?? []) {
+    if (message.from.kind === "coordinator") consider(message.createdAt);
+  }
+  const workflows: CoordinatorWorkflowAssociation[] = [];
   for (const association of associations) {
     if (association.nodeId || association.pending) continue;
     if (association.kind === "environment") {
       if (association.resourceId !== environmentId) continue;
       if (association.baseCommit) consider(association.createdAt);
       consider(association.delegation?.requestedAt);
-    } else if ((await workflowEnvironmentId(storage, association)) === environmentId) {
+    } else workflows.push(association);
+  }
+  // A workflow cannot contribute a contact newer than its association. Once
+  // the newest matching workflow is found, older records need no hydration.
+  workflows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const association of workflows) {
+    if (at && association.createdAt <= at) break;
+    if ((await workflowEnvironmentId(storage, association)) === environmentId) {
       consider(association.createdAt);
     }
-  }
-  for (const message of mailbox?.messages ?? []) {
-    if (message.from.kind === "coordinator") consider(message.createdAt);
   }
   return at ? { at } : {};
 }
@@ -625,7 +633,7 @@ export class NodeCoordination {
     if (!controller) throw new Error("Only an attached command node can hand back its mail.");
     const item = await this.leafMail.queued(controllerId, seq);
     if (!item) return;
-    if (item.fromCoordinator || item.toCoordinator) {
+    if (item.fromCoordinator || item.toCoordinator || item.allowLocalFallback === false) {
       throw new Error("That mail was addressed to a coordinator conversation.");
     }
     const environment = await storage.getEnvironment(item.fromEnvironmentId);
@@ -642,7 +650,10 @@ export class NodeCoordination {
         toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
         toTabId: "",
         ...(item.subject ? { subject: item.subject } : {}),
-        body: `${controller.displayName} has no coordinator for this repository, so this came to you instead.\n\n${item.body}`,
+        body: item.body,
+      },
+      {
+        fallbackNotice: `${controller.displayName} has no coordinator for this repository, so this came to you instead.`,
       },
     );
     await this.leafMail.ack(controllerId, seq, [seq], true, true);

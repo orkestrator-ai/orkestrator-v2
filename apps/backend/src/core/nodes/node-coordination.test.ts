@@ -273,84 +273,139 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
 
   // Delegations are not the only local contact: a leaf coordinator's build
   // pipeline reports to it too, and has no `environment` association.
-  test("a workflow the local coordinator started keeps its environment's mail local", async () => {
-    const world = await MailWorld.create();
-    worlds.push(world);
-    const worker = await world.addEnvironment("pipeline-worker");
-    coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
-    const route = () =>
-      world.storage.nodeMailRouter!.route({
-        fromEnvironmentId: worker.environmentId,
-        fromTabId: worker.tabId,
+  for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
+    test(`a ${kind} the local coordinator started keeps its environment mail local`, async () => {
+      const world = await MailWorld.create();
+      worlds.push(world);
+      const worker = await world.addEnvironment("pipeline-worker");
+      coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+      const route = () =>
+        world.storage.nodeMailRouter!.route({
+          fromEnvironmentId: worker.environmentId,
+          fromTabId: worker.tabId,
+          toEnvironmentId: "coordinator",
+        });
+      expect(await route()).toMatchObject({ controllerId: "bk_cmd" });
+      const pipelines =
+        kind === "graph-run"
+          ? spyOn(world.storage.graphRuns, "getGraphRun").mockResolvedValue({
+              environmentId: worker.environmentId,
+            } as never)
+          : kind === "build-pipeline"
+            ? spyOn(world.storage, "getBuildPipelineEnvironmentId").mockResolvedValue(
+                worker.environmentId,
+              )
+            : spyOn(world.storage, "getMultiReviewWorkflow").mockResolvedValue({
+                snapshot: { environmentId: worker.environmentId },
+              } as never);
+      const main = await world.main();
+      try {
+        await world.storage.coordinators.reserveCoordinatorWorkflowAssociation({
+          id: "pipeline-association",
+          projectId: world.projectId,
+          coordinatorId: world.coordinatorId,
+          conversationId: main.conversationId!,
+          kind,
+          resourceId: "pipeline-1",
+          requestId: "pipeline-request",
+          createdAt: new Date().toISOString(),
+        });
+        await world.storage.coordinators.completeCoordinatorWorkflowAssociation(
+          "pipeline-association",
+          "pipeline-1",
+        );
+        // An older association must not require another full workflow read.
+        await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+          id: "older-workflow",
+          projectId: world.projectId,
+          coordinatorId: world.coordinatorId,
+          conversationId: main.conversationId!,
+          kind,
+          resourceId: "older",
+          requestId: "older",
+          createdAt: "2000-01-01T00:00:00.000Z",
+        });
+        expect(await route()).toBeNull();
+        expect(pipelines).toHaveBeenCalledTimes(1);
+      } finally {
+        pipelines.mockRestore();
+      }
+    });
+  }
+
+  for (const body of ["Please create build environments.", "a".repeat(32768), "é".repeat(16384)]) {
+    test(`hand-back preserves a ${Buffer.byteLength(body)} byte payload and leaves the outbox`, async () => {
+      const world = await MailWorld.create();
+      worlds.push(world);
+      const agent = await world.addEnvironment("agent");
+      const { instance } = coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
+      const router = world.storage.nodeMailRouter!;
+      const destination = await router.route({
+        fromEnvironmentId: agent.environmentId,
+        fromTabId: agent.tabId,
         toEnvironmentId: "coordinator",
       });
-    expect(await route()).toMatchObject({ controllerId: "bk_cmd" });
-    const pipelines = spyOn(world.storage, "getBuildPipeline").mockResolvedValue({
-      snapshot: { environmentId: worker.environmentId },
-    } as never);
-    const main = await world.main();
-    try {
-      await world.storage.coordinators.reserveCoordinatorWorkflowAssociation({
-        id: "pipeline-association",
-        projectId: world.projectId,
-        coordinatorId: world.coordinatorId,
-        conversationId: main.conversationId!,
-        kind: "build-pipeline",
-        resourceId: "pipeline-1",
-        requestId: "pipeline-request",
-        createdAt: new Date().toISOString(),
+      const queued = await router.enqueue(destination!, {
+        requestId: "handed-back",
+        fromEnvironmentId: agent.environmentId,
+        fromTabId: agent.tabId,
+        body,
       });
-      await world.storage.coordinators.completeCoordinatorWorkflowAssociation(
-        "pipeline-association",
-        "pipeline-1",
+
+      await expect(instance.returnOutboxMail("bk_stranger" as never, queued.seq)).rejects.toThrow(
+        "Only an attached command node",
       );
-      expect(await route()).toBeNull();
-    } finally {
-      pipelines.mockRestore();
-    }
-  });
+      await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
 
-  test("mail the command node hands back reaches this node's coordinator and leaves the outbox", async () => {
-    const world = await MailWorld.create();
-    worlds.push(world);
-    const agent = await world.addEnvironment("agent");
-    const { instance } = coordination(world, [{ id: "bk_cmd", name: "arktech-mini" }]);
-    const router = world.storage.nodeMailRouter!;
-    const destination = await router.route({
-      fromEnvironmentId: agent.environmentId,
-      fromTabId: agent.tabId,
-      toEnvironmentId: "coordinator",
+      const main = await world.main();
+      const { messages } = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+      expect(messages).toHaveLength(1);
+      const message = await world.storage.getAgentMailMessage(
+        main.environmentId,
+        main.tabId,
+        messages[0]!.id,
+      );
+      expect(message.fallbackNotice).toContain(
+        "arktech-mini has no coordinator for this repository",
+      );
+      expect(message.body).toBe(body);
+      expect(message.from).toMatchObject({ kind: "tab", environmentId: agent.environmentId });
+      expect((await instance.leafMail.collect("bk_cmd" as never, 0)).items).toEqual([]);
+      // Already gone: a repeat from a lost answer does nothing.
+      await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
+      expect(
+        (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages,
+      ).toHaveLength(1);
     });
-    const queued = await router.enqueue(destination!, {
-      requestId: "handed-back",
-      fromEnvironmentId: agent.environmentId,
-      fromTabId: agent.tabId,
-      body: "Please create build environments.",
+  }
+
+  for (const mode of ["explicit", "fromCoordinator", "toCoordinator", "missing"] as const) {
+    test(`hand-back refuses ${mode} mail without removing it`, async () => {
+      const world = await MailWorld.create();
+      worlds.push(world);
+      const agent = await world.addEnvironment("agent");
+      const { instance } = coordination(world, [{ id: "bk_cmd", name: "Command" }]);
+      const queued = await instance.leafMail.enqueue("bk_cmd" as never, {
+        requestId: mode,
+        fromEnvironmentId: mode === "missing" ? "gone" : agent.environmentId,
+        fromTabId: agent.tabId,
+        body: "payload",
+        ...(mode === "explicit" ? { allowLocalFallback: false as const } : {}),
+        ...(mode === "fromCoordinator" ? { fromCoordinator: true as const } : {}),
+        ...(mode === "toCoordinator"
+          ? { toCoordinator: { environmentId: "coord", tabId: "tab" } }
+          : {}),
+      });
+      await expect(instance.returnOutboxMail("bk_cmd" as never, queued.seq)).rejects.toThrow(
+        mode === "missing" ? "no longer exists" : "addressed",
+      );
+      expect((await instance.leafMail.collect("bk_cmd" as never, 0, true)).items).toHaveLength(1);
+      const main = await world.main();
+      expect(
+        (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages,
+      ).toHaveLength(0);
     });
-
-    await expect(instance.returnOutboxMail("bk_stranger" as never, queued.seq)).rejects.toThrow(
-      "Only an attached command node",
-    );
-    await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
-
-    const main = await world.main();
-    const { messages } = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
-    expect(messages).toHaveLength(1);
-    const message = await world.storage.getAgentMailMessage(
-      main.environmentId,
-      main.tabId,
-      messages[0]!.id,
-    );
-    expect(message.body).toContain("arktech-mini has no coordinator for this repository");
-    expect(message.body).toContain("Please create build environments.");
-    expect(message.from).toMatchObject({ kind: "tab", environmentId: agent.environmentId });
-    expect((await instance.leafMail.collect("bk_cmd" as never, 0)).items).toEqual([]);
-    // Already gone: a repeat from a lost answer does nothing.
-    await instance.returnOutboxMail("bk_cmd" as never, queued.seq);
-    expect(
-      (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages,
-    ).toHaveLength(1);
-  });
+  }
 
   // Regression (2026-10-26): on a leaf attached to a command node, a local
   // coordinator's worker reported to "coordinator" and the report went to the

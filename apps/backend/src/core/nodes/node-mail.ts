@@ -3,6 +3,7 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_MAIL_ADDRESS,
+  LOCAL_COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
 
 import type { MailAttachmentBatch } from "../mail-attachments.js";
@@ -75,6 +76,8 @@ export interface OutboxItem {
   repositoryHint?: string;
   /** Present when the destination conversation is known (origin or thread). */
   toCoordinator?: { environmentId: string; tabId: string };
+  /** Explicit command-node mail must never fall back to the leaf. */
+  allowLocalFallback?: false;
   subject?: string;
   body: string;
   bytes: number;
@@ -152,6 +155,8 @@ function mailRequestFingerprint(item: Omit<OutboxItem, "seq" | "createdAt" | "by
               ]),
             ]
           : null,
+        // Keep legacy generic-mail fingerprints stable across upgrades.
+        ...(item.allowLocalFallback === false ? ["command-node-only"] : []),
       ]),
     )
     .digest("hex");
@@ -307,6 +312,7 @@ export class LeafNodeMail {
     toEnvironmentId: string;
     replyToMessageId?: string;
   }): Promise<CoordinatorMailbox | { controllerId: BackendId; controllerName?: string } | null> {
+    if (input.toEnvironmentId === LOCAL_COORDINATOR_MAIL_ADDRESS) return null;
     const upward = input.toEnvironmentId === COMMAND_NODE_COORDINATOR_MAIL_ADDRESS;
     const attached = this.context.attachedControllers();
     if (attached.length === 0) {

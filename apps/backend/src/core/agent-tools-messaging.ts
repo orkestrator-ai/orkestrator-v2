@@ -306,6 +306,9 @@ export function registerAgentMessagingTools(
             fromTabId: identity.tabId,
             ...(input.subject ? { subject: input.subject } : {}),
             body: input.body,
+            ...(input.toEnvironmentId === COMMAND_NODE_COORDINATOR_MAIL_ADDRESS
+              ? { allowLocalFallback: false as const }
+              : {}),
           });
           return result({
             identity,

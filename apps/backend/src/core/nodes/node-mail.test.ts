@@ -75,6 +75,18 @@ describe("UP-02/UP-03 routing a leaf agent's mail", () => {
     ).toBeNull();
   });
 
+  test("the explicit local address overrides a command-node reply thread", async () => {
+    const { mail } = leaf(["bk_a"]);
+    await mail.recordThread("remote", coordinatorOf("bk_a"));
+    expect(
+      await mail.route({
+        fromEnvironmentId: "e1",
+        toEnvironmentId: "local-coordinator",
+        replyToMessageId: "remote",
+      }),
+    ).toBeNull();
+  });
+
   test("an environment launched by a command node reports to that command node", async () => {
     const { mail } = leaf(["bk_a", "bk_b"], "bk_b");
     await mail.recordOrigin("e1", coordinatorOf("bk_a"));

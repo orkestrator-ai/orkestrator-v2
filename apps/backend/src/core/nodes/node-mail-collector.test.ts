@@ -1,3 +1,4 @@
+import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import { describe, expect, test } from "bun:test";
 import { NodeMailCollector } from "./node-mail-collector.js";
 import { type OutboxItem } from "./node-mail.js";
@@ -109,7 +110,7 @@ describe("a repository with no coordinator on this node", () => {
           calls.push({ command, args });
           if (command === "collect_node_outbox") return { items: pending, more: false } as T;
           if (command === "return_node_outbox_mail" && options.returnFails) {
-            throw new Error("This project has no coordinator");
+            throw new Error("The environment that sent that mail no longer exists.");
           }
           if (command === "ack_node_outbox") {
             pending = pending.filter((entry) => !(args.sequences as number[]).includes(entry.seq));
@@ -143,6 +144,41 @@ describe("a repository with no coordinator on this node", () => {
     expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
     expect(world.pending()).toEqual([1]);
     world.collector.dispose();
+  });
+
+  test("a hand-back refusal logs the leaf error and leaves mail queued", async () => {
+    const outputs: LogOutput[] = [];
+    configureLogger({
+      sink: (output) => {
+        outputs.push(output);
+      },
+    });
+    const world = collecting([item(92)], { returnFails: true });
+    try {
+      expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+      expect(world.pending()).toEqual([92]);
+      expect(
+        outputs.some(
+          (output) =>
+            output.line.includes("mail.return-deferred") &&
+            output.line.includes("no longer exists"),
+        ),
+      ).toBe(true);
+    } finally {
+      world.collector.dispose();
+      resetLogger();
+    }
+  });
+
+  test("explicit command-node mail is never handed back or acknowledged", async () => {
+    const world = collecting([{ ...item(1), allowLocalFallback: false }]);
+    try {
+      expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
+      expect(world.returned()).toEqual([]);
+      expect(world.pending()).toEqual([1]);
+    } finally {
+      world.collector.dispose();
+    }
   });
 
   test("an older leaf is never asked, and its mail keeps waiting", async () => {

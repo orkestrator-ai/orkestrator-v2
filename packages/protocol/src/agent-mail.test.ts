@@ -113,6 +113,11 @@ describe("agent mail protocol", () => {
       placement: "stored",
       revision: 1,
     } satisfies AgentMailMessage;
+    const returned = renderAgentMailCarrier({
+      ...message,
+      fallbackNotice: "Returned by the command node",
+    });
+    expect(returned).toContain('"fallbackNotice":"Returned by the command node"');
     const carrier = renderAgentMailCarrier(message);
     expect(carrier.match(/<\/orkestrator-peer-payload-json>/g)).toHaveLength(1);
     expect(carrier).not.toContain("<fake>");

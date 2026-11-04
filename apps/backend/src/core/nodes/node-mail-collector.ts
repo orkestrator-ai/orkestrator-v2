@@ -232,7 +232,8 @@ export class NodeMailCollector {
     if (
       (error as { code?: unknown } | null)?.code !== "no-coordinator" ||
       item.toCoordinator ||
-      item.fromCoordinator
+      item.fromCoordinator ||
+      item.allowLocalFallback === false
     ) {
       return false;
     }
@@ -242,7 +243,17 @@ export class NodeMailCollector {
     }
     return link
       .invoke("return_node_outbox_mail", { controllerId, seq: item.seq })
-      .then(() => true)
-      .catch(() => false);
+      .then(() => {
+        log.recovered("mail.return-deferred", `${controllerId}:${item.seq}`);
+        return true;
+      })
+      .catch((error: unknown) => {
+        log.throttled("warn", "mail.return-deferred", {
+          scope: `${controllerId}:${item.seq}`,
+          error,
+          fields: () => ({ error: formatLogError(error) }),
+        });
+        return false;
+      });
   }
 }

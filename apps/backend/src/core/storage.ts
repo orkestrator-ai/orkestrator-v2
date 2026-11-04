@@ -1426,6 +1426,10 @@ export class StorageService {
     return this.repos.buildPipelines.buildPipelineTranscriptStats();
   }
 
+  getBuildPipelineEnvironmentId(pipelineId: string): Promise<string | undefined> {
+    return this.repos.buildPipelines.getBuildPipelineEnvironmentId(pipelineId);
+  }
+
   getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null> {
     return this.repos.buildPipelines.getBuildPipeline(pipelineId);
   }
@@ -1797,6 +1801,7 @@ export class StorageService {
     options: {
       newDelegation?: boolean;
       nodePrefix?: string;
+      fallbackNotice?: string;
       nodeParent?: { id: string; threadId: string; hopCount: number };
       /** Structured facts for a workflow notice; ignored for any other sender. */
       notice?: AgentMailNotice;

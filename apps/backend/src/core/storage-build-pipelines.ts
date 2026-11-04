@@ -450,6 +450,13 @@ export class BuildPipelinesRepository {
     if (commit.deletedChunks.length > 0) await transcripts.unlinkUnreferenced(commit.deletedChunks);
   }
 
+  /** Contact routing needs only this scalar, never a clone of the workflow. */
+  async getBuildPipelineEnvironmentId(pipelineId: string): Promise<string | undefined> {
+    const snapshot = (await this.loadBuildPipelines())[pipelineId]?.snapshot as
+      { environmentId?: unknown } | undefined;
+    return typeof snapshot?.environmentId === "string" ? snapshot.environmentId : undefined;
+  }
+
   async getBuildPipeline(pipelineId: string): Promise<PersistedBuildPipeline | null> {
     if (!isNonBlankString(pipelineId)) {
       throw new Error("Build pipeline ID must not be blank");

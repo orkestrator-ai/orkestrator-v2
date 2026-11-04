@@ -1,3 +1,4 @@
+import { LeafNodeMail, emptyNodeMailState } from "./nodes/node-mail.js";
 import {
   COORDINATOR_WORKSPACE_VERSION,
   COORDINATOR_EXECUTION_POLICY,
@@ -970,11 +971,32 @@ describe("agent Kanban tools", () => {
     }));
     await storage.synchronizeAgentMailboxes();
     const enqueued: unknown[] = [];
+    let state = emptyNodeMailState();
+    let attached = true;
+    const leaf = new LeafNodeMail(
+      {
+        load: async () => state,
+        mutate: async (fn) => {
+          const { next, result } = fn(state);
+          if (next) state = next;
+          return result;
+        },
+      },
+      {
+        attachedControllers: () =>
+          attached ? [{ controllerId: "bk_cmd" as never, displayName: "Office desktop" }] : [],
+        mostRecentControllerId: () => "bk_cmd" as never,
+      },
+      () => undefined,
+    );
+    await leaf.recordThread("remote-message", {
+      controllerId: "bk_cmd" as never,
+      controllerName: "Office desktop",
+      coordinatorEnvironmentId: "remote",
+      coordinatorTabId: "remote-tab",
+    });
     storage.nodeMailRouter = {
-      route: async (input) =>
-        input.toEnvironmentId === "coordinator"
-          ? { controllerId: "bk_cmd", controllerName: "Office desktop" }
-          : null,
+      route: (input) => leaf.route(input),
       enqueue: async (_destination, item) => {
         enqueued.push(item);
         return { seq: 1 };
@@ -984,7 +1006,12 @@ describe("agent Kanban tools", () => {
     const send = (requestId: string, toEnvironmentId: string) =>
       rpc(sender.url, sender.token, "tools/call", {
         name: "send_message",
-        arguments: { requestId, toEnvironmentId, body: "Please build this." },
+        arguments: {
+          requestId,
+          toEnvironmentId,
+          body: "Please build this.",
+          replyToMessageId: "remote-message",
+        },
       });
 
     const up = await send("default", "coordinator");
@@ -994,6 +1021,14 @@ describe("agent Kanban tools", () => {
     });
     expect(enqueued).toHaveLength(1);
 
+    const explicit = await send("explicit", "command-node-coordinator");
+    expect(explicit.body.result?.structuredContent).toMatchObject({ placement: "node-outbox" });
+    expect(enqueued[1]).toMatchObject({ allowLocalFallback: false });
+    attached = false;
+    const unavailable = await send("unavailable", "command-node-coordinator");
+    expect(unavailable.body.result?.isError).toBe(true);
+    expect(JSON.stringify(unavailable.body.result)).toContain("not controlled by a command node");
+    attached = true;
     const local = await send("named", "local-coordinator");
     expect(local.body.result?.structuredContent).toMatchObject({
       coordinator: "this machine",
@@ -1002,7 +1037,7 @@ describe("agent Kanban tools", () => {
         toTabId: "main-tab",
       },
     });
-    expect(enqueued).toHaveLength(1);
+    expect(enqueued).toHaveLength(2);
   });
 
   test("binds messaging actions to the credential's tab and covers send/read/ack/reply/status", async () => {

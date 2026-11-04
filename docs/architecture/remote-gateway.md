@@ -244,6 +244,18 @@ streaming gzip context: the gateway sees Go's `gzip`, and Go decodes it again fo
 the client. Browsers always send the header, and an explicit `identity` is not
 overridden, so only non-browser clients that omit it are affected.
 
+The gateway's keep-alive timeout (`GATEWAY_KEEP_ALIVE_TIMEOUT_MS`, 120 s) must
+outlast Serve's 90 s idle timeout for upstream connections, so that Serve is
+always the side that closes. When the gateway closed first (Bun's default closes
+at about 6 s), a POST that Serve had just put on that connection could fail, and
+Go does not replay a POST. Serve then answers with an empty-bodied 502, which the
+desktop client reports as `Backend request failed with HTTP 502`, and its log
+shows `http: proxy error` with a connection reset, `EOF` or a closed connection.
+CPU load widens that race but does not create it. Invoke is not retried to hide
+this, because terminal input sent twice would type twice. The evidence, and the
+live runs still to do, are in
+[4400-gateway-502-under-load-live-evidence.md](../todo/cross-cutting/4400-gateway-502-under-load-live-evidence.md).
+
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
 

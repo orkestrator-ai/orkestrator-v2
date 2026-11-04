@@ -4,6 +4,7 @@ import { cleanupEnvironmentTmux, RUNTIME_ROOT_PREFIX, tmuxSessionName } from "..
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { LOW_PRIORITY_SHELL_PREFIX } from "../src/core/process-priority";
 import {
   createHandlers,
   deferred,
@@ -413,6 +414,8 @@ describe("Electron tmux MCP config and session start", () => {
       expect(newSessionLines).toHaveLength(2);
       expect(newSessionLines[0]).toContain(first.tmux_session);
       expect(newSessionLines[1]).toContain(second.tmux_session);
+      // The pane is lowered from inside; the tmux server keeps normal priority.
+      expect(newSessionLines[0]).toContain(`sh -c ${LOW_PRIORITY_SHELL_PREFIX}`);
 
       await invoke(
         handlers,

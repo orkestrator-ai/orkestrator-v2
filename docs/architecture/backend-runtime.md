@@ -126,6 +126,41 @@ draining lifecycle work and `runtime.localServers.shutdown({ operationDrainTimeo
 after it. SIGINT and SIGTERM reach both through `createBackendShutdownHandler`
 (`apps/backend/src/shutdown.ts`).
 
+## Workload priority
+
+Agent and build work runs at nice 10 (`WORKLOAD_NICE`, `process-priority.ts`) so
+a saturated machine still schedules the backend. The backend stays at the
+default priority, because raising it needs privileges. Under contention, a
+backend thread at nice 0 outweighs each lowered task by about 9 to 1 on Linux.
+On an idle machine nice changes nothing.
+
+| Lowered | How |
+| --- | --- |
+| Local bridges and `opencode serve`, with everything they start | `LocalServerRuntime`'s default `spawn` |
+| Local setup terminals and user commands | `lowPriorityCommand` around the PTY's shell |
+| Review validation commands | `LOW_PRIORITY_SHELL_PREFIX` in the worker's command shell; the worker keeps normal priority so its heartbeat stays prompt |
+| A local Claude tmux pane | `LOW_PRIORITY_SHELL_PREFIX` in the pane; the tmux server keeps normal priority |
+
+These stay at normal priority: the backend's own short commands (`git` and
+similar, which an invoke may be waiting on), interactive terminal tabs, and
+`orkestrator exec`, whose worker publishes a heartbeat and reports a missing
+command as a spawn error.
+
+Three limits apply:
+
+- `nice` execs the command, so the PID, process group and start time do not
+  change. A missing command exits 127 instead of failing to spawn, which is why
+  `lowPriorityCommand` suits resolved paths and not `orkestrator exec`'s argv.
+- On Linux, nice ranks tasks only inside one CPU cgroup. Work in a Docker
+  container is not affected, whatever its nice value, and with autogroup in the
+  root cgroup a `detached` child's new session has its own group too. The
+  backend's systemd service keeps its children in its own cgroup, so it is
+  unaffected there.
+- On macOS, threads with an explicit QoS class ignore nice. Nice 10 maps to base
+  priority 21, the lowest that stays in XNU's default scheduler bucket; this
+  comes from reading XNU and has not been measured on a Mac. Do not use
+  background QoS (`taskpolicy -b`), which throttles even on an idle machine.
+
 ## Process-wide on purpose
 
 Some module state describes the host or the Docker daemon, not one backend,

@@ -750,7 +750,7 @@ async function createAgentToolServer(
     );
     // A Build Pipeline stage turn runs on this server alone, so it carries the
     // key information tools the stage prompts ask for.
-    if (keyInformation && binding.kind !== "graph-output") {
+    if (keyInformation && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
       await registerKeyInformationTools(server, keyInformation, pipelineScope);
     }
     if (workerTabId) {

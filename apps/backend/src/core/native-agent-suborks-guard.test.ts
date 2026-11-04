@@ -175,3 +175,24 @@ describe("the read-only guard", () => {
     expect(view.suborks[0]!.line).toContain("left-behind.txt");
   });
 });
+
+test("restart with a stopped environment drops an uncertified guarded answer", async () => {
+  const { probe } = scriptedProbe();
+  const w = await world(probe);
+  const started = await w.ask({ targets: [{ agent: "grok" }], prompt: "Look." });
+  const id = String(started.batchId);
+  w.storage.suborks.updateSuborkBatch(id, (batch) => ({
+    ...batch,
+    suborks: batch.suborks.map((branch) => ({
+      ...branch,
+      status: "completed",
+      answer: "uncertified answer",
+      certified: undefined,
+    })),
+  }));
+  await w.storage.updateEnvironment("e1", { status: "stopped" });
+  await w.restart();
+  await w.drive(id);
+  expect((await w.mail())[0]!.body).not.toContain("uncertified answer");
+  expect(w.storage.suborks.getSuborkBatch(id)!.suborks[0]!.status).toBe("failed");
+});

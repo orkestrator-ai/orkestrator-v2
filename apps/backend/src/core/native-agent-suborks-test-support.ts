@@ -69,6 +69,9 @@ export interface SuborkWorldOptions {
 
 export interface SuborkWorld {
   storage: StorageService;
+  workflowResults: WorkflowResultService;
+  retired: string[];
+  created: string[];
   service: NativeAgentSuborkService;
   providers: Map<AgentPlatform, FakeAgentProvider>;
   announced: string[];
@@ -105,10 +108,16 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
       return [agent, provider] as const;
     }),
   );
+  const retired: string[] = [];
+  const created: string[] = [];
   const instance = (agent: AgentPlatform): BuildPipelineProvider => {
+    created.push(agent);
     const base = providers.get(agent)!.asProvider();
     return {
       ...base,
+      dispose: () => {
+        retired.push(agent);
+      },
       ...(options.messages ? { messages: async () => options.messages!() } : {}),
       observeSession: async (id: string) => ({
         ...(await (
@@ -190,6 +199,9 @@ export async function suborkWorld(options: SuborkWorldOptions = {}): Promise<Sub
   };
   return {
     storage,
+    workflowResults,
+    retired,
+    created,
     get service() {
       return service;
     },

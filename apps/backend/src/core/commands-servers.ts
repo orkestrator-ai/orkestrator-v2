@@ -1555,6 +1555,7 @@ export async function deleteEnvironment(
       // Agents lose tool access first: nothing an agent calls back into may act
       // on an environment that is being taken apart.
       context.agentTools?.revokeEnvironment(environmentId);
+      await context.suborks?.deleteEnvironment(environmentId);
       await stopEnvironmentReviewValidation(environmentId, context);
       await stopEnvironmentExecWorkers(environmentId, context);
       // The user's `!` commands run in the worktree too.

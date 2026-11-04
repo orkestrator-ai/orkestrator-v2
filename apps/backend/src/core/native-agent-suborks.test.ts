@@ -3,10 +3,11 @@
  * MCP, targets run on the shared branch runner, and the answers reach the
  * caller's mailbox. No test here reaches a real provider.
  */
+import { AgentBranchDispatchSetupError } from "./agent-branch-types.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
@@ -1023,3 +1024,175 @@ describe("the transcript", () => {
     ).toBe("line one line two");
   });
 });
+
+async function eventually(check: () => boolean | Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (await check()) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("Condition did not settle");
+}
+
+for (const restart of [false, true]) {
+  test(`delivered final answer consumption retries independently (restart: ${restart})`, async () => {
+    const w = await world({ service: { autoAdvance: true, pollIntervalMs: 30 } });
+    const original = w.workflowResults.consume.bind(w.workflowResults);
+    let fail = true;
+    const consume = spyOn(w.workflowResults, "consume").mockImplementation(async (key) => {
+      if (fail) throw new Error("temporary storage failure");
+      return original(key);
+    });
+    try {
+      const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+      await eventually(async () => (await w.mail()).length === 1);
+      const requestId = w.storage.suborks.getSuborkBatch(started.batchId)!.suborks[0]!.requestId!;
+      expect(
+        await w.workflowResults.status({ environmentId: "e1", projectId: "p1" }, requestId),
+      ).toMatchObject({ lifecycle: "accepted" });
+      if (restart) await w.restart();
+      fail = false;
+      await eventually(
+        async () =>
+          (await w.workflowResults.status({ environmentId: "e1", projectId: "p1" }, requestId))
+            ?.lifecycle === "consumed",
+      );
+      expect(await w.workflowResults.structured(requestId)).toBeNull();
+    } finally {
+      consume.mockRestore();
+    }
+  });
+}
+
+test("deleting an environment drains a Stop race and removes settled index entries", async () => {
+  const w = await world();
+  const done = handle(await w.ask({ targets: [{ agent: "claude" }], prompt: "Look." }));
+  await w.drive(done.batchId);
+  let entered!: () => void;
+  const sending = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let resume!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  w.provider("codex").beforeSend = async () => {
+    entered();
+    await barrier;
+  };
+  const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+  const pass = w.service.advanceNow(started.batchId);
+  await sending;
+  const deletion = w.service.deleteEnvironment("e1");
+  await Bun.sleep(10);
+  resume();
+  await Promise.all([pass, deletion]);
+  await eventually(
+    () =>
+      w.retired.filter((a) => a === "codex").length ===
+      w.created.filter((a) => a === "codex").length,
+  );
+  await w.storage.suborks.deleteSuborkBatchesByEnvironment("e1");
+  expect(w.service.views(SESSION_KEY)).toBeUndefined();
+});
+
+test("timer storage failures at the failure limit are caught and later recover", async () => {
+  const w = await world({ service: { autoAdvance: true, pollIntervalMs: 15 } });
+  const get = w.storage.getEnvironment.bind(w.storage);
+  const update = w.storage.suborks.updateSuborkBatch.bind(w.storage.suborks);
+  await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." });
+  let writes = 0;
+  const readFailure = spyOn(w.storage, "getEnvironment").mockRejectedValue(
+    new Error("unavailable"),
+  );
+  const writeFailure = spyOn(w.storage.suborks, "updateSuborkBatch").mockImplementation(() => {
+    writes++;
+    throw new Error("unavailable");
+  });
+  try {
+    await eventually(() => writes >= 2);
+  } finally {
+    readFailure.mockImplementation(get);
+    writeFailure.mockImplementation(update);
+  }
+  await eventually(async () => (await w.mail()).length === 1);
+  readFailure.mockRestore();
+  writeFailure.mockRestore();
+});
+
+test("automatic dispatch preparation retries wait for the poll interval", async () => {
+  const attempts: number[] = [];
+  const w = await world({
+    environmentType: "container",
+    service: {
+      autoAdvance: true,
+      pollIntervalMs: 80,
+      assertAgentToolsReachable: async () => {
+        attempts.push(Date.now());
+        if (attempts.length <= 2)
+          throw new AgentBranchDispatchSetupError(new Error("temporary bridge failure"));
+      },
+    },
+  });
+  await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." });
+  await eventually(async () => (await w.mail()).length === 1);
+  expect(attempts.length).toBeGreaterThanOrEqual(3);
+  expect(attempts[1]! - attempts[0]!).toBeGreaterThanOrEqual(60);
+  expect(attempts[2]! - attempts[1]!).toBeGreaterThanOrEqual(60);
+  expect((await w.mail())[0]!.body).toContain("codex says hi");
+});
+
+for (const recover of [false, true]) {
+  for (const terminal of ["stop", "deadline", "forced failure", "provider error"] as const) {
+    test(`result cleanup after ${terminal} rejects late answers (recovery: ${recover})`, async () => {
+      let now = Date.now();
+      const w = await world({
+        script: () => async () => "idle",
+        service: { now: () => now, deadlineMs: 60_000 },
+      });
+      w.provider("codex").runningPolls = 1_000_000;
+      const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+      for (let i = 0; i < 8 && w.provider("codex").turns().length === 0; i++)
+        await w.service.advanceNow(started.batchId);
+      const requestId = w.storage.suborks.getSuborkBatch(started.batchId)!.suborks[0]!.requestId!;
+      expect(await w.workflowResults.registered(requestId)).toBe(true);
+      const originalClose = w.workflowResults.close.bind(w.workflowResults);
+      const close = spyOn(w.workflowResults, "close").mockImplementation(async (...args) => {
+        if (recover) throw new Error("unavailable");
+        return originalClose(...args);
+      });
+      try {
+        if (terminal === "stop") await w.service.stopForSession(SESSION_KEY);
+        else {
+          if (terminal === "deadline") now += 120_000;
+          if (terminal === "forced failure")
+            await w.storage.updateEnvironment("e1", { status: "stopped" });
+          if (terminal === "provider error") {
+            // Reproduce a persisted provider failure before its cleanup pass.
+            w.storage.suborks.updateSuborkBatch(started.batchId, (batch) => ({
+              ...batch,
+              suborks: batch.suborks.map((branch) => ({
+                ...branch,
+                status: "failed",
+                error: "provider failed",
+              })),
+            }));
+          }
+          await w.service.advanceNow(started.batchId);
+        }
+      } finally {
+        close.mockRestore();
+      }
+      await w.restart();
+      await w.drive(started.batchId);
+      expect(
+        await w.workflowResults.status({ environmentId: "e1", projectId: "p1" }, requestId),
+      ).toMatchObject({ lifecycle: "cancelled" });
+      const connection = w.agentTools.workflowResultConnection("e1", "p1", "host", requestId);
+      const result = await fakeAgentTools(connection).call("submit_subork_answer", {
+        resultKey: requestId,
+        result: { answer: "late" },
+      });
+      expect(JSON.stringify(result)).toContain("attempt_closed");
+    });
+  }
+}

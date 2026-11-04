@@ -86,7 +86,6 @@ const STOP_TIMEOUT_MS = 15_000;
 const MAX_PASS_FAILURES = 20;
 /** Delivery attempts before the failure is reported on the rows. */
 const MAX_DELIVERY_FAILURES = 20;
-const MAX_PENDING_CONSUMPTIONS = 64;
 
 /** A refused call: the tool reports the message to the agent. */
 export class SuborkRefusedError extends Error {
@@ -275,7 +274,7 @@ function deliveryEntries(batch: PersistedSuborkBatch): SuborkDeliveryEntry[] {
     const label = `${AGENT_PLATFORM_LABELS[entry.agent]} · ${modelLabel ?? "saved default"}${
       entry.name === suborkDefaultName(entry.agent, modelLabel) ? "" : ` (${entry.name})`
     }`;
-    return entry.status === "completed" && entry.answer
+    return entry.status === "completed" && (!entry.guarded || entry.certified) && entry.answer
       ? {
           label,
           status: "finished",
@@ -315,7 +314,6 @@ export class NativeAgentSuborkService {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly passFailures = new Map<string, number>();
   private readonly deliveryFailures = new Map<string, number>();
-  private readonly pendingConsumptions = new Set<string>();
   private readonly actionReadAt = new Map<string, number>();
   private readonly progress = new MultiReviewProgressTracker();
   private readonly pollGate: AgentBranchPollGate;
@@ -376,13 +374,9 @@ export class NativeAgentSuborkService {
         Math.max(this.startedTotals.get(batch.sessionKey) ?? 0, batch.sessionStartedTotal),
       );
       this.index(batch);
-      if (
-        batch.status === "running" ||
-        (batch.status === "settled" && batch.delivery === "waiting")
-      ) {
-        this.live.set(batch.id, batch.sessionKey);
-        this.schedule(batch.id, 0);
-      }
+      if (batch.historyPruned) continue;
+      this.live.set(batch.id, batch.sessionKey);
+      this.schedule(batch.id, 0);
     }
   }
 
@@ -747,7 +741,10 @@ export class NativeAgentSuborkService {
     const calls = this.bySession.get(sessionKey);
     if (!calls || calls.size <= SUBORK_LIMITS.retainedBatchesPerSession) return;
     const removable = [...calls.values()]
-      .filter((call) => call.status !== "running" && call.delivery !== "waiting")
+      .filter(
+        (call) =>
+          call.status !== "running" && call.delivery !== "waiting" && !this.live.has(call.id),
+      )
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     const excess = calls.size - SUBORK_LIMITS.retainedBatchesPerSession;
     for (const call of removable.slice(0, excess)) {
@@ -783,6 +780,22 @@ export class NativeAgentSuborkService {
       }
     }
     await Promise.all(work);
+  }
+
+  /** Stop owned work before storage deletion, then remove even settled index entries. */
+  async deleteEnvironment(environmentId: string): Promise<void> {
+    const batches = (await this.batches.listSuborkBatches()).filter(
+      (batch) => batch.environmentId === environmentId || runEnvironmentOf(batch) === environmentId,
+    );
+    for (const batch of batches) {
+      await this.stopForSession(batch.sessionKey, batch.id);
+      await this.locks.get(batch.id);
+      await this.afterStop(this.batches.getSuborkBatch(batch.id) ?? batch);
+      this.live.delete(batch.id);
+      this.clearTimer(batch.id);
+      this.bySession.get(batch.sessionKey)?.delete(batch.id);
+      this.options.announce(batch.sessionKey);
+    }
   }
 
   private markStopped(batchId: string): PersistedSuborkBatch | null {
@@ -833,16 +846,30 @@ export class NativeAgentSuborkService {
 
   private async afterStop(batch: PersistedSuborkBatch): Promise<void> {
     await this.abortSessions(batch);
-    await Promise.all(
-      batch.suborks.map(async (branch) => {
-        if (branch.requestId && branch.resultTransport === "tool-v1") {
-          await this.options.workflowResults
-            ?.close(branch.requestId, "cancelled")
-            .catch(() => undefined);
-        }
-        this.releaseBranch(batch, branch);
-      }),
-    );
+    try {
+      await this.cleanupResults(batch);
+      this.live.delete(batch.id);
+    } catch {
+      this.live.set(batch.id, batch.sessionKey);
+      this.schedule(batch.id, this.pollIntervalMs);
+    } finally {
+      for (const branch of batch.suborks) this.releaseBranch(batch, branch);
+    }
+  }
+
+  /** Terminal rows are durable cleanup intents, including after delivery or restart. */
+  private async cleanupResults(batch: PersistedSuborkBatch): Promise<void> {
+    const results = this.options.workflowResults;
+    if (!results) return;
+    for (const branch of batch.suborks) {
+      if (!agentBranchSettled(branch) || !branch.requestId || branch.resultTransport !== "tool-v1")
+        continue;
+      if (branch.status === "completed" && (await results.structured(branch.requestId))) {
+        await results.consume(branch.requestId);
+      } else {
+        await results.close(branch.requestId, "cancelled");
+      }
+    }
   }
 
   private async abortSessions(batch: PersistedSuborkBatch): Promise<void> {
@@ -870,7 +897,9 @@ export class NativeAgentSuborkService {
         };
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
-          abort().catch(() => undefined),
+          abort()
+            .catch(() => undefined)
+            .finally(() => this.releaseBranch(batch, branch)),
           new Promise<void>((resolve) => {
             timer = setTimeout(resolve, STOP_TIMEOUT_MS);
             timer.unref?.();
@@ -940,14 +969,24 @@ export class NativeAgentSuborkService {
     this.clearTimer(batchId);
     const timer = setTimeout(() => {
       this.timers.delete(batchId);
-      void this.withLock(batchId, () => this.pass(batchId)).finally(() => {
-        if (!this.live.has(batchId)) return;
-        const batch = this.batches.getSuborkBatch(batchId);
-        const starting = batch?.suborks.some(
-          (branch) => branch.status === "pending" || branch.dispatchState === "prepared",
-        );
-        this.schedule(batchId, starting ? 0 : this.pollIntervalMs);
-      });
+      void this.withLock(batchId, () => this.pass(batchId))
+        .finally(() => {
+          if (!this.live.has(batchId)) return;
+          const batch = this.batches.getSuborkBatch(batchId);
+          const starting = batch?.suborks.some(
+            (branch) =>
+              branch.status === "pending" ||
+              (branch.dispatchState === "prepared" && !branch.idleResultPolls),
+          );
+          this.schedule(
+            batchId,
+            starting && !this.passFailures.has(batchId) ? 0 : this.pollIntervalMs,
+          );
+        })
+        .catch(() => {
+          log.warn("pass.failed", { source: "timer" });
+          if (this.live.has(batchId)) this.schedule(batchId, this.pollIntervalMs);
+        });
     }, delayMs);
     timer.unref?.();
     this.timers.set(batchId, timer);
@@ -984,9 +1023,9 @@ export class NativeAgentSuborkService {
       return;
     }
     try {
-      await this.retryConsumptions();
       if (batch.status === "running") await this.advance(batch);
       if (batch.status === "settled" && batch.delivery === "waiting") await this.deliver(batch);
+      await this.cleanupResults(batch);
       if (batch.status !== "running" && batch.delivery !== "waiting") this.live.delete(batchId);
       this.passFailures.delete(batchId);
     } catch (error) {
@@ -1012,7 +1051,10 @@ export class NativeAgentSuborkService {
   private async afterFence(batch: PersistedSuborkBatch): Promise<void> {
     if (this.stopped) return;
     const stored = this.batches.getSuborkBatch(batch.id);
-    if (stored?.status === "stopped") await this.abortSessions(batch);
+    if (!stored || stored.status === "stopped") {
+      await this.abortSessions(batch);
+      for (const branch of batch.suborks) this.releaseBranch(batch, branch);
+    }
   }
 
   private async advance(batch: PersistedSuborkBatch): Promise<void> {
@@ -1056,7 +1098,9 @@ export class NativeAgentSuborkService {
     await runner.flushObservations();
     if (await this.certifyGuarded(batch)) await host.save();
     for (const branch of batch.suborks) {
-      if (agentBranchSettled(branch)) this.releaseBranch(batch, branch);
+      if (agentBranchSettled(branch)) {
+        this.releaseBranch(batch, branch);
+      }
     }
     if (batch.suborks.every(agentBranchSettled)) {
       batch.status = "settled";
@@ -1083,9 +1127,17 @@ export class NativeAgentSuborkService {
             status: "settled",
             settledAt: at,
             suborks: batch.suborks.map((branch) =>
-              agentBranchSettled(branch)
+              agentBranchSettled(branch) &&
+              !(branch.guarded && !branch.certified && branch.status === "completed")
                 ? branch
-                : { ...branch, status: "failed" as const, completedAt: at, error },
+                : {
+                    ...branch,
+                    status: "failed" as const,
+                    completedAt: at,
+                    error,
+                    answer: undefined,
+                    answerBytes: undefined,
+                  },
             ),
           },
     );
@@ -1094,6 +1146,7 @@ export class NativeAgentSuborkService {
     for (const branch of stored.suborks) this.releaseBranch(stored, branch);
     this.publish(stored);
     if (stored.status === "settled" && stored.delivery === "waiting") await this.deliver(stored);
+    await this.cleanupResults(stored);
     if (stored.delivery !== "waiting") this.live.delete(batchId);
   }
 
@@ -1176,17 +1229,6 @@ export class NativeAgentSuborkService {
     }
   }
 
-  private async retryConsumptions(): Promise<void> {
-    for (const requestId of [...this.pendingConsumptions].slice(0, 8)) {
-      try {
-        await this.options.workflowResults?.consume(requestId);
-        this.pendingConsumptions.delete(requestId);
-      } catch {
-        // Kept for a later pass; bounded.
-      }
-    }
-  }
-
   private hostDependencies(): SuborkHostDependencies {
     const { workflowResults, agentTools } = this.options;
     if (!workflowResults || !agentTools) {
@@ -1223,14 +1265,9 @@ export class NativeAgentSuborkService {
             },
           }
         : {}),
-      deferConsumption: (requestId) => {
-        if (this.pendingConsumptions.size < MAX_PENDING_CONSUMPTIONS) {
-          this.pendingConsumptions.add(requestId);
-        }
-      },
-      finishConsumption: (requestId) => {
-        this.pendingConsumptions.delete(requestId);
-      },
+      // Terminal branch rows reconstruct pending consumption after a crash.
+      deferConsumption: () => undefined,
+      finishConsumption: () => undefined,
       progress: this.progress,
       pollGate: this.pollGate,
       ...(this.options.stallWarningMs !== undefined

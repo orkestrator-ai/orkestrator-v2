@@ -81,6 +81,7 @@
     "./launch-selection": "./src/launch-selection.ts",
     "./build-pipeline-address-report": "./src/build-pipeline-address-report.ts",
     "./build-pipeline-key-information": "./src/build-pipeline-key-information.ts",
+    "./build-pipeline-notes": "./src/build-pipeline-notes.ts",
     "./build-pipeline-stage-instructions": "./src/build-pipeline-stage-instructions.ts",
     "./connections": "./src/connections.ts",
     "./device-catalogue": "./src/device-catalogue.ts",

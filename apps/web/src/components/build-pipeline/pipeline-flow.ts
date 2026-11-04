@@ -8,7 +8,7 @@
  * new node to the right, so the whole history stays on the line.
  *
  * - Steps the pipeline will definitely reach (Prepare, Review, Verify, Ship,
- *   the PR) are drawn ahead as faded placeholders.
+ *   the PR, Notes) are drawn ahead as faded placeholders.
  * - Steps that only sometimes happen (Address, Fix, conflict resolution, an
  *   extra pass) are never drawn ahead; they appear once they start.
  * - Steps a restart superseded stay on the line, greyed, as one "Previous
@@ -69,6 +69,7 @@ export type PipelineFlowNodeKind =
   | "ship"
   | "conflicts"
   | "pr"
+  | "notes"
   | "attempt";
 
 /** The column a kind sits in; reviewers of one pass share a column. */
@@ -165,6 +166,7 @@ export interface PipelinePullRequest {
 export const PIPELINE_TICKET_NODE_ID = "flow:ticket";
 export const PIPELINE_SETUP_NODE_ID = "flow:setup";
 export const PIPELINE_PR_NODE_ID = "flow:pr";
+export const PIPELINE_NOTES_NODE_ID = "flow:notes";
 
 const SETUP_PHASES = new Set<string>([
   "creating-environment",
@@ -186,6 +188,7 @@ const KIND_TITLES: Record<PipelineFlowNodeKind, string> = {
   ship: "Ship",
   conflicts: "Resolve conflicts",
   pr: "PR",
+  notes: "Notes",
   attempt: "Previous attempt",
 };
 
@@ -203,6 +206,7 @@ const COLUMN_LABELS: Record<PipelineFlowColumnKind, string> = {
   ship: "Ship",
   conflicts: "Conflicts",
   pr: "PR",
+  notes: "Notes",
   attempt: "Previous attempt",
 };
 
@@ -1324,6 +1328,17 @@ export function pipelineFlowModel(
       state: pr ? (pr.state === "closed" ? "cancelled" : "complete") : "not-started",
       placeholder: !pr && !complete && !cancelled,
     });
+  // Notes: the last step. Its contents come from the record, so it never runs
+  // and cannot fail; it is done when the run is.
+  if (!cancelled || shipped) {
+    place(addColumn("notes", "notes"), {
+      id: PIPELINE_NOTES_NODE_ID,
+      kind: "notes",
+      title: KIND_TITLES.notes,
+      state: complete ? "complete" : "not-started",
+      placeholder: !complete,
+    });
+  }
   if (plannedDelivery === "push-no-pr") {
     for (const column of columns) {
       if (column.kind === "ship" && !column.superseded) column.label = PUSH_TITLE;

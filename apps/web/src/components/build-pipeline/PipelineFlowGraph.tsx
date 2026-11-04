@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { pipelineCriteriaStatusWord } from "@orkestrator/protocol/build-pipeline-criteria";
+import { pipelineFollowUps } from "@orkestrator/protocol/build-pipeline-notes";
 import { DELIVERY_POLICY_LABELS, type DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import {
   CircleDot,
@@ -15,6 +16,7 @@ import {
   Rocket,
   Server,
   ShieldCheck,
+  StickyNote,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -65,6 +67,7 @@ export const PIPELINE_IDLE_ICON: Record<PipelineFlowNodeKind, LucideIcon> = {
   ship: Rocket,
   conflicts: GitBranch,
   pr: GitPullRequest,
+  notes: StickyNote,
   attempt: History,
 };
 
@@ -94,6 +97,7 @@ export function pipelineNodeStatusLabel(
   pullRequest: PipelinePullRequest | null,
 ): string {
   if (node.kind === "ticket") return "Started with";
+  if (node.kind === "notes") return pipeline.phase === "complete" ? "Final" : "So far";
   if (node.kind === "attempt") return "Superseded by a restart";
   if (node.superseded) return `Superseded · ${STATE_LABEL[node.state]}`;
   if (node.kind === "pr") {
@@ -148,6 +152,10 @@ function nodeDetail(
       return pullRequest && node.state !== "not-started"
         ? pullRequest.url.replace(/^https?:\/\/(www\.)?github\.com\//, "")
         : "No pull request yet";
+    case "notes": {
+      const followUps = pipelineFollowUps(pipeline).length;
+      return followUps > 0 ? `${plural(followUps, "item")} to look at` : "Nothing flagged";
+    }
     case "attempt":
       return attemptDetail(node, pipeline);
     default:

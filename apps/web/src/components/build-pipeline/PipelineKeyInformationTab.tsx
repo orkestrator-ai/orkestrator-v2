@@ -169,7 +169,8 @@ export function PipelineKeyInformationTab({ data }: { data: KeyInformationTabDat
   );
 }
 
-function KeyInformationDocument({
+/** The whole brief, or a note that nothing is recorded yet. Also read by the Notes step. */
+export function KeyInformationDocument({
   keyInformation: info,
   scrollRef,
 }: {

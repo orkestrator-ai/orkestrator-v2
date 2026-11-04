@@ -48,6 +48,7 @@ export const ENVIRONMENT_LOG_AREAS = defineLogAreas({
         "A pending agent launch could not be cleared after setup failed.",
       "setup.record-failure-failed":
         "A setup failure before its first attempt could not be recorded.",
+      "setup.tab-publish-failed": "The setup terminal's tab could not be published.",
       "lifecycle.failed":
         "Starting, rebuilding or recreating an environment failed; `operation` says which.",
       "tab-teardown.pending":

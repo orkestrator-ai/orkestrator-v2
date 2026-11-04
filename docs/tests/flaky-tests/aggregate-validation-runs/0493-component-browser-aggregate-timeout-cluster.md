@@ -763,3 +763,44 @@ from starting; no public-site files changed.
 - **Browser suite:** `mise run test:logged -- --name merge-feature-browser -- mise run test:browser`, nine Playwright workers, finished with 1,019 passed, 108 skipped and three failed (607.7 s logged): both native branch-picker cases retained `rel` instead of `release/2.0`, and mobile ToolGroupFold retained scrollTop 704 instead of zero. The component-stage failure prevented the chained public-site stage from starting; no public-site files changed.
 - **Complete unchanged owners:** `mise run test:logged -- --name merge-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts e2e/AgentLaunchDialog.spec.ts --workers=1` finished with 40 passed and two failed (103.5 s). All 38 ToolGroupFold cases passed, confirming [0747](../web-ui/0747-tool-group-overflow-follow.md#auto-merge-main-merge-validation--2026-10-31); both persistent native branch-selection failures remained. No owning source, assertion, timeout or skip changed.
 - **Evidence:** `orkestrator-test-run.0oakL2/merge-feature-tests.log.gz`, inner `orkestrator-test-run.oLFJHT/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, `orkestrator-test-run.xHtE03/merge-feature-browser.log.gz`, and `orkestrator-test-run.OdWuh9/merge-browser-owners.log.gz`, below the host temporary directory.
+
+## Tab-launch main merge — 2026-11-04
+
+Merge parents: feature `8fa6d92cc`, main `7abf6ca1a`. Seven original conflicts
+were retained in local Git metadata; both shortcut additions and tab-launch
+shimmers were preserved alongside main's shared lazy loaders.
+
+- `mise run test:logged -- --name merge-browser -- mise run test:browser`
+  finished after 1477.6 s: 1274 passed, 126 skipped, 12 failed. The public-site
+  stage did not run after component failures.
+- The one-worker scenario rerun below finished after 153.6 s: 20 passed,
+  two skipped, two failed. All ten other originally failing cases passed
+  unchanged: mobile DataSavingGateway and assigned-composer Meta+I; native
+  same-minute paging and automatic history loading in both viewports; desktop
+  streaming-find release, tool-fold threshold and both VirtuosoFollow cases.
+  This was a filtered scenario rerun, not complete-owner qualification.
+- Both SettingsPageLayout cases reproduce: `gaps.length` is 5, expected 4.
+  These are not classified as flakes.
+- No owning implementation, assertion, timeout or skip changed for reruns.
+  Shared-host load is a possible contributor, not an established cause.
+
+```sh
+NODE_ENV=development mise run test:logged -- --name merge-browser-failure-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DataSavingGateway.spec.ts e2e/KeyboardShortcuts.spec.ts e2e/SettingsPageLayout.spec.ts e2e/StreamingTranscript.spec.ts e2e/ToolGroupFold.spec.ts e2e/TranscriptPaging.spec.ts e2e/VirtuosoFollow.spec.ts --workers=1 --grep 'data saving survives|Meta[+]I focuses|related Debug controls|same-minute page growing row zero|history pages in without a click|scrollbar departure after find|live group crossing the fold threshold|live transcript follow releases|small wheel release stays'
+```
+
+Other validation: focused pane/terminal/renderer-shortcut and protocol-shortcut
+tests passed, as did formatting and lint. Global typechecking failed with six
+errors in two backend test files identical to main. The default suite failed
+(1646.8 s): root/support (3551 tests), bridges and protocol lockfile passed;
+web/backend groups failed. Backend reported 14601 passed, 109 skipped,
+55 failed and 40 errors. Portable-inputs stamps' Grok rotation/sign-out case
+also timed out alone after 60 s (62.3 s logged), so it is not classified as
+flaky. Broader deterministic failures remain unresolved by this merge task.
+
+Evidence below the host temporary directory:
+`orkestrator-test-run.1NFufQ/merge-browser.log.gz`,
+`orkestrator-test-run.HlofyN/merge-browser-failure-rerun.log.gz`,
+`orkestrator-test-run.LVWG8j/merge-tests.log.gz`,
+`orkestrator-test-run.5678za/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`,
+`orkestrator-test-run.r3JTBn/merge-portable-inputs-rerun.log.gz`,
+and `orkestrator-test-run.TaUoiD/merge-check.log.gz`.

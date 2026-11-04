@@ -471,6 +471,7 @@ export class BuildPipelineSupervisor {
         taskId: pipeline.taskId,
         environmentId: pipeline.environmentId,
         isLocal: pipeline.environmentType === "local",
+        activate: "setup-handoff",
       });
       await this.startStage(pipeline, "build", "building");
       return;

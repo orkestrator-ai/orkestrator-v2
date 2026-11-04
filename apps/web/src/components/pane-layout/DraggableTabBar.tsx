@@ -20,6 +20,7 @@ import {
   resolveComposeDraftDiscardConflict,
 } from "@/lib/compose-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
+import { TabLaunchPlaceholder, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
 import { TAB_STRIP_CLASS } from "./TabShell";
 import {
   AlertDialog,
@@ -60,6 +61,10 @@ export function DraggableTabBar({
   isPaneFocused = false,
 }: DraggableTabBarProps) {
   const removeTab = usePaneLayoutStore((state) => state.removeTab);
+  const launches = useEnvironmentTabLaunches(environmentId);
+  // A launch lands in the focused pane, so its placeholder sits there too.
+  const placeholders = isPaneFocused ? launches.filter((launch) => !launch.arrived) : [];
+  const placeholderHasFocus = placeholders.some((launch) => launch.focused);
   const isDirty = useFileDirtyStore((state) => state.isDirty);
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
 
@@ -353,7 +358,7 @@ export function DraggableTabBar({
   // Always show tab bar when there's at least one tab (even for single-tab panes).
   // This provides a consistent drag-drop target for cross-pane tab moves and
   // makes it clear which pane is which. Only hide when truly empty.
-  if (pane.tabs.length === 0) {
+  if (pane.tabs.length === 0 && placeholders.length === 0) {
     return null;
   }
 
@@ -370,7 +375,7 @@ export function DraggableTabBar({
       >
         <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
           {pane.tabs.map((tab, index) => {
-            const isActive = tab.id === pane.activeTabId;
+            const isActive = tab.id === pane.activeTabId && !placeholderHasFocus;
             return (
               <DraggableTab
                 key={tab.id}
@@ -398,6 +403,14 @@ export function DraggableTabBar({
             );
           })}
         </SortableContext>
+        {placeholders.map((launch) => (
+          <TabLaunchPlaceholder
+            key={launch.tabId}
+            environmentId={environmentId}
+            launch={launch}
+            isPaneFocused={isPaneFocused}
+          />
+        ))}
       </div>
 
       {/* Confirmation dialog for closing tabs with unsaved changes */}

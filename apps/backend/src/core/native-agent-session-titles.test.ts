@@ -249,13 +249,13 @@ describe("NativeAgentSessionTitles", () => {
     expect(title).toBe("Please fix the OAuth callback race in the login flow");
   });
 
-  test("a placeholder stays when there is nothing better", () => {
+  test("a placeholder is never shown, so a reader keeps the title it has", () => {
     const h = harness();
-    expect(h.titles.resolve(h.read({ firstUserMessage: undefined }))).toBe("Agent Session");
+    expect(h.titles.resolve(h.read({ firstUserMessage: undefined }))).toBeUndefined();
     expect(
       h.titles.resolve(
         h.read({ agent: "claude", providerTitle: "Session a1b2c3", firstUserMessage: undefined }),
       ),
-    ).toBe("Session a1b2c3");
+    ).toBeUndefined();
   });
 });

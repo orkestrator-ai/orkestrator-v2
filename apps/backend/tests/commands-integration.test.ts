@@ -1,3 +1,4 @@
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
@@ -2404,9 +2405,9 @@ exit 1
     });
   });
 
-  test(
-    "keeps the preparation session attachable before its setup PTY exists",
-    async () => {
+  test.each([false, true])(
+    "preparation publishes setup and continues after publication failure=%s",
+    async (publicationFails) => {
       const environment = createEnvironment({
         id: "env-container-prepare-attach",
         environmentType: "containerized",
@@ -2416,6 +2417,12 @@ exit 1
         status: "running",
       });
       const { context } = createContext(environment);
+      const logsCapture = captureLogs();
+      const publication = mock(async () => {
+        if (publicationFails) throw new Error("layout unavailable");
+        return null as never;
+      });
+      context.storage.ensureSetupTab = publication;
       const commands = createCommandRegistry();
       const setupSessionId = `${environment.id}:setup`;
 
@@ -2463,6 +2470,7 @@ exit 0
             // It must be attachable so the renderer subscribes once instead of
             // replaying the intro in a reconnect loop.
             expect(ptySpawn).not.toHaveBeenCalled();
+            expect(publication).toHaveBeenCalledWith(environment.id);
             expect(
               commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
             ).toEqual({ id: setupSessionId, running: true, bootstrapped: false });
@@ -2487,6 +2495,11 @@ exit 0
           await waitForPtyProcessCount(1);
           ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
           await setupPromise;
+          expect(publication).toHaveBeenCalledTimes(2);
+          expect(
+            logsCapture.records().some((record) => record.event === "setup.tab-publish-failed"),
+          ).toBe(publicationFails);
+          logsCapture.restore();
           if (verificationError) throw verificationError;
         },
       );

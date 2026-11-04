@@ -141,8 +141,12 @@ export async function openMultiReviewTab(
               },
             },
       );
-    pane.activeTabId = tabId;
-    desired.activePaneId = pane.id;
+    // Selection stays with the client: one the user pressed in focuses the tab
+    // itself, and any other way of opening it does not take focus.
+    if (!pane.activeTabId) {
+      pane.activeTabId = tabId;
+      desired.activePaneId = pane.id;
+    }
     desired.version = PANE_LAYOUT_VERSION;
     if (checkOnly) return { status: "unavailable" };
     try {

@@ -18,6 +18,7 @@ import { adoptPersistedPaneLayout, onPaneLayoutWriteSettled } from "@/lib/pane-l
 import {
   commitBuildPipelineSetupHandoff,
   commitStartupAgentSetupHandoff,
+  flushPaneTabActivation,
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
@@ -227,6 +228,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     }
     declinedPaneLayoutRefreshes.delete(environmentId);
     latestPaneStore.applyAuthoritativeLayout(environmentId, selected);
+    flushPaneTabActivation(environmentId);
     commitBuildPipelineSetupHandoff(environmentId, selected);
     commitStartupAgentSetupHandoff(environmentId, selected);
   };

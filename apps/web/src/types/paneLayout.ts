@@ -341,6 +341,8 @@ export interface TabInfo {
   isSetupTab?: boolean;
   /** Backend owns PTY creation and bootstrap; the renderer may only attach. */
   backendManagedTerminal?: boolean;
+  /** Backend one-shot setup focus decision; retained across renderer saves. */
+  setupHandoffConsumed?: boolean;
   /** Exact backend-owned PTY identity to attach to. */
   backendTerminalSessionId?: string;
 }

@@ -157,6 +157,8 @@ export interface NativeAgentJobLaunchResult {
 export async function launchNativeAgentJob(input: {
   requestId: string;
   environmentId: string;
+  /** The id of the tab this launch creates; a reused tab answers with its own. */
+  tabId?: string;
   agent: NativeAgentClientPlatform;
   prompt: string;
   title?: string;

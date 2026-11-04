@@ -292,7 +292,7 @@ export function registerTerminalCommands(
       tabId,
       type: tabType,
       title,
-      activate: args.activateTab === true,
+      activate: args.activateTab === "setup-handoff" ? "setup-handoff" : args.activateTab === true,
     });
 
     const invoke = async <T>(command: string, commandArgs: Record<string, unknown>): Promise<T> => {

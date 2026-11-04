@@ -826,8 +826,13 @@ export class StorageService {
     taskId: string;
     environmentId: string;
     isLocal: boolean;
+    activate?: "setup-handoff";
   }): Promise<PersistedPaneLayout> {
     return this.repos.sessions.ensureBuildPipelineTab(input);
+  }
+
+  ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
+    return this.repos.sessions.ensureSetupTab(environmentId);
   }
 
   ensureNativeAgentJobTab(input: {
@@ -848,7 +853,7 @@ export class StorageService {
     tabId: string;
     type: BuildPipelineAgent | "plain" | "claude-tmux";
     title?: string;
-    activate?: boolean;
+    activate?: boolean | "setup-handoff";
     terminalSessionId?: string | null;
     existingOnly?: boolean;
   }): Promise<PersistedPaneLayout> {

@@ -1,3 +1,5 @@
+import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
+import { useTabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
@@ -437,6 +439,7 @@ describe("PaneLeafContainer", () => {
 
   beforeEach(() => {
     cleanup();
+    resetTabLaunches();
 
     usePaneLayoutStore.setState({
       environments: new Map([
@@ -554,7 +557,31 @@ describe("PaneLeafContainer", () => {
     expect(targets["plain-file"]).toBeNull();
   });
 
-  test("clicking the pane scopes the active pane update to its environment", () => {
+  test("a focused launch shows shimmer until user tab selection", () => {
+    beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
+    const state = usePaneLayoutStore.getState().environments.get("env-hidden")!;
+    usePaneLayoutStore.setState({
+      environments: new Map(usePaneLayoutStore.getState().environments).set("env-hidden", {
+        ...state,
+        activePaneId: hiddenPane.id,
+      }),
+    });
+    render(
+      <PaneLeafContainer
+        pane={hiddenPane}
+        containerId="container-hidden"
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+    expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
+    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
+    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+  });
+
+  test("clicking another pane relinquishes the launch focus and scopes the update", () => {
+    beginTabLaunch("env-hidden", { tabId: "launch", title: "Run", surface: "agent" });
     const { container } = render(
       <PaneLeafContainer
         pane={hiddenPane}
@@ -566,6 +593,8 @@ describe("PaneLeafContainer", () => {
 
     expect(container.firstElementChild?.hasAttribute("data-pane-leaf")).toBe(true);
     fireEvent.click(container.firstElementChild as HTMLElement);
+    expect(useTabLaunchStore.getState().launches.get("env-hidden")?.[0]?.focused).toBe(false);
+    expect(screen.queryByTestId("tab-launch-shimmer")).toBeNull();
 
     expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
       "pane-hidden",
@@ -1185,7 +1214,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByText("Loading tab...")).toBeTruthy();
+    expect(screen.getByTestId("tab-launch-shimmer")).toBeTruthy();
     expect(await screen.findByTestId("build-chat-tab")).toMatchObject({
       dataset: {
         pipelineId: "pipeline-1",

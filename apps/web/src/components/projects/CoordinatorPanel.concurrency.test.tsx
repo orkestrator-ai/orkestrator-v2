@@ -11,17 +11,21 @@ import {
   type CoordinatorSnapshot,
   type ProjectGitStatus,
 } from "@orkestrator/protocol/coordinator";
+import type { CoordinatorCheckoutTurn } from "@orkestrator/protocol/coordinator-activity";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
 import {
   reconcileCoordinatorLayout,
+  revealCoordinatorConversation,
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
 import { resetClientStateCapabilitiesForTests } from "@/lib/client-state-capabilities";
 import { resetUpstreamCheckForTests } from "@/lib/coordinator-upstream-check";
+import { dispatchResourceChange } from "@/lib/resource-sync";
 import { createSessionKey } from "@/lib/utils";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useProjectStore } from "@/stores/projectStore";
 
@@ -167,6 +171,7 @@ const assignAgent = mock(
   },
 );
 const closeConversation = mock(async (): Promise<CoordinatorSnapshot> => ensuredSnapshot);
+const getCheckoutTurn = mock(async (): Promise<CoordinatorCheckoutTurn | null> => null);
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
@@ -179,6 +184,7 @@ mock.module("@/lib/backend", () => ({
   checkCoordinatorUpstreamMerge: mock(async () => null),
   assignCoordinatorConversationAgent: assignAgent,
   closeCoordinatorConversation: closeConversation,
+  getCoordinatorCheckoutTurn: getCheckoutTurn,
   selectCoordinatorConversation: mock(async () => ensuredSnapshot),
 }));
 
@@ -239,6 +245,9 @@ beforeEach(() => {
     fn.mockClear();
   }
   closeConversation.mockClear();
+  getCheckoutTurn.mockReset();
+  getCheckoutTurn.mockImplementation(async () => null);
+  useEnvironmentStore.setState({ environments: [] });
   useProjectStore.setState({
     projects: [
       {
@@ -432,5 +441,127 @@ describe("Git and conversation actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
     await waitFor(() => expect(closeConversation).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("fetch went wrong")).toBeNull());
+  });
+});
+
+describe("branch switch and Sync while any turn runs", () => {
+  const side = sideConversation(1);
+  const branchPicker = () => screen.getByRole("combobox");
+  const sync = () => screen.getByRole("button", { name: "Sync" });
+  const refresh = () => screen.getByRole("button", { name: "Refresh repository status" });
+  const gated = () => branchPicker().hasAttribute("disabled") && sync().hasAttribute("disabled");
+
+  /** The side agent in front; the main conversation's tab is behind it, so it is not mounted. */
+  async function renderSideFocused() {
+    ensuredSnapshot = snapshotOf([mainConversation, side], side.id);
+    useCoordinatorPaneLayoutStore
+      .getState()
+      .setLayout(
+        "project-1",
+        revealCoordinatorConversation(
+          reconcileCoordinatorLayout(null, [mainConversation.id, side.id]),
+          side.id,
+        ),
+      );
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("native-agent").getAttribute("data-tab-id")).toBe(side.tabId),
+    );
+    await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
+  }
+
+  async function backendAnswers(turn: CoordinatorCheckoutTurn | null) {
+    const reads = getCheckoutTurn.mock.calls.length;
+    getCheckoutTurn.mockImplementation(async () => turn);
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: reads + 100,
+      });
+    });
+    await waitFor(() => expect(getCheckoutTurn.mock.calls.length).toBeGreaterThan(reads));
+  }
+
+  test("a turn in a conversation behind the focused side agent disables both and names it", async () => {
+    getCheckoutTurn.mockImplementation(async () => ({
+      kind: "conversation",
+      conversationId: mainConversation.id,
+    }));
+    await renderSideFocused();
+
+    await waitFor(() => expect(gated()).toBe(true));
+    const reason =
+      "Coordinator is running a turn. Branch switching and Sync wait for it to finish.";
+    expect(branchPicker().getAttribute("title")).toBe(reason);
+    expect(sync().closest("span")?.getAttribute("title")).toBe(reason);
+    // Reading the remote changes nothing a turn is working on.
+    expect(refresh().hasAttribute("disabled")).toBe(false);
+
+    await backendAnswers(null);
+    await waitFor(() => expect(gated()).toBe(false));
+    expect(branchPicker().getAttribute("title")).toBe("Switch branch");
+    expect(sync().closest("span")?.hasAttribute("title")).toBe(false);
+  });
+
+  test("the project home's turn disables both and is named", async () => {
+    getCheckoutTurn.mockImplementation(async () => ({ kind: "project-home" }));
+    await renderSideFocused();
+    await waitFor(() => expect(gated()).toBe(true));
+    expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
+  });
+
+  test("a turn that ended behind another tab does not hold the controls", async () => {
+    // Nothing rewrites this projection while its tab is not mounted, so it still
+    // says running. The backend is the one that knows the turn is over.
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(sessionKeyOf(mainConversation), projectionOf(mainConversation, "running"));
+    await renderSideFocused();
+    await waitFor(() => expect(gated()).toBe(false));
+  });
+
+  test("a mounted conversation counts before the backend has observed its turn", async () => {
+    ensuredSnapshot = snapshotOf([mainConversation, side], side.id);
+    showInTwoGroups(mainConversation, side);
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
+    await waitFor(() => expect(getCheckoutTurn).toHaveBeenCalled());
+    await waitFor(() => expect(gated()).toBe(false));
+
+    setPhase(mainConversation, "running");
+    await waitFor(() => expect(gated()).toBe(true));
+    expect(branchPicker().getAttribute("title")).toStartWith("Coordinator is running a turn.");
+
+    setPhase(mainConversation, "idle");
+    await waitFor(() => expect(gated()).toBe(false));
+  });
+
+  test.each([
+    ["has no such command", () => Promise.reject(new Error("Unknown backend command: x"))],
+    ["has not answered yet", () => new Promise<null>(() => undefined)],
+  ])("a backend that %s leaves every projection to go on", async (_name, answer) => {
+    getCheckoutTurn.mockImplementation(answer);
+    useEnvironmentStore.setState({
+      environments: [{ id: "home-1", projectId: "project-1", projectHome: true } as never],
+    });
+    useNativeAgentProjectionStore
+      .getState()
+      .setProjection(sessionKeyOf(mainConversation), projectionOf(mainConversation, "running"));
+    await renderSideFocused();
+    await waitFor(() => expect(gated()).toBe(true));
+    expect(branchPicker().getAttribute("title")).toStartWith("Coordinator is running a turn.");
+
+    setPhase(mainConversation, "idle");
+    await waitFor(() => expect(gated()).toBe(false));
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection("home-session", {
+        ...projectionOf(mainConversation, "running"),
+        environmentId: "home-1",
+      });
+    });
+    await waitFor(() => expect(gated()).toBe(true));
+    expect(branchPicker().getAttribute("title")).toStartWith("Home is running a turn.");
   });
 });

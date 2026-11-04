@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import {
-  coordinatorRuntimeId,
-  type CoordinatorSnapshot,
-  type ProjectGitStatus,
-  type ProjectGitSwitchConfirmation,
+import type {
+  CoordinatorSnapshot,
+  ProjectGitStatus,
+  ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import * as backend from "@/lib/backend";
+import {
+  activeCoordinatorTurnLabel,
+  projectHomeEnvironmentIds,
+} from "@/lib/coordinator-active-turn";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
-import { createSessionKey } from "@/lib/utils";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
@@ -118,39 +120,15 @@ export function useCoordinatorGitActions({
       if (!lifetime || lifetime.signal.aborted) return false;
       if (conversation.role === "side") return;
       // Only an older backend needs this panel to judge running turns itself.
-      const turnRunning = () => {
-        const current = snapshotRef.current;
-        const projections = useNativeAgentProjectionStore.getState().projections;
-        const active = (phase: string | undefined) =>
-          phase === "running" ||
-          phase === "blocked" ||
-          phase === "cancelling" ||
-          phase === "recovering";
-        const conversationRunning = current?.workspace.conversations.some(
-          (item) =>
-            !item.closedAt &&
-            item.agent &&
-            active(
-              projections.get(
-                createSessionKey(coordinatorRuntimeId(current.workspace.id, item.id), item.tabId),
-              )?.turn.phase,
-            ),
-        );
-        const homeIds = new Set(
-          useEnvironmentStore
-            .getState()
-            .environments.filter(
-              (environment) => environment.projectId === projectId && environment.projectHome,
-            )
-            .map((environment) => environment.id),
-        );
-        return (
-          conversationRunning === true ||
-          Array.from(projections.values()).some(
-            (projection) => homeIds.has(projection.environmentId) && active(projection.turn.phase),
-          )
-        );
-      };
+      const turnRunning = () =>
+        activeCoordinatorTurnLabel({
+          workspace: snapshotRef.current?.workspace,
+          homeEnvironmentIds: projectHomeEnvironmentIds(
+            useEnvironmentStore.getState().environments,
+            projectId,
+          ),
+          projections: useNativeAgentProjectionStore.getState().projections,
+        }) !== null;
       let cancel!: () => void;
       const cancelled = new Promise<false>((resolve) => {
         cancel = () => resolve(false);

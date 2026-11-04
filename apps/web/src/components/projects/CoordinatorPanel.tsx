@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { useCoordinatorActions } from "./useCoordinatorActions";
+import { useCoordinatorActiveTurn } from "./useCoordinatorActiveTurn";
 import { useCoordinatorGitActions } from "./useCoordinatorGitActions";
 import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
 import { useCoordinatorSelection } from "./useCoordinatorSelection";
@@ -32,7 +33,9 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { TAB_ICON_CLASS } from "@/components/pane-layout/TabShell";
 import { CoordinatorPaneTree, SortableCoordinatorTab } from "./CoordinatorPaneTree";
+import { isCoordinatorTurnPhaseActive } from "@/lib/coordinator-active-turn";
 import {
+  collectCoordinatorLeaves,
   focusCoordinatorPane,
   focusedCoordinatorConversationId,
 } from "@/lib/coordinator-pane-layout";
@@ -244,17 +247,29 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const selectedTurnPhase = useNativeAgentProjectionStore((state) =>
     selectedSessionKey ? state.projections.get(selectedSessionKey)?.turn.phase : undefined,
   );
-  const coordinatorTurnActive =
-    selectedTurnPhase === "running" ||
-    selectedTurnPhase === "blocked" ||
-    selectedTurnPhase === "cancelling" ||
-    selectedTurnPhase === "recovering";
+  const selectedTurnActive = isCoordinatorTurnPhaseActive(selectedTurnPhase);
 
   // A settled turn may have changed delegations: one coalesced conditional read.
   useEffect(() => {
-    if (!selectedSessionKey || coordinatorTurnActive) return;
+    if (!selectedSessionKey || selectedTurnActive) return;
     invalidateView();
-  }, [coordinatorTurnActive, invalidateView, selectedSessionKey]);
+  }, [invalidateView, selectedSessionKey, selectedTurnActive]);
+  const mountedConversationIds = useMemo(
+    () =>
+      new Set(
+        layout
+          ? collectCoordinatorLeaves(layout.root).flatMap((pane) =>
+              pane.activeConversationId ? [pane.activeConversationId] : [],
+            )
+          : [],
+      ),
+    [layout],
+  );
+  const activeTurn = useCoordinatorActiveTurn(
+    projectId,
+    snapshot?.workspace,
+    mountedConversationIds,
+  );
 
   if (!project?.localPath) {
     return (
@@ -373,7 +388,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           error={error}
           runGit={runGit}
           prepareSwitch={prepareSwitch}
-          coordinatorTurnActive={coordinatorTurnActive}
+          activeTurn={activeTurn}
           selectedAgent={selected?.agent}
           paused={paused}
           onPause={() => setPaused(true)}

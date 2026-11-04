@@ -55,7 +55,8 @@ interface CoordinatorToolbarProps {
     ref: string,
     onReady: (confirmation: ProjectGitSwitchConfirmation) => void,
   ) => Promise<void>;
-  coordinatorTurnActive: boolean;
+  /** Who is running the turn that holds the checkout, by name. */
+  activeTurn: string | null;
   /** The agent of the conversation in front, once it has one. */
   selectedAgent: AgentPlatform | undefined;
   paused: boolean;
@@ -72,7 +73,7 @@ export function CoordinatorToolbar({
   error,
   runGit,
   prepareSwitch,
-  coordinatorTurnActive,
+  activeTurn,
   selectedAgent,
   paused,
   onPause,
@@ -90,7 +91,10 @@ export function CoordinatorToolbar({
   );
   const switchBlocked = Boolean(blocked && !discardableDirty);
   const pendingSwitchBranch = git?.branches.find((branch) => branch.ref === pendingSwitch?.ref);
-  const branchSwitchDisabled = gitBusy || switchBlocked || coordinatorTurnActive;
+  const branchSwitchDisabled = gitBusy || switchBlocked || activeTurn !== null;
+  const activeTurnReason = activeTurn
+    ? `${activeTurn} is running a turn. Branch switching and Sync wait for it to finish.`
+    : undefined;
   const syncDisabled = branchSwitchDisabled || dirty;
   const canSync = Boolean(git?.upstream && git.behind && git.behind > 0 && !git.ahead && !blocked);
   // The badge speaks for the conversation in front: its platform's read-only
@@ -131,6 +135,7 @@ export function CoordinatorToolbar({
               size="sm"
               className="max-w-56"
               title={
+                activeTurnReason ??
                 (switchBlocked ? blocked : null) ??
                 (dirty
                   ? "Switch branch and choose whether to discard local changes"
@@ -165,15 +170,19 @@ export function CoordinatorToolbar({
             {gitSummary(git)}
           </span>
           {canSync ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={syncDisabled}
-              onClick={() => void runGit("sync")}
-            >
-              <RotateCcw className="size-3.5" />
-              Sync
-            </Button>
+            // A disabled button takes no pointer events, so its reason shows from here.
+            <span className="inline-flex" title={activeTurnReason}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={syncDisabled}
+                title={activeTurnReason}
+                onClick={() => void runGit("sync")}
+              >
+                <RotateCcw className="size-3.5" />
+                Sync
+              </Button>
+            </span>
           ) : null}
           <Button
             size="icon"

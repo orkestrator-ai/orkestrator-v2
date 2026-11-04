@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
+import * as captureFs from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +96,7 @@ describe("runCommand timeout", () => {
             groupPidFile,
             pidFile,
           ],
-          { timeoutMs: 400 },
+          { timeoutMs: 400, waitForDescendants: true },
         ).catch((error: unknown) => error);
 
         expect(failure).toBeInstanceOf(CommandFailedError);
@@ -146,7 +147,7 @@ describe("runCommand timeout", () => {
       const failure = await runCommand(
         "sh",
         ["-c", 'echo $$ > "$1"; while :; do sleep 0.01 & wait; done', "sh", groupPidFile],
-        { timeoutMs: 400 },
+        { timeoutMs: 400, waitForDescendants: true },
       ).catch((error: unknown) => error);
       expect((failure as CommandFailedError).timedOut).toBe(true);
       const rootPid = Number(await readFile(groupPidFile, "utf8"));
@@ -174,7 +175,7 @@ describe("runCommand timeout", () => {
         const failure = await runCommand(
           "sh",
           ["-c", 'echo $$ > "$1"; sleep 30 & exit 0', "sh", groupPidFile],
-          { timeoutMs: 400 },
+          { timeoutMs: 400, waitForDescendants: true },
         ).catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(CommandFailedError);
         expect((failure as CommandFailedError).timedOut).toBe(true);
@@ -519,12 +520,13 @@ describe("runCommand capture", () => {
     ["300", 3],
   ] as const) {
     darwinOnly(`settles a lost exit from the zombie's status (${status})`, async () => {
+      let nativeChild: ReturnType<typeof Bun.spawn>;
       const realSpawn = Bun.spawn;
       const realSpawnSync = Bun.spawnSync;
       const realSetTimeout = globalThis.setTimeout;
       const spawned = spyOn(Bun, "spawn").mockImplementation(
         ((...launch: [string[], object]) =>
-          new Proxy(realSpawn(...launch), {
+          new Proxy((nativeChild = realSpawn(...launch)), {
             get(target, key) {
               if (key === "exited") return new Promise(() => undefined);
               const value = Reflect.get(target, key) as unknown;
@@ -537,7 +539,10 @@ describe("runCommand capture", () => {
         ...rest: []
       ) =>
         command.includes("stat=,xstat=")
-          ? { stdout: Buffer.from(`Z ${status}\n`), success: true }
+          ? {
+              stdout: Buffer.from(nativeChild.exitCode === null ? "" : `Z ${status}\n`),
+              success: true,
+            }
           : realSpawnSync(command, ...rest)) as unknown as typeof Bun.spawnSync);
       const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
         callback: Parameters<typeof setTimeout>[0],
@@ -573,7 +578,9 @@ describe("runCommand capture", () => {
   });
 
   posixOnly("waits for a descendant holding the pipes and keeps its output", async () => {
-    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.2; echo late) & echo early"]);
+    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.2; echo late) & echo early"], {
+      waitForDescendants: true,
+    });
     expect(stdout).toBe("early\nlate\n");
   });
 
@@ -622,3 +629,111 @@ posixOnly("AbortSignal cancels a command without waiting for its independent tim
     controller.abort();
   }
 });
+
+describe("capture filesystem failures", () => {
+  for (const stage of [
+    "second open",
+    "unlink",
+    "read",
+    "read on failure",
+    "read on timeout",
+    "stat",
+    "stat while running",
+  ] as const) {
+    test(`rejects and closes all descriptors after ${stage} failure`, async () => {
+      const opened: number[] = [];
+      const paths: string[] = [];
+      const closed: number[] = [];
+      const originalOpen = captureFs.openSync;
+      const originalClose = captureFs.closeSync;
+      const open = spyOn(captureFs, "openSync").mockImplementation((...args) => {
+        if (stage === "second open" && opened.length === 1) throw new Error("injected EMFILE");
+        const fd = originalOpen(...args);
+        opened.push(fd);
+        paths.push(String(args[0]));
+        return fd;
+      });
+      const close = spyOn(captureFs, "closeSync").mockImplementation((fd) => {
+        closed.push(fd);
+        originalClose(fd);
+      });
+      const fault =
+        stage === "unlink"
+          ? spyOn(captureFs, "unlinkSync").mockImplementation(() => {
+              throw new Error("injected unlink");
+            })
+          : stage.startsWith("read")
+            ? spyOn(captureFs, "readSync").mockImplementation(() => {
+                throw new Error("injected EIO");
+              })
+            : stage.startsWith("stat")
+              ? spyOn(captureFs, "fstatSync").mockImplementation(() => {
+                  throw new Error("injected EIO");
+                })
+              : undefined;
+      try {
+        const script =
+          stage.endsWith("timeout") || stage.endsWith("running")
+            ? "echo output; exec sleep 30"
+            : stage.endsWith("failure")
+              ? "echo output; exit 1"
+              : "echo output";
+        await expect(runCommand("sh", ["-c", script], { timeoutMs: 500 })).rejects.toThrow();
+        expect(opened.length).toBeGreaterThan(0);
+        expect(closed.sort()).toEqual(opened.sort());
+      } finally {
+        fault?.mockRestore();
+        close.mockRestore();
+        open.mockRestore();
+        for (const file of paths) await rm(file, { force: true });
+      }
+    });
+  }
+});
+
+posixOnly("returns at leader exit and leaves a redirected same-group helper alive", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ork-helper-"));
+  const pidFile = path.join(directory, "pid");
+  let pid = 0;
+  try {
+    await runCommand("sh", ["-c", 'sleep 30 >/dev/null 2>&1 & echo $! > "$1"', "sh", pidFile], {
+      timeoutMs: 500,
+    });
+    pid = Number(await readFile(pidFile, "utf8"));
+    expect(isRunning(pid)).toBe(true);
+  } finally {
+    if (pid) process.kill(pid, "SIGKILL");
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+darwinOnly(
+  "unknown group inspection retains explicit waiting until the command deadline",
+  async () => {
+    const original = Bun.spawnSync;
+    const inspection = spyOn(Bun, "spawnSync").mockImplementation(((
+      args: string[],
+      options: object,
+    ) => {
+      if (args[0] === "/bin/ps" && args.includes("-A"))
+        return { success: false, stdout: Buffer.alloc(0) };
+      return original(args, options);
+    }) as typeof Bun.spawnSync);
+    const realKill = process.kill;
+    const kill = spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => (signal === 0 ? true : realKill(pid, signal))) as typeof process.kill);
+    try {
+      const failure = await runCommand("sh", ["-c", "exit 0"], {
+        waitForDescendants: true,
+        timeoutMs: 50,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(CommandFailedError);
+      expect((failure as CommandFailedError).timedOut).toBe(true);
+    } finally {
+      kill.mockRestore();
+      inspection.mockRestore();
+    }
+  },
+);

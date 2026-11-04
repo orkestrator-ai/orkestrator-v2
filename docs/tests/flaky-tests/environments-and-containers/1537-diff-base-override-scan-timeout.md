@@ -143,7 +143,10 @@ after its exit, or is a zombie with no exit event:
 | **Files**, final `4543e8b33`, reaping init | 8 CPU hogs | 100 | **0** | **0** |
 
 As a positive control, the same probe flagged `sh -c 'sleep 3 & exit 0'`, whose group
-really is alive after 1 s, and the command settled at 3 s.
+really is alive after 1 s, and the command settled at 3 s. This is historical
+group-waiting evidence: after review, that behavior requires explicit
+`waitForDescendants: true`. Default capture now snapshots at leader exit,
+allowing redirected fsmonitor helpers to survive their launching command.
 
 macOS (18 cores, a scratch copy that always prints its timings):
 

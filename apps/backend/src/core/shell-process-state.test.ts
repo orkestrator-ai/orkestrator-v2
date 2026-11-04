@@ -1,9 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { decodeWaitStatus, groupHasLiveMember, readZombieExit } from "./shell-process-state.js";
+import {
+  decodeWaitStatus,
+  groupHasLiveMember,
+  readZombieExit,
+  PROCESS_INSPECTION_OPTIONS,
+} from "./shell-process-state.js";
 
 const posixOnly = process.platform === "win32" ? test.skip : test;
 const darwinOnly = process.platform === "darwin" ? test : test.skip;
@@ -100,4 +105,26 @@ describe("groupHasLiveMember", () => {
       { ownGroup: true },
     );
   });
+});
+
+darwinOnly("process inspection times out and treats failed ps as unknown", () => {
+  const original = Bun.spawnSync;
+  const seen: object[] = [];
+  const inspection = spyOn(Bun, "spawnSync").mockImplementation(((
+    args: string[],
+    options: object,
+  ) => {
+    if (args[0] !== "/bin/ps") return original(args, options);
+    seen.push(options);
+    return original(["sh", "-c", "exec sleep 30"], options);
+  }) as typeof Bun.spawnSync);
+  const start = Date.now();
+  try {
+    expect(readZombieExit(1)).toBeUndefined();
+    expect(groupHasLiveMember(1)).toBe(true);
+    expect(seen).toEqual([PROCESS_INSPECTION_OPTIONS, PROCESS_INSPECTION_OPTIONS]);
+    expect(Date.now() - start).toBeLessThan(2000);
+  } finally {
+    inspection.mockRestore();
+  }
 });

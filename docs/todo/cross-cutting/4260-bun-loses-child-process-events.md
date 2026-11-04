@@ -62,7 +62,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`.
 - **What should `runCommand` do?**
   - **Capture stdout and stderr through unlinked files, and read a lost macOS exit from the zombie's status (recommended).** Implemented in `51ccfb3f2` and `4543e8b33`.
     - Pros: removes the stall instead of bounding it; loses no output and keeps the real exit code; needs no grace period that could fail a slow success.
-    - Cons: two file opens per command; the temporary directory has to be usable; the output limit is noticed by polling; a same-group descendant that redirected its output now holds the command (see the report's decisions).
+    - Cons: two file opens per command; the temporary directory has to be usable; the output limit is noticed by polling; default capture ends at leader exit; callers needing late descendant output must opt into group waiting (see the report's decisions).
   - **Fail the command once `exit` has fired, the process group is gone and a grace period has passed.**
     - Pros: smaller change.
     - Cons: fails commands that succeeded, and a too-short grace fails a slow success on a starved host (local runs saw 3.6 s for a healthy child under load).
@@ -155,3 +155,13 @@ Chose file capture because a bound could only fail a command that had succeeded,
 ## Replaces
 
 Nothing; new observation.
+
+## Assumptions and decisions
+
+### Task 3: completion after daemon regression review
+
+Leader exit now ends default capture; explicit `waitForDescendants` retains late
+output and deadline-bound group waiting. Always waiting for the group preserved
+late output but blocked same-group fsmonitor daemons, so it was rejected. Tests
+cover helper survival, automatic daemon startup through project-home status,
+capture filesystem failures, and bounded unknown process inspection.

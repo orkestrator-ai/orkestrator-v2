@@ -321,41 +321,38 @@ if (timingProbe) {
 
 test("step timings report through Bun's deadline hook and stay silent on success", async () => {
   for (const outcome of ["deadline", "passed"]) {
-    const child = Bun.spawn(
-      [
+    let exitCode = 0;
+    const result = await shell
+      .runCommand(
         process.execPath,
-        "test",
-        import.meta.path,
-        "--test-name-pattern",
-        "^step timings lifecycle probe$",
-        "--parallel=1",
-      ],
-      {
-        cwd: import.meta.dir,
-        env: { ...process.env, ORKESTRATOR_DIFF_TIMINGS_PROBE: outcome },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const watchdog = setTimeout(() => child.kill(), 10_000);
-    try {
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ]);
-      const output = stdout + stderr;
-      expect(exitCode).toBe(outcome === "deadline" ? 1 : 0);
-      if (outcome === "deadline") {
-        expect(output).toContain("waiting on #2 probe stalled");
-        expect(output).toMatch(/#1 ok \d+ ms probe completed/);
-        expect(output).toMatch(/#2 WAITING \d+ ms probe stalled/);
-        expect(output.match(/\[step timings\]/g)).toHaveLength(1);
-      } else {
-        expect(output).not.toContain("[step timings]");
-      }
-    } finally {
-      clearTimeout(watchdog);
+        [
+          "test",
+          import.meta.path,
+          "--test-name-pattern",
+          "^step timings lifecycle probe$",
+          "--parallel=1",
+        ],
+        {
+          cwd: import.meta.dir,
+          env: { ...process.env, ORKESTRATOR_DIFF_TIMINGS_PROBE: outcome },
+          timeoutMs: 10_000,
+        },
+      )
+      .catch((error: unknown) => {
+        if (!(error instanceof shell.CommandFailedError) || error.timedOut) throw error;
+        exitCode = error.exitCode ?? -1;
+        return { stdout: error.stdout, stderr: error.message };
+      });
+    const { stdout, stderr } = result;
+    const output = stdout + stderr;
+    expect(exitCode).toBe(outcome === "deadline" ? 1 : 0);
+    if (outcome === "deadline") {
+      expect(output).toContain("waiting on #2 probe stalled");
+      expect(output).toMatch(/#1 ok \d+ ms probe completed/);
+      expect(output).toMatch(/#2 WAITING \d+ ms probe stalled/);
+      expect(output.match(/\[step timings\]/g)).toHaveLength(1);
+    } else {
+      expect(output).not.toContain("[step timings]");
     }
   }
 }, 25_000);

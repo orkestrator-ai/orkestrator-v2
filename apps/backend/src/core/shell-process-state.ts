@@ -8,6 +8,12 @@ import { constants as osConstants } from "node:os";
  * and a zombie still counts as a member of its process group. All of this is
  * synchronous and runs only once a command has outlived the common path.
  */
+export const PROCESS_INSPECTION_OPTIONS = {
+  timeout: 100,
+  killSignal: "SIGKILL",
+  maxBuffer: 1024 * 1024,
+} as const;
+
 export type CommandExit = { code: number | null; signal: NodeJS.Signals | null };
 
 export function decodeWaitStatus(status: number): CommandExit {
@@ -23,7 +29,11 @@ export function decodeWaitStatus(status: number): CommandExit {
  */
 export function readZombieExit(pid: number): CommandExit | undefined {
   try {
-    const { stdout } = Bun.spawnSync(["/bin/ps", "-o", "stat=,xstat=", "-p", String(pid)]);
+    const { stdout, success } = Bun.spawnSync(
+      ["/bin/ps", "-o", "stat=,xstat=", "-p", String(pid)],
+      PROCESS_INSPECTION_OPTIONS,
+    );
+    if (!success) return undefined;
     const match = /^Z\S*\s+([0-9a-f]+)\s*$/i.exec(stdout.toString().trim());
     return match ? decodeWaitStatus(Number.parseInt(match[1]!, 16)) : undefined;
   } catch {
@@ -52,7 +62,10 @@ function linuxGroupHasLiveMember(pgid: number): boolean {
 }
 
 function psGroupHasLiveMember(pgid: number): boolean {
-  const { stdout, success } = Bun.spawnSync(["/bin/ps", "-A", "-o", "pgid=,stat="]);
+  const { stdout, success } = Bun.spawnSync(
+    ["/bin/ps", "-A", "-o", "pgid=,stat="],
+    PROCESS_INSPECTION_OPTIONS,
+  );
   if (!success) return true;
   return stdout
     .toString()

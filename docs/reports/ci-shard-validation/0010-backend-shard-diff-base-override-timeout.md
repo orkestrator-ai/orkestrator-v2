@@ -44,7 +44,7 @@ The body (`apps/backend/src/core/diff-base-override.integration.test.ts:16-136`)
 
 Both links are removed:
 
-- `runCommand` captures output through private, already unlinked files and settles on the process's exit and the end of its group, so no stream event is involved (`51ccfb3f2`).
+- `runCommand` captures output through private, already unlinked files and settles on the leader's exit (group waiting is now explicit opt-in), so no stream event is involved (`51ccfb3f2`).
 - On macOS, a child with no exit after 1 s is checked with `ps`. A zombie's `xstat` is its true wait status, so the command settles with its real outcome (`4543e8b33`).
 - A retarget clears `entry.inFlight`, and a superseded attempt no longer requests a rerun (`1573f4949`).
 
@@ -103,10 +103,13 @@ An earlier attempt failed and is recorded so nobody repeats it: `runCommand` on 
 
 ### Task 2: which commands wait for what
 
-- **Chose:** settle when the process has exited and its process group has no live member. The old code settled when the pipes closed.
-- **Why:** a file has no end-of-stream, so the group is the nearest equivalent that keeps a descendant's late output and keeps the existing tests' behaviour for a descendant that outlives its parent. Zombies do not count: without that, an orphan under a non-reaping PID 1 held `sh -c 'sleep 3 & exit 0'` to its whole 10 s timeout, which the probe's positive control exposed.
-- **Behaviour change:** a descendant left in the same group that has redirected its own output used to let the command return at once, and now holds it until the descendant exits or the timeout kills the group. No backend caller was found that relies on it: its fixed shell script starts no background work, and `git maintenance --detach` and `core.fsmonitor=true` both returned promptly when measured. A daemon needs its own session, as those have.
-- **Alternative:** settle a fixed time after the leader's exit. That would silently lose a slower descendant's output and leave it running, so it was not used.
+- **Chose after review:** settle on leader exit by default, taking a bounded snapshot of stdout/stderr at that point. Output written later by descendants is outside the default capture contract. Callers needing descendant output must set `waitForDescendants: true`; that wait retains the command deadline and group escalation.
+- **Why:** preparation exposed three fsmonitor daemon-start timeouts and a subsequent stacked-spy recursion failure. A same-group daemon with redirected output must be allowed to outlive its launching command. The earlier claim that all such helpers detach into their own sessions was incorrect.
+- **Alternative:** always wait for the process group, preserving late output automatically. This holds daemon-start calls until timeout and kills their helpers, so it was rejected.
+- **Error boundaries:** capture descriptors are registered separately, unlink failure closes its descriptor, and read/stat failures reject while releasing descriptors. `ps` inspections have a 100 ms SIGKILL deadline and 1 MiB output cap; unsuccessful answers stay unknown.
+- **Coverage:** redirected same-group helper survival; explicit late-output capture; second-open/unlink/read/stat failure cleanup; slow/failed process inspection and command deadline; project-home status auto-starting an fsmonitor daemon; lifecycle probe through file-backed `runCommand`.
+- **Repair validation (2026-11-04, macOS):** shell, process-state, fsmonitor and diff-base integration owners passed together. Deadline/success probe passed 10 repetitions and another 10 with two owned CPU-load workers. Backend typecheck and format/lint checks on edited code passed. These local results do not replace the CI confirmation below.
+- **Validation discovery repair:** the preparation command from the root matches no tests because root `bunfig.toml` ignores backend tests. Its exact rerun confirmed that result. Use `mise run test:logged -- --name diff-base-override-integration-corrected -- bun test --cwd apps/backend ./src/core/diff-base-override.integration.test.ts --parallel=1 --only-failures`, which executes the owner successfully.
 
 ### Task 2: scope of the retarget guarantee after review
 

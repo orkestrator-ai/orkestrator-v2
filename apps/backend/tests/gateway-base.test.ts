@@ -436,8 +436,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 1024 * 1024,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return false;
       }),
       destroy: mock(() => undefined),
@@ -515,8 +515,8 @@ describe("remote gateway", () => {
     const writes: string[] = [];
     const client = {
       writableLength: 1024 * 1024,
-      write: mock((message: string) => {
-        writes.push(message);
+      write: mock((message: string | Buffer) => {
+        writes.push(String(message));
         return false;
       }),
       destroy: mock(() => undefined),

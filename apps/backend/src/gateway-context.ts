@@ -113,7 +113,7 @@ export class GatewayContext {
    * actively mounted terminals on one filtered stream, so retention is bounded
    * to one frame per subscribed tmux session rather than one frame per socket.
    */
-  droppedTmuxFrames = new WeakMap<EventClientWriter, Map<string, string>>();
+  droppedTmuxFrames = new WeakMap<EventClientWriter, Map<string, Buffer>>();
   proxyRequests = new Set<ReturnType<typeof http.request>>();
   sockets = new Set<Socket>();
   keepalive: ReturnType<typeof setInterval> | null = null;

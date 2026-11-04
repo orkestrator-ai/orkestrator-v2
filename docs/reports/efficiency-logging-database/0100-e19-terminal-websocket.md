@@ -20,7 +20,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Stop flushing channel frames above a low watermark**: leave backlog in the per-channel queues and resume when the socket drains. Status: open.
+1. **Stop flushing channel frames above a low watermark**: leave backlog in the per-channel queues and resume when the socket drains. Status: done (2026-11-04; [1202 task 11](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) has the before-and-after numbers).
 
 #### 1. Stop flushing channel frames above a low watermark
 
@@ -55,8 +55,7 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 
 ### Needs verification
 
-- How `bufferedAmount` and the `ws.send` callback behave under Bun's `ws` compatibility layer. The backend runs `ws` under Bun, and this was read from code only.
-- The desync itself was reasoned from the code; no flooding run was observed.
+None left for this part. Both items were checked on 2026-11-04 and are recorded in 1202 task 11: how `bufferedAmount` and the `ws.send` callback behave under Bun's `ws`, and the desync itself, which `terminal-flood` in `apps/backend/scripts/gateway-frame-costs.ts` reproduced on the unchanged code.
 
 ## 0375: Small per-chunk and per-frame gateway costs
 

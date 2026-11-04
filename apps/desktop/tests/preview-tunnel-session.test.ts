@@ -268,45 +268,72 @@ describe("PreviewTunnelConnector against a v1-only backend", () => {
   });
 });
 
+/** An authenticated session over a scripted WebSocket. */
+async function fakeSession() {
+  const ws = new EventEmitter() as EventEmitter & {
+    isOpen: boolean;
+    send: () => boolean;
+    start: () => void;
+    ping: () => void;
+    close: (code: number) => void;
+  };
+  ws.isOpen = true;
+  ws.send = () => true;
+  ws.start = () => {};
+  ws.ping = () => {};
+  const closed: number[] = [];
+  ws.close = (code) => {
+    closed.push(code);
+    ws.isOpen = false;
+    ws.emit("close", code);
+  };
+  const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
+    attachmentId: "att_test",
+    credential: "credential",
+    idleMs: 30_000,
+    onClosed: () => {},
+  });
+  ws.emit(
+    "message",
+    Buffer.from(
+      JSON.stringify({
+        type: "ready",
+        serviceId: "service",
+        endpointGeneration: 1,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      }),
+    ),
+    false,
+  );
+  await session.ready;
+  return { ws, session, closed };
+}
+
+test("a session error frame fails its streams before the close frame arrives", async () => {
+  const { ws, session, closed } = await fakeSession();
+  const opening = session.openStream(undefined, performance.now());
+  ws.emit("message", Buffer.from(JSON.stringify({ type: "open-ok", stream: 1 })), false);
+  const stream = await opening;
+  const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
+  ws.emit(
+    "message",
+    Buffer.from(JSON.stringify({ type: "error", error: previewError("access-expired") })),
+    false,
+  );
+  // A caller checking this stream in the gap must not find it reusable.
+  expect(closed).toEqual([]);
+  expect(stream.destroyed).toBe(true);
+  expect(session.size).toBe(0);
+  expect(session.canOpen).toBe(false);
+  expect(previewErrorFromUnknown(await failed)?.category).toBe("access-expired");
+  ws.close(PREVIEW_TUNNEL_CLOSE.revoked);
+  expect(closed).toEqual([PREVIEW_TUNNEL_CLOSE.revoked]);
+});
+
 test.each(["generation-changed", "access-expired"] as const)(
   "OPEN_FAILED %s retires a session while existing streams drain",
   async (category) => {
-    const ws = new EventEmitter() as EventEmitter & {
-      isOpen: boolean;
-      send: () => boolean;
-      start: () => void;
-      ping: () => void;
-      close: (code: number) => void;
-    };
-    ws.isOpen = true;
-    ws.send = () => true;
-    ws.start = () => {};
-    ws.ping = () => {};
-    const closed: number[] = [];
-    ws.close = (code) => {
-      closed.push(code);
-      ws.isOpen = false;
-      ws.emit("close", code);
-    };
-    const session = new PreviewTunnelSession(ws as unknown as PreviewWebSocket, {
-      attachmentId: "att_test",
-      credential: "credential",
-      idleMs: 30_000,
-      onClosed: () => {},
-    });
-    ws.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "ready",
-          serviceId: "service",
-          endpointGeneration: 1,
-          expiresAt: new Date(Date.now() + 60000).toISOString(),
-        }),
-      ),
-      false,
-    );
-    await session.ready;
+    const { ws, session, closed } = await fakeSession();
     const active = session.openStream(undefined, performance.now());
     ws.emit("message", Buffer.from(JSON.stringify({ type: "open-ok", stream: 1 })), false);
     const stream = await active;
@@ -358,13 +385,19 @@ test("Node pull-mode reads replenish a fully buffered receive window", async () 
   const session = { sendFrame: frame => credits.push(frame), cancel() {}, violation() { throw new Error("credit overflow"); } };
   const stream = new PreviewTunnelMuxStream(session, 1, 0);
   const windowBytes = 256 * 1024;
+  // How much one read() returns varies by Node version (one chunk on Node 26).
+  const drain = () => {
+    let bytes = 0;
+    for (let chunk = stream.read(); chunk !== null; chunk = stream.read()) bytes += chunk.length;
+    return bytes;
+  };
   for (let i = 0; i < 4; i++) stream.receive(Buffer.alloc(windowBytes / 4));
   assert.equal(stream.readableLength, windowBytes);
   assert.equal(credits.length, 0);
-  assert.equal(stream.read().length, windowBytes);
+  assert.equal(drain(), windowBytes);
   assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes);
   stream.receive(Buffer.alloc(windowBytes / 4));
-  assert.equal(stream.read().length, windowBytes / 4);
+  assert.equal(drain(), windowBytes / 4);
   assert.equal(credits.reduce((n, frame) => n + frame.bytes, 0), windowBytes * 1.25);
   stream.destroy();
 }

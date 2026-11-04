@@ -645,7 +645,12 @@ export function browserPreviewRefererPrefix(request: IncomingMessage): string | 
 export interface EventClientWriter {
   /** Uncompressed bytes accepted from the application but not yet discharged. */
   readonly writableLength: number;
-  write(chunk: string): boolean;
+  /**
+   * `byteLength` is the size of `chunk` when the caller already knows it. Event
+   * frames always pass it, so a frame is measured once however many clients it
+   * reaches; only short fixed strings such as keepalives leave it out.
+   */
+  write(chunk: string | Buffer, byteLength?: number): boolean;
   destroy(): void;
 }
 
@@ -670,8 +675,8 @@ export class IdentityEventClientWriter implements DrainAwareEventClientWriter {
     return this.response.writableLength;
   }
 
-  write(chunk: string): boolean {
-    const bytes = Buffer.byteLength(chunk);
+  write(chunk: string | Buffer, byteLength?: number): boolean {
+    const bytes = byteLength ?? Buffer.byteLength(chunk);
     this.metrics?.sourceBytes(bytes);
     this.metrics?.encodedBytes(bytes);
     return this.response.write(chunk);
@@ -716,9 +721,9 @@ export class GzipEventClientWriter implements DrainAwareEventClientWriter {
     return this.pendingBytes + this.compressor.readableLength + this.response.writableLength;
   }
 
-  write(chunk: string): boolean {
+  write(chunk: string | Buffer, byteLength?: number): boolean {
     if (this.closed) return false;
-    const bytes = Buffer.byteLength(chunk);
+    const bytes = byteLength ?? Buffer.byteLength(chunk);
     this.metrics?.sourceBytes(bytes);
     this.pendingBytes += bytes;
     return this.compressor.write(chunk, (error) => {
@@ -805,7 +810,7 @@ export type GatewayEventClient = {
 export type BufferedGatewayEvent = {
   event: string;
   payload: unknown;
-  message: string;
+  message: Buffer;
   messageBytes: number;
   droppable: boolean;
   revision: number | null;

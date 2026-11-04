@@ -1,5 +1,5 @@
 import type { GatewayContext } from "./gateway-context.js";
-import { formatGatewayCursor } from "./gateway-event-replay.js";
+import { encodeGatewayFrame, formatGatewayCursor } from "./gateway-event-replay.js";
 import type {
   GatewayEventReplay,
   GatewayCursorParseResult,
@@ -58,8 +58,8 @@ export class GatewayEvents {
       // omitted before it, so the pending cursor is already superseded.
       if (replayFrame) state.omittedRevision = null;
       if (message === null) {
-        message = `data: ${JSON.stringify({ event, payload })}\n\n`;
-        messageBytes = Buffer.byteLength(message);
+        message = encodeGatewayFrame(`data: ${JSON.stringify({ event, payload })}\n\n`);
+        messageBytes = message.byteLength;
       }
 
       if (state.handshake) {
@@ -134,7 +134,7 @@ export class GatewayEvents {
     state: GatewayEventClient,
     event: string,
     payload: unknown,
-    message: string,
+    message: Buffer,
     messageBytes: number,
     droppable: boolean,
   ): boolean {
@@ -162,7 +162,7 @@ export class GatewayEvents {
       this.markTerminalFrameDropped(client, state, event, message, payload);
       return true;
     }
-    client.write(message);
+    client.write(message, messageBytes);
     this.ctx.metrics.recordEvent(event, messageBytes);
     return true;
   }
@@ -177,41 +177,64 @@ export class GatewayEvents {
       event,
       payload,
     })}\n\n`;
-    const projectedBytes = client.writableLength + Buffer.byteLength(message);
+    const messageBytes = Buffer.byteLength(message);
+    const projectedBytes = client.writableLength + messageBytes;
     if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
       this.dropBufferedClient(client, event, projectedBytes);
       return false;
     }
-    client.write(message);
+    client.write(message, messageBytes);
     return true;
   }
 
-  writeReplayFrame(
+  /**
+   * Writes a replay window to one client.
+   *
+   * A scoped stream still has to advance through global revisions it omitted,
+   * otherwise every reconnect would request the same irrelevant frames. Only the
+   * newest of a run of omitted revisions matters, so each run costs one cursor
+   * frame: just before the next matching frame, or at the end of the window.
+   */
+  writeReplayFrames(
     client: EventClientWriter,
     state: GatewayEventClient,
-    frame: GatewayReplayFrame,
+    frames: readonly GatewayReplayFrame[],
   ): boolean {
-    if (
-      eventMatchesSubscription(
-        frame.event,
-        state.prefixes,
-        state.includedPrefixes,
-        state.excludedPrefixes,
+    let skippedCursor: string | null = null;
+    const flushSkipped = (): boolean => {
+      if (skippedCursor === null) return true;
+      if (!this.ctx.clients.has(client)) return false;
+      const cursor = skippedCursor;
+      skippedCursor = null;
+      return this.writeControlFrame(client, GATEWAY_CURSOR_EVENT, cursor, null);
+    };
+    for (const frame of frames) {
+      if (
+        !eventMatchesSubscription(
+          frame.event,
+          state.prefixes,
+          state.includedPrefixes,
+          state.excludedPrefixes,
+        )
+      ) {
+        skippedCursor = frame.cursor;
+        continue;
+      }
+      if (!flushSkipped() || !this.ctx.clients.has(client)) return false;
+      if (
+        !this.writeEventToClient(
+          client,
+          state,
+          frame.event,
+          undefined,
+          frame.message,
+          frame.encodedBytes,
+          false,
+        )
       )
-    ) {
-      return this.writeEventToClient(
-        client,
-        state,
-        frame.event,
-        undefined,
-        frame.message,
-        frame.encodedBytes,
-        false,
-      );
+        return false;
     }
-    // A scoped stream still has to advance through global revisions it omitted,
-    // otherwise every reconnect would request the same irrelevant frames.
-    return this.writeControlFrame(client, GATEWAY_CURSOR_EVENT, frame.cursor, null);
+    return flushSkipped();
   }
 
   /**
@@ -313,11 +336,8 @@ export class GatewayEvents {
       if (!this.ctx.clients.has(client)) return;
       highestSent = this.ctx.eventReplay.latestRevision;
     } else if (replay) {
-      for (const frame of replay.frames) {
-        if (!this.ctx.clients.has(client)) return;
-        if (!this.writeReplayFrame(client, state, frame)) return;
-        highestSent = Math.max(highestSent, frame.revision);
-      }
+      if (!this.writeReplayFrames(client, state, replay.frames)) return;
+      highestSent = Math.max(highestSent, replay.frames.at(-1)?.revision ?? 0);
     }
 
     // Stay in buffered mode until the dynamic end of the array. A write can
@@ -353,7 +373,7 @@ export class GatewayEvents {
     client: EventClientWriter,
     state: GatewayEventClient,
     event: string,
-    message: string,
+    message: Buffer,
     payload: unknown,
   ): void {
     const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
@@ -403,8 +423,10 @@ export class GatewayEvents {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
       const retainedTmuxFrame = this.ctx.droppedTmuxFrames.get(client)?.get(sessionId);
       const recoveryFrame =
-        retainedTmuxFrame ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
-      const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
+        retainedTmuxFrame ??
+        encodeGatewayFrame(`data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`);
+      const recoveryBytes = recoveryFrame.byteLength;
+      const projectedBytes = client.writableLength + recoveryBytes;
       if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
         this.dropBufferedClient(client, event, projectedBytes);
         return false;
@@ -419,8 +441,8 @@ export class GatewayEvents {
         if (retained?.size === 0) this.ctx.droppedTmuxFrames.delete(client);
       }
       state.desyncedSessions.delete(sessionId);
-      client.write(recoveryFrame);
-      this.ctx.metrics.recordEvent(event, Buffer.byteLength(recoveryFrame));
+      client.write(recoveryFrame, recoveryBytes);
+      this.ctx.metrics.recordEvent(event, recoveryBytes);
     }
     return true;
   }

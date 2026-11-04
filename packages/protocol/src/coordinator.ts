@@ -283,9 +283,16 @@ export interface CoordinatorDelegation {
    *
    * Distinct from `completedAt` so a crash between observing the edge and
    * delivering the wake retries rather than losing it, and so a delivered wake
-   * is never sent twice.
+   * is never sent twice. Also stamped when no wake is owed any more: its
+   * coordinator is gone, or delivery was given up on (`wakeFailedAt`).
    */
   wokenAt?: string;
+  /**
+   * Delivering the wake kept failing, so it was given up on and the coordinator
+   * was sent one notice, best effort. A mark on the wake, not on the work:
+   * `state` still says how the worker ended.
+   */
+  wakeFailedAt?: string;
   /**
    * The worker has been waiting on input or an approval since `since`.
    *

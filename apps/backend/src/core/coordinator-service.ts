@@ -38,7 +38,7 @@ import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 import { CoordinatorPullRequestWatches } from "./coordinator-pr-watches.js";
-import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError, logErrorKind } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");
 
@@ -53,6 +53,27 @@ const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
  * or watchers, so keep this fallback short and qualify the timeout notice.
  */
 const DELEGATION_BACKGROUND_WORK_HOLD_MS = 2 * 60_000;
+/**
+ * A delegation whose wake has failed this many passes, over at least
+ * {@link DELEGATION_WAKE_RETIRE_MIN_MS}, is retired: it stops being retried and
+ * its coordinator gets one notice. Passes also run on turn-end edges, which on a
+ * busy host come many times a minute, so the count alone would let a short fault
+ * retire every wake owed; the time bound is what makes it mean "keeps failing".
+ */
+const DELEGATION_WAKE_RETIRE_ATTEMPTS = 10;
+const DELEGATION_WAKE_RETIRE_MIN_MS = 10 * 60_000;
+const CONVERSATION_LIMIT_MESSAGE = "Coordinator conversation limit reached";
+
+/**
+ * A wake failure that is a state the user can change, not a fault of this
+ * delegation: messaging turned off, or no room to open a main. Such a wake is
+ * held and retried, because the wake is owed again as soon as the state changes.
+ */
+function wakeHeldByUserState(error: unknown): boolean {
+  return error instanceof AgentMailError
+    ? error.code === "messaging-disabled"
+    : error instanceof Error && error.message === CONVERSATION_LIMIT_MESSAGE;
+}
 
 /** Delegation settling knobs beyond the status-wake options. */
 export interface CoordinatorDelegationOptions {
@@ -63,6 +84,8 @@ export interface CoordinatorDelegationOptions {
   workerBackgroundWork?: (environmentId: string, tabId: string) => Promise<boolean>;
   /** Overrides {@link DELEGATION_BACKGROUND_WORK_HOLD_MS}; for tests. */
   backgroundWorkHoldMs?: number;
+  /** Overrides {@link DELEGATION_WAKE_RETIRE_MIN_MS}; for tests. */
+  wakeRetireMinMs?: number;
   /**
    * Whether a command in the worker environment is waiting on the user (a
    * sign-in link, a code, a password; see `human-prompt-registry.ts`). Such a
@@ -188,6 +211,12 @@ export class CoordinatorService {
    * restart, which only restarts the hold.
    */
   private readonly backgroundWorkSince = new Map<string, { since: number; requestedAt: string }>();
+  /**
+   * Failed wake attempts per delegation since its last success. In memory so a
+   * failing sweep writes nothing to a store that is rewritten whole; a restart
+   * only restarts the count.
+   */
+  private readonly delegationWakeFailures = new Map<string, { attempts: number; since: number }>();
 
   constructor(
     private readonly storage: StorageService,
@@ -311,7 +340,7 @@ export class CoordinatorService {
         existing.conversations.filter((item) => !item.closedAt).length >=
         MAX_OPEN_COORDINATOR_CONVERSATIONS
       ) {
-        throw new Error("Coordinator conversation limit reached");
+        throw new Error(CONVERSATION_LIMIT_MESSAGE);
       }
       const created = conversation(
         existing.id,
@@ -638,7 +667,7 @@ export class CoordinatorService {
             conversations.filter((item) => !item.closedAt).length >=
             MAX_OPEN_COORDINATOR_CONVERSATIONS
           ) {
-            throw new Error("Coordinator conversation limit reached");
+            throw new Error(CONVERSATION_LIMIT_MESSAGE);
           }
           const remaining = { ...current, conversations };
           const created = coordinatorMainConversation(remaining)
@@ -907,38 +936,55 @@ export class CoordinatorService {
         const delegation = association.delegation;
         if (!delegation) continue;
         if (worker.tabId && delegation.workerTabId !== worker.tabId) continue;
-        /*
-         * The turn that just ended cannot be the answer to a request the worker
-         * has not received yet. That happens when the coordinator messages a
-         * worker already mid-turn: the delegation opens, the in-flight turn ends
-         * moments later, and closing here would report "finished" for work that
-         * has not started. The request stays open; the turn that actually reads
-         * it is the one that settles it.
-         *
-         * A stopped worker with pending mail may still start and read it. A
-         * failed worker releases the coordinator through the failure path.
-         */
-        if (
-          worker.state !== "failed" &&
-          (await this.storage.hasUndeliveredCoordinatorRequest(
-            association.resourceId,
-            delegation.workerTabId,
-          ))
-        ) {
-          continue;
-        }
-        const background =
-          worker.state === "completed"
-            ? await this.backgroundWorkDisposition(association)
-            : { held: false };
-        if (background.held) continue;
-        // A close that returns null lost the race to another observer of the same
-        // edge. Either way the delegation is now closed, and the wake below is
-        // idempotent, so there is nothing to do differently.
-        await this.closeWorkerDelegation(association.id, worker.state, background.timeoutMs);
+        await this.settleWorkerDelegation(association, worker.state).catch((error: unknown) => {
+          this.noteDelegationReconcileFailure(association.id, error);
+        });
       }
     });
     await this.deliverDelegationWakes();
+  }
+
+  private async settleWorkerDelegation(
+    association: CoordinatorWorkflowAssociation,
+    state: "completed" | "failed" | "stopped",
+  ): Promise<void> {
+    const delegation = association.delegation!;
+    /*
+     * The turn that just ended cannot be the answer to a request the worker
+     * has not received yet. That happens when the coordinator messages a
+     * worker already mid-turn: the delegation opens, the in-flight turn ends
+     * moments later, and closing here would report "finished" for work that
+     * has not started. The request stays open; the turn that actually reads
+     * it is the one that settles it.
+     *
+     * A stopped worker with pending mail may still start and read it. A
+     * failed worker releases the coordinator through the failure path.
+     */
+    if (
+      state !== "failed" &&
+      (await this.storage.hasUndeliveredCoordinatorRequest(
+        association.resourceId,
+        delegation.workerTabId,
+      ))
+    ) {
+      return;
+    }
+    const background =
+      state === "completed" ? await this.backgroundWorkDisposition(association) : { held: false };
+    if (background.held) return;
+    // A close that returns null lost the race to another observer of the same
+    // edge. Either way the delegation is now closed, and the wake below is
+    // idempotent, so there is nothing to do differently.
+    await this.closeWorkerDelegation(association.id, state, background.timeoutMs);
+  }
+
+  /** One delegation that could not be settled must not stop the rest of the pass. */
+  private noteDelegationReconcileFailure(associationId: string, error: unknown): void {
+    log.throttled("warn", "delegation.reconcile-failed", {
+      scope: associationId,
+      error,
+      fields: () => ({ associationId, error: formatLogError(error, { stack: false }) }),
+    });
   }
 
   /**
@@ -1034,65 +1080,26 @@ export class CoordinatorService {
   async reconcileWorkerDelegations(): Promise<void> {
     for (const workspace of await this.storage.coordinators.listCoordinatorWorkspaces()) {
       const main = coordinatorMainConversation(workspace);
-      if (main) await this.reconcileMainMail(workspace, main);
-    }
-    for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
-      if (association.nodeId) {
-        await this.reconcileRemoteDelegation(association);
-        continue;
-      }
-      await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
-        const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
-          (item) => item.id === association.id,
-        );
-        if (!current) return;
-        const environment = await this.storage.getEnvironment(association.resourceId);
-        if (
-          environment?.status === "stopped" &&
-          !environment.deletionRequestedAt &&
-          (await this.storage.hasUndeliveredCoordinatorRequest(
-            association.resourceId,
-            association.delegation!.workerTabId,
-          ))
-        )
-          return;
-        let state: "completed" | "failed" | "stopped" | null =
-          !environment || environment.deletionRequestedAt
-            ? ("stopped" as const)
-            : environment.status === "error"
-              ? ("failed" as const)
-              : environment.status === "stopped"
-                ? ("stopped" as const)
-                : null;
-        const activity =
-          !state && this.workerActivity
-            ? await this.workerActivity(association.resourceId, association.delegation!.workerTabId)
-            : "unknown";
-        if (activity === "working") this.backgroundWorkSince.delete(association.id);
-        let timeoutMs: number | undefined;
-        if (
-          !state &&
-          this.workerActivity &&
-          Date.now() - Date.parse(association.delegation!.requestedAt) >=
-            DELEGATION_IDLE_RECONCILE_GRACE_MS
-        ) {
-          const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
-            association.resourceId,
-            association.delegation!.workerTabId,
-          );
-          if (!undelivered && activity === "idle" && !(await this.goalIsDriving(current))) {
-            const background = await this.backgroundWorkDisposition(current);
-            if (!background.held) {
-              state = "completed";
-              timeoutMs = background.timeoutMs;
-            }
-          }
-        }
-        if (!state) return;
-        await this.closeWorkerDelegation(association.id, state, timeoutMs);
+      if (!main) continue;
+      await this.reconcileMainMail(workspace, main).catch((error: unknown) => {
+        log.throttled("warn", "mail.reconcile-failed", {
+          scope: workspace.id,
+          error,
+          fields: () => ({ coordinatorId: workspace.id, error: formatLogError(error) }),
+        });
       });
     }
-    await this.deliverDelegationWakes();
+    for (const association of await this.storage.coordinators.listOpenCoordinatorDelegations()) {
+      await this.reconcileWorkerDelegation(association).catch((error: unknown) => {
+        this.noteDelegationReconcileFailure(association.id, error);
+      });
+    }
+    await this.deliverDelegationWakes().catch((error: unknown) => {
+      log.throttled("warn", "delegation.wake-pass-failed", {
+        error,
+        fields: () => ({ error: formatLogError(error, { stack: false }) }),
+      });
+    });
     const owed = new Set(
       [
         ...(await this.storage.coordinators.listOpenCoordinatorDelegations()),
@@ -1100,6 +1107,65 @@ export class CoordinatorService {
       ].map((association) => association.id),
     );
     await this.storage.releaseOrphanedDelegationHolds(owed);
+  }
+
+  private async reconcileWorkerDelegation(
+    association: CoordinatorWorkflowAssociation,
+  ): Promise<void> {
+    if (association.nodeId) {
+      await this.reconcileRemoteDelegation(association);
+      return;
+    }
+    await this.storage.withAgentMailWorkerAdmission(association.resourceId, async () => {
+      const current = (await this.storage.coordinators.listOpenCoordinatorDelegations()).find(
+        (item) => item.id === association.id,
+      );
+      if (!current) return;
+      const environment = await this.storage.getEnvironment(association.resourceId);
+      if (
+        environment?.status === "stopped" &&
+        !environment.deletionRequestedAt &&
+        (await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          association.delegation!.workerTabId,
+        ))
+      )
+        return;
+      let state: "completed" | "failed" | "stopped" | null =
+        !environment || environment.deletionRequestedAt
+          ? ("stopped" as const)
+          : environment.status === "error"
+            ? ("failed" as const)
+            : environment.status === "stopped"
+              ? ("stopped" as const)
+              : null;
+      const activity =
+        !state && this.workerActivity
+          ? await this.workerActivity(association.resourceId, association.delegation!.workerTabId)
+          : "unknown";
+      if (activity === "working") this.backgroundWorkSince.delete(association.id);
+      let timeoutMs: number | undefined;
+      if (
+        !state &&
+        this.workerActivity &&
+        Date.now() - Date.parse(association.delegation!.requestedAt) >=
+          DELEGATION_IDLE_RECONCILE_GRACE_MS
+      ) {
+        const undelivered = await this.storage.hasUndeliveredCoordinatorRequest(
+          association.resourceId,
+          association.delegation!.workerTabId,
+        );
+        if (!undelivered && activity === "idle" && !(await this.goalIsDriving(current))) {
+          const background = await this.backgroundWorkDisposition(current);
+          if (!background.held) {
+            state = "completed";
+            timeoutMs = background.timeoutMs;
+          }
+        }
+      }
+      if (!state) return;
+      await this.closeWorkerDelegation(association.id, state, timeoutMs);
+    });
   }
 
   /**
@@ -1110,7 +1176,11 @@ export class CoordinatorService {
     const open = (await this.storage.coordinators.listOpenCoordinatorDelegations()).filter(
       (association) => association.nodeId === nodeId && association.resourceId === environmentId,
     );
-    for (const association of open) await this.reconcileRemoteDelegation(association);
+    for (const association of open) {
+      await this.reconcileRemoteDelegation(association).catch((error: unknown) => {
+        this.noteDelegationReconcileFailure(association.id, error);
+      });
+    }
     if (open.length > 0) await this.deliverDelegationWakes();
   }
 
@@ -1203,172 +1273,298 @@ export class CoordinatorService {
 
   private async deliverDelegationWakesOnce(): Promise<void> {
     const unwoken = await this.storage.coordinators.listUnwokenCoordinatorDelegations();
-    for (const association of unwoken) {
-      const delegation = association.delegation;
-      if (!delegation || !association.conversationId) continue;
-      const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
-        association.coordinatorId,
-      );
-      if (!owner) {
-        // The coordinator itself is gone. Retiring the delegation is the only
-        // honest outcome: there is nobody left to wake, and leaving it
-        // unstamped would retry this lookup on every sweep forever.
-        await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
-        continue;
-      }
-      // The wake goes to the main coordinator. If the user closed it, a new
-      // main starts with the default agent and takes this delegation over.
-      const { workspace, main: conversation } = await this.ensureMainConversation(owner.projectId);
-      const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
-      let wakeKind = delegation.wakeKind;
-      if (!wakeKind) {
-        const hasReport = await this.storage.hasDelegationHeldAgentMail(
-          association.id,
-          runtimeId,
-          conversation.tabId,
-          association.resourceId,
-          delegation.workerTabId,
-        );
-        const prepared = await this.storage.coordinators.prepareCoordinatorDelegationWake(
-          association.id,
-          hasReport ? "report" : "notice",
-        );
-        wakeKind = prepared?.delegation?.wakeKind;
-      }
-      if (!wakeKind) continue;
-      if (wakeKind === "report") {
-        // A zero count is safe on retry: wakeKind was committed while the
-        // report was still held, so zero now means an earlier pass released it.
-        await this.storage.releaseDelegationHeldAgentMail(
-          association.id,
-          runtimeId,
-          conversation.tabId,
-          association.resourceId,
-          delegation.workerTabId,
-        );
-      } else {
-        const remote = association.nodeId ? this.remote : null;
-        const remoteState =
-          remote && association.nodeId
-            ? await remote
-                .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
-                .catch(() => "unavailable" as const)
-            : null;
-        const environment = association.nodeId
-          ? null
-          : await this.storage.getEnvironment(association.resourceId);
-        const nodeName =
-          remote && association.nodeId
-            ? await remote.nodeName(association.nodeId).catch(() => association.nodeId!)
-            : null;
-        const label =
-          (environment?.name ??
-            (remoteState && remoteState !== "unavailable" ? remoteState.name : undefined) ??
-            association.resourceId) + (nodeName ? ` on ${nodeName}` : "");
-        // A turn the coordinator stopped (stop_worker_turn) ends like any
-        // other, however its delegation closed (the turn end, or a failed or
-        // stopped environment); say who stopped it, so a turn end is not read
-        // as the worker finishing.
-        const stoppedByCoordinator = delegation.stopRequestedAt !== undefined;
-        const outcome =
-          delegation.state === "completed"
-            ? stoppedByCoordinator
-              ? "stopped"
-              : "finished"
-            : delegation.state === "failed"
-              ? "failed"
-              : "stopped";
-        const stopNote = !stoppedByCoordinator
-          ? `without sending a report.`
-          : delegation.state === "completed"
-            ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
-            : `after you stopped its turn with stop_worker_turn, before it sent a report.`;
-        // What the worker last said is the closest thing to a report it left.
-        // Only a finished turn has a live session worth reading; best effort.
-        const excerpt =
-          delegation.state !== "completed"
-            ? undefined
-            : remote && association.nodeId
-              ? await remote
-                  .lastAssistantExcerpt(
-                    association.nodeId,
-                    association.resourceId,
-                    delegation.workerTabId,
-                  )
-                  .catch(() => undefined)
-              : await this.options
-                  .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
-                  .catch(() => undefined);
-        const goal = association.nodeId
-          ? undefined
-          : await this.options
-              .workerGoal?.(association.resourceId, delegation.workerTabId)
-              .catch(() => undefined);
-        const backgroundWorkTimeoutMs = delegation.backgroundWorkTimeoutMs;
-        const backgroundWorkMinutes = Math.round((backgroundWorkTimeoutMs ?? 0) / 60_000);
-        const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
-        await this.storage
-          .sendAgentMail(
-            {
-              kind: "system",
-              projectId: association.projectId,
-              source: "workflow",
-              resourceId: association.resourceId,
-            },
-            {
-              requestId: `delegation-${association.id}-${delegation.completedAt ?? outcome}`,
-              toEnvironmentId: runtimeId,
-              toTabId: conversation.tabId,
-              subject: `Worker ${label} ${outcome}`,
-              body:
-                `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
-                stopNote +
-                (backgroundWorkTimeoutMs !== undefined
-                  ? ` Its turn ended while work it started in the background was still running, and none of it reported for ${backgroundWorkMinutes} ${backgroundWorkMinutes === 1 ? "minute" : "minutes"}; it may resume if that work reports.`
-                  : "") +
-                (association.baseBranch
-                  ? ` It was started from ${association.baseBranch}${
-                      association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
-                    }.`
-                  : "") +
-                (goal
-                  ? ` Its goal is ${goal.status}${goal.statusReason ? ` (${goal.statusReason})` : ""} after ${goal.iterations} of ${goal.maxIterations} iterations.`
-                  : "") +
-                ` Inspect the environment through Orkestrator controls before deciding what to do next.` +
-                (excerpt ? `\n\nLast message: ${boundedLine(excerpt)}` : "") +
-                `\n\nRead more: ${goal ? `\`get_worker_goal ${tabArgs}\`, ` : ""}\`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
-            },
-            {
-              notice: {
-                resource: {
-                  kind: "agent-tab",
-                  id: delegation.workerTabId,
-                  environmentId: association.resourceId,
-                  tabId: delegation.workerTabId,
-                  label,
-                },
-                state: delegation.state,
-                tone:
-                  delegation.state === "failed"
-                    ? "failure"
-                    : stoppedByCoordinator
-                      ? "info"
-                      : delegation.state === "completed"
-                        ? "success"
-                        : "info",
-              },
-            },
-          )
-          .catch((error: unknown) => {
-            // Placed by an earlier pass whose woken stamp never landed; the
-            // excerpt read this time differs, so the store calls it a
-            // conflict. The wake was delivered.
-            if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
-            throw error;
-          });
-      }
-      await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
+    const owed = new Set(unwoken.map((association) => association.id));
+    for (const id of Array.from(this.delegationWakeFailures.keys())) {
+      if (!owed.has(id)) this.delegationWakeFailures.delete(id);
     }
+    // A failure costs only its own delegation: the rest of the pass still runs.
+    for (const association of unwoken) {
+      try {
+        await this.deliverDelegationWake(association);
+        this.delegationWakeFailures.delete(association.id);
+        log.recovered("delegation.wake-failed", association.id);
+      } catch (error) {
+        await this.noteDelegationWakeFailure(association, error).catch((noteError: unknown) => {
+          log.warn("delegation.wake-retire-failed", {
+            associationId: association.id,
+            error: formatLogError(noteError, { stack: false }),
+          });
+        });
+      }
+    }
+  }
+
+  private async noteDelegationWakeFailure(
+    association: CoordinatorWorkflowAssociation,
+    error: unknown,
+  ): Promise<void> {
+    if (wakeHeldByUserState(error)) {
+      this.delegationWakeFailures.delete(association.id);
+      log.debug("delegation.wake-held", {
+        associationId: association.id,
+        kind: logErrorKind(error),
+      });
+      return;
+    }
+    const now = Date.now();
+    const previous = this.delegationWakeFailures.get(association.id);
+    const attempts = (previous?.attempts ?? 0) + 1;
+    const since = previous?.since ?? now;
+    this.delegationWakeFailures.set(association.id, { attempts, since });
+    log.throttled("warn", "delegation.wake-failed", {
+      scope: association.id,
+      error,
+      fields: () => ({
+        associationId: association.id,
+        attempts,
+        error: formatLogError(error, { stack: false }),
+      }),
+    });
+    const minMs = this.options.wakeRetireMinMs ?? DELEGATION_WAKE_RETIRE_MIN_MS;
+    if (attempts < DELEGATION_WAKE_RETIRE_ATTEMPTS || now - since < minMs) return;
+    await this.retireDelegationWake(association, attempts, error);
+  }
+
+  /**
+   * Stop retrying a wake that keeps failing, and tell the coordinator once.
+   *
+   * The notice goes first and is best effort, since it can fail for the same
+   * reason the wake did. It is idempotent per delegation, so a crash before the
+   * mark below only repeats the attempt. It goes to the open main rather than
+   * through `ensureMainConversation`, which may be what keeps failing. The mark
+   * makes nothing owed any more, so a report still held for this delegation is
+   * released as ordinary mail on the sweep (`releaseOrphanedDelegationHolds`).
+   */
+  private async retireDelegationWake(
+    association: CoordinatorWorkflowAssociation,
+    attempts: number,
+    cause: unknown,
+  ): Promise<void> {
+    const delegation = association.delegation!;
+    const kind = logErrorKind(cause);
+    const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      association.coordinatorId,
+    );
+    const main = owner ? coordinatorMainConversation(owner) : undefined;
+    if (owner && main) {
+      const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
+      try {
+        await this.storage.sendAgentMail(
+          {
+            kind: "system",
+            projectId: association.projectId,
+            source: "workflow",
+            resourceId: association.resourceId,
+          },
+          {
+            requestId: `delegation-wake-failed-${association.id}`,
+            toEnvironmentId: coordinatorRuntimeId(owner.id, main.id),
+            toTabId: main.tabId,
+            subject: `Worker ${association.resourceId} ${delegation.state}: wake failed`,
+            body:
+              `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ended its delegation as ${delegation.state}, but waking you for it failed ${attempts} times (${kind}), so it will not be tried again. ` +
+              `A report it sent, if any, is released as ordinary mail. Read its state yourself before relying on it.` +
+              `\n\nRead more: \`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
+          },
+          {
+            notice: {
+              resource: {
+                kind: "agent-tab",
+                id: delegation.workerTabId,
+                environmentId: association.resourceId,
+                tabId: delegation.workerTabId,
+                label: association.resourceId,
+              },
+              state: delegation.state,
+              tone: "failure",
+            },
+          },
+        );
+      } catch (error) {
+        // Messaging was turned off while this was failing: hold, as for the wake.
+        if (wakeHeldByUserState(error)) {
+          this.delegationWakeFailures.delete(association.id);
+          return;
+        }
+        if (!(error instanceof AgentMailError && error.code === "idempotency-conflict")) {
+          log.warn("delegation.wake-retire-notice-failed", {
+            associationId: association.id,
+            kind: logErrorKind(error),
+          });
+        }
+      }
+    }
+    await this.storage.coordinators.markCoordinatorDelegationWakeFailed(association.id);
+    this.delegationWakeFailures.delete(association.id);
+    log.warn("delegation.wake-retired", { associationId: association.id, attempts, kind });
+  }
+
+  /** Deliver one delegation's wake. Throws when it could not be delivered. */
+  private async deliverDelegationWake(association: CoordinatorWorkflowAssociation): Promise<void> {
+    const delegation = association.delegation;
+    if (!delegation || !association.conversationId) return;
+    const owner = await this.storage.coordinators.getCoordinatorWorkspaceById(
+      association.coordinatorId,
+    );
+    if (!owner) {
+      // The coordinator itself is gone. Retiring the delegation is the only
+      // honest outcome: there is nobody left to wake, and leaving it
+      // unstamped would retry this lookup on every sweep forever.
+      await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
+      return;
+    }
+    // The wake goes to the main coordinator. If the user closed it, a new
+    // main starts with the default agent and takes this delegation over.
+    const { workspace, main: conversation } = await this.ensureMainConversation(owner.projectId);
+    const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
+    let wakeKind = delegation.wakeKind;
+    if (!wakeKind) {
+      const hasReport = await this.storage.hasDelegationHeldAgentMail(
+        association.id,
+        runtimeId,
+        conversation.tabId,
+        association.resourceId,
+        delegation.workerTabId,
+      );
+      const prepared = await this.storage.coordinators.prepareCoordinatorDelegationWake(
+        association.id,
+        hasReport ? "report" : "notice",
+      );
+      wakeKind = prepared?.delegation?.wakeKind;
+    }
+    if (!wakeKind) return;
+    if (wakeKind === "report") {
+      // A zero count is safe on retry: wakeKind was committed while the
+      // report was still held, so zero now means an earlier pass released it.
+      await this.storage.releaseDelegationHeldAgentMail(
+        association.id,
+        runtimeId,
+        conversation.tabId,
+        association.resourceId,
+        delegation.workerTabId,
+      );
+    } else {
+      const remote = association.nodeId ? this.remote : null;
+      const remoteState =
+        remote && association.nodeId
+          ? await remote
+              .workerState(association.nodeId, association.resourceId, delegation.workerTabId)
+              .catch(() => "unavailable" as const)
+          : null;
+      const environment = association.nodeId
+        ? null
+        : await this.storage.getEnvironment(association.resourceId);
+      const nodeName =
+        remote && association.nodeId
+          ? await remote.nodeName(association.nodeId).catch(() => association.nodeId!)
+          : null;
+      const label =
+        (environment?.name ??
+          (remoteState && remoteState !== "unavailable" ? remoteState.name : undefined) ??
+          association.resourceId) + (nodeName ? ` on ${nodeName}` : "");
+      // A turn the coordinator stopped (stop_worker_turn) ends like any
+      // other, however its delegation closed (the turn end, or a failed or
+      // stopped environment); say who stopped it, so a turn end is not read
+      // as the worker finishing.
+      const stoppedByCoordinator = delegation.stopRequestedAt !== undefined;
+      const outcome =
+        delegation.state === "completed"
+          ? stoppedByCoordinator
+            ? "stopped"
+            : "finished"
+          : delegation.state === "failed"
+            ? "failed"
+            : "stopped";
+      const stopNote = !stoppedByCoordinator
+        ? `without sending a report.`
+        : delegation.state === "completed"
+          ? `because you stopped its turn with stop_worker_turn, before it sent a report. Its tab is idle and keeps the conversation; send_prompt_to_tab gives it its next instruction.`
+          : `after you stopped its turn with stop_worker_turn, before it sent a report.`;
+      // What the worker last said is the closest thing to a report it left.
+      // Only a finished turn has a live session worth reading; best effort.
+      const excerpt =
+        delegation.state !== "completed"
+          ? undefined
+          : remote && association.nodeId
+            ? await remote
+                .lastAssistantExcerpt(
+                  association.nodeId,
+                  association.resourceId,
+                  delegation.workerTabId,
+                )
+                .catch(() => undefined)
+            : await this.options
+                .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+                .catch(() => undefined);
+      const goal = association.nodeId
+        ? undefined
+        : await this.options
+            .workerGoal?.(association.resourceId, delegation.workerTabId)
+            .catch(() => undefined);
+      const backgroundWorkTimeoutMs = delegation.backgroundWorkTimeoutMs;
+      const backgroundWorkMinutes = Math.round((backgroundWorkTimeoutMs ?? 0) / 60_000);
+      const tabArgs = `{ ${association.nodeId ? `"nodeId": "${association.nodeId}", ` : ""}"environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
+      await this.storage
+        .sendAgentMail(
+          {
+            kind: "system",
+            projectId: association.projectId,
+            source: "workflow",
+            resourceId: association.resourceId,
+          },
+          {
+            requestId: `delegation-${association.id}-${delegation.completedAt ?? outcome}`,
+            toEnvironmentId: runtimeId,
+            toTabId: conversation.tabId,
+            subject: `Worker ${label} ${outcome}`,
+            body:
+              `Worker environment ${association.resourceId}${nodeName ? ` on ${nodeName} (nodeId ${association.nodeId})` : ""} (tab ${delegation.workerTabId}) ${outcome} ` +
+              stopNote +
+              (backgroundWorkTimeoutMs !== undefined
+                ? ` Its turn ended while work it started in the background was still running, and none of it reported for ${backgroundWorkMinutes} ${backgroundWorkMinutes === 1 ? "minute" : "minutes"}; it may resume if that work reports.`
+                : "") +
+              (association.baseBranch
+                ? ` It was started from ${association.baseBranch}${
+                    association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
+                  }.`
+                : "") +
+              (goal
+                ? ` Its goal is ${goal.status}${goal.statusReason ? ` (${goal.statusReason})` : ""} after ${goal.iterations} of ${goal.maxIterations} iterations.`
+                : "") +
+              ` Inspect the environment through Orkestrator controls before deciding what to do next.` +
+              (excerpt ? `\n\nLast message: ${boundedLine(excerpt)}` : "") +
+              `\n\nRead more: ${goal ? `\`get_worker_goal ${tabArgs}\`, ` : ""}\`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
+          },
+          {
+            notice: {
+              resource: {
+                kind: "agent-tab",
+                id: delegation.workerTabId,
+                environmentId: association.resourceId,
+                tabId: delegation.workerTabId,
+                label,
+              },
+              state: delegation.state,
+              tone:
+                delegation.state === "failed"
+                  ? "failure"
+                  : stoppedByCoordinator
+                    ? "info"
+                    : delegation.state === "completed"
+                      ? "success"
+                      : "info",
+            },
+          },
+        )
+        .catch((error: unknown) => {
+          // Placed by an earlier pass whose woken stamp never landed; the
+          // excerpt read this time differs, so the store calls it a
+          // conflict. The wake was delivered.
+          if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+          throw error;
+        });
+    }
+    await this.storage.coordinators.markCoordinatorDelegationWoken(association.id);
   }
 
   /**

@@ -530,3 +530,46 @@ describe("container arguments", () => {
     expect(await gitMirrorContainerArguments(file, { id: PROJECT_ID })).toEqual([]);
   });
 });
+
+test("a clone report during fetch survives publication and is verified next time", async () => {
+  expect(await refresh()).toBe("built");
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const fetching = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const run: typeof runCommand = async (command, args, options) => {
+    if (args?.includes("fetch")) {
+      started();
+      await gate;
+    }
+    return runCommand(command, args, options);
+  };
+  const pending = refresh({ run });
+  await fetching;
+  try {
+    await noteGitMirrorCloneOutcome("\x1eORKESTRATOR_GIT_MIRROR:corrupt\x1f", dataDir, PROJECT_ID);
+  } finally {
+    release();
+  }
+  expect(await pending).toBe("fetched");
+  expect(JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8")).suspect).toBe(
+    true,
+  );
+  let verified = false;
+  expect(
+    await refresh({
+      run: (command, args, options) => {
+        if (args?.includes("fsck")) verified = true;
+        return runCommand(command, args, options);
+      },
+    }),
+  ).toBe("fetched");
+  expect(verified).toBe(true);
+  expect(JSON.parse(await fs.readFile(path.join(projectDir(), "state.json"), "utf8")).suspect).toBe(
+    false,
+  );
+});

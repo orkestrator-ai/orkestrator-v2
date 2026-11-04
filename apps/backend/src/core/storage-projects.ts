@@ -589,7 +589,6 @@ export class ProjectsRepository {
     return projects;
   }
 
-  /** Destructive reconciliation needs a complete owner set, never a fallback. */
   /** Every project id, or a throw: a sweep must not read a lost store as "no projects". */
   async loadProjectIdsForCleanup(): Promise<Set<string>> {
     const snapshot = this.context.loadStoreStrict<unknown>(this.files.projectsFile());
@@ -606,6 +605,7 @@ export class ProjectsRepository {
     return ids;
   }
 
+  /** Destructive reconciliation needs a complete owner set, never a fallback. */
   async loadEnvironmentIdsForCleanup(): Promise<Set<string>> {
     const snapshot = this.context.loadStoreStrict<unknown>(this.files.environmentsFile());
     if (!snapshot || !Array.isArray(snapshot.value)) {

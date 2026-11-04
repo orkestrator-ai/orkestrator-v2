@@ -83,6 +83,7 @@ type MirrorState = {
   oversizedUntil?: number;
   /** A clone could not use the mirror: verify it before the next fetch. */
   suspect?: boolean;
+  suspectRevision?: string;
 };
 
 export type GitMirrorRefreshOutcome =
@@ -140,10 +141,36 @@ async function readState(directory: string): Promise<MirrorState> {
   }
 }
 
-async function writeState(directory: string, state: MirrorState): Promise<void> {
-  const temporary = path.join(directory, `.state-${randomUUID()}.tmp`);
-  await writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
-  await rename(temporary, path.join(directory, "state.json"));
+const stateWrites = new Map<string, Promise<void>>();
+
+/** Serialize state publication with clone reports; a refresh may clear only the report it read. */
+async function writeState(
+  directory: string,
+  state: MirrorState,
+  clearRevision?: { revision: string | undefined },
+  cloneReport = false,
+): Promise<void> {
+  const previous = stateWrites.get(directory) ?? Promise.resolve();
+  const done = (async () => {
+    await previous.catch(() => undefined);
+    const current = await readState(directory);
+    const next = cloneReport
+      ? { ...current, suspect: true, suspectRevision: state.suspectRevision }
+      : { ...state };
+    if (!cloneReport && (!clearRevision || current.suspectRevision !== clearRevision.revision)) {
+      next.suspect = current.suspect;
+      next.suspectRevision = current.suspectRevision;
+    }
+    const temporary = path.join(directory, `.state-${randomUUID()}.tmp`);
+    await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
+    await rename(temporary, path.join(directory, "state.json"));
+  })();
+  stateWrites.set(directory, done);
+  try {
+    await done;
+  } finally {
+    if (stateWrites.get(directory) === done) stateWrites.delete(directory);
+  }
 }
 
 async function ensureProjectDirectories(dataDir: string, projectId: string): Promise<void> {
@@ -199,12 +226,25 @@ export function scheduleProjectGitMirrorRefresh(
   void refreshProjectGitMirror(context, project);
 }
 
+/**
+ * Admission must be closed first. Wait for the entire writer, including local
+ * Git, scratch cleanup and state publication, before giving up the registry lease.
+ */
+export async function stopProjectGitMirrorRefreshes(dataDir: string): Promise<void> {
+  const prefix = path.join(dataDir, GIT_MIRRORS_DIR) + path.sep;
+  const active = Array.from(writers.entries()).filter(([key]) => key.startsWith(prefix));
+  for (const [, writer] of active) writer.controller.abort();
+  await Promise.all(active.map(([, writer]) => writer.done));
+}
+
 /** Creates or updates a project's mirror. Failures are logged, never thrown. */
 export function refreshProjectGitMirror(
   context: GitMirrorContext,
   project: Pick<Project, "id" | "gitUrl">,
   options: GitMirrorRefreshOptions = {},
 ): Promise<GitMirrorRefreshOutcome> {
+  if (context.environmentLifecycleTasks?.isAccepting() === false)
+    return Promise.resolve("skipped-shutdown");
   const key = path.join(context.storage.getDataDir(), GIT_MIRRORS_DIR, project.id);
   const running = writers.get(key);
   if (running) return running.done;
@@ -232,7 +272,11 @@ async function runRefresh(
   const dataDir = context.storage.getDataDir();
   const now = options.now ?? Date.now;
   const maxBytes = options.maxBytes ?? GIT_MIRROR_MAX_BYTES;
-  const run = options.run ?? runCommand;
+  const execute = options.run ?? runCommand;
+  const run: typeof runCommand = (command, args, settings) => {
+    controller.signal.throwIfAborted();
+    return execute(command, args, { ...settings, signal: controller.signal });
+  };
   const directory = projectDirectory(dataDir, project.id);
   await ensureProjectDirectories(dataDir, project.id);
   const mirror = path.join(mountDirectory(dataDir, project.id), MIRROR_NAME);
@@ -302,7 +346,12 @@ async function runRefresh(
   } finally {
     await removeScratch(directory).catch(() => undefined);
   }
-  await writeState(directory, { ...next, failures: 0, suspect: false });
+  if (controller.signal.aborted) return "cancelled";
+  await writeState(
+    directory,
+    { ...next, failures: 0, suspect: false },
+    { revision: state.suspectRevision },
+  );
   log.info("git-mirror.refreshed", { projectId: project.id, rebuilt: rebuild });
   return rebuild ? "built" : "fetched";
 }
@@ -502,7 +551,12 @@ export async function noteGitMirrorCloneOutcome(
   if (!SUSPECT_OUTCOMES.has(outcome)) return;
   try {
     const directory = projectDirectory(dataDir, projectId);
-    await writeState(directory, { ...(await readState(directory)), suspect: true });
+    await writeState(
+      directory,
+      { ...(await readState(directory)), suspect: true, suspectRevision: randomUUID() },
+      undefined,
+      true,
+    );
   } catch (error) {
     log.warn("git-mirror.state-write-failed", {
       projectId,

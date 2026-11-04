@@ -200,7 +200,10 @@ function isMutationRecord(value: unknown): value is PreviewMutationRecord {
 }
 
 function sanitizeSettings(value: unknown): PreviewSettings {
-  if (!isRecord(value)) return structuredClone(DEFAULT_PREVIEW_SETTINGS);
+  if (!isRecord(value)) {
+    log.warn("preview-settings.invalid");
+    return { ...structuredClone(DEFAULT_PREVIEW_SETTINGS), transport: false, relay: false };
+  }
   const publication = isRecord(value.publication) ? value.publication : {};
   const text = (field: unknown) =>
     typeof field === "string" && field.trim() ? field.trim() : null;
@@ -419,11 +422,10 @@ export class PreviewServicesRepository {
   }
 
   async loadPreviewSettings(): Promise<PreviewSettings> {
+    const file = this.previewSettingsFile();
+    const exists = await this.context.storeExists(file);
     return sanitizeSettings(
-      await this.context.loadJson<unknown>(
-        this.previewSettingsFile(),
-        () => DEFAULT_PREVIEW_SETTINGS,
-      ),
+      await this.context.loadJson<unknown>(file, () => (exists ? null : DEFAULT_PREVIEW_SETTINGS)),
     );
   }
 

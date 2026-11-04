@@ -20,6 +20,7 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
       "nodes.entries-dropped": "Unreadable node registry entries were ignored.",
       "preview-identity.reminted":
         "The data directory moved or was copied, so previews get a new backend identity.",
+      "preview-settings.invalid": "Invalid preview settings disabled transport and relay.",
       "machine-profile.invalid":
         "The stored machine profile was invalid and the default was restored.",
       "permission-rules.cleanup-failed":

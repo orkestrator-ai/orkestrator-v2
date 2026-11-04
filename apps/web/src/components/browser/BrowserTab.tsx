@@ -103,6 +103,17 @@ function ManualBrowserTab({
       return true;
     }
   })();
+  // Migration belongs to the restored address only. Once the user or another
+  // client navigates, returning to that address must not re-arm it.
+  const [restoredNavigation] = useState({ url: data.url, requestId: data.navigationRequestId });
+  const [migrationEligible, setMigrationEligible] = useState(true);
+  if (
+    migrationEligible &&
+    (data.url !== restoredNavigation.url ||
+      data.navigationRequestId !== restoredNavigation.requestId)
+  ) {
+    setMigrationEligible(false);
+  }
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
   // A native preview's latest navigation (`BrowserPreviewState.navigation`),
@@ -225,6 +236,7 @@ function ManualBrowserTab({
       // reports the page being left (main sends one as the load starts). Adopting
       // it would re-attach that page and cancel the load.
       if (state.navigation !== undefined && state.navigation === urlBasis) return;
+      setMigrationEligible(false);
       setAddress(navigatedDisplayUrl);
       setCurrentUrl(navigatedDisplayUrl);
       setUrlBasis(state.navigation);
@@ -402,6 +414,8 @@ function ManualBrowserTab({
   const migrateToService =
     isActive &&
     nativeBrowserPreview &&
+    migrationEligible &&
+    currentUrl === restoredNavigation.url &&
     serviceMatch !== null &&
     conversionState === null &&
     previewCapabilities?.surfaces.desktopTunnel.available === true;
@@ -432,6 +446,7 @@ function ManualBrowserTab({
       }
 
       conversionAttempt.current += 1;
+      setMigrationEligible(false);
       stopAnnotationForPageChange();
       setError(null);
       setAddress(next.displayUrl);

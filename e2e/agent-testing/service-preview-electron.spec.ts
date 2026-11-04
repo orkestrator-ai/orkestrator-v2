@@ -2286,6 +2286,11 @@ test("a stored 127.0.0.1 URL tab migrates to its service and stays migrated afte
     await closeStartupDialogs();
     await expect.poll(() => visibilityOn(origin("a")), { timeout: 30_000 }).toContain(true);
     expect(await storedUrl()).toBe(expected);
+    await mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });
+    await expect(s().window.getByLabel("Browser address")).toBeVisible({ timeout: 30_000 });
+    await s().window.screenshot({
+      path: path.join(repositoryRoot, "output/visual-previews/legacy-migration-after.png"),
+    });
     record(testInfo, "legacy-migration", JSON.stringify({ migrated: true }));
   } finally {
     await uiStore("selectProject", null).catch(() => undefined);

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import {
@@ -884,6 +885,28 @@ describe("service browser tabs", () => {
     expect(screen.getByText("Compatibility mode")).toBeTruthy();
   });
 
+  test("a web client restores a desktop-migrated shared layout through compatibility", async () => {
+    installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab("http://127.0.0.1:49152/shared?x=1");
+    const desktop = renderTab();
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/shared?x=1")));
+    const sharedUrl = tabUrl();
+    desktop.unmount();
+    const capabilities = fixturePreviewCapabilities();
+    capabilities.surfaces.browserTopLevel.available = false;
+    installBackend({ capabilities, services: [fixturePreviewService()] }, false);
+    seedTab(sharedUrl);
+    const web = renderTab();
+    await waitFor(() =>
+      expect(web.container.querySelector("iframe")?.getAttribute("src")).toContain("49152"),
+    );
+    expect(screen.getByText("Compatibility mode")).toBeTruthy();
+    expect(tabUrl()).toBe(sharedUrl);
+  });
+
   test("compatibility navigation and Back retain route and basis on resize/scroll", async () => {
     const { browserPreview, emitState } = installBackend({
       capabilities: fixturePreviewCapabilities({
@@ -1260,6 +1283,133 @@ describe("service browser tabs", () => {
       seedTab(legacyUrl);
       renderTab();
       await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+    });
+
+    test.each(["typed", "link", "redirect", "back"])(
+      "matching %s navigation after mount stays a URL tab",
+      async (kind) => {
+        const native = installBackend({
+          capabilities: fixturePreviewCapabilities(),
+          services: [fixturePreviewService()],
+        });
+        seedTab("http://localhost:4000/");
+        renderTab();
+        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+        if (kind === "typed") {
+          const input = screen.getByLabelText("Browser address");
+          fireEvent.change(input, { target: { value: legacyUrl } });
+          fireEvent.submit(input.closest("form")!);
+        } else {
+          native.emitState({
+            tabId: "browser-1",
+            url: legacyUrl,
+            navigation: 2,
+            loading: false,
+            canGoBack: true,
+            canGoForward: kind === "back",
+            error: null,
+          });
+        }
+        expect(await screen.findByRole("button", { name: "Open as service" })).toBeTruthy();
+        expect(tabUrl()).toBe(legacyUrl);
+      },
+    );
+
+    test("an unmatched localhost URL stays a URL with the tunnel available", async () => {
+      installBackend({
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      });
+      seedTab("http://localhost:3000/");
+      renderTab();
+      await act(async () => {
+        await usePreviewServiceStore.getState().loadCapabilities();
+      });
+      expect(tabUrl()).toBe("http://localhost:3000/");
+    });
+
+    test("StrictMode retries a cancelled automatic confirmation", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      seedTab(legacyUrl);
+      await act(async () => {
+        ensurePreviewServiceSync();
+        await usePreviewServiceStore.getState().loadCapabilities();
+        await usePreviewServiceStore.getState().refreshEnvironment(FIXTURE_ENVIRONMENT_ID);
+      });
+      const pending: Array<(snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void> = [];
+      backend.snapshot = () => new Promise((done) => pending.push(done));
+      render(
+        <StrictMode>
+          <TabHarness isActive />
+        </StrictMode>,
+      );
+      await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      expect(tabUrl()).toBe(legacyUrl);
+      backend.snapshot = async () => fixturePreviewSnapshot(backend.services);
+      await act(async () => {
+        for (const done of pending) done(fixturePreviewSnapshot(backend.services));
+      });
+      await waitFor(() => expect(tabUrl()).toBe(serviceUri("/app/next?tab=2")));
+    });
+
+    test("a failed automatic confirmation stops retrying", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      installBackend(backend);
+      let reads = 0;
+      backend.snapshot = async () => {
+        if (++reads > 1) throw new Error("unavailable");
+        return fixturePreviewSnapshot(backend.services);
+      };
+      seedTab(legacyUrl);
+      renderTab();
+      await screen.findByText(/could not|couldn.t|failed/i);
+      const settled = reads;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      expect(reads).toBe(settled);
+      expect(tabUrl()).toBe(legacyUrl);
+    });
+
+    test("native navigation cancels delayed automatic migration", async () => {
+      const backend: Backend = {
+        capabilities: fixturePreviewCapabilities(),
+        services: [fixturePreviewService()],
+      };
+      const native = installBackend(backend);
+      let resolve!: (snapshot: ReturnType<typeof fixturePreviewSnapshot>) => void;
+      let reads = 0;
+      backend.snapshot = async () =>
+        ++reads === 1
+          ? fixturePreviewSnapshot(backend.services)
+          : new Promise((done) => {
+              resolve = done;
+            });
+      seedTab(legacyUrl);
+      renderTab();
+      await waitFor(() => expect(resolve).toBeDefined());
+      const next = "http://127.0.0.1:49152/new";
+      native.emitState({
+        tabId: "browser-1",
+        url: next,
+        navigation: 2,
+        loading: false,
+        canGoBack: true,
+        canGoForward: false,
+        error: null,
+      });
+      await act(async () => {
+        resolve(fixturePreviewSnapshot(backend.services));
+      });
+      expect(tabUrl()).toBe(next);
+      expect(parsePreviewTabTarget(tabUrl()).kind).toBe("url");
     });
 
     test("an inactive tab migrates only once it becomes active", async () => {

@@ -436,6 +436,10 @@ copy_agent_file() {
         ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
         rm -f "$temporary_path" 2>/dev/null || true
         agent_copy_warn "$relative_path" "Failed to copy $label file"
+    else
+        if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
+            agent_input_record_copy "$source_root" "$relative_path"
+        fi
     fi
 }
 
@@ -578,6 +582,10 @@ copy_agent_directory() {
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then
         agent_copy_warn "$display_path" "Failed to copy $label directory"
+    else
+        if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
+            agent_input_record_copy "$source_root" "$relative_path"
+        fi
     fi
 }
 
@@ -766,6 +774,13 @@ agent_input_home_matches() {
     ) 2>/dev/null
 }
 
+# Copy helpers publish ownership only after a successful copy. The per-entry
+# walker can therefore retain successes without claiming a refused sibling.
+agent_input_record_copy() {
+    [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ] || return 0
+    (cd "$1" && find -P "$2" -printf '%y%p\0') >> "$AGENT_INPUT_COPIED_PATHS"
+}
+
 # Removes what the previous listing imported and the current one no longer has:
 # files first, then each directory if that left it empty, deepest first. The
 # listing is workload-writable, so a path through a link or `..` is refused.
@@ -775,6 +790,7 @@ agent_input_forget_removed() {
     local destination_root="$3"
     local entry
     local path
+    local failed=0
 
     while IFS= read -r -d '' entry; do
         path="${entry:1}"
@@ -784,7 +800,10 @@ agent_input_forget_removed() {
                     continue
                 fi
                 if [ ! -d "$destination_root/$path" ] || [ -L "$destination_root/$path" ]; then
-                    rm -f -- "$destination_root/$path" 2>/dev/null || true
+                    if ! rm -f -- "$destination_root/$path" 2>/dev/null; then
+                        failed=1
+                        agent_copy_warn "$path" "Failed to remove imported input; will retry"
+                    fi
                 fi
                 ;;
         esac
@@ -799,6 +818,7 @@ agent_input_forget_removed() {
                 ;;
         esac
     done < <(LC_ALL=C comm -z -23 --nocheck-order "$previous" "$current" 2>/dev/null | LC_ALL=C sort -rz || true)
+    return "$failed"
 }
 
 # Runs one copy helper for one input, unless that would change nothing:
@@ -834,10 +854,13 @@ import_agent_input() {
             if [ -f "$stamp" ]; then
                 if ! agent_destination_path_has_symlink "$destination_root" "$relative_path" &&
                     [ ! -d "$destination_path" ]; then
-                    rm -f -- "$destination_path" 2>/dev/null || true
+                    if ! rm -f -- "$destination_path" 2>/dev/null; then
+                        agent_copy_warn "$relative_path" "Failed to remove imported input; will retry"
+                        return 0
+                    fi
                 fi
             elif [ -f "$stamp/paths" ]; then
-                agent_input_forget_removed "$stamp/paths" /dev/null "$destination_root"
+                agent_input_forget_removed "$stamp/paths" /dev/null "$destination_root" || return 0
             fi
             rm -rf -- "$stamp" 2>/dev/null || true
         fi
@@ -857,7 +880,9 @@ import_agent_input() {
             "$helper" "$mount" "$destination_root" "$relative_path" "$@"
             AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
         fi
-        { : > "$stamp"; } 2>/dev/null || true
+        if [ "${AGENT_COPY_SKIPPED:-}" = "$skipped_before" ]; then
+            { : > "$stamp"; } 2>/dev/null || true
+        fi
         return 0
     fi
 
@@ -882,11 +907,29 @@ import_agent_input() {
         return 0
     fi
     if [ -d "$stamp" ] && [ -f "$stamp/paths" ] && [ ! -L "$stamp/paths" ]; then
-        agent_input_forget_removed "$stamp/paths" "$fresh/paths" "$destination_root"
+        if ! agent_input_forget_removed "$stamp/paths" "$fresh/paths" "$destination_root"; then
+            # Keep unresolved removals in the ownership union, and force a retry.
+            cp "$stamp/paths" "$fresh/pending"
+        fi
     fi
+    local AGENT_INPUT_COPIED_PATHS="$fresh/copied"
+    : > "$AGENT_INPUT_COPIED_PATHS"
     "$helper" "$mount" "$destination_root" "$relative_path" "$@"
     AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
-    # A copy that warned keeps its paths, for removal, but cannot match next boot.
+    if [ -s "$fresh/copied" ]; then
+        printf 'd%s\0' "$relative_path" >> "$fresh/copied"
+    fi
+    # Ownership is the successful copies plus previously owned paths still in
+    # the source and any removals awaiting retry. Never claim skipped new paths.
+    if [ -f "$stamp/paths" ]; then
+        LC_ALL=C comm -z -12 --nocheck-order "$stamp/paths" "$fresh/paths" > "$fresh/retained"
+    fi
+    : >> "$fresh/retained"
+    : >> "$fresh/pending"
+    LC_ALL=C sort -zu "$fresh/copied" "$fresh/retained" "$fresh/pending" > "$fresh/owned"
+    mv "$fresh/owned" "$fresh/paths"
+    rm -f "$fresh/copied" "$fresh/retained" "$fresh/pending"
+    # A copy that warned or has pending removals cannot match next boot.
     if [ "${AGENT_COPY_SKIPPED:-}" != "$skipped_before" ]; then
         rm -f -- "$fresh/sums" 2>/dev/null || true
     fi
@@ -1045,6 +1088,10 @@ fi
 #
 # This MUST happen AFTER copying host files so a real credential always beats
 # whatever `/claude-config` happened to contain.
+(
+# Shared with backend credential publication. Keep cleanup, import and digest
+# attribution in one transaction; descriptor closes even on an early failure.
+flock -x 9
 forget_unchanged_agent_login "$HOME/.claude" .credentials.json
 if [ -n "$CLAUDE_OAUTH_CREDENTIALS" ] && [ "$CLAUDE_OAUTH_CREDENTIALS" != "{}" ]; then
     if publish_claude_credentials "" "$CLAUDE_OAUTH_CREDENTIALS"; then
@@ -1082,6 +1129,8 @@ else
         echo "No credential on the mount; awaiting the backend credential sync"
     fi
 fi
+
+) 9> "$HOME/.claude/.credentials.json.orkestrator-lock"
 
 # Ensure directories Claude Code needs to write to exist
 mkdir -p "$HOME/.claude/debug"

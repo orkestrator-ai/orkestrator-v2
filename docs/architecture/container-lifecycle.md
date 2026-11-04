@@ -863,19 +863,25 @@ full copy's, apart from the removal below.
   and the relay's `tar` keeps whole seconds.
 - **Copying.** Anything else runs the same copy helpers as before, with the same
   bounds and link rules. A copy that warned is not stamped as complete, so it
-  runs again and warns again. If the tools fail, the input is copied.
+  runs again and warns again. Ownership is recorded only after a helper succeeds;
+  a refused entry never grants deletion authority over local files. Previously
+  owned paths remain tracked across failed imports. If the tools fail, the input is copied.
 - **Removal.** A stamp also lists the paths its input imported, so one that has
   left the mounts leaves the home: a file, a directory it emptied, or a whole
   provider's inputs after a revocation. Nothing else is removed, so a CLI's own
   files beside the imports stay. A path through a link or `..` is refused, and a
-  mount `node` cannot open (a failed relay) removes nothing.
+  mount `node` cannot open (a failed relay) removes nothing. Failed file removals
+  warn and keep their ownership history so the next start retries them.
 - **Logins** (`.credentials.json`, Codex's, Grok's, OpenCode's and Pi's
   `auth.json`) are never skipped, and go through `restrict_imported_login` on every
   start as before. Their stamp is a digest of the home's copy after the import. If
   the mount no longer has the login and the copy is still exactly that one, it is
   removed. A copy that differs was pushed by the backend or made in the container,
   and stays with the backend's own paths, which race the entrypoint and must keep
-  winning. For Claude a pushed copy is therefore stripped of its refresh tokens
+  winning. Claude startup cleanup, publication and digest attribution share an
+  exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
+  publication commands. The lock file stays in place so concurrent writers always
+  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
   but not removed after a host sign-out, as before
   ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
 - **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container

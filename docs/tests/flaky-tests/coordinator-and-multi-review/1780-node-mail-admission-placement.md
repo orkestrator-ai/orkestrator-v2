@@ -41,3 +41,16 @@ codex protocol lockfile groups passed. The unchanged owner then passed alone thr
 times (`bun test src/core/nodes/node-coordination.test.ts` from `apps/backend`,
 24 pass each). It did not fail in any of the six GitHub Actions CI runs checked
 between `d6040915c` and `b0dcf1660`.
+
+
+## Recurrence, 2026-11-04 (input stamps review)
+
+Preparation at `6ceb37b3422f1eec61d2b7b0808080dc5c229619` recorded the same
+assertion at line 120 in `mise run test`: expected `pending-inject`, received
+`injected` (29 ms). The package triage marks it related through the shared
+`image-manifest.ts` import and known-flaky; this is not an aggregate pass.
+The unchanged owner passed alone during repair:
+`mise run test:logged -- --name mail-failure-triage -- bun test --cwd apps/backend ./src/core/nodes/node-coordination.test.ts --parallel=1 --only-failures`
+(exit 0, 1.0 s). Preparation evidence remains in
+`.orkestrator/review-artifacts/review-validation-51211246-bf75-4cea-b58b-3053677ba760/validation-04.stdout.txt`.
+The aggregate remains unresolved for verification; no mail behavior was changed.

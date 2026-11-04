@@ -15,6 +15,7 @@ import {
   stagePortableInputs,
   stagedInputMountArguments,
 } from "../src/core/portable-inputs";
+import { buildMergeContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers";
 import { tempDir } from "./container-lifecycle-fixtures";
 
 const REPO = path.join(import.meta.dir, "../../..");
@@ -127,11 +128,15 @@ async function fixture() {
     ].join("\n");
   };
 
-  async function boot(options: { relay?: string; path?: string } = {}) {
+  async function boot(options: { relay?: string; path?: string; prelude?: string } = {}) {
     const progress = path.join(root, "progress");
     await fs.writeFile(progress, "");
     const result = Bun.spawnSync({
-      cmd: ["bash", "-c", setScript({ relay: options.relay ?? path.join(root, "no-relay") })],
+      cmd: [
+        "bash",
+        "-c",
+        `${options.prelude ?? ""}\n${setScript({ relay: options.relay ?? path.join(root, "no-relay") })}`,
+      ],
       env: {
         PATH: options.path ?? toolPath,
         HOME: containerHome,
@@ -639,4 +644,82 @@ describe("older images", () => {
       expect(await fs.readFile(file, "utf8")).not.toContain(".orkestrator-inputs");
     }
   }, 60_000);
+});
+
+describe("import ownership failures", () => {
+  test("refused trees and files never claim local files", async () => {
+    const f = await fixture();
+    await write(f.inHome(".claude/skills/review/SKILL.md"), "local skill");
+    await fs.symlink(f.root, f.inHome(".claude/skills/review/link"));
+    // A directory at a single-file destination refuses that import too.
+    await fs.mkdir(f.inHome(".codex/AGENTS.md"), { recursive: true });
+    expect((await f.boot()).progress).toContain("destination symlink");
+    await fs.rm(f.stage("claude-config/skills/review"), { recursive: true });
+    await f.replace("codex-home/AGENTS.md", undefined);
+    await fs.rm(f.inHome(".codex/AGENTS.md"), { recursive: true });
+    await write(f.inHome(".codex/AGENTS.md"), "local agents");
+    await f.boot();
+    expect(await f.read(".claude/skills/review/SKILL.md")).toBe("local skill");
+    expect(await f.read(".codex/AGENTS.md")).toBe("local agents");
+  });
+
+  test("failed single-file removal keeps its stamp for retry", async () => {
+    const f = await fixture();
+    await f.boot();
+    await f.replace("codex-home/AGENTS.md", undefined);
+    const prelude = `rm() { case "$*" in *'.codex/AGENTS.md'*) return 1;; *) command rm "$@";; esac; }`;
+    expect((await f.boot({ prelude })).progress).toContain("will retry");
+    expect(await f.exists(".codex/AGENTS.md")).toBe(true);
+    await f.boot();
+    expect(await f.exists(".codex/AGENTS.md")).toBe(false);
+  });
+
+  for (const missingTree of [false, true]) {
+    test(`failed removal retries (whole tree missing=${missingTree})`, async () => {
+      const f = await fixture();
+      await f.boot();
+      const removed = ".claude/skills/review/SKILL.md";
+      await fs.rm(
+        f.stage(missingTree ? "claude-config/skills" : "claude-config/skills/review/SKILL.md"),
+        { recursive: true },
+      );
+      // A deterministic failed rm, independent of whether the runner is root.
+      const prelude = `rm() { case "$*" in *${removed}*) return 1;; *) command rm "$@";; esac; }`;
+      expect((await f.boot({ prelude })).progress).toContain("will retry");
+      expect(await f.exists(removed)).toBe(true);
+      await f.boot();
+      expect(await f.exists(removed)).toBe(false);
+      expect(await f.read(".codex/AGENTS.md")).toContain("agents one");
+    });
+  }
+
+  test("backend publication waits for cleanup and is never attributed to the import", async () => {
+    const f = await fixture();
+    const login = LOGINS.find((entry) => entry.name === "Claude") ?? LOGINS[0]!;
+    await f.replace(login.staged, login.one);
+    await f.boot();
+    const file = f.inHome(".claude/.credentials.json");
+    const script = buildMergeContainerClaudeCredentialCommand(file);
+    // Publish from inside the digest calculation: it must wait for the
+    // entrypoint transaction to release the lock before replacing the file.
+    const payload = JSON.stringify({ login: { claudeAiOauth: { accessToken: "fresh-backend" } } });
+    const publisher = path.join(f.root, "publish.sh");
+    await write(publisher, script);
+    const done = path.join(f.root, "published");
+    const once = path.join(f.root, "started");
+    const prelude = `sha256sum() {
+      if [ "$#" -eq 0 ] && [ ! -e '${once}' ]; then
+        touch '${once}'
+        (printf '%s' '${payload}' | bash '${publisher}'; touch '${done}') 9>&- >/dev/null 2>&1 &
+      fi
+      command sha256sum "$@"
+    }`;
+    await f.boot({ prelude });
+    for (let i = 0; i < 200 && !(await fs.exists(done)); i++) await Bun.sleep(10);
+    expect(await fs.exists(done)).toBe(true);
+    expect(await f.read(".claude/.credentials.json")).toContain("fresh-backend");
+    await f.replace(login.staged, undefined);
+    await f.boot();
+    expect(await f.read(".claude/.credentials.json")).toContain("fresh-backend");
+  });
 });

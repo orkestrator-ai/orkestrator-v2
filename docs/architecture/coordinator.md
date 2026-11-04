@@ -132,7 +132,15 @@ works across the nodes that node controls:
 
 - `list_nodes` shows the connected nodes, whether each has a copy of this
   project (matched by repository identity) and, for this machine and each
-  node, its OS and load (see [Choosing a machine](#choosing-a-machine));
+  node, its running version and its OS and load (see
+  [Choosing a machine](#choosing-a-machine)). A node's `version` comes from
+  the hello of its current connection, so a leaf needs no update to report
+  it and shows its new version once it reconnects after a restart. It is
+  `null`, never a last-known value, while the node is disconnected, disabled
+  or reconnecting. A version alone does not identify a commit: builds of one
+  version can hold different code, and a running backend does not know the
+  commit it was built from
+  ([4840](../todo/coordinator-and-multi-review/4840-node-build-commit.md));
   `list_environments` lists the project's environments on them as well.
 - Every environment and workflow tool takes an optional `nodeId` and works
   on that node's copy with the same contract as here: launches, jobs,

@@ -1031,6 +1031,63 @@ describe("minimum scan gap", () => {
     expect(world.scans()).toBe(2);
   });
 
+  test("a known mutation preserves an armed gap's deadline and publishes fresh counts", async () => {
+    const world = gapped();
+    await trackedAndScanned(world);
+    await world.owner.time.advance(100);
+    world.owner.hint({ fileList: true });
+    await flushMicrotasks();
+    expect(world.scans()).toBe(1);
+
+    await world.owner.time.advance(400);
+    world.files.push("mutation-in-gap.ts");
+    world.owner.service.invalidateChanges(localLookup);
+    await flushMicrotasks();
+    // Invalidation fences readers; it does not itself request a scan.
+    expect(world.scans()).toBe(1);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS - 501);
+    expect(world.scans()).toBe(1);
+    await world.owner.time.advance(1);
+    await flushMicrotasks();
+    expect(world.scans()).toBe(2);
+    expect(world.owner.diffEvents.at(-1).stats.filesChanged).toBe(2);
+    expect((await readList(world.owner, localLookup)).changes).toEqual([
+      change("a.ts"),
+      change("mutation-in-gap.ts"),
+    ]);
+    expect(world.scans()).toBe(2);
+    await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 2);
+    expect(world.scans()).toBe(2);
+  });
+
+  test("a reader or hint after a known mutation bypasses an armed gap exactly once", async () => {
+    for (const trigger of ["reader", "hint"] as const) {
+      const world = gapped();
+      await trackedAndScanned(world);
+      await world.owner.time.advance(100);
+      world.owner.hint({ fileList: true });
+      await flushMicrotasks();
+      expect(world.scans()).toBe(1);
+
+      world.files.push("mutation-in-gap.ts");
+      world.owner.service.invalidateChanges(localLookup);
+      if (trigger === "reader") {
+        expect((await readList(world.owner, localLookup)).changes).toEqual([
+          change("a.ts"),
+          change("mutation-in-gap.ts"),
+        ]);
+      } else {
+        world.owner.hint({ fileList: true });
+      }
+      await flushMicrotasks();
+      expect(world.scans()).toBe(2);
+      expect(world.owner.diffEvents.at(-1).stats.filesChanged).toBe(2);
+      await world.owner.time.advance(LOCAL_SCAN_MIN_GAP_MS * 2);
+      await flushMicrotasks();
+      expect(world.scans()).toBe(2);
+    }
+  });
+
   test("a hint soon after a reader's scan waits a full gap from that scan", async () => {
     const world = gapped();
     await trackedAndScanned(world);

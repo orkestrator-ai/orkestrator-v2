@@ -2354,7 +2354,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(result.wasRunning).toBe(false);
     expect(result.port).toBeGreaterThan(0);
     expect(result.pid).toBeGreaterThan(0);
-    expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
     await expect(
       commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
@@ -2886,7 +2886,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
       expect(await fs.readFile(markerPath, "utf8")).toContain("used");
       // The Claude CLI the bridge spawns reads this to raise its 2-hour ceiling.
@@ -3024,7 +3024,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       { environmentId: environment.id },
       context,
     )) as { port: number; pid: number; authToken: string };
-    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
@@ -3037,7 +3037,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
-      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       expect(second.authToken).not.toBe(first.authToken);
       expect(isProcessRunning(first.pid)).toBe(false);
       await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
@@ -3186,7 +3186,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       { environmentId: environment.id },
       context,
     )) as { port: number; pid: number; authToken: string };
-    expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
@@ -3199,7 +3199,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
-      expect(second.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       expect(second.authToken).not.toBe(first.authToken);
       expect(isProcessRunning(first.pid)).toBe(false);
       await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
@@ -3263,7 +3263,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
       expect(restarted.wasRunning).toBe(false);
       expect(restarted.pid).toBeGreaterThan(0);
-      expect(restarted.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(restarted.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(restarted.port, "/global/health")).resolves.toBe(true);
     } finally {
       localServerHooks.spawn = spawnCommand;

@@ -78,7 +78,7 @@ exit 0
         expect(result).toMatchObject({
           hostPort,
           wasRunning: false,
-          authToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+          authToken: expect.stringMatching(/^okb_[A-Za-z0-9_-]{43}$/),
         });
         // The stop wait and start's reuse check both encounter HTML. Neither
         // may mistake it for the old bridge still running or a reusable bridge.
@@ -89,7 +89,9 @@ exit 0
         expect(execLog).toContain(stop);
         expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog.indexOf(stop)).toBeLessThan(execLog.indexOf("exec -d "));
-        expect(execLog).toContain(`${provider.toUpperCase()}_BRIDGE_TOKEN=`);
+        expect(execLog).toContain(
+          `"$${provider.toUpperCase()}_BRIDGE_TOKEN" > /tmp/${provider}-bridge-token`,
+        );
       });
     } finally {
       server.closeAllConnections();

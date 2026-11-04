@@ -2821,7 +2821,7 @@ exit 1
             approveProjectMcps: process.env.ACP_APPROVE_PROJECT_MCPS ?? "",
             stateDir: process.env.ACP_STATE_DIR ?? "",
             hostname: process.env.HOSTNAME ?? "",
-            hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN),
+            hasToken: Boolean(process.env.ACP_BRIDGE_TOKEN_SHA256) && !process.env.ACP_BRIDGE_TOKEN,
             hasCursorApiKey: Boolean(process.env.CURSOR_API_KEY),
             home: process.env.HOME ?? "",
             credentialStore: process.env.AGENT_CLI_CREDENTIAL_STORE ?? "",
@@ -2903,7 +2903,7 @@ exit 1
       )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
       try {
         expect(started.wasRunning).toBe(false);
-        expect(started.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(started.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
         // Every bridge bootstraps from its own package directory and learns the
         // worktree from `CWD`. Only the Cursor SDK bridge then enters it, and
@@ -4053,7 +4053,7 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       };
       expect(result.wasRunning).toBe(false);
       expect(result.port).toBeGreaterThan(0);
-      expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(result.authToken).toMatch(/^okb_[A-Za-z0-9_-]{43}$/);
       await expect(requestOk(result.port, "/global/health")).resolves.toBe(false);
       await expect(
         requestOk(result.port, "/global/health", {

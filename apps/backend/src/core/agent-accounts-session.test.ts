@@ -8,7 +8,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import * as containerExec from "./commands-container-exec.js";
 import * as serverHealth from "./commands-server-health.js";
 import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "./constants.js";
-import { readSessionAgentAccount } from "./agent-accounts-session.js";
+import { coordinatorSessionAccount, readSessionAgentAccount } from "./agent-accounts-session.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 
@@ -74,6 +74,8 @@ describe("readSessionAgentAccount", () => {
       account: { id: "default", isDefault: true },
       pendingActive: { id: SECOND, label: "Work" },
     });
+    expect(coordinatorSessionAccount(result)?.id).toBe("default");
+    expect(coordinatorSessionAccount(result && { ...result, running: false })?.id).toBe(SECOND);
   });
 
   test("a container reports the login its marker records", async () => {

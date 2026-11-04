@@ -3,7 +3,7 @@
  * command node, joined by a fake node link. Only the agents and the link are
  * simulated; routing, the outbox, the mail store and session creation are real.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { AgentAccountSummary } from "@orkestrator/protocol/agent-accounts";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import { coordinatorMainConversation } from "@orkestrator/protocol/coordinator";
@@ -101,6 +101,7 @@ function stopNotices(
   target: MailWorld,
   options: {
     coordinatorKey?: string | null;
+    staysBound?: boolean;
     move?: LimitedAccountMove;
     machineKey?: string;
     machineName?: string;
@@ -114,7 +115,10 @@ function stopNotices(
       key: options.machineKey ?? "machine-a",
       name: options.machineName ?? "Machine A",
     }),
-    coordinatorAccountKey: async () => options.coordinatorKey ?? null,
+    coordinatorAccountKey: async () =>
+      moves.length && !options.staysBound && options.move?.moved !== false
+        ? null
+        : (options.coordinatorKey ?? null),
     moveOff: async (platform, key, moveOptions) => {
       moves.push({ platform, key, quiet: moveOptions.quietProjectId });
       return options.move ?? { moved: true, to: "other@example.com" };
@@ -1018,4 +1022,171 @@ describe("a leaf session's stop", () => {
     await up.notices.settled();
     f.dispose();
   });
+});
+
+describe("review regressions", () => {
+  test.each(["pipeline:one", "pull-request:one"])(
+    "relayed %s retains hourly budgets and coalescing",
+    async (resource) => {
+      const f = await fleet();
+      const config = await f.command.storage.loadConfig();
+      await f.command.storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 1 },
+      });
+      await f.collect();
+      for (const i of [1, 2]) {
+        await f.leaf.coordinator.noticeRouter.deliver(
+          repositoryNotice(f.leaf, {
+            upwardRequestId: `budget-${i}`,
+            statusBudgetKey: resource,
+            coalesceMs: 1000,
+          }),
+        );
+      }
+      const send = spyOn(f.command.storage, "sendAgentMail");
+      const queued = f.store.state.outbox[COMMAND]!.items;
+      expect(queued[0]!.coordinatorNotice).toMatchObject({
+        statusBudgetKey: resource,
+        coalesceMs: 1000,
+      });
+      await f.collect();
+      const messages = (await inbox(f.command, await f.command.main())).filter(
+        (m) => m.statusBudgetKey,
+      );
+      expect(messages.map((m) => m.statusBudgetKey)).toEqual([
+        `node:bk_leaf:resource:${resource}`,
+        `node:bk_leaf:resource:${resource}`,
+      ]);
+      expect(messages.filter((m) => m.placementReason === "hourly-limit")).toHaveLength(1);
+      expect(send.mock.calls.some((call) => call[2]?.coalesceMs === 1000)).toBe(true);
+      send.mockRestore();
+      f.dispose();
+    },
+  );
+
+  test("failed main creation leaves stops pending across restart", async () => {
+    const w = await world();
+    const worker = await w.addEnvironment("worker");
+    await w.closeMain();
+    const fail = spyOn(w.coordinator, "ensureMainConversation").mockRejectedValue(
+      new Error("start unavailable"),
+    );
+    const first = stopNotices(w);
+    await first.notices.noteStop(report(worker.environmentId));
+    await first.settle();
+    first.notices.stop();
+    expect(
+      w.storage.coordinatorNotices.updateUsageLimitNoticeLedger((l) => l.groups[0]!.sentStopIds),
+    ).toEqual([]);
+    fail.mockRestore();
+    const again = stopNotices(w);
+    again.notices.start();
+    await again.settle();
+    expect(await inbox(w, await w.main())).toHaveLength(1);
+    again.notices.stop();
+  });
+
+  test("quiet stops with no open main do not start one", async () => {
+    const w = await world();
+    const worker = await w.addEnvironment("worker");
+    await w.closeMain();
+    const config = await w.storage.loadConfig();
+    await w.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, coordinatorStatusWakes: "off" },
+    });
+    const n = stopNotices(w);
+    await n.notices.noteStop(report(worker.environmentId));
+    await n.settle();
+    expect(await openMains(w)).toHaveLength(0);
+    n.notices.stop();
+  });
+
+  test("a running bridge still bound after a default move keeps the notice", async () => {
+    const w = await world();
+    const worker = await w.addEnvironment("worker");
+    const n = stopNotices(w, {
+      coordinatorKey: "claude:email:limited@example.com",
+      staysBound: true,
+    });
+    await n.notices.noteStop(report(worker.environmentId));
+    await n.settle();
+    expect(w.wakes(await w.main())).toBe(0);
+    expect((await inbox(w, await w.main()))[0]!.placementReason).toBe(
+      "coordinator-on-limited-account",
+    );
+    n.notices.stop();
+  });
+
+  test("fallback owns the notice before delivery yields to a reconnecting collector", async () => {
+    const f = await fleet();
+    await f.collect();
+    f.link.up = false;
+    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+    f.advance(NOTICE_HOLD_MAX_MS);
+    const original = f.leaf.coordinator.noticeRouter.fromLeaf.takeBack;
+    let entered!: () => void;
+    const atBarrier = new Promise<void>((r) => {
+      entered = r;
+    });
+    let release!: () => void;
+    const barrier = new Promise<void>((r) => {
+      release = r;
+    });
+    f.leaf.coordinator.noticeRouter.fromLeaf.takeBack = async (item) => {
+      entered();
+      await barrier;
+      await original(item);
+    };
+    const delivery = f.takeBack();
+    await atBarrier;
+    f.link.up = true;
+    await f.collect();
+    release();
+    await delivery;
+    expect(await inbox(f.command, await f.command.main())).toHaveLength(0);
+    expect(await inbox(f.leaf, await f.leaf.main())).toHaveLength(1);
+    f.dispose();
+  });
+
+  test("an ambiguous command delivery cannot be handed back during an outage", async () => {
+    const f = await fleet();
+    await f.collect();
+    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+    f.link.lostAcks = 1;
+    await f.collect();
+    f.link.up = false;
+    f.advance(NOTICE_HOLD_MAX_MS);
+    await f.takeBack();
+    expect(f.taken.taken).toBe(0);
+    expect(await inbox(f.command, await f.command.main())).toHaveLength(1);
+    expect(await inbox(f.leaf, await f.leaf.main())).toHaveLength(0);
+    f.link.up = true;
+    await f.collect();
+    expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(0);
+    f.dispose();
+  });
+});
+
+test("relayed resource depth is bounded independently of the node conversation", async () => {
+  const f = await fleet();
+  const config = await f.command.storage.loadConfig();
+  await f.command.storage.updateGlobalConfig({
+    ...config.global,
+    agentMessaging: { ...config.global.agentMessaging!, autonomousWakeBudget: 1 },
+  });
+  await f.collect();
+  for (const i of [1, 2, 3]) {
+    await f.leaf.coordinator.noticeRouter.deliver(
+      repositoryNotice(f.leaf, { upwardRequestId: `depth-${i}`, statusBudgetKey: "status:one" }),
+    );
+  }
+  await f.collect();
+  const messages = (await inbox(f.command, await f.command.main())).filter(
+    (m) => m.statusBudgetKey,
+  );
+  expect(messages).toHaveLength(3);
+  expect(messages.some((m) => m.placementReason === "loop-budget-exhausted")).toBe(true);
+  f.dispose();
 });

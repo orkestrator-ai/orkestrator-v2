@@ -98,6 +98,8 @@ export interface OutboxItem {
   noticeProjectId?: string;
   /** The command node declined it; this node's coordinator takes it next. */
   handedBack?: true;
+  /** Command owns delivery until an explicit decline; survives ambiguous/lost acknowledgements. */
+  collected?: true;
 }
 
 /** A command node's coordinator's latest contact with one environment. */
@@ -394,14 +396,37 @@ export class LeafNodeMail {
   ): Promise<{ items: OutboxItem[]; more: boolean }> {
     if (notices) await this.recordNoticeRoute(controllerId, notices.repositoryHints);
     else await this.forgetNoticeRoute(controllerId);
-    const state = await this.store.load();
-    const items = (state.outbox[controllerId]?.items ?? []).filter(
-      (entry) =>
-        entry.seq > after &&
-        (coordinatorMail || !entry.fromCoordinator) &&
-        (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
-    );
-    return { items: items.slice(0, MAX_COLLECT), more: items.length > MAX_COLLECT };
+    return this.store.mutate((state) => {
+      const current = state.outbox[controllerId];
+      const eligible = (current?.items ?? []).filter(
+        (entry) =>
+          entry.seq > after &&
+          (coordinatorMail || !entry.fromCoordinator) &&
+          (!entry.coordinatorNotice || (notices !== undefined && !entry.handedBack)),
+      );
+      const items = eligible.slice(0, MAX_COLLECT);
+      const claimed = new Set(
+        items.filter((entry) => entry.coordinatorNotice).map((entry) => entry.seq),
+      );
+      return {
+        next:
+          current && claimed.size
+            ? {
+                ...state,
+                outbox: {
+                  ...state.outbox,
+                  [controllerId]: {
+                    ...current,
+                    items: current.items.map((entry) =>
+                      claimed.has(entry.seq) ? { ...entry, collected: true as const } : entry,
+                    ),
+                  },
+                },
+              }
+            : null,
+        result: { items, more: eligible.length > MAX_COLLECT },
+      };
+    });
   }
 
   private async recordNoticeRoute(
@@ -446,7 +471,9 @@ export class LeafNodeMail {
                   [controllerId]: {
                     ...current,
                     items: current.items.map((entry) =>
-                      entry.coordinatorNotice ? { ...entry, handedBack: true as const } : entry,
+                      entry.coordinatorNotice && !entry.collected
+                        ? { ...entry, handedBack: true as const }
+                        : entry,
                     ),
                   },
                 },
@@ -464,23 +491,31 @@ export class LeafNodeMail {
    * for a command node that has gone (detached, or silent past the bound).
    */
   async noticesToTakeBack(): Promise<Array<{ controllerId: BackendId; item: OutboxItem }>> {
-    const state = await this.store.load();
-    const now = this.now();
-    const attached = this.context.attachedControllers();
-    const taken: Array<{ controllerId: BackendId; item: OutboxItem }> = [];
-    for (const [controllerId, outbox] of Object.entries(state.outbox)) {
-      const controller = attached.find((entry) => entry.controllerId === controllerId);
-      const lastContact = Date.parse(controller?.lastContactAt ?? "");
-      const silent = Number.isFinite(lastContact) && now - lastContact >= NOTICE_HOLD_MAX_MS;
-      for (const item of outbox.items) {
-        if (!item.coordinatorNotice) continue;
-        const expired = silent && now - Date.parse(item.createdAt) >= NOTICE_HOLD_MAX_MS;
-        if (item.handedBack || !controller || expired) {
-          taken.push({ controllerId: controllerId as BackendId, item });
-        }
+    return this.store.mutate((state) => {
+      const now = this.now();
+      const attached = this.context.attachedControllers();
+      const taken: Array<{ controllerId: BackendId; item: OutboxItem }> = [];
+      const outboxes = { ...state.outbox };
+      for (const [controllerId, outbox] of Object.entries(state.outbox)) {
+        const controller = attached.find((entry) => entry.controllerId === controllerId);
+        const lastContact = Date.parse(controller?.lastContactAt ?? "");
+        const silent = Number.isFinite(lastContact) && now - lastContact >= NOTICE_HOLD_MAX_MS;
+        outboxes[controllerId] = {
+          ...outbox,
+          items: outbox.items.map((item) => {
+            if (!item.coordinatorNotice) return item;
+            const expired = silent && now - Date.parse(item.createdAt) >= NOTICE_HOLD_MAX_MS;
+            if (item.handedBack || (!item.collected && (!controller || expired))) {
+              const claimed = { ...item, handedBack: true as const };
+              taken.push({ controllerId: controllerId as BackendId, item: claimed });
+              return claimed;
+            }
+            return item;
+          }),
+        };
       }
-    }
-    return taken;
+      return { next: taken.length ? { ...state, outbox: outboxes } : null, result: taken };
+    });
   }
 
   /** This node's coordinator has it, so it leaves the outbox. */

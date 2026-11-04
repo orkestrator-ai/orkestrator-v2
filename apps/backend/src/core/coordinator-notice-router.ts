@@ -162,7 +162,7 @@ export class CoordinatorNoticeRouter {
       return await this.startMain(projectId);
     } catch (error) {
       log.warn("notice.start-main-failed", { error: formatLogError(error, { message: false }) });
-      return current;
+      throw error;
     }
   }
 
@@ -181,7 +181,12 @@ export class CoordinatorNoticeRouter {
           fromTabId: "notice",
           subject: notice.subject,
           body: notice.body,
-          coordinatorNotice: { kind: "repository", createSession: notice.createSession },
+          coordinatorNotice: {
+            kind: "repository",
+            createSession: notice.createSession,
+            statusBudgetKey: notice.statusBudgetKey,
+            coalesceMs: notice.coalesceMs,
+          },
           noticeProjectId: notice.projectId,
         }))
       ) {
@@ -335,7 +340,14 @@ export class CoordinatorNoticeRouter {
           ...(item.subject ? { subject: item.subject } : {}),
           body: item.body,
         },
-        { nodePrefix: describeRelayedNotice(node), relayedNotice: true },
+        {
+          nodePrefix: describeRelayedNotice(node),
+          relayedNotice: true,
+          ...(notice.statusBudgetKey
+            ? { statusBudgetKey: `node:${node.nodeId}:resource:${notice.statusBudgetKey}` }
+            : {}),
+          ...(notice.coalesceMs !== undefined ? { coalesceMs: notice.coalesceMs } : {}),
+        },
       );
     } catch (error) {
       if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
@@ -361,6 +373,8 @@ export class CoordinatorNoticeRouter {
       projectId,
       createSession: notice.createSession,
       resourceId: item.fromEnvironmentId,
+      statusBudgetKey: notice.statusBudgetKey,
+      coalesceMs: notice.coalesceMs,
       requestId: () => `notice-back:${shortHash(item.requestId)}`,
       upwardRequestId: item.requestId,
       subject: item.subject ?? "Coordinator notice",

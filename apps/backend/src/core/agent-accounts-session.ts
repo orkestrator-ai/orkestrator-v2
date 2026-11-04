@@ -88,3 +88,9 @@ export async function readSessionAgentAccount(
     ...(active ? { pendingActive: active } : {}),
   };
 }
+
+/** Login the next coordinator turn can actually use, including a live bridge binding. */
+export function coordinatorSessionAccount(session: AgentSessionAccount | null) {
+  if (session?.source !== "account") return undefined;
+  return session.running ? session.account : (session.pendingActive ?? session.account);
+}

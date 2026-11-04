@@ -175,7 +175,7 @@ export function parseUsageLimitStop(value: unknown): UsageLimitStop | null {
 export type UpwardCoordinatorNotice =
   | { kind: "usage-limit-stop"; stop: UsageLimitStop }
   /** A status or pull request notice the leaf wrote; it stays an agent's untrusted text. */
-  | { kind: "repository"; createSession: boolean }
+  | { kind: "repository"; createSession: boolean; statusBudgetKey?: string; coalesceMs?: number }
   | { kind: "auto-switch"; event: AgentAccountAutoSwitchedEvent };
 
 export function parseUpwardCoordinatorNotice(value: unknown): UpwardCoordinatorNotice | null {
@@ -186,7 +186,21 @@ export function parseUpwardCoordinatorNotice(value: unknown): UpwardCoordinatorN
     return stop ? { kind: "usage-limit-stop", stop } : null;
   }
   if (record.kind === "repository") {
-    return { kind: "repository", createSession: record.createSession === true };
+    return {
+      kind: "repository",
+      createSession: record.createSession === true,
+      ...(typeof record.statusBudgetKey === "string" &&
+      record.statusBudgetKey.length > 0 &&
+      record.statusBudgetKey.length <= 256
+        ? { statusBudgetKey: record.statusBudgetKey }
+        : {}),
+      ...(typeof record.coalesceMs === "number" &&
+      Number.isFinite(record.coalesceMs) &&
+      record.coalesceMs >= 0 &&
+      record.coalesceMs <= 3_600_000
+        ? { coalesceMs: record.coalesceMs }
+        : {}),
+    };
   }
   if (record.kind === "auto-switch" && isAgentAccountAutoSwitchedEvent(record.event)) {
     const { event } = record;

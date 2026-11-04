@@ -432,7 +432,15 @@ export class CoordinatorUsageLimitNotices {
     const move = await this.deps.moveOff(platform, group.accountKey, {
       quietProjectId: group.projectId,
     });
-    return move.moved ? { kind: "moved", to: move.to } : { kind: "kept", reason: move.reason };
+    if (!move.moved) return { kind: "kept", reason: move.reason };
+    // A default switch does not change the login held by an already-running bridge.
+    const after = await this.deps.coordinatorAccountKey(
+      coordinatorRuntimeId(coordinatorId, main.id),
+      main.agent,
+    );
+    return after === group.accountKey
+      ? { kind: "kept", reason: "switch-refused" }
+      : { kind: "moved", to: move.to };
   }
 
   /** Which repository and session a report is about. */

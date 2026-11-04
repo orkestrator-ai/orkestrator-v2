@@ -442,7 +442,10 @@ export class AgentMailRepository {
     const requestId = input.requestId.trim();
     const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
     const statusBudgetKey =
-      sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
+      (sender.kind === "system" || (sender.kind === "node" && options.relayedNotice)) &&
+      options.statusBudgetKey
+        ? options.statusBudgetKey
+        : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const nodeParent = sender.kind === "node" ? options.nodeParent : undefined;
@@ -697,7 +700,7 @@ export class AgentMailRepository {
         senderMailbox?.mailboxId ??
         (sender.kind === "node"
           ? options.relayedNotice
-            ? undefined
+            ? statusBudgetKey
             : nodeMailSenderKey(sender)
           : statusBudgetKey);
       const pairDepth =

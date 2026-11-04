@@ -205,3 +205,28 @@ describe("what a notice says", () => {
     expect(body).toContain("no turn was started");
   });
 });
+
+test("repository budget metadata is bounded and preserves resource separators", () => {
+  expect(
+    parseUpwardCoordinatorNotice({
+      kind: "repository",
+      createSession: true,
+      statusBudgetKey: "status:pr:one\0status",
+      coalesceMs: 10000,
+    }),
+  ).toEqual({
+    kind: "repository",
+    createSession: true,
+    statusBudgetKey: "status:pr:one\0status",
+    coalesceMs: 10000,
+  });
+  for (const coalesceMs of [-1, Infinity, NaN, 3600001, "1000"]) {
+    expect(
+      parseUpwardCoordinatorNotice({
+        kind: "repository",
+        coalesceMs,
+        statusBudgetKey: "x".repeat(257),
+      }),
+    ).toEqual({ kind: "repository", createSession: false });
+  }
+});

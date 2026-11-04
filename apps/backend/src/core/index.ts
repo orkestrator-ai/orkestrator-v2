@@ -74,7 +74,7 @@ import {
   bridgeRemoteAutoSwitchNotices,
   mailAutoSwitchNotice,
 } from "./agent-accounts-auto-switch-notices.js";
-import { readSessionAgentAccount } from "./agent-accounts-session.js";
+import { coordinatorSessionAccount, readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
@@ -938,7 +938,7 @@ export class OrkestratorBackend {
       }),
       coordinatorAccountKey: async (environmentId, agent) => {
         const session = await readSessionAgentAccount(context, environmentId, agent);
-        const account = session?.pendingActive ?? session?.account;
+        const account = coordinatorSessionAccount(session);
         if (session?.source !== "account" || !account) return null;
         return usageLimitAccountKey({
           platform: agent,

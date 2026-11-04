@@ -352,7 +352,11 @@ A command node attached to another command node operates in leaf mode:
   usage-limit stop) go to the command node's main coordinator for that repository, not
   to its own, through the same outbox. It keeps the ones for repositories the command
   node lacks, those a command node too old to take them would miss, and those whose
-  command node has been gone for an hour. A worker's close notice still reaches the
+  command node has been gone for an hour. Fallback claims the notice durably
+  before delivery, excluding concurrent collection. Once collected, the command
+  node owns delivery until it acknowledges or explicitly declines: a lost ack
+  is ambiguous, so timeout or detach cannot safely send a second copy locally.
+  Collected notices remain pending for that command node on reconnect. A worker's close notice still reaches the
   coordinator that delegated to it. See
   [Who hears a notice](coordinator.md#who-hears-a-notice).
 - Its coordinator conversations are kept, because they may hold important

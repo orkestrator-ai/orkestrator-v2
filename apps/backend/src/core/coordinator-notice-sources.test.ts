@@ -95,7 +95,7 @@ describe("a status wake", () => {
     await target.deliver();
 
     expect(queued).toHaveLength(1);
-    expect(queued[0]?.coordinatorNotice).toEqual({ kind: "repository", createSession: true });
+    expect(queued[0]?.coordinatorNotice).toMatchObject({ kind: "repository", createSession: true });
     const main = await target.main();
     const inbox = await target.storage.getAgentMailMailbox(main.environmentId, main.tabId);
     expect(inbox.messages).toHaveLength(0);
@@ -140,7 +140,10 @@ describe("a status wake", () => {
     const { worker, pipelineId } = await ownedPipeline(target);
     await endPipeline(target, worker, pipelineId);
     await target.coordinator.statusWakes.reconcile();
-    expect(queued[0]?.coordinatorNotice).toEqual({ kind: "repository", createSession: false });
+    expect(queued[0]?.coordinatorNotice).toMatchObject({
+      kind: "repository",
+      createSession: false,
+    });
   });
 
   test("a worker's waiting notice stays with the coordinator that delegated to it", async () => {

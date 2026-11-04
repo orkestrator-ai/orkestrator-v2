@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
 import type { NativeAgentTurnPhase } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -25,7 +26,6 @@ export function useMultiReviewPrPhase({
   useEffect(() => {
     if (!active || !tabId || !agent || !key) return;
     let cancelled = false;
-    let timer: number | undefined;
     const refresh = async () => {
       try {
         const update = await loadSessionState({
@@ -39,12 +39,17 @@ export function useMultiReviewPrPhase({
       } catch {
         if (!cancelled) setObserved(null);
       }
-      if (!cancelled) timer = window.setTimeout(() => void refresh(), 2_000);
     };
     void refresh();
+    const stopPolling = startCoordinatedPoll({
+      resource: "multi-review-pr-phase",
+      target: key,
+      intervalMs: 2_000,
+      read: refresh,
+    });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      stopPolling();
     };
   }, [active, agent, environmentId, key, loadSessionState, tabId]);
   return observed?.key === key ? observed?.phase : undefined;

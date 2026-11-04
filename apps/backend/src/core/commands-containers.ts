@@ -109,7 +109,6 @@ import { copyGithubRangesSeed, githubRangesSeed } from "./github-ranges-cache.js
 import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
-  EGRESS_OVERRIDE_ENV,
   createEgressGateway,
   egressEnforcement,
   egressGatewayName,
@@ -286,7 +285,6 @@ export async function createDockerContainer(
     networkMode: environment.networkAccessMode === "full" ? "full" : "restricted",
     networkPolicy,
     imageGatewayVersion: imageCapabilitySet?.["egress-gateway"] ?? 0,
-    override: process.env[EGRESS_OVERRIDE_ENV],
   });
   const addHostGatewayAlias = shouldAddDockerHostGatewayAlias(process.platform, topology.kind);
   // Rootless: host-gateway is inside RootlessKit's namespace. Name its host

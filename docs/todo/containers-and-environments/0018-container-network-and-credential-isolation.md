@@ -16,7 +16,7 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; ticking it waits for the decision below).
 2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done.
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
-4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch once tasks 1 to 3 pass. Status: blocked (on tasks 1 to 3).
+4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
 5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
 6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
 7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
@@ -196,6 +196,26 @@ starts runtimes through the backend (`createDockerContainer`,
   - **No, drop it with the cap.**
     - Pros: less test code.
     - Cons: legacy runtimes lose their live coverage.
+
+**Result (2026-11-04).** `egressEnforcement` no longer takes an override and
+the backend no longer reads `ORKESTRATOR_EGRESS`, so a gateway-capable image's
+restricted runtime always gets a gateway. The value the backend sets on a
+gateway runtime (`ORKESTRATOR_EGRESS=gateway`), which
+`network-policy-entrypoint.sh` records, is separate and unchanged. Older images
+and policy 1 still take the in-container path, and a runtime created under the
+cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
+"Assumptions and decisions".
+- Unit coverage: `egress-gateway.test.ts` and `docker-image.test.ts`, including
+  that setting the old value still creates a gateway.
+- The in-container readiness scenarios now select that path with an image whose
+  manifest does not declare `egress-gateway`. On a real image derived from
+  `orkestrator-v2:dev-1e785cae5ca6`, the backend read the edited manifest and
+  chose `container`, and chose `gateway` for the base image.
+- **Needs live evidence:** those scenarios have not passed since the rework. The
+  one run on the shared host, on 2026-11-04, failed 7 of 7 before any boot
+  because Docker had no free address range ("all predefined address pools have
+  been fully subnetted", 33 networks in use). Run them on a disposable daemon,
+  or on a host with free pools, as listed in the container qualification guide.
 
 ### 5. Claude host refresh and mid-session pickup
 
@@ -382,10 +402,11 @@ and renewal delivery with real, fresh provider logins.
   the firewall. The runtime has no `NET_ADMIN`, so a root terminal cannot
   change the rules. [Container lifecycle](../../architecture/container-lifecycle.md),
   "Egress gateway", describes creation, the start gate, boot verification,
-  stop, removal and the orphan sweep. Older images and
-  `ORKESTRATOR_EGRESS=in-container` (rollout cap) keep the in-container
-  firewall with `NET_ADMIN`, where a root terminal can still change it;
-  full-mode containers get neither.
+  stop, removal and the orphan sweep. Older images, and runtimes created
+  under the `ORKESTRATOR_EGRESS=in-container` rollout cap (removed
+  2026-11-04), keep the in-container firewall with `NET_ADMIN` until they are
+  rebuilt, and a root terminal can still change it there; full-mode
+  containers get neither.
 - sudo: `docker/Dockerfile` writes `/etc/sudoers.d/node-firewall` with two
   `NOPASSWD` grants for `node`: `network-policy-entrypoint.sh *` (which now
   runs the firewall step as root before dropping privileges) and
@@ -642,8 +663,9 @@ and renewal delivery with real, fresh provider logins.
   restricted runtimes on a current image). Still owed: a rootless daemon
   (task 2), and the decision whether the CI runs below count as the rootful
   pass (task 1). On a rootless host run the live suites against an image
-  built there. Until both are recorded, `ORKESTRATOR_EGRESS=in-container`
-  restores the in-container firewall.
+  built there. The `ORKESTRATOR_EGRESS=in-container` fallback was removed on
+  2026-11-04, before these were recorded (task 4), so a gateway failure on a
+  host now needs a release.
   - Linux Engine CI (`container-live-qualification.yml`, recorded
     2026-10-31 from `gh run view`). Run 40999226305 (head `79c35c0b`,
     2026-10-30, Engine 28.0.4, image capabilities including
@@ -964,10 +986,23 @@ Recorded 2026-10-25, while implementing items 1–7.
   without `--user` run as root. A gateway runtime has no `NET_ADMIN` to
   regain, so the remaining sudo grants give root only inside a namespace
   root cannot change.
-- **Rollout cap.** `ORKESTRATOR_EGRESS=in-container` keeps the old topology
-  on a gateway-capable image, like `ORKESTRATOR_NETWORK_POLICY=2`. It is
-  listed in the lifecycle doc's rollout switches, and is to be removed once
-  Linux Engine and rootless pass.
+- **Rollout cap.** `ORKESTRATOR_EGRESS=in-container` kept the old topology
+  on a gateway-capable image, like `ORKESTRATOR_NETWORK_POLICY=2`. It was
+  listed in the lifecycle doc's rollout switches, to be removed once Linux
+  Engine and rootless passed. Removed 2026-11-04 (task 4, next two entries).
+- **Task 4: removed ahead of task 2 (2026-11-04).** The user asked for the
+  removal while task 2 was still partly done, overriding this file's
+  recommended order. Linux Engine has CI evidence, though task 1's decision
+  to count it is still open. The rootless tamper and gateway-restart checks
+  and the default host-loopback-disabled daemon stay unproved. The cost is
+  the one task 4 named: a gateway problem on a host now needs a release
+  instead of a setting.
+- **Task 4: in-container live coverage kept, selected by image.** The readiness
+  scenarios run on derived images whose manifest no longer declares
+  `egress-gateway`, which is the condition an older image takes through
+  `egressEnforcement`. The live firewall suite takes such an image through
+  `ORKESTRATOR_QUALIFICATION_IMAGE`. Legacy runtimes still use this path until
+  they are rebuilt, so dropping the coverage would have left them untested.
 - **Item 2, in-place mode change: not built.**
   - Options: switch a running gateway between restricted and full; or keep
     "mode change is a rebuild".

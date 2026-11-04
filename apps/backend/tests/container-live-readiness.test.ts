@@ -24,11 +24,12 @@
  * Scenario ids refer to the matrix in
  * docs/development/container-qualification.md.
  */
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { IMAGE_MANIFEST_PATH } from "@orkestrator/protocol/image-manifest";
 import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import {
@@ -56,20 +57,17 @@ const scenarios: Scenario[] = [];
 const derivedImages: string[] = [];
 const cleanups: Array<() => Promise<void> | void> = [];
 
-const savedEgress = process.env.ORKESTRATOR_EGRESS;
-afterEach(() => {
-  if (savedEgress === undefined) delete process.env.ORKESTRATOR_EGRESS;
-  else process.env.ORKESTRATOR_EGRESS = savedEgress;
-});
-
 /**
- * Keeps this scenario's firewall inside the runtime (the rollout cap). Its
- * faults are injected into the runtime's own firewall step, which a runtime
- * behind an egress gateway does not have; the gateway's are tested apart.
+ * Dockerfile lines that keep a scenario's firewall inside the runtime: the
+ * image stops declaring the gateway, as one built before it does. These faults
+ * are injected into the runtime's own firewall step, which a runtime behind an
+ * egress gateway does not have; the gateway's are tested apart.
  */
-function pinInContainerFirewall(): void {
-  process.env.ORKESTRATOR_EGRESS = "in-container";
-}
+const IN_CONTAINER_FIREWALL = [
+  "USER root",
+  `RUN jq 'del(.capabilities["egress-gateway"])' ${IMAGE_MANIFEST_PATH} > /tmp/manifest.json && install -m 0644 /tmp/manifest.json ${IMAGE_MANIFEST_PATH} && rm /tmp/manifest.json`,
+  "USER node",
+];
 
 async function docker(args: string[], timeoutMs = 120_000): Promise<string> {
   return (await runCommand("docker", args, { timeoutMs })).stdout.trim();
@@ -149,6 +147,14 @@ async function deriveImage(
   return tag;
 }
 
+let inContainerFirewallImageTag: Promise<string> | null = null;
+
+/** The qualification image with its firewall inside the runtime. */
+function inContainerFirewallImage(): Promise<string> {
+  inContainerFirewallImageTag ??= deriveImage("in-container-firewall", IN_CONTAINER_FIREWALL);
+  return inContainerFirewallImageTag;
+}
+
 const HOLD_MARKER = "/etc/orkestrator-qualification-hold";
 const HELD_MARKER = "/run/orkestrator-qualification-held";
 const RELEASE_MARKER = "/run/orkestrator-qualification-release";
@@ -164,6 +170,7 @@ function heldBootImage(): Promise<string> {
   heldBootImageTag ??= deriveImage(
     "held-boot",
     [
+      ...IN_CONTAINER_FIREWALL,
       "USER root",
       "RUN mv /usr/local/bin/init-firewall.sh /usr/local/bin/init-firewall-real.sh",
       "COPY --chmod=0755 hold-firewall.sh /usr/local/bin/init-firewall.sh",
@@ -406,8 +413,8 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a missing firewall script fails a restricted boot before setup or agent launch",
     async () => {
-      pinInContainerFirewall();
-      const image = await deriveImage("no-firewall", [
+      const image = await deriveImage("no-firewall-in-container", [
+        ...IN_CONTAINER_FIREWALL,
         "USER root",
         "RUN rm /usr/local/bin/init-firewall.sh",
         "USER node",
@@ -482,12 +489,13 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a DNS-broken network fails the firewall bootstrap closed, never network-ready",
     async () => {
-      pinInContainerFirewall();
       const { NETWORK_ROLE, environmentNetworkName } =
         await import("../src/core/container-network");
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-dns`);
-      const fixture = readinessContext(scene, environment);
+      const fixture = readinessContext(scene, environment, {
+        image: await inContainerFirewallImage(),
+      });
       // The environment network exists before the start, as an interrupted
       // earlier attempt would leave it, so the backend adopts it. It is
       // internal: Docker's resolver answers only local names and nothing
@@ -610,10 +618,10 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a boot status directory the entrypoint cannot write fails the launch",
     async () => {
-      pinInContainerFirewall();
       // A permission fault: the status directory is root-owned, so the
       // entrypoint (node) cannot record any phase, not even `failed`.
       const image = await deriveImage("status-unwritable", [
+        ...IN_CONTAINER_FIREWALL,
         "USER root",
         "RUN chown root:root /run/orkestrator /run/orkestrator/processes && chmod 0755 /run/orkestrator",
         "USER node",
@@ -641,7 +649,6 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: an interrupted status write never releases readiness and times out typed",
     async () => {
-      pinInContainerFirewall();
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-torn`);
       const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
@@ -707,7 +714,6 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
   live(
     "C09/readiness: a container restart during launch never releases the previous boot",
     async () => {
-      pinInContainerFirewall();
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-restart`);
       const fixture = readinessContext(scene, environment, { image: await heldBootImage() });
@@ -777,14 +783,14 @@ describe("C23/readiness firewall failure after boot", () => {
   live(
     "C23/readiness: a firewall re-run that loses DNS fails closed with no allow-all interval",
     async () => {
-      pinInContainerFirewall();
       const { createDockerContainer } = await import("../src/core/commands-containers");
       const { resolveDockerImage } = await import("../src/core/docker-image");
       const { environmentNetworkPolicy } = await import("../src/core/container-network");
       const scene = await scenario();
       const environment = lifecycleEnvironment({ id: `env-${RUN}-rerun` });
-      const fixture = readinessContext(scene, environment);
-      const resolved = await resolveDockerImage(IMAGE);
+      const image = await inContainerFirewallImage();
+      const fixture = readinessContext(scene, environment, { image });
+      const resolved = await resolveDockerImage(image);
       if (resolved.kind !== "present") throw new Error("qualification image missing");
       const containerId = await createDockerContainer(environment, fixture.context, {
         imageId: resolved.imageId,

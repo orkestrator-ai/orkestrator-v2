@@ -59,8 +59,6 @@ export const DOCKER_LABEL_EGRESS_WORKLOAD = "orkestrator-egress-workload";
 /** On a gateway: its environment (not `environment-id`, which marks runtimes). */
 export const DOCKER_LABEL_EGRESS_ENVIRONMENT = "orkestrator-egress-environment";
 export const EGRESS_GATEWAY_ENTRYPOINT = "/usr/local/bin/orkestrator-egress-gateway";
-/** Rollout cap: `in-container` keeps the firewall inside the workload. */
-export const EGRESS_OVERRIDE_ENV = "ORKESTRATOR_EGRESS";
 
 /** The gateway's own budget; it runs bash, sleep, the refresher and lookups. */
 export const EGRESS_GATEWAY_MEMORY_MIB = 128;
@@ -73,18 +71,16 @@ export type EgressEnforcement = "gateway" | "container" | "none";
 /**
  * Where a new runtime's firewall runs. Full mode has none. A gateway needs
  * the environment's own network (policy 2 or later) and an image that ships
- * the gateway entrypoint; `ORKESTRATOR_EGRESS=in-container` keeps the
- * firewall in the workload, with `NET_ADMIN`, as before.
+ * the gateway entrypoint; an older image keeps the firewall in the workload,
+ * with `NET_ADMIN`, until it is rebuilt.
  */
 export function egressEnforcement(options: {
   networkMode: "full" | "restricted";
   networkPolicy: NetworkPolicyVersion;
   imageGatewayVersion: number;
-  override: string | undefined;
 }): EgressEnforcement {
   if (options.networkMode === "full") return "none";
   if (options.networkPolicy < 2 || options.imageGatewayVersion < 1) return "container";
-  if (options.override?.trim() === "in-container") return "container";
   return "gateway";
 }
 

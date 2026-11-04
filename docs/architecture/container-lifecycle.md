@@ -542,7 +542,7 @@ one any more.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Egress gateway rollout cap, not a legacy path | A gateway-capable image's restricted runtime keeps its firewall inside, with `NET_ADMIN`, where a root terminal can change it | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)). Remove once the gateway has been qualified on Linux Engine and rootless |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -552,7 +552,7 @@ What still exists in the legacy shapes, and what handles it:
 | Resource | Handled by |
 | --- | --- |
 | Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
-| Current runtime with host mounts or policy 1 (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image |
+| Current runtime with host mounts, policy 1 or an in-container firewall (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy and `enforcement`. Any rebuild creates the new runtime from the current image |
 | Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
 | `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
 
@@ -1027,7 +1027,8 @@ the network namespace, and the runtime joins it (`--network
 container:<gateway id>`) with no added capability, so nothing in the runtime,
 `orkroot` terminals included, can change the rules. Before this, the
 firewall ran inside the runtime, which needed `NET_ADMIN`; that remains for
-older images and under the `ORKESTRATOR_EGRESS=in-container` rollout cap.
+older images, and for runtimes created under the removed
+`ORKESTRATOR_EGRESS=in-container` rollout cap, until they are rebuilt.
 The network status reports `enforcement` (`gateway`, `container`, `none`)
 and the Network section says whether a root terminal can change the rules.
 

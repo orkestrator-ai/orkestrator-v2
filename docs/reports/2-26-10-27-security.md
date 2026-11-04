@@ -167,10 +167,11 @@ before and after the fix: `docker/tests/root-boundary-smoke.sh` planted
 zsh `compinit` and a trusted `mise.toml` as `node`. On the old image root ran
 11 of them, through the stop drain, `update-firewall.sh` and a root terminal.
 On the new image it ran none, and npm globals still install and run for
-`node`. In-container firewall enforcement is not retired: images without the
-egress gateway, and policy 1 runtimes, still depend on it until they are
-rebuilt. Removing the `ORKESTRATOR_EGRESS=in-container` cap stays with
-[todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+`node`. The `ORKESTRATOR_EGRESS=in-container` cap was removed on 2026-11-04
+([todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)).
+In-container firewall enforcement is not gone: images without the egress
+gateway, policy 1 runtimes and runtimes created under the cap still depend on
+it until they are rebuilt.
 See [`docker/AGENTS.md`](../../docker/AGENTS.md). The original finding
 follows.
 **Actor:** A1

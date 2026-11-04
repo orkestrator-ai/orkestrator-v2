@@ -26,11 +26,10 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 10 | [0200-i1-workspace-grant-allowlist.md](0200-i1-workspace-grant-allowlist.md) | Medium | No | I1: grant deny-list against its documented guarantee | A grant holder can change global config and request host updates, but grants are short-lived and issued through the user's own command node. |
 | 11 | [0270-s8-ios-app-review.md](0270-s8-ios-app-review.md) | Medium | No | §8: the iOS app: Review the iOS app | It is a missing review of a client that holds the gateway token, with no specific defect known. |
 | 12 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: default flip and legacy route retirement | The sandbox header already closes the top-level path, and all remaining work is blocked in todo 0042. |
-| 13 | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) | Low | No | H2: retiring in-container firewall enforcement | The root paths are closed, and the one remaining item is blocked on todo 0018's qualification. |
-| 14 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
-| 15 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 16 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
-| 17 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
+| 13 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
+| 14 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
+| 15 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
+| 16 | [0230-i5-preview-publication-domain.md](0230-i5-preview-publication-domain.md) | Low | No | I5: same-site check for the publication domain | Publication is off by default, and the gateway's Origin check and opaque sessions limit what a same-site host gains. |
 
 ## Parallel running
 
@@ -82,17 +81,16 @@ When one of these becomes ready, it joins the lane shown.
 | File | Why it waits | Lane |
 | --- | --- | --- |
 | [`0020`](0020-m1-isolated-preview-default.md) | Blocked on todo 0042 | Gateway |
-| [`0030`](0030-h2-retire-in-container-firewall.md) | Blocked on todo 0018 | Containers |
 | [`0110`](0110-l18-dependency-advisories.md) | Blocked upstream in todo 0032 | No lane |
 
 ## Status of every finding
 
-20 done, 15 partly done, 18 open, 12 no action.
+22 done, 13 partly done, 18 open, 12 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
 | H1 | Partly done | `apps/backend/src/gateway-sessions.ts:73-75`, `apps/backend/src/gateway-auth.ts:135-138` (commit `4f9cf3b32`); remainder in [S4 part 0010](0010-s4-gateway-login.md#0010-finish-the-gateway-cookie-hardening-and-settle-what-a-leaked-session-still-allows) |
-| H2 | Partly done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); remainder in [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
+| H2 | Done | `apps/backend/src/core/container-scripts.ts:13-20`, `docker/container-zshrc.zsh:20-24` (commit `5fc5982aa`); cap removed from `egressEnforcement` (`apps/backend/src/core/egress-gateway.ts`); runtimes without a gateway keep the in-container firewall until rebuilt, and rootless gateway checks stay with [todo 0018](../../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 |
 | H3 | Done | `apps/backend/src/core/container-project-seed-files.ts:66-110`; no project file in `bindIfExists` calls (`apps/backend/src/core/commands-containers.ts:503-559`); commit `1565c7c16` |
 | H4 | Partly done | `packages/protocol/src/execution-policy-narrowing.ts:140`, each bridge's `delete process.env` (commits `2d4528dc5`, `a2bba9d80`); remainder in [S2 part 0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls) |
 | H5 | Open | `packages/protocol/src/app-config-defaults.ts:48`; [S1 part 0070](0070-s1-github-token.md#0070-stop-handing-the-host-github-token-to-every-container-by-default) |
@@ -149,7 +147,7 @@ When one of these becomes ready, it joins the lane shown.
 | §8 Dynamic testing | Open | [S4 part 0260](0010-s4-gateway-login.md#0260-run-the-outstanding-dynamic-security-checks) |
 | §9 step 1 (H1 + M1) | Partly done | [S4 part 0010](0010-s4-gateway-login.md#0010-finish-the-gateway-cookie-hardening-and-settle-what-a-leaked-session-still-allows), [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) |
 | §9 step 2 (H3) | Done | See H3 |
-| §9 step 3 (H2) | Partly done | [0030-h2-retire-in-container-firewall.md](0030-h2-retire-in-container-firewall.md) |
+| §9 step 3 (H2) | Done | See H2 |
 | §9 step 4 (M3) | Done | See M3 |
 | §9 step 5 (H4 + M13) | Partly done | [S2 part 0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls); M13 is done |
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |

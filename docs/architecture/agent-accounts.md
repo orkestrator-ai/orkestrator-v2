@@ -1024,11 +1024,23 @@ still end that leaf's pin and change the tick of an account with no email. A
 coordinator's own `switch_provider_account` still needs an approval unless a
 self-timer or the [standing permission](#switching-without-asking) carries it, and
 pins like any other. Each automatic
-switch sends every main coordinator on the machine a workflow notice through the
-mail store, and a leaf's switch also reaches its command node's main coordinators
-(`AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`). A link that is down when it happens loses
-that notice, and `lastSwitch` still records the move. A notice never delays a
-switch, and nothing here starts a coordinator.
+switch tells the open main coordinators through the mail store, following
+[Who hears a notice](coordinator.md#who-hears-a-notice): on a leaf the command
+node's coordinators hear it through the leaf's outbox, which keeps it across a link
+drop, and the leaf's only for repositories the command node lacks. An older command
+node still hears through `AGENT_ACCOUNT_AUTO_SWITCHED_EVENT`, where a link that is
+down loses the notice and `lastSwitch` still records the move. A notice never delays
+a switch, and an automatic switch notice starts no coordinator, because it belongs to
+no repository.
+
+A session stopping on a usage limit is a separate notice
+([Usage-limit stop notices](coordinator.md#usage-limit-stop-notices)), and it can
+move the machine: when the coordinator that should hear it is on the limited login,
+matched by provider and email across machines, `moveOffLimitedAccount` moves this
+machine first so the coordinator can run. It is this switcher's own path, so it never
+pins, and it gives way to a pin, to automatic switching being off and to having no
+account with headroom. Every entry with the limited email counts as limited. In those
+cases nothing moves, no turn starts, and the notice is kept and says why.
 
 ## Machines
 

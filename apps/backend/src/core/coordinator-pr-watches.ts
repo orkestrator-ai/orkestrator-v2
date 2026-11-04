@@ -26,16 +26,11 @@
  */
 import { createHash } from "node:crypto";
 import {
-  AgentMailError,
   agentMailStatusBudgetKey,
   normalizeAgentMessagingSettings,
   type AgentMailNotice,
   type AgentMailNoticeTone,
 } from "@orkestrator/protocol/agent-mail";
-import {
-  coordinatorMainConversation,
-  coordinatorRuntimeId,
-} from "@orkestrator/protocol/coordinator";
 import {
   gitHubPullRequestKey,
   gitHubPullRequestUrl,
@@ -44,6 +39,7 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { GitHubApiError } from "./github.js";
 import { resolveGitHubToken } from "./github-credentials.js";
 import {
@@ -93,9 +89,13 @@ export interface CoordinatorPullRequestWatchOptions {
   > & {
     coordinators: Pick<
       CoordinatorsStorage,
-      "getCoordinatorWorkspace" | "listCoordinatorWorkflowAssociations"
+      | "getCoordinatorWorkspace"
+      | "getCoordinatorReconciliationState"
+      | "listCoordinatorWorkflowAssociations"
     >;
   };
+  /** Who hears a notice; without one, this machine's coordinator and no new sessions. */
+  noticeRouter?: CoordinatorNoticeRouter;
   readStatus?: (token: string, ref: GitHubPullRequestRef) => Promise<GitHubPullRequestStatus>;
   /** After a 404 or 410: true only when GitHub positively shows the pull request is gone. */
   confirmDeleted?: (token: string, ref: GitHubPullRequestRef) => Promise<boolean>;
@@ -246,9 +246,12 @@ export class CoordinatorPullRequestWatches {
   private readonly now: () => number;
   private readonly coalesceMs: number;
   private sweeping: Promise<void> | null = null;
+  private readonly baselined = new Set<string>();
+  private readonly router: CoordinatorNoticeRouter;
 
   constructor(options: CoordinatorPullRequestWatchOptions) {
     this.storage = options.storage;
+    this.router = options.noticeRouter ?? new CoordinatorNoticeRouter(options.storage);
     this.readStatus =
       options.readStatus ?? ((token, ref) => getGitHubPullRequestStatus(token, ref));
     this.confirmDeleted =
@@ -398,6 +401,7 @@ export class CoordinatorPullRequestWatches {
       );
       if (delivered) notices += 1;
     }
+    this.baselined.add(`${projectId}:${entry.key}:${entry.incarnationId ?? ""}`);
     const checkedAt = new Date(this.now()).toISOString();
     this.storage.watchedPullRequests.updateWatchedPullRequest(
       projectId,
@@ -508,13 +512,16 @@ export class CoordinatorPullRequestWatches {
   }
 
   /**
-   * Put one notice in the main coordinator's inbox. Like other status
-   * notices it does not start a coordinator: with no main conversation open
-   * the change is recorded without a notice. The request id is fixed by the
-   * pull request lifecycle, notice count and reading, so a retry after a crash replays.
-   * Legacy watches retain their original request namespace until they settle.
+   * Put one notice with the coordinator that should hear it; see
+   * `CoordinatorNoticeRouter`. A change seen after this backend's first sweep is
+   * a new event and starts a coordinator if none is running. The first sweep
+   * compares against a reading from before the restart, so it starts nothing:
+   * with no main open the change is recorded without a notice. The request id is
+   * fixed by the pull request lifecycle, notice count and reading, so a retry after
+   * a crash replays. Legacy watches retain their original request namespace until
+   * they settle.
    */
-  private async deliver(
+  private deliver(
     projectId: string,
     entry: WatchedPullRequest,
     title: string | undefined,
@@ -522,35 +529,24 @@ export class CoordinatorPullRequestWatches {
     noticeState: { state: string; tone: AgentMailNoticeTone },
     signature: string,
   ): Promise<boolean> {
-    const workspace = await this.storage.coordinators.getCoordinatorWorkspace(projectId);
-    const main = workspace ? coordinatorMainConversation(workspace) : undefined;
-    if (!workspace || !main) return false;
     const { subject, body, notice } = renderWatchedPullRequestNotice(
       entry,
       title,
       changes,
       noticeState,
     );
-    try {
-      await this.storage.sendAgentMail(
-        { kind: "system", projectId, source: "workflow", resourceId: entry.key },
-        {
-          requestId: `pr-watch:${main.id}:${entry.key}:${entry.incarnationId ? `${entry.incarnationId}:` : ""}${entry.notices + 1}:${signature}`,
-          toEnvironmentId: coordinatorRuntimeId(workspace.id, main.id),
-          toTabId: main.tabId,
-          subject,
-          body,
-        },
-        {
-          notice,
-          statusBudgetKey: agentMailStatusBudgetKey("watched-pull-request", entry.key),
-          coalesceMs: this.coalesceMs,
-        },
-      );
-      return true;
-    } catch (error) {
-      if (error instanceof AgentMailError && error.code === "idempotency-conflict") return true;
-      throw error;
-    }
+    const key = `${entry.key}:${entry.incarnationId ? `${entry.incarnationId}:` : ""}${entry.notices + 1}:${signature}`;
+    return this.router.deliver({
+      projectId,
+      createSession: this.baselined.has(`${projectId}:${entry.key}:${entry.incarnationId ?? ""}`),
+      resourceId: entry.key,
+      requestId: (mainId) => `pr-watch:${mainId}:${key}`,
+      upwardRequestId: `pr-watch:${projectId}:${key}`,
+      subject,
+      body,
+      notice,
+      statusBudgetKey: agentMailStatusBudgetKey("watched-pull-request", entry.key),
+      coalesceMs: this.coalesceMs,
+    });
   }
 }

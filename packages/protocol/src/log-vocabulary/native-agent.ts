@@ -49,6 +49,7 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
         "A turn failed again after automatic recovery and is left for the user.",
       "turn-recovery.retrying":
         "An incomplete or provider-failed turn is being retried automatically.",
+      "usage-limit.notice-failed": "A usage-limit stop's outcome could not be read for its notice.",
       "usage-limit.resend-failed":
         "Resending after a usage limit failed. An unknown send stays in the journal.",
       "title.strategy-failed":

@@ -34,6 +34,7 @@ import {
   CoordinatorStatusWakes,
   type CoordinatorStatusWakeOptions,
 } from "./coordinator-status-wakes.js";
+import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import type { CoordinatorRemoteAccess } from "./coordinator-remote.js";
 import { CoordinatorPullRequestWatches } from "./coordinator-pr-watches.js";
@@ -168,6 +169,8 @@ export class CoordinatorService {
   readonly statusWakes: CoordinatorStatusWakes;
   /** Pull requests its conversations showed; see `coordinator-pr-watches.ts`. */
   readonly pullRequestWatches: CoordinatorPullRequestWatches;
+  /** Who hears a notice for a repository; see `coordinator-notice-router.ts`. */
+  readonly noticeRouter: CoordinatorNoticeRouter;
   /** Reads of work on other nodes; absent until the node services exist. */
   private remote: CoordinatorRemoteAccess | null = null;
   /**
@@ -201,12 +204,17 @@ export class CoordinatorService {
     private readonly options: Omit<CoordinatorStatusWakeOptions, "workerActivity"> &
       CoordinatorDelegationOptions = {},
   ) {
+    this.noticeRouter = new CoordinatorNoticeRouter(storage, (projectId) =>
+      this.startMainForNotice(projectId),
+    );
     this.statusWakes = new CoordinatorStatusWakes(storage, {
       ...options,
+      noticeRouter: this.noticeRouter,
       ...(workerActivity ? { workerActivity } : {}),
     });
     this.pullRequestWatches = new CoordinatorPullRequestWatches({
       storage,
+      noticeRouter: this.noticeRouter,
       ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
     });
     // Mail to "coordinator", or to a conversation that has since closed, finds
@@ -242,6 +250,21 @@ export class CoordinatorService {
     if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) return null;
     const { workspace, main } = await this.ensureMainConversation(projectId);
     return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+  }
+
+  /**
+   * A new notice needs a coordinator and none is running. Unlike mail to an
+   * address, this creates a project's first one too: a machine with the
+   * repository has a coordinator for it, whether or not one was ever opened.
+   * Serialized per project, so notices arriving together start only one.
+   */
+  private async startMainForNotice(
+    projectId: string,
+  ): Promise<{ workspace: CoordinatorWorkspace; main: CoordinatorConversation }> {
+    if (!(await this.storage.coordinators.getCoordinatorWorkspace(projectId))) {
+      await this.ensure(projectId);
+    }
+    return this.ensureMainConversation(projectId);
   }
 
   /**

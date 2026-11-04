@@ -185,3 +185,34 @@ test("a bounded partial drain is not reported as complete", async () => {
     collector.dispose();
   }
 });
+
+test("deferred notice retries retain exponential backoff", async () => {
+  let reads = 0;
+  const collector = new NodeMailCollector({
+    retryDelayMs: 10,
+    selfId: async () => "bk_cmd" as never,
+    nodeName: async () => "Leaf",
+    link: () => ({
+      connected: true,
+      hello: { capabilities: { "coordinator-notices": 1 } },
+      invoke: async <T>() => {
+        reads++;
+        return {
+          items: [{ ...item(1), coordinatorNotice: { kind: "repository", createSession: false } }],
+          more: false,
+        } as T;
+      },
+    }),
+    deliver: async () => {},
+    notices: { repositoryHints: async () => [], deliver: async () => "deferred" },
+  });
+  try {
+    await collector.collect("bk_leaf" as never);
+    await until(() => reads >= 3);
+    // With a reset delay, there would already be a fourth read after another 25ms.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(reads).toBe(3);
+  } finally {
+    collector.dispose();
+  }
+});

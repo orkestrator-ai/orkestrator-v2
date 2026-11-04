@@ -90,6 +90,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "node-summaries": { kind: "document" },
   "node-outcomes": { kind: "document" },
   "node-mail": { kind: "document" },
+  "coordinator-usage-limit-notices": { kind: "document" },
   "node-action-requests": { kind: "document" },
   "agent-accounts": { kind: "document" },
   "public-operations/index": { kind: "document" },

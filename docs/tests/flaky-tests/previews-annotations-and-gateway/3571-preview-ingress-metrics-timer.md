@@ -1,5 +1,6 @@
 # Preview ingress metrics timer misses first-byte measurement under aggregate load
 
+- **ID:** 3571
 - **Status:** open
 - **Observed:** 2026-11-04 during subagent model review repair.
 - **Owner:** `apps/desktop/tests/preview-transport-manager.test.ts`

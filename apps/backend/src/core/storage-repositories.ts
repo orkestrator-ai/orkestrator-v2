@@ -23,6 +23,7 @@ import { KanbanRepository } from "./storage-kanban.js";
 import { NativeAgentDeliveries } from "./storage-native-deliveries.js";
 import { NativeAgentSessionsRepository } from "./storage-native.js";
 import { NodesRepository } from "./storage-nodes.js";
+import { CoordinatorNoticesRepository } from "./storage-coordinator-notices.js";
 import { PreviewServicesRepository } from "./storage-preview-services.js";
 import { PromptQueueStore } from "./storage-prompt-queue-store.js";
 import { ProjectsRepository } from "./storage-projects.js";
@@ -67,6 +68,7 @@ export class StorageRepositories {
   readonly kanban: KanbanRepository;
   readonly previewServices: PreviewServicesRepository;
   readonly nodes: NodesRepository;
+  readonly coordinatorNotices: CoordinatorNoticesRepository;
   readonly publicOperations: PublicOperationsRepository;
   readonly coordinators: CoordinatorsRepository;
   readonly agentAccounts: AgentAccountsRepository;
@@ -103,6 +105,7 @@ export class StorageRepositories {
     this.kanban = new KanbanRepository(context, files);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);
+    this.coordinatorNotices = new CoordinatorNoticesRepository(context);
     this.publicOperations = new PublicOperationsRepository(context, files, this);
     this.coordinators = new CoordinatorsRepository(context, files, this);
     this.agentAccounts = new AgentAccountsRepository(context);

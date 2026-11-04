@@ -32,8 +32,9 @@ function budgetSenderOf(message: AgentMailMessage): string | null {
   if (message.from.kind === "tab" || message.from.kind === "coordinator") {
     return agentMailboxId(message.from.environmentId, message.from.tabId);
   }
+  if (message.statusBudgetKey) return message.statusBudgetKey;
   if (message.from.kind === "node") return nodeMailSenderKey(message.from);
-  return message.from.kind === "system" && message.statusBudgetKey ? message.statusBudgetKey : null;
+  return null;
 }
 
 function sameMailboxPair(
@@ -154,6 +155,7 @@ export class AgentMailBudgets {
    */
   async noticeCoordinatorBudgetHold(message: AgentMailMessage): Promise<void> {
     const from = message.from;
+    if (message.statusBudgetKey) return;
     if (
       !(from.kind === "tab" || (from.kind === "node" && from.role === "agent")) ||
       message.route !== "coordinator"

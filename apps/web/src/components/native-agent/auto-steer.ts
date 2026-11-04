@@ -36,6 +36,71 @@ export function shouldAutoSteer(input: {
   );
 }
 
+/**
+ * Why a queued prompt has no Steer action while a turn is running, shown on
+ * its row so a message waiting for the next turn says why rather than just
+ * sitting there. `undefined` when there is no running turn (nothing to steer
+ * into) or the row can be steered.
+ *
+ * A row that steering refused keeps that refusal (`refusal`) until it leaves
+ * the queue; it wins over the generic reasons because it is what actually
+ * happened to this message.
+ */
+export function queuedSteerNote(input: {
+  /** A turn is running: the queue's rows would otherwise be steerable. */
+  running: boolean;
+  /** The provider reports `actions.steer` for this session. */
+  providerSteers: boolean;
+  /** A dispatch or steer is parked awaiting recovery. */
+  parked: boolean;
+  /** The row passes the per-item checks (text only, not a command). */
+  steerable: boolean;
+  attachmentCount: number;
+  command: boolean;
+  /** What happened when this row was last steered, if it was refused. */
+  refusal?: string;
+  label: string;
+}): string | undefined {
+  if (!input.running) return undefined;
+  if (input.refusal) return input.refusal;
+  if (!input.providerSteers) {
+    return `${input.label} cannot be steered here, so this is sent when the turn ends.`;
+  }
+  if (input.parked) {
+    return "An earlier message is still being confirmed, so this is sent when the turn ends.";
+  }
+  if (input.steerable) return undefined;
+  if (input.attachmentCount > 0) {
+    return "Steering carries text only, so this is sent with its attachments when the turn ends.";
+  }
+  if (input.command) return "Commands run as their own turn, so this runs when the turn ends.";
+  return undefined;
+}
+
+/**
+ * The row note for a steer that left the message queued, or `undefined` when
+ * the message was delivered or is owned by the recovery card. Pairs with
+ * {@link autoSteerNotice}: the toast reports the moment, the row keeps the
+ * reason for as long as the message waits.
+ */
+export function steerRefusalNote(
+  outcome: NativeAgentSessionActionOutcome | null,
+  label: string,
+): string | undefined {
+  if (outcome === null) return undefined;
+  switch (outcome.outcome) {
+    case "applied":
+    case "unknown":
+      return undefined;
+    case "rejected":
+      return `${nativeAgentSteerRejectionMessage(outcome)} Sent when the turn ends.`;
+    case "mismatch":
+      return "The turn moved on before this could be steered. Sent when the turn ends.";
+    default:
+      return `${label} finished the turn before this could be steered. Sent as the next turn.`;
+  }
+}
+
 export type AutoSteerNotice = { tone: "success" | "info"; message: string } | null;
 
 /**

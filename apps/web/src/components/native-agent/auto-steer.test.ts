@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoSteerNotice, shouldAutoSteer } from "./auto-steer";
+import { autoSteerNotice, queuedSteerNote, shouldAutoSteer, steerRefusalNote } from "./auto-steer";
 
 const eligible = {
   enabled: true,
@@ -60,6 +60,58 @@ describe("autoSteerNotice", () => {
   test("reports a message the queue already sent as the next turn", () => {
     expect(autoSteerNotice(null, "Codex")?.message).toBe(
       "Codex finished the turn first, so your message was sent as the next turn.",
+    );
+  });
+});
+
+describe("queuedSteerNote", () => {
+  const steerable = {
+    running: true,
+    providerSteers: true,
+    parked: false,
+    steerable: true,
+    attachmentCount: 0,
+    command: false,
+    label: "Claude",
+  };
+
+  test("says nothing when the row can be steered or there is no turn to steer", () => {
+    expect(queuedSteerNote(steerable)).toBeUndefined();
+    expect(queuedSteerNote({ ...steerable, running: false, providerSteers: false })).toBe(
+      undefined,
+    );
+  });
+
+  test("names why a row waits for the turn to end", () => {
+    expect(queuedSteerNote({ ...steerable, providerSteers: false })).toBe(
+      "Claude cannot be steered here, so this is sent when the turn ends.",
+    );
+    expect(queuedSteerNote({ ...steerable, parked: true })).toContain("still being confirmed");
+    expect(queuedSteerNote({ ...steerable, steerable: false, attachmentCount: 1 })).toContain(
+      "text only",
+    );
+    expect(queuedSteerNote({ ...steerable, steerable: false, command: true })).toContain(
+      "Commands run as their own turn",
+    );
+  });
+
+  test("a refusal is what happened to this row, so it wins", () => {
+    expect(
+      queuedSteerNote({ ...steerable, providerSteers: false, refusal: "Steering is full." }),
+    ).toBe("Steering is full.");
+  });
+});
+
+describe("steerRefusalNote", () => {
+  test("only a steer that left the message queued leaves a note", () => {
+    expect(steerRefusalNote({ outcome: "applied" }, "Claude")).toBeUndefined();
+    expect(steerRefusalNote({ outcome: "unknown", requestId: "r" }, "Claude")).toBeUndefined();
+    expect(steerRefusalNote(null, "Claude")).toBeUndefined();
+    expect(steerRefusalNote({ outcome: "mismatch" }, "Claude")).toBe(
+      "The turn moved on before this could be steered. Sent when the turn ends.",
+    );
+    expect(steerRefusalNote({ outcome: "idle" }, "Claude")).toBe(
+      "Claude finished the turn before this could be steered. Sent as the next turn.",
     );
   });
 });

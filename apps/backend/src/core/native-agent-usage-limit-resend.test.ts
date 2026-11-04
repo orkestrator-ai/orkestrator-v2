@@ -37,6 +37,7 @@ function harness(
     queue?: unknown;
     observed?: { providerSessionId: string; state: "idle" | "working" };
     dispatch?: NativeAgentUsageLimitResendDependencies["dispatchPrompt"];
+    reports?: boolean;
   } = {},
 ) {
   let clock = 1_000;
@@ -54,6 +55,7 @@ function harness(
   const handleLimitStop = mock(async (_input: { resends: number }) => state.verdict);
   const requestOutcome = mock(async () => state.outcome);
   const noteTurnEnded = mock(() => undefined);
+  const noteUnresentStop = mock(async (_input: Record<string, unknown>) => undefined);
   const resend = new NativeAgentUsageLimitResend({
     storage: {
       getEnvironment: async () => ({ id: "env-1" }),
@@ -64,6 +66,7 @@ function harness(
       automatic: async () => options.automatic ?? true,
       noteTurnEnded,
       handleLimitStop,
+      ...(options.reports ? { noteUnresentStop } : {}),
     }),
     now: () => clock,
     isStopped: () => false,
@@ -86,6 +89,7 @@ function harness(
     state,
     dispatches,
     handleLimitStop,
+    noteUnresentStop,
     requestOutcome,
     noteTurnEnded,
     advance: (ms: number) => {
@@ -183,6 +187,7 @@ describe("a native tab the weekly limit stopped", () => {
       error: LIMIT,
       resends: 0,
       turnStartedAt: new Date(1_000).toISOString(),
+      session: { tabId: "tab-1" },
     });
     expect(h.resend.hasCandidate("session-key")).toBe(false);
 
@@ -532,4 +537,89 @@ test("native recovery waits for a workflow on the shared bridge, then continues 
   } finally {
     workflow.dispose?.();
   }
+});
+
+describe("a stop nothing here will resend still gets reported", () => {
+  test("a tab on a machine that is not switching", async () => {
+    const h = harness({ automatic: false, reports: true });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.handleLimitStop).not.toHaveBeenCalled();
+    expect(h.dispatches).toHaveLength(0);
+    expect(h.noteUnresentStop.mock.calls[0]?.[0]).toMatchObject({
+      platform: "claude",
+      environmentId: "env-1",
+      requestId: "request-1",
+      error: LIMIT,
+      session: { tabId: "tab-1" },
+    });
+  });
+
+  test("a tab whose turn has no record to resend from", async () => {
+    const h = harness({
+      reports: true,
+      session: sessionWith({ lastDispatchedTurn: undefined }),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.dispatches).toHaveLength(0);
+    expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("a coordinator's own turn, whose queue is not held for it", async () => {
+    const h = harness({
+      reports: true,
+      session: sessionWith({
+        environmentId: "coordinator:c1:conversation-1",
+        logicalSessionKey: "main",
+        origin: "coordinator",
+        owner: { kind: "coordinator", projectId: "p", coordinatorId: "c1" },
+      } as never),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    expect(h.resend.isPending(h.state.session.key)).toBe(false);
+    await h.settle();
+    expect(h.handleLimitStop).not.toHaveBeenCalled();
+    expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("a tab on a provider without accounts", async () => {
+    const h = harness({
+      reports: true,
+      outcome: { outcome: "failed", error: "USAGE_EXHAUSTED" },
+      session: sessionWith({ agent: "grok" } as never),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.noteUnresentStop.mock.calls[0]?.[0]).toMatchObject({ platform: "grok" });
+  });
+
+  test.each([
+    ["completed after the provider retried a transient limit", { outcome: "completed" }],
+    ["failed for another reason", { outcome: "failed", error: "The bridge went away" }],
+  ])("not a turn that %s", async (_name, outcome) => {
+    const h = harness({
+      reports: true,
+      outcome,
+      session: sessionWith({
+        environmentId: "coordinator:c1:conversation-1",
+        origin: "coordinator",
+        owner: { kind: "coordinator", projectId: "p", coordinatorId: "c1" },
+      } as never),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.noteUnresentStop).not.toHaveBeenCalled();
+  });
+
+  test("not a workflow's session, which reports through its own provider", async () => {
+    const h = harness({
+      reports: true,
+      session: sessionWith({ origin: "automated-review" } as never),
+    });
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.requestOutcome).not.toHaveBeenCalled();
+    expect(h.noteUnresentStop).not.toHaveBeenCalled();
+  });
 });

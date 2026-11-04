@@ -4,7 +4,8 @@
 // here would close a runtime import cycle with storage.
 export { parseNodeActionApproval } from "./node-action-requests.js";
 export { coordinatorNodeContext } from "./node-context.js";
-export { NodeCoordination } from "./node-coordination.js";
+export { NodeCoordination, type NodeCoordinatorNotices } from "./node-coordination.js";
+export type { OutboxItem } from "./node-mail.js";
 export { bridgeRemoteCoordinatorEvents, NodeCoordinatorRemote } from "./node-coordinator-remote.js";
 export { parseNodeFileScope, seedFilesDir } from "./node-files.js";
 export { NodeUnavailableError, type NodeLink } from "./node-link.js";

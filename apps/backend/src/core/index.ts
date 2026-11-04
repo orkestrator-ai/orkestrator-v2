@@ -40,12 +40,14 @@ import {
   NodeService,
   type NodeServiceOptions,
 } from "./nodes/index.js";
-import type { BackendId } from "@orkestrator/protocol/federation";
+import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
+import { usageLimitAccountKey } from "@orkestrator/protocol/coordinator-notices";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_AUTO_SWITCHED_EVENT } from "@orkestrator/protocol/agent-account-auto-switch";
 import {
   AGENT_ACCOUNT_PLATFORMS,
   AGENT_ACCOUNTS_CHANGED_EVENT,
+  isAgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
@@ -66,6 +68,8 @@ import {
   renewAgentAccountLogin,
 } from "./agent-accounts.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
+import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
+import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
 import {
   bridgeRemoteAutoSwitchNotices,
   mailAutoSwitchNotice,
@@ -160,7 +164,7 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
-import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
+import { BACKEND_CAPABILITIES, type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -345,6 +349,7 @@ export class OrkestratorBackend {
   private hostSuspendDetector: HostSuspendDetector | null = null;
   private readonly machineLoad = new MachineLoadSampler();
   private accountAutoSwitch!: AgentAccountAutoSwitcher;
+  private usageLimitNotices!: CoordinatorUsageLimitNotices;
   private claudeLoginKeeper: ContainerClaudeLoginKeeper | null = null;
   private codexLoginRefresher: ((home: string) => Promise<void>) | null = null;
   private containerLoginFileWatcher: ContainerLoginFileWatcher | null = null;
@@ -836,11 +841,21 @@ export class OrkestratorBackend {
         collectMail: (nodeId) => this.nodeCoordination.collector.collect(nodeId as BackendId),
       }),
     );
+    this.coordinators.noticeRouter.setOutbox({
+      routeNotice: (projectId) => this.nodeCoordination.routeNotice(projectId),
+      queueNotice: (controllerId, item) =>
+        this.nodeCoordination.queueNotice(controllerId as BackendId, item),
+    });
+    this.nodeCoordination.setCoordinatorNotices(this.coordinators.noticeRouter.fromLeaf);
     bridgeRemoteAutoSwitchNotices({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
       nodeName: async (nodeId) =>
         (await this.nodePortal.summaries([nodeId])).nodes[0]?.view.displayName ?? nodeId,
       mail: (event, machineName) => mailAutoSwitchNotice(storage, event, machineName),
+      sendsThroughOutbox: (nodeId) =>
+        isBackendId(nodeId) &&
+        this.nodes.link(nodeId)?.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices] ===
+          1,
     });
     bridgeRemoteCoordinatorEvents({
       onNodeEvent: (listener) => this.nodePortal.readModel.onNodeEvent(listener),
@@ -902,14 +917,55 @@ export class OrkestratorBackend {
         readSessionAgentAccount(context, environmentId, platform),
       bridgeBusy: (environmentId, platform) =>
         this.nativeAgents.hasObservedLiveWork(environmentId, platform),
-      notify: async (notice) => {
-        // A command node's own coordinators, and through its event stream the
-        // coordinators of whichever command node this machine is attached to.
+      notify: async ({ quietProjectId, ...notice }) => {
+        // An older command node hears through its event stream; a newer one
+        // ignores that and takes this machine's notice from its outbox.
         options.emit(AGENT_ACCOUNT_AUTO_SWITCHED_EVENT, notice);
-        await mailAutoSwitchNotice(storage, notice, "this machine");
+        await this.coordinators.noticeRouter.deliverAutoSwitch(notice, "this machine", {
+          coalesceMs: COORDINATOR_STATUS_COALESCE_MS,
+          ...(quietProjectId ? { quietProjectId } : {}),
+        });
       },
+      onLimitStop: (report) => this.usageLimitNotices.noteStop(report),
     });
     context.accountAutoSwitch = this.accountAutoSwitch;
+    this.usageLimitNotices = new CoordinatorUsageLimitNotices({
+      storage,
+      router: this.coordinators.noticeRouter,
+      machine: async () => ({
+        key: await this.nodes.selfIdentity(),
+        name: (await this.nodes.selfProfile()).displayName,
+      }),
+      coordinatorAccountKey: async (environmentId, agent) => {
+        const session = await readSessionAgentAccount(context, environmentId, agent);
+        const account = session?.pendingActive ?? session?.account;
+        if (session?.source !== "account" || !account) return null;
+        return usageLimitAccountKey({
+          platform: agent,
+          machineKey: await this.nodes.selfIdentity(),
+          email: account.identity.email,
+          accountId: account.id,
+        });
+      },
+      moveOff: async (platform, accountKey, moveOptions) => {
+        if (!isAgentAccountPlatform(platform)) {
+          return { moved: false, reason: "no-account-with-headroom" };
+        }
+        const machineKey = await this.nodes.selfIdentity();
+        return this.accountAutoSwitch.moveOffLimitedAccount(
+          platform,
+          (account) =>
+            usageLimitAccountKey({
+              platform,
+              machineKey,
+              email: account.identity.email,
+              accountId: account.id,
+            }) === accountKey,
+          moveOptions,
+        );
+      },
+    });
+    this.coordinators.noticeRouter.setUsageLimitStops(this.usageLimitNotices);
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -2658,6 +2714,7 @@ export class OrkestratorBackend {
     });
     this.nodeCoordination.start();
     this.coordinators.startStatusWakes();
+    this.usageLimitNotices.start();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
     // result: can agents in containers reach the agent tools server? Runs in
@@ -2923,6 +2980,7 @@ export class OrkestratorBackend {
     // under the same request key, so it never acts twice.
     const scheduledJobsStopped = this.scheduledJobs.stop().catch(() => undefined);
     this.coordinators.stopStatusWakes();
+    this.usageLimitNotices.stop();
     this.graphRunAttention.stop();
     this.buildPipelineActivity.stop();
     this.agentHumanPrompts.stop();

@@ -321,19 +321,37 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("collect_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "after", "coordinatorMail"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["controllerId", "after", "coordinatorMail", "coordinatorNotices"],
+      "arguments",
+    );
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     const after =
       typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
+    const notices = args.coordinatorNotices as { repositoryHints?: unknown } | undefined;
     return coordination(context).leafMail.collect(
       args.controllerId,
       after,
       args.coordinatorMail === true,
+      notices
+        ? {
+            repositoryHints: Array.isArray(notices.repositoryHints)
+              ? notices.repositoryHints.filter(
+                  (hint): hint is string => typeof hint === "string" && hint.length <= 2_048,
+                )
+              : [],
+          }
+        : undefined,
     );
   });
 
   register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "upTo", "sequences", "coordinatorMail"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["controllerId", "upTo", "sequences", "coordinatorMail", "coordinatorNotices"],
+      "arguments",
+    );
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
@@ -346,11 +364,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         !sequences.every((seq) => Number.isSafeInteger(seq) && seq > 0))
     )
       throw new Error("Invalid mail sequences.");
+    const notices = args.coordinatorNotices as { declined?: unknown } | undefined;
+    const declined = Array.isArray(notices?.declined)
+      ? notices.declined.filter((seq): seq is number => Number.isSafeInteger(seq)).slice(0, 50)
+      : [];
     return coordination(context).leafMail.ack(
       args.controllerId,
       args.upTo,
       sequences as number[] | undefined,
       args.coordinatorMail === true,
+      notices ? { declined } : undefined,
     );
   });
 

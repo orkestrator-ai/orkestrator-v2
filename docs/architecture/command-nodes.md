@@ -348,6 +348,13 @@ A command node attached to another command node operates in leaf mode:
   that coordinator's request, or a new message to
   `"command-node-coordinator"`, both through the outbox. Every other node
   tool still refuses.
+- Notices for a repository's coordinator (status, pull request, automatic switch,
+  usage-limit stop) go to the command node's main coordinator for that repository, not
+  to its own, through the same outbox. It keeps the ones for repositories the command
+  node lacks, those a command node too old to take them would miss, and those whose
+  command node has been gone for an hour. A worker's close notice still reaches the
+  coordinator that delegated to it. See
+  [Who hears a notice](coordinator.md#who-hears-a-notice).
 - Its coordinator conversations are kept, because they may hold important
   information, but they are mostly hidden: the portal and the node's own UI
   do not show them by default. They can be opened behind a warning that the

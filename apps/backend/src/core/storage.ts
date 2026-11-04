@@ -11,6 +11,7 @@ export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 export type { KanbanStorage } from "./storage-kanban.js";
 export type { NodesStorage } from "./storage-nodes.js";
+export type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 export type { PreviewServicesStorage } from "./storage-preview-services.js";
 export type { PublicOperationsStorage } from "./storage-public-operations.js";
 
@@ -40,6 +41,7 @@ import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
 import type { KanbanStorage } from "./storage-kanban.js";
 import type { NodesRepository, NodesStorage } from "./storage-nodes.js";
+import type { CoordinatorNoticesStorage } from "./storage-coordinator-notices.js";
 import type { PreviewServicesStorage } from "./storage-preview-services.js";
 import type { PublicOperationsStorage } from "./storage-public-operations.js";
 import path from "node:path";
@@ -153,6 +155,7 @@ export class StorageService {
   readonly coordinators: CoordinatorsStorage;
   readonly publicOperations: PublicOperationsStorage;
   readonly nodes: NodesStorage;
+  readonly coordinatorNotices: CoordinatorNoticesStorage;
   readonly previewServices: PreviewServicesStorage;
   readonly agentAccounts: AgentAccountsStorage;
   readonly agentHandoffs: AgentHandoffsStorage;
@@ -172,6 +175,7 @@ export class StorageService {
     this.coordinators = this.repos.coordinators;
     this.publicOperations = this.repos.publicOperations;
     this.nodes = this.repos.nodes;
+    this.coordinatorNotices = this.repos.coordinatorNotices;
     this.previewServices = this.repos.previewServices;
     this.agentAccounts = this.repos.agentAccounts;
     this.agentHandoffs = this.repos.drafts;
@@ -1804,6 +1808,10 @@ export class StorageService {
        * recipient rather than starting its own.
        */
       coalesceMs?: number;
+      /** File it for its reader without a wake, under this placement reason. */
+      keepWithoutWake?: string;
+      /** A notice a leaf sent up the coordinator hierarchy: no pair budget. */
+      relayedNotice?: boolean;
       /**
        * The coordinator's `deliverNow`: if the message is scheduled for
        * delivery, mark its pending entry `steerRequested`, exactly as Deliver

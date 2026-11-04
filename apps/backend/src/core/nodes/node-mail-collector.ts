@@ -1,3 +1,4 @@
+import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import type { BackendId } from "@orkestrator/protocol/federation";
 
 import {
@@ -54,6 +55,18 @@ export interface CollectorDeps {
       coordinator?: boolean;
     };
   }): Promise<void>;
+  /**
+   * This node's side of coordinator notices. `declined` hands one back to the
+   * leaf's own coordinator: this node has no copy of its repository. A throw
+   * leaves it in the leaf's outbox for the next attempt.
+   */
+  notices?: {
+    repositoryHints(): Promise<string[]>;
+    deliver(
+      item: OutboxItem,
+      node: { nodeId: string; name: string },
+    ): Promise<"delivered" | "declined">;
+  };
 }
 
 export class NodeMailCollector {
@@ -140,6 +153,11 @@ export class NodeMailCollector {
     let after = 0;
     let failed = false;
     let deliveredPrefix = 0;
+    // An older leaf refuses keys it does not know, so this goes only to one that says it takes it.
+    const notices = link.hello?.capabilities?.[BACKEND_CAPABILITIES.coordinatorNotices]
+      ? this.deps.notices
+      : undefined;
+    const repositoryHints = notices ? await notices.repositoryHints() : [];
     for (let round = 0; round < 20; round += 1) {
       const batch = await link.invoke<{ items: OutboxItem[]; more: boolean }>(
         "collect_node_outbox",
@@ -147,12 +165,22 @@ export class NodeMailCollector {
           controllerId,
           after,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
+          ...(notices ? { coordinatorNotices: { repositoryHints } } : {}),
         },
       );
       if (!batch?.items?.length) return !batch?.more && !failed;
       const delivered: number[] = [];
+      const declined: number[] = [];
       for (const item of batch.items) {
         try {
+          if (item.coordinatorNotice) {
+            if (!notices) throw new Error("This node does not take coordinator notices.");
+            const outcome = await notices.deliver(item, { nodeId, name });
+            if (outcome === "declined") declined.push(item.seq);
+            else delivered.push(item.seq);
+            if (!failed) deliveredPrefix = item.seq;
+            continue;
+          }
           await this.deps.deliver({
             ...(item.toCoordinator ? { toCoordinator: item.toCoordinator } : {}),
             ...(item.repositoryHint ? { repositoryHint: item.repositoryHint } : {}),
@@ -183,13 +211,14 @@ export class NodeMailCollector {
           failed = true;
         }
       }
-      if (delivered.length) {
+      if (delivered.length || declined.length) {
         // Older leaves understand only upTo. Retain the safe contiguous
         // acknowledgement while newer leaves can also remove later successes.
         await link.invoke("ack_node_outbox", {
           controllerId,
           upTo: deliveredPrefix,
           ...(link.hello?.capabilities?.["node-coordinator-mail"] ? { coordinatorMail: true } : {}),
+          ...(notices ? { coordinatorNotices: { declined } } : {}),
           sequences: delivered,
         });
       }

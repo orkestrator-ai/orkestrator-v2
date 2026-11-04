@@ -168,7 +168,121 @@ command node's coordinator: it answers that coordinator's mail with
 `toEnvironmentId: "command-node-coordinator"`. Its conversations are kept
 but hidden behind a warning in the project's Coordinator tab.
 
-### Coordinators on two nodes
+### Who hears a notice
+
+Status, pull request, automatic switch and usage-limit notices are addressed to
+*the repository's coordinator*, not to one conversation. They all go through
+`CoordinatorNoticeRouter` (`coordinator-notice-router.ts`), which applies one rule
+(`routeCoordinatorNotice` in `@orkestrator/protocol/coordinator-notices`), so a
+notice reaches exactly one coordinator:
+
+| Where the notice starts | Who hears it |
+| --- | --- |
+| A leaf, and its command node has the repository | The command node's main coordinator for that repository, not the leaf's |
+| A leaf, and its command node has no copy of the repository | The leaf's own main coordinator |
+| A leaf whose command node is too old to take it | The leaf's own main coordinator |
+| A standalone machine, or the command node itself | That machine's main coordinator |
+
+With two command nodes attached, it goes to the one with the repository that last
+mailed this project's coordinator, else the most recent.
+
+**Replies are not notices.** A delegating coordinator still gets its own worker's
+close notice, and the status wakes of a delegated worker (`association.kind` is
+`environment`), because it is waiting on that worker. Workers messaging a
+coordinator directly are unchanged too.
+
+**Workflows a leaf's coordinator started** go up with everything else, so that
+coordinator no longer hears about its own pipeline or review from its status wakes;
+the command node's does, and can mail it.
+
+**Starting a coordinator.** With no main coordinator running, a notice about a *new
+event* starts one, creating the project's workspace if it never had one, and then
+delivers to it. With one running it wakes that one and creates nothing. Starts are
+serialized per project, so notices arriving together start one session. Two kinds
+of notice never start a session:
+
+- A sweep of older state: `CoordinatorStatusWakes.reconcile`, and the first
+  `CoordinatorPullRequestWatches.sweep` after a start, which compares against a
+  reading from before the restart. A status sweep finds nobody and sends the state
+  current when one opens; on a leaf the notice waits in the outbox instead.
+- A machine-wide notice with no repository, such as an automatic switch, which
+  would start one coordinator per project on every switch. It goes only to
+  coordinators already open.
+
+Nothing is started while agent messaging is off. A held coordinator stays held:
+notices take the normal mail path, so the unattended budget, Pause and mutes apply
+as they always did. Status and pull request notices keep their per-resource
+budgets.
+
+**Over the node link.** A leaf queues the notice in its durable outbox
+([agent-messaging.md](agent-messaging.md#node-mail)), so it survives a link drop and
+a restart of the leaf and arrives once on reconnect. Text a leaf wrote reaches the
+command node's coordinator as an agent's untrusted mail; automatic switch and
+usage-limit notices are rendered there from checked fields, with every name quoted
+as data. A notice does not use the pair budget that bounds two coordinators
+talking, so an exhausted budget cannot hold it. An automatic switch reaches the
+command node's open coordinators once, and on the leaf only the coordinators of
+repositories the command node lacks.
+
+**A command node that stays gone.** A brief drop holds the notice and never falls
+back, so nothing is delivered twice. After `NOTICE_HOLD_MAX_MS` (one hour) with no
+contact from that command node at all, or as soon as it is detached, the notice
+leaves the outbox and the leaf's own coordinator takes it. An hour is short against
+limits that reset in hours and long against a restart. A status notice from a sweep
+that finds no coordinator open at that point is logged and dropped.
+
+## Usage-limit stop notices
+
+Every session that really stops on a usage limit produces a notice: a user-started
+native tab, a delegated worker, a pipeline, review or branch session, and a
+coordinator conversation, on any provider. It names the session, machine, repository,
+account, the reset time when known (else the provider's words for it) and whether the
+session will resend, is waiting, or stays stopped.
+
+"Really stops" means the turn ended failed with a usage-limit error
+(`classifyUsageLimitError`). A transient limit the provider retries while the session
+carries on does not fail the turn, so it sends nothing. Native tabs report from
+`NativeAgentUsageLimitResend`, workflows from `provider.usageLimitStop`, and both reach
+`AgentAccountAutoSwitcher`, whose `onLimitStop` fires once per stopped turn with the
+account the turn ran on, read before any move. A stop that waits counts once, when the
+wait starts.
+
+`CoordinatorUsageLimitNotices` (`coordinator-usage-limit-notices.ts`) keeps a durable
+ledger (the `coordinator-usage-limit-notices` store):
+
+- **Raising.** A stop has an id derived from its environment and request, recorded in
+  `raised`, so a retry or restart raises nothing new.
+- **Grouping.** The machine with the receiving coordinator groups stops per project by
+  account and reset window, with an hour's tolerance between readings of one reset; an
+  unknown reset counts as a five-hour window. A group waits 30 seconds for stops landing
+  together, then sends one wake listing them. A later stop in the window is filed
+  without a wake (`usage-limit-window-already-notified`). A flush is recorded before it
+  is sent, under a fixed request id, so a restart resends it rather than repeating it.
+- **The coordinator on the limited account.** Accounts compare by provider and email,
+  across machines; without an email only the entry on its own machine matches. A
+  coordinator on the limited login (or about to be, counting a pending move) has its
+  machine moved off first by `moveOffLimitedAccount`, the automatic switcher's own path:
+  it never pins, and every entry of the login counts as limited. That move's automatic
+  switch notice skips this coordinator, whose own notice says so.
+- **No move possible.** With no account with headroom, an explicit pin, or automatic
+  switching off, the notice is kept (`coordinator-on-limited-account`), no turn starts,
+  and the reason is in the notice and the ledger (`keptReason`). Nothing retries it; the
+  coordinator reads it on its next turn. With status wakes off, a notice is filed without
+  a wake and starts nothing.
+
+**A coordinator's own stop never notifies itself.** A leaf coordinator's goes up to the
+command node's coordinator for that repository. With nobody above, it attempts the same
+move, and the provider's error in its transcript is what the user sees. A side agent's
+stop reaches its main. So a wake that fails on a limit ends there rather than raising
+another wake: a notice cannot trigger another notice about the same stop.
+
+To check this live, with real accounts and two machines: attach a leaf to a command node
+that has the same repository, run a tab on the leaf until the provider refuses it, and
+look for one wake on the command node's coordinator and none on the leaf's. Repeat with
+the link down across a leaf restart, and with the command node's coordinator on the same
+email as the stopped tab, with and without another included account.
+
+## Coordinators on two nodes
 
 A command node's main coordinator and a leaf's main coordinator for the same
 repository exchange ordinary node mail
@@ -335,17 +449,18 @@ own until it is needed: the next agent mail to the coordinator, or a worker's
 delegation wake, starts a new main with the repository's default agent
 (`CoordinatorService.ensureMainConversation`) and moves onto it the work the
 closed one still owed a report for (open delegations, unreported workflows).
-A build-pipeline or review notice does not start one by itself — it waits for
-the next main — so finished work from long-closed conversations cannot wake a
-fresh coordinator. With no main open, the toolbar action reads **Start
-coordinator**.
+A notice about a new event starts one too. A sweep of older state does not: it
+waits for the next main, so finished work from long-closed conversations cannot
+wake a fresh coordinator after a restart. See
+[Who hears a notice](#who-hears-a-notice). With no main open, the toolbar action
+reads **Start coordinator**.
 
 An open main that has never run has no agent until its first prompt, so it can
 neither read mail nor be woken for it. Mail from an agent in its own project, or
 a delegation wake, assigns it the default agent the same way, and mail already
-filed for it is delivered. A build-pipeline or review notice still does not
-start it. Until it has an agent, the conversation shows a banner saying the mail
-is waiting.
+filed for it is delivered. A new notice does too, but a sweep of older state and
+a machine-wide notice do not. Until it has an agent, the conversation shows a
+banner saying the mail is waiting.
 
 Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
 free number). A side agent reads the project and Orkestrator state (its
@@ -1699,8 +1814,12 @@ the main coordinator has four tools (capability `accounts`, plus
 - `set_account_auto_switch` changes the automatic-switching ticks, with no
   approval, because the backend then does the switching. On a leaf it refuses the
   shared ticks, which its command node holds, and can still end that leaf's pin. Each
-  automatic switch sends the main coordinator a notice. See
+  automatic switch sends the open main coordinators a notice, following
+  [Who hears a notice](#who-hears-a-notice). See
   [agent-accounts.md](agent-accounts.md#automatic-switching).
+
+A session stopping on a usage limit also tells a coordinator by itself; see
+[Usage-limit stop notices](#usage-limit-stop-notices).
 
 A self-timer carries that permission only when the main coordinator sets it
 with `authorizeAccountSwitch` in a turn the user started with their own

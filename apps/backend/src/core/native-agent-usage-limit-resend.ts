@@ -18,6 +18,11 @@
  *
  * Workflows have their own turns and results (see `usageLimitStop` on the
  * provider), and a coordinator's conversation is not a native tab.
+ *
+ * Every session a limit really stopped is also reported, whatever happens to it
+ * next: a resend, a wait, or nothing (auto-switch off, a coordinator's own turn,
+ * a provider without accounts). A turn the provider retried while the session
+ * carried on ends without a failed outcome, so it never gets this far.
  */
 import {
   usageLimitResendCount,
@@ -25,6 +30,7 @@ import {
   usageLimitResendRequestId,
   type UsageLimitStopVerdict,
 } from "@orkestrator/protocol/agent-account-auto-switch";
+import { classifyUsageLimitError } from "@orkestrator/protocol/agent-usage-limits";
 import { isAgentAccountPlatform } from "@orkestrator/protocol/agent-accounts";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
@@ -44,6 +50,15 @@ const RETRY_MS = 15_000;
 /** A stop still undecided after this stays stopped, and the queue it holds is let go. */
 export const USAGE_LIMIT_CANDIDATE_MAX_MS = 45 * 60_000;
 const MAX_TRACKED_SESSIONS = 1_024;
+const NOTICE_ONLY_ATTEMPTS = 3;
+
+/** The tab a native session belongs to, from its logical key. */
+function sessionTabId(session: PersistedNativeAgentSession): { tabId?: string } {
+  const prefix = `env-${session.environmentId}:`;
+  return session.logicalSessionKey.startsWith(prefix)
+    ? { tabId: session.logicalSessionKey.slice(prefix.length) }
+    : {};
+}
 
 /** The part of the auto-switcher a session needs; absent in tests and older wiring. */
 export interface UsageLimitStops {
@@ -57,7 +72,17 @@ export interface UsageLimitStops {
     resends: number;
     turnStartedAt?: string;
     siblingTurnRunning?: () => boolean;
+    session?: { tabId?: string; label?: string };
   }): Promise<UsageLimitStopVerdict>;
+  /** A turn a limit stopped that nothing here will resend. Absent in narrow doubles. */
+  noteUnresentStop?(input: {
+    platform: string;
+    environmentId: string;
+    requestId: string;
+    error: string | undefined;
+    turnStartedAt?: string;
+    session?: { tabId?: string; label?: string };
+  }): Promise<void>;
 }
 
 export interface NativeAgentUsageLimitResendDependencies {
@@ -94,6 +119,8 @@ type Candidate = {
 export class NativeAgentUsageLimitResend {
   private readonly candidates = new Map<string, Candidate>();
   private readonly tasks = new Map<string, Promise<void>>();
+  /** Reads for sessions that can only get a notice; they hold no queue, unlike `tasks`. */
+  private readonly noticeTasks = new Map<string, Promise<void>>();
   /** The newest request seen per session: a turn refused between two sweeps shows no busy state. */
   private readonly seenRequests = new Map<string, string>();
   /** When each session's newest request was first seen, in any state. */
@@ -117,13 +144,26 @@ export class NativeAgentUsageLimitResend {
     return this.candidates.has(key);
   }
 
+  /**
+   * Whether only a notice can come of this session's stop. Its queue is not held:
+   * it has no resend to wait for. Workflows report through their own provider.
+   */
+  private noticeOnly(session: PersistedNativeAgentSession): boolean {
+    if (this.appliesTo(session)) return false;
+    return (
+      session.owner?.kind === "coordinator" ||
+      coordinatorIdFromRuntimeId(session.environmentId) !== null ||
+      session.origin === "interactive-native"
+    );
+  }
+
   /** The queue holds its head back rather than parking it while a resend is decided. */
   isPending(key: string): boolean {
     return this.candidates.has(key) || this.tasks.has(key);
   }
 
   pendingTasks(): Promise<void>[] {
-    return [...this.tasks.values()];
+    return [...this.tasks.values(), ...this.noticeTasks.values()];
   }
 
   clear(): void {
@@ -139,10 +179,13 @@ export class NativeAgentUsageLimitResend {
     previous: AgentActivityState | undefined,
   ): void {
     const stops = this.deps.stops();
-    if (!stops || !isAgentAccountPlatform(session.agent)) return;
+    if (!stops) return;
     const turnEnded = isAgentTurnEndTransition({ previousState: previous, state });
-    if (turnEnded) stops.noteTurnEnded(session.agent);
-    if (!this.appliesTo(session)) return;
+    if (turnEnded && isAgentAccountPlatform(session.agent)) stops.noteTurnEnded(session.agent);
+    if (!this.appliesTo(session)) {
+      if (turnEnded && this.noticeOnly(session)) this.reportNoticeOnlyStop(session);
+      return;
+    }
     const requestId = session.dispatchedRequestIds?.at(-1);
     if (requestId && this.turnsSeen.get(session.key)?.requestId !== requestId) {
       if (!this.turnsSeen.has(session.key) && this.turnsSeen.size >= MAX_TRACKED_SESSIONS) {
@@ -179,6 +222,45 @@ export class NativeAgentUsageLimitResend {
       });
     }
     this.schedule(session);
+  }
+
+  /** One turn's end, looked at briefly: an unknown outcome is not a stop anyone can report. */
+  private reportNoticeOnlyStop(session: PersistedNativeAgentSession, attempt = 1): void {
+    const requestId = session.dispatchedRequestIds?.at(-1);
+    const stops = this.deps.stops();
+    if (!requestId || !stops?.noteUnresentStop || this.deps.isStopped()) return;
+    const key = `notice\0${session.key}\0${requestId}`;
+    if (this.noticeTasks.has(key)) return;
+    const task = this.deps
+      .requestOutcome({
+        environmentId: session.environmentId,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+        requestId,
+        expectedProviderSessionId: session.providerSessionId,
+      })
+      .then(async (outcome) => {
+        if (outcome.outcome === "pending" && attempt < NOTICE_ONLY_ATTEMPTS) {
+          const timer = setTimeout(() => this.reportNoticeOnlyStop(session, attempt + 1), RETRY_MS);
+          timer.unref?.();
+          return;
+        }
+        if (outcome.outcome !== "failed" || !classifyUsageLimitError(outcome.error)) return;
+        await stops.noteUnresentStop?.({
+          platform: session.agent,
+          environmentId: session.environmentId,
+          requestId,
+          error: outcome.error,
+          session: sessionTabId(session),
+        });
+      })
+      .catch(() => {
+        log.warn("usage-limit.notice-failed", { environmentId: session.environmentId });
+      })
+      .finally(() => {
+        if (this.noticeTasks.get(key) === task) this.noticeTasks.delete(key);
+      });
+    this.noticeTasks.set(key, task);
   }
 
   private schedule(session: PersistedNativeAgentSession): void {
@@ -221,7 +303,9 @@ export class NativeAgentUsageLimitResend {
     const stops = this.deps.stops();
     const platform = session.agent;
     if (!stops || !isAgentAccountPlatform(platform) || this.deps.isStopped()) return "done";
-    if (!(await stops.automatic(platform))) return "done";
+    const automatic = await stops.automatic(platform);
+    // With nothing to report to, a machine that is not switching has nothing to read.
+    if (!automatic && !stops.noteUnresentStop) return "done";
     const { requestId } = candidate;
     const durable = await this.deps.storage.getNativeAgentSession(session.key);
     if (
@@ -234,7 +318,8 @@ export class NativeAgentUsageLimitResend {
     // without changing the session's controls, and a planning turn must not come
     // back as Build. A turn with no such record stays stopped rather than guess.
     const stoppedTurn = durable.lastDispatchedTurn;
-    if (stoppedTurn?.requestId !== requestId) return "done";
+    const resendable = automatic && stoppedTurn?.requestId === requestId;
+    if (!resendable && !stops.noteUnresentStop) return "done";
     const environment = await this.deps.storage.getEnvironment(session.environmentId);
     if (!environment || environment.deletionRequestedAt) return "done";
 
@@ -249,13 +334,27 @@ export class NativeAgentUsageLimitResend {
     if (outcome.outcome !== "failed") return "done";
 
     const turn = this.turnsSeen.get(session.key);
+    const turnStartedAt =
+      turn?.requestId === requestId ? { turnStartedAt: new Date(turn.at).toISOString() } : {};
+    if (!resendable || !stoppedTurn) {
+      await stops.noteUnresentStop?.({
+        platform,
+        environmentId: session.environmentId,
+        requestId,
+        error: outcome.error,
+        ...turnStartedAt,
+        session: sessionTabId(session),
+      });
+      return "done";
+    }
     const verdict = await stops.handleLimitStop({
       platform,
       environmentId: session.environmentId,
       requestId,
       error: outcome.error,
       resends: usageLimitResendCount(requestId),
-      ...(turn?.requestId === requestId ? { turnStartedAt: new Date(turn.at).toISOString() } : {}),
+      ...turnStartedAt,
+      session: sessionTabId(session),
     });
     if (verdict === "stop") return "done";
     if (verdict === "wait") return "retry";

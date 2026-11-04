@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { connect } from "node:net";
-import { request as httpRequest } from "node:http";
+import { Agent, request as httpRequest } from "node:http";
 import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
 import { WebSocket } from "ws";
 import { nextTerminalControl, startGateway, websocketInbox } from "./gateway-test-harness.js";
@@ -8,35 +7,78 @@ import { nextTerminalControl, startGateway, websocketInbox } from "./gateway-tes
 /** Bun closes about a second after the 5 s default, so this idles past that close. */
 const PAST_DEFAULT_CLOSE_MS = 6_500;
 
+// Serve's upstream transport retires idle connections after 90 s. Exercise a
+// reusable connection near that boundary and beyond Bun's default 60 s
+// headersTimeout, without racing the client's own idle expiry.
+const SERVE_IDLE_CONN_TIMEOUT_MS = 90_000;
+const NEAR_SERVE_IDLE_CLOSE_MS = 85_000;
+
 describe("gateway connections idle past the default keep-alive close", () => {
-  test("the same connection serves another POST", async () => {
-    const invoke = mock(async () => ({ ok: true }));
-    const { info } = await startGateway({ backend: { invoke } });
-    const { hostname, port } = new URL(info.url);
-    const body = JSON.stringify({ command: "ping", args: {} });
-    const post =
-      `POST /__orkestrator/invoke HTTP/1.1\r\nHost: ${hostname}:${port}\r\n` +
-      `Authorization: Bearer ${info.token}\r\nContent-Type: application/json\r\n` +
-      `Content-Length: ${body.length}\r\n\r\n${body}`;
-    const socket = connect(Number(port), hostname);
-    let closed = false;
-    socket.once("close", () => (closed = true));
-    const nextResponse = () =>
-      new Promise<string>((resolve) => socket.once("data", (chunk) => resolve(String(chunk))));
+  test.each([PAST_DEFAULT_CLOSE_MS, NEAR_SERVE_IDLE_CLOSE_MS])(
+    "the same connection serves another POST after %i ms idle with a Serve-style idle timeout",
+    async (idleMs) => {
+      const invoke = mock(async () => ({ ok: true }));
+      const { info } = await startGateway({ backend: { invoke } });
+      const endpoint = new URL(`${info.url}__orkestrator/invoke`);
+      const body = JSON.stringify({ command: "ping", args: {} });
+      const agent = new Agent({
+        keepAlive: true,
+        maxSockets: 1,
+        maxFreeSockets: 1,
+        timeout: SERVE_IDLE_CONN_TIMEOUT_MS,
+      });
+      const post = () =>
+        new Promise<{ status: number | undefined; socket: unknown; reused: boolean }>(
+          (resolve, reject) => {
+            const request = httpRequest(
+              endpoint,
+              {
+                agent,
+                method: "POST",
+                signal: AbortSignal.timeout(5_000),
+                headers: {
+                  authorization: `Bearer ${info.token}`,
+                  "content-type": "application/json",
+                  "content-length": Buffer.byteLength(body),
+                },
+              },
+              (response) => {
+                const socket = response.socket;
+                response.on("error", reject);
+                response.on("end", () =>
+                  resolve({
+                    status: response.statusCode,
+                    socket,
+                    reused: request.reusedSocket,
+                  }),
+                );
+                response.resume();
+              },
+            );
+            request.on("error", reject);
+            request.end(body);
+          },
+        );
 
-    const first = nextResponse();
-    socket.write(post);
-    expect(await first).toStartWith("HTTP/1.1 200");
+      try {
+        const first = await post();
+        expect(first.status).toBe(200);
+        expect(first.reused).toBe(false);
 
-    await Bun.sleep(PAST_DEFAULT_CLOSE_MS);
-    expect(closed).toBe(false);
+        await Bun.sleep(idleMs);
 
-    const second = nextResponse();
-    socket.write(post);
-    expect(await second).toStartWith("HTTP/1.1 200");
-    socket.destroy();
-    expect(invoke).toHaveBeenCalledTimes(2);
-  }, 15_000);
+        const second = await post();
+        expect(second.status).toBe(200);
+        // A successful request on a replacement connection hides the regression.
+        expect(second.reused).toBe(true);
+        expect(second.socket).toBe(first.socket);
+        expect(invoke).toHaveBeenCalledTimes(2);
+      } finally {
+        agent.destroy();
+      }
+    },
+    NEAR_SERVE_IDLE_CLOSE_MS + 15_000,
+  );
 
   test("a quiet event stream and terminal WebSocket stay open and deliver", async () => {
     // No keepalive frame may hide a stream that the idle close has ended.

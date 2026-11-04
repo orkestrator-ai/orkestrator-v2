@@ -6,7 +6,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Tasks
 
-1. **Decide on multiplexing**: whether to run several streams over one socket per attachment. Status: open.
+1. **Decide on multiplexing**: whether to run several streams over one socket per attachment. Status: done (2026-11-04: multiplexed as tunnel v2, see [4500](../../todo/cross-cutting/4500-preview-tunnel-one-socket-per-connection.md)).
 
 ### 1. Decide on multiplexing
 

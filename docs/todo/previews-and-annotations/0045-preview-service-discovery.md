@@ -18,7 +18,7 @@ spec or dev-test fixture set an `entryPort` yet. Task 1 was acted on that day.
    with two local environments and real dev servers. Status: done (2026-11-03):
    all five checks pass on macOS in
    `e2e/agent-testing/service-preview-seeded-electron.spec.ts`; the restart
-   check found a timing gap, now
+   check found a timing gap, fixed in
    [3230](3230-restart-inside-verification-window.md). See **Assumptions and
    decisions**, D10–D14.
 2. **`orkestrator environment exec` as a managed root**: the open question,
@@ -263,11 +263,10 @@ environments", §"Diagnostics" and §"Framework configuration".
   3. After Ctrl-C and the same command in A's terminal, the fixture client
      polls and renders the new process in its visible heading. The document
      identity stays unchanged. The endpoint generation advances, and an
-     attachment issued at the old generation is specifically refused on renewal. This holds only once the registry's
-     5 s verification window has passed since the last verified connection: a
-     restart faster than that was observed reaching the new process at the old
-     generation, with no revocation. See D12 and
-     [3230](3230-restart-inside-verification-window.md).
+     attachment issued at the old generation is specifically refused on renewal.
+     Until [3230](3230-restart-inside-verification-window.md) this held only
+     once the registry's 5 s verification window had passed; the check now
+     restarts with no wait. See D12.
   4. A plain click on a `localhost` link in an agent reply opens the system
      browser (captured in the main process, never launched); ⌘⇧-click opens a
      preview tab in that environment bound to its seeded service, showing its
@@ -332,8 +331,10 @@ a listener owned by another OS user is invisible (`none` or `unattributed`).
 binding key.** Options: record the pid only; pid and start time; a durable
 record. **Chosen:** pid and start time, in memory per backend epoch. Pros: a
 restart or pid reuse changes the key and revokes old attachments; nothing
-durable to go stale. Cons: an attribution is reused for the existing 5-second
-verification window, as container bindings are.
+durable to go stale. Cons: an attribution was reused for the existing 5-second
+verification window, as container bindings are; since
+[3230](3230-restart-inside-verification-window.md) a new connection inside the
+window also compares the listener's pids.
 
 **D4. Linux without `lsof`: fall back to `ss`.** The Debian image used for
 containers lacks `lsof`, as do minimal Linux installs; `ss` (iproute2) is
@@ -409,13 +410,11 @@ rendered marker alongside a document identity sentinel (recommended).
 body dataset. The test requires the new marker, unchanged document identity,
 unchanged tab URL, a newer generation and specifically `access-expired` or
 `generation-changed` on old-attachment renewal. Unrelated errors fail.
-The normal restart check still allows the verification window to expire.
-Check 6 separately restarts within five seconds and expects only the generation
-assertion to fail under [3230](3230-restart-inside-verification-window.md).
+Check 6 separately restarts within five seconds and requires a newer
+generation, the guard for [3230](3230-restart-inside-verification-window.md),
+which also removed the restart wait from check 3.
 The fixture closes each health response so polling opens new connections
 and exercises tunnel revalidation rather than indefinitely reusing a socket.
-Setup, process identity and timing assertions run before the expected-failure
-annotation, so they cannot masquerade as the known defect.
 
 **D13. Task 1, the agent reply is the real `MessageMarkdown`, not a live agent
 turn.** Options: (a) drive a real agent to print the link; (b) render the real
@@ -447,7 +446,7 @@ therefore the ownership root are the ones **Run** created.
 ## Related
 
 - [3230-restart-inside-verification-window.md](3230-restart-inside-verification-window.md)
-  (a restart inside the 5 s verification window keeps the old generation).
+  (a restart inside the 5 s verification window kept the old generation; fixed).
 - [0042-service-preview-rollout.md](0042-service-preview-rollout.md) (transports,
   qualification and legacy route).
 - [browser-previews.md](../../architecture/browser-previews.md) §"Local
@@ -472,6 +471,7 @@ therefore the ownership root are the ones **Run** created.
 Chose a polling fixture client with a document sentinel over transport-only
 assertions because the acceptance criterion requires a visible update. Kept
 production ownership behavior unchanged and added a narrowly annotated
-expected-failure fast-restart check for 3230. Chose an actual AgentNativeTab
+expected-failure fast-restart check for 3230 (annotation removed when 3230 was
+fixed). Chose an actual AgentNativeTab
 component with synthetic projection data to cover its context provider without
 credentials or billing; the Electron check still owns the end-to-end chooser.

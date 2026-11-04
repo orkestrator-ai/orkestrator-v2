@@ -50,7 +50,7 @@ export interface PreviewTargetResolverOptions {
    * Who listens on a backend-loopback port (`preview-listener-ownership.ts`).
    * Without it every loopback target is `user-registered` and `unchecked`.
    */
-  listenerOwnership?: Pick<LoopbackListenerOwnership, "attribute" | "stats">;
+  listenerOwnership?: Pick<LoopbackListenerOwnership, "attribute" | "listenerPids" | "stats">;
 }
 
 export interface ContainerInspection {
@@ -195,6 +195,10 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
       inflightInspections: this.inflightInspections,
       ...this.options.listenerOwnership?.stats(),
     };
+  }
+
+  async listenerPids(target: ResolvedPreviewTarget): Promise<readonly number[] | null> {
+    return this.options.listenerOwnership?.listenerPids(target.port, target.addressFamily) ?? null;
   }
 
   async resolve(
@@ -468,7 +472,7 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
     else family = "ipv4";
     const target = (
       ownership: "user-registered" | "managed-process",
-      processKey?: string,
+      owner?: { processKey: string; listenerPids: readonly number[] },
     ): ResolvedPreviewTarget => ({
       transportKind: "backend-loopback",
       host: family === "ipv6" ? "::1" : "127.0.0.1",
@@ -476,7 +480,8 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
       addressFamily: family,
       containerId: null,
       ownership,
-      bindingKey: `loopback:${family}:${port}${processKey ? `:process:${processKey}` : ""}`,
+      bindingKey: `loopback:${family}:${port}${owner ? `:process:${owner.processKey}` : ""}`,
+      ...(owner ? { listenerPids: owner.listenerPids } : {}),
       tls:
         definition.scheme === "https"
           ? { servername: definition.tlsServerName ?? "localhost" }
@@ -487,7 +492,7 @@ export class PreviewTargetResolver implements PreviewTargetResolverPort {
       : ({ attribution: "unchecked", retryable: false } as const);
     const listener = found.attribution;
     if (found.attribution === "this-environment") {
-      return { ok: true, target: target("managed-process", found.processKey), listener };
+      return { ok: true, target: target("managed-process", found), listener };
     }
     if (listener === "other-environment" && definition.targetKind === "worktree") {
       return {

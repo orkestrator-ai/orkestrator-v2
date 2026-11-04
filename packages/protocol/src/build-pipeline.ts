@@ -1431,6 +1431,12 @@ export interface BuildPipeline {
   reviewRetryRequested?: boolean;
   /** Selected historical stage to start again on the next supervisor pass. */
   restartRequest?: PipelineRestartRequest;
+  /** Bounded durable coordinator deduplication; never evict identities of prior mutations. */
+  coordinatorRestarts?: Array<{
+    key: string;
+    intent: string;
+    step: { phase: string; round: number; sessionKey?: string; label?: string };
+  }>;
   /** Skipped stage whose successor opens on the next supervisor pass. */
   skipRequest?: PipelineSkipRequest;
   /**
@@ -1532,16 +1538,15 @@ export const BUILD_CANCELLED_ERROR = "Build cancelled";
 
 /**
  * True when a `failed` pipeline was stopped by someone's cancel rather than by
- * an error: cancel ends in `failed` with {@link BUILD_CANCELLED_ERROR} and no
- * failure context.
+ * an error. A cancellation marker remains authoritative even if a preceding
+ * step failure left a failure context.
  */
 export function isCancelledBuildPipeline(
-  pipeline: Pick<BuildPipeline, "phase" | "error" | "failureContext">,
+  pipeline: Pick<BuildPipeline, "phase" | "error" | "failureContext" | "cancelledAt">,
 ): boolean {
   return (
     pipeline.phase === "failed" &&
-    !pipeline.failureContext &&
-    (pipeline.error?.startsWith(BUILD_CANCELLED_ERROR) ?? false)
+    (Boolean(pipeline.cancelledAt) || (pipeline.error?.startsWith(BUILD_CANCELLED_ERROR) ?? false))
   );
 }
 
@@ -2343,6 +2348,27 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
             isUserMessage(entry) && isRecord(entry) && isNonBlankString(entry.requestId),
         ))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
+    (value.coordinatorRestarts !== undefined &&
+      (!Array.isArray(value.coordinatorRestarts) ||
+        value.coordinatorRestarts.length > 1024 ||
+        !value.coordinatorRestarts.every((entry: unknown) => {
+          if (!isRecord(entry) || !isRecord(entry.step)) return false;
+          return (
+            typeof entry.key === "string" &&
+            /^[a-f0-9]{64}$/.test(entry.key) &&
+            typeof entry.intent === "string" &&
+            /^[a-f0-9]{64}$/.test(entry.intent) &&
+            typeof entry.step.phase === "string" &&
+            entry.step.phase.length <= 100 &&
+            Number.isInteger(entry.step.round) &&
+            (entry.step.round as number) > 0 &&
+            (entry.step.sessionKey === undefined ||
+              (typeof entry.step.sessionKey === "string" &&
+                entry.step.sessionKey.length <= 1024)) &&
+            (entry.step.label === undefined ||
+              (typeof entry.step.label === "string" && entry.step.label.length <= 1024))
+          );
+        }))) ||
     (value.restartRequest !== undefined && !isPipelineRestartRequest(value.restartRequest)) ||
     (value.skipRequest !== undefined && !isPipelineSkipRequest(value.skipRequest)) ||
     !isOptionalNonBlankString(value.skippedValidationRunId) ||

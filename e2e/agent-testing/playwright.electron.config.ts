@@ -26,6 +26,7 @@ export default defineConfig({
     "design-canvas-electron.spec.ts",
     "workspace-realm-electron.spec.ts",
     "connection-outage-electron.spec.ts",
+    "local-gateway-transport-electron.spec.ts",
     "renderer-log-boundary-electron.spec.ts",
     "pull-request-pane-electron.spec.ts",
   ],

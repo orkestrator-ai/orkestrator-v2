@@ -376,7 +376,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * refreshes the "behind" state with a cooldown-bound fetch and decides
    * whether the upstream commits can be merged
    * (`check_coordinator_upstream_merge`). Whenever Git can fast-forward the
-   * checkout cleanly, the panel does so without asking.
+   * checkout cleanly, the panel does so without asking. When the fetch is
+   * slow or fails, the backend itself fast-forwards to the upstream commit
+   * already fetched and answers `fast-forwarded`, so a slow remote does not
+   * leave the checkout behind commits it already has.
    *
    * Merging resolves only after the fast-forward, so the message then reads
    * the merged code. A fast-forward that fails anyway (the remote moved, the
@@ -449,6 +452,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           }),
         ]).finally(() => clearTimeout(timer));
         if (lifetime.signal.aborted || check === false) return false;
+        if (check && !check.offer && check.reason === "fast-forwarded") {
+          // The backend already merged what it had fetched; the header has the
+          // status, and the view picks up the new commit before sending.
+          await refreshView().catch(() => undefined);
+          return lifetime.signal.aborted ? false : undefined;
+        }
         if (!check?.offer) return;
         setOperation("sync");
         setError(null);

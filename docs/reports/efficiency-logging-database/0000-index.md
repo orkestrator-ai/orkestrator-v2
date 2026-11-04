@@ -265,12 +265,12 @@ When one of these becomes ready, it joins the lane shown.
 | BG-13 | Done | Queued sync shared by later callers, `pr-monitor-runtime.ts:116`, `:169-170` (5254f8e27); the project-scoped alternative was not needed. |
 | BG-14 | Open | Whole file read, `tmux-session-manager.ts:284-311`; see 0690. |
 | BG-15 | No action | The whole-store reads have gone, as the report predicted; what repeats is keyed reads and a deliberate fresh probe, `prompt-queue-drainer.ts:115-170`, kept by 1202's task 10 record and its recommendation to leave it. |
-| DK-1 | Open | Unfiltered stream, `backend-process.ts:662-663`; see 0400. |
-| DK-2 | Open | Four serialisations remain, `ipc.ts:297-305`, `backend-process.ts:490-506`; see 0400. |
+| DK-1 | Partly done | Local windows on the filtered gateway transport behind a setting that is off by default (2026-11-04, 1202 task 12); the default flip is todo 4501; see 0400. |
+| DK-2 | Partly done | Two serialisations per invoke on the gateway transport, behind the same off-by-default setting (2026-11-04, 1202 task 12); see 0400. |
 | DK-3 | Done | `file-stamps.ts:34` (da0f720fa). |
 | DK-4 | Done | Idle timeout and `Range:` resume, `download.ts:8-14` (da0f720fa). |
-| DK-5 | Open | Data URLs, `browser-preview-capture-image.ts:45-69`, `browser-preview-capture-store.ts:736-739`; see 0691. |
-| DK-6 | Open | One socket per stream, `preview-tunnel-client.ts:130-150`; see 0692. |
+| DK-5 | Done | Capture images cross IPC as bytes (2026-11-04, 1202 task 12); region crops still cross as data URLs; see 0691. |
+| DK-6 | Done | Tunnel v2 multiplexes an attachment's connections over one socket, `preview-tunnel-session.ts`, `preview-tunnel-mux-server.ts` (2026-11-04, todo 4500); see 0692. |
 | DK-7 | Done | Order and split SDK layers, `docker/Dockerfile:40-65`, `:421-423` (fd679c0e2). |
 | DK-8 | Done | `mise link`, `docker/Dockerfile:399` (fd679c0e2). |
 | DK-9 | Done | `npm cache clean --force`, `docker/Dockerfile:218`, `:247`, `:321` (fd679c0e2). |

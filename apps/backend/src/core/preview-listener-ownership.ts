@@ -19,6 +19,8 @@ export type ListenerOwnership =
       attribution: "this-environment";
       /** Digest of the listener pid and its start time: changes whenever the server restarts. */
       processKey: string;
+      /** The listener pids, sorted: what a later port lookup is compared with. */
+      listenerPids: number[];
     }
   | {
       attribution: Exclude<PreviewListenerAttribution, "this-environment">;
@@ -56,6 +58,10 @@ export function parseLsofPids(stdout: string): number[] {
     if (match) pids.add(Number(match[1]));
   }
   return Array.from(pids);
+}
+
+function sortedPids(pids: number[]): number[] {
+  return [...pids].sort((a, b) => a - b);
 }
 
 /** Only sockets capable of serving the selected loopback address participate.
@@ -132,6 +138,7 @@ export class LoopbackListenerOwnership {
   private readonly timeoutMs: number;
   private processList: { at: number; promise: Promise<Map<number, ListedProcess>> } | null = null;
   private readonly inflight = new Map<string, Promise<ListenerOwnership>>();
+  private readonly inflightLookups = new Map<string, Promise<number[] | null>>();
   private checks = 0;
   private unchecked = 0;
 
@@ -161,6 +168,30 @@ export class LoopbackListenerOwnership {
     });
     this.inflight.set(key, promise);
     return promise;
+  }
+
+  /**
+   * Who listens on this port now, sorted, from the port lookup alone: there is
+   * no process listing, so this says nothing about ownership. `null` when the
+   * backend cannot tell. Coalesced per port and family.
+   */
+  listenerPids(port: number, family: "ipv4" | "ipv6"): Promise<number[] | null> {
+    const key = `${family}\0${port}`;
+    const pending = this.inflightLookups.get(key);
+    if (pending) return pending;
+    const promise = this.lookUpPids(port, family).finally(() => {
+      if (this.inflightLookups.get(key) === promise) this.inflightLookups.delete(key);
+    });
+    this.inflightLookups.set(key, promise);
+    return promise;
+  }
+
+  private async lookUpPids(port: number, family: "ipv4" | "ipv6"): Promise<number[] | null> {
+    if (this.platform !== "darwin" && this.platform !== "linux") return null;
+    const found = await this.findListeners(port, family);
+    // A listener whose process is hidden could be anyone's.
+    if ("retryable" in found || found.anonymous) return null;
+    return sortedPids(found.pids);
   }
 
   private async check(
@@ -206,7 +237,7 @@ export class LoopbackListenerOwnership {
       .update(`${leader}\0${processes.get(leader)?.started ?? ""}`)
       .digest("hex")
       .slice(0, 16);
-    return { attribution: "this-environment", processKey };
+    return { attribution: "this-environment", processKey, listenerPids: sortedPids(listeners) };
   }
 
   /**

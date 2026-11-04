@@ -398,12 +398,13 @@ conversation is mounted.
 
 ## Activity indicator
 
-While a coordinator works, its icons carry the same spinner an environment
-row's marker draws: the **Coordinator** tab in the project navigation, and the
-leading icon of the project's sidebar heading (the coordinator's own icon when
-the project has none, shown only while it is active). A conversation waiting
-on the user pulses yellow instead; working outranks waiting across a project's
-open conversations, main and side agents alike.
+While a coordinator works, it shows the same spinner an environment row's
+marker draws: around the whole **Coordinator** tab in the project navigation,
+and around the leading icon of the project's sidebar heading (the coordinator's
+own icon when the project has none, shown only while it is active). A
+conversation waiting on the user pulses yellow on those same icons instead;
+working outranks waiting across a project's open conversations, main and side
+agents alike.
 
 The state comes from the backend's activity observer, the same observation
 mail delivery and the environment markers read

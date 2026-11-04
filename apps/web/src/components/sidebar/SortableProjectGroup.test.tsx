@@ -177,6 +177,8 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
       .getByTestId("coordinator-activity-ring")
       .className.includes("environment-working-spinner"),
   ).toBe(true);
+  // The row keeps its icon ring; only the toolbar tab circles itself.
+  expect(within(row).queryByTestId("coordinator-working-outline") === null).toBe(true);
   const description = row.getAttribute("aria-describedby")!.split(" ").at(-1)!;
   expect(document.getElementById(description)?.textContent).toBe("Coordinator working");
 
@@ -197,4 +199,39 @@ test("a working coordinator rings the project's icon, and shows its own icon whe
     expect(within(row).queryByTestId("coordinator-activity-icon") === null).toBe(true),
   );
   expect(row.getAttribute("aria-describedby")?.includes(description) ?? false).toBe(false);
+});
+
+test("a waiting coordinator's halo stays on the project's icon", async () => {
+  const project = { id: "project", name: "Checkout", gitUrl: "", order: 0 } as Project;
+  invokeMock.mockImplementation(async (command: string) =>
+    command === COORDINATOR_ACTIVITY_COMMAND ? { projects: { project: "waiting" } } : undefined,
+  );
+  const noop = () => {};
+  render(
+    <SortableProjectGroup
+      project={project}
+      environments={[]}
+      isCollapsed
+      isSelected={false}
+      selectedEnvironmentId={null}
+      onToggleCollapse={noop}
+      onSelectProject={noop}
+      onSelectEnvironment={noop}
+      onDeleteProject={noop}
+      onOpenSettings={noop}
+      onDeleteEnvironment={noop}
+      onStartEnvironment={noop}
+      onStopEnvironment={noop}
+      onRestartEnvironment={noop}
+      onCreateEnvironment={noop}
+    />,
+  );
+  const row = screen.getByRole("button", { name: "Checkout" });
+  await waitFor(() =>
+    expect(within(row).getByTestId("coordinator-activity-icon").getAttribute("data-state")).toBe(
+      "waiting",
+    ),
+  );
+  expect(within(row).getByTestId("coordinator-activity-ring").className).toContain("animate-pulse");
+  expect(within(row).queryByTestId("coordinator-working-outline") === null).toBe(true);
 });

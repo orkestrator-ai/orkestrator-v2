@@ -608,6 +608,21 @@ export function nativeSubmissionText(prompt: string, command?: NativeAgentComman
  * authoritative snapshots, treats resource events as invalidation hints, and
  * keeps transient button state local.
  */
+/**
+ * The session's sync and progressive cache entries, read without subscribing.
+ * They only seed the state and refs of `useNativeAgentSession` when it first
+ * runs, and a change of session resets from `getState()`. Subscribing would
+ * re-render the whole tab for every token that hook writes back, with nothing
+ * new to show.
+ */
+function useSessionCacheSeeds(sessionKey: string) {
+  const { syncCaches, progressiveCaches } = useNativeAgentProjectionStore.getState();
+  return {
+    sharedSyncCache: syncCaches.get(sessionKey),
+    sharedProgressiveCache: progressiveCaches.get(sessionKey),
+  };
+}
+
 export function useNativeAgentSession<TMessage = unknown>({
   platform,
   environmentId,
@@ -653,12 +668,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   const sharedProjection = useNativeAgentProjectionStore((state) =>
     state.projections.get(sessionKey),
   ) as NativeAgentSessionProjection<TMessage> | undefined;
-  const sharedSyncCache = useNativeAgentProjectionStore((state) =>
-    state.syncCaches.get(sessionKey),
-  );
-  const sharedProgressiveCache = useNativeAgentProjectionStore((state) =>
-    state.progressiveCaches.get(sessionKey),
-  );
+  const { sharedSyncCache, sharedProgressiveCache } = useSessionCacheSeeds(sessionKey);
   const matchingSharedProjection =
     sharedProjection?.platform === platform &&
     sharedProjection.environmentId === environmentId &&

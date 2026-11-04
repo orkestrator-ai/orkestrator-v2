@@ -1,8 +1,12 @@
+import { useLayoutEffect } from "react";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { mailMarkdownComponents } from "./mail-markdown-components";
 
 /** A mail body as Markdown; `AgentMailBody` loads this the first time a thread is read. */
-export function AgentMailMarkdown({ body }: { body: string }) {
+export function AgentMailMarkdown({ body, onRendered }: { body: string; onRendered?: () => void }) {
+  useLayoutEffect(() => {
+    onRendered?.();
+  }, [body, onRendered]);
   return (
     <MessageMarkdown
       content={body}

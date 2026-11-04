@@ -1,3 +1,4 @@
+import { cachedArtifactSearchBody, rememberArtifactSearchBody } from "@/lib/chat/artifact-requests";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { useRef, type ChangeEvent } from "react";
 import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
@@ -125,4 +126,32 @@ describe("useAgentChatFind indexing (WEB-10)", () => {
     rerender({ items: structuredClone(items), isActive: true });
     expect(getSearchText).toHaveBeenCalledTimes(2);
   });
+});
+
+test("unchanged artifact rows refresh body text after publication and withdrawal", () => {
+  const items = [{ id: "artifact-row", parts: [{ type: "artifact", content: "summary" }] }];
+  const artifact = { publicationId: "search-test", artifactId: "artifact-test", revision: 1 };
+  const getSearchText = () => `summary ${cachedArtifactSearchBody(artifact) ?? ""}`;
+  const hook = renderHook(() =>
+    useAgentChatFind({
+      items,
+      getSearchText,
+      isActive: true,
+      ownerRef: useRef<HTMLElement | null>(null),
+      onNavigate: () => {},
+    }),
+  );
+  fireEvent.keyDown(document, { key: "f", metaKey: true });
+  const query = (value: string) =>
+    act(() =>
+      hook.result.current.onQueryChange({ target: { value } } as ChangeEvent<HTMLInputElement>),
+    );
+  query("body");
+  expect(hook.result.current.matches).toHaveLength(0);
+  rememberArtifactSearchBody(artifact, "body loaded");
+  query("loaded");
+  expect(hook.result.current.matches).toHaveLength(1);
+  rememberArtifactSearchBody(artifact, null);
+  query("body");
+  expect(hook.result.current.matches).toHaveLength(0);
 });

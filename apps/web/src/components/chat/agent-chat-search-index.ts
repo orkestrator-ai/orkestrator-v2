@@ -28,8 +28,11 @@ export class AgentChatSearchIndex<TItem> {
     const texts = items.map((item, index) => {
       const key = itemKey(item, index);
       const held = this.entries.get(key);
+      // Artifact bodies are external projections: publication/withdrawal need not change the row.
+      const parts = (item as { parts?: Array<{ type?: string }> } | null)?.parts;
+      const externalText = parts?.some((part) => part.type === "artifact");
       const text =
-        held && (held.item === item || sameTranscriptJson(held.item, item))
+        !externalText && held && (held.item === item || sameTranscriptJson(held.item, item))
           ? held.text
           : getSearchText(item);
       next.set(key, { item, text });

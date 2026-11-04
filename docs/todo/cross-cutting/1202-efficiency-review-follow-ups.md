@@ -197,7 +197,7 @@ No React Profiler run was made; the numbers are render counts from tests.
 
 Re-checked against `main` at `96ee1eb3e` first. All five still applied, in places differently from the report. Each landed as its own commit. Every change has a test that fails on the previous code, except the WEB-9 sizes and the timings, which are measurements.
 
-**WEB-9, startup bundle.** Measured from a production build's manifest: `index.html`'s static imports plus `renderer-entry` (which `main.tsx` always imports) and its static imports. To reproduce: `bunx vite build --manifest && bun run scripts/startup-closure.ts` in `apps/web`.
+**WEB-9, startup bundle.** Measured from a production build's manifest: `index.html`'s static imports plus `renderer-entry` (which `main.tsx` always imports) and its static imports. To reproduce: `bunx vite build --manifest && bun scripts/startup-closure.ts` in `apps/web`.
 
 | Startup closure | Chunks | JavaScript | Gzip | CSS |
 | --- | --- | --- | --- | --- |

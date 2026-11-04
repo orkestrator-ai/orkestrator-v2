@@ -1,3 +1,4 @@
+import { createXtermTerminal } from "../../apps/web/src/lib/terminal-xterm";
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import type { BrowserPreviewServiceTarget } from "@orkestrator/protocol/browser-preview";
@@ -81,11 +82,14 @@ export function TerminalLinksFixture() {
       setInternal((current) => [...current, request]);
     });
     const store = useTerminalPortalStore.getState();
-    const data = store.createTerminal({
-      environmentId: "osc-environment",
-      tabId: "osc-source-tab",
-      containerId: null,
-    });
+    const data = store.createTerminal(
+      {
+        environmentId: "osc-environment",
+        tabId: "osc-source-tab",
+        containerId: null,
+      },
+      createXtermTerminal,
+    );
     const terminal = data.terminal;
     terminal.open(hostRef.current!);
     terminal.resize(30, 5);

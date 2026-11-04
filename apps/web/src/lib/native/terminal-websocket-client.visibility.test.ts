@@ -63,7 +63,7 @@ const CALLBACKS = {
   onChannelUnavailable: () => undefined,
 };
 
-function subscribedHarness(mobileHost: boolean) {
+function subscribedHarness(mobileHost?: boolean) {
   let now = 1_000_000;
   const sockets: MockWebSocket[] = [];
   const unavailable = mock((_sessionId: string) => undefined);
@@ -182,4 +182,48 @@ describe("terminal WebSocket on returning to the page (WEB-11)", () => {
     expect(sockets[0]!.closes.at(-1)?.reason).toBe("Foreground reconciliation");
     expect(sockets).toHaveLength(2);
   });
+});
+
+const navigatorDescriptors = new Map(
+  ["userAgentData", "userAgent", "platform", "maxTouchPoints"].map((key) => [
+    key,
+    Object.getOwnPropertyDescriptor(navigator, key),
+  ]),
+);
+afterEach(() => {
+  for (const [key, descriptor] of navigatorDescriptors) {
+    if (descriptor) Object.defineProperty(navigator, key, descriptor);
+    else Reflect.deleteProperty(navigator, key);
+  }
+});
+test.each([
+  [
+    { userAgentData: { mobile: true }, userAgent: "Desktop", platform: "Linux", maxTouchPoints: 0 },
+    true,
+  ],
+  [
+    {
+      userAgentData: { mobile: false },
+      userAgent: "Android",
+      platform: "Linux",
+      maxTouchPoints: 0,
+    },
+    true,
+  ],
+  [{ userAgentData: undefined, userAgent: "iPhone", platform: "iPhone", maxTouchPoints: 1 }, true],
+  [
+    { userAgentData: undefined, userAgent: "Safari", platform: "MacIntel", maxTouchPoints: 5 },
+    true,
+  ],
+  [
+    { userAgentData: undefined, userAgent: "Safari", platform: "MacIntel", maxTouchPoints: 0 },
+    false,
+  ],
+] as const)("detects foreground policy from navigator %j", async (host, mobile) => {
+  for (const [key, value] of Object.entries(host))
+    Object.defineProperty(navigator, key, { configurable: true, value });
+  const { sockets, hideFor } = subscribedHarness();
+  hideFor(MOBILE_FOREGROUND_REBUILD_AFTER_HIDDEN_MS);
+  await Promise.resolve();
+  expect(sockets).toHaveLength(mobile ? 2 : 1);
 });

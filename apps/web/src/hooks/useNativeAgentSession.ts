@@ -602,13 +602,6 @@ export function nativeSubmissionText(prompt: string, command?: NativeAgentComman
 }
 
 /**
- * The shared native-agent lifecycle controller.
- *
- * Long-running authority stays in the backend. This hook only installs full
- * authoritative snapshots, treats resource events as invalidation hints, and
- * keeps transient button state local.
- */
-/**
  * The session's sync and progressive cache entries, read without subscribing.
  * They only seed the state and refs of `useNativeAgentSession` when it first
  * runs, and a change of session resets from `getState()`. Subscribing would
@@ -623,6 +616,13 @@ function useSessionCacheSeeds(sessionKey: string) {
   };
 }
 
+/**
+ * The shared native-agent lifecycle controller.
+ *
+ * Long-running authority stays in the backend. This hook only installs full
+ * authoritative snapshots, treats resource events as invalidation hints, and
+ * keeps transient button state local.
+ */
 export function useNativeAgentSession<TMessage = unknown>({
   platform,
   environmentId,

@@ -183,7 +183,7 @@ export class ChangeRetentionService {
         continue;
       }
       reachable.add(snapshot.tree_oid);
-      const manifest = await readManifest(store, snapshot.tree_oid);
+      const manifest = await readManifest(store, snapshot.tree_oid, { scan: true });
       for (const entry of manifest?.entries ?? []) if (entry.m !== "160000") reachable.add(entry.o);
     }
     // Live-detail blobs are referenced by diff identities, not snapshots.

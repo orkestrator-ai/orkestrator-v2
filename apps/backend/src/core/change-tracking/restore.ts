@@ -19,6 +19,7 @@ import { runCommandBuffer } from "../shell.js";
 import {
   decodePath,
   displayPath,
+  findManifestEntry,
   readManifest,
   type Manifest,
   type ReadRecord,
@@ -207,7 +208,7 @@ export class ChangeRestoreService {
   ) {}
 
   private manifestEntry(manifest: Manifest, pathId: string | null) {
-    return pathId ? (manifest.entries.find((entry) => entry.p === pathId) ?? null) : null;
+    return pathId ? findManifestEntry(manifest.entries, pathId) : null;
   }
 
   async prepare(input: {

@@ -46,6 +46,7 @@ import {
   decodePath,
   displayPath,
   encodePath,
+  findManifestEntry,
   readManifest,
   SAFE_GIT_CONFIG,
   type ManifestEntry,
@@ -165,11 +166,7 @@ export class DiffBodyService {
           pathId: string | null,
           blob: string | null,
         ): ManifestEntry | null =>
-          pathId
-            ? (manifest.entries.find(
-                (candidate) => candidate.p === pathId && (!blob || candidate.o === blob),
-              ) ?? null)
-            : null;
+          pathId ? findManifestEntry(manifest.entries, pathId, blob) : null;
         const files: SnapshotFileChange[] = rows.map((row) => ({
           pathId: row.path_id,
           oldPathId: row.old_path,
@@ -326,23 +323,12 @@ export class DiffBodyService {
     if (!ignoreWhitespace) return renderSnapshotBodies(this.deps.store, files, budget);
     const bodies: ChangeDiffFileBody[] = [];
     for (const file of files) {
-      const [rendered] = await renderSnapshotBodies(this.deps.store, [file], budget);
-      if (!rendered || rendered.fileKind !== "text" || !file.oldEntry || !file.newEntry) {
-        if (rendered) bodies.push(rendered);
-        continue;
-      }
-      const oldBytes = await this.deps.store.get(file.oldEntry.o);
-      const newBytes = await this.deps.store.get(file.newEntry.o);
-      if (!oldBytes || !newBytes) {
-        bodies.push(rendered);
-        continue;
-      }
-      const diff = diffRawLines(oldBytes, newBytes, budget, undefined, { ignoreWhitespace: true });
-      bodies.push({
-        ...rendered,
-        hunks: diff.kind === "diff" ? diff.hunks : [],
-        truncated: diff.kind !== "diff" || diff.truncated,
-      });
+      bodies.push(
+        ...(await renderSnapshotBodies(this.deps.store, [file], {
+          ...budget,
+          ignoreWhitespace: true,
+        })),
+      );
     }
     return bodies;
   }

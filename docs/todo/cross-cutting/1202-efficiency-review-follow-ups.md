@@ -32,7 +32,7 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13 to ST-15 and ST-17 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -465,6 +465,28 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 Done on 2026-11-04: ST-3 (`ObjectStore.reuse` leaves a fence younger than half the orphan grace alone, and the closure check skips objects proven present in the pass; `capture-orphan-fence.test.ts`, [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup") and ST-16's minimum gap (`LOCAL_SCAN_MIN_GAP_MS`; `worktree-snapshots.test.ts` "minimum scan gap", [git-scan-caches.md](../../architecture/git-scan-caches.md)). Container helper captures stay out of scope.
 
+Done on 2026-11-04 (ST-5, ST-6), re-checked first against `main` at `a8bdce444`, on which #1734's `capture.ts` and `object-store.ts` had moved the report's lines. Both findings still applied.
+
+- ST-5: `readManifest` reads through a per-store LRU of deep-frozen parsed manifests (`manifest-cache.ts`; 32 entries, 128 MiB estimated), `findManifestEntry` binary-searches on path bytes for diff pages and restore, and `renderSnapshotBodies` takes `ignoreWhitespace`, so that view renders once. Tests: `manifest-cache.test.ts`, `diff-bodies-lookup.test.ts`.
+- ST-6: `ObjectStore.batch()` stages each object as a temporary file, deflating inputs from 16 KiB through the thread pool, and a flush fsyncs the temporaries off the loop, renames them, then fsyncs the directories with unsynced names. Tests: `object-store-write-path.test.ts`. [change-tracking.md](../../architecture/change-tracking.md) "Object writes and durability" and "Manifest cache".
+
+`TMPDIR=<a directory on the btrfs disk> bun scripts/benchmark-change-tracking.ts --only=large-blob,durable-cold,manifest --runs=7` and `--only=capture,assets,long-turn --sizes=1000,10000 --runs=10`, three interleaved runs each of `a8bdce444` and this code, on the shared build host, btrfs, load average 3 to 18, Bun 1.4.4:
+
+| Workload | Before | After |
+| --- | --- | --- |
+| 16 MiB changed file captured durably: longest event-loop stall, p50 of runs | 107–143 ms | 12–13 ms |
+| Same: longest stall in any run | 109–188 ms | 13–21 ms |
+| Same: capture duration, p50 | 148–234 ms | 276–321 ms |
+| 1,000 files, cold durable capture: duration, p50 | 3,338–4,108 ms | 632–1,130 ms |
+| Same: longest event-loop stall, p50 of runs | 560–661 ms | 2.8–5.2 ms |
+| Manifest of 100,000 entries: repeat read, p50 | 26.9–34.9 ms | 0.02–0.10 ms |
+| Same: first read | 39–46 ms | 93–140 ms |
+| Same: lookups for one 20-row diff page, p50 | 6.4–11.1 ms | 0.04–0.09 ms |
+| 10,000 files, one changed, not durable: warm capture, p50 | 113–200 ms | 129–177 ms |
+| Long turn, 200 changed files, not durable: compare, p50 | 8.3–11.1 ms | 5.7–13 ms |
+
+The large file's capture takes longer in total, because compression now runs in chunks through the thread pool, while the rest of the backend keeps running. The first read of a manifest costs more because it freezes every entry; a repeat read repays that after about three reads. The non-durable rows show warm captures did not regress; the differences are within the load's noise. The remaining stall on the large file is its read and two SHA-1 passes, about 5 to 7 ms each. `object-store-write-path.test.ts` also compares the stall during a real 16 MiB put and capture against `deflateSync`'s in the same process.
+
 **Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
 
 **Investigation.** Re-checked on 2026-11-04 against `main` at `96ee1eb3`: `reuse` still called `utimes` under the store lock for every unchanged file, the closure still called `has` for every entry, and `DiffStatsService.request` started a scan for every hint with none running. Micro-benchmark over 10,000 objects (median of 7, same host):
@@ -583,6 +605,79 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **From the start of the last scan.**
     - Pros: a steadier cadence for quick scans.
     - Cons: a scan longer than the gap would be followed by another at once, which is the cost being removed.
+- **How does a large write leave the event loop (ST-6)?** Done as recommended.
+  - **Bun's asynchronous `zlib.deflate` and `FileHandle.sync` (recommended).**
+    - Pros: measured off the loop under Bun 1.4.4 (a 16 MiB deflate stalled the loop 100–228 ms synchronously and about 7 ms asynchronously); no worker file to bundle and package.
+    - Cons: a large object takes about twice as long end to end, because the compression runs in stream chunks through the thread pool.
+  - **A worker thread.**
+    - Pros: could also take hashing and the manifest's JSON work off the loop.
+    - Cons: a new entry point for the bundled backend, for tens of milliseconds at most once zlib has left the loop.
+- **Below what size does a zlib call stay on the loop (ST-6)?** Done as recommended.
+  - **16 KiB (recommended).**
+    - Pros: source files keep the synchronous call, which measured 8 µs against 25 µs asynchronously for an 800-byte file; the longest such call is a few hundred microseconds.
+    - Cons: a second code path in `put` and `get`.
+  - **Everything off the loop.**
+    - Pros: one code path.
+    - Cons: three times the per-call cost on the commonest object size.
+- **What may a batched fsync defer (ST-6)?** Done as recommended.
+  - **Stage temporaries, then fsync, rename and sync directories at the flush, so a final name always means synced content (recommended).**
+    - Pros: a crash can lose a name but never leave one over a partial file, which `has` and `reuse` would adopt for good; concurrent fsyncs commit together.
+    - Cons: objects are invisible to other writers until the flush, so two captures can compress the same new content twice; a sweep needs to know live temporaries.
+  - **Rename first, fsync everything at the end.**
+    - Pros: objects are visible at once, no staging state.
+    - Cons: a crash can leave a final name over a partial file, and nothing would detect it before a ledger row named it.
+  - **Fsync each file before its rename as before, batching only directories.**
+    - Pros: smallest change.
+    - Cons: directories were already synced per capture, so the per-file cost stays: the sequential fsyncs were most of a cold capture's time.
+- **Which directories does a flush sync (ST-6)?** Done as recommended.
+  - **Every directory with an unsynced name, store-wide, after any sync already running (recommended).**
+    - Pros: a capture that adopts an object another writer has just renamed waits for that name. The previous code synced only `newObjectIds`, so it did not, and `resolveLiveDetail` synced no directory at all; both gaps are closed.
+    - Cons: a capture can wait on another writer's sync.
+  - **Only the directories of the capture's own new objects.**
+    - Pros: no shared state.
+    - Cons: keeps that gap, which a test now pins as closed.
+- **What happens to staged objects when a capture is abandoned (ST-6)?** Done as recommended.
+  - **Publish them on `close`, and flush every 512 objects or 64 MiB (recommended).**
+    - Pros: a capture over its deadline leaves progress for its retry, as it did when every object was written at once; otherwise a large repository that never fits one deadline would never finish.
+    - Cons: an abandoned capture can overrun by one batch's fsyncs.
+  - **Delete them.**
+    - Pros: an abandoned capture returns at once.
+    - Cons: the retry starts over.
+- **How is a failed fsync treated (ST-6)?** Done as recommended.
+  - **Fail the capture, except where the platform does not support the sync (recommended).**
+    - Pros: nothing is named without being durable; a failed directory is retried by the next flush.
+    - Cons: a failing disk now shows as `capture-failed` rather than passing silently.
+  - **Ignore every error, as `fsyncPath` did.**
+    - Pros: no new failure mode.
+    - Cons: an EIO would silently break the durability rule.
+- **Where does the manifest cache live, and what does a hit prove (ST-5)?** Done as recommended.
+  - **On the store, keyed by oid, with one `stat` per hit (recommended).**
+    - Pros: an expired or swept object still reads as absent, so `body-expired` cannot be masked; stores never share entries.
+    - Cons: one system call per hit; a file corrupted on disk after caching is not noticed on a hit, though the cached copy was verified when read.
+  - **Trust the cache until evicted, invalidating on sweep.**
+    - Pros: no system call.
+    - Cons: an object removed by anything other than `sweep` would keep answering.
+- **Does retention fill the manifest cache (ST-5)?** Done as recommended.
+  - **No: a `scan` read uses a hit and keeps nothing (recommended).**
+    - Pros: one pass over every snapshot cannot evict what live views use, and it does not pay to freeze each manifest; ST-20 stays free to change this.
+    - Cons: retention still parses every uncached manifest.
+  - **Read through the cache like every other caller.**
+    - Pros: no option.
+    - Cons: each hourly pass replaces the whole cache.
+- **How is the shared manifest protected (ST-5)?** Done as recommended.
+  - **Deep-freeze it and make the `Manifest` type `readonly` throughout (recommended).**
+    - Pros: a write fails at compile time and at run time; `tsc` found no caller that wrote.
+    - Cons: freezing costs 30 to 50 ms at 100,000 entries, on the loop, once per manifest; that is more than the parse.
+  - **Copy on every read.**
+    - Pros: no freezing.
+    - Cons: costs about what the cache saves.
+- **Should the whitespace view share the page's batch budget once it renders once (ST-5)?** Not done: [4760](4760-whitespace-view-skips-batch-budget.md).
+  - **Keep one budget per file for now (recommended).**
+    - Pros: a client sees the same bodies as before, apart from a limit now being named by the diff shown.
+    - Cons: the view stays unbounded across a page.
+  - **Share the budget.**
+    - Pros: the same bound as the normal view.
+    - Cons: a visible change the ticket did not ask for.
 - **Should ST-16 also drop hints whose paths are all under ignored directories, as the report suggests?** Not done.
   - **Leave them counting; the gap bounds their cost (recommended).**
     - Pros: `classifyWorktreeChange` already records why: a build directory can hold tracked or visible untracked files, so a path's location does not prove the file list is unchanged.
@@ -1372,6 +1467,22 @@ captures measure the settled path.
 The cache is module-level, shared by every comparison in the process, because
 blob ids are content addresses; a hit is accepted only after `store.has` on
 both blobs, so a different or pruned store still reports `body-unavailable`.
+
+### Task 7: what "batched per capture" means for the fsync count (2026-11-04)
+
+A capture still makes one file fsync per new object, as Git's loose format has no shared file to sync. "Batched" here means they are grouped at the flush and issued concurrently, 16 at a time, so the filesystem commits them together, and each directory is synced once per flush rather than once per object's own step. A batch also flushes itself at 512 objects or 64 MiB, so one large capture has several flushes; a ledger row still waits for the last.
+
+### Task 7: changes beyond the two findings (2026-11-04)
+
+Closing the durability gaps was taken as part of "durability must not weaken", since batching would otherwise have widened them: `resolveLiveDetail` now syncs what it stores, a capture waits for names it adopts from another writer, a new process syncs its fan-out directories at its first flush, and a new fan-out directory also syncs `objects/`. Inflating moved off the loop too, though the report's line references name only the write side, because its title says synchronous zlib and the change is a few lines.
+
+### Task 7: whitespace view's reason text (2026-11-04)
+
+Rendering once leaves one difference from the old double render, kept deliberately: when a diff limit is reached in only one of the two diffs, the file now names the limit of the whitespace diff it shows. The old view could show hunks beside a limit reason, or an empty truncated body with no reason. Within limits the output is byte for byte the old view's, which `diff-bodies-lookup.test.ts` checks.
+
+### Task 7: the benchmark's before tree (2026-11-04)
+
+The "before" runs used `git archive a8bdce444` of `apps/backend/src` and `packages/protocol/src` with this change's benchmark script copied in, and one addition to its `capture.ts`: `findManifestEntry` as the linear find diff pages used, so the script runs on both. The scratch tree was not committed.
 
 ### Task 8: idle cadence
 

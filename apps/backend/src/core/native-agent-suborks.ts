@@ -698,7 +698,17 @@ export class NativeAgentSuborkService {
         if (!sessionId || branch.status === "completed") return;
         const abort = async () => {
           const provider = await this.options.providers.get(environment, branch.agent, branch.id);
+          // Capture both before and after abort: some providers clear their final
+          // snapshot on abort, while others publish usage only as it settles.
+          const host = new SuborkBranchHost(
+            this.hostDependencies(),
+            batch,
+            environment,
+            this.actionReadAt,
+          );
+          await host.recordUsage(branch, provider, sessionId).catch(() => undefined);
           await provider.abort(sessionId);
+          await host.recordUsage(branch, provider, sessionId).catch(() => undefined);
         };
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
@@ -858,7 +868,7 @@ export class NativeAgentSuborkService {
         const startedAt = Date.parse(branch.startedAt ?? batch.createdAt);
         if (this.now() - startedAt >= deadlineMs) {
           if (branch.providerSessionId) {
-            await host.abandonSession(branch, branch.providerSessionId);
+            await this.abortSessions({ ...batch, suborks: [branch] });
           }
           branch.status = "failed";
           branch.completedAt = new Date(this.now()).toISOString();

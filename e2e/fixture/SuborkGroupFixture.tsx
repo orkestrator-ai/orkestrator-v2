@@ -75,29 +75,50 @@ export function SuborkGroupFixture() {
     } as typeof window.orkestrator;
     return true;
   });
+  const maximum = new URLSearchParams(window.location.search).has("maximum");
+  const stopFails = new URLSearchParams(window.location.search).has("stop-fails");
+  const source = useMemo<NativeAgentSuborkBatchView>(
+    () =>
+      maximum
+        ? {
+            ...BATCH,
+            suborks: Array.from({ length: 32 }, (_, i) => ({
+              ...BATCH.suborks[1]!,
+              id: `target-${i}`,
+              name: `Target ${i}`,
+              status: i < 4 ? "running" : "failed",
+              line: i < 4 ? "Working" : "Target limit exceeded",
+            })),
+          }
+        : BATCH,
+    [maximum],
+  );
   const settled = new URLSearchParams(window.location.search).get("settled") === "1";
   const [opened, setOpened] = useState<string>("");
   const [stopped, setStopped] = useState(false);
   const batch = useMemo<NativeAgentSuborkBatchView>(() => {
-    if (!settled && !stopped) return BATCH;
+    if (!settled && !stopped) return source;
     return {
-      ...BATCH,
+      ...source,
       status: stopped ? "stopped" : "settled",
       settledAt: ago(0),
       delivery: "sent",
-      suborks: BATCH.suborks.map((subork) =>
+      suborks: source.suborks.map((subork) =>
         subork.status === "running"
           ? { ...subork, status: stopped ? "stopped" : "finished", endedAt: ago(0) }
           : subork,
       ),
     };
-  }, [settled, stopped]);
+  }, [settled, stopped, source]);
   const actions = useMemo(
     () => ({
       openTranscript: (_batchId: string, suborkId: string) => setOpened(suborkId),
-      stop: async () => setStopped(true),
+      stop: async () => {
+        if (stopFails) throw new Error("offline");
+        setStopped(true);
+      },
     }),
-    [],
+    [stopFails],
   );
   return (
     <SuborkGroupActionsContext.Provider value={actions}>

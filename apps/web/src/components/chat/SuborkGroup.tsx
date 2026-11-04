@@ -133,6 +133,7 @@ export const SuborkGroup = memo(function SuborkGroup({
   const [collapsed, setCollapsed] = useMessagePartExpansion(expansionKey);
   const actions = useContext(SuborkGroupActionsContext);
   const panelId = useId();
+  const [stopError, setStopError] = useState<string>();
   const [stopping, setStopping] = useState(false);
   const { suborks } = batch;
   const running = batch.status === "running";
@@ -140,7 +141,11 @@ export const SuborkGroup = memo(function SuborkGroup({
   const stop = () => {
     if (!actions) return;
     setStopping(true);
-    void actions.stop(batch.id).finally(() => setStopping(false));
+    setStopError(undefined);
+    void Promise.resolve()
+      .then(() => actions.stop(batch.id))
+      .catch(() => setStopError("Could not stop these suborks. Try again."))
+      .finally(() => setStopping(false));
   };
   return (
     <div className="px-2 py-1 @sm:px-4" data-subork-group="true" data-status={batch.status}>
@@ -154,7 +159,7 @@ export const SuborkGroup = memo(function SuborkGroup({
             className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span aria-hidden="true" className="flex shrink-0 items-center">
-              {suborks.map((subork, index) => (
+              {suborks.slice(0, 3).map((subork, index) => (
                 <span
                   key={subork.id}
                   className={cn(
@@ -165,6 +170,9 @@ export const SuborkGroup = memo(function SuborkGroup({
                   <ProviderMark agent={subork.agent} className="size-3.5" />
                 </span>
               ))}
+              {suborks.length > 3 ? (
+                <span className="ml-1 text-xs text-muted-foreground">+{suborks.length - 3}</span>
+              ) : null}
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold text-foreground">
@@ -214,6 +222,11 @@ export const SuborkGroup = memo(function SuborkGroup({
             ))}
           </ul>
         )}
+        {stopError ? (
+          <p role="alert" className="mt-1 px-1 text-xs text-destructive">
+            {stopError}
+          </p>
+        ) : null}
         {note ? <p className="mt-1 px-1 text-xs text-amber-300">{note}</p> : null}
       </div>
     </div>

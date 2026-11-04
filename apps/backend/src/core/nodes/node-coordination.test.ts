@@ -391,6 +391,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     const world = await MailWorld.create();
     worlds.push(world);
     const main = await world.main();
+    // Keep the recipient busy so this admission assertion cannot race the
+    // automatic injection drain; delivery itself has separate coverage.
+    world.startTurn(main);
     const acks: number[] = [];
     const link = {
       connected: true,

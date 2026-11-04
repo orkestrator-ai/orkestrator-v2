@@ -78,3 +78,53 @@ test("the transcript identifies partial pages and reaches the final answer", asy
   await page.getByRole("button", { name: "Back to start" }).click();
   await expect(page.getByText("First transcript page", { exact: true })).toBeVisible();
 });
+
+test("maximum targets fit at desktop and 320px and retain Stop and all rows", async ({ page }) => {
+  await page.goto("/subork-group?maximum=1");
+  const preview = path.resolve("output/visual-previews");
+  // Reconstruct the former unbounded header, then restore the actual UI.
+  const stack = page.locator("[data-subork-group] button[aria-expanded] > span").first();
+  const original = await stack.innerHTML();
+  await stack.evaluate((node) => {
+    const mark = node.firstElementChild!;
+    node.replaceChildren(
+      ...Array.from({ length: 32 }, (_, i) => {
+        const clone = mark.cloneNode(true) as HTMLElement;
+        if (i) clone.classList.add("-ml-2");
+        return clone;
+      }),
+    );
+  });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.screenshot({
+    path: path.join(preview, "subork-maximum-before-reconstruction-320.png"),
+  });
+  await stack.evaluate((node, html) => {
+    node.innerHTML = html;
+  }, original);
+  for (const width of [1280, 320]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(page.getByText("+29", { exact: true })).toBeVisible();
+    await expect(page.getByRole("listitem")).toHaveCount(32);
+    await expect(page.getByText("4 working · 28 failed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop these suborks" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: path.join(preview, `subork-maximum-after-${width}.png`) });
+  }
+  await page.reload();
+  await expect(page.getByRole("listitem")).toHaveCount(32);
+  await page.getByRole("button", { name: /Target 31/ }).click();
+  await expect(page.getByTestId("opened-transcript")).toHaveText("target-31");
+});
+
+test("Stop failure gives feedback and keeps retry available", async ({ page }) => {
+  await page.goto("/subork-group?stop-fails=1");
+  await page.getByRole("button", { name: "Stop these suborks" }).click();
+  await expect(page.getByRole("alert")).toContainText("Could not stop");
+  await expect(page.getByRole("button", { name: "Stop these suborks" })).toBeEnabled();
+  await page.screenshot({
+    path: path.resolve("output/visual-previews/subork-stop-error-after.png"),
+  });
+});

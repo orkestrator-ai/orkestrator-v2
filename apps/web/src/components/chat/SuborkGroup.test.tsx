@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { NativeAgentSuborkBatchView } from "@orkestrator/protocol/suborks";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { NativeMessage } from "./NativeMessage";
@@ -63,6 +63,36 @@ describe("SuborkGroup", () => {
     expect(screen.getByText("4m 16s")).toBeTruthy();
   });
 
+  test("a failed Stop shows feedback and allows retry", async () => {
+    const actions = {
+      openTranscript: mock(),
+      stop: mock(async () => {
+        throw new Error("offline");
+      }),
+    };
+    renderGroup(BATCH, actions);
+    fireEvent.click(screen.getByRole("button", { name: "Stop these suborks" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not stop");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Stop these suborks" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
+  });
+
+  test("bounds header marks while keeping every target row", () => {
+    renderGroup({
+      ...BATCH,
+      suborks: Array.from({ length: 32 }, (_, i) => ({
+        ...BATCH.suborks[1]!,
+        id: `target-${i}`,
+        name: `Target ${i}`,
+      })),
+    });
+    expect(screen.getByText("+29")).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(32);
+  });
+
   test("uses the singular", () => {
     renderGroup({ ...BATCH, suborks: [BATCH.suborks[0]!] });
     expect(screen.getAllByText("1 subork").length).toBeGreaterThan(0);
@@ -86,10 +116,10 @@ describe("SuborkGroup", () => {
     expect(screen.queryByText("Opus review")).toBeNull();
   });
 
-  test("only a running call offers Stop", () => {
+  test("only a running call offers Stop", async () => {
     const actions = renderGroup();
     fireEvent.click(screen.getByRole("button", { name: "Stop these suborks" }));
-    expect(actions.stop).toHaveBeenCalledWith("batch-1");
+    await waitFor(() => expect(actions.stop).toHaveBeenCalledWith("batch-1"));
     cleanup();
     renderGroup({ ...BATCH, status: "settled", settledAt: "2026-11-04T00:05:00.000Z" });
     expect(screen.queryByRole("button", { name: "Stop these suborks" })).toBeNull();

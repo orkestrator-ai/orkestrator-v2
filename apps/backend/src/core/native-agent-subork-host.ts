@@ -471,13 +471,19 @@ export class SuborkBranchHost implements AgentBranchHost<PersistedSuborkBranch> 
   }
 
   /** A subork's turns reach the usage panes under its own row, in the caller's environment. */
-  private async recordUsage(
+  async recordUsage(
     branch: PersistedSuborkBranch,
     provider: BuildPipelineProvider,
     sessionId: string,
   ): Promise<void> {
     if (!this.dependencies.recordUsage) return;
-    const status = await readProviderStatus(provider, sessionId).catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const status = await Promise.race([
+      readProviderStatus(provider, sessionId).catch(() => undefined),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 1000);
+      }),
+    ]).finally(() => clearTimeout(timer));
     const turns = status?.contextUsage?.turns;
     if (!turns || turns.length === 0) return;
     this.dependencies.recordUsage({

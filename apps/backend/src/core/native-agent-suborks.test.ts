@@ -702,6 +702,35 @@ describe("stopping and lifecycle", () => {
     expect(w.storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(100);
   });
 
+  for (const terminal of ["stop", "deadline", "forced failure"] as const) {
+    test(`usage survives ${terminal} and restart exactly once`, async () => {
+      let now = Date.now();
+      const w = await world({
+        script: () => async () => "idle",
+        service: { now: () => now, deadlineMs: 60_000 },
+        contextUsage: () => ({
+          usedTokens: 120,
+          sessionTokens: 120,
+          turns: [{ turnId: "terminal-turn", inputTokens: 100, outputTokens: 20 }],
+        }),
+      });
+      w.provider("codex").runningPolls = 1_000_000;
+      const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
+      await w.service.advanceNow(started.batchId);
+      await w.service.advanceNow(started.batchId);
+      if (terminal === "stop") await w.service.stopForSession(SESSION_KEY);
+      else {
+        if (terminal === "deadline") now += 120_000;
+        else await w.storage.updateEnvironment("e1", { status: "stopped" });
+        await w.service.advanceNow(started.batchId);
+      }
+      expect(w.storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(100);
+      await w.restart();
+      await w.service.advanceNow(started.batchId);
+      expect(w.storage.getAgentUsageHistory({ days: 1 }).totals.inputTokens).toBe(100);
+    });
+  }
+
   test("a container environment reaches its tools the way a container turn does", async () => {
     const w = await world({ environmentType: "container" });
     const started = handle(await w.ask({ targets: [{ agent: "codex" }], prompt: "Look." }));
@@ -808,6 +837,18 @@ describe("the transcript", () => {
     });
     expect(read.status).toBe("found");
     expect((read as { messages: unknown[] }).messages).toEqual(stored);
+    // Startup maintenance beyond the orphan grace must retain this owner.
+    await w.restart();
+    await w.storage.sweepBuildPipelineTranscripts({ graceMs: -1 });
+    expect(
+      (
+        await w.service.readTranscript({
+          environmentId: "e1",
+          batchId: started.batchId,
+          suborkId: row.id,
+        })
+      ).status,
+    ).toBe("found");
     // Another environment cannot read it.
     expect(
       (

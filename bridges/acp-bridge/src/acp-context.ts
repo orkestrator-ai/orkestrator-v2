@@ -40,6 +40,7 @@ import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-row
 import type { AcpTurnUsage } from "./usage.js";
 import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
+import { JsonlLineFramer } from "./acp-jsonl-framer.js";
 import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
@@ -1112,7 +1113,7 @@ export class AcpProcess {
   #closed = false;
   #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
   #terminationOutcome?: "resolved" | "rejected";
-  #stdoutBuffer = Buffer.alloc(0);
+  readonly #stdoutFramer = new JsonlLineFramer(MAX_LINE_BYTES);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
   /**
    * The latest `available_commands_update` that arrived before a session
@@ -1394,23 +1395,16 @@ export class AcpProcess {
 
   #acceptChunk(chunk: Buffer): void {
     if (this.#closed) return;
-    this.#stdoutBuffer = Buffer.concat([this.#stdoutBuffer, chunk]);
-    while (true) {
-      const newline = this.#stdoutBuffer.indexOf(0x0a);
-      if (newline < 0) break;
-      if (newline > MAX_LINE_BYTES) {
-        this.#close(new Error(`${provider} ACP emitted an oversized JSONL frame`));
-        void this.#terminateChild("rejected");
-        return;
-      }
-      const line = this.#stdoutBuffer.subarray(0, newline).toString("utf8");
-      this.#stdoutBuffer = this.#stdoutBuffer.subarray(newline + 1);
-      this.#acceptLine(line);
-    }
-    if (this.#stdoutBuffer.length > MAX_LINE_BYTES) {
-      this.#close(new Error(`${provider} ACP emitted an unterminated oversized JSONL frame`));
-      void this.#terminateChild("rejected");
-    }
+    const failure = this.#stdoutFramer.accept(chunk, (line) => this.#acceptLine(line));
+    if (!failure) return;
+    this.#close(
+      new Error(
+        failure === "oversized"
+          ? `${provider} ACP emitted an oversized JSONL frame`
+          : `${provider} ACP emitted an unterminated oversized JSONL frame`,
+      ),
+    );
+    void this.#terminateChild("rejected");
   }
 
   #acceptLine(line: string): void {

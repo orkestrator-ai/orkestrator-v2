@@ -141,6 +141,12 @@ async function fixture() {
         PATH: options.path ?? toolPath,
         HOME: containerHome,
         PROGRESS_FILE: progress,
+        // The image sets a locale. Without one, Homebrew's bash restores the
+        // locale after a `LC_ALL=C cmd` inside a subshell by asking
+        // CoreFoundation for the user's languages, which is not fork-safe:
+        // about one boot in ten crashed every stamp's ownership subshell
+        // (SIGSEGV in libintl_setlocale), so no tree was stamped.
+        LANG: "C.UTF-8",
       },
       stdout: "pipe",
       stderr: "pipe",

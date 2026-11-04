@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
+import { LOG_FORMAT_ENV } from "@orkestrator/protocol/node/logger-environment";
 
 import {
   NativeAbortController,
@@ -58,30 +58,59 @@ describe("ACP failure logging", () => {
     expect(await record("agent.exited")).toMatchObject({
       level: "warn",
       area: "bridge.acp",
-      fields: { code: 9, signal: null },
+      fields: { code: 9, signal: null, requested: false },
     });
     expect(output()).not.toContain("ACP process exited");
     expect(output()).not.toContain("CRASH now");
   });
 
-  test("an agent the bridge closes normally is no failure", async () => {
-    const { base, headers, output, record, stopAndDrain } = await spawnLoggingBridge({
-      [LOG_LEVEL_ENV]: "debug",
-    });
+  test("an agent the bridge closes normally warns and says it was requested", async () => {
+    const { base, headers, output, record, stopAndDrain } = await spawnLoggingBridge();
     const { id } = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
     }).then((response) => response.json())) as { id: string };
     const closed = await nativeFetch(`${base}/session/${id}/close`, { method: "POST", headers });
     expect(closed.status).toBe(200);
-    expect(await record("agent.exited")).toMatchObject({ level: "debug" });
+    expect(await record("agent.exited")).toMatchObject({
+      level: "warn",
+      fields: { requested: true },
+    });
     await stopAndDrain();
     const exits = output()
       .split("\n")
       .filter((line) => line.includes('"event":"agent.exited"'))
       .map((line) => JSON.parse(line));
     expect(exits).toHaveLength(1);
-    expect(exits[0].level).toBe("debug");
+    expect(exits[0].level).toBe("warn");
+  });
+
+  test("a turn the user cancels warns about nothing and keeps its agent", async () => {
+    const { base, headers, output } = await spawnLoggingBridge();
+    const { id } = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const status = () =>
+      nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{ status: string }>;
+    await nativeFetch(`${base}/session/${id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "USAGE_CANCEL", requestId: "cancel-1" }),
+    });
+    await waitFor(status, (value) => value.status === "running");
+
+    const cancelled = await nativeFetch(`${base}/session/${id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(cancelled.status).toBe(202);
+    await waitFor(status, (value) => value.status === "idle");
+
+    expect(output()).not.toContain('"event":"agent.exited"');
+    expect(output()).not.toContain('"level":"warn"');
   });
 
   test("a client hang-up during create does not warn about the route", async () => {

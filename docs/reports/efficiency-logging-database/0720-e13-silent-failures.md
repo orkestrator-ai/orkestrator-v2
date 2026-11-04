@@ -196,9 +196,9 @@ The lease guards container mutation and already formats its refusal as a contain
 
 `terminate` is the one path every requested stop takes, including replacement and shutdown, so it records the child in a `WeakSet`. Reporting does not depend on key ownership, because a replaced child no longer owns its key and its exit still explains what happened. A bridge that crashes in the moment before a stop is requested reads as requested. A bridge that exits before it is healthy also logs, beside the startup error that already reported it.
 
-### Task 4: a normal ACP close is `debug`, not `warn`
+### Task 4: every ACP exit is `warn`, and `requested` marks a normal close
 
-The bridge closes agent processes on every session close, replacement and shutdown (`#terminationOutcome === "resolved"`). A `warn` on each would make the line useless, so only an exit nothing asked for, or a fault-driven termination, warns. Client hang-ups are left out of `http.route-failed` too, because the aborted route rejects with no one waiting.
+The ticket's criterion asks for a `warn` on ACP exits, and an earlier `debug` for a normal close was rejected at verification as not meeting it. So `agent.exited` is always `warn`, and `requested` is true when the bridge closed the process normally (`#terminationOutcome === "resolved"`), false for an exit nothing asked for or a fault-driven termination. The cost is one `warn` per session close, replacement, discovery probe and shutdown; `requested=false` filters those out. A cancelled turn stays out because cancelling sends `session/cancel` and keeps the process. Client hang-ups are left out of `http.route-failed` too, because the aborted route rejects with no one waiting.
 
 ### Task 4: turn failure sites beyond the analysis
 

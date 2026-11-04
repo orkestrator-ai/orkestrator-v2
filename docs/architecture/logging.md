@@ -269,14 +269,15 @@ and no site logs a stderr tail.
 | `bridge.pi`, `bridge.cursor` | `turn.failed` | `warn` | A turn ended in failure. A turn someone stopped stays out, even if stopping it made the run reject. |
 | `bridge.pi` | `turn.startup-timed-out`, `turn.refused` | `warn` | Pi did not start a turn in time, or refused it before any run. |
 | `bridge.cursor` | `turn.timed-out`, `turn.send-failed`, `turn.recovery-failed` | `warn` | A turn outlived its budget; `send` rejected, so the outcome is unknown; a run recovered after a restart failed. |
-| `bridge.acp` | `agent.exited` | `warn`, or `debug` if the bridge closed it normally | An agent process exited, with `code` and `signal`. |
+| `bridge.acp` | `agent.exited` | `warn` | An agent process exited, with `code`, `signal` and `requested` (true when the bridge closed it normally). |
 | `bridge.acp` | `http.route-failed` | `warn` | A route answered 500. A deliberate `HttpError` of another status and a client that hung up stay out. |
 | `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
 
-These lines reach disk only while **Save Logs to Disk** is on. A level on `bridge.acp`
-applies as it does anywhere else: a normal agent close is at `debug`, because it
-happens on every session close.
+These lines reach disk only while **Save Logs to Disk** is on. A normal agent close
+also writes `agent.exited` at `warn`, on every session close, so filter on
+`requested=false` to find the exits nothing asked for. Stopping a turn sends
+`session/cancel` and keeps the process, so it writes no such line.
 
 ## Command failures
 

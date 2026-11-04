@@ -1211,11 +1211,12 @@ export class AcpProcess {
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
       // Scalars only: agent stderr and exit errors can hold prompts or file contents.
-      log[this.#terminationOutcome === "resolved" ? "debug" : "warn"]("agent.exited", {
+      log.warn("agent.exited", {
         provider,
         pid: this.child.pid ?? null,
         code,
         signal,
+        requested: this.#terminationOutcome === "resolved",
       });
       this.#close(
         new Error(

@@ -44,7 +44,7 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "evidence.shell-record-failed": "A shell observation could not be recorded.",
       "evidence.turn-record-failed": "Turn change evidence could not be recorded.",
       "agent.exited":
-        "An ACP agent process exited, with its `code` and `signal`. `warn` unless the bridge closed it normally, then `debug`.",
+        "An ACP agent process exited, with its `code` and `signal`, always at `warn`. `requested` is true when the bridge closed it normally, false for an unrequested or fault-driven exit.",
       "http.route-failed":
         "An HTTP route answered 500; its error message is not logged because it can hold content.",
       "server.listening": "The HTTP server is listening.",

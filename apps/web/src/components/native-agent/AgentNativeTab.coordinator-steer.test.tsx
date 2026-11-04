@@ -328,6 +328,17 @@ describe("Coordinator chat steering", () => {
     expect(queuedRows()).toHaveLength(1);
     expect(queuedItems.map((item) => item.id)).toEqual([enqueuedId()]);
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    // The turn ends and the backend's queue drain sends it as the next turn
+    // (native-agent-prompt-queue-dispatcher.test.ts covers that drain for a
+    // coordinator). The tab only reflects it: no second send from here.
+    running = false;
+    queuedItems = [];
+    await publishProjection();
+    await waitFor(() => expect(queuedRows()).toHaveLength(0));
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
+    expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1);
   });
 
   test("a refused Steer from the row leaves it queued with the reason", async () => {
@@ -359,6 +370,12 @@ describe("Coordinator chat steering", () => {
     );
     expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
     expect(steerNativeAgentQueuedPromptMock).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    running = false;
+    queuedItems = [];
+    await publishProjection();
+    await waitFor(() => expect(queuedRows()).toHaveLength(0));
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
 });

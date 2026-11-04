@@ -87,6 +87,13 @@ describe("StorageService config migration", () => {
         coordinatorAccountSwitchGrant: { codex: true },
       });
 
+      const config = await storage.loadConfig();
+      await storage.saveConfig({ ...config, global: rendererSave });
+      await storage.saveConfig({
+        ...config,
+        global: { ...rendererSave, coordinatorAccountSwitchGrant: { codex: true } },
+      });
+
       const restarted = new StorageService(dataDir);
       await restarted.init();
       expect((await restarted.loadConfig()).global.coordinatorAccountSwitchGrant).toEqual({

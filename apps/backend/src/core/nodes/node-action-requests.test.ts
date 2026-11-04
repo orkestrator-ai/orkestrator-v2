@@ -169,3 +169,92 @@ test("unattended runs take the limit and the record together, and never mail", a
   expect(await actions.list({ pendingOnly: true })).toHaveLength(0);
   await expect(actions.resolve("one", "approve")).rejects.toThrow("already executed");
 });
+
+test("unattended allowance survives unrelated eviction and reload; interrupted runs never replay", async () => {
+  let durable: NodeActionRequest[] = [];
+  let executions = 0;
+  const options = {
+    load: async () => structuredClone(durable),
+    save: async (rows: NodeActionRequest[]) => {
+      durable = structuredClone(rows);
+    },
+    emit: () => {},
+    executors: {
+      "switch-agent-account": async () => {
+        executions++;
+        return { code: "ok", message: "done" };
+      },
+    },
+  };
+  const actions = new NodeActionRequests(options);
+  const switchInput = { ...input, kind: "switch-agent-account" as const };
+  const limit = { count: 3, windowMs: 3_600_000, scope: () => true };
+  for (let i = 0; i < 3; i++)
+    await actions.runUnattended({ ...switchInput, requestId: "switch-" + i }, limit);
+  for (let i = 0; i < 205; i++) await actions.create({ ...input, requestId: "ordinary-" + i });
+  const restarted = new NodeActionRequests(options);
+  expect(await restarted.runUnattended({ ...switchInput, requestId: "fourth" }, limit)).toEqual({
+    overLimit: { recent: 3 },
+  });
+  durable[0]!.state = "approved";
+  const interrupted = new NodeActionRequests(options);
+  expect(
+    await interrupted.runUnattended({ ...switchInput, requestId: "switch-0" }, limit),
+  ).toMatchObject({
+    ran: false,
+    request: { state: "outcome-unknown", result: { code: "interrupted" } },
+  });
+  expect(executions).toBe(3);
+  expect(String(durable[0]!.state)).toBe("outcome-unknown");
+});
+
+test("initial unattended save failure releases reservation and allows an exact retry", async () => {
+  let fail = true;
+  let executions = 0;
+  const actions = new NodeActionRequests({
+    load: async () => [],
+    save: async () => {
+      if (fail) throw new Error("disk failure");
+    },
+    emit: () => {},
+    executors: {
+      "switch-agent-account": async () => {
+        executions++;
+        return { code: "ok", message: "done" };
+      },
+    },
+  });
+  const request = { ...input, kind: "switch-agent-account" as const, requestId: "retry" };
+  const limit = { count: 1, windowMs: 3_600_000, scope: () => true };
+  await expect(actions.runUnattended(request, limit)).rejects.toThrow("disk failure");
+  expect(await actions.get("retry")).toBeNull();
+  expect(executions).toBe(0);
+  fail = false;
+  expect(await actions.runUnattended(request, limit)).toMatchObject({
+    ran: true,
+    request: { state: "executed" },
+  });
+});
+
+test.each(["failed", "outcome-unknown"] as const)(
+  "only definite failure releases allowance (%s)",
+  async (state) => {
+    const actions = new NodeActionRequests({
+      load: async () => [],
+      save: async () => {},
+      emit: () => {},
+      executors: {
+        "switch-agent-account": async () => {
+          if (state === "failed") throw new Error("refused");
+          return { code: "unknown", message: "check target", outcomeUnknown: true };
+        },
+      },
+    });
+    const request = { ...input, kind: "switch-agent-account" as const, requestId: "first" };
+    const limit = { count: 1, windowMs: 3_600_000, scope: () => true };
+    expect(await actions.runUnattended(request, limit)).toMatchObject({ request: { state } });
+    const next = await actions.runUnattended({ ...request, requestId: "next" }, limit);
+    if (state === "failed") expect(next).toMatchObject({ ran: true });
+    else expect(next).toEqual({ overLimit: { recent: 1 } });
+  },
+);

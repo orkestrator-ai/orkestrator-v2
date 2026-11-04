@@ -45,6 +45,9 @@ let clock: { now: number };
 let accounts: Record<string, AgentAccountSummary[]>;
 let usage: Record<string, Record<string, PlanUsageSnapshot>>;
 let commandContext: CommandContext;
+let switchFailure: "failed" | "outcome-unknown" | null;
+let durable: NodeActionRequest[];
+let actionOptions: ConstructorParameters<typeof NodeActionRequests>[0];
 const switches: Array<{ machine: string; accountId: string }> = [];
 const events: Array<{ event: string; payload: unknown }> = [];
 const notified: NodeActionRequest[] = [];
@@ -147,6 +150,8 @@ beforeEach(async () => {
   });
   clock = { now: Date.now() };
   switches.length = 0;
+  switchFailure = null;
+  durable = [];
   events.length = 0;
   notified.length = 0;
   accounts = {
@@ -162,26 +167,37 @@ beforeEach(async () => {
     [SELF]: { default: reading(100), "acct-work": reading(20), "acct-spent": reading(100) },
     [LEAF]: { default: reading(100) },
   };
-  actions = new NodeActionRequests({
-    load: async () => [],
-    save: async () => {},
+  actionOptions = {
+    load: async () => structuredClone(durable),
+    save: async (rows) => {
+      durable = structuredClone(rows);
+    },
     emit: (event, payload) => events.push({ event, payload }),
     now: () => clock.now,
     executors: {
-      "switch-agent-account": (request) =>
-        executeAgentAccountSwitch(request, {
+      "switch-agent-account": (request) => {
+        if (switchFailure === "failed") throw new Error("Switch refused");
+        if (switchFailure === "outcome-unknown")
+          return Promise.resolve({
+            code: "unknown",
+            message: "Check the target",
+            outcomeUnknown: true,
+          });
+        return executeAgentAccountSwitch(request, {
           selfId: () => SELF,
           invoke: async (command, args) => accountCommand(SELF, command, args),
           invokeOnNode: async ({ nodeId, command, args }) => ({
             outcome: "ok",
             result: accountCommand(nodeId, command, args),
           }),
-        }),
+        });
+      },
     },
     notify: async (request) => {
       notified.push(request);
     },
-  });
+  };
+  actions = new NodeActionRequests(actionOptions);
   commandContext = {
     storage,
     nodeCoordination: { actions } as unknown as NodeCoordination,
@@ -393,6 +409,11 @@ describe("standing permission to switch accounts", () => {
       const result = await switchTo(target, `flip-${index}`);
       expect(result.structuredContent).toMatchObject({ state: "switched" });
     }
+    actions = new NodeActionRequests(actionOptions);
+    commandContext = {
+      ...commandContext,
+      nodeCoordination: { actions } as unknown as NodeCoordination,
+    };
     const over = await switchTo(limit % 2 === 0 ? "acct-work" : "default", "over");
     expect(over.structuredContent).toMatchObject({ state: "pending" });
     expect(over.structuredContent!.askedBecause).toContain(`${limit} times in the last 60 minutes`);
@@ -440,6 +461,31 @@ describe("standing permission to switch accounts", () => {
     expect(outcome).toEqual({ outcome: "not-granted" });
     expect(await actions.list()).toHaveLength(0);
   });
+
+  test.each(["failed", "outcome-unknown"] as const)(
+    "records and warns on %s, with conservative allowance accounting",
+    async (failure) => {
+      await grant(true);
+      switchFailure = failure;
+      const result = await switchTo("acct-work", "failure");
+      if (failure === "failed") expect(result.isError).toBe(true);
+      else expect(result.structuredContent).toMatchObject({ state: "outcome-unknown" });
+      expect((await grantState()).recentSwitches[0]?.state).toBe(failure);
+      expect(
+        events.find((event) => event.event === COORDINATOR_ACCOUNT_SWITCHED_EVENT)?.payload,
+      ).toMatchObject({ state: failure });
+      actions = new NodeActionRequests(actionOptions);
+      commandContext = {
+        ...commandContext,
+        nodeCoordination: { actions } as unknown as NodeCoordination,
+      };
+      switchFailure = null;
+      expect((await switchTo("acct-work", "after-failure")).structuredContent).toMatchObject({
+        state: "switched",
+      });
+      expect(switches).toHaveLength(1);
+    },
+  );
 
   test("the tool description says when no approval is needed", async () => {
     const issued = server.issueCoordinatorCredential({

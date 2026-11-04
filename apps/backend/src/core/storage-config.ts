@@ -352,6 +352,10 @@ export class ConfigRepository {
         kept.logDetail === undefined && own.global.logDetail !== undefined
           ? { ...kept, logDetail: own.global.logDetail }
           : kept;
+      // Only the dedicated setter may change this machine's standing permission.
+      delete ownGlobal.coordinatorAccountSwitchGrant;
+      if (own.global.coordinatorAccountSwitchGrant !== undefined)
+        ownGlobal.coordinatorAccountSwitchGrant = own.global.coordinatorAccountSwitchGrant;
       // Older clients must not erase the user's container credential choice.
       if (ownGlobal.containerGitHubCredential === undefined)
         ownGlobal.containerGitHubCredential = own.global.containerGitHubCredential;

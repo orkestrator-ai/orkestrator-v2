@@ -8,6 +8,37 @@ import type {
 const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 let state: CoordinatorAccountSwitchGrantState;
 let unknown = false;
+let refresh: (() => void) | undefined;
+let resync: (() => void) | undefined;
+let notice: ((event: { payload: unknown }) => void) | undefined;
+let noticeStop = 0;
+import { mockToastInfo, mockToastWarning } from "../../../../../tests/mocks/sonner";
+mock.module("@/lib/federation/node-events", () => ({
+  subscribeCommandNodeEvents: (subscriber: { onEvent: () => void; onResync: () => void }) => {
+    refresh = subscriber.onEvent;
+    resync = subscriber.onResync;
+    return () => {};
+  },
+  subscribeNodeEvents: () => () => {},
+}));
+mock.module("@/lib/native/authoritative-events", () => ({
+  listenAuthoritative: (_event: string, handler: () => void, options: { onResync: () => void }) => {
+    refresh = handler;
+    resync = options.onResync;
+    return Promise.resolve(() => {});
+  },
+}));
+mock.module("@/lib/portal/portal-transport", () => ({
+  portalListen: (_event: string, handler: (event: { payload: unknown }) => void) => {
+    notice = handler;
+    return Promise.resolve(() => {
+      noticeStop++;
+    });
+  },
+  workspaceTarget: () => null,
+  portalListenAuthoritative: () => Promise.resolve(() => {}),
+  portalInvoke: (command: string, args?: Record<string, unknown>) => answer(command, args),
+}));
 
 const record: CoordinatorAccountSwitchRecord = {
   requestId: "switch-account:c:1",
@@ -43,7 +74,7 @@ mock.module("@/lib/native/backend", () => ({
 }));
 
 const { CoordinatorAccountSwitchGrant } = await import("./CoordinatorAccountSwitchGrant");
-const { describeCoordinatorAccountSwitch } =
+const { describeCoordinatorAccountSwitch, CoordinatorAccountSwitchNotices } =
   await import("@/components/federation/CoordinatorAccountSwitchNotices");
 
 beforeEach(() => {
@@ -58,12 +89,12 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-function show() {
+function show(machine: null | undefined = undefined) {
   return render(
     <CoordinatorAccountSwitchGrant
       platform="claude"
       platformLabel="Claude"
-      machine={undefined}
+      machine={machine}
       machineName={null}
       refreshKey="0"
     />,
@@ -116,6 +147,33 @@ describe("coordinator account-switch permission in Settings", () => {
       ),
     );
     expect(container.textContent).toBe("");
+  });
+
+  test("refreshes open history after a leaf switch and a stream resync", async () => {
+    show(null);
+    await tick();
+    state = { ...state, recentSwitches: [record] };
+    refresh?.();
+    await screen.findByRole("listitem", { name: "Switch on beelink" });
+    state = { ...state, recentSwitches: [{ ...record, nodeName: "other leaf" }] };
+    resync?.();
+    await screen.findByRole("listitem", { name: "Switch on other leaf" });
+  });
+
+  test("notice listener shows success and warning, ignores malformed data and cleans up", async () => {
+    notice = undefined;
+    noticeStop = 0;
+    const view = render(<CoordinatorAccountSwitchNotices />);
+    await waitFor(() => expect(notice).toBeDefined());
+    notice!({ payload: null });
+    notice!({ payload: {} });
+    notice!({ payload: record });
+    notice!({ payload: { ...record, state: "outcome-unknown", message: "Check target" } });
+    expect(mockToastInfo).toHaveBeenCalledTimes(1);
+    expect(mockToastWarning).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    view.unmount();
+    expect(noticeStop).toBe(1);
   });
 
   test("the notice names the machine, both accounts, the coordinator and the reason", () => {

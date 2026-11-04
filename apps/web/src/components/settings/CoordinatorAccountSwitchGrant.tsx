@@ -8,6 +8,9 @@
  * shows nothing and keeps asking.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { subscribeCommandNodeEvents, subscribeNodeEvents } from "@/lib/federation/node-events";
+import { listenAuthoritative } from "@/lib/native/authoritative-events";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { Checkbox } from "@/components/ui/checkbox";
 import { getCoordinatorAccountSwitchGrant, setCoordinatorAccountSwitchGrant } from "@/lib/backend";
 import type { AccountMachine } from "@/lib/backend/agent-accounts";
@@ -84,6 +87,28 @@ export function CoordinatorAccountSwitchGrant({
   useEffect(() => {
     load();
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    const events = ["node-action-requests-changed", "coordinator-account-switched"];
+    if (machine !== undefined) {
+      const subscriber = { events, onEvent: load, onResync: load };
+      return machine === null
+        ? subscribeCommandNodeEvents(subscriber)
+        : subscribeNodeEvents(machine as BackendId, subscriber);
+    }
+    const controller = new AbortController();
+    void listenAuthoritative("node-action-requests-changed", load, {
+      onResync: load,
+      signal: controller.signal,
+      resyncOnSubscribe: true,
+    })
+      .then((stop) => {
+        if (controller.signal.aborted) stop();
+        else controller.signal.addEventListener("abort", stop, { once: true });
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [load, machine]);
 
   if (!state) return error ? <p className="mt-4 text-xs text-destructive">{error}</p> : null;
   const granted = state.grants[platform];

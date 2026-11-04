@@ -63,6 +63,8 @@ import type { ProjectHomeMessage } from "@orkestrator/protocol/project-home-mess
 export const NODE_ACTION_REQUESTS_CHANGED_EVENT = "node-action-requests-changed";
 export const NODE_ACTION_REQUEST_TTL_MS = 24 * 60 * 60_000;
 const MAX_REQUESTS = 200;
+const MAX_PROTECTED_REQUESTS = 2_000;
+const SWITCH_WINDOW_MS = 60 * 60_000;
 
 export type NodeActionKind =
   | "delete-environment"
@@ -224,19 +226,43 @@ export class NodeActionRequests {
     return this.loadPromise;
   }
 
+  private retain(requests: NodeActionRequest[]): NodeActionRequest[] {
+    const cutoff = this.now() - SWITCH_WINDOW_MS;
+    const protectedRecord = (request: NodeActionRequest) =>
+      request.authorizedBy === "standing-grant" &&
+      (request.state === "approved" || Date.parse(request.createdAt) > cutoff);
+    const ordinary = new Set(
+      requests.filter((request) => !protectedRecord(request)).slice(-MAX_REQUESTS),
+    );
+    return requests.filter((request) => protectedRecord(request) || ordinary.has(request));
+  }
+
   private async load(): Promise<void> {
     const raw = await this.options.load();
     if (Array.isArray(raw)) {
-      this.requests = raw
-        .filter(
+      this.requests = this.retain(
+        raw.filter(
           (entry): entry is NodeActionRequest =>
             !!entry &&
             typeof entry === "object" &&
             typeof (entry as NodeActionRequest).requestId === "string" &&
             Array.isArray((entry as NodeActionRequest).targets),
-        )
-        .slice(-MAX_REQUESTS);
+        ),
+      );
     }
+    let interrupted = false;
+    for (const request of this.requests) {
+      if (request.authorizedBy === "standing-grant" && request.state === "approved") {
+        request.state = "outcome-unknown";
+        request.result = {
+          code: "interrupted",
+          message:
+            "The backend restarted before the switch outcome was saved. Check the active account before retrying.",
+        };
+        interrupted = true;
+      }
+    }
+    if (interrupted) await this.persist();
   }
 
   private async persist(): Promise<void> {
@@ -300,7 +326,7 @@ export class NodeActionRequests {
       expiresAt: new Date(now + NODE_ACTION_REQUEST_TTL_MS).toISOString(),
       state: "pending",
     };
-    this.requests = [...this.requests, request].slice(-MAX_REQUESTS);
+    this.requests = this.retain([...this.requests, request]);
     await this.persist();
     return request;
   }
@@ -349,6 +375,13 @@ export class NodeActionRequests {
         throw new Error("Request ID was reused with a different payload");
       return { request: structuredClone(existing), ran: false };
     }
+    this.requests = this.retain(this.requests);
+    if (limit.windowMs > SWITCH_WINDOW_MS) throw new Error("Unsupported allowance window.");
+    if (
+      this.requests.filter((request) => request.authorizedBy === "standing-grant").length >=
+      MAX_PROTECTED_REQUESTS
+    )
+      throw new Error("Switch history capacity reached; try again later.");
     const now = this.now();
     const recent = this.requests.filter(
       (request) =>
@@ -372,8 +405,13 @@ export class NodeActionRequests {
       resolvedAt: at,
       state: "approved",
     };
-    this.requests = [...this.requests, request].slice(-MAX_REQUESTS);
-    await this.persist();
+    this.requests = this.retain([...this.requests, request]);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.requests = this.requests.filter((entry) => entry !== request);
+      throw error;
+    }
     return { request: await this.execute(request, {}), ran: true };
   }
 

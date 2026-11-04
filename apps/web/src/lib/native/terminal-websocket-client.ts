@@ -83,6 +83,8 @@ export type TerminalWebSocketClientOptions = {
   operationTimeoutMs?: number;
   /** Maximum time to coalesce cumulative terminal-output acknowledgements. */
   acknowledgementDelayMs?: number;
+  /** How long a foreground liveness probe waits for its pong before replacing the socket. */
+  foregroundProbeTimeoutMs?: number;
   createSocket?: (url: string, protocols: string | string[]) => WebSocket;
   onFallbackRequired(): void;
   onSocketReady(): void;
@@ -99,6 +101,17 @@ const DEFAULT_RECONNECT_DELAY_MS = 500;
 const DEFAULT_MAX_RECONNECT_DELAY_MS = 10_000;
 /** Matches the gateway's event streams: longer than its 25 s keepalive. */
 const DEFAULT_RECONNECT_HEALTHY_AFTER_MS = 30_000;
+/**
+ * Long enough for a pong over a slow remote link, short enough that a socket a
+ * mobile WebView kept OPEN but dead is replaced soon after the page returns.
+ */
+export const DEFAULT_FOREGROUND_PROBE_TIMEOUT_MS = 2_500;
+
+type LivenessProbe = {
+  socket: WebSocket;
+  nonce: number;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 export class TerminalWebSocketClient {
   private readonly desired = new Map<string, DesiredChannel>();
@@ -120,6 +133,10 @@ export class TerminalWebSocketClient {
   private operationId = 0;
   private pendingOperationBytes = 0;
   private serverReady = false;
+  /** Whether the current socket's `ready` frame advertised the `ping` feature. */
+  private serverAnswersPing = false;
+  private livenessProbe: LivenessProbe | null = null;
+  private pingNonce = 0;
   private disposed = false;
   private token: string | undefined;
 
@@ -340,6 +357,7 @@ export class TerminalWebSocketClient {
     if (this.disposed) return;
     this.disposed = true;
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    this.clearLivenessProbe();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     for (const channel of this.desired.values()) {
@@ -358,10 +376,52 @@ export class TerminalWebSocketClient {
 
   private readonly onVisibilityChange = (): void => {
     if (document.visibilityState !== "visible" || this.desired.size === 0) return;
-    // OPEN and an earlier ready frame cannot prove this transport is still live.
-    // The main event stream has its own connection and may keep heartbeating
-    // while this one silently stalls. Until the terminal protocol has a liveness
-    // probe, foregrounding must replace it and reconcile every desired channel.
+    // OPEN and an earlier ready frame cannot prove this transport is still live:
+    // a mobile WebView can keep a dead socket OPEN while backgrounded, and the
+    // main event stream has its own connection that may keep heartbeating while
+    // this one silently stalls. A server that answers pings is asked directly,
+    // and the socket is kept only if the answer comes back. Anything else is
+    // replaced at once and every desired channel reconciles.
+    const socket = this.socket;
+    if (
+      socket &&
+      this.serverReady &&
+      this.serverAnswersPing &&
+      socket.readyState === WebSocket.OPEN
+    ) {
+      if (this.livenessProbe?.socket !== socket) this.probeLiveness(socket);
+      return;
+    }
+    this.replaceSocketForForeground();
+  };
+
+  private probeLiveness(socket: WebSocket): void {
+    this.clearLivenessProbe();
+    const nonce = ++this.pingNonce;
+    const timer = setTimeout(() => {
+      if (this.livenessProbe?.timer !== timer) return;
+      this.livenessProbe = null;
+      if (this.disposed || this.socket !== socket) return;
+      // Hidden again before the answer: replacing now would cut background
+      // work for nothing, and the next return to the page probes afresh.
+      if (document.visibilityState !== "visible") return;
+      this.replaceSocketForForeground();
+    }, this.options.foregroundProbeTimeoutMs ?? DEFAULT_FOREGROUND_PROBE_TIMEOUT_MS);
+    this.livenessProbe = { socket, nonce, timer };
+    try {
+      this.send({ type: "ping", nonce });
+    } catch {
+      this.replaceSocketForForeground();
+    }
+  }
+
+  private clearLivenessProbe(): void {
+    if (this.livenessProbe) clearTimeout(this.livenessProbe.timer);
+    this.livenessProbe = null;
+  }
+
+  private replaceSocketForForeground(): void {
+    this.clearLivenessProbe();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const oldSocket = this.socket;
@@ -371,7 +431,7 @@ export class TerminalWebSocketClient {
     oldSocket?.close(1000, "Foreground reconciliation");
     this.resetChannelsForReconnect(new Error("Terminal WebSocket is reconnecting"));
     this.ensureSocket();
-  };
+  }
 
   /**
    * The link went silent, which a socket does not notice by itself: drop it, so
@@ -407,6 +467,7 @@ export class TerminalWebSocketClient {
     }
     this.socket = socket;
     this.serverReady = false;
+    this.serverAnswersPing = false;
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       if (this.socket !== socket) return;
@@ -444,6 +505,7 @@ export class TerminalWebSocketClient {
       switch (frame.type) {
         case "ready":
           this.serverReady = true;
+          this.serverAnswersPing = frame.features?.includes("ping") ?? false;
           this.socketBackoff.connected();
           this.options.onSocketReady();
           for (const channel of this.desired.values()) this.sendSubscribe(channel);
@@ -548,6 +610,11 @@ export class TerminalWebSocketClient {
             }
           }
           if (frame.fatal) socket.close(4004, frame.code);
+          break;
+        case "pong":
+          if (this.livenessProbe?.socket === socket && this.livenessProbe.nonce === frame.nonce) {
+            this.clearLivenessProbe();
+          }
           break;
         case "lifecycle":
           break;

@@ -59,7 +59,23 @@ const CALLBACKS = {
   onChannelUnavailable: () => undefined,
 };
 
-function subscribedHarness() {
+const PROBE_TIMEOUT_MS = 5;
+const pastProbeTimeout = () => new Promise((resolve) => setTimeout(resolve, PROBE_TIMEOUT_MS * 4));
+
+function controlFrames(socket: MockWebSocket): Array<{ type: string; [key: string]: unknown }> {
+  return socket.sent
+    .filter((frame): frame is string => typeof frame === "string")
+    .map((frame) => JSON.parse(frame) as { type: string });
+}
+
+function pings(socket: MockWebSocket): number[] {
+  return controlFrames(socket)
+    .filter((frame) => frame.type === "ping")
+    .map((frame) => frame.nonce as number);
+}
+
+/** `features` is what the server's ready frame advertises; omitted, it predates them. */
+function subscribedHarness(features?: string[]) {
   let now = 1_000_000;
   const sockets: MockWebSocket[] = [];
   const unavailable = mock((_sessionId: string) => undefined);
@@ -70,6 +86,7 @@ function subscribedHarness() {
     maxReconnectDelayMs: 0,
     subscriptionRetryDelayMs: 0,
     acknowledgementDelayMs: 0,
+    foregroundProbeTimeoutMs: PROBE_TIMEOUT_MS,
     reconnectNow: () => now,
     createSocket: () => {
       const socket = new MockWebSocket();
@@ -85,7 +102,14 @@ function subscribedHarness() {
   });
   const socket = sockets[0]!;
   socket.open();
-  socket.receive(JSON.stringify({ type: "ready", version: 1, socketId: "one" }));
+  socket.receive(
+    JSON.stringify({
+      type: "ready",
+      version: 1,
+      socketId: "one",
+      ...(features ? { features } : {}),
+    }),
+  );
   const subscribe = socket.sent
     .filter((frame): frame is string => typeof frame === "string")
     .map((frame) => JSON.parse(frame) as { type: string; requestId?: number })
@@ -112,11 +136,92 @@ function subscribedHarness() {
 }
 
 describe("terminal WebSocket on returning to the page (WEB-11)", () => {
+  test("a socket that answers the foreground ping is kept, with no channel reconciled", async () => {
+    const { sockets, socket, payloads, unavailable, hideFor } = subscribedHarness(["ping"]);
+    hideFor(10 * 60_000);
+    const [nonce] = pings(socket);
+    expect(nonce).toBeNumber();
+    socket.receive(JSON.stringify({ type: "pong", nonce }));
+    await pastProbeTimeout();
+
+    expect(sockets).toHaveLength(1);
+    expect(socket.closes).toEqual([]);
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(payloads.filter((payload) => "desynced" in payload)).toEqual([]);
+    expect(controlFrames(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(1);
+
+    // The kept channel carries on from its cursor.
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 7,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("after"),
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(payloads.at(-1)).toMatchObject({ generation: 1, revision: 1 });
+  });
+
+  test("a socket that stays OPEN but never answers the ping is replaced", async () => {
+    const { sockets, socket, payloads, unavailable, hideFor } = subscribedHarness(["ping"]);
+    hideFor(200);
+    expect(pings(socket)).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+
+    await pastProbeTimeout();
+    expect(socket.closes.at(-1)?.reason).toBe("Foreground reconciliation");
+    expect(sockets).toHaveLength(2);
+    expect(unavailable).toHaveBeenCalledWith("session-a");
+    expect(payloads.at(-1)).toMatchObject({ desynced: true });
+  });
+
+  test("a pong for an earlier probe does not prove the current one", async () => {
+    const { sockets, socket, hideFor } = subscribedHarness(["ping"]);
+    hideFor(200);
+    const [nonce] = pings(socket);
+    socket.receive(JSON.stringify({ type: "pong", nonce: nonce! + 1 }));
+    await pastProbeTimeout();
+    expect(sockets).toHaveLength(2);
+  });
+
+  test("returning again while a probe is out sends no second ping", () => {
+    const { socket, hideFor } = subscribedHarness(["ping"]);
+    hideFor(200);
+    hideFor(200);
+    expect(pings(socket)).toHaveLength(1);
+  });
+
+  test("hidden again before the answer, the socket is left for the next return", async () => {
+    const { sockets, socket, hideFor } = subscribedHarness(["ping"]);
+    hideFor(200);
+    setVisibility("hidden");
+    await pastProbeTimeout();
+    expect(sockets).toHaveLength(1);
+    expect(socket.closes).toEqual([]);
+
+    setVisibility("visible");
+    expect(pings(socket)).toHaveLength(2);
+    socket.receive(JSON.stringify({ type: "pong", nonce: pings(socket)[1] }));
+    await pastProbeTimeout();
+    expect(sockets).toHaveLength(1);
+  });
+
+  test("disposing during a probe leaves nothing to fire", async () => {
+    const { client, sockets, hideFor } = subscribedHarness(["ping"]);
+    hideFor(200);
+    client.dispose();
+    await pastProbeTimeout();
+    expect(sockets).toHaveLength(1);
+  });
+
   test.each([0, 200, 4_999, 5_000, 600_000])(
-    "an answered but independently stalled OPEN socket recovers after a %i ms hide without input",
+    "a server that does not answer pings has its OPEN socket replaced after a %i ms hide",
     async (hiddenMs) => {
       const { sockets, socket, payloads, unavailable, hideFor } = subscribedHarness();
       expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(pings(socket)).toEqual([]);
       // No terminal close/error is delivered. The main event stream stays
       // healthy (never calls dropConnection); no input or resize drives recovery.
       hideFor(hiddenMs);

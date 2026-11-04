@@ -220,7 +220,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-8 | Done | Normalised only when a handler runs, `AgentInfoButton.tsx:475-479` (9c06cb7aa). |
 | WEB-9 | Done | Startup closure 4.23 MB to 2.55 MB, 1.28 MB to 0.80 MB gzip; guarded by `startup-closure.test.ts` (2026-11-04); see 0520 and 1202. |
 | WEB-10 | Done | `AgentChatSearchIndex`, gated on `isOpen`, `AgentChatFind.tsx` (2026-11-04); see 0600 and 1202. |
-| WEB-11 | Done | Rebuilt only on a mobile host hidden for 5 s, or a socket not answering, `terminal-websocket-client.ts` (2026-11-04); see 0610 and 1202. |
+| WEB-11 | Done | On return the terminal socket is pinged and kept when the pong arrives within 2.5 s, replaced otherwise or when the server lacks the `ping` feature, `terminal-websocket-client.ts`, `terminal-websocket-server.ts` (2026-11-04); see 0610 and 1202. |
 | WEB-12 | Open | Project read per change, `useEnvironmentListSync.ts:84-92`; see 0620. |
 | WEB-13 | Open | `reloadFolders` has no digest, `useFilesPanel.ts:644-663`; see 0630. |
 | WEB-14 | Open | Four Maps copied up front, `nativeAgentProjectionStore.ts:173-178`; see 0640. |

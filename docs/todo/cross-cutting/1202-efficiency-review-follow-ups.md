@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts done; TX-4 rest, ST-9 rest and ST-10's environment, session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9 and WEB-10 done 2026-11-04; WEB-11 deferred pending terminal-specific liveness; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
@@ -193,7 +193,7 @@ No React Profiler run was made; the numbers are render counts from tests.
     - Pros: what the report suggested; the selector is a single `get`.
     - Cons: still re-renders on every change inside that environment.
 
-#### WEB-9, WEB-6, WEB-10 and WEB-2's third fix (done 2026-11-04); WEB-11 deferred
+#### WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix (done 2026-11-04)
 
 Re-checked against `main` at `96ee1eb3e` first. All five still applied, in places differently from the report. Each landed as its own commit. Every change has a test that fails on the previous code, except the WEB-9 sizes and the timings, which are measurements.
 
@@ -233,7 +233,7 @@ These are small absolute costs, which matches the report's reasoning-only impact
 
 The first pass after opening find still reads every row once (179–1,197 ms at those sizes); only later passes and further typing improve. The comparison timings ran once each on one reparsed copy.
 
-**WEB-11, terminal socket (optimization deferred after review).** The mobile-only 5 s policy was reverted: an OPEN terminal socket that answered earlier can silently stall independently of the main event stream. Every foreground return with desired channels now replaces the transport and reconciles from authoritative state, without waiting for input. Hiding alone keeps background work connected. Visibility regressions cover 0 ms, 200 ms, 4,999 ms, 5 s and 10 min hides, resubscription and resumed ordered output. Socket retention needs a terminal-specific liveness probe before it is safe; the previous live retention measurements describe the superseded policy.
+**WEB-11, terminal socket.** A first attempt (keep the socket unless a mobile host was hidden for 5 s) was reverted in review: an OPEN socket that answered earlier can stall on its own while the main event stream keeps heartbeating, and only this socket can prove it is live. The terminal protocol now has that proof. A server lists `features: ["ping"]` in its `ready` frame and answers `{ type: "ping", nonce }` with `{ type: "pong", nonce }` through its bounded control queue (`terminal-websocket-server.ts`; parsers in `packages/protocol/src/terminal-websocket.ts`, which drop feature names they do not know). On a return to the page with channels open, `TerminalWebSocketClient` sends one ping to a ready OPEN socket whose server advertised the feature, and keeps it when the matching pong arrives: no channel is unsubscribed, reconciled or re-snapshotted. With no matching pong within 2.5 s (`DEFAULT_FOREGROUND_PROBE_TIMEOUT_MS`), the socket is replaced and every channel reconciles, as before. A socket not yet answered, not OPEN, or from a server without the feature is replaced at once, so a new renderer against an older backend behaves exactly as before and never sends it a frame type it would reject as fatal. If the page is hidden again before the answer, nothing is replaced and the next return probes afresh; hiding alone never touches the socket. Tests (`terminal-websocket-client.visibility.test.ts`): a socket that answers is kept after a 10 min hide and still delivers ordered output, which fails on the previous code (it opened a second socket); a socket that stays OPEN but never answers is replaced and recovers; a pong for an earlier nonce does not count; a second return during a probe sends no second ping; disposing during a probe leaves nothing to fire; and a server without the feature still has its OPEN socket replaced after 0 ms to 10 min hides, with resubscription and resumed output. `gateway-terminal-liveness.test.ts` checks the real gateway advertises the feature, answers two pings in order and refuses a ping before authentication; protocol parser tests cover the frames and the feature list's bounds. Cost on return: one ~30-byte frame each way instead of closing the socket, re-subscribing each channel and fetching an HTTP snapshot per channel. A stalled socket is now replaced up to 2.5 s later than before.
 
 **WEB-2's third fix.** The target was the hook rather than the controller, as 0590 found: the controller's only projection store subscription is its own turn-stop marker. `useNativeAgentSession` subscribed to its whole sync and progressive cache entries, whose every use is a `useState` or `useRef` initial value. It now reads them with `getState()`; the shared projection stays subscribed because an effect follows it. `useNativeAgentSession.store-subscriptions.test.tsx`: one cache write cost one hook render before and none now; a new projection still arrives and a remount still restores the cached transcript token. `useNativeAgentSession.background-flags.test.tsx` ("a manual read still raises and clears the flags") only saw the flag because the removed subscription forced a render mid-read, so it now holds the read open.
 
@@ -282,12 +282,15 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
     - Pros: trivial.
     - Cons: every pass still re-parses everything above 512 rows, and matches lag behind the text.
 - **What decides a socket rebuild on return (WEB-11)?**
-  - **Rebuild on every foreground return while channels exist (recommended, implemented after review).**
-    - Pros: recovers independently stalled sockets without input; works with the current protocol on all hosts.
-    - Cons: each return reconciles all channels; the retention optimization is deferred.
-  - **An application-level echo, rebuilding only if unanswered.**
-    - Pros: tests the socket directly and can retain quiet healthy channels.
-    - Cons: requires a protocol addition and compatibility handling, plus a delay on return.
+  - **An application-level ping on the terminal socket, rebuilding only if unanswered (recommended, done).**
+    - Pros: tests the terminal socket itself, so an independently stalled one is still caught on every host; a healthy one keeps every channel without reconciling.
+    - Cons: a protocol addition, gated on a `ready` feature so older servers keep the old behaviour; a stalled socket is replaced up to 2.5 s later.
+  - **Rebuild on every foreground return while channels exist.**
+    - Pros: recovers stalled sockets at once with the existing protocol.
+    - Cons: every return closes the socket and reconciles every channel from a snapshot, which is the cost WEB-11 names.
+  - **Keep the socket unless a mobile host was hidden for 5 s.**
+    - Pros: no protocol change.
+    - Cons: OPEN and an earlier `ready` do not prove liveness; a desktop socket that stalled on its own was never recovered. Reverted in review.
 - **How to read the two caches without subscribing (WEB-2)?**
   - **`getState()` on each render (recommended, done).**
     - Pros: removes the subscriptions; holds no reference to an entry, so an evicted cache can be freed.
@@ -937,9 +940,9 @@ Counted `src/renderer-entry.tsx` and its static imports with `index.html`'s, bec
 
 Stopped once the chat, Markdown and xterm code had left the closure, which is what the finding names. `CreateEnvironmentDialog`, the action bar and other non-chat code stay eager; no sidebar component was touched, because a compact sidebar build was running at the same time. Added `apps/web/scripts/startup-closure.ts` and `startup-closure.test.ts` beyond the report's list, so the sizes can be repeated and a stray static import fails a test instead of silently undoing the work.
 
-### Task 3: mobile host detection for WEB-11 (2026-11-04)
+### Task 3: mobile host detection for WEB-11 (2026-11-04, superseded)
 
-The client decides "mobile" from `navigator.userAgentData.mobile`, the user agent, or iPadOS's touch-capable `MacIntel`, not from the layout's viewport media query: the concern is how the host suspends sockets, and a narrow desktop window is not a mobile host. The 5 s bound is a judgment with no measurement behind it.
+The mobile-host policy this recorded was reverted in review and then replaced by the terminal ping (see "Task 3: terminal liveness probe for WEB-11" below).
 
 ### Task 14: preserve unrelated task records (review, 2026-11-02)
 
@@ -1292,7 +1295,7 @@ browser and real-stack suites were not run.
 - A React Profiler run with two visible agent tabs, idle and streaming, for
   WEB-2.
 - The compression default under real remote load: tracked in 0052 task 2.
-- WEB-11 on a real mobile WebView: that a socket hidden past 5 s is rebuilt, and that 5 s is long enough to spare a glance away and short enough to catch a dead socket. Only tests with a fake socket and a desktop browser with `visibilityState` overridden have run.
+- WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
 
 ## Related
 
@@ -1305,7 +1308,18 @@ browser and real-stack suites were not run.
 
 ### Task 3: terminal foreground recovery after review
 
-Chose unconditional foreground replacement until terminal-specific liveness is
+Chose unconditional foreground replacement until terminal-specific liveness was
 available. The main stream heartbeat cannot establish terminal socket health.
-This restores the safe existing recovery path; WEB-11's retention optimization
-is deferred while the other task 3 efficiency improvements remain implemented.
+Superseded the same day by the liveness probe below.
+
+### Task 3: terminal liveness probe for WEB-11 (2026-11-04)
+
+Added `ping`/`pong` to terminal WebSocket protocol version 1 rather than
+bumping the version: the server advertises it in `ready.features`, an older
+client ignores the field, and the client sends a ping only to a server that
+listed it, because an older server closes the socket on an unknown frame type.
+The pong goes through the server's bounded control queue, so it needs no new
+bound. The 2.5 s timeout is a judgment, not a measurement: long enough for a
+round trip over a slow remote link, short enough that a dead mobile socket is
+replaced soon after the page returns. A probe whose page is hidden again before
+it settles replaces nothing, so hiding alone never cuts background work.

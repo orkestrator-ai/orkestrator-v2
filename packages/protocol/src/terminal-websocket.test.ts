@@ -901,3 +901,55 @@ describe("terminal WebSocket binary protocol", () => {
     ).toThrow("maximum");
   });
 });
+
+describe("terminal WebSocket liveness probe", () => {
+  test("parses ping and pong with a nonce, and bounds it", () => {
+    expect(
+      parseTerminalWebSocketClientControlFrame(encodeJson({ type: "ping", nonce: 7 })),
+    ).toEqual({ type: "ping", nonce: 7 });
+    expect(
+      parseTerminalWebSocketServerControlFrame(encodeJson({ type: "pong", nonce: 0, extra: 1 })),
+    ).toEqual({ type: "pong", nonce: 0 });
+    for (const nonce of [undefined, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      const frame = nonce === undefined ? {} : { nonce };
+      expectControlError(
+        parseTerminalWebSocketClientControlFrame,
+        { type: "ping", ...frame },
+        "malformed-frame",
+      );
+      expectControlError(
+        parseTerminalWebSocketServerControlFrame,
+        { type: "pong", ...frame },
+        "malformed-frame",
+      );
+    }
+  });
+
+  test("keeps a ready frame without features as it was, and drops unknown names", () => {
+    expect(
+      parseTerminalWebSocketServerControlFrame(
+        encodeJson({ type: "ready", version: 1, socketId: "socket-1" }),
+      ),
+    ).toEqual({ type: "ready", version: 1, socketId: "socket-1" });
+    expect(
+      parseTerminalWebSocketServerControlFrame(
+        encodeJson({
+          type: "ready",
+          version: 1,
+          socketId: "socket-1",
+          features: ["future", "ping", "ping"],
+        }),
+      ),
+    ).toEqual({ type: "ready", version: 1, socketId: "socket-1", features: ["ping"] });
+  });
+
+  test("rejects a features list that is not a bounded list of names", () => {
+    for (const features of ["ping", [1], [null], Array.from({ length: 33 }, () => "ping")]) {
+      expectControlError(
+        parseTerminalWebSocketServerControlFrame,
+        { type: "ready", version: 1, socketId: "socket-1", features },
+        "malformed-frame",
+      );
+    }
+  });
+});

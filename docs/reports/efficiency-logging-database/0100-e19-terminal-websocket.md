@@ -140,7 +140,7 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 
 #### Tasks
 
-1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: deferred after review (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)). The mobile-only 5 s policy was reverted because an independently stalled terminal socket has no liveness probe; foreground replacement remains required on all hosts.
+1. **Rebuild only when needed**: stop replacing a healthy socket when the page becomes visible. Status: done (2026-11-04; [1202 task 3](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)). A first mobile-only 5 s policy was reverted in review because it could not catch an independently stalled terminal socket. The terminal protocol now has a liveness probe: a server that lists `ping` in `ready.features` answers `ping` with `pong`, and on return the client keeps a socket whose pong arrives within 2.5 s and replaces it otherwise. A socket not yet answered, or from a server without the feature, is replaced at once as before.
 
 #### 1. Rebuild only when needed
 
@@ -153,15 +153,15 @@ With a 256 KiB watermark, one flooding channel holds at most about 768 KiB (its 
 **Decisions.**
 
 - **What decides a rebuild?**
-  - **Keep foreground replacement until terminal-specific liveness exists (recommended, implemented after review).**
-    - Pros: recovers stalled terminal connections without user input on every host.
-    - Cons: retains the per-return channel reconciliation cost.
+  - **Add an application-level echo and rebuild only if it goes unanswered (recommended, done).**
+    - Pros: tests the terminal socket directly on every host, so a socket that stalled on its own is still replaced; a healthy one keeps every channel.
+    - Cons: a protocol addition with a version-compatibility entry (renderer-side, in [version-compatibility.md](../../architecture/version-compatibility.md#register)), and a stalled socket is replaced up to 2.5 s later.
+  - **Keep foreground replacement on every return.**
+    - Pros: recovers stalled terminal connections at once with no protocol change.
+    - Cons: retains the per-return channel reconciliation cost this item is about.
   - **Limit the rebuild to mobile hosts and to a page hidden for longer than a short bound (rejected after review).**
     - Pros: a desktop alt-tab costs nothing; needs no new frame; keeps the protection where the comment says it matters.
     - Cons: the main-stream silence path never fires when only the terminal socket stalls.
-  - **Add an application-level echo and rebuild only if it goes unanswered.**
-    - Pros: tests the socket directly on every host.
-    - Cons: a protocol addition with a version-compatibility entry, and a delay on return while it waits.
 
 ### Constraints and rationale
 

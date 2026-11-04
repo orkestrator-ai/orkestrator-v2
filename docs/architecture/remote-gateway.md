@@ -411,6 +411,13 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   source and clock (`eventReconnectRandom`, `eventReconnectNow`). When it asks
   again for the HTTP fallback, that request waits for the fallback's pending
   retry.
+- The main stream's watchdog cannot see a terminal WebSocket that stalls on
+  its own, so on each return to the page the client asks the socket itself: a
+  server that lists `ping` in its `ready` frame's `features` answers
+  `{ type: "ping", nonce }` with a matching `pong`, and the socket is kept when
+  that arrives within 2.5 s. Otherwise, or when the server does not list the
+  feature, the socket is replaced and every terminal reconciles from a
+  snapshot. Hiding the page never touches the socket.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
   backed-off retries until a stream opens. The renderer uses it

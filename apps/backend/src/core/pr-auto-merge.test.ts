@@ -289,7 +289,7 @@ describe("PrAutoMergeController", () => {
     test(`uses latest cleanup intent after preparation: ${requested}`, async () => {
       const h = harness(
         environment({
-          cleanupAfterMergeRequestedAt: requested ? null : new Date().toISOString(),
+          cleanupAfterMergeRequestedAt: requested ? undefined : new Date().toISOString(),
         }),
       );
       const load = h.storage.loadConfig;
@@ -299,7 +299,7 @@ describe("PrAutoMergeController", () => {
         if (++reads === 2)
           h.set({
             ...h.stored,
-            cleanupAfterMergeRequestedAt: requested ? new Date().toISOString() : null,
+            cleanupAfterMergeRequestedAt: requested ? new Date().toISOString() : undefined,
           });
         return config;
       };

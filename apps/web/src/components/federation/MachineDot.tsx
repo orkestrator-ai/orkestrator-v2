@@ -142,9 +142,10 @@ export function MachineHomeIcon({
 
 /**
  * A repository group's leading home, two text lines tall, outlined in the
- * command node's colour: the group belongs to the machine that commands the
- * others. The command node's own icon for the project replaces the home and
- * fills the outline edge to edge, clipped to its rounded corners.
+ * command node's colour while it has a copy of the repository, else that of
+ * the machine running the coordinator (`repositoryTileColor`). The command
+ * node's own icon for the project replaces the home and fills the outline edge
+ * to edge, clipped to its rounded corners.
  */
 export function CommandNodeHomeIcon({
   colorToken,

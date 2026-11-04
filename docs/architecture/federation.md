@@ -523,10 +523,12 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   projects, folders flattened away. Every connected machine counts: the machine
   filter's control is not on screen, so it does not apply here (it is kept for
   the other modes).
-- **An icon** reuses `CommandNodeHomeIcon` (the command node's colour and icon for
-  the project, as a repository heading has; a repository with none shows the
-  house tile) inside `CoordinatorActivityIcon`. The name is a tooltip and the
-  accessible name, and there is no other text.
+- **An icon** reuses `CommandNodeHomeIcon` (the command node's icon for the
+  project, as a repository heading has; a repository with none shows the house
+  tile) inside `CoordinatorActivityIcon`. Its outline is `repositoryTileColor`,
+  also as on a heading: the command node's colour while it has a copy of the
+  repository, else the colour of the machine whose coordinator a click opens. The
+  name is a tooltip and the accessible name, and there is no other text.
 - **Opening** a repository goes where its heading goes (`openRepository`), and a
   project with no repository where its row goes. The icon of whatever project is
   shown is marked selected, and the sidebar stays compact. To another node's

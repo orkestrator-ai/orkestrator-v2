@@ -380,11 +380,11 @@ test("a repository group names each member by its machine in its colour and summ
   // No trailing dot or member count: the leading box carries the colour.
   expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
   expect(within(heading).queryByText("2") === null).toBe(true);
-  // The heading leads with the command node's home (no command node is known
-  // here) over "owner/repo" and a machine and environment count.
+  // The heading leads with the home of the machine it opens on (no command node
+  // is known here) over "owner/repo" and a machine and environment count.
   expect(
     within(heading).getByTestId("command-node-home-icon").getAttribute("data-machine-color"),
-  ).toBe("neutral");
+  ).toBe("teal");
   expect(within(heading).getByText("acme/").classList).toContain("text-muted-foreground");
   expect(within(heading).getByText("app").classList).toContain("text-foreground");
   expect(within(heading).getByText("2 machines · 2 environments")).toBeTruthy();
@@ -408,7 +408,7 @@ test("a repository group names each member by its machine in its colour and summ
   expect(screen.queryByRole("button", { name: /^Move repository/ }) === null).toBe(true);
 });
 
-test("a repository heading uses the command node's colour even when that machine is filtered out", async () => {
+test("a repository not on the command node has a heading in the colour of the machine it opens on", async () => {
   installTwoMachines();
   // The workspace is on a different machine from the command node.
   const remote = machineView({ bound: true });
@@ -432,13 +432,13 @@ test("a repository heading uses the command node's colour even when that machine
   );
   const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
   const home = within(heading).getByTestId("command-node-home-icon");
-  await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
-  expect(home.querySelector("svg")!.classList).toContain("text-violet-500");
-  expect(home.classList).toContain("border-violet-500");
+  await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("teal"));
+  expect(home.querySelector("svg")!.classList).toContain("text-teal-500");
+  expect(home.classList).toContain("border-teal-500");
   expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
 });
 
-test("a repository heading shows the command node's own icon for the project, outlined in its colour", async () => {
+test("a repository heading shows the command node's own icon for the project, outlined in its colour even when that machine is filtered out", async () => {
   installTwoMachines();
   const icon = "data:image/png;base64,iVBORw0KGgo=";
   const remote = machineView({ bound: true });
@@ -526,10 +526,11 @@ test.each([false, true])(
     );
     const heading = screen.getByRole("button", { name: "Open acme/app on Machine A" });
     const home = within(heading).getByTestId("command-node-home-icon");
-    await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe("violet"));
-    expect(home.classList).toContain("border-violet-500");
+    const color = hasMatchingProject ? "violet" : "teal";
+    await waitFor(() => expect(home.getAttribute("data-machine-color")).toBe(color));
+    expect(home.classList).toContain(`border-${color}-500`);
     expect(home.querySelector("svg.lucide-house") === null).toBe(false);
-    expect(home.querySelector("svg")!.classList).toContain("text-violet-500");
+    expect(home.querySelector("svg")!.classList).toContain(`text-${color}-500`);
     expect(within(home).queryByTestId("project-icon") === null).toBe(true);
   },
 );

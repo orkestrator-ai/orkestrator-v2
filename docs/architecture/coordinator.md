@@ -216,7 +216,9 @@ budgets.
 
 **Over the node link.** A leaf queues the notice in its durable outbox
 ([agent-messaging.md](agent-messaging.md#node-mail)), so it survives a link drop and
-a restart of the leaf and arrives once on reconnect. Text a leaf wrote reaches the
+a restart of the leaf and arrives once on reconnect. A retry whose words changed (an
+excerpt, a time) finds the queued notice and keeps its first rendering, so it cannot
+fall back to the leaf's coordinator as well. Text a leaf wrote reaches the
 command node's coordinator as an agent's untrusted mail; automatic switch and
 usage-limit notices are rendered there from checked fields, with every name quoted
 as data. A notice does not use the pair budget that bounds two coordinators
@@ -259,7 +261,12 @@ ledger (the `coordinator-usage-limit-notices` store):
   without a wake (`usage-limit-window-already-notified`). A flush is recorded before it
   is sent, under a fixed request id, so a restart resends it rather than repeating it.
   A group still unsent after a restart can start a coordinator only while its window is
-  open: once the window has ended it is older state, and it starts nothing.
+  open: once the window has ended it is older state, and it starts nothing. If the main
+  that had the wake has closed, a later stop in the open window starts one and is filed
+  there without a wake, so the stop is not lost and the window still costs one turn.
+- **Naming a leaf's worker.** A worker this command node delegated to a leaf has its
+  delegation here, so the leaf reports it as a tab. `deliverFromLeaf` names it a delegated
+  worker when an environment association for that node, environment and tab matches.
 - **The coordinator on the limited account.** Accounts compare by provider and email,
   across machines; without an email only the entry on its own machine matches. What is
   compared is the login the coordinator's next turn runs on: an idle bridge launched on

@@ -1034,6 +1034,84 @@ describe("a leaf session's stop", () => {
   });
 });
 
+describe("acceptance audit regressions", () => {
+  test("a retry with changed words stays in the outbox and reaches one coordinator", async () => {
+    const f = await fleet();
+    await f.collect();
+    f.link.up = false;
+    const router = f.leaf.coordinator.noticeRouter;
+    expect(await router.deliver(repositoryNotice(f.leaf, { body: "First words." }))).toBe(true);
+    expect(await router.deliver(repositoryNotice(f.leaf, { body: "Later words." }))).toBe(true);
+    expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(1);
+    expect(await inbox(f.leaf, await f.leaf.main())).toHaveLength(0);
+
+    f.link.up = true;
+    await f.collect();
+    const messages = await inbox(f.command, await f.command.main());
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.body).toContain("First words.");
+    expect(await inbox(f.leaf, await f.leaf.main())).toHaveLength(0);
+    f.dispose();
+  });
+
+  test("a later stop after the woken main closed starts one and files it without a wake", async () => {
+    const w = await world();
+    const first = await w.addEnvironment("first");
+    const second = await w.addEnvironment("second");
+    const { notices, settle } = stopNotices(w);
+    await notices.noteStop(report(first.environmentId, { requestId: "one" }));
+    await settle();
+    const closed = await w.main();
+    expect(w.wakes(closed)).toBe(1);
+    await w.finishTurn(closed);
+    await w.closeMain();
+
+    await notices.noteStop(report(second.environmentId, { requestId: "two" }));
+    await settle();
+    expect(await openMains(w)).toHaveLength(1);
+    const reopened = await w.main();
+    const filed = (await inbox(w, reopened)).find((message) => message.body.includes('"second"'))!;
+    expect(filed.placement).toBe("stored");
+    expect(filed.placementReason).toBe("usage-limit-window-already-notified");
+    expect(w.wakes(reopened)).toBe(0);
+    notices.stop();
+  });
+
+  test("a worker this command node delegated to a leaf is named as one", async () => {
+    const f = await fleet();
+    const up = stopNotices(f.command);
+    const down = stopNotices(f.leaf, { machineName: "Leaf one", machineKey: "bk_leaf" });
+    await f.collect();
+    const worker = await f.leaf.addEnvironment("delegated-from-above");
+    const main = await f.command.main();
+    const association = await f.command.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: `launch-${worker.environmentId}`,
+      projectId: f.command.projectId,
+      coordinatorId: f.command.coordinatorId,
+      conversationId: main.conversationId!,
+      kind: "environment",
+      nodeId: LEAF,
+      resourceId: worker.environmentId,
+      requestId: "launch-delegated",
+      createdAt: new Date().toISOString(),
+    });
+    await f.command.storage.coordinators.openCoordinatorDelegation(
+      f.command.coordinatorRequests.workerTabs,
+      association.id,
+      worker.tabId,
+    );
+    await down.notices.noteStop(report(worker.environmentId, { session: { tabId: worker.tabId } }));
+    await f.collect();
+    await up.settle();
+    const body = (await inbox(f.command, main))[0]!.body;
+    expect(body).toContain("delegated worker");
+    expect(body).toContain('"delegated-from-above"');
+    up.notices.stop();
+    down.notices.stop();
+    f.dispose();
+  });
+});
+
 describe("review regressions", () => {
   test.each(["pipeline:one", "pull-request:one"])(
     "relayed %s retains hourly budgets and coalescing",

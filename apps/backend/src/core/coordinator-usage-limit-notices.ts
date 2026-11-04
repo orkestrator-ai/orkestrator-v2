@@ -427,7 +427,9 @@ export class CoordinatorUsageLimitNotices {
     const quiet = settings.coordinatorStatusWakes === "off";
     // A window that ended while this backend was down is older state, not a new event.
     const windowOpen = group.windowEndsAt > this.now();
-    const target = await this.deps.router.mainFor(group.projectId, first && !quiet && windowOpen);
+    // A later stop also starts a main if the one woken has since closed. It is filed
+    // there without a wake, so the window still costs one turn and the stop is not lost.
+    const target = await this.deps.router.mainFor(group.projectId, !quiet && windowOpen);
     if (!target) {
       // Nobody to file it with and no leave to start anyone: the window ends with it.
       this.update(id, (current) => {

@@ -316,6 +316,11 @@ export class LeafNodeMail {
           entry.fromTabId === item.fromTabId,
       );
       if (duplicate) {
+        // A notice keeps its first rendering. A retry's words can differ (an excerpt, a
+        // time), and refusing it would send the sender to this node's coordinator as well.
+        if (duplicate.coordinatorNotice && item.coordinatorNotice) {
+          return { next: null, result: duplicate };
+        }
         if (
           duplicate.body !== item.body ||
           duplicate.subject !== item.subject ||

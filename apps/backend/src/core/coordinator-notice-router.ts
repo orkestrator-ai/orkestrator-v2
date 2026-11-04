@@ -299,12 +299,28 @@ export class CoordinatorNoticeRouter {
           ...notice.stop,
           machine: noticeText(node.name) ?? notice.stop.machine,
           nodeId: node.nodeId,
+          sessionKind: (await this.delegatedFromHere(notice.stop, node.nodeId))
+            ? "worker"
+            : notice.stop.sessionKind,
         },
         projectId,
       );
       return "delivered";
     }
     return this.deliverRelayed(item, notice, node, projectId);
+  }
+
+  /** The delegation lives on this node, so the leaf reports its worker as a plain tab. */
+  private async delegatedFromHere(stop: UsageLimitStop, nodeId: string): Promise<boolean> {
+    if (stop.sessionKind !== "tab" || !stop.tabId) return false;
+    const { workflows } = await this.storage.coordinators.getCoordinatorReconciliationState();
+    return workflows.some(
+      (association) =>
+        association.kind === "environment" &&
+        association.nodeId === nodeId &&
+        association.resourceId === stop.environmentId &&
+        association.delegation?.workerTabId === stop.tabId,
+    );
   }
 
   /**

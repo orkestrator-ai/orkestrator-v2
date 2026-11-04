@@ -81,13 +81,22 @@ function launch(
 }
 
 /** `dev:test` flags a caller may pass through; the runner owns the profile and fixture. */
-const PROFILE_FLAGS = new Set(["--no-agent-credentials", "--use-dev-worktree-folder"]);
+const PROFILE_FLAGS = new Set([
+  "--headless",
+  "--no-agent-credentials",
+  "--use-dev-worktree-folder",
+]);
 const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms"]);
 
 /**
  * The disposable profile's `dev:test` arguments: a credential-free Codex
  * fixture unless the caller chooses credential sources or platforms, for
  * example to provision a provider that a host's startup checks require.
+ *
+ * Always `--headless`, and `--no-headless` is refused: these runs drive the
+ * gateway from their own browser, and the explicit flag beats whatever the
+ * caller's terminal or environment says, so a sub-agent's run cannot open a
+ * window on the host's desktop.
  */
 export function isolatedProfileArguments(extra: readonly string[] = []): string[] {
   for (let index = 0; index < extra.length; index += 1) {
@@ -104,6 +113,7 @@ export function isolatedProfileArguments(extra: readonly string[] = []): string[
   );
   const args = [
     "--fixture",
+    "--headless",
     ...(credentials ? [] : ["--no-agent-credentials"]),
     ...(extra.includes("--agent-platforms") ? [] : ["--agent-platforms", "codex"]),
     ...extra,
@@ -194,6 +204,8 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_TEST_HOST_WORKERS: "2",
     ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
     ...options.suite?.env,
+    // Specs may restart dev:test without the initial command-line flag.
+    ORKESTRATOR_AGENT_TEST_HEADLESS: "1",
   };
   if (options.docker) {
     const realDocker = Bun.which("docker", { PATH: env.PATH });
@@ -204,7 +216,9 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     });
   }
   const startupTimeout = options.startupTimeoutMs ?? (options.docker ? 300_000 : 120_000);
-  const testTimeout = options.testTimeoutMs ?? 900_000;
+  // The browser suite has taken from 640 s to past 900 s on a busy Linux host; a
+  // run cut off here reports no result for the cases it never reached.
+  const testTimeout = options.testTimeoutMs ?? 1_500_000;
   const cleanupTimeout = options.cleanupTimeoutMs ?? 45_000;
   const launchTask = (
     task: string,

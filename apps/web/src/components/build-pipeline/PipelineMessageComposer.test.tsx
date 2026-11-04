@@ -101,7 +101,7 @@ describe("Auto-steer on", () => {
     );
     expect(box.value).toBe("");
     expect(currentQueue()).toEqual([]);
-    expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+    expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true);
   });
 
   test("steers the new row when older text is identical", async () => {
@@ -305,7 +305,7 @@ describe("Auto-steer off", () => {
     expect(strip.getByText("use the helper")).toBeTruthy();
     expect(strip.getByRole("button", { name: /^Steer queued prompt 1 of 1/ })).toBeTruthy();
     // The pipeline's queue has no separate manager to open.
-    expect(screen.queryByRole("button", { name: /View queued prompts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /View queued prompts/ }) === null).toBe(true);
   });
 
   test("the Steer button moves that message into the running turn", async () => {
@@ -391,18 +391,18 @@ describe("Auto-steer off", () => {
   test("no Steer button between turns, on a paused build, or for a command", () => {
     const queued = [queuedMessage];
     renderComposer({ ...betweenTurns, pendingUserMessages: queued });
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     cleanup();
 
     renderComposer({ ...running, phase: "paused", pendingUserMessages: queued });
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     cleanup();
 
     renderComposer({
       ...running,
       pendingUserMessages: [{ ...queuedMessage, text: "/compact" }],
     });
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     expect(screen.getByRole("button", { name: /^Remove queued prompt/ })).toBeTruthy();
   });
 
@@ -412,7 +412,7 @@ describe("Auto-steer off", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Remove queued prompt/ }));
 
     await waitFor(() => expect(removeQueuedMock).toHaveBeenCalledWith(running.id, "q1"));
-    await waitFor(() => expect(screen.queryByTestId("compose-queue-strip")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true));
   });
 
   test("Edit loads the message into the box and takes it out of the queue", async () => {
@@ -466,7 +466,7 @@ describe("Auto-steer off", () => {
     expect(screen.getByRole("button", { name: "Send message" }).getAttribute("title")).toContain(
       "Validation",
     );
-    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
     expect(screen.getByRole("button", { name: /^Edit queued prompt/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Remove queued prompt/ })).toBeTruthy();
     fireEvent.keyDown(box, { key: "Enter" });

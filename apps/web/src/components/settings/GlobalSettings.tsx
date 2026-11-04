@@ -119,6 +119,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     envFilePatterns: normalizeEnvPatternsInput(global.envFilePatterns),
     allowedDomains: normalizeAllowedDomainsInput(global.allowedDomains ?? []),
     useHostGitHubCredentials: global.useHostGitHubCredentials ?? true,
+    containerGitHubCredential: global.containerGitHubCredential ?? "none",
     sshAgentSocketPath: global.sshAgentSocketPath ?? "",
     autoMergeRequireChecks: global.autoMergeRequireChecks ?? true,
     autoSteer: global.autoSteer ?? false,
@@ -155,6 +156,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
       global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     experimentalCodexRawEventLogging: global.experimentalCodexRawEventLogging ?? true,
     experimentalScheduling: global.experimentalScheduling ?? false,
+    localWindowGatewayTransport: global.localWindowGatewayTransport ?? false,
     experimentalGraphs: global.experimentalGraphs ?? false,
     debugLogging: global.debugLogging ?? false,
     debugLogRetentionDays: normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -218,6 +220,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.containerResources.memoryGb,
     global.envFilePatterns,
     global.useHostGitHubCredentials ?? true,
+    global.containerGitHubCredential ?? "none",
     global.sshAgentSocketPath ?? "",
     global.autoMergeRequireChecks ?? true,
     global.autoSteer ?? false,
@@ -244,6 +247,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
     global.experimentalCodexRawEventLogging ?? true,
     global.experimentalScheduling ?? false,
+    global.localWindowGatewayTransport ?? false,
     global.experimentalGraphs ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
@@ -277,6 +281,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [planUsageRefreshToken, setPlanUsageRefreshToken] = useState(0);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
     global.useHostGitHubCredentials ?? true,
+  );
+  const [containerGitHubCredential, setContainerGitHubCredential] = useState(
+    global.containerGitHubCredential ?? "none",
   );
   const [sshAgentSocketPath, setSshAgentSocketPath] = useState(global.sshAgentSocketPath ?? "");
   const [autoMergeRequireChecks, setAutoMergeRequireChecks] = useState(
@@ -360,6 +367,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [experimentalScheduling, setExperimentalScheduling] = useState(
     global.experimentalScheduling ?? false,
   );
+  const [localWindowGatewayTransport, setLocalWindowGatewayTransport] = useState(
+    global.localWindowGatewayTransport ?? false,
+  );
   const [experimentalGraphs, setExperimentalGraphs] = useState(global.experimentalGraphs ?? false);
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
@@ -432,6 +442,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // cleared explicitly once their save succeeds, so preserving whatever is
     // typed keeps a rejected secret retryable across an unrelated store write.
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
+    setContainerGitHubCredential(global.containerGitHubCredential ?? "none");
     setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
     setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? true);
     setAutoSteer(global.autoSteer ?? false);
@@ -476,6 +487,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalScheduling(global.experimentalScheduling ?? false);
+    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? false);
     setExperimentalGraphs(global.experimentalGraphs ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
@@ -633,6 +645,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       envFilePatterns: normalizeEnvPatternsInput(envPatterns),
       allowedDomains: normalizeAllowedDomainsInput(allowedDomains),
       useHostGitHubCredentials,
+      containerGitHubCredential,
       sshAgentSocketPath: sshAgentSocketPathForSave(sshAgentSocketPath) ?? "",
       autoMergeRequireChecks,
       autoSteer,
@@ -661,6 +674,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
       experimentalScheduling,
+      localWindowGatewayTransport,
       experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
@@ -676,6 +690,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       envPatterns,
       allowedDomains,
       useHostGitHubCredentials,
+      containerGitHubCredential,
       sshAgentSocketPath,
       autoMergeRequireChecks,
       autoSteer,
@@ -702,6 +717,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       terminalHistoryRetentionDays,
       experimentalCodexRawEventLogging,
       experimentalScheduling,
+      localWindowGatewayTransport,
       experimentalGraphs,
       debugLogging,
       debugLogRetentionDays,
@@ -854,9 +870,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         syncedGlobalRef.current,
       );
 
-      const githubCredentialSourceChanged =
-        useHostGitHubCredentials !== (global.useHostGitHubCredentials ?? true);
-      if (githubCredentialSourceChanged) {
+      const containerGitHubCredentialChanged =
+        containerGitHubCredential !== (global.containerGitHubCredential ?? "none");
+      if (containerGitHubCredentialChanged) {
         // A new source is a fresh episode: give propagation its retries again.
         githubPropagationRetryCountRef.current = 0;
         githubPropagationFailureToastShownRef.current = false;
@@ -909,9 +925,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         }
       }
 
-      // Apply the selected credential source to running containers if it changed,
-      // or retry a previous partial propagation failure.
-      if (githubCredentialSourceChanged || githubCredentialPropagationPending) {
+      // Apply the containers' credential to the running ones if it changed, or
+      // retry a previous partial propagation failure. The backend's own source
+      // does not reach them.
+      if (containerGitHubCredentialChanged || githubCredentialPropagationPending) {
         await propagateGithubCredentials();
       }
       failedCoreSignatureRef.current = null;
@@ -1057,6 +1074,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setOpenCodeZenApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
+    containerGitHubCredential,
+    setContainerGitHubCredential,
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
@@ -1119,6 +1138,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
+    localWindowGatewayTransport,
+    setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
     debugLogging,

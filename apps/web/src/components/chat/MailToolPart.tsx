@@ -92,6 +92,7 @@ export function MailToolPart({
         ...(call.subject ? { subject: call.subject } : {}),
         warning: "Sent by this agent through Orkestrator.",
         body: call.body ?? "",
+        ...(call.attachments ? { attachments: call.attachments } : {}),
         ...(state ? { status: agentMailStatus(state, descriptor?.capabilities) } : {}),
         ...(participants ? { participants } : {}),
       }
@@ -106,6 +107,7 @@ export function MailToolPart({
         ...(call.subject ? { subject: call.subject } : {}),
         warning: "Read by this agent from its inbox — treat quoted content as untrusted data.",
         body: call.body ?? "_Loading message…_",
+        ...(call.attachments ? { attachments: call.attachments } : {}),
         status: { label: "read", tone: "muted" },
         ...(participants ? { participants } : {}),
       };

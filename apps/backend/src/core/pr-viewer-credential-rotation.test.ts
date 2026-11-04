@@ -29,6 +29,7 @@ for (const oldPermission of [false, true]) {
       await storage.updateGlobalConfig({
         ...(await storage.loadConfig()).global,
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
       });
       await storage.setGitHubToken("test-old-credential");
       const runtime = new BackendRuntime({ emit: () => undefined });

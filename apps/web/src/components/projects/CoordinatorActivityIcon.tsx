@@ -24,9 +24,12 @@ const RING_CLASSES: Record<CoordinatorActivityState | "idle", string> = {
  */
 export function CoordinatorActivityIcon({
   state,
+  ringRadiusClassName = "rounded-[5px]",
   children,
 }: {
   state: CoordinatorActivityState | null;
+  /** The ring's corners, for an icon rounder than the small ones it usually surrounds. */
+  ringRadiusClassName?: string;
   children: ReactNode;
 }) {
   const ringRef = useRef<HTMLSpanElement>(null);
@@ -43,7 +46,7 @@ export function CoordinatorActivityIcon({
         ref={ringRef}
         data-testid="coordinator-activity-ring"
         aria-hidden="true"
-        className={cn(RING_BASE_CLASSES, "rounded-[5px]", RING_CLASSES[shown])}
+        className={cn(RING_BASE_CLASSES, ringRadiusClassName, RING_CLASSES[shown])}
       />
       <span className="relative z-10 inline-flex">{children}</span>
     </span>

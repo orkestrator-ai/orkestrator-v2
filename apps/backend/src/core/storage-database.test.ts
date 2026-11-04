@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -332,6 +333,55 @@ describe("StorageDatabase", () => {
     const db = database(directory);
     expect(db.schemaVersion()).toBe(0 + 1);
     expect(db.db.query("SELECT name FROM sqlite_master WHERE name = 'half'").get()).toBeNull();
+  });
+
+  test("a failed migration logs one line with no error text, and fails the open as before", async () => {
+    const directory = await dataDir();
+    const logs = captureLogs();
+    try {
+      database(directory).close();
+      expect(() =>
+        database(directory, {
+          migrations: [
+            {
+              version: 2,
+              name: "broken",
+              up: () => {
+                throw new Error("/Users/someone/private path");
+              },
+            },
+          ],
+        }),
+      ).toThrow("/Users/someone/private path");
+      const failed = logs.records().filter((record) => record.event === "migration.failed");
+      expect(failed).toHaveLength(1);
+      expect(failed[0]?.level).toBe("error");
+      expect(failed[0]?.fields).toMatchObject({ fromVersion: 1, toVersion: 2, step: "migrate" });
+      expect(failed[0]?.fields?.error).not.toHaveProperty("message");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a failed safety copy before a migration is told apart from the migration", async () => {
+    const directory = await dataDir();
+    const logs = captureLogs();
+    try {
+      database(directory).close();
+      expect(() =>
+        database(directory, {
+          migrations: [{ version: 2, name: "fine", up: () => undefined }],
+          beforeMigrate: () => {
+            throw new Error("no snapshot");
+          },
+        }),
+      ).toThrow("no snapshot");
+      expect(
+        logs.records().find((record) => record.event === "migration.failed")?.fields?.step,
+      ).toBe("snapshot");
+    } finally {
+      logs.restore();
+    }
   });
 
   describe("leases", () => {
@@ -720,6 +770,160 @@ describe("StorageDatabase space reclamation", () => {
   });
 });
 
+describe("StorageDatabase failure logging", () => {
+  const SENTINEL = "SENTINEL-SQLITE-MESSAGE";
+  const failure = () => Object.assign(new Error(SENTINEL), { code: "SQLITE_IOERR" });
+
+  test("a scrub checkpoint a reader blocks is logged, and recovers on the next success", async () => {
+    const directory = await dataDir();
+    const writer = database(directory, { busyTimeoutMs: 0 });
+    const reader = database(directory, { busyTimeoutMs: 0 });
+    writer.writeStore("records", { first: "value" });
+    reader.db.exec("BEGIN");
+    reader.db.query("SELECT count(*) FROM store_rows").get();
+    writer.writeStore("records", { first: "changed" });
+    const logs = captureLogs();
+    try {
+      writer.scrubDeletedContent();
+      writer.scrubDeletedContent();
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          area: "storage",
+          event: "scrub.checkpoint-failed",
+          fields: { scope: "scrub", kind: "busy" },
+        },
+      ]);
+      reader.db.exec("COMMIT");
+      writer.scrubDeletedContent();
+      expect(logs.records().at(-1)).toMatchObject({
+        level: "warn",
+        event: "throttle.recovered",
+        fields: { site: "scrub.checkpoint-failed", scope: "scrub", failures: 2 },
+      });
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a scrub checkpoint that throws is logged without its message and never throws", async () => {
+    const db = database(await dataDir());
+    const logs = captureLogs();
+    const exec = spyOn(db.db, "exec").mockImplementation(() => {
+      throw failure();
+    });
+    try {
+      expect(() => db.scrubDeletedContent()).not.toThrow();
+      expect(() => db.scrubDeletedContent()).not.toThrow();
+      exec.mockRestore();
+      db.scrubDeletedContent();
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          event: "scrub.checkpoint-failed",
+          fields: { scope: "scrub", kind: "SQLITE_IOERR", error: { code: "SQLITE_IOERR" } },
+        },
+        { event: "throttle.recovered", fields: { site: "scrub.checkpoint-failed", failures: 2 } },
+      ]);
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    } finally {
+      exec.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test("a successful scrub with no fault writes nothing", async () => {
+    const db = database(await dataDir());
+    const logs = captureLogs();
+    try {
+      db.scrubDeletedContent();
+      expect(logs.records()).toEqual([]);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a heartbeat cannot report recovery after another connection reclaims the lease", async () => {
+    const directory = await dataDir();
+    const first = database(directory);
+    const second = database(directory);
+    jest.useFakeTimers();
+    const logs = captureLogs();
+    const releaseFirst = await first.acquireLease("reclaimed-heartbeat", "test");
+    const realQuery = first.db.query.bind(first.db);
+    const failHeartbeats = spyOn(first.db, "query").mockImplementation(((sql: string) => {
+      if (sql.startsWith("UPDATE leases")) throw failure();
+      return realQuery(sql);
+    }) as typeof first.db.query);
+    let releaseSecond: (() => Promise<void>) | undefined;
+    try {
+      jest.advanceTimersByTime(5_000);
+      // Offset the new holder's timer so this assertion observes only the
+      // original holder's next beat, not a successful renewal by its successor.
+      jest.advanceTimersByTime(1);
+      second.db.query("UPDATE leases SET heartbeat_at = 0").run();
+      releaseSecond = await second.acquireLease("reclaimed-heartbeat", "test");
+      failHeartbeats.mockRestore();
+      jest.advanceTimersByTime(4_999);
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          event: "lease.heartbeat-failed",
+          fields: { scope: "reclaimed-heartbeat" },
+        },
+      ]);
+      await releaseFirst();
+      expect(second.db.query("SELECT name FROM leases").all()).toHaveLength(1);
+    } finally {
+      failHeartbeats.mockRestore();
+      await releaseFirst();
+      await releaseSecond?.();
+      jest.useRealTimers();
+      logs.restore();
+    }
+  });
+
+  test("a failed lease heartbeat is logged once per lease, and recovers on the next beat", async () => {
+    const db = database(await dataDir());
+    jest.useFakeTimers();
+    const logs = captureLogs();
+    const release = await db.acquireLease("store-a", "test");
+    const realQuery = db.db.query.bind(db.db);
+    const failHeartbeats = spyOn(db.db, "query").mockImplementation(((sql: string) => {
+      if (sql.startsWith("UPDATE leases")) throw failure();
+      return realQuery(sql);
+    }) as typeof db.db.query);
+    try {
+      jest.advanceTimersByTime(5_000);
+      jest.advanceTimersByTime(5_000);
+      failHeartbeats.mockRestore();
+      jest.advanceTimersByTime(5_000);
+      jest.advanceTimersByTime(5_000);
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          area: "storage",
+          event: "lease.heartbeat-failed",
+          fields: { scope: "store-a", kind: "SQLITE_IOERR", error: { code: "SQLITE_IOERR" } },
+        },
+        {
+          level: "warn",
+          event: "throttle.recovered",
+          fields: { site: "lease.heartbeat-failed", scope: "store-a", failures: 2 },
+        },
+      ]);
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    } finally {
+      failHeartbeats.mockRestore();
+      jest.useRealTimers();
+      logs.restore();
+      await release();
+    }
+  });
+});
+
 describe("StorageDatabase.updateStoreRow", () => {
   test("writers of different keys on different connections keep each other's rows", async () => {
     const directory = await dataDir();
@@ -786,11 +990,163 @@ describe("StorageDatabase.updateStoreRow", () => {
     expect(other.readStore("records")?.value).toEqual({ ...original, a: { n: 4 } });
   });
 
-  test("refuses stores that are not keyed records", async () => {
+  test("refuses stores that are not keyed", async () => {
     const db = database(await dataDir());
-    expect(() => db.updateStoreRow("items", "a", () => ({ result: null }))).toThrow(
+    expect(() => db.updateStoreRow("plain", "a", () => ({ result: null }))).toThrow(
       "requires a record store",
     );
+    expect(() =>
+      db.updateStoreRow("items", "a", () => ({ result: null }), { collection: "c" }),
+    ).toThrow("requires a record store");
+  });
+});
+
+describe("StorageDatabase.updateStoreRow on a keyed array store", () => {
+  const item = (id: string, n = 0, owner = "o1") => ({ id, n, owner });
+
+  test("inserts last, updates in place and deletes, keeping the order", async () => {
+    const db = database(await dataDir());
+    db.writeStore("items", [item("c"), item("a"), item("b")]);
+    db.updateStoreRow("items", "d", () => ({ result: null, value: item("d") }));
+    db.updateStoreRow("items", "a", (current) => ({
+      result: null,
+      value: { ...(current as object), n: 7 },
+    }));
+    db.updateStoreRow("items", "c", () => ({ result: null, delete: true }));
+    db.updateStoreRow("items", "e", () => ({ result: null, value: item("e") }));
+    expect(db.readStore("items")?.value).toEqual([item("a", 7), item("b"), item("d"), item("e")]);
+    // A connection with no cached copy assembles the same order from the rows.
+    const fresh = database(path.dirname(db.path));
+    const ids = (fresh.readStore("items")!.value as Array<{ id: string }>).map((row) => row.id);
+    expect(ids).toEqual(["a", "b", "d", "e"]);
+  });
+
+  test("touches only its own row and keeps the owner column current", async () => {
+    const db = database(await dataDir());
+    db.writeStore("items", [item("a"), item("b")]);
+    const rows = () =>
+      db.db
+        .query("SELECT key, position, owner, value FROM store_rows WHERE store = 'items'")
+        .all() as Array<{ key: string; position: number; owner: string; value: string }>;
+    const before = rows();
+    const whole = spyOn(db, "writeStoreInTransaction");
+    try {
+      db.updateStoreRow("items", "a", () => ({ result: null, value: item("a", 1, "o2") }));
+      expect(whole).not.toHaveBeenCalled();
+    } finally {
+      whole.mockRestore();
+    }
+    const after = rows();
+    expect(after.find((row) => row.key === "b")).toEqual(before.find((row) => row.key === "b")!);
+    expect(after.find((row) => row.key === "a")).toMatchObject({ position: 0, owner: "o2" });
+    expect(db.readStoreRowsByOwner("items", "o2")).toEqual([item("a", 1, "o2")]);
+  });
+
+  test("reads the current item, skips no-ops and writes nothing for a missing delete", async () => {
+    const db = database(await dataDir());
+    db.writeStore("items", [item("a", 1)]);
+    const revision = db.storeRevision("items");
+    expect(db.updateStoreRow("items", "a", (current) => ({ result: current }))).toEqual(
+      item("a", 1),
+    );
+    expect(db.updateStoreRow("items", "z", (current) => ({ result: current }))).toBeUndefined();
+    db.updateStoreRow("items", "a", () => ({ result: null, value: item("a", 1) }));
+    db.updateStoreRow("items", "z", () => ({ result: null, delete: true }));
+    expect(db.storeRevision("items")).toBe(revision);
+  });
+
+  test("refuses a value that does not carry its key, writing nothing", async () => {
+    const db = database(await dataDir());
+    db.writeStore("items", [item("a")]);
+    const revision = db.storeRevision("items");
+    for (const value of [item("b"), { n: 1 }, "text"]) {
+      expect(() => db.updateStoreRow("items", "a", () => ({ result: null, value }))).toThrow(
+        "must equal its non-blank key",
+      );
+    }
+    expect(() => db.updateStoreRow("items", "", () => ({ result: null, value: item("") }))).toThrow(
+      "must equal its non-blank key",
+    );
+    expect(db.storeRevision("items")).toBe(revision);
+    expect(db.readStore("items")?.value).toEqual([item("a")]);
+  });
+
+  test("creates an absent store as an array", async () => {
+    const db = database(await dataDir());
+    db.updateStoreRow("items", "a", () => ({ result: null, value: item("a") }));
+    expect(db.readStore("items")?.value).toEqual([item("a")]);
+    expect(db.readStoreHeader("items")).toMatchObject({ layout: "array", mode: "rows" });
+    expect(db.readStoreRow("items", "a")).toEqual(item("a"));
+  });
+
+  test("falls back to the whole value for a store held as a document", async () => {
+    const db = database(await dataDir());
+    // A repeated key cannot be held as rows.
+    const repeated = [item("a", 1), item("b"), item("a", 2)];
+    db.writeStore("items", repeated);
+    expect(db.readStoreHeader("items")?.mode).toBe("document");
+    expect(db.updateStoreRow("items", "a", (current) => ({ result: current }))).toEqual(
+      item("a", 1),
+    );
+    db.updateStoreRow("items", "b", () => ({ result: null, value: item("b", 5) }));
+    db.updateStoreRow("items", "n", () => ({ result: null, value: item("n") }));
+    expect(db.readStore("items")?.value).toEqual([
+      item("a", 1),
+      item("b", 5),
+      item("a", 2),
+      item("n"),
+    ]);
+    // Deleting the key removes every item that carries it, so the rows fit again.
+    db.updateStoreRow("items", "a", () => ({ result: null, delete: true }));
+    expect(db.readStore("items")?.value).toEqual([item("b", 5), item("n")]);
+    expect(db.readStoreHeader("items")?.mode).toBe("rows");
+  });
+
+  test("replaces an unreadable store only when allowed", async () => {
+    const { StoreCorruptError } = await import("./storage-database.js");
+    const db = database(await dataDir());
+    db.transaction(() => db.writeRawDocumentInTransaction("items", "{ torn"));
+    expect(() =>
+      db.updateStoreRow("items", "a", () => ({ result: null, value: item("a") }), {
+        unreadable: "throw",
+      }),
+    ).toThrow(StoreCorruptError);
+    db.updateStoreRow("items", "a", () => ({ result: null, value: item("a") }));
+    expect(db.readStore("items")?.value).toEqual([item("a")]);
+  });
+
+  test("a rollback restores the row, the cache and the revision", async () => {
+    const directory = await dataDir();
+    const db = database(directory);
+    const other = database(directory);
+    db.writeStore("items", [item("a"), item("b")]);
+    other.readStore("items");
+    const revision = db.storeRevision("items");
+    expect(() =>
+      db.transaction(() => {
+        db.updateStoreRow("items", "a", () => ({ result: null, value: item("a", 9) }));
+        db.updateStoreRow("items", "b", () => ({ result: null, delete: true }));
+        db.updateStoreRow("items", "c", () => ({ result: null, value: item("c") }));
+        expect(db.readStore("items")?.value).toEqual([item("a", 9), item("c")]);
+        throw new Error("roll back");
+      }),
+    ).toThrow("roll back");
+    expect(db.storeRevision("items")).toBe(revision);
+    expect(db.readStore("items")?.value).toEqual([item("a"), item("b")]);
+    db.updateStoreRow("items", "a", () => ({ result: null, value: item("a", 3) }));
+    expect(other.readStore("items")?.value).toEqual([item("a", 3), item("b")]);
+  });
+
+  test("whole-value writes and row writes share one row layout", async () => {
+    const db = database(await dataDir());
+    db.writeStore("items", [item("a"), item("b"), item("c")]);
+    db.updateStoreRow("items", "b", () => ({ result: null, delete: true }));
+    db.updateStoreRow("items", "d", () => ({ result: null, value: item("d") }));
+    // The gap the delete left does not disturb a whole-value write after it.
+    const current = db.readStore("items")!.value as Array<{ id: string }>;
+    db.writeStore("items", [...current, item("e")]);
+    const ids = (db.readStore("items")!.value as Array<{ id: string }>).map((row) => row.id);
+    expect(ids).toEqual(["a", "c", "d", "e"]);
   });
 });
 

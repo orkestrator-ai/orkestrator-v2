@@ -34,7 +34,7 @@ mise run test:agent:design:isolated
 Each task creates a unique disposable profile, starts `dev:test` concurrently,
 polls `dev:status --json` until all runtime processes are ready, runs Playwright,
 and stops/resets the profile in `finally`. Startup is bounded to two minutes,
-the browser suite to fifteen minutes, and each cleanup command to 45 seconds.
+the browser suite to twenty-five minutes, and each cleanup command to 45 seconds.
 An IPC-owned supervisor also cleans up when the caller is cancelled or killed.
 Test failures and cleanup failures return a nonzero exit status. Artifacts stay
 under `output/agent-testing/<unique-profile>/browser/`; profile state is removed.
@@ -89,27 +89,30 @@ mise run test:agent:browser:isolated --agent-platforms codex,opencode
 The runner owns `--profile` and `--fixture` and rejects anything else before it
 creates a profile.
 
-On a shared Linux host, a profile's Electron window would otherwise open on the
-signed-in user's desktop (it inherits `DISPLAY` and `WAYLAND_DISPLAY`). Set
-`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` for `dev:test` or either isolated
-task to start it on Chromium's headless Ozone platform with the GPU off and
-both display variables removed; the browser suites drive the gateway, not that
-window. It applies only to agent-test profiles on Linux, and the Electron
-specs, which launch their own Electron rather than the profile's, are not
-covered by it. The design canvas Electron spec reads the same variable and
-launches its own Electron headless; the packaged-app spec is always headless on
-Linux (see [Packaged-app Electron spec](#packaged-app-electron-spec)):
+Every one-shot isolated runner starts its profile with `dev:test --headless`
+(see [Headless Electron](#headless-electron)), so a sub-agent's run cannot open
+a window on the host's desktop. They refuse `--no-headless`. The browser suites
+drive the gateway, not that window. `headless-profile.spec.ts` checks this on each
+isolated browser run on Linux: it reads `/proc` for the profile's Electron tree (no
+display variables, the headless switches on the launcher's child) and loads the app.
 
-```bash
-ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 mise run test:agent:design:isolated
-```
+Electron specs launch their own Electron rather than the profile's, so the
+profile's headless setting does not apply to them. The design canvas and service
+preview Electron specs support `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1`
+on Linux; the packaged-app specs are always headless on Linux. See
+[Electron specs and their display](#electron-specs-and-their-display) and
+[Packaged-app Electron spec](#packaged-app-electron-spec).
 
 On Linux, Chromium aborts in-flight requests, including loopback ones, with
 `net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,
 and Docker adds or removes a bridge or veth for every network and container it
 creates or deletes. A browser suite running beside other Docker work on the
-same host can therefore lose Vite module loads and render a blank page; see
+same host can therefore lose Vite module loads and render a blank page or the
+"Orkestrator couldn't connect" screen; see
 flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+When a browser run fails, it prints which failed cases have that error in their
+trace; the run's result does not change. `headless-profile.spec.ts` fetches its
+modules outside Chromium's network stack, so this does not fail the headless check.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
@@ -463,13 +466,43 @@ when Settings > Disk usage names a folder for new dev worktrees, so the browser
 suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
 place them in that folder instead; `mise run dev` always uses it.
 
-On Linux, `--headless-electron` (also `dev:test` only) runs Electron on
-Chromium's headless Ozone platform without `DISPLAY` or `WAYLAND_DISPLAY`, so
-the profile opens no window in the desktop session that started it. Use it on
-a shared host when only the browser surface is under test; the renderer is
-still at `browserUrl`. Do not use it for native-window, menu or clipboard QA.
-The switch has to be on Electron's command line, so the launcher adds it;
-Electron's main script cannot apply it.
+#### Headless Electron
+
+A profile's Electron inherits `DISPLAY` and `WAYLAND_DISPLAY`, which on a shared
+Linux host belong to whoever is signed in. Its window would open on their
+desktop, take focus and receive their keystrokes. `--headless` (`dev:test`
+only) starts it on Chromium's headless Ozone platform instead, with the GPU off,
+`--password-store=basic` (so `safeStorage` never reaches the signed-in user's
+keyring, and the desktop's remote connection tokens last only for the session)
+and neither display variable. No window opens, and the app is at `browserUrl`.
+The launcher prints when this mode is on and why.
+
+The first of these that applies decides:
+
+| Input | Result |
+| --- | --- |
+| `--headless` / `--no-headless` | Headless / a real window |
+| `ORKESTRATOR_AGENT_TEST_HEADLESS=1` / `=0` | Headless / a real window |
+| `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` (the earlier opt-in) | Headless |
+| Launcher's stdin and stdout are both terminals | A real window, as before |
+| Anything else (an agent's shell, a log redirect, a pipe) | Headless |
+
+So a person running `mise run dev:test` in a terminal still gets the window, and
+an agent normally does not need to pass anything. An agent whose shell has a
+real terminal, such as a pseudo-terminal tool, does need `--headless`, because
+it cannot be told apart from a person. Conversely, a person piping the launcher
+to `tee` who wants the window passes `--no-headless`. `--headless-electron`
+still works as another spelling of `--headless`.
+
+`mise run dev` never goes headless and rejects these flags. On macOS and Windows
+they are accepted and change nothing, because Ozone does not exist there.
+
+Do not use a headless profile for native-window, menu or clipboard QA:
+`capturePage` hangs in this mode. The switch has to be on Electron's command
+line, so the launcher adds it; Electron's main script cannot apply it.
+
+None of this reaches the [Electron specs](#electron-specs-and-their-display),
+which launch their own Electron.
 
 The launcher prints what it seeded, what it could not seed, and what Electron
 will therefore download. A first run on a host without the pinned versions needs
@@ -866,10 +899,38 @@ stays "Orkestrator AI". A pass takes about 15 seconds on beelink, because
 nothing waits for Vite. Native menu key equivalents are still not exercised:
 Playwright sends keys through Chromium, not the OS (to-do 0036, task 3).
 
-`design-canvas-electron.spec.ts` reads
-`ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux and launches its
-Electron with the same switches and no display variables. Its Vite-served
-renderer is exposed to
+### Electron specs and their display
+
+The specs in `playwright.electron.config.ts` (`mise run test:agent:electron`)
+launch their own Electron rather than a profile's, and most assert on a real
+window, so `dev:test --headless` and `ORKESTRATOR_AGENT_TEST_HEADLESS` do not
+apply to them. They use whatever display they are given. On a shared Linux host
+give them a disposable one, because the signed-in user's would receive the
+windows. `xvfb-run` sets only `DISPLAY`, so on a Wayland desktop also remove
+`WAYLAND_DISPLAY`, or Electron can still choose the session's compositor:
+
+```bash
+env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT \
+  xvfb-run -a mise run test:agent:electron
+```
+
+With neither `DISPLAY` nor `WAYLAND_DISPLAY` the run stops before its first
+launch and says this (`electron-display-setup.ts`), rather than letting every
+spec report a launch timeout. The Wayland rendering case in
+`electron-main.spec.ts` skips unless `WAYLAND_DISPLAY` is set, so it does not
+run under that command. The packaged-app specs are always headless on Linux (see
+[Packaged-app Electron spec](#packaged-app-electron-spec)).
+
+`design-canvas-electron.spec.ts` is the one spec in that config that can run
+without a display. It reads `ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1` on Linux
+and launches its Electron with the same switches and no display variables:
+
+```bash
+ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON=1 bunx playwright test \
+  --config e2e/agent-testing/playwright.electron-headless.config.ts
+```
+
+Its Vite-served renderer is exposed to
 [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)
 while other work starts or stops containers; the `file://` renderer is not.
 

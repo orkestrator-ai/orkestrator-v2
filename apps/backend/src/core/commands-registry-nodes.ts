@@ -18,6 +18,7 @@ import {
   approveSetupCommandsOnNodes,
   parseNodeActionApproval,
   parseNodeFileScope,
+  runGrantedAccountSwitch,
   type NodeCoordination,
   type NodePortal,
   type NodeService,
@@ -252,6 +253,8 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "nodeParent",
         // The leaf's project, for mail to its coordinator ("coordinator").
         "projectId",
+        // Images already in this node's spool (`node-mail-attachments`).
+        "attachments",
       ],
       "arguments",
     );
@@ -321,7 +324,11 @@ export function registerNodeCommands(register: CommandRegistrar): void {
   });
 
   register("collect_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "after", "coordinatorMail"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["controllerId", "after", "coordinatorMail", "attachmentMail"],
+      "arguments",
+    );
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     const after =
       typeof args.after === "number" && Number.isSafeInteger(args.after) ? args.after : 0;
@@ -329,11 +336,16 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.controllerId,
       after,
       args.coordinatorMail === true,
+      args.attachmentMail === true,
     );
   });
 
   register("ack_node_outbox", async (args, context) => {
-    assertOnlyKeys(args, ["controllerId", "upTo", "sequences", "coordinatorMail"], "arguments");
+    assertOnlyKeys(
+      args,
+      ["controllerId", "upTo", "sequences", "coordinatorMail", "attachmentMail"],
+      "arguments",
+    );
     if (!isBackendId(args.controllerId)) throw new Error("Expected controllerId.");
     if (typeof args.upTo !== "number" || !Number.isSafeInteger(args.upTo)) {
       throw new Error("Expected upTo.");
@@ -351,6 +363,7 @@ export function registerNodeCommands(register: CommandRegistrar): void {
       args.upTo,
       sequences as number[] | undefined,
       args.coordinatorMail === true,
+      args.attachmentMail === true,
     );
   });
 
@@ -367,10 +380,42 @@ export function registerNodeCommands(register: CommandRegistrar): void {
         "agentsMd",
         "workerQuestion",
         "projectHomeMessage",
+        "askedBecause",
       ],
       "arguments",
     );
     return coordination(context).createActionRequest(args);
+  });
+
+  // A coordinator's account switch under the user's standing permission
+  // (`control-mcp-account-tools.ts`); this machine's permission, never another's.
+  register("run_granted_agent_account_switch", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      [
+        "requestId",
+        "platform",
+        "nodeId",
+        "nodeName",
+        "accountId",
+        "accountLabel",
+        "previousAccountId",
+        "previousAccountLabel",
+        "requestedBy",
+        "reason",
+      ],
+      "arguments",
+    );
+    return runGrantedAccountSwitch(
+      {
+        actions: coordination(context).actions,
+        loadGlobalConfig: async () => (await context.storage.loadConfig()).global,
+        projectName: async (projectId) =>
+          (await context.storage.getProject(projectId).catch(() => null))?.name,
+        emit: (event, payload) => context.emit(event, payload),
+      },
+      args,
+    );
   });
 
   register("list_node_action_requests", async (args, context) => {

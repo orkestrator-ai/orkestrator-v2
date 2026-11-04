@@ -27,6 +27,7 @@ import type {
   BrowserPreviewCapturePurpose,
   BrowserPreviewExpiredCaptureNotice,
   BrowserPreviewPendingCapture,
+  BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewReplaceImageInput,
   BrowserPreviewResponsiveMember,
@@ -91,6 +92,19 @@ export function pngDimensions(bytes: Buffer): { width: number; height: number } 
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
+/** Validate PNG bytes (≤ 8 MiB, ≤ 2000 px per side). */
+export function decodePngBytes(bytes: Buffer): DecodedPng {
+  if (bytes.length > WEB_ANNOTATION_LIMITS.imageBytes) {
+    throw new BrowserPreviewCaptureSpoolError("too-large", "The image exceeds 8 MiB");
+  }
+  const size = pngDimensions(bytes);
+  const max = WEB_ANNOTATION_LIMITS.imageMaxDimension;
+  if (!size || size.width < 1 || size.height < 1 || size.width > max || size.height > max) {
+    throw new BrowserPreviewCaptureSpoolError("invalid", "Expected a PNG image up to 2000 px");
+  }
+  return { bytes, ...size };
+}
+
 /** Validate and decode a bounded PNG data URL (≤ 8 MiB, ≤ 2000 px per side). */
 export function decodePngDataUrl(value: unknown): DecodedPng {
   const maxBase64 = Math.ceil(WEB_ANNOTATION_LIMITS.imageBytes / 3) * 4;
@@ -105,16 +119,17 @@ export function decodePngDataUrl(value: unknown): DecodedPng {
   if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
     throw new BrowserPreviewCaptureSpoolError("invalid", "Expected a base64 PNG image");
   }
-  const bytes = Buffer.from(base64, "base64");
-  if (bytes.length > WEB_ANNOTATION_LIMITS.imageBytes) {
-    throw new BrowserPreviewCaptureSpoolError("too-large", "The image exceeds 8 MiB");
-  }
-  const size = pngDimensions(bytes);
-  const max = WEB_ANNOTATION_LIMITS.imageMaxDimension;
-  if (!size || size.width < 1 || size.height < 1 || size.width > max || size.height > max) {
-    throw new BrowserPreviewCaptureSpoolError("invalid", "Expected a PNG image up to 2000 px");
-  }
-  return { bytes, ...size };
+  return decodePngBytes(Buffer.from(base64, "base64"));
+}
+
+export function pendingCaptureWithDataUrl(
+  pending: BrowserPreviewPendingCaptureWire,
+): BrowserPreviewPendingCapture {
+  const { imageBytes, ...rest } = pending;
+  return {
+    ...rest,
+    imageDataUrl: imageBytes ? `${PNG_PREFIX}${Buffer.from(imageBytes).toString("base64")}` : null,
+  };
 }
 
 export interface BrowserPreviewCaptureStoreChange {
@@ -728,20 +743,24 @@ export class BrowserPreviewCaptureStore {
   }
 
   async read(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
+    const pending = await this.readWire(captureId);
+    return pending && pendingCaptureWithDataUrl(pending);
+  }
+
+  /** The same read with the image as bytes, for IPC. */
+  async readWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
     if (!isBrowserPreviewCaptureId(captureId)) return null;
     return this.afterReady(async () => {
       await this.sweepLocked();
       const record = this.records.get(captureId);
       if (!record) return null;
-      let imageDataUrl: string | null = null;
-      if (record.imageFile) {
-        const bytes = await fs.readFile(path.join(this.directory, record.imageFile));
-        imageDataUrl = `${PNG_PREFIX}${bytes.toString("base64")}`;
-      }
+      const imageBytes = record.imageFile
+        ? await fs.readFile(path.join(this.directory, record.imageFile))
+        : null;
       return {
         descriptor: { ...record.descriptor },
         capture: structuredClone(record.capture),
-        imageDataUrl,
+        imageBytes,
         masks: structuredClone(record.masks ?? []),
         ...(record.result ? { result: structuredClone(record.result) } : {}),
       };
@@ -777,7 +796,11 @@ export class BrowserPreviewCaptureStore {
     ) {
       throw new BrowserPreviewCaptureSpoolError("invalid", "Invalid redaction region count");
     }
-    const image = input.imageDataUrl === null ? null : decodePngDataUrl(input.imageDataUrl);
+    const image = input.imageBytes
+      ? decodePngBytes(Buffer.from(input.imageBytes))
+      : input.imageDataUrl === null
+        ? null
+        : decodePngDataUrl(input.imageDataUrl);
     const descriptor = await this.afterReady(async () => {
       await this.sweepLocked();
       const record = this.records.get(captureId);

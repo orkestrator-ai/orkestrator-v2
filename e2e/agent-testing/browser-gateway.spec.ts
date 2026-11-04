@@ -99,7 +99,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
     throw new Error("dev:login returned invalid JSON");
   }
   if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
-  const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
+  const response = await page.goto(login.loginUrl, { waitUntil: "load" });
   expect(response?.ok() ?? false).toBe(true);
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
   expect(page.url()).not.toContain("code=");
@@ -114,6 +114,15 @@ async function authenticatedInvoke(page: Page, status: Status) {
     return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
+
+/** Terminal output as text, without the escape sequences a shell interleaves (`PS0`, prompts). */
+const visibleText = (output: string): string =>
+  output
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1bP[^\x1b]*\x1b\\/g, "")
+    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
 // This host-specific notice can arrive after login, on top of any surface.
 // Dismiss it through its public Close control so local-worktree flows run even
@@ -490,7 +499,9 @@ test("project Home retains background work and unread attention beneath the boar
         const snapshot = await invoke<{ output: string }>("get_terminal_output_snapshot", {
           sessionId: terminal.sessionId,
         });
-        return snapshot.output.split(/\r?\n/).some((line) => line === "home-background-finished");
+        return visibleText(snapshot.output)
+          .split("\n")
+          .some((line) => line === "home-background-finished");
       })
       .toBe(true);
     await invoke("set_environment_unread", { environmentId: home.id, unread: true });
@@ -586,7 +597,8 @@ test("real browser gateway exercises an authoritative local environment", async 
     await invoke("start_local_terminal_session", { sessionId: terminal.sessionId });
     await invoke("local_terminal_write", {
       sessionId: terminal.sessionId,
-      data: "sleep 1; i=0; while [ $i -lt 1100 ]; do printf '%0480d\\n' \"$i\"; i=$((i + 1)); done; printf 'background-done\\n'; printf 'changed\\n' > smoke-change.txt\n",
+      // `%s` keeps the marker out of the echoed command: only the finished loop prints it.
+      data: "sleep 1; i=0; while [ $i -lt 1100 ]; do printf '%0480d\\n' \"$i\"; i=$((i + 1)); done; printf 'background-%s\\n' done; printf 'changed\\n' > smoke-change.txt\n",
     });
 
     // Exercise the inactive-environment contract through unrelated authoritative
@@ -617,11 +629,27 @@ test("real browser gateway exercises an authoritative local environment", async 
         { timeout: 30_000 },
       )
       .toEqual({ current: true, retainedWithinBudget: true, rolledOver: true });
-    const historyPage = await invoke<{
-      rows: Array<{ text: string }>;
-      previousCursor: string | null;
-    } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
-    expect(historyPage?.rows.some((row) => row.text.includes("background-done"))).toBe(true);
+    const readHistory = () =>
+      invoke<{
+        rows: Array<{ text: string }>;
+        previousCursor: string | null;
+        historyGap: boolean;
+      } | null>("get_terminal_history_page", { sessionId: terminal.sessionId });
+    const historyHas = (page: Awaited<ReturnType<typeof readHistory>>, text: string) =>
+      page?.rows.some((row) => row.text.includes(text));
+    // The archive's write queue holds 256 records per session, so a burst that
+    // outruns a flush loses lines and reports `historyGap`. Without a gap, every
+    // line must be there.
+    const burstPage = await readHistory();
+    if (!burstPage?.historyGap) expect(historyHas(burstPage, "background-done")).toBe(true);
+    // Reading the page drained that queue, so output after a burst is always kept.
+    await invoke("local_terminal_write", {
+      sessionId: terminal.sessionId,
+      data: "printf 'history-%s\\n' resumed\n",
+    });
+    await expect
+      .poll(async () => historyHas(await readHistory(), "history-resumed"), { timeout: 15_000 })
+      .toBe(true);
     await invoke<void>("refresh_environment_diff_stats", {
       environmentId: environment.id,
     });
@@ -751,6 +779,11 @@ test("file rename preserves selection, survives reload and cancels on workspace 
 test("capped file tree loads subtrees, retries failures and refreshes across inactive views and reload", async ({
   page,
 }) => {
+  // 5,100 rows, two reloads and a viewport change. With these rows on a busy host
+  // the page has taken 17 s to handle a response it already had, so a default 5 s
+  // wait can end first (flake 2930).
+  test.setTimeout(240_000);
+  const treeExpect = expect.configure({ timeout: 30_000 });
   const status = await profileStatus();
   expect(status.status).toBe("ready");
   let subtreeReads = 0;
@@ -835,7 +868,7 @@ test("capped file tree loads subtrees, retries failures and refreshes across ina
     };
     const expandFolder = async (name: string) => {
       const folder = page.getByRole("button", { name, exact: true });
-      await expect(folder).toBeVisible();
+      await expect(folder).toBeVisible({ timeout: 30_000 });
       if ((await folder.getAttribute("aria-expanded")) !== "true") {
         await folder.focus();
         await page.keyboard.press("Enter");
@@ -844,60 +877,62 @@ test("capped file tree loads subtrees, retries failures and refreshes across ina
     await page.reload();
     await openFiles();
     await expandFolder("src");
-    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+    await treeExpect(
+      page.getByRole("button", { name: "cap-source.ts", exact: true }),
+    ).toBeVisible();
     await expandFolder("empty-folder");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }),
     ).toHaveCount(0);
     await expandFolder("build");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
     await expandFolder(".turbo");
     const folderContentsId = await page
       .getByRole("button", { name: ".turbo", exact: true })
       .getAttribute("aria-controls");
-    await expect(
+    await treeExpect(
       page.locator(`[id="${folderContentsId}"]`).getByText("Loading folder…", { exact: true }),
     ).toBeVisible();
     releaseFailure();
-    await expect(page.getByText("Could not load folder.", { exact: true })).toBeVisible();
+    await treeExpect(page.getByText("Could not load folder.", { exact: true })).toBeVisible();
     const retry = page.getByRole("button", { name: "Retry loading build/.turbo", exact: true });
     await retry.focus();
     failSubtreeReads = false;
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toBeVisible();
-    await expect(retry).toHaveCount(0);
+    await treeExpect(page.getByRole("button", { name: "hidden.o", exact: true })).toBeVisible();
+    await treeExpect(retry).toHaveCount(0);
     // The bounded walk never opens .turbo; its digest cannot see these edits.
     await fs.rename(
       path.join(root, "build", ".turbo", "hidden.o"),
       path.join(root, "build", ".turbo", "fresh.o"),
     );
-    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
+    await treeExpect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
     await page.getByRole("tab", { name: /^Changes\b/ }).click();
     await fs.writeFile(path.join(root, "build", ".turbo", "inactive.o"), "");
     await page.getByRole("tab", { name: "All files", exact: true }).click();
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     const previousReads = subtreeReads;
     await page.getByRole("button", { name: "build", exact: true }).click();
     await expandFolder("build");
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     expect(subtreeReads).toBeGreaterThan(previousReads);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await openFiles();
     await expandFolder("build");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
     await expandFolder(".turbo");
-    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     await expandFolder("src");
-    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+    await treeExpect(
+      page.getByRole("button", { name: "cap-source.ts", exact: true }),
+    ).toBeVisible();
   } finally {
     releaseFailure();
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
@@ -1469,7 +1504,8 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
       await entry.click();
     };
     await openHeld();
-    const panel = page.getByTestId("setup-approval-panel");
+    // Recovery overlay and native tab show the same approval; select one explicitly.
+    const panel = page.getByTestId("setup-approval-panel").filter({ visible: true }).first();
     await expect(panel).toBeVisible();
     await expect(panel).toContainText(marker);
     await fs.mkdir(path.join(repositoryRoot, "output/visual-previews"), { recursive: true });

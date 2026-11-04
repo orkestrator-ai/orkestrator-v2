@@ -7,6 +7,8 @@ import {
   boundedTailCommand,
   boundDiagnosticTail,
   bridgeLogEnvironmentExports,
+  keepPreviousLogCommand,
+  previousContainerLogFile,
 } from "./container-log-bounds.js";
 import { persistentStateExports } from "./container-state-layout.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
@@ -204,12 +206,7 @@ export function registerServerCommands(
         : {}),
     };
   });
-  register("get_opencode_server_log", ({ containerId }) =>
-    dockerExec(
-      asString(containerId, "containerId"),
-      boundedTailCommand("/tmp/opencode-serve.log"),
-    ).then(boundDiagnosticTail),
-  );
+  register("get_opencode_server_log", serverLogCommand("/tmp/opencode-serve.log"));
   register("get_opencode_model_preferences", async (_args, context) => {
     if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("opencode")) {
       return { recent: [], favorite: [], variant: {} };
@@ -320,12 +317,7 @@ export function registerServerCommands(
       ...(authToken ? { authToken } : {}),
     };
   });
-  register("get_claude_server_log", ({ containerId }) =>
-    dockerExec(
-      asString(containerId, "containerId"),
-      boundedTailCommand("/tmp/claude-bridge.log"),
-    ).then(boundDiagnosticTail),
-  );
+  register("get_claude_server_log", serverLogCommand("/tmp/claude-bridge.log"));
   register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id);
@@ -416,7 +408,7 @@ export function registerServerCommands(
           "codex",
           `
           cd /workspace
-          rm -f /tmp/codex-bridge.log
+          ${keepPreviousLogCommand("/tmp/codex-bridge.log")}
           mkdir -p /tmp/${APP_SLUG}
           umask 077
           printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
@@ -511,12 +503,7 @@ export function registerServerCommands(
       ...(BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
     };
   });
-  register("get_codex_server_log", ({ containerId }) =>
-    dockerExec(
-      asString(containerId, "containerId"),
-      boundedTailCommand("/tmp/codex-bridge.log"),
-    ).then(boundDiagnosticTail),
-  );
+  register("get_codex_server_log", serverLogCommand("/tmp/codex-bridge.log"));
 
   for (const provider of ["cursor", "grok"] as const) {
     const containerPort = provider === "cursor" ? CURSOR_BRIDGE_PORT : GROK_ACP_BRIDGE_PORT;
@@ -579,7 +566,7 @@ export function registerServerCommands(
           provider,
           `
           cd /workspace
-          rm -f ${logFile}
+          ${keepPreviousLogCommand(logFile)}
           umask 077
           printf '%s' ${quoteShell(token)} > ${tokenFile}
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
@@ -652,14 +639,23 @@ export function registerServerCommands(
         ...(running ? { authToken } : {}),
       };
     });
-    register(`get_${provider}_server_log`, ({ containerId }) =>
-      dockerExec(asString(containerId, "containerId"), boundedTailCommand(logFile)).then(
-        boundDiagnosticTail,
-      ),
-    );
+    register(`get_${provider}_server_log`, serverLogCommand(logFile));
   }
 
   registerPiServerCommands(register);
+}
+
+/**
+ * A container server's log tail. `previous: true` reads the run before the last
+ * relaunch instead, under the same bounds and redaction, and is empty when there
+ * has been no relaunch.
+ */
+function serverLogCommand(logFile: string): CommandHandler {
+  return ({ containerId, previous }) =>
+    dockerExec(
+      asString(containerId, "containerId"),
+      boundedTailCommand(previous === true ? previousContainerLogFile(logFile) : logFile),
+    ).then(boundDiagnosticTail);
 }
 
 /**
@@ -714,7 +710,7 @@ function registerPiServerCommands(register: CommandRegistrar): void {
         "pi",
         `
           cd /workspace
-          rm -f ${logFile}
+          ${keepPreviousLogCommand(logFile)}
           umask 077
           printf '%s' ${quoteShell(token)} > ${tokenFile}
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
@@ -759,9 +755,5 @@ function registerPiServerCommands(register: CommandRegistrar): void {
     return { running, hostPort, ...(running ? { authToken } : {}) };
   });
 
-  register("get_pi_server_log", ({ containerId }) =>
-    dockerExec(asString(containerId, "containerId"), boundedTailCommand(logFile)).then(
-      boundDiagnosticTail,
-    ),
-  );
+  register("get_pi_server_log", serverLogCommand(logFile));
 }

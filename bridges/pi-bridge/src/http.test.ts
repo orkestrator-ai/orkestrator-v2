@@ -1,12 +1,17 @@
 import { publicInteractionKinds } from "./public.js";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type AgentSession,
+  type ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import {
@@ -34,8 +39,13 @@ const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // froze a different token and every request here would 401 — a failure that
 // looks like broken routing rather than a test that was never self-sufficient.
 const { authToken: TOKEN } = await import("./config.js");
-const { isSessionClosed, newSessionState, setAgentSessionTestHooks } =
-  await import("./agent-session.js");
+const {
+  isSessionClosed,
+  newSessionState,
+  SESSION_LIST_TIMEOUT_MESSAGE,
+  setAgentSessionTestHooks,
+  setSessionListTimeoutForTests,
+} = await import("./agent-session.js");
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
@@ -186,6 +196,21 @@ describe("authentication", () => {
   test("refuses every other route without a token", async () => {
     expect((await call("/global/auth-check", { authorize: false })).status).toBe(401);
     expect((await call("/session/list", { authorize: false })).status).toBe(401);
+  });
+
+  test("a session list that timed out answers 504 with its reason", async () => {
+    const list = spyOn(SessionManager, "list").mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    setSessionListTimeoutForTests(5);
+    try {
+      const response = await call("/session/list");
+      expect(response.status).toBe(504);
+      expect(await response.json()).toEqual({ error: SESSION_LIST_TIMEOUT_MESSAGE });
+    } finally {
+      setSessionListTimeoutForTests();
+      list.mockRestore();
+    }
   });
 
   test("refuses a token of the wrong length without leaking which", async () => {
@@ -2536,10 +2561,16 @@ describe("steering", () => {
     expect(await steer.json()).toEqual({ outcome: "idle" });
     expect(steerCalls).toBe(0);
 
+    const logs = captureLogs();
     rejectFirstRun(new Error("preflight rejected"));
     const refused = await firstPrompt;
+    logs.restore();
     expect(refused.status).toBe(422);
     expect(await refused.json()).toEqual({ error: "preflight rejected", kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toMatchObject([
+      { level: "warn", area: "bridge.pi", fields: { sessionId: state.id } },
+    ]);
+    expect(JSON.stringify(logs.records())).not.toContain("preflight rejected");
     expect(state.pendingSteerDeliveries).toEqual([]);
     expect(state.steerJournal.size).toBe(0);
 
@@ -2550,6 +2581,36 @@ describe("steering", () => {
     expect(secondPrompt.status).toBe(202);
     expect(steerCalls).toBe(0);
   });
+});
+
+test("a preflight refusal after cancellation does not warn", async () => {
+  const state = seedSession();
+  let rejectRun!: (error: Error) => void;
+  const run = new Promise<void>((_resolve, reject) => {
+    rejectRun = reject;
+  });
+  state.session = fakeAgentSession({ prompt: () => run, abort: async () => undefined });
+  const logs = captureLogs();
+  const prompt = call(`/session/${state.id}/prompt`, {
+    method: "POST",
+    body: JSON.stringify({ prompt: "cancel in preflight", requestId: "cancel-refused" }),
+  });
+  try {
+    await waitFor(() => state.dispatching && state.status === "running");
+    const cancel = await call(`/session/${state.id}/cancel`, { method: "POST" });
+    expect(cancel.status).toBe(202);
+    expect(await cancel.json()).toMatchObject({ cancelled: false, pending: true });
+    rejectRun(new Error("SENTINEL-PREFLIGHT-REFUSAL"));
+    const response = await prompt;
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ kind: "prompt-refused" });
+    expect(logs.records().filter((record) => record.event === "turn.refused")).toEqual([]);
+    expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-PREFLIGHT-REFUSAL");
+  } finally {
+    rejectRun(new Error("test cleanup"));
+    await prompt;
+    logs.restore();
+  }
 });
 
 describe("provider-owned follow-ups", () => {

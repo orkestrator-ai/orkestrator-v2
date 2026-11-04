@@ -15,6 +15,7 @@ import { noteRowRevised, revisedRowIds } from "./transcript.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Agent, type LocalAgentStore } from "@cursor/sdk";
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -1199,6 +1200,46 @@ describe("ensureAgent", () => {
     expect(created).toHaveLength(1);
   });
 
+  test("a failed resume warns without its message, and still starts a fresh agent", async () => {
+    const state = newSessionState();
+    state.agentId = "lost-agent";
+    resumeFails = true;
+    const logs = captureLogs();
+    try {
+      expect(await ensureAgent(state)).toMatchObject({ agentId: "created-agent" });
+      expect(state.agentId).toBe("created-agent");
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          area: "bridge.cursor",
+          event: "session.resume-fell-back",
+          fields: { sessionId: state.id, error: { name: "Error" } },
+        },
+      ]);
+      expect(JSON.stringify(records)).not.toContain("no such agent");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a configuration resume that fails keeps the conversation and is not a fallback", async () => {
+    const state = newSessionState();
+    await ensureAgent(state);
+    await mkdir(join(configHome, ".cursor"), { recursive: true });
+    await writeFile(join(configHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    resumeFails = true;
+    const logs = captureLogs();
+    try {
+      await expect(ensureAgent(state)).rejects.toThrow("conversation was kept");
+      expect(logs.records().map((record) => record.event)).not.toContain(
+        "session.resume-fell-back",
+      );
+    } finally {
+      logs.restore();
+    }
+  });
+
   test("a retry after a failed configuration resume reopens the conversation and clears the mark", async () => {
     const state = newSessionState();
     await ensureAgent(state);
@@ -2014,6 +2055,106 @@ describe("resumeSession", () => {
     release();
     await state.recoveringRun;
   });
+
+  test("a recovered run that fails warns without its message, and a cancelled one does not", async () => {
+    const recovered = (ending: "error" | "cancelled" | "throw") => {
+      const run = {
+        id: `run-${ending}`,
+        status: "running",
+        error: undefined as { message: string } | undefined,
+        createdAt: Date.now(),
+        supports: () => false,
+        async *stream() {},
+        wait: async () => {
+          if (ending === "throw") throw new Error("SENTINEL-RUN-TEXT");
+          run.status = ending;
+          if (ending === "error") run.error = { message: "SENTINEL-RUN-TEXT" };
+          return { status: ending };
+        },
+        cancel: async () => undefined,
+        onDidChangeStatus: () => () => undefined,
+      };
+      return run;
+    };
+    const logs = captureLogs();
+    const lines = () =>
+      logs
+        .records()
+        .filter((record) => record.event === "turn.recovery-failed")
+        .map((record) => record.level);
+    try {
+      runs = { items: [recovered("cancelled")] };
+      await (
+        await resumeSession("agent-cancelled", undefined)
+      ).recoveringRun;
+      expect(lines()).toEqual([]);
+
+      runs = { items: [recovered("error")] };
+      await (
+        await resumeSession("agent-error", undefined)
+      ).recoveringRun;
+      expect(lines()).toEqual(["warn"]);
+
+      runs = { items: [recovered("throw")] };
+      await (
+        await resumeSession("agent-throw", undefined)
+      ).recoveringRun;
+      expect(lines()).toEqual(["warn", "warn"]);
+      expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-RUN-TEXT");
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test.each(["error", "throw"])(
+    "a cancelled recovered run settling with %s stays silent",
+    async (ending) => {
+      let release!: () => void;
+      const hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let cancellations = 0;
+      const run = {
+        id: `run-cancel-${ending}`,
+        status: "running",
+        error: undefined as { message: string } | undefined,
+        createdAt: Date.now(),
+        supports: () => false,
+        async *stream() {
+          await hold;
+          yield* [];
+        },
+        wait: async () => {
+          if (ending === "throw") throw new Error("SENTINEL-CANCELLED-RUN");
+          run.status = "error";
+          run.error = { message: "SENTINEL-CANCELLED-RUN" };
+          return { status: "error" };
+        },
+        cancel: async () => {
+          cancellations += 1;
+        },
+        onDidChangeStatus: () => () => undefined,
+      };
+      runs = { items: [run] };
+      const logs = captureLogs();
+      try {
+        const state = await resumeSession(`agent-cancel-${ending}`, undefined);
+        expect(state.status).toBe("running");
+        await state.cancelTurn?.();
+        expect(cancellations).toBe(1);
+        expect(state.turnCancelRequested).toBe(true);
+        release();
+        await state.recoveringRun;
+        expect(logs.records().filter((record) => record.event === "turn.recovery-failed")).toEqual(
+          [],
+        );
+        expect(JSON.stringify(logs.records())).not.toContain("SENTINEL-CANCELLED-RUN");
+      } finally {
+        release();
+        logs.restore();
+      }
+    },
+  );
 
   test("applies live stream updates while recovering a still-running run", async () => {
     let release!: () => void;

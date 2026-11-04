@@ -23,6 +23,9 @@ import { confinedRead, validCapturePath } from "./confined-read.js";
 import { HARDENED_GIT_CONFIG } from "../git-fsmonitor.js";
 import { CommandFailedError, runCommandBuffer } from "../shell.js";
 import { objectId, type ObjectStore } from "./object-store.js";
+import { STAT_SETTLE_WINDOW_MS, statSettled, statStamp } from "../stat-stamp.js";
+
+export { STAT_SETTLE_WINDOW_MS };
 
 /** Git tree kinds supported by manifest v1. */
 export type ManifestMode = "100644" | "100755" | "120000" | "160000";
@@ -83,16 +86,6 @@ export interface StatCacheEntry {
   mode: ManifestMode;
   settled?: boolean;
 }
-
-/**
- * How old a file's timestamps must be, at the moment it is read, before its
- * stat stamp is trusted to identify its content. Filesystem timestamps are
- * coarse (a kernel tick on Linux, two seconds on FAT), so a second write in
- * the same tick with the same size leaves the stamp unchanged; Git calls such
- * an entry "racily clean" and re-hashes it. A file younger than this is read
- * and hashed on every capture until it ages past the window.
- */
-export const STAT_SETTLE_WINDOW_MS = 2_000;
 
 export const MANIFEST_POLICY_ID = "raw-bytes-v1/manifest-v1";
 export const OBJECT_FORMAT = "git-loose-sha1+manifest-json-v1";
@@ -230,10 +223,6 @@ export function parseLsFilesStage(
   return records;
 }
 
-function statStamp(info: { size: number; mtimeMs: number; ctimeMs: number; ino: number }): string {
-  return `${info.size}:${Math.trunc(info.mtimeMs * 1000)}:${Math.trunc(info.ctimeMs * 1000)}:${info.ino}`;
-}
-
 export class HostCaptureExecutor implements CaptureExecutor {
   readonly kind = "host-worker" as const;
   readonly label: string;
@@ -363,10 +352,7 @@ export class HostCaptureExecutor implements CaptureExecutor {
           oid: objectId("blob", bytes),
           ...(cached?.stamp === stamp ? {} : { bytes }),
           stable,
-          settled:
-            !!info &&
-            stable &&
-            readAt - Math.max(info.mtimeMs, info.ctimeMs) >= this.settleWindowMs,
+          settled: !!info && stable && statSettled(info, readAt, this.settleWindowMs),
         };
       } catch (error) {
         if (signal?.aborted) throw new Error("capture-timeout");
@@ -745,6 +731,9 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     const statCache = new Map<string, StatCacheEntry>();
     const newObjectIds: string[] = [];
     const needBytes: ReadRecord[] = [];
+    // Objects this pass wrote or proved present, for the closure check below.
+    const proven = new Set<string>();
+    const removedAtStart = request.store.removedObjects;
     let retainedBytes = 0;
     let metadataReused = 0;
 
@@ -762,6 +751,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
           return;
         }
         const written = await request.store.put("blob", record.bytes);
+        proven.add(written.id);
         if (written.id !== record.oid) unstable.push(record.pathId);
         retainedBytes += record.bytes.length;
         if (written.created) {
@@ -783,6 +773,7 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
         return;
       }
       if (await request.store.reuse(record.oid)) {
+        proven.add(record.oid);
         entries.push({
           p: record.pathId,
           m: record.mode,
@@ -940,9 +931,13 @@ export async function captureWorktree(request: CaptureRequest): Promise<CaptureR
     const written = await request.store.put("manifest", manifestBytes);
     if (written.created) newObjectIds.push(written.id);
 
-    // Closure: every referenced blob is readable from this store alone.
+    // Closure: every referenced blob is readable from this store alone. An
+    // object proven present in this pass needs no second look unless a sweep
+    // removed something since the pass began.
+    const nothingRemoved = request.store.removedObjects === removedAtStart;
     for (const entry of entries) {
       if (entry.m === "160000") continue;
+      if (nothingRemoved && proven.has(entry.o)) continue;
       if (!(await request.store.has(entry.o))) return unavailable("closure-incomplete");
     }
     request.store.syncDirectories(newObjectIds);

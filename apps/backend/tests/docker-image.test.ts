@@ -809,28 +809,52 @@ esac
         },
       );
 
-      // The rollout cap keeps the firewall in the workload.
+      // The retired rollout cap no longer moves the firewall into the workload.
       process.env.ORKESTRATOR_EGRESS = "in-container";
+      resetNetworkOwnerCache();
       await withDockerScript(script("printf 'created-workload\\n'"), async (log) => {
         await createDockerContainer(environment, context, { imageId: IMAGE_ID });
-        const lines = (await log.read()).split("\n");
-        const creates = lines.filter((line) => line.startsWith("create --name ork-"));
-        expect(creates).toHaveLength(1);
-        expect(creates[0]).not.toContain("github-ranges");
-        expect(
-          lines.some(
-            (line) =>
-              line.startsWith("cp ") && line.endsWith("created-workload:/etc/orkestrator-seed"),
-          ),
-        ).toBe(true);
+        const creates = (await log.read())
+          .split("\n")
+          .filter((line) => line.startsWith("create --name ork-"));
+        expect(creates).toHaveLength(2);
         expect(creates[0]).toContain("--cap-add NET_ADMIN");
-        expect(creates[0]).toContain("--network ork-");
-        expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");
-        expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
-        expect(await egressGatewayOf("created-workload")).toBeNull();
-        expect(await prepareEgressGatewayForStart("created-workload")).toBe("none");
-        expect(await log.read()).not.toContain("{{.HostConfig.NetworkMode}}");
+        expect(creates[1]).toContain(`--network container:${gatewayId}`);
+        expect(creates[1]).toContain("-e ORKESTRATOR_EGRESS=gateway");
+        expect(creates[1]).not.toContain("NET_ADMIN");
       });
+
+      // An image without the gateway keeps the firewall in the workload.
+      delete process.env.ORKESTRATOR_EGRESS;
+      resetNetworkOwnerCache();
+      const noGatewayImage = `sha256:${"e".repeat(64)}`;
+      const noGatewayTar = await tarOf(
+        "image-manifest.json",
+        validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+      );
+      await withDockerScript(
+        script("printf 'created-workload\\n'").replace(`cat '${tar}'`, `cat '${noGatewayTar}'`),
+        async (log) => {
+          await createDockerContainer(environment, context, { imageId: noGatewayImage });
+          const lines = (await log.read()).split("\n");
+          const creates = lines.filter((line) => line.startsWith("create --name ork-"));
+          expect(creates).toHaveLength(1);
+          expect(creates[0]).not.toContain("github-ranges");
+          expect(
+            lines.some(
+              (line) =>
+                line.startsWith("cp ") && line.endsWith("created-workload:/etc/orkestrator-seed"),
+            ),
+          ).toBe(true);
+          expect(creates[0]).toContain("--cap-add NET_ADMIN");
+          expect(creates[0]).toContain("--network ork-");
+          expect(creates[0]).toContain("-p 127.0.0.1::4097/tcp");
+          expect(creates[0]).not.toContain("ORKESTRATOR_EGRESS");
+          expect(await egressGatewayOf("created-workload")).toBeNull();
+          expect(await prepareEgressGatewayForStart("created-workload")).toBe("none");
+          expect(await log.read()).not.toContain("{{.HostConfig.NetworkMode}}");
+        },
+      );
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
       if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
@@ -875,8 +899,6 @@ esac
       validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
     );
     const { createDockerContainer } = await import("../src/core/commands-containers");
-    const saved = process.env.ORKESTRATOR_EGRESS;
-    process.env.ORKESTRATOR_EGRESS = "in-container";
     resetDockerTopologyCache();
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
@@ -910,8 +932,6 @@ esac
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
       resetDockerTopologyCache();
-      if (saved === undefined) delete process.env.ORKESTRATOR_EGRESS;
-      else process.env.ORKESTRATOR_EGRESS = saved;
     }
   });
 

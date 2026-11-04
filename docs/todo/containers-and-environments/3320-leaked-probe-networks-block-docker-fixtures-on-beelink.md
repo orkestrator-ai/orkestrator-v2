@@ -49,3 +49,4 @@ Analysed 2026-11-03 against main at `7b48c23fb`.
 
 - [0241-leaked-reach-probe-networks.md](0241-leaked-reach-probe-networks.md), the original leak and its fix.
 - [2922-full-and-isolated-suite-failures-on-main.md](../cross-cutting/2922-full-and-isolated-suite-failures-on-main.md), task 5, where this was found.
+- [4730-disposable-docker-daemon-for-live-suites.md](4730-disposable-docker-daemon-for-live-suites.md), a way to run live suites while the pools are full.

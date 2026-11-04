@@ -727,6 +727,13 @@ export class StorageService {
     return this.repos.config.updateAgentAccountAutoSwitchSettings(update);
   }
 
+  setCoordinatorAccountSwitchGrant(
+    platform: import("@orkestrator/protocol/agent-accounts").AgentAccountPlatform,
+    enabled: boolean,
+  ): Promise<AppConfig> {
+    return this.repos.config.setCoordinatorAccountSwitchGrant(platform, enabled);
+  }
+
   setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
     return this.repos.config.setGitHubCliReminderDismissed(dismissed);
   }
@@ -1815,6 +1822,13 @@ export class StorageService {
     } = {},
   ): Promise<AgentMailMessage> {
     return this.repos.agentMail.sendAgentMail(sender, input, options);
+  }
+
+  resolveAgentMailRecipient(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<{ environmentId: string; tabId: string }> {
+    return this.repos.agentMail.resolveAgentMailRecipient(sender, input);
   }
 
   startRemoteWorkerBudget(

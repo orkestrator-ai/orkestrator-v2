@@ -2,10 +2,9 @@ import {
   CLIENT_STATE_CAPABILITIES_COMMAND,
   type ClientStateCapabilities,
 } from "@orkestrator/protocol/client-state";
-import {
-  decideUpstreamMergeOffer,
-  type CoordinatorUpstreamAutoMerge,
-  type CoordinatorUpstreamMergeCheck,
+import type {
+  CoordinatorUpstreamAutoMerge,
+  CoordinatorUpstreamMergeCheck,
 } from "@orkestrator/protocol/coordinator-upstream-merge";
 import {
   isNoticeOccurrenceId,
@@ -15,6 +14,7 @@ import {
 } from "@orkestrator/protocol/notice-dismissals";
 import type { CommandContext } from "./commands-context.js";
 import { asNonBlankString } from "./commands-helpers.js";
+import { checkUpstreamBeforeMessage } from "./coordinator-message-upstream.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /**
@@ -30,6 +30,8 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
  *   the checkout before a message to the main coordinator. Refreshes the
  *   checkout status (subject to the fetch cooldown) unless a turn is running,
  *   and answers every mergeable checkout `automatic`: it is always merged.
+ *   A slow or failed fetch is answered by fast-forwarding to the upstream
+ *   commit already fetched (`coordinator-message-upstream.ts`).
  * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
  *   onlyIfAbsent?}`, `get_coordinator_upstream_auto_merge {projectId}` and
  *   `set_coordinator_upstream_auto_merge {projectId, enabled}`: retired, kept
@@ -88,13 +90,7 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
     async ({ projectId }, context): Promise<CoordinatorUpstreamMergeCheck> => {
       const projectGit = context.projectGit;
       if (!projectGit) throw new Error("Project Git service is unavailable");
-      const id = await existingProjectId(projectId, context);
-      // The backend refuses to change the checkout under a running turn, so
-      // there is nothing to offer; and no fetch is started for it either.
-      if (await projectGit.isCheckoutBusy(id)) {
-        return { offer: false, reason: "turn-running", status: null };
-      }
-      return decideUpstreamMergeOffer(await projectGit.fetch(id).catch(() => null));
+      return checkUpstreamBeforeMessage(projectGit, await existingProjectId(projectId, context));
     },
   );
   register(

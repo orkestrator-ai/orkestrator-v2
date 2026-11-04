@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { promises as fs, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHarness, git, type Harness } from "./service-test-support.js";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { getLocalGitStatusDetailed } from "../commands-files.js";
+import { observeCommandInvocations } from "../shell.js";
+import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
 import { committedHead, gitScopeResourceKey } from "./git-scopes.js";
 
 const harnesses: Harness[] = [];
@@ -209,4 +211,250 @@ test("live Git detail refuses filters and committed measurements missing their H
   } finally {
     spy.mockRestore();
   }
+});
+
+describe("Git scope demand (ST-18)", () => {
+  const key = gitScopeResourceKey("uncommitted-net", "env-1");
+
+  /** A settled scan's event; the recompute it may start is awaited. */
+  async function scanSettled(h: Harness) {
+    await scanned(h, "main");
+    await h.service.gitScopes.idle();
+  }
+
+  function resets(h: Harness) {
+    return h.events.filter((entry) => (entry.payload as { kind?: string }).kind === "reset");
+  }
+
+  /** Runs `body` and returns how many `git diff` processes it spawned. */
+  async function diffsSpawnedBy(body: () => Promise<void>) {
+    let diffs = 0;
+    const stop = observeCommandInvocations("git", (args) => {
+      if (args.includes("diff") && args.includes("--raw") && !args.includes("--porcelain=v1")) {
+        diffs += 1;
+      }
+    });
+    try {
+      await body();
+    } finally {
+      stop();
+    }
+    return diffs;
+  }
+
+  function afterDemandExpires() {
+    const now = Date.now;
+    return spyOn(Date, "now").mockImplementation(() => now() + 121_000);
+  }
+
+  test("a scan recomputes a scope read within its window", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    await measured(h, key);
+    writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+    await scanSettled(h);
+    expect(h.service.projections.selectedMeasurement(key)?.totals.additions.value).toBe(1);
+    expect(resets(h)).toEqual([]);
+  });
+
+  test("a scan stops recomputing an unused scope, and a reopened view is correct", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    await measured(h, key);
+    const clock = afterDemandExpires();
+    try {
+      writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+      const before = h.service.projections.selectedMeasurement(key)?.measurementId;
+      await scanSettled(h);
+      // Expired: not recomputed, and marked stale rather than left looking current.
+      expect(h.service.projections.selectedMeasurement(key)?.measurementId).toBe(before);
+      expect(h.service.projections.project(key, 0)?.state).toBe("stale");
+      expect(resets(h)).toHaveLength(1);
+      expect(resets(h)[0]?.payload).toMatchObject({ kind: "reset", resourceKey: key });
+
+      // With nobody reading, a later scan costs nothing further: no recompute, no event.
+      const running = spyOn(h.service.gitScopes, "ensure");
+      await h.service.gitScopes.idle();
+      const later = await diffsSpawnedBy(async () => {
+        h.service.gitScopes.invalidate("env-1");
+        await h.service.gitScopes.idle();
+      });
+      expect(later).toBe(0);
+      expect(running).not.toHaveBeenCalled();
+      running.mockRestore();
+      expect(resets(h)).toHaveLength(1);
+
+      // The view opens again: the read recomputes, and shows the change made meanwhile.
+      writeFileSync(join(h.repo, "b.txt"), "new\n");
+      const reopened = await measured(h, key);
+      expect(reopened.totals).toMatchObject({ changedFiles: 2, additions: { value: 2 } });
+      expect(h.service.projections.project(key, 0)?.state).toBe("ready");
+
+      // The read renewed the demand, so scans follow it again.
+      writeFileSync(join(h.repo, "b.txt"), "new\nnewer\n");
+      const recomputes = await diffsSpawnedBy(async () => {
+        h.service.gitScopes.invalidate("env-1");
+        await h.service.gitScopes.idle();
+      });
+      expect(recomputes).toBe(1);
+      expect(h.service.projections.selectedMeasurement(key)?.totals.additions.value).toBe(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a view left open follows changes across expiry: reset, read, recompute", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    await measured(h, key);
+    const clock = afterDemandExpires();
+    try {
+      writeFileSync(join(h.repo, "a.txt"), "one\ntwo\nthree\n");
+      await scanSettled(h);
+      // What an open view does on `reset` (lib/changes/subscriptions.ts).
+      await h.service.ensureResource(key);
+      const view = h.service.getView({ resourceKey: key });
+      if (view.kind !== "projection") throw new Error("projection expected");
+      expect(view.projection.state).toBe("ready");
+      expect(view.projection.counters.additions.value).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a change while a recompute runs is picked up by one more", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    await measured(h, key);
+    const spawned = await diffsSpawnedBy(async () => {
+      h.service.gitScopes.invalidate("env-1");
+      h.service.gitScopes.invalidate("env-1");
+      h.service.gitScopes.invalidate("env-1");
+      writeFileSync(join(h.repo, "late.txt"), "late\n");
+      await h.service.gitScopes.idle();
+    });
+    expect(spawned).toBe(2);
+    expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(1);
+  });
+
+  for (const action of ["stop", "forget"] as const) {
+    test(`a pending follow-up is dropped after ${action}`, async () => {
+      const h = createHarness();
+      harnesses.push(h);
+      writeFileSync(join(h.repo, "gate.txt"), "first\n");
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const original = fs.open.bind(fs);
+      const spy = spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] === join(h.repo, "gate.txt")) {
+          entered.resolve();
+          await release.promise;
+        }
+        return original(...args);
+      });
+      try {
+        const count = await diffsSpawnedBy(async () => {
+          const first = h.service.gitScopes.ensure(key);
+          await entered.promise;
+          h.service.gitScopes.invalidate("env-1");
+          if (action === "stop") h.service.gitScopes.stop();
+          else h.service.gitScopes.forget("env-1");
+          release.resolve();
+          await first;
+          await h.service.gitScopes.idle();
+        });
+        expect(count).toBe(1);
+      } finally {
+        release.resolve();
+        spy.mockRestore();
+      }
+    });
+  }
+
+  test("a read joining a running computation waits for the follow-up and sees current data", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    writeFileSync(join(h.repo, "gate.txt"), "first\n");
+    const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const original = fs.open.bind(fs);
+    let opens = 0;
+    const spy = spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === join(h.repo, "gate.txt") && opens < 2) {
+        const index = opens++;
+        entered[index]!.resolve();
+        await release[index]!.promise;
+      }
+      return original(...args);
+    });
+    try {
+      const first = h.service.gitScopes.ensure(key);
+      await entered[0]!.promise;
+      // ls-files already ran for the first pass: only the follow-up sees late.txt.
+      writeFileSync(join(h.repo, "late.txt"), "late\n");
+      let joinedSettled = false;
+      const joined = h.service.gitScopes.ensure(key).then(() => {
+        joinedSettled = true;
+      });
+      release[0]!.resolve();
+      await entered[1]!.promise;
+      expect(joinedSettled).toBe(false);
+      expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(1);
+      release[1]!.resolve();
+      await joined;
+      await first;
+      expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(2);
+    } finally {
+      for (const gate of release) gate.resolve();
+      spy.mockRestore();
+      await h.service.gitScopes.idle();
+    }
+  });
+
+  test("a pinned scope is not refreshed or reset by scans", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    const head = git(h.repo, "rev-parse", "HEAD").trim();
+    await measured(h, gitScopeResourceKey("commit", "env-1", head));
+    const clock = afterDemandExpires();
+    try {
+      await scanSettled(h);
+      expect(resets(h)).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+test("a scope counts untracked files with bounded concurrency", async () => {
+  const h = createHarness();
+  harnesses.push(h);
+  for (let index = 0; index < UNTRACKED_SCAN_CONCURRENCY * 3; index += 1) {
+    writeFileSync(join(h.repo, `new-${index}.txt`), "a\nb\n");
+  }
+  const original = fs.open.bind(fs);
+  let open = 0;
+  let peak = 0;
+  const spy = spyOn(fs, "open").mockImplementation(async (...args) => {
+    open += 1;
+    peak = Math.max(peak, open);
+    const handle = await original(...args);
+    const close = handle.close.bind(handle);
+    handle.close = async () => {
+      open -= 1;
+      await close();
+    };
+    return handle;
+  });
+  try {
+    const measurement = await measured(h, gitScopeResourceKey("uncommitted-net", "env-1"));
+    expect(measurement.totals).toMatchObject({
+      changedFiles: UNTRACKED_SCAN_CONCURRENCY * 3,
+      additions: { value: UNTRACKED_SCAN_CONCURRENCY * 6 },
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  expect(peak).toBeGreaterThan(1);
+  expect(peak).toBeLessThanOrEqual(UNTRACKED_SCAN_CONCURRENCY);
 });

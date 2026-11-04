@@ -14,6 +14,7 @@ These rules apply to `docker/` and to container lifecycle code such as
 | `update-firewall.sh`    | Operator-only allowlist edits via `docker exec --user root` |
 | `runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
 | `git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
+| `orkestrator-git-credential.sh` | Git credential helper that reads the GitHub token file |
 | `verify-playwright.cjs` | Launches Chromium; run at build time and on demand       |
 | `verify-root-boundary.sh` | Build-time check that root uses nothing `node` can write |
 | `tests/root-boundary-smoke.sh` | Plants files as `node` in a built image; root must run none |
@@ -76,7 +77,12 @@ Users and isolation:
   shared hook through `/etc/zsh/zshrc`, reads prompt configuration from
   `/etc/starship.toml` through `STARSHIP_CONFIG`, and retains repository-owned
   Git aliases plus native Zsh completion without Oh My Zsh.
-- Staged inputs (`staged-inputs=4`, which adds `/agents-skills`): the backend's staged mounts are
+- Staged inputs (`staged-inputs=5`; 4 added `/agents-skills`, and 5 skips an input when
+  copying it would change nothing, through `import_agent_input`): a new input goes through
+  that wrapper unless it is a login, which uses `forget_unchanged_agent_login` and
+  `remember_agent_login` around its copy
+  ([container-lifecycle.md](../docs/architecture/container-lifecycle.md#input-stamps-staged-inputs5)).
+  The backend's staged mounts are
   owner-only and belong to its user, so `node` cannot read them under
   rootless Docker (they are container root's) or on a rootful daemon whose
   host user is not uid 1000 (GitHub's runners). The root entrypoint relays

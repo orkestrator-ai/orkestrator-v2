@@ -19,3 +19,30 @@
   todo 0030, which named this owner without a case; the evidence is the 0790
   record, not a new run. Next recurrence: capture which messages were posted
   (their `type`) and whether an earlier test's grant or timer was still live.
+
+## R6a final aggregate recurrence — 2026-11-04
+
+At `315d6953c72e238ea85281abb5cd2f800b32f2e3`, the exact preparation command
+`mise run test:logged -- --name review-default-tests -- mise run test`
+failed in 325.6 s. The scheduler granted five workspace slots, one root slot
+and two bridge slots. The grouping-delivery test at line 1163 received seven
+`postMessage` calls instead of zero (12.99 ms). Web totals were 11,784 passed,
+ten skipped, one failed; backend had 14,069 passed, 102 skipped, zero failed.
+The only other failure was the root Chromium lifecycle hook (case 2711).
+
+Evidence:
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.Cj4lpa/review-default-tests.log.gz`
+(lines 2670–2683). Inner group evidence is under
+`/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.kVPV5d/`.
+
+The unchanged complete owner passed alone, exit 0 in 1.1 s:
+
+```sh
+mise run test:logged -- --name fix-final-remote-workspace-owner -- bun test --cwd apps/web ./src/components/federation/RemoteWorkspaceRegion.test.tsx --preload ../../tests/setup.ts --parallel=1 --only-failures
+```
+
+The owner, component and direct grouping/workspace/UI stores have no diff in
+`origin/main...HEAD`. The posted message types were not captured. This confirms
+another intermittent observation, not a demonstrated cause or an environmental
+excuse. No assertion, timer or renderer implementation was changed; the failed
+aggregate remains a limitation for the verifier.

@@ -68,6 +68,7 @@ import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { promises as fs } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
+import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
 import {
@@ -76,7 +77,7 @@ import {
 } from "./container-project-seed-files.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
-import { pathExists, runCommand } from "./shell.js";
+import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { retryGitWithoutFsmonitorOnTimeout, stopGitFsmonitorDaemon } from "./git-fsmonitor.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
@@ -145,10 +146,10 @@ import {
   resolveRemoteWorktreeStartPoint,
   gitRefExists,
   enableGitScanCaches,
-  syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { resolveGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
+import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
+import { resolveContainerGitHubToken, type GitHubCliConfigSource } from "./github-credentials.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
 import {
   configuredImageRef,
@@ -691,16 +692,17 @@ export async function spawnSetupTerminal(
       cols: 80,
       rows: 24,
     });
+    // Use an interactive login shell (-i) so PATH entries that tool installers
+    // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
+    // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
+    // so a plain `-lc` login shell never sees those exports and `bun` etc. are
+    // "command not found". This mirrors what fix-path.ts does when recovering
+    // the login-shell PATH.
+    const lowered = lowPriorityCommand(shellPath, ["-ilc", setupCommand]);
     spawnTerminalProcess(
       sessionId,
-      shellPath,
-      // Use an interactive login shell (-i) so PATH entries that tool installers
-      // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
-      // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
-      // so a plain `-lc` login shell never sees those exports and `bun` etc. are
-      // "command not found". This mirrors what fix-path.ts does when recovering
-      // the login-shell PATH.
-      ["-ilc", setupCommand],
+      lowered.command,
+      lowered.args,
       {
         cwd: environment.worktreePath,
         cols: 80,
@@ -1679,10 +1681,14 @@ export async function startEnvironmentOnce(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      const githubToken = await resolveGitHubToken(config.global);
+      const githubToken = await resolveContainerGitHubToken(config.global);
+      const environmentId = environment.id;
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
-        () => syncContainerGitHubCredential(containerId, githubToken),
+        async () => {
+          const current = await storage.getEnvironment(environmentId);
+          await syncRuntimeGitHubCredential(current, containerId, githubToken, context);
+        },
       );
     }
     await syncContainerAgentAccountsOnStart(context, environment, containerId, config.global);
@@ -2288,7 +2294,16 @@ export async function createLocalWorktree(
   ];
   assertWorktreePathUnlinked(worktreePath);
   recheckBase();
-  await runCommand("git", args, { timeoutMs: 120_000 });
+  try {
+    await runCommand("git", args, { timeoutMs: 120_000 });
+  } catch (error) {
+    // Exit zero proves add created our allocation even if output was lost.
+    // Ordinary add failures may be collisions; never delete their resources.
+    if (error instanceof CommandFailedError && error.exitCode === 0) {
+      await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
+    }
+    throw error;
+  }
 
   try {
     await configureSameNamedOriginPush(worktreePath);

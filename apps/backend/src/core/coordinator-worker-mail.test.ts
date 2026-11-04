@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
   PROJECT_HOME_WARNING,
   projectHomeApprovalRequestId,
 } from "./coordinator-worker-mail.js";
+import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import { isNodeExcludedCommand } from "./nodes/node-routing.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { runCommand } from "./shell.js";
@@ -430,6 +431,104 @@ describe("coordinator messages to the project home", () => {
     } finally {
       mail.mockRestore();
     }
+  });
+
+  test("an image waits with a held message and is copied only once approved", async () => {
+    const checkout = (await storage.getProject(scope.projectId))!.localPath!;
+    await storage.updateEnvironment(homeId, { worktreePath: checkout });
+    Object.assign(context.runtime, {
+      environments: { fence: { beginMutation: () => () => undefined } },
+    });
+    const source = await storage.coordinators.writeCoordinatorAttachment(
+      scope.coordinatorId,
+      scope.conversationId,
+      "shot.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+    );
+    // Approval of text opens the three-hour window, but cannot authorize
+    // a later image writing to the user's checkout.
+    const first = await send(homeMessage({ requestId: "text-before-image" }));
+    await resolveRequest(String(first.approvalRequestId), "approve");
+    expect(await send(homeMessage({ requestId: "text-in-window" }))).toMatchObject({
+      projectHome: true,
+    });
+    const priorMail = await mailTo(homeId);
+    const message = homeMessage({ attachments: [source] });
+    const homeImages = projectHomeMailAttachmentDir(storage.getDataDir(), homeId);
+    const copies = async () => readdir(homeImages).catch(() => []);
+
+    const held = await send(message);
+    expect(held).toMatchObject({ sent: false, state: "pending" });
+    const [request] = await pendingRequests();
+    expect(request!.projectHomeMessage).toMatchObject({ attachments: [path.basename(source)] });
+    expect(await copies()).toEqual([]);
+    expect(await mailTo(homeId)).toEqual(priorMail);
+
+    await resolveRequest(String(held.approvalRequestId), "approve");
+
+    const delivered = (await mailTo(homeId)).find((mail) => mail.requestId === "home-1");
+    const file = delivered!.attachments![0]!.path;
+    // Outside the user's checkout, which nothing ever cleans up.
+    expect(file.startsWith(homeImages + path.sep)).toBe(true);
+    expect((await readFile(file)).length).toBe(9);
+    await expect(readdir(path.join(checkout, ".orkestrator"))).rejects.toThrow();
+    expect((await runCommand("git", ["status", "--porcelain"], { cwd: checkout })).stdout).toBe("");
+    expect(
+      (await runCommand("git", ["status", "--porcelain", "--ignored"], { cwd: checkout })).stdout,
+    ).toBe("");
+
+    // A retry finds what the approval sent, with the same image.
+    const again = await send(message);
+    expect(again).toMatchObject({ id: delivered!.id, projectHome: true });
+    expect(await mailTo(homeId)).toHaveLength(priorMail.length + 1);
+
+    // Maintenance reads the effective setting rather than the 14-day default.
+    const config = await storage.loadConfig();
+    const configured = spyOn(storage, "loadConfig").mockResolvedValue({
+      ...config,
+      global: {
+        ...config.global,
+        agentMessaging: { ...config.global.agentMessaging!, retentionDays: 30 },
+      },
+    });
+    const age = new Date(Date.now() - 15 * 86_400_000);
+    await utimes(path.dirname(file), age, age);
+    try {
+      await coordination.files.sweepMailAttachments();
+      expect((await readFile(file)).length).toBe(9);
+    } finally {
+      configured.mockRestore();
+      const now = new Date();
+      await utimes(path.dirname(file), now, now);
+    }
+
+    // The maintenance pass keeps a live project home's images, and removes
+    // them once its record is gone (a removed project, an interrupted delete).
+    await coordination.files.sweepMailAttachments();
+    expect((await readFile(file)).length).toBe(9);
+    await storage.removeEnvironment(homeId);
+    await coordination.files.sweepMailAttachments();
+    await expect(readdir(homeImages)).rejects.toThrow();
+  });
+
+  test("an image gone by the time of approval sends nothing, and says why", async () => {
+    const checkout = (await storage.getProject(scope.projectId))!.localPath!;
+    await storage.updateEnvironment(homeId, { worktreePath: checkout });
+    Object.assign(context.runtime, {
+      environments: { fence: { beginMutation: () => () => undefined } },
+    });
+    const source = await storage.coordinators.writeCoordinatorAttachment(
+      scope.coordinatorId,
+      scope.conversationId,
+      "shot.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+    );
+    const held = await send(homeMessage({ attachments: [source] }));
+    await rm(source);
+    const resolved = await resolveRequest(String(held.approvalRequestId), "approve");
+    expect(resolved.state).toBe("failed");
+    expect((resolved.result as { message: string }).message).toContain("attachments");
+    expect(await mailTo(homeId)).toEqual([]);
   });
 
   test("the window closes exactly three hours after the last sent message", async () => {

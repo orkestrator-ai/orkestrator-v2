@@ -848,7 +848,8 @@ try {
 }`;
   return `set -e
 umask 077
-node -e ${quoteShell(script)} -- ${quoteShell(file)}
+mkdir -p ${quoteShell(path.dirname(file))}
+flock -x ${quoteShell(`${file}.orkestrator-lock`)} node -e ${quoteShell(script)} -- ${quoteShell(file)}
 `;
 }
 

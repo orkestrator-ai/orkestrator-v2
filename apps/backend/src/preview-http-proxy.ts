@@ -128,10 +128,17 @@ export class PreviewHttpProxy {
   }
 
   /** Re-check the access and resolve its current target before any upstream use. */
-  private async authorizedTarget(context: PreviewProxyContext): Promise<ResolvedPreviewTarget> {
+  private async authorizedTarget(
+    context: PreviewProxyContext,
+    options?: { reusingConnection: boolean },
+  ): Promise<ResolvedPreviewTarget> {
     const { runtime } = this.options;
     runtime.access.assertCurrent(context.access);
-    return runtime.registry.acquireTarget(context.access.serviceId, context.access.generation);
+    return runtime.registry.acquireTarget(
+      context.access.serviceId,
+      context.access.generation,
+      options,
+    );
   }
 
   private hooks(context: PreviewProxyContext, reusable: boolean) {
@@ -152,7 +159,7 @@ export class PreviewHttpProxy {
       ...(pool
         ? {
             takeIdle: async (): Promise<Duplex | null> => {
-              target = await this.authorizedTarget(context);
+              target = await this.authorizedTarget(context, { reusingConnection: true });
               const socket = pool.take(context.access, target);
               if (socket) metrics.increment("upstream.reused");
               return socket;

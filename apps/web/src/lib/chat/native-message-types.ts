@@ -480,6 +480,12 @@ export interface PeerMailAddress {
   node?: string;
 }
 
+/** An image carried by a mail message; its path is for the agent, not the tile. */
+export interface PeerMailAttachment {
+  name: string;
+  bytes?: number;
+}
+
 /** One delivered agent-mail message, as the transcript tile presents it. */
 export interface PeerMailPresentation {
   messageId: string;
@@ -498,6 +504,7 @@ export interface PeerMailPresentation {
   body: string;
   /** Workflow notices only: what the notice is about and how to weigh it. */
   notice?: AgentMailNotice;
+  attachments?: PeerMailAttachment[];
   /** Sender and recipient participant keys, when known: the tile opens their conversation. */
   participants?: [string, string];
   /** `out` for mail this transcript's agent sent; absent for mail it received. */

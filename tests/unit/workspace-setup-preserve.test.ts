@@ -812,3 +812,63 @@ move_clone_into_workspace "$2" "$3"
     expect(setup).not.toContain('cp -a -n "$CLONE_DEST"');
   });
 });
+
+describe("workspace setup GitHub credential cleanup", () => {
+  test.each(["", "current-token"])("removes legacy rewrites before clone (token %s)", (token) => {
+    const root = mkdtempSync(join(tmpdir(), "ork-setup-credential-"));
+    try {
+      const config = join(root, "gitconfig");
+      writeFileSync(
+        config,
+        `[url "https://x-access-token:legacy-secret@github.com/"]
+  insteadOf = https://github.com/
+[url "https://x-access-token:other-secret@github.com/"]
+  insteadOf = git@github.com:
+`,
+      );
+      const setup = readFileSync(setupScript, "utf8");
+      const block = setup.slice(
+        setup.indexOf("# Configure GitHub token"),
+        setup.indexOf("print_workspace_disk_status()"),
+      );
+      const remoteLine = setup.split("\n").find((line) => line.includes('echo "  Remote:'))!;
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -e
+${block}
+git init -q .
+git remote add origin https://github.com/example/repo.git
+git remote get-url origin
+${remoteLine}
+git remote set-url origin https://user:embedded-secret@github.com/example/repo.git
+${remoteLine}
+cat "$GIT_CONFIG_GLOBAL"
+`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: config,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GH_TOKEN: token,
+            GITHUB_TOKEN: "",
+          },
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("https://github.com/example/repo.git");
+      expect(result.stdout).not.toContain("legacy-secret");
+      expect(result.stdout).not.toContain("other-secret");
+      expect(result.stdout).not.toContain("push-secret");
+      expect(result.stdout).not.toContain("embedded-secret");
+      expect(result.stdout).not.toContain("current-token");
+      expect(readFileSync(config, "utf8")).not.toContain("x-access-token:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

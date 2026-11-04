@@ -230,8 +230,10 @@ not claimed. See 1202 task 14 for the qualification command, setup constraints a
 1. **Electron 45 → 46 before 45's end of support (2027-04-27).**
    - [x] Leave Electron 44 before its end of support (2027-03-02). **Done
      2026-10-25:** Electron 45.0.0 (stable 2026-10-21). Its breaking changes
-     do not reach the app: the main window, workspace views and
-     toolchain-bootstrap preloads run with `sandbox: false`, and the sandboxed
+     did not reach the app at the time: the main window, workspace views and
+     toolchain-bootstrap preloads ran with `sandbox: false` (they are sandboxed
+     now, and `electron-bundle.test.ts` pins that they use none of the removed
+     shims), and the sandboxed
      preview and artifact views have no preload, so the removed
      sandboxed-preload shims do not apply; every `setWindowOpenHandler` denies,
      so the new `window.open()` process split never happens; preview and artifact sessions deny every permission except

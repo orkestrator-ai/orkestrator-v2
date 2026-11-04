@@ -204,14 +204,14 @@ describe("CoordinatorWorkPanel", () => {
 
     fireEvent.click(finished);
     expect(finished.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: /^Open PR #42/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Open PR #42/ }) === null).toBe(true);
     // The count stays, and the other sections are unaffected.
     expect(screen.getByRole("heading", { level: 3, name: "Finished (1)" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open fix-login" })).toBeTruthy();
 
     unmount();
     render(panel());
-    expect(screen.queryByRole("button", { name: /^Open PR #42/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Open PR #42/ }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Finished (1)" }));
     expect(screen.getByRole("button", { name: /^Open PR #42/ })).toBeTruthy();
   });
@@ -251,7 +251,7 @@ describe("CoordinatorWorkPanel", () => {
         onClearFinished={clearFinished}
       />,
     );
-    expect(screen.queryByRole("button", { name: /^Clear/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Clear/ }) === null).toBe(true);
     unmount();
 
     render(
@@ -299,7 +299,7 @@ describe("CoordinatorWorkPanel", () => {
     );
     for (const name of ["fix-login", "Work panel", "PR #43"]) {
       fireEvent.contextMenu(screen.getByText(name));
-      expect(screen.queryByRole("menuitem", { name: "Clear" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Clear" }) === null).toBe(true);
     }
   });
 });

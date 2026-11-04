@@ -3,6 +3,7 @@ import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import { createHash, randomUUID } from "node:crypto";
 
+import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 import {
   COORDINATOR_MAIL_ADDRESS,
   coordinatorIdFromRuntimeId,
@@ -27,7 +28,19 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 
+import {
+  assertNodeTakesMailAttachments,
+  attachmentReferences,
+  pushCallerAttachmentsToNode,
+  readCallerAttachments,
+} from "./coordinator-mail-attachments.js";
 import { prepareRemoteBuildTicket } from "./coordinator-node-tickets.js";
+import {
+  mailAttachmentBatchId,
+  mailAttachmentFiles,
+  removeMailAttachmentBatch,
+  stageMailAttachments,
+} from "./mail-attachments.js";
 import {
   nodeCoordinatorMailbox,
   sendToNodeCoordinator,
@@ -508,6 +521,33 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       throw new Error('A side agent can only message the main coordinator. Send to "coordinator".');
     }
     const toEnvironmentId = asNonBlankString(args.toEnvironmentId, "toEnvironmentId");
+    // Checked before anything happens, then copied to the node before the
+    // message exists; a failure on either side means there is no message.
+    const images = await readCallerAttachments(
+      context,
+      caller,
+      attachmentReferences(args.attachments),
+    );
+    const pushImages = async (
+      target: CoordinatorNodeTarget,
+      to: { environmentId: string } | { projectId: string },
+    ) => {
+      if (images.length === 0) return {};
+      if (!context.nodeCoordination) {
+        throw new Error("Cross-node coordination is not available in this backend.");
+      }
+      return {
+        attachments: await pushCallerAttachmentsToNode(
+          context,
+          context.nodeCoordination.projectFiles.transfer,
+          target,
+          caller,
+          asNonBlankString(args.requestId, "requestId"),
+          images,
+          to,
+        ),
+      };
+    };
     // That node's main coordinator for this project, not a worker: no
     // delegation, and its answer comes back as mail.
     if (
@@ -531,6 +571,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       if (parent && (parent.from.kind !== "node" || parent.from.nodeId !== target.nodeId))
         throw new Error("Reply parent is not from that node");
       return sendToNodeCoordinator(target, {
+        // An older node is refused below, naming the address it does not know.
+        ...(target.supports(BACKEND_CAPABILITIES.nodeCoordinatorMail)
+          ? await pushImages(target, { projectId: target.projectId })
+          : {}),
         coordinatorId: caller.coordinatorId,
         mailbox: own,
         ...(parent
@@ -547,6 +591,18 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         body: asNonBlankString(args.body, "body"),
       });
     }
+    // Outside the admission lock: a copy takes as long as the link takes.
+    const pushed = images.length
+      ? await (async () => {
+          const target = await coordinatorNodeTarget(
+            context,
+            caller.projectId,
+            asNonBlankString(args.nodeId, "nodeId"),
+          );
+          await target.environment(toEnvironmentId);
+          return pushImages(target, { environmentId: toEnvironmentId });
+        })()
+      : {};
     return context.storage.withAgentMailWorkerAdmission(
       `node:${args.nodeId}:${toEnvironmentId}`,
       async () => {
@@ -590,6 +646,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             injectedVia?: string;
             deliverNow?: string;
             deliverNowNote?: string;
+            attachments?: AgentMailAttachment[];
           }>(
             "deliver_node_mail",
             {
@@ -601,6 +658,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               ...(typeof args.subject === "string" ? { subject: args.subject } : {}),
               body: asNonBlankString(args.body, "body"),
               ...(steer ? { steer: true } : {}),
+              ...pushed,
             },
             `mail:${caller.coordinatorId}:${requestId}`,
           );
@@ -645,6 +703,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
             ...(delivered?.placement ? { placement: delivered.placement } : {}),
             ...(delivered?.placementReason ? { placementReason: delivered.placementReason } : {}),
             ...(delivered?.injectedVia ? { injectedVia: delivered.injectedVia } : {}),
+            ...(delivered?.attachments?.length ? { attachments: delivered.attachments } : {}),
             // The leaf's own outcome; absent when it was not asked to steer.
             ...(steer && delivered?.deliverNow
               ? { deliverNow: delivered.deliverNow, deliverNowNote: delivered.deliverNowNote }
@@ -662,6 +721,76 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
         }
       },
     );
+  });
+
+  /**
+   * `transfer_files` from this conversation's own attachments: the same checks
+   * and the same landing place as mail, with the transfer framework's receipt.
+   * Nothing is delivered, and the destination is always the Git-excluded place,
+   * so a copied image can reach a commit only if an agent moves it there.
+   */
+  register("transfer_coordinator_attachments", async (args, context) => {
+    const caller = await identity(args.scope, context);
+    const coordination = context.nodeCoordination;
+    if (!coordination || !context.nodes) {
+      throw new Error("Cross-node coordination is not available in this backend.");
+    }
+    const to = args.to as { nodeId?: unknown; scope?: { environmentId?: unknown } } | null;
+    const nodeId = asNonBlankString(to?.nodeId, "to.nodeId");
+    const environmentId = asNonBlankString(to?.scope?.environmentId, "to.scope.environmentId");
+    const images = await readCallerAttachments(context, caller, attachmentReferences(args.files));
+    if (images.length === 0) throw new Error("Name at least one attachment to transfer.");
+    const self = (await context.nodes.status()).nodeId;
+    if (nodeId === self) {
+      const environment = await context.storage.getEnvironment(environmentId);
+      if (!environment || environment.projectId !== caller.projectId) {
+        throw new Error("That environment does not belong to this project.");
+      }
+    } else {
+      const target = await coordinatorNodeTarget(context, caller.projectId, nodeId);
+      assertNodeTakesMailAttachments(target);
+      await target.environment(environmentId);
+    }
+    // Each transfer is its own copy, as a repeated call of this tool always was.
+    const source = mailAttachmentBatchId([
+      caller.coordinatorId,
+      caller.conversationId,
+      randomUUID(),
+    ]);
+    const destination = mailAttachmentBatchId([source, "destination"]);
+    const dataDir = context.storage.getDataDir();
+    await stageMailAttachments(dataDir, source, images);
+    try {
+      const receipt = await coordination.projectFiles.transfer.transfer({
+        from: { nodeId: self, scope: { mailAttachments: source } },
+        to: { nodeId, scope: { mailAttachments: destination } },
+        files: images.map((file) => file.name),
+        overwrite: true,
+        actor: `coordinator ${caller.coordinatorId}`,
+      });
+      const named = {
+        from: { nodeId: self, attachments: true },
+        to: { nodeId, scope: { environmentId } },
+      };
+      if (receipt.status !== "completed") return { ...receipt, ...named };
+      const placed = await coordination.projectFiles.invokerFor(nodeId)<{
+        attachments: AgentMailAttachment[];
+      }>("place_node_mail_attachments", {
+        to: { environmentId },
+        attachments: { batch: destination, files: mailAttachmentFiles(images) },
+      });
+      return {
+        ...receipt,
+        ...named,
+        files: receipt.files.map((file) => ({
+          ...file,
+          destination:
+            placed.attachments.find((entry) => entry.name === file.path)?.path ?? file.destination,
+        })),
+      };
+    } finally {
+      await removeMailAttachmentBatch(dataDir, source).catch(() => undefined);
+    }
   });
 
   /** Whether that node's copy of this project has a coordinator to mail. */

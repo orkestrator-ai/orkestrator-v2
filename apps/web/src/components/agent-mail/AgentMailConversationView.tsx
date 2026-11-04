@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { loadAgentMailMarkdown } from "@/lib/lazy-view-loaders";
+import { lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, RotateCcw, Send, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -14,10 +15,8 @@ import {
   type AgentMailMessage,
   type AgentMailParticipant,
 } from "@orkestrator/protocol/agent-mail";
-import {
-  MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS,
-  MessageMarkdown,
-} from "@/components/chat/MessageMarkdown";
+import { MARKDOWN_POLICY } from "@orkestrator/protocol/rich-content-policy";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,22 +32,35 @@ import {
   deliverNowNotice,
   formatAgentMailTime,
 } from "./agent-mail-ui";
-import { mailMarkdownComponents } from "./mail-markdown-components";
+
+// The mail panel is mounted at startup; the Markdown renderer is not needed until mail is read.
+const LazyAgentMailMarkdown = lazy(loadAgentMailMarkdown);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function AgentMailBody({ body }: { body: string }) {
-  if (body.length > MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS) {
-    return <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
-  }
+export function AgentMailBody({ body, onRendered }: { body: string; onRendered?: () => void }) {
+  const plainBody = <p className="whitespace-pre-wrap break-words text-xs">{body}</p>;
+  if (body.length > MARKDOWN_POLICY.blockParserCharacters) return plainBody;
   return (
-    <MessageMarkdown
-      content={body}
-      components={mailMarkdownComponents}
-      className="break-words text-xs prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2 [&>:first-child]:mt-0 [&>:last-child]:mb-0"
-    />
+    <LazyLoadBoundary
+      loadingFallback={plainBody}
+      renderError={({ isModuleLoadError, onReload, onRetry }) => (
+        <>
+          {plainBody}
+          <button
+            type="button"
+            className="text-xs underline"
+            onClick={isModuleLoadError ? onReload : onRetry}
+          >
+            {isModuleLoadError ? "Reload application" : "Retry formatting"}
+          </button>
+        </>
+      )}
+    >
+      <LazyAgentMailMarkdown body={body} onRendered={onRendered} />
+    </LazyLoadBoundary>
   );
 }
 
@@ -85,7 +97,12 @@ export function AgentMailConversationView({
   const { subject, body, sending } = draft;
   const markedSnapshot = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followBottom = useRef(true);
   const lastMessageId = useRef<string | undefined>(undefined);
+  const onBodyRendered = useCallback(() => {
+    const node = scrollRef.current;
+    if (node && followBottom.current) node.scrollTop = node.scrollHeight;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +145,7 @@ export function AgentMailConversationView({
     const last = conversation?.messages.at(-1)?.id;
     if (!last || last === lastMessageId.current) return;
     lastMessageId.current = last;
+    followBottom.current = true;
     const scroller = scrollRef.current;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [conversation]);
@@ -251,7 +269,15 @@ export function AgentMailConversationView({
           {error}
         </div>
       )}
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div
+        ref={scrollRef}
+        onScroll={() => {
+          const node = scrollRef.current;
+          if (node)
+            followBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
+        }}
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3"
+      >
         {!conversation && !error ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -337,7 +363,7 @@ export function AgentMailConversationView({
                 {message.subject && (
                   <p className="mb-1 break-words text-xs font-medium">{message.subject}</p>
                 )}
-                <AgentMailBody body={message.body} />
+                <AgentMailBody body={message.body} onRendered={onBodyRendered} />
                 {(failed || held || waiting) && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {(failed || held) && (

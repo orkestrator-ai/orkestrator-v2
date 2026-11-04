@@ -3,11 +3,49 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DESKTOP_STARTUP_EVENTS } from "../debug-logging.js";
 import { MAX_BRIDGE_DIAGNOSTIC_BYTES } from "./bridge.js";
-import type { LogAreaSpec } from "./define.js";
+import type { EssentialLogEvent, LogAreaSpec } from "./define.js";
 import { COMMAND_FAILURE_REASONS, LOG_VOCABULARY } from "./index.js";
 
 const NAME_GRAMMAR = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*$/;
 const areas = LOG_VOCABULARY as Readonly<Record<string, LogAreaSpec>>;
+
+const essentialEvents = Object.entries(areas).flatMap(([area, spec]) =>
+  Object.entries(spec.events).flatMap(([event, definition]) =>
+    typeof definition === "object" ? [{ name: `${area} ${event}`, definition }] : [],
+  ),
+);
+
+/**
+ * What the app keeps with every setting off. Changing this list changes that
+ * stance, so a new entry is a decision to review, here and in the logging guide.
+ */
+const CURATED_ESSENTIAL_EVENTS = [
+  "backend shutdown.finished",
+  "backend shutdown.signal-received",
+  "backend starting",
+  "bridge.cursor session.resume-fell-back",
+  "bridge.pi session.resume-fell-back",
+  "desktop backend.exited",
+  "desktop backend.exited-recovering",
+  "desktop backend.start-failed",
+  "desktop main-thread.stalled",
+  "desktop uncaught-exception",
+  "docker bridge.launched",
+  "docker writer-lease.lost",
+  "docker writer-lease.not-acquired",
+  "docker writer-lease.regained",
+  "event-loop stalled",
+  "local-server bridge.exited",
+  "local-server bridge.started",
+  "logging entries.dropped",
+  "logging essential.started",
+  "logging essential.stopped",
+  "process rejection.unhandled",
+  "process uncaught-exception",
+  "storage migration.failed",
+  "storage snapshot.failed",
+  "storage snapshot.integrity-failed",
+];
 
 const DOMAIN_FILES = readdirSync(import.meta.dir).filter(
   (name) =>
@@ -58,7 +96,8 @@ describe("log vocabulary", () => {
     for (const spec of Object.values(areas)) {
       expect(spec.description.length).toBeGreaterThan(10);
       expect(Object.keys(spec.events).length).toBeGreaterThan(0);
-      for (const description of Object.values(spec.events)) {
+      for (const definition of Object.values(spec.events)) {
+        const description = typeof definition === "string" ? definition : definition.description;
         expect(description.length).toBeGreaterThan(10);
       }
     }
@@ -81,6 +120,58 @@ describe("log vocabulary", () => {
       expect.arrayContaining([...DESKTOP_STARTUP_EVENTS]),
     );
     expect(areas["desktop.startup"]!.tag).toBe("DesktopStartup");
+  });
+});
+
+describe("essential events", () => {
+  test("the list is exactly the curated one", () => {
+    expect(essentialEvents.map(({ name }) => name).sort()).toEqual(CURATED_ESSENTIAL_EVENTS);
+  });
+
+  test("an event definition is a sentence or a flagged essential event, nothing in between", () => {
+    for (const { definition } of essentialEvents) {
+      expect((definition as EssentialLogEvent).essential).toBe(true);
+    }
+  });
+
+  test("every field is a scalar kind", () => {
+    for (const { name, definition } of essentialEvents) {
+      for (const [field, kind] of Object.entries(definition.fields)) {
+        expect(`${name} ${field} ${["number", "boolean", "label"].includes(kind)}`).toBe(
+          `${name} ${field} true`,
+        );
+      }
+    }
+  });
+
+  test("no field can hold an error's text, a path or other content", () => {
+    const content =
+      /(^|\.)(message|stack|cause|detail|text|path|file|directory|dir|cwd|url|prompt|content|output|stdout|stderr|cmd|command|args|spawnargs|token|password|secret|authorization|apikey|cookie|credentials)$/i;
+    for (const { name, definition } of essentialEvents) {
+      for (const field of Object.keys(definition.fields)) {
+        expect(`${name} ${field} ${content.test(field)}`).toBe(`${name} ${field} false`);
+      }
+    }
+  });
+
+  test("an error can only be declared by its identity, not as a whole", () => {
+    for (const { name, definition } of essentialEvents) {
+      expect(`${name} ${Object.hasOwn(definition.fields, "error")}`).toBe(`${name} false`);
+    }
+  });
+
+  test("the logging guide lists every essential event and no other", () => {
+    const guide = readFileSync(
+      join(import.meta.dir, "../../../../docs/architecture/logging.md"),
+      "utf8",
+    );
+    const start = guide.indexOf("### What it holds");
+    const section = guide.slice(start, guide.indexOf("\n### ", start + 1));
+    const listed = Array.from(
+      section.matchAll(/^\| `([\w.-]+)` \| `([\w.-]+)` \|/gm),
+      (match) => `${match[1]} ${match[2]}`,
+    );
+    expect(listed.sort()).toEqual(CURATED_ESSENTIAL_EVENTS);
   });
 });
 

@@ -44,6 +44,8 @@ import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 export interface LegacyTranscriptSnapshot {
   messages: unknown[];
   truncated: boolean;
+  /** Content is missing because of the bridge's byte bound, not a requested tail. */
+  omittedByTransport: boolean;
   /** The bridge answered 404: it has no such session. */
   missing?: true;
   revision?: number;
@@ -69,16 +71,32 @@ export async function readHttpBridgeLegacyTranscript(input: {
     {},
     input.fetchImpl,
   );
-  if (response.status === 404) return { messages: [], truncated: false, missing: true };
+  if (response.status === 404) {
+    return { messages: [], truncated: false, omittedByTransport: false, missing: true };
+  }
   assertOk(response, `${input.agent} transcript read`);
   const body = asRecord(
     await boundedJson(response, `${input.agent} transcript read`, { remaining: 16 * 1024 * 1024 }),
   );
   const messageWindow = asRecord(body?.messageWindow);
   const transcriptStatus = body?.status;
+  const messages: unknown[] = Array.isArray(body?.messages) ? body.messages : [];
+  const truncated = messageWindow?.truncated === true;
   return {
-    messages: Array.isArray(body?.messages) ? body.messages : [],
-    truncated: messageWindow?.truncated === true,
+    messages:
+      input.limit !== undefined && messages.length > input.limit
+        ? messages.slice(-input.limit)
+        : messages,
+    truncated,
+    // A tail read reports its own cut as truncation too. Exactly `limit` whole
+    // rows is that cut; fewer, more (a bridge that ignored it) or shed parts are
+    // the bridge's transport bound speaking.
+    omittedByTransport:
+      truncated &&
+      (input.limit === undefined ||
+        messages.length !== input.limit ||
+        (Number.isSafeInteger(messageWindow?.omittedParts) &&
+          (messageWindow!.omittedParts as number) > 0)),
     ...(Number.isSafeInteger(body?.revision) ? { revision: body!.revision as number } : {}),
     ...(transcriptStatus === "idle" ||
     transcriptStatus === "running" ||

@@ -70,5 +70,4 @@ Partly in place, so not in Tasks: the per-environment status and message above, 
 ## Related
 
 - [Security report, M9](../2-26-10-27-security.md#m9-legacy-pre-staged-inputs-images-still-mount-whole-host-agent-homes)
-- [0030](0030-h2-retire-in-container-firewall.md): other behaviour older images keep
 - `docs/architecture/container-lifecycle.md`, "Rollout switches and legacy runtimes"

@@ -28,6 +28,8 @@ import type { GatewayProxy } from "./gateway-proxy.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { GatewayTokenValidationError } from "@orkestrator/protocol/gateway-token";
+import type { GuessPeer } from "./gateway-credential-throttle.js";
+import { REFUSED_HOST_MESSAGE } from "./gateway-host-policy.js";
 import {
   clearedGatewayCookies,
   gatewayRequestCredential,
@@ -56,12 +58,12 @@ import {
   appendHeadersVary,
   responseCompressionContexts,
   jsonResponse,
-  textResponse,
   getBearerToken,
   tokenMatches,
   readJsonBody,
   readLoginToken,
   loginPage,
+  loginPageResponse,
   wantsHtml,
   browserPreviewRefererPrefix,
 } from "./gateway-internals.js";
@@ -79,6 +81,10 @@ import { parseBackendId } from "@orkestrator/protocol/federation";
 
 /** A host updater report is a handful of bounded fields. */
 const HOST_UPDATER_REPORT_MAX_BYTES = 16 * 1024;
+
+function throttledMessage(retryAfterSeconds: number): string {
+  return `Too many wrong gateway tokens. Try again in ${retryAfterSeconds} ${retryAfterSeconds === 1 ? "second" : "seconds"}.`;
+}
 
 /**
  * The route handlers `handle` dispatches to. `GatewayHandlers` calls back into
@@ -116,7 +122,7 @@ export class GatewayAuth {
    */
   requestCredentialMatches(request: IncomingMessage): boolean {
     const bearer = getBearerToken(request.headers);
-    if (bearer) return this.gatewayCredentialMatches(bearer);
+    if (bearer) return this.gatewayCredentialMatches(bearer, request);
     return this.cookieCredentialMatches(getGatewayAuthCookie(request.headers));
   }
 
@@ -164,11 +170,28 @@ export class GatewayAuth {
     return true;
   }
 
-  gatewayCredentialMatches(candidate: string | null): boolean {
-    if (tokenMatches(this.ctx.token, candidate)) return true;
+  /**
+   * Grants and sessions are random, so they are tried first and never count as
+   * guesses; only what is left can be an attempt at the durable token.
+   */
+  gatewayCredentialMatches(candidate: string | null, request: GuessPeer): boolean {
     if (!candidate) return false;
     if (this.grantExpiresAt(candidate) !== null) return true;
-    return this.ctx.browserSessions.matches(candidate);
+    if (this.ctx.browserSessions.matches(candidate)) return true;
+    return this.durableCredentialOutcome(candidate, request) === "match";
+  }
+
+  /**
+   * A lapsed random credential must not spend the durable-token guess budget.
+   * Durable tokens are user chosen, so exempt a credential shape only when the
+   * configured token cannot have that shape. Otherwise it still needs throttling.
+   * Apply this to stale cookies too, including the legacy-token migration check.
+   */
+  private durableCredentialOutcome(candidate: string, request: GuessPeer) {
+    for (const shape of [/^[A-Za-z0-9_-]{43}$/, /^okg_[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{43}$/]) {
+      if (shape.test(candidate) && !shape.test(this.ctx.token)) return "wrong";
+    }
+    return this.ctx.credentialThrottle.check(this.ctx.token, candidate, request);
   }
 
   /**
@@ -295,6 +318,10 @@ export class GatewayAuth {
     instrumentGatewayResponse(response, (responseBytes) => {
       requestMetrics.finish(response, responseBytes);
     });
+    if (!this.ctx.hostPolicy.allows(request.headers.host)) {
+      jsonResponse(response, 421, { error: REFUSED_HOST_MESSAGE });
+      return;
+    }
     const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
     // Legacy previews serve agent-controlled HTML on the gateway's own origin.
     // Sandboxing every response keeps such a document opaque-origin even when
@@ -519,23 +546,32 @@ export class GatewayAuth {
    * A browser whose cookie no longer authenticates gets the login page with a
    * reason, never a blank failure. A cookie holding the durable token (what
    * gateways before opaque sessions issued) is also expired on the way, so the
-   * token stops travelling to every other port on this host.
+   * token stops travelling to every other port on this host. Expiring it answers
+   * whether the value was the token, so that comparison is throttled like any
+   * other. A bearer refused by the throttle is told to wait, not that it is wrong.
    */
   private refuseUnauthenticated(request: IncomingMessage, response: ServerResponse): void {
+    const throttle = this.ctx.credentialThrottle;
+    const bearer = getBearerToken(request.headers);
+    if (bearer && this.durableCredentialOutcome(bearer, request) === "throttled") {
+      const retryAfter = throttle.retryAfterSeconds(request);
+      jsonResponse(
+        response,
+        429,
+        { error: throttledMessage(retryAfter) },
+        { "retry-after": String(retryAfter) },
+      );
+      return;
+    }
     const staleCookie = getGatewayAuthCookie(request.headers);
-    if (staleCookie && tokenMatches(this.ctx.token, staleCookie)) {
+    if (staleCookie && this.durableCredentialOutcome(staleCookie, request) === "match") {
       response.setHeader("set-cookie", clearedGatewayCookies(requestIsHttps(request)));
     }
     if (wantsHtml(request) && request.method === "GET") {
       const notice = staleCookie
         ? "Your browser session has ended. Enter the gateway token to sign in again."
         : "";
-      textResponse(
-        response,
-        401,
-        loginPage(notice, this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
-      );
+      loginPageResponse(response, 401, loginPage(notice, this.agentTestLoginHint()));
     } else {
       jsonResponse(response, 401, { error: "Authentication required" });
     }
@@ -563,6 +599,7 @@ export class GatewayAuth {
       capabilities[BACKEND_CAPABILITIES.publicActionRelay] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailSteer] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeMailAttachments] = 1;
       capabilities[BACKEND_CAPABILITIES.ticketSync] = 1;
     }
     const hello: BackendHello = {
@@ -732,12 +769,7 @@ export class GatewayAuth {
 
   async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === "GET") {
-      textResponse(
-        response,
-        200,
-        loginPage("", this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
-      );
+      loginPageResponse(response, 200, loginPage("", this.agentTestLoginHint()));
       return;
     }
     if (request.method !== "POST") {
@@ -751,22 +783,34 @@ export class GatewayAuth {
       token = await readLoginToken(request);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
-        textResponse(
+        loginPageResponse(
           response,
           413,
           loginPage("Login request is too large.", this.agentTestLoginHint()),
-          "text/html; charset=utf-8",
         );
         return;
       }
       throw error;
     }
-    if (!tokenMatches(this.ctx.token, token)) {
-      textResponse(
+    // An empty submission is not a guess.
+    const outcome = token
+      ? this.ctx.credentialThrottle.check(this.ctx.token, token, request)
+      : "wrong";
+    if (outcome === "throttled") {
+      const retryAfter = this.ctx.credentialThrottle.retryAfterSeconds(request);
+      response.setHeader("retry-after", String(retryAfter));
+      loginPageResponse(
+        response,
+        429,
+        loginPage(throttledMessage(retryAfter), this.agentTestLoginHint()),
+      );
+      return;
+    }
+    if (outcome === "wrong") {
+      loginPageResponse(
         response,
         401,
         loginPage("Invalid gateway token.", this.agentTestLoginHint()),
-        "text/html; charset=utf-8",
       );
       return;
     }
@@ -917,14 +961,13 @@ export class GatewayAuth {
       return;
     }
     if (!this.consumeAgentTestBootstrap(url.searchParams.get("code") ?? "")) {
-      textResponse(
+      loginPageResponse(
         response,
         401,
         loginPage(
           "That login link was already used or has expired. Mint a fresh one.",
           this.agentTestLoginHint(),
         ),
-        "text/html; charset=utf-8",
       );
       return;
     }

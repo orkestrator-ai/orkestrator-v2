@@ -9,6 +9,7 @@ import type { NodeStatus } from "@orkestrator/protocol/command-nodes";
 import { repositoryHint, type NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { z } from "zod";
 
+import { APP_VERSION } from "./constants.js";
 import { readNodeMachineLoad, readOwnMachineLoad } from "./control-mcp-machine-load.js";
 import {
   compactMessages,
@@ -22,7 +23,7 @@ import {
 /**
  * Cross-node coordinator tools (docs/architecture/command-nodes.md,
  * "Coordinators"). A coordinator on a command node can:
- * - list the connected nodes, each machine's OS and load, and their
+ * - list the connected nodes, each machine's version, OS and load, and their
  *   environments for its project;
  * - create environments on another node (its own node stays the default:
  *   that is launch_environment);
@@ -222,7 +223,7 @@ export function registerNodeTools(
     {
       title: "List connected nodes",
       description:
-        "This command node and the nodes it controls, with availability, mode, whether each has a copy of this project, and in machine its OS, size and average CPU and RAM percent over 5 minutes, 1 hour and 24 hours. coveredSeconds below windowSeconds means that average rests on less history than its window. status unavailable means the load is unknown, not that the machine is idle.",
+        "This command node and the nodes it controls, with availability, mode, version, whether each has a copy of this project, and in machine its OS, size and average CPU and RAM percent over 5 minutes, 1 hour and 24 hours. version is the Orkestrator version the machine is running now, from its current connection; null means the node is not connected (disconnected, disabled or reconnecting), so its version is unknown, not that it is old. Builds can share a version number and hold different code, so a version alone does not prove a specific fix is on that machine. coveredSeconds below windowSeconds means that average rests on less history than its window. status unavailable means the load is unknown, not that the machine is idle.",
       inputSchema: z.object({}),
       annotations: READ,
     },
@@ -240,6 +241,7 @@ export function registerNodeTools(
           available: node.available,
           state: node.view.connection.state,
           mode: node.view.connection.remoteMode ?? null,
+          version: node.version ?? null,
           hasProject: Boolean(
             hint && node.projects.some((project) => project.repositoryHint === hint),
           ),
@@ -251,7 +253,7 @@ export function registerNodeTools(
         })),
       );
       return result({
-        self: { nodeId: self.nodeId, mode: self.mode, machine: ownMachine },
+        self: { nodeId: self.nodeId, mode: self.mode, version: APP_VERSION, machine: ownMachine },
         nodes,
         total: nodes.length,
       });

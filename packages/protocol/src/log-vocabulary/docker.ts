@@ -33,6 +33,30 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "Docker is not available; written when the diagnostic changes. Fixed-shape metadata only: messages can hold daemon endpoints.",
       "start.port-collision-retrying":
         "An automatic host port collided on start, so it is retried once with fresh ports.",
+      "writer-lease.lost": {
+        description:
+          "This backend lost the registry writer lease, for the fixed `reason` given. Schedules stop and container changes are refused until it restarts.",
+        essential: true,
+        fields: { reason: "label" },
+      },
+      "writer-lease.regained": {
+        description:
+          "This backend took the registry writer lease over from a holder that stopped refreshing it (it crashed, was killed or stalled), `staleForMs` after its last refresh. The counterpart of that holder's `writer-lease.lost` with reason `reclaimed`; a lease left by a clean shutdown is acquired silently.",
+        essential: true,
+        fields: { staleForMs: "number" },
+      },
+      "writer-lease.not-acquired": {
+        description:
+          "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",
+        essential: true,
+        fields: { reason: "label" },
+      },
+      "bridge.launched": {
+        description:
+          "A bridge process was launched in a container, for the first time there or as a relaunch; `provider` names it. A relaunch keeps the run before it in the previous log.",
+        essential: true,
+        fields: { provider: "label", containerPort: "number" },
+      },
     },
   },
   "docker.reachability": {

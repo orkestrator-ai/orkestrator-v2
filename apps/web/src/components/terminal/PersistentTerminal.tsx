@@ -7,6 +7,7 @@ import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { publishTerminalGeometryIfOwned } from "@/lib/terminal-geometry-owner";
+import { createXtermTerminal } from "@/lib/terminal-xterm";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import {
   useTerminalSessionStore,
@@ -1404,7 +1405,7 @@ export function PersistentTerminal({
         // This can happen when the container was detached from DOM for too long and xterm disposed itself
         if (!hasXtermBefore) {
           // Recreate the terminal - this will trigger a re-render with new terminalData
-          const newTerminalData = recreateTerminal(environmentId, tabId);
+          const newTerminalData = recreateTerminal(environmentId, tabId, createXtermTerminal);
           if (newTerminalData) {
             // Terminal was disposed and recreated - return empty cleanup since no handlers
             // were set up. The effect will re-run with the new terminalData from the store.

@@ -1826,12 +1826,5 @@ export function handlePromptTools(
     });
     return true;
   }
-  // Two same-kind reads launched together, only the second of which settles
-  // while the turn keeps running. Cursor indexes a call when it settles, so
-  // `FAKE_ACP_REPLAY_CURSOR_PARALLEL_READS` withholds the first read's
-  // metadata until this prompt is released. A live pass must enrich the
-  // settled sibling from that partial index without letting the pending one
-  // claim it.
-
   return handlePromptCursor(message, params, prompt);
 }

@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
+import * as captureFs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -13,6 +15,7 @@ import {
   writeConfinedFile,
 } from "./path-safety.js";
 import { recurringWorkMetrics, spawnWorkUnit } from "./recurring-work-metrics.js";
+import { groupHasLiveMember, readZombieExit, type CommandExit } from "./shell-process-state.js";
 
 export type ExecResult = {
   stdout: string;
@@ -41,6 +44,8 @@ export type ExecBufferResult = {
 export class CommandFailedError extends Error {
   readonly stdout: string;
   readonly timedOut: boolean;
+  /** Compatibility classification for callers rejecting failed pipe captures. */
+  readonly outputCloseTimedOut: boolean;
   readonly executableMissing: boolean;
   /** The caller's abort signal stopped it. `timedOut` is also set, as callers expect. */
   readonly aborted: boolean;
@@ -54,6 +59,7 @@ export class CommandFailedError extends Error {
     details: {
       stdout?: string;
       timedOut?: boolean;
+      outputCloseTimedOut?: boolean;
       executableMissing?: boolean;
       aborted?: boolean;
       outputLimitExceeded?: boolean;
@@ -65,6 +71,7 @@ export class CommandFailedError extends Error {
     this.name = "CommandFailedError";
     this.stdout = details.stdout ?? "";
     this.timedOut = details.timedOut ?? false;
+    this.outputCloseTimedOut = details.outputCloseTimedOut ?? false;
     this.executableMissing = details.executableMissing ?? false;
     this.aborted = details.aborted ?? false;
     this.outputLimitExceeded = details.outputLimitExceeded ?? false;
@@ -85,6 +92,8 @@ export class CommandFailedError extends Error {
 
 type RunCommandOptions = {
   signal?: AbortSignal;
+  /** Wait for same-group descendants and capture their late output. Defaults to leader exit. */
+  waitForDescendants?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   /** Optional stdin payload. When omitted, stdin is closed immediately. */
@@ -215,12 +224,95 @@ function nonInteractiveGitEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.Proces
 
 const MAX_COMMAND_OUTPUT_BYTES = 50 * 1024 * 1024;
 const COMMAND_KILL_GRACE_MS = 100;
+/** A file has no back-pressure, so a runaway command is noticed by looking. */
+const COMMAND_OUTPUT_CHECK_MS = 100;
+const COMMAND_GROUP_POLL_MS = 5;
+const COMMAND_GROUP_POLL_MAX_MS = 200;
+const COMMAND_EXIT_WATCH_MS = 1_000;
+const COMMAND_EXIT_WATCH_MAX_MS = 16_000;
+
+/**
+ * Opens a private, already unlinked file for one stream of a command.
+ *
+ * Output goes to a file and not a pipe because Bun 1.4.4's pipe readers can miss
+ * the end of a stream: the kernel reports EOF on the socket and Bun never reads
+ * it, so a child that exited in 2 ms looks unfinished until its 10 s or 60 s
+ * timeout, through `Bun.spawn` as much as `node:child_process`
+ * (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
+ * The file is unlinked before the child starts, so captured output has no name
+ * on disk and its blocks are freed with the last descriptor. Appending keeps a
+ * child that reopens `/dev/stdout` from writing over what is there.
+ */
+function openCaptureFile(): number {
+  const filePath = path.join(os.tmpdir(), `orkestrator-capture-${randomUUID()}`);
+  const fd = captureFs.openSync(
+    filePath,
+    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_APPEND,
+    0o600,
+  );
+  try {
+    captureFs.unlinkSync(filePath);
+    return fd;
+  } catch (error) {
+    captureFs.closeSync(fd);
+    throw error;
+  }
+}
+
+/** The first `MAX_COMMAND_OUTPUT_BYTES` of a stream. Synchronous, so no event can be lost. */
+function readCaptureFile(fd: number): Buffer {
+  const size = Math.min(captureFs.fstatSync(fd).size, MAX_COMMAND_OUTPUT_BYTES);
+  const buffer = Buffer.allocUnsafe(size);
+  let offset = 0;
+  while (offset < size) {
+    const bytesRead = captureFs.readSync(fd, buffer, offset, size - offset, offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return buffer.subarray(0, offset);
+}
+
+/**
+ * Starts a captured command. POSIX detached children lead a private
+ * session/process group; these commands do not need the backend's controlling tty.
+ */
+function spawnCaptured(
+  command: string,
+  args: string[],
+  options: RunCommandOptions,
+  stdoutFd: number,
+  stderrFd: number,
+) {
+  const payload = options.stdin?.length ? Buffer.from(options.stdin) : undefined;
+  const child = Bun.spawn([command, ...args], {
+    cwd: options.cwd,
+    env: command === "git" ? nonInteractiveGitEnv(options.env) : (options.env ?? process.env),
+    detached: process.platform !== "win32",
+    stdin: payload ?? "pipe",
+    stdout: stdoutFd,
+    stderr: stderrFd,
+  });
+  // Close stdin immediately when there is no payload, so CLIs cannot await EOF.
+  if (!payload) closeStdin(child.stdin as Bun.FileSink);
+  return child;
+}
+
+function closeStdin(stdin: Bun.FileSink): void {
+  try {
+    // Closing can reject once the child is gone, and nothing is left to deliver.
+    void Promise.resolve(stdin.end()).catch(() => undefined);
+  } catch {
+    // Already closed. The child sees EOF either way.
+  }
+}
+
+type CapturedChild = ReturnType<typeof spawnCaptured>;
 
 /** Signal only the group created for this command, never PIDs from a ps snapshot. */
-function signalCommand(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+function signalCommand(child: CapturedChild, signal: NodeJS.Signals): void {
   try {
-    if (process.platform !== "win32" && child.pid !== undefined) {
-      // The group can still own output pipes after its leader has exited.
+    if (process.platform !== "win32") {
+      // The group can outlive its leader, and it may still be writing output.
       process.kill(-child.pid, signal);
     } else {
       child.kill(signal);
@@ -228,6 +320,20 @@ function signalCommand(child: ChildProcessWithoutNullStreams, signal: NodeJS.Sig
   } catch {
     // Already gone or no longer signalable. Settlement must not depend on this.
   }
+}
+
+/**
+ * Whether anything still runs in the command's group. The signal is the common
+ * path: only a group that still exists is worth enumerating for live members.
+ */
+function commandGroupAlive(child: CapturedChild): boolean {
+  if (process.platform === "win32") return false;
+  try {
+    process.kill(-child.pid, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+  }
+  return groupHasLiveMember(child.pid);
 }
 
 function executeCommandBytes(
@@ -241,40 +347,64 @@ function executeCommandBytes(
       reject(Object.assign(new Error(COMMAND_ABORTED_MESSAGE), { killed: true }));
       return;
     }
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: command === "git" ? nonInteractiveGitEnv(options.env) : options.env,
-      // POSIX detached children lead a private session/process group. These are
-      // captured commands, so they do not need the backend's controlling tty.
-      detached: process.platform !== "win32",
-      stdio: "pipe",
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
+    const captureFds: number[] = [];
+    const releaseCaptureFds = () => {
+      for (const fd of captureFds.splice(0)) {
+        try {
+          captureFs.closeSync(fd);
+        } catch {
+          /* Continue releasing the other stream. */
+        }
+      }
+    };
+    try {
+      captureFds.push(openCaptureFile());
+      captureFds.push(openCaptureFile());
+    } catch (error) {
+      releaseCaptureFds();
+      // Not the command's own outcome: an ENOENT here must not read as a missing executable.
+      const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+      reject(new Error(`Could not open a command output file in the temporary directory: ${code}`));
+      return;
+    }
+    const [stdoutFd, stderrFd] = captureFds as [number, number];
+    let child: CapturedChild;
+    try {
+      child = spawnCaptured(command, args, options, stdoutFd, stderrFd);
+    } catch (error) {
+      releaseCaptureFds();
+      reject(error);
+      return;
+    }
     let settled = false;
     let timedOut = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let groupTimer: ReturnType<typeof setTimeout> | undefined;
+    let limitTimer: ReturnType<typeof setInterval> | undefined;
+    let exitWatchTimer: ReturnType<typeof setTimeout> | undefined;
+    let commandExit: CommandExit | undefined;
 
-    const stopCapture = () => {
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
+    /** Ends the command's capture and returns what it wrote. Runs exactly once. */
+    const finishCapture = (): ExecBufferResult | undefined => {
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(groupTimer);
+      clearInterval(limitTimer);
+      clearTimeout(exitWatchTimer);
+      options.signal?.removeEventListener("abort", abort);
+      try {
+        return { stdout: readCaptureFile(stdoutFd), stderr: readCaptureFile(stderrFd) };
+      } catch (error) {
+        reject(error);
+        return undefined;
+      } finally {
+        releaseCaptureFds();
+      }
     };
     const fail = (error: Error) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timeoutTimer);
-      options.signal?.removeEventListener("abort", abort);
-      stopCapture();
-      reject(
-        Object.assign(error, {
-          stdout: Buffer.concat(stdout, stdoutBytes),
-          stderr: Buffer.concat(stderr, stderrBytes),
-          killed: timedOut,
-        }),
-      );
+      const output = finishCapture();
+      if (output) reject(Object.assign(error, { ...output, killed: timedOut }));
     };
     const abort = () => {
       timedOut = true;
@@ -282,62 +412,91 @@ function executeCommandBytes(
       fail(new Error(COMMAND_ABORTED_MESSAGE));
     };
     options.signal?.addEventListener("abort", abort, { once: true });
-    const capture = (chunks: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
-      if (settled || timedOut) return;
-      const previousBytes = stream === "stdout" ? stdoutBytes : stderrBytes;
-      const retained = chunk.subarray(0, MAX_COMMAND_OUTPUT_BYTES - previousBytes);
-      chunks.push(retained);
-      if (stream === "stdout") stdoutBytes += retained.length;
-      else stderrBytes += retained.length;
-      if (previousBytes + chunk.length > MAX_COMMAND_OUTPUT_BYTES) {
+    const checkOutputLimit = (): boolean => {
+      const stream =
+        captureFs.fstatSync(stdoutFd).size > MAX_COMMAND_OUTPUT_BYTES
+          ? "stdout"
+          : captureFs.fstatSync(stderrFd).size > MAX_COMMAND_OUTPUT_BYTES
+            ? "stderr"
+            : undefined;
+      if (stream === undefined) return false;
+      signalCommand(child, "SIGKILL");
+      fail(
+        Object.assign(new Error(`${stream} ${OUTPUT_LIMIT_MESSAGE}`), {
+          outputLimitExceeded: true,
+        }),
+      );
+      return true;
+    };
+    const failIfOverLimit = (): boolean => {
+      try {
+        return checkOutputLimit();
+      } catch (error) {
         signalCommand(child, "SIGKILL");
-        fail(
-          Object.assign(new Error(`${stream} ${OUTPUT_LIMIT_MESSAGE}`), {
-            outputLimitExceeded: true,
-          }),
-        );
+        fail(error instanceof Error ? error : new Error(String(error)));
+        return true;
       }
     };
-    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk, "stdout"));
-    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk, "stderr"));
-    const onError = (error: Error) => {
-      if (timedOut || settled) return;
-      signalCommand(child, "SIGKILL");
-      fail(error);
-    };
-    child.on("error", onError);
-    child.stdout.on("error", onError);
-    child.stderr.on("error", onError);
-    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
-      // A command may close its input before consuming all of a supplied payload.
-      if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") onError(error);
-    });
-    child.on("close", (code, signal) => {
-      if (settled || timedOut) return;
-      if (code !== 0 || signal !== null) {
+    limitTimer = setInterval(() => {
+      if (!settled && !timedOut) failIfOverLimit();
+    }, COMMAND_OUTPUT_CHECK_MS);
+    const settleOnExit = () => {
+      if (settled || timedOut || failIfOverLimit()) return;
+      if (commandExit?.code !== 0 || commandExit.signal !== null) {
         fail(
           Object.assign(new Error(`Command failed: ${[command, ...args].join(" ")}`), {
-            code,
-            signal,
+            code: commandExit?.code,
+            signal: commandExit?.signal,
           }),
         );
         return;
       }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      options.signal?.removeEventListener("abort", abort);
-      resolve({
-        stdout: Buffer.concat(stdout, stdoutBytes),
-        stderr: Buffer.concat(stderr, stderrBytes),
-      });
-    });
+      const output = finishCapture();
+      if (output) resolve(output);
+    };
+    // Default capture is a snapshot at leader exit. Helpers may outlive it;
+    // callers needing their late output explicitly opt into group waiting.
+    const awaitGroupExit = (delayMs: number) => {
+      if (settled || timedOut) return;
+      if (commandGroupAlive(child)) {
+        groupTimer = setTimeout(
+          awaitGroupExit,
+          delayMs,
+          Math.min(delayMs * 2, COMMAND_GROUP_POLL_MAX_MS),
+        );
+        return;
+      }
+      settleOnExit();
+    };
+    const onCommandExit = (exit: CommandExit) => {
+      if (commandExit) return;
+      commandExit = exit;
+      clearTimeout(exitWatchTimer);
+      if (options.waitForDescendants) awaitGroupExit(COMMAND_GROUP_POLL_MS);
+      else settleOnExit();
+    };
+    void child.exited.then(
+      () =>
+        onCommandExit({ code: child.exitCode, signal: child.signalCode as NodeJS.Signals | null }),
+      (error) => fail(error instanceof Error ? error : new Error(String(error))),
+    );
+    // On macOS Bun can lose the exit itself, and the child waits as a zombie that
+    // nothing will reap. Its status is still readable, so ask once it has had time.
+    const watchForLostExit = (delayMs: number) => {
+      exitWatchTimer = setTimeout(() => {
+        if (settled || timedOut || commandExit) return;
+        const exit = readZombieExit(child.pid);
+        if (exit) onCommandExit(exit);
+        else watchForLostExit(Math.min(delayMs * 2, COMMAND_EXIT_WATCH_MAX_MS));
+      }, delayMs);
+    };
+    if (process.platform === "darwin") watchForLostExit(COMMAND_EXIT_WATCH_MS);
     if (timeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         signalCommand(child, "SIGTERM");
-        stopCapture();
-        // Always escalate, even if the leader exits or the pipes close during
-        // the grace period. Neither proves that the group's descendants exited.
+        // Always escalate, even if the leader exits during the grace period.
+        // That does not prove that the group's descendants exited.
         timeoutTimer = setTimeout(() => {
           signalCommand(child, "SIGKILL");
           fail(
@@ -349,8 +508,6 @@ function executeCommandBytes(
         }, COMMAND_KILL_GRACE_MS);
       }, timeoutMs);
     }
-    // Close stdin immediately when there is no payload, so CLIs cannot await EOF.
-    child.stdin.end(options.stdin);
   });
 }
 

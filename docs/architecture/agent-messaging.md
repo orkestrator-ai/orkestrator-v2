@@ -117,7 +117,11 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 - Inject batch: 10 messages or 128 KiB of rendered carriers per wake
 - Agent Tools rate limits: read 30/min and 2 000/day; send 20/min and 200/day, per `(environment, tab, kind)`
 
-There are no attachments, no multicast, and no search-over-bodies API. One
+There is no multicast and no search-over-bodies API. The only attachments are
+images a coordinator sends from its own conversation
+([coordinator.md](coordinator.md#passing-a-pasted-image-on)): at most 8, 8 MiB
+each and 32 MiB together, copied for the recipient before the message exists, and
+stored on it as paths rather than content. One
 `requestId` per sender scope is idempotent; retrying the same id with a
 different body is `idempotency-conflict`.
 

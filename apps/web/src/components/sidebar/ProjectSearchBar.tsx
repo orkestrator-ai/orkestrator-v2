@@ -26,11 +26,12 @@ import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIStore } from "@/stores/uiStore";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import { onAppShortcut } from "@/lib/app-shortcuts";
 import { formatCompactRelativeTime } from "@/lib/format-relative-time";
 import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { projectLandingBoardTab } from "@/lib/federation/workspace-realm";
+import { projectLandingBoardTab, realmGroupingFor } from "@/lib/federation/workspace-realm";
 import {
   flattenProjectSearchResults,
   localSearchSource,
@@ -383,6 +384,13 @@ export function ProjectSearchBar({
   useEffect(
     () =>
       onAppShortcut("search-projects", () => {
+        // Closing content remains mounted until motion settles. Reopen its
+        // desktop panel before the search can be unmounted by that timer.
+        const ui = useUIStore.getState();
+        if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches && !ui.sidebarOpen) {
+          ui.toggleSidebar();
+          openRef.current = false;
+        }
         if (!openRef.current) setNow(new Date());
         openRef.current = !openRef.current;
         setOpen(openRef.current);
@@ -445,10 +453,11 @@ export function ProjectSearchBar({
         // and opened there as its sidebar row opens it.
         onSelectMachineProject?.(other, hit.project.id);
         // Read after the reveal, which can switch the sidebar's grouping.
-        const grouping =
-          useUIStore.getState().environmentSortMode === "activity"
-            ? "activity"
-            : useMachineViewStore.getState().grouping;
+        const grouping = realmGroupingFor(
+          useUIStore.getState().environmentSortMode,
+          useMachineViewStore.getState().grouping,
+          window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
+        );
         const boardTab = projectLandingBoardTab(grouping, false);
         openMachineWorkspace({
           connectionId: other.connectionId,

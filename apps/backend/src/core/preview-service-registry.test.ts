@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { PREVIEW_SERVICES_CHANGED_EVENT } from "@orkestrator/protocol/preview-services";
 
+import { seedStore, seedUnreadableStore } from "./storage-test-support.js";
 import { createPreviewHarness, type PreviewHarness } from "./preview-test-support.js";
 
 describe("PreviewServiceRegistry", () => {
@@ -149,10 +150,56 @@ describe("PreviewServiceRegistry", () => {
     await harness.addContainerEnvironment("a", { entryPort: 3000 });
     publish("a", "container-a", {});
     const registry = await started();
+    await harness.runtime.updateSettings((current) => ({ ...current, relay: false }));
+    await registry.settle();
     const endpoint = registry.snapshot({ environmentId: "a" }).services[0]!.endpoint;
     expect(endpoint.state).toBe("unavailable");
     expect(endpoint.failure?.category).toBe("target-unmapped");
     expect(endpoint.hostPort).toBeNull();
+  });
+
+  test("transport off re-resolves unpublished relay services with an actionable failure", async () => {
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    publish("a", "container-a", {});
+    const registry = await started();
+    // Model an already healthy relay without starting a real Docker child.
+    harness.runtime.relay.healthy = () => true;
+    const id = registry.snapshot({ environmentId: "a" }).services[0]!.definition.serviceId;
+    harness.runtime.resolver.invalidate("a");
+    await registry.refresh(id);
+    expect(registry.snapshot({ environmentId: "a" }).services[0]!.endpoint.state).toBe("available");
+    await harness.runtime.updateSettings((current) => ({ ...current, transport: false }));
+    expect(harness.runtime.storedSettings().relay).toBe(true);
+    expect(harness.runtime.effectiveSettings().relay).toBe(false);
+    expect(registry.snapshot({ environmentId: "a" }).services[0]!.endpoint).toMatchObject({
+      state: "unavailable",
+      failure: { category: "target-unmapped" },
+    });
+    await harness.runtime.updateSettings((current) => ({ ...current, transport: true }));
+    expect(registry.snapshot({ environmentId: "a" }).services[0]!.endpoint.state).toBe("available");
+  });
+
+  test.each([null, [], "invalid", 42])(
+    "non-object settings %j disable transport and relay",
+    async (value) => {
+      seedStore(harness.dir, "preview-settings.json", value);
+      expect(await harness.storage.previewServices.loadPreviewSettings()).toMatchObject({
+        transport: false,
+        relay: false,
+      });
+    },
+  );
+
+  test("absent settings enable transport; corrupt settings fail closed", async () => {
+    expect(await harness.storage.previewServices.loadPreviewSettings()).toMatchObject({
+      transport: true,
+      relay: true,
+    });
+    seedUnreadableStore(harness.dir, "preview-settings.json", "{corrupt");
+    expect(await harness.storage.previewServices.loadPreviewSettings()).toMatchObject({
+      transport: false,
+      relay: false,
+    });
   });
 
   test("compare-and-set updates reject stale writers and replay operation ids", async () => {

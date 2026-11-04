@@ -41,6 +41,9 @@ import {
   LOG_LEVEL_ENV,
 } from "@orkestrator/protocol/node/logger-environment";
 
+/** The default agent: no vendor quirks, unlike a fixture that asks for `grok`. */
+const FIXTURE_PROVIDER_ID = "acp-fixture";
+
 export const here = dirname(fileURLToPath(import.meta.url));
 
 type NativeWebPlatform = {
@@ -243,7 +246,7 @@ export async function spawnBridge(
     // can run this harness under a parent configured for JSON or error-only logs.
     [LOG_FORMAT_ENV]: "text",
     [LOG_LEVEL_ENV]: "info",
-    ACP_PROVIDER: "cursor",
+    ACP_PROVIDER: FIXTURE_PROVIDER_ID,
     ACP_AGENT_PATH: resolve(here, "testing/fake-agent.ts"),
     ACP_BRIDGE_TOKEN: token,
     HOSTNAME: "127.0.0.1",
@@ -274,10 +277,10 @@ export async function spawnBridge(
     if (value === undefined) delete env[key];
   }
   if (!("ACP_PROVIDER_CONFIG" in (options.env ?? {}))) delete env.ACP_PROVIDER_CONFIG;
-  if (env.ACP_PROVIDER === "cursor" && options.env?.ACP_PROVIDER_CONFIG === undefined) {
+  if (env.ACP_PROVIDER === FIXTURE_PROVIDER_ID && options.env?.ACP_PROVIDER_CONFIG === undefined) {
     env.ACP_PROVIDER_CONFIG = JSON.stringify({
-      id: "cursor",
-      name: "Cursor test fixture",
+      id: FIXTURE_PROVIDER_ID,
+      name: "ACP test fixture",
       executable: env.ACP_AGENT_PATH,
       argv: [],
       env: {},

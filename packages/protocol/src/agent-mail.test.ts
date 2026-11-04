@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  AGENT_MAIL_MAX_ATTACHMENTS,
   agentMailAddressLabel,
   formatAgentMailAddressLabel,
   agentMailKind,
   agentMailRouteWakes,
+  normalizeAgentMailAttachments,
   normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   classifyAgentMailRoute,
@@ -182,6 +184,74 @@ describe("agent mail protocol", () => {
         trust: "cross-project",
       }),
     ).toBe("external");
+  });
+
+  test("a carrier names attached images on the recipient's own filesystem", () => {
+    const attachment = {
+      name: "shot.png",
+      path: "/workspace/.orkestrator/mail-attachments/abc/shot.png",
+      mediaType: "image/png",
+      bytes: 12,
+      sha256: "a".repeat(64),
+    };
+    const message = {
+      version: 1,
+      id: "m1",
+      threadId: "t1",
+      requestId: "r1",
+      createdAt: "2026-11-04T00:00:00.000Z",
+      from: { kind: "user" },
+      toEnvironmentId: "e1",
+      toTabId: "tab",
+      toIncarnationId: "i1",
+      body: "Look.",
+      bodyBytes: 5,
+      trust: "user",
+      injectDepth: 0,
+      threadDepth: 0,
+      placement: "stored",
+      revision: 1,
+    } as const;
+    const carrier = renderAgentMailCarrier({ ...message, attachments: [attachment] });
+    const payload = JSON.parse(
+      /<orkestrator-peer-payload-json>\n([\s\S]*?)\n<\/orkestrator-peer-payload-json>/.exec(
+        carrier,
+      )![1]!,
+    );
+    expect(payload.attachments).toEqual([attachment]);
+    expect(payload.body).toBe("Look.");
+    expect(carrier).toContain("on your own filesystem");
+    // Mail without images reads exactly as before.
+    expect(renderAgentMailCarrier(message)).not.toContain("attachments");
+  });
+
+  test("attachment entries read back from a transcript are checked one by one", () => {
+    const good = {
+      name: "shot.png",
+      path: "/w/shot.png",
+      mediaType: "image/png",
+      bytes: 12,
+      sha256: "a".repeat(64),
+    };
+    expect(normalizeAgentMailAttachments(undefined)).toEqual([]);
+    expect(normalizeAgentMailAttachments("nope")).toEqual([]);
+    expect(
+      normalizeAgentMailAttachments([
+        good,
+        { ...good, name: "../up.png" },
+        { ...good, name: ".hidden" },
+        { ...good, mediaType: "text/html" },
+        { ...good, bytes: -1 },
+        { ...good, sha256: "short" },
+        { ...good, path: 3 },
+        null,
+      ]),
+    ).toEqual([good]);
+    expect(
+      normalizeAgentMailAttachments(
+        Array.from({ length: AGENT_MAIL_MAX_ATTACHMENTS + 3 }, () => good),
+      ),
+    ).toHaveLength(AGENT_MAIL_MAX_ATTACHMENTS);
   });
 
   test("knows the watched pull request notice", () => {

@@ -584,8 +584,10 @@ export interface GlobalConfig {
   openCodeZenApiKeySource?: "config" | "host-env" | "none";
   /** Whether a write-only GitHub token is stored by the backend. */
   githubTokenConfigured?: boolean;
-  /** Reuse the host's active `gh auth login` token for container GitHub access. */
+  /** The backend's own GitHub credential: the host's `gh auth login`, or else the stored token. */
   useHostGitHubCredentials?: boolean;
+  /** What containers receive, independent of the backend's credential. Absent means none. */
+  containerGitHubCredential?: "none" | "host-cli" | "pat";
   /** The user asked not to be reminded at startup to set up the GitHub CLI. */
   githubCliReminderDismissed?: boolean;
   /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
@@ -632,6 +634,11 @@ export interface GlobalConfig {
   experimentalCodexRawEventLogging?: boolean;
   /** Experimental: scheduled jobs (Settings → Schedules, schedule tools and actions) */
   experimentalScheduling?: boolean;
+  /**
+   * Desktop app: a local window created while this is on takes backend events
+   * and commands over the gateway directly rather than through Electron main.
+   */
+  localWindowGatewayTransport?: boolean;
   /** Experimental: graphs (the action bar's Graphs and Run graph… buttons, a ticket's Run graph…) */
   experimentalGraphs?: boolean;
   /** "Save logs to disk": whether application logs are written. Applies live. */

@@ -132,6 +132,8 @@ export interface TestNode {
   publicActionRelay: boolean;
   /** Answer the hello with a different identity (a route that reaches another machine). */
   impersonate?: string;
+  /** Replaces hello fields: a new version or generation, or `undefined` to omit one. */
+  helloOverrides?: Record<string, unknown>;
   online: boolean;
   portal: NodePortal;
   /** Extra commands this node answers (projects, environments, writes). */
@@ -339,6 +341,7 @@ export class TestNodeNetwork {
       profile: node.storage.profile,
       endpointRole: "client",
       nodeMode: node.service.mode(),
+      ...node.helloOverrides,
     };
   }
 }

@@ -484,6 +484,11 @@ export class MailWorld {
     );
   }
 
+  /** Each wake's whole prompt, exactly as it was dispatched to the actor's agent. */
+  deliveredPrompts(actor: MailActor): string[] {
+    return [...(this.prompts.get(`${actor.environmentId}\0${actor.logicalSessionKey}`) ?? [])];
+  }
+
   /** How many separate turns mail started for this actor. */
   wakes(actor: MailActor): number {
     return this.prompts.get(`${actor.environmentId}\0${actor.logicalSessionKey}`)?.length ?? 0;

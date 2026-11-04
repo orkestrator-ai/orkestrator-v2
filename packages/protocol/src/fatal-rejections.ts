@@ -37,6 +37,8 @@ export interface FatalRejectionGuardOptions {
   label: string;
   /** Injected in tests. */
   warn?: (message: string) => void;
+  /** Also told of each rejection, after the line above. A throw from it is contained. */
+  onRejection?: (reason: unknown) => void;
   /** Injected in tests. */
   onProcess?: RejectionEventTarget;
   /**
@@ -242,6 +244,11 @@ export function installFatalRejectionGuard(options: FatalRejectionGuardOptions):
       warn(`${options.label} Unhandled promise rejection (continuing): ${describe(reason)}`);
     } catch {
       // A throw from this handler would be the crash the guard exists to prevent.
+    }
+    try {
+      options.onRejection?.(reason);
+    } catch {
+      // The same: it must not become the crash.
     }
   };
   target.on("unhandledRejection", handler);

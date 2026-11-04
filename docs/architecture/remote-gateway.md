@@ -113,7 +113,7 @@ equivalent environment variable unless noted.
 | `--host` | | Bind address. Default is the first Tailscale address. |
 | `--port` | `ORKESTRATOR_GATEWAY_PORT` | Browser gateway port. Default `34121` for the default data directory's backend, and a free port for any other. See [Default gateway port](#default-gateway-port). |
 | `--allow-non-tailscale-bind` | | Permit a non-Tailscale bind (local development). |
-| `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. |
+| `--allowed-origins` | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | Comma-separated browser origins. Their hosts are also names the gateway answers to. See [Security notes](#security-notes). |
 | `--tailscale-serve` | `ORKESTRATOR_TAILSCALE_SERVE=1` | Publish HTTPS through Tailscale Serve. On Linux, run `sudo tailscale set --operator=$USER` once first; otherwise Tailscale answers `Access denied: serve config denied` and the backend exits. |
 | `--tailscale-serve-port` | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | Serve HTTPS port. Default `443`. |
 | `--tailscale-bin` | `ORKESTRATOR_TAILSCALE_BIN` | Tailscale CLI path. |
@@ -218,6 +218,54 @@ The socket has process-wide socket and channel limits and a per-socket channel
 limit, uses no message compression, and is not touched by `--compression`.
 Output ACKs are cumulative and coalesced for 50 ms.
 
+Terminal input and resizes wait on one ordering tail per session, owned by the
+gateway rather than the socket, so a plain disconnect still delivers what was
+already accepted and a reconnect cannot overtake it. Revocation is the
+deliberate exception: credential rotation and gateway stop refuse everything
+still queued, including what a disconnected socket left behind, and so do
+browser-session revocation and credential expiry on an open socket. The one
+operation already running in the backend cannot be recalled. Two gaps remain:
+a disconnected socket loses its credential expiry/revocation watchers, and explicit client-grant revocation does not notify even an open
+socket. A revoked grant can continue admitting input and running queued work
+until its original expiry (up to 15 minutes). Both are tracked
+in [4480](../todo/transcripts-and-observation/4480-terminal-operations-after-disconnected-credential-expiry.md).
+
+A local desktop window normally takes everything through Electron main: every
+backend event, terminal output included, is parsed in main and relayed to each
+window, and each command is cloned, stringified, fetched, parsed and cloned back.
+With `global.localWindowGatewayTransport` on (Settings → Experimental, off by
+default, read once as each window is created), a new local window uses this
+gateway itself instead:
+
+- `readLocalWindowGatewayTransport` decides at creation, and `gateway-sync` hands
+  the preload the backend's origin. The preload then exposes
+  `orkestratorDesktopHost` instead of `orkestrator`, because a context-bridge
+  property cannot be replaced. `installLocalDesktopGateway` composes
+  `window.orkestrator` from that host and a gateway client, so commands and events
+  cross no bridge. File-draft saves and deletes are an exception: they are
+  handed immediately to a bounded main-owned IPC queue with per-client CAS
+  revision tracking. Queued writes survive renderer reload or close, including
+  payloads above fetch keepalive limits; a failed revision fences its successors.
+  Native APIs and events main raises itself (menus, connection
+  lists, `local-backend-unavailable`) stay on IPC. The window sets no
+  `orkestratorGateway`: it is still a local client.
+- It talks to the control listener, the origin main already uses, which never
+  compresses. All of its terminals share one filtered SSE stream, even though it
+  has a `baseUrl`: the listener is plain HTTP, about six connections per origin,
+  and one stream per terminal would leave commands queueing behind them. The
+  terminal WebSocket stays a separate choice.
+- The page never holds the token. `directTransportAuthorization` lets main's
+  `webRequest` hook add it for exactly this origin and the `invoke` and `events`
+  routes, and the request presents the backend's own origin, which any launch
+  answers whatever `--allowed-origins` lists.
+- Main relays no backend event to such a window (`relayBackendEvent`), and asks for
+  its own stream with `excludeEvents=terminal-output-` while no open window takes
+  terminal output from it (`setTerminalOutputRelay`). A window's transport stays as
+  it was created, so mixed windows are normal: a relay window keeps main's stream
+  unfiltered, and a change restarts that stream from its cursor. Opening it again
+  announces `terminal-event-stream-connected`, so a relay window reads its exact
+  snapshot.
+
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the
 rollback. The terminal transport default has not changed. The evidence and the
@@ -243,6 +291,18 @@ compression on, so a client that sends **no** `Accept-Encoding` still costs a
 streaming gzip context: the gateway sees Go's `gzip`, and Go decodes it again for
 the client. Browsers always send the header, and an explicit `identity` is not
 overridden, so only non-browser clients that omit it are affected.
+
+The gateway's keep-alive timeout (`GATEWAY_KEEP_ALIVE_TIMEOUT_MS`, 120 s) must
+outlast Serve's 90 s idle timeout for upstream connections, so that Serve is
+always the side that closes. When the gateway closed first (Bun's default closes
+at about 6 s), a POST that Serve had just put on that connection could fail, and
+Go does not replay a POST. Serve then answers with an empty-bodied 502, which the
+desktop client reports as `Backend request failed with HTTP 502`, and its log
+shows `http: proxy error` with a connection reset, `EOF` or a closed connection.
+CPU load widens that race but does not create it. Invoke is not retried to hide
+this, because terminal input sent twice would type twice. The evidence, and the
+live runs still to do, are in
+[4400-gateway-502-under-load-live-evidence.md](../todo/cross-cutting/4400-gateway-502-under-load-live-evidence.md).
 
 `apps/backend/scripts/sse-route-probe.ts` measures whether a route holds or
 changes a gzip stream; the steps for a real tailnet are in the to-do.
@@ -411,6 +471,13 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   source and clock (`eventReconnectRandom`, `eventReconnectNow`). When it asks
   again for the HTTP fallback, that request waits for the fallback's pending
   retry.
+- The main stream's watchdog cannot see a terminal WebSocket that stalls on
+  its own, so on each return to the page the client asks the socket itself: a
+  server that lists `ping` in its `ready` frame's `features` answers
+  `{ type: "ping", nonce }` with a matching `pong`, and the socket is kept when
+  that arrives within 2.5 s. Otherwise, or when the server does not list the
+  feature, the socket is replaced and every terminal reconciles from a
+  snapshot. Hiding the page never touches the socket.
 - The main stream reports its state (`eventStreamConnection`: `idle`,
   `connecting`, `connected`, `disconnected`). It stays `disconnected` through
   backed-off retries until a stream opens. The renderer uses it
@@ -427,7 +494,17 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   Cookies are scoped by host, not port, so every other service on the same
   host (a container dev server on a published loopback port, any HTTP service
   on the Tailscale address) receives the cookie; the session limits what that
-  exposes. It is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
+  exposes. A session that leaks this way still acts as the user until it ends,
+  including opening host terminals, but it cannot read or rotate the token.
+  This is accepted rather than closed: a restricted container is refused at the
+  gateway's port, and binding a session to the peer address would not help,
+  because Tailscale Serve and Docker Desktop both show their clients as
+  loopback. A `full` mode container can reach the gateway, so `full` mode gives
+  up this protection. Observed on Docker Desktop only
+  ([qualification record](../development/container-qualification.md#project-seed-files-and-gateway-reach-on-docker-desktop-2026-11-04));
+  if a restricted container reaches the gateway elsewhere, revisit this
+  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+- The cookie is `HttpOnly; SameSite=Strict; Path=/`, plus `Secure` when the
   browser reached the gateway over HTTPS (TLS, `X-Forwarded-Proto: https`, or
   a same-host `https:` `Origin`). The gateway reads and strips the
   `__Host-orkestrator_gateway_auth` name too, but does not issue it yet: older
@@ -449,6 +526,27 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   session id sent as a bearer, or a client grant gets `403`, so a browser
   signed in through the login form cannot show the token in Settings → Web
   client; Electron, the hosted client and the CLI send the bearer.
+- The gateway answers `421` on every listener, WebSocket upgrades included, to a
+  `Host` an attacker could rebind to it with DNS (`gateway-host-policy.ts`). It
+  accepts IP literals, single-label names, `*.localhost`, `*.ts.net`, this
+  machine's host name and its `.local` form, and the hosts of
+  `--allowed-origins`. **Reaching the gateway through a name of your own, such as
+  a reverse proxy that keeps `Host`, needs that origin in `--allowed-origins`.**
+  This stops a browser, not a client that writes its own headers, which still
+  needs a credential.
+- Wrong gateway tokens slow down (`gateway-credential-throttle.ts`). A listener
+  answers 10 different wrong values, then pauses for 1 s, doubling with each
+  further wrong value up to 60 s, and forgets after 15 minutes without a new one.
+  During a pause a new value gets `429` with `Retry-After` and is not compared,
+  so **the correct token is refused too**; otherwise the one success would give
+  a guesser the answer. A guesser can therefore hold off a real sign-in. Still
+  exempt are browser sessions, client grants, a connection that has already
+  shown the token, and a non-loopback address that has. Repeating a known wrong
+  value gets the usual `401` and does not count, so a client left with an old
+  token cannot start a pause. Each listener counts alone, so guessing through
+  the browser listener leaves the desktop app's control listener alone. Rotating
+  the token clears everything. The count lives in memory only, and holds keyed
+  digests rather than the values.
 - Default bind is Tailscale-only. `--allow-non-tailscale-bind` is for local
   development.
 - Do not use Tailscale Funnel.
@@ -556,7 +654,8 @@ the client's own disk.
 
 Browser tabs can preview registered services through a scoped desktop tunnel
 (`/__orkestrator/preview/tunnel` on this gateway) or through private HTTPS
-preview origins served by a separate listener. Both are off by default. See
+preview origins served by a separate listener. The tunnel is on by default;
+private origins need an operator's domain and certificate, so they stay off. See
 [browser-previews.md](browser-previews.md) for setup, limits, and the rollback
 procedure.
 
@@ -571,10 +670,11 @@ procedure.
   policy, the same flags as the client's preview iframe. The page stays an
   opaque origin even when opened top-level, so it cannot call gateway routes
   as the signed-in user. It also has no storage or cookies of its own there;
-  applications that need them use the tunnel or a private origin. Making the
-  isolated transports the default is
+  applications that need them use the tunnel or a private origin. The web
+  client without private origins still loads URL tabs through this route.
+  Retiring it is
   [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md)
-  task 7.
+  task 8.
 - The legacy route opens only a port that is the verified binding of an
   enabled preview service of the requesting environment (a container's own
   loopback publication, or a backend-host or worktree listener the resolver

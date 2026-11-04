@@ -233,6 +233,13 @@ body {
   touch-action: manipulation;
 }
 
+/* An iframe takes pointer events from the page, including a divider drag that
+   strays over it, which ends the drag. The panel library's own pointer capture
+   starts on the first move, and that move can already be inside the frame. */
+body:has([data-slot="resizable-handle"][data-separator="active"]) iframe {
+  pointer-events: none;
+}
+
 body[data-orkestrator-dev-profile]::before {
   content: "DEV · " attr(data-orkestrator-dev-profile);
   position: fixed;
@@ -950,4 +957,19 @@ body[data-orkestrator-dev-profile]::before {
   outline: 2px solid var(--color-primary);
   outline-offset: 3px;
   border-radius: 0.75rem;
+}
+
+/*
+ * The sidebar's width between its full, compact and hidden states
+ * (`useSidebarPanelMotion`). The attribute is set only for that change, and a
+ * resize handle held by the pointer turns it off, so a drag follows the pointer.
+ */
+[data-sidebar-width-animating]:not(:has(> [data-separator="active"])) > [data-panel] {
+  transition: flex-grow 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-width-animating] > [data-panel] {
+    transition: none !important;
+  }
 }

@@ -529,8 +529,9 @@ const RESET_CREDENTIAL_HELPERS = Object.freeze([
  *   push cannot borrow the keychain or `gh auth git-credential`.
  *
  * What it cannot withhold: SSH keys and agents, a token written into a
- * global Git `url.<…>.insteadOf` rewrite or a file the agent can read (a
- * container's runtime credential). The remote-ref guard is the backstop for
+ * global Git `url.<…>.insteadOf` rewrite (an image older than
+ * `github-git-credential`) or a file the agent can read (a container's runtime
+ * credential). The remote-ref guard is the backstop for
  * those. Pure: the input is not modified.
  */
 export function withheldGitHubCredentialEnvironment(

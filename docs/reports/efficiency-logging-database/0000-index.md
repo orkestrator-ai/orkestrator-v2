@@ -176,8 +176,8 @@ When one of these becomes ready, it joins the lane shown.
 | GW-14 | Open | The lookup is still `frames.filter` (`apps/backend/src/gateway-event-replay.ts:162`) and no oversized metric exists; see 0300. |
 | GW-15 | Open | Compression still runs before the 304 check (`apps/backend/src/gateway-proxy.ts:794`, `:860`); see 0310. |
 | GW-16 | Open | Timers, decoders, per-operation results and 50 ms acks all remain (`apps/backend/src/gateway-proxy.ts:301-308`, `apps/backend/src/terminal-websocket-server.ts:400`, `:1040`, `apps/web/src/lib/native/terminal-websocket-client.ts:97`); see 0375. |
-| TX-1 | Open | The view cache holds one entry per key, and a delta needs the newest token (`apps/backend/src/core/native-agent-transcript-projection.ts:468`, `:3012-3017`); see 0160. |
-| TX-2 | Open | `interactiveSnapshot` still reads `legacy` with no limit (`apps/backend/src/core/http-bridge-provider.ts:648`, `:771`) after dispatch (`apps/backend/src/core/native-agent-service.ts:2023`); see 0150. |
+| TX-1 | Done | Superseded views stay in a bounded ring per key, and the cached answer and the read path both build deltas from it (`apps/backend/src/core/native-agent-transcript-delta-bases.ts`); see 0160. |
+| TX-2 | Done | Reads other than `sync-v1` pass a limit to `legacy` through `interactiveSnapshot`, and dropped refreshes read a 32-row tail (`refreshProjectionState` in `apps/backend/src/core/native-agent-transcript-projection.ts`); see 0150. |
 | TX-3 | Open | The fingerprint is still a whole `JSON.stringify` (`apps/backend/src/core/native-agent-transcript-projection.ts:5465`); see 0210. |
 | TX-4 | Partly done | Reads are keyed (`apps/backend/src/core/storage-native.ts:424`, `apps/backend/src/core/storage-prompt-queue-store.ts:126-127`, #1548 `12289fc56`), but mutations still load the whole store (`apps/backend/src/core/storage-native.ts:1209`); see 0230. |
 | TX-5 | Open | State reads have no condition (`apps/backend/src/core/http-bridge-progressive.ts:217`) and the hash covers the composer (`apps/backend/src/core/native-agent-transcript-projection.ts:3418-3420`); see 0180. |

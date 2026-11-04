@@ -41,6 +41,7 @@ import {
   NATIVE_PROJECTION_MAX_BYTES,
   NATIVE_PROJECTION_MAX_MESSAGES,
   NATIVE_PROJECTION_MAX_WINDOW_MESSAGES,
+  NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES,
   NATIVE_PROJECTION_REVISION_LIMIT,
   NATIVE_HISTORY_CACHE_MAX_BYTES,
   NATIVE_HISTORY_PAGE_DEFAULT_BYTES,
@@ -160,6 +161,11 @@ import {
   type ProjectionEntryContext,
 } from "./native-agent-projection-entries.js";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
+import {
+  chainedTranscriptDelta,
+  TranscriptDeltaBases,
+  type TranscriptDeltaChain,
+} from "./native-agent-transcript-delta-bases.js";
 import { encodedPatchBytes, patchTranscriptDelta } from "./native-agent-transcript-patches.js";
 import {
   digestWithMessages,
@@ -369,8 +375,8 @@ function goalProjectionField(session: PersistedNativeAgentSession) {
  * tool details and the restart display tails.
  *
  * Every cache here is bounded (`toolDetailCacheBytes`, `projectionHistoryBytes`,
- * `progressiveTranscriptBytes`, the projected-message and direct-page caches)
- * and reconstructible: providers stay authoritative, so dropping any of it
+ * `progressiveTranscriptBytes`, the delta bases, the projected-message and
+ * direct-page caches) and reconstructible: providers stay authoritative, so dropping any of it
  * costs a re-read, never user state.
  */
 export class NativeAgentTranscriptProjection {
@@ -467,6 +473,8 @@ export class NativeAgentTranscriptProjection {
   private readonly progressiveInstanceId = randomUUID();
   private readonly progressiveTranscriptCache = new Map<string, ProgressiveTranscriptEntry>();
   private progressiveTranscriptBytes = 0;
+  /** Views the newest one superseded, for readers who are behind; has its own bounds. */
+  private readonly transcriptDeltaBases = new TranscriptDeltaBases();
   private readonly progressiveSourceTokens = new Map<string, string>();
   private readonly progressiveStateCache = new Map<
     string,
@@ -670,6 +678,7 @@ export class NativeAgentTranscriptProjection {
       projectionRefreshes: this.projectionRefreshes,
       stopNotices: this.stopNotices,
       progressiveTranscriptCache: this.progressiveTranscriptCache,
+      transcriptDeltaBases: this.transcriptDeltaBases,
       progressiveReads: this.progressiveReads,
       progressiveDirtyFollowUps: this.progressiveDirtyFollowUps,
       progressiveTrailing: this.progressiveTrailing,
@@ -766,6 +775,7 @@ export class NativeAgentTranscriptProjection {
     this.progressiveHydrations.clear();
     this.progressiveReads.clear();
     this.progressiveTranscriptCache.clear();
+    this.transcriptDeltaBases.clear();
     this.progressiveSourceTokens.clear();
     this.progressiveTranscriptBytes = 0;
     this.progressiveStateCache.clear();
@@ -1796,6 +1806,51 @@ export class NativeAgentTranscriptProjection {
     };
   }
 
+  /**
+   * The delta taking a reader from the view it holds to `value`, or `null` when
+   * a snapshot is the better answer: the reader is older than the ring, the base
+   * is a different history, or the delta would not be smaller.
+   */
+  private transcriptDeltaForReader(
+    input: NativeAgentTranscriptUpdateInput,
+    key: string,
+    value: NativeAgentTranscriptView,
+    snapshotBytes: number,
+    /** The view this read replaced, in case the ring could not keep it. */
+    replaced?: ProgressiveTranscriptEntry,
+  ): NativeAgentTranscriptDelta | null {
+    const knownToken = input.knownToken;
+    if (!knownToken) return null;
+    const chain: TranscriptDeltaChain | undefined =
+      (input.forceSnapshot ? undefined : this.transcriptDeltaBases.chain(key, knownToken)) ??
+      (replaced?.token === knownToken ? { base: replaced.value, later: [] } : undefined);
+    if (
+      !chain ||
+      chain.base.identity.providerSessionId !== value.identity.providerSessionId ||
+      chain.base.historyEpoch !== value.historyEpoch
+    ) {
+      return null;
+    }
+    const delta = chainedTranscriptDelta(this.transcriptDelta(chain.base, value), chain, value);
+    if (!delta) return null;
+    if (input.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) {
+      patchTranscriptDelta(delta, chain.base.messages);
+    }
+    const operationCount =
+      delta.messageUpserts.length +
+      (delta.messagePatches?.length ?? 0) +
+      delta.deletedMessageIds.length +
+      (delta.liveMessageIds?.length ?? 0);
+    const deltaBytes =
+      encodedBytesWithMessages({
+        ...delta,
+        messages: delta.messageUpserts,
+        messageUpserts: [],
+        messagePatches: [],
+      }) + (delta.messagePatches ? encodedPatchBytes(delta.messagePatches) : 0);
+    return operationCount <= 1024 && deltaBytes < snapshotBytes ? delta : null;
+  }
+
   private scheduleDisplayTailPersist(
     input: NativeAgentProgressiveInput,
     value: NativeAgentTranscriptView,
@@ -1853,6 +1908,7 @@ export class NativeAgentTranscriptProjection {
       const entry = this.progressiveTranscriptCache.get(oldest);
       if (entry) this.progressiveTranscriptBytes -= entry.bytes;
       this.progressiveTranscriptCache.delete(oldest);
+      this.transcriptDeltaBases.forget(oldest);
     }
   }
 
@@ -2635,7 +2691,10 @@ export class NativeAgentTranscriptProjection {
     const current = this.progressiveTranscriptCache.get(key);
     if (!current || current.token !== token) {
       const bytes = encodedBytesWithMessages(value);
-      if (current) this.progressiveTranscriptBytes -= current.bytes;
+      if (current) {
+        this.progressiveTranscriptBytes -= current.bytes;
+        this.transcriptDeltaBases.record(key, current, value);
+      }
       this.progressiveTranscriptCache.delete(key);
       this.progressiveTranscriptCache.set(key, {
         token,
@@ -2841,10 +2900,20 @@ export class NativeAgentTranscriptProjection {
       input.agent,
       input.logicalSessionKey,
     );
-    const cached = progressive ?? (legacy?.sessionId === session.providerSessionId ? legacy : null);
-    const persisted = cached ? null : await this.storage.getNativeAgentDisplayTail(sessionKey);
-    const source =
-      cached ?? (persisted?.providerSessionId === session.providerSessionId ? persisted : null);
+    const heldLegacy = legacy?.sessionId === session.providerSessionId ? legacy : null;
+    // A cut legacy view may be only a state refresh's short tail, so the saved
+    // tail is consulted before showing it as all that is left of the history.
+    const persisted =
+      progressive || (heldLegacy && !heldLegacy.messageWindow?.truncated)
+        ? null
+        : await this.storage.getNativeAgentDisplayTail(sessionKey);
+    const saved = persisted?.providerSessionId === session.providerSessionId ? persisted : null;
+    const cached =
+      progressive ??
+      (heldLegacy && (!saved || heldLegacy.messages.length >= saved.messages.length)
+        ? heldLegacy
+        : null);
+    const source = cached ?? saved;
     if (!source)
       throw new ProviderUnavailableError(
         "The Coordinator is paused and no saved transcript is available",
@@ -2867,12 +2936,10 @@ export class NativeAgentTranscriptProjection {
       freshness: "cached",
       messages: bounded.messages,
       historyEpoch:
-        progressive?.historyEpoch ??
-        persisted?.historyEpoch ??
-        `saved:${session.providerSessionId}`,
+        progressive?.historyEpoch ?? saved?.historyEpoch ?? `saved:${session.providerSessionId}`,
       historyComplete:
         (progressive?.historyComplete ??
-          (persisted ? persisted.historyComplete === true : priorWindow?.truncated === false)) &&
+          (saved ? saved.historyComplete === true : priorWindow?.truncated === false)) &&
         !messageWindow.truncated,
       messageWindow,
       ...(source.title ? { title: source.title } : {}),
@@ -2972,13 +3039,21 @@ export class NativeAgentTranscriptProjection {
     }
     if (cached && !input.forceSnapshot && input.knownToken !== cached.token) {
       void publish().catch(() => undefined);
-      this.recordProgressiveMetric("transcript", startedAt, "memory", "cached");
-      return {
-        viewVersion: 1,
-        status: "snapshot",
-        token: cached.token,
-        value: { ...cached.value, freshness: "cached" },
-      };
+      const value: NativeAgentTranscriptView = { ...cached.value, freshness: "cached" };
+      // This is the path a reader who is behind actually takes, so it gets what
+      // it is missing rather than the whole view, without waiting for the read.
+      const delta = this.transcriptDeltaForReader(input, key, value, cached.bytes);
+      this.recordProgressiveMetric("transcript", startedAt, "memory", delta ? "delta" : "cached");
+      return delta
+        ? {
+            viewVersion: 1,
+            status: "delta",
+            baseToken: input.knownToken!,
+            token: cached.token,
+            identity: value.identity,
+            delta,
+          }
+        : { viewVersion: 1, status: "snapshot", token: cached.token, value };
     }
     try {
       const previous = cached;
@@ -3009,47 +3084,17 @@ export class NativeAgentTranscriptProjection {
           identity: entry.value.identity,
         };
       }
-      if (
-        previous &&
-        input.knownToken === previous.token &&
-        previous.token !== entry.token &&
-        previous.value.identity.providerSessionId === value.identity.providerSessionId &&
-        previous.value.historyEpoch === value.historyEpoch
-      ) {
-        const delta = this.transcriptDelta(previous.value, value);
-        if (input.patchVersion === NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) {
-          patchTranscriptDelta(delta, previous.value.messages);
-        }
-        const operationCount =
-          delta.messageUpserts.length +
-          (delta.messagePatches?.length ?? 0) +
-          delta.deletedMessageIds.length +
-          (delta.liveMessageIds?.length ?? 0);
-        const deltaBytes =
-          encodedBytesWithMessages({
-            ...delta,
-            messages: delta.messageUpserts,
-            messageUpserts: [],
-            messagePatches: [],
-          }) + (delta.messagePatches ? encodedPatchBytes(delta.messagePatches) : 0);
-        const snapshotBytes = entry.bytes;
-        if (operationCount <= 1024 && deltaBytes < snapshotBytes) {
-          this.recordProgressiveMetric(
-            "transcript",
-            startedAt,
-            "provider",
-            "delta",
-            phases.phases(),
-          );
-          return {
-            viewVersion: 1,
-            status: "delta",
-            baseToken: previous.token,
-            token: entry.token,
-            identity: value.identity,
-            delta,
-          };
-        }
+      const delta = this.transcriptDeltaForReader(input, key, value, entry.bytes, previous);
+      if (delta) {
+        this.recordProgressiveMetric("transcript", startedAt, "provider", "delta", phases.phases());
+        return {
+          viewVersion: 1,
+          status: "delta",
+          baseToken: input.knownToken!,
+          token: entry.token,
+          identity: value.identity,
+          delta,
+        };
       }
       this.recordProgressiveMetric(
         "transcript",
@@ -4635,6 +4680,7 @@ export class NativeAgentTranscriptProjection {
       const entry = this.progressiveTranscriptCache.get(candidate);
       if (entry) this.progressiveTranscriptBytes -= entry.bytes;
       this.progressiveTranscriptCache.delete(candidate);
+      this.transcriptDeltaBases.forget(candidate);
       this.progressiveSourceTokens.delete(candidate);
     }
     for (const candidate of Array.from(this.progressiveHydrations.keys())) {
@@ -4702,6 +4748,18 @@ export class NativeAgentTranscriptProjection {
     this.projectionMissingSince.delete(key);
   }
 
+  /**
+   * A refresh whose result the caller drops: one that follows a dispatch, a
+   * settled dispatch or an answered interaction. Everything that matters then
+   * is state beside the transcript (turn phase, pending interactions, usage,
+   * the announcement that wakes readers), so it reads a short tail instead of
+   * the session's window. Readers still get their own window on their next
+   * read: this does not change the limit they inherit.
+   */
+  refreshProjectionState(input: NativeAgentProjectionInput): Promise<unknown> {
+    return this.refreshProjection(input, true, undefined, NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES);
+  }
+
   refreshProjection(
     input: NativeAgentProjectionInput,
     force: boolean,
@@ -4711,6 +4769,7 @@ export class NativeAgentTranscriptProjection {
       provider: NativeAgentRuntimeProvider;
       transient: true;
     },
+    tailMessages?: number,
   ): Promise<NativeAgentSessionProjection | null> {
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -4725,6 +4784,7 @@ export class NativeAgentTranscriptProjection {
       refreshUsage: input.refreshUsage === true,
       representation: input.representation ?? "legacy",
       force,
+      tailMessages: tailMessages ?? null,
     });
     const previousDescriptor = this.projectionRefreshDescriptors.get(key);
     if (
@@ -4737,7 +4797,14 @@ export class NativeAgentTranscriptProjection {
     const operation = (async () => {
       if (previousRefresh) await previousRefresh.catch(() => undefined);
       const coveredEpoch = this.projectionEpochs.get(key) ?? epoch;
-      return this.refreshProjectionOnce(input, force, key, coveredEpoch, resolvedSession);
+      return this.refreshProjectionOnce(
+        input,
+        force,
+        key,
+        coveredEpoch,
+        resolvedSession,
+        tailMessages,
+      );
     })();
     this.projectionRefreshes.set(key, operation);
     this.projectionRefreshDescriptors.set(key, {
@@ -4765,6 +4832,7 @@ export class NativeAgentTranscriptProjection {
       provider: NativeAgentRuntimeProvider;
       transient: true;
     },
+    tailMessages?: number,
   ): Promise<NativeAgentSessionProjection | null> {
     const previous = this.projectionCache.get(key);
     const messageLimit = this.resolveMessageLimit(input.messageLimit, previous?.input.messageLimit);
@@ -4835,18 +4903,29 @@ export class NativeAgentTranscriptProjection {
             .refreshUsage?.(resolved.session.providerSessionId)
             .catch(() => undefined)
         : undefined;
+      const syncRead = input.representation === "sync-v1";
+      const projectedLimit =
+        tailMessages === undefined || syncRead
+          ? messageLimit
+          : Math.min(messageLimit, tailMessages);
+      // One row past the window is what tells a tail read that older history
+      // exists. A sync read fills `projectionHistory`, so it stays whole.
+      const readOptions = syncRead ? undefined : { limit: projectedLimit + 1 };
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
       const readSnapshot = (): Promise<ProviderInteractiveSnapshot> =>
         resolved.provider.interactiveSnapshot
-          ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
+          ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId, readOptions)
           : (async () => ({
               // A terminal turn error belongs in the projection as `error` plus
               // its detail, not as a thrown read that would report the whole
               // runtime as unreachable.
               ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
-              messages: await resolved.provider.messages(resolved.session.providerSessionId),
+              messages: await resolved.provider.messages(
+                resolved.session.providerSessionId,
+                readOptions,
+              ),
             }))();
       // Capture as soon as the snapshot resolves, before unrelated metadata.
       const snapshotPromise = resolved.transient
@@ -5025,7 +5104,7 @@ export class NativeAgentTranscriptProjection {
       const normalized = this.projectionMessages(
         sessionKey,
         snapshot.messages,
-        input.representation === "sync-v1" ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : messageLimit,
+        syncRead ? NATIVE_PROJECTION_MAX_WINDOW_MESSAGES : projectedLimit,
         NATIVE_PROJECTION_MAX_BYTES,
         resolved.session.initialPromptPresentation,
         resolved.session.owner?.kind === "coordinator",

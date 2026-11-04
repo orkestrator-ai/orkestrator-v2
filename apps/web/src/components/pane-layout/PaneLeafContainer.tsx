@@ -210,6 +210,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {
     if (activePaneId !== pane.id) {
+      cancelTabLaunchFocus(environmentId);
       setActivePane(pane.id, environmentId);
     }
   }, [activePaneId, environmentId, pane.id, setActivePane]);

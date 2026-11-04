@@ -60,7 +60,6 @@ import {
   getAllLeaves,
   type EnvironmentPaneState,
 } from "@/stores/paneLayoutStore";
-import { requestPaneTabActivation } from "@/lib/pane-layout-authoritative";
 import { legacyLaunchMultiReview } from "@/lib/multi-review-launch-compat";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
 import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
@@ -226,6 +225,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const [scriptDialogEnvironmentId, setScriptDialogEnvironmentId] = useState<string | null>(null);
   const [scriptLaunchError, setScriptLaunchError] = useState<string | null>(null);
   const scriptDialogOpen = scriptDialogEnvironmentId !== null;
+  const scriptSubmitRef = useRef(false);
+  const [scriptSubmitting, setScriptSubmitting] = useState(false);
   const createScriptButtonRef = useRef<HTMLButtonElement>(null);
   const [multiReviewDialogOpen, setMultiReviewDialogOpen] = useState(false);
   const [multiReviewLaunchPending, setMultiReviewLaunchPending] = useState(false);
@@ -1243,21 +1244,28 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const handleConfiguredCreateScript = useCallback(
     async (selection: AgentLaunchSelection) => {
-      if (!scriptDialogEnvironmentId || scriptEligibilityError) return;
-      const created = await handleCreateScript(selection.agent, {
-        agentLaunchMode: "native",
-        initialAgentModel: selection.model,
-        initialReasoningEffort: selection.reasoningEffort,
-        initialFastMode: selection.fastMode,
-      });
-      if (!created) {
-        setScriptLaunchError(
-          "The run-script agent tab could not be created. Check the environment and tab limit, then try again.",
-        );
-        return;
+      if (!scriptDialogEnvironmentId || scriptEligibilityError || scriptSubmitRef.current) return;
+      scriptSubmitRef.current = true;
+      setScriptSubmitting(true);
+      try {
+        const created = await handleCreateScript(selection.agent, {
+          agentLaunchMode: "native",
+          initialAgentModel: selection.model,
+          initialReasoningEffort: selection.reasoningEffort,
+          initialFastMode: selection.fastMode,
+        });
+        if (!created) {
+          setScriptLaunchError(
+            "The run-script agent tab could not be created. Check the environment and tab limit, then try again.",
+          );
+          return;
+        }
+        setScriptLaunchError(null);
+        setScriptDialogEnvironmentId(null);
+      } finally {
+        scriptSubmitRef.current = false;
+        setScriptSubmitting(false);
       }
-      setScriptLaunchError(null);
-      setScriptDialogEnvironmentId(null);
     },
     [handleCreateScript, scriptDialogEnvironmentId, scriptEligibilityError],
   );
@@ -1862,7 +1870,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         // An open Resolve tab is usually reused, so there is no new tab to show;
         // the tab the backend answers with takes focus.
         const tabId = hasOpenResolveTab ? undefined : `agent-job-${createUuid()}`;
-        launch = tabId ? beginLaunchedTab(operationEnvironmentId, tabId, "Resolve") : null;
+        launch = beginLaunchedTab(
+          operationEnvironmentId,
+          tabId ?? `resolve-focus-${createUuid()}`,
+          "Resolve",
+        );
         const result = await backend.launchNativeAgentJob({
           requestId: `resolve-${createUuid()}`,
           environmentId: operationEnvironmentId,
@@ -1879,8 +1891,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(initialReasoningEffort ? { reasoningId: initialReasoningEffort } : {}),
           ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         });
-        if (launch) launch.settled(result.tabId);
-        else requestPaneTabActivation(operationEnvironmentId, result.tabId);
+        launch.settled(result.tabId);
         if (result.status === "rejected") {
           return fail(result.error || "The conflict-resolution agent rejected the prompt.");
         }
@@ -2250,6 +2261,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     scriptDialogEnvironmentId,
     setScriptDialogEnvironmentId,
     scriptLaunchError,
+    scriptSubmitting,
     setScriptLaunchError,
     scriptDialogOpen,
     createScriptButtonRef,

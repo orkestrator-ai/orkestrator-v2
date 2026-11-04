@@ -2980,6 +2980,7 @@ describe("NativeAgentService", () => {
       "starts %s through the backend terminal coordinator",
       async (_label, agentConfig) => {
         const { provider, createSession, send } = createProviderStub("codex");
+        let launchStorage: StorageService;
         const invokeMock = mock(async (command: string, args?: Record<string, unknown>) => {
           expect(command).toBe("launch_terminal_job");
           expect(args).toMatchObject({
@@ -2992,6 +2993,12 @@ describe("NativeAgentService", () => {
           } else {
             expect(args?.data).toEqual(expect.stringContaining("Start working"));
           }
+          await launchStorage.ensureTerminalJobTab({
+            environmentId: "env-1",
+            tabId: "startup-agent",
+            type: args?.tabType as "codex",
+            activate: "setup-handoff",
+          });
           return { status: "started" };
         });
         const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
@@ -3008,6 +3015,8 @@ describe("NativeAgentService", () => {
             invoke,
           },
           async ({ storage, service }) => {
+            launchStorage = storage;
+            await storage.ensureSetupTab("env-1");
             await service.reconcileInitialLaunch("env-1");
 
             expect(await storage.getEnvironment("env-1")).toMatchObject({
@@ -3019,7 +3028,8 @@ describe("NativeAgentService", () => {
             );
             expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
               kind: "leaf",
-              tabs: [{ id: "startup-agent", backendManagedTerminal: true }],
+              activeTabId: "startup-agent",
+              tabs: [{ isSetupTab: true }, { id: "startup-agent", backendManagedTerminal: true }],
             });
             expect(invokeMock).toHaveBeenCalledTimes(1);
             expect(createSession).not.toHaveBeenCalled();

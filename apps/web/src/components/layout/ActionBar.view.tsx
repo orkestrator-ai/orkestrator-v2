@@ -255,6 +255,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setReviewDialogOpen,
     setScriptDialogEnvironmentId,
     scriptLaunchError,
+    scriptSubmitting,
     setScriptLaunchError,
     scriptDialogOpen,
     createScriptButtonRef,
@@ -1587,7 +1588,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? document.querySelector<HTMLButtonElement>(MOBILE_TOOLS_TRIGGER_SELECTOR)
             : null
         }
-        confirmDisabled={Boolean(scriptEligibilityError)}
+        confirmDisabled={scriptSubmitting || Boolean(scriptEligibilityError)}
         error={scriptEligibilityError ?? scriptLaunchError}
         onConfirm={handleConfiguredCreateScript}
       />

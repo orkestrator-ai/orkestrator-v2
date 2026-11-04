@@ -79,6 +79,7 @@ export function beginTabLaunch(
       if (!entry) return;
       if (landedTabId && landedTabId !== tabId) {
         // The backend reused another tab, so the placeholder has nothing to become.
+        cancelPaneTabActivation(environmentId, tabId);
         forget(environmentId, tabId);
         if (entry.focused) requestPaneTabActivation(environmentId, landedTabId);
         return;
@@ -90,7 +91,10 @@ export function beginTabLaunch(
       useTabLaunchStore.getState().update(environmentId, tabId, { settled: true });
       arrivalTimers.set(
         timerKey(environmentId, tabId),
-        setTimeout(() => forget(environmentId, tabId), ARRIVAL_GRACE_MS),
+        setTimeout(() => {
+          cancelPaneTabActivation(environmentId, tabId);
+          forget(environmentId, tabId);
+        }, ARRIVAL_GRACE_MS),
       );
     },
     failed: () => {

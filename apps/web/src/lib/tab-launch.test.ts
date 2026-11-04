@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { flushPaneTabActivation } from "./pane-layout-authoritative";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   beginTabLaunch,
   cancelTabLaunchFocus,
@@ -93,6 +94,41 @@ describe("tab launches", () => {
     expect(launches()).toEqual([]);
     expect(activeTab()).toBe("reused");
   });
+
+  test("expiry withdraws the pending activation without cancelling a newer launch", () => {
+    let expire: (() => void) | undefined;
+    const original = globalThis.setTimeout;
+    spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      if (ms === 15_000) {
+        expire = callback;
+        return original(() => {}, 0);
+      }
+      return original(callback, ms);
+    }) as typeof setTimeout);
+    const launch = beginTabLaunch(ENV, { tabId: "launched", title: "Run", surface: "terminal" });
+    launch.settled();
+    expire?.();
+    expect(launches()).toEqual([]);
+    install([terminal, launched], "terminal");
+    flushPaneTabActivation(ENV);
+    expect(activeTab()).toBe("terminal");
+  });
+
+  test.each(["navigation", "new launch"])(
+    "reused Resolve respects %s before its answer",
+    (choice) => {
+      install([terminal, { id: "reused", type: "plain" }], "terminal");
+      const launch = beginTabLaunch(ENV, {
+        tabId: "resolve-claim",
+        title: "Resolve",
+        surface: "agent",
+      });
+      if (choice === "navigation") cancelTabLaunchFocus(ENV);
+      else beginTabLaunch(ENV, { tabId: "run", title: "Run", surface: "terminal" });
+      launch.settled("reused");
+      expect(activeTab()).toBe("terminal");
+    },
+  );
 
   test("a failed launch leaves nothing behind", () => {
     const launch = beginTabLaunch(ENV, { tabId: "launched", title: "Push", surface: "agent" });

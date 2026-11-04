@@ -131,12 +131,11 @@ function applySetupTabArrival(
  * Let the post-setup layout revision perform the one setup-to-agent focus
  * handoff requested by this Electron window.
  *
- * The tab is published before setup, so presence alone is too early. A
- * provider session id (an opening prompt was dispatched) or environment
- * setup-ready (a prompt-less launch never mints a session) is the durable
- * boundary that the agent can take focus. Resolve the request at that
- * boundary even when focus has moved elsewhere; once the result is
- * installed, a later reconcile must not steal an intentional choice.
+ * Native tabs arrive after setup and can hand off on that arrival. For a tab
+ * already present, a provider session or setup-ready environment establishes
+ * readiness, and this window must still hold its one-shot activation request.
+ * Installing the decision retires that request, including when the user has
+ * chosen another tab.
  */
 function applyStartupAgentSetupHandoff(
   environmentId: string,
@@ -433,7 +432,8 @@ export function requestPaneTabActivation(environmentId: string, tabId: string): 
 }
 
 /** Withdraw a tab that was still due to take focus when it arrives. */
-export function cancelPaneTabActivation(environmentId: string): void {
+export function cancelPaneTabActivation(environmentId: string, tabId?: string): void {
+  if (tabId && pendingTabActivations.get(environmentId) !== tabId) return;
   pendingTabActivations.delete(environmentId);
 }
 

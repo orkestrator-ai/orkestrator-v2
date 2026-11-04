@@ -1219,6 +1219,7 @@ export function TerminalContainer({
       // For local environments, we don't need a containerId but do need worktreePath to be set
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
+      cancelTabLaunchFocus(environmentId);
       const allTabs = getAllTabs(environmentId);
       // A Multi Review workflow outlives the tab that launched it, so reopening
       // one is a normal request rather than a duplicate: the launcher reattaches
@@ -1634,6 +1635,7 @@ export function TerminalContainer({
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(
     (filePath: string, options?: CreateFileTabOptions) => {
+      cancelTabLaunchFocus(environmentId);
       const requestedDiff = options?.changeDiff;
       // For container environments, need containerId and running state
       // For local environments, need worktreePath

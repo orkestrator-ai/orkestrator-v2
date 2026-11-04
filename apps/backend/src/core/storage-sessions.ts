@@ -167,9 +167,16 @@ function preserveJobCompletionActions(root: unknown, previousRoot: unknown): unk
       .filter((tab) => tab.jobCompletionAction === "refresh-pr-after-agent-completion")
       .map((tab) => [tab.id, tab.jobCompletionAction]),
   );
+  const consumedHandoffs = new Set(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .filter((tab) => tab.setupHandoffConsumed === true)
+      .map((tab) => tab.id),
+  );
   const next = structuredClone(root);
   for (const leaf of paneLayoutLeaves(next)) {
     for (const tab of leaf.tabs) {
+      if (consumedHandoffs.has(tab.id)) tab.setupHandoffConsumed = true;
       if (tab.type === "agent-native" && actions.has(tab.id))
         tab.jobCompletionAction = actions.get(tab.id);
     }
@@ -682,12 +689,15 @@ export class SessionsRepository {
         } as Record<string, unknown>);
       target.tabs = [tab, ...target.tabs.filter((candidate) => candidate !== tab)];
 
-      const selected = target.tabs.find((candidate) => candidate.id === target.activeTabId);
+      const focused = leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? target;
+      const selected = focused.tabs.find((candidate) => candidate.id === focused.activeTabId);
       const userChoseTab =
         selected !== undefined &&
         selected !== tab &&
         selected.type !== "claude-build" &&
-        selected.id !== STARTUP_AGENT_TAB_ID;
+        (selected.id !== STARTUP_AGENT_TAB_ID ||
+          !environment.pendingAgentLaunch ||
+          Boolean((selected.nativeAgentData as { sessionId?: string } | undefined)?.sessionId));
       if (!userChoseTab) target.activeTabId = tab.id as string;
 
       const containerId = environment.environmentType === "local" ? null : environment.containerId;
@@ -913,11 +923,12 @@ export class SessionsRepository {
       const activateTab =
         input.activate === true ||
         (input.activate === "setup-handoff" &&
-          !existingTab &&
+          !existingTab?.setupHandoffConsumed &&
           selectedTabIsSetupHandoffSource(target) &&
           (!focusedTerminalLeaf ||
             focusedTerminalLeaf === target ||
             selectedTabIsSetupHandoffSource(focusedTerminalLeaf)));
+      if (input.activate === "setup-handoff") tab.setupHandoffConsumed = true;
       if (!target.activeTabId || activateTab) target.activeTabId = input.tabId;
 
       const containerId = environment.environmentType === "local" ? null : environment.containerId;

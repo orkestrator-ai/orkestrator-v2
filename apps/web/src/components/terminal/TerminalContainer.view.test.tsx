@@ -1,3 +1,5 @@
+import { beginTabLaunch, resetTabLaunches } from "@/lib/tab-launch";
+import { useTabLaunchStore } from "@/stores/tabLaunchStore";
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
@@ -5891,7 +5893,10 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
+    beginTabLaunch("env-visible", { tabId: "delayed-agent", title: "Run", surface: "agent" });
     fireEvent.click(screen.getByRole("link", { name: "Open file" }));
+    expect(useTabLaunchStore.getState().launches.get("env-visible")?.[0]?.focused).toBe(false);
+    resetTabLaunches();
 
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(

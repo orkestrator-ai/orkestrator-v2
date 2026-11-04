@@ -87,6 +87,101 @@ describe("backend-owned setup and build surfaces", () => {
     });
   });
 
+  test.each(["codex", "claude-tmux"] as const)(
+    "prepublished %s hands off once when its terminal starts",
+    async (type) => {
+      await withTemporaryStorage(async (storage) => {
+        const environment = await storage.addEnvironment(createEnvironment("project-1"));
+        await storage.ensureSetupTab(environment.id);
+        const input = { environmentId: environment.id, tabId: "startup-agent", type };
+        await storage.ensureTerminalJobTab({ ...input, terminalSessionId: null });
+        const arrived = await storage.ensureTerminalJobTab({
+          ...input,
+          terminalSessionId: "pty-1",
+          activate: "setup-handoff",
+        });
+        expect(arrived.root).toMatchObject({ activeTabId: "startup-agent" });
+        await storage.savePaneLayout(
+          environment.id,
+          { ...arrived, root: { ...(arrived.root as object), activeTabId: "default" } },
+          arrived.revision,
+        );
+        const repeated = await storage.ensureTerminalJobTab({
+          ...input,
+          terminalSessionId: "pty-1",
+          activate: "setup-handoff",
+        });
+        expect(repeated.root).toMatchObject({ activeTabId: "default" });
+      });
+    },
+  );
+
+  test("setup preserves a user's focused pane and an established startup conversation", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const setup = {
+        kind: "leaf",
+        id: "setup",
+        tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+        activeTabId: "default",
+      };
+      const user = {
+        kind: "leaf",
+        id: "user",
+        tabs: [
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: { sessionId: "provider-1", platform: "codex" },
+          },
+        ],
+        activeTabId: "startup-agent",
+      };
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: environment.containerId,
+          activePaneId: "user",
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            children: [setup, user],
+          },
+        },
+        0,
+      );
+      const layout = await storage.ensureSetupTab(environment.id);
+      expect(layout.activePaneId).toBe("user");
+      expect(layout.root).toMatchObject({
+        children: [{ activeTabId: "default" }, { activeTabId: "startup-agent" }],
+      });
+    });
+  });
+
+  test("rerun setup leaves the established startup conversation selected", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      await storage.ensureSetupTab(environment.id);
+      await storage.ensureStartupNativeAgentTab({
+        environmentId: environment.id,
+        agent: "codex",
+        providerSessionId: "session-1",
+      });
+      const before = (await storage.getPaneLayout(environment.id))!;
+      await storage.savePaneLayout(
+        environment.id,
+        { ...before, root: { ...(before.root as object), activeTabId: "startup-agent" } },
+        before.revision,
+      );
+      expect((await storage.ensureSetupTab(environment.id)).root).toMatchObject({
+        activeTabId: "startup-agent",
+      });
+    });
+  });
+
   describe("the setup terminal", () => {
     const leafOf = (layout: { root: unknown }) =>
       layout.root as { tabs: Array<Record<string, unknown>>; activeTabId: string | null };

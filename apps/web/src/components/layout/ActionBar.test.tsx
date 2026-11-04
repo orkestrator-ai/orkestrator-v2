@@ -2145,6 +2145,36 @@ describe("ActionBar editor and run commands", () => {
     );
   });
 
+  test("duplicate script submission stays busy without reporting failure", async () => {
+    let finish!: () => void;
+    launchNativeAgentJobMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({
+              jobId: "script",
+              environmentId: "env-1",
+              tabId: "script-tab",
+              agent: "codex",
+              logicalSessionKey: "env-env-1:script-tab",
+              status: "accepted",
+            });
+        }),
+    );
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    const submit = screen.getByRole("button", { name: "Create run script" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    finish();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Configure run script" })).toBeNull(),
+    );
+  });
+
   test("activates an unknown script launch but skips activation when launch throws", async () => {
     launchNativeAgentJobMock
       .mockResolvedValueOnce({

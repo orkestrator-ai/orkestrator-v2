@@ -91,6 +91,7 @@ const COALESCE_MS = 50;
 export const BOOT_ANNOUNCE_COALESCE_MS = 1_000;
 
 interface PendingDispatch {
+  latest: ResourceChange;
   /** Null while only the leading delivery has happened in this window. */
   change: ResourceChange | null;
   timer: ReturnType<typeof setTimeout>;
@@ -232,7 +233,7 @@ export function dispatchResourceChange(change: ResourceChange): void {
   if (existing) {
     clearTimeout(existing.timer);
     // Keep the highest revision seen so handlers observe the latest ordering.
-    if (existing.change && change.revision < existing.change.revision) change = existing.change;
+    if (change.revision < existing.latest.revision) change = existing.latest;
   }
   const leading = !existing && LEADING_EDGE_RESOURCES.has(change.resource);
   if (leading) void deliver(change);
@@ -241,7 +242,7 @@ export function dispatchResourceChange(change: ResourceChange): void {
     pending.delete(key);
     if (trailing) void deliver(trailing);
   }, COALESCE_MS);
-  pending.set(key, { change: trailing, timer });
+  pending.set(key, { change: trailing, latest: change, timer });
 }
 
 /** Drops queued dispatches. Tests use this to avoid cross-file bleed. */

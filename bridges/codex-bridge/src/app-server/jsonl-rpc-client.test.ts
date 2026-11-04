@@ -897,9 +897,7 @@ describe("SerialQueue", () => {
     await Promise.resolve();
     queue.clear();
     blocker.resolve();
-    await blocker.promise;
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(queue.pendingDepth).toBe(0);
   });
 });

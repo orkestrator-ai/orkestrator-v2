@@ -31,7 +31,7 @@ governs, marked "Decided".
 3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open.
-6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings and BR-16 open).
+6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-2's directory-handle cache deliberately not done; ST-3, ST-5, ST-6 and ST-13 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
@@ -254,7 +254,18 @@ Done 2026-11-03 (against `main` at `b68b6e71`), Codex half: BR-2 and BR-11.
 - BR-2: `getConfig`'s `durable` check (`isSessionConfigPersisted` in `app-server-runtime-sessions.ts`) now calls `BridgeSessionStore.loadRecord(id)` (`sessions/persistence.ts`) instead of `load()`. It reads only `recordPath(id)`, with `load()`'s validation (`isPersistedBridgeSession`, cwd hash, retention cutoff, a tombstone is not persisted, and the record must name the session asked about). It does no legacy migration, login-record adoption, directory listing, chmod or sweep. Only when no record file exists does it look, read-only, where `load()` would first have published one: the former aggregate file, then the login's own records directory. Tests: `sessions/persistence-load-record.test.ts` (one `readFile` out of 50 records, no `readdir`/`chmod`/`mkdir`/write/`load()`; agreement with `load()` for valid, tombstoned, expired, wrong-cwd, invalid, corrupt, foreign-id, legacy-only and absent records; a login record found without being moved) and `app-server-runtime-config-durable.test.ts` (`getConfig` on one of 50 persisted sessions reads one record file and never calls `load()`, which fails on the old code; `durable` false for a changed config, a tombstone, a missing and an expired record).
 - BR-11: `history/session-index-cache.ts` keeps `session_index.jsonl` parsed per path, keyed by size, mtime, ctime and `dev:ino` from the descriptor's `fstat`, as `transcript-cache.ts` does. Unchanged means no read. Growth on the same inode whose 64 bytes before the old boundary are unchanged parses only the appended bytes. A shrink, a replacement, a same-size rewrite or a changed anchor re-reads from scratch. An unterminated last line is parsed on each read but never committed. Both `findSessionIndexEntry` (hydrate) and the cwd listing read through it; the listing still visits every line in file order, so its result is unchanged. Bounds (invariant 11): 50,000 entries, 16 MiB estimated and 4 paths across the cache, least recently used evicted first; an index too large on its own is parsed uncached on every read, as before. `readTranscriptLines` and `PersistedSessionIndexEntry`, used only for this, were removed. Tests: `history/session-index-cache.test.ts` (parsing parity, unchanged read once, append read as tail only, shorter rewrite, inode replacement, in-place rewrite with growth, same-size rewrite, pending tail, snapshot stability, concurrent readers, path/entry/byte bounds) and `history/rollout-session-index.test.ts` (two hydrates read the index once, an appended rename is found after one tail read, a shorter rewrite is fully re-read, the listing shares the cache).
 
-**Investigation.** Not re-checked since the report: BR-7, BR-10, BR-12 to BR-14, BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`) and BR-16's likely dead Cursor replay in the Grok-only ACP bridge.
+Done 2026-11-04 (against `main` at `96ee1eb3`), the remainder apart from the SSE replay rings. Each item was re-checked against that commit first, and all six still applied. Every test named below was also run against the old sources and failed there.
+
+- BR-7, Codex. `TurnRenderState.runningItemParts` keeps a running item's parts while its accumulator `version` stands still, so an unchanged card keeps its object and `isSamePublishedPart` no longer lists it. The version is sampled with the item in `collectTurnItems`, because a delta can land while a render awaits an earlier item. Patches carry `content` only when it changed (`publishedContent`, named by message, so a path that swaps the row sends the body again). Tests: `messages/render-turn.test.ts` ("running items across publish ticks": identity across ticks, only the moved item rebuilt, progress lines, measurements, a raw patch shown at turn end, a delta during a render, and 300 random steps rendering what a fresh state renders); `app-server-runtime-rows.test.ts` ("publishing running tool cards": a patch lists only the moved card, a client applying the frames holds exactly the transcript's row).
+- BR-10, Pi. `session-list-cache.ts` keeps the list against a sha256 of each `.jsonl` file's name, size, mtime, ctime and inode; unchanged costs one `readdir` and a `stat` per file. A timeout aborts the read through the SDK's `signal` and answers 504 with a fixed message, which `assertOkWithErrorDetail` already passes on and the resume dialog already shows. Any other failure still reads as no sessions, as before, now with a log line. Tests: `session-list-cache.test.ts`, `http.test.ts` ("a session list that timed out"), and `http-bridge-provider-archive.test.ts` in the backend.
+- BR-12, ACP. `acp-jsonl-framer.ts` searches only the new chunk and joins held bytes once per frame. A 2.1 MB frame written in 32 pieces copied 36.7 MB before and copies under 2.3 MB now. Tests: `acp-jsonl-framer.test.ts` (500 random chunkings against a verbatim copy of the old loop, both limits, and a real `AcpProcess` whose copies are counted).
+- BR-13, Codex. `SerialQueue` holds an array per key and drains it in one microtask, so a synchronous task allocates no promise. It has count (100,000) and byte (256 MiB, by line length) bounds. Past either it drops what has not started and calls `AppServerSupervisor.restartNow`, without awaiting it on the read loop. Tests: `jsonl-rpc-client.test.ts` (no promise chain over 1,000 tasks, both bounds, order, drain and clear), `process-supervisor.test.ts` (replaced child, new generation, nothing started during shutdown) and `app-server-runtime-lifecycle.test.ts` (a running turn past the bound fails as a restart, the status a workflow can continue from, and the dropped deltas never reach the transcript).
+- BR-14, Pi. `encodeStateWithinBudget` encodes each record once and splices them into the envelope with exact byte accounting; shedding re-encodes only the records it trims. Tests: `persistence.test.ts` (300 random states and budgets against a verbatim copy of the old code, byte for byte; forty 1 MB sessions encode under 80 MiB in all, where the old code encoded about 810 MB).
+- BR-16, ACP. The replay is removed: `reconcileCursorToolMetadata`, its scheduler, collector and join, the session fields, constants and `ACP_MAX_LIVE_CURSOR_TOOL_REPLAYS`, and the provider labels in `acp-errors.ts` and `session-config.ts`. No launch reaches it: `commands-servers.ts` handles `cursor` in its own branch and only Grok falls through to `ACP_PROVIDER = kind`, `host-model-catalog-refresh.ts` does the same, and the container entrypoint (`commands-registry-servers.ts:585`) exports `ACP_PROVIDER=grok`. The harness moved to a neutral `acp-fixture` id; the expectations that changed for it changed only in that name. Test: `acp-context.test.ts` ("a turn's generic tool calls spawn no replay child"), with the provider id set to `cursor` by hand. On the old code it sees a second child. The `cursor/*` method handlers are not provider-gated and stayed: [4540](../agent-engines/4540-acp-bridge-cursor-extension-leftovers.md).
+
+**Investigation.** Not re-checked since the report: BR-15's SSE replay rings (Codex `event-ring.ts`, Claude `routes/events.ts`).
+
+What the 2026-11-04 fixes do not remove. A Pi history too large to parse within 30 s now reports a timeout on every attempt instead of showing an empty list; it never fills the cache, because Pi does not export its per-file step. An ordinary Pi state write still encodes every session once: only the repeated encoding while shedding went away. Nothing was measured on real workloads (task 1); the BR-12 and BR-14 figures come from the tests' own fixtures.
 
 What BR-5 does not remove: Pi resends a running tool's whole accumulated output on every frame, and `renderToolCall` re-bounds it (`boundText`) before the charge, so a Pi frame still costs O(output) — now one prefix comparison instead of a whole-card serialisation. Getting below that needs Pi's tool rendering to take deltas. ACP's text charge (`Buffer.byteLength(text) * 2`) is not JSON-escaped, so it is not a strict upper bound on encoded growth; it only schedules the bound, which is exact, so it was left alone. Cursor's per-sub-agent byte check (`boundNestedParts` with `measureBytes`) still serialises each live row's nested parts on an exact pass. No before-and-after numbers were taken (task 1).
 
@@ -291,6 +302,34 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
   - **Move Codex's `event-ring.ts` into protocol now and point Claude at it.**
     - Pros: closes BR-15.
     - Cons: a behaviour change to Claude's SSE replay in a task meant to leave output unchanged.
+- **Change the wire shape of Codex's `message.patched` (BR-7)?** Done 2026-11-04 with the first option.
+  - **Make `content` optional, and omit it when unchanged (recommended, taken).**
+    - Pros: smaller frames; a patch applies only at `revision - 1`, where the recipient already holds the body, so absent means unchanged and a missed frame is still a revision gap.
+    - Cons: a client reading `content` unconditionally would blank the body. None exists: nothing in `apps`, `packages` or `e2e` reads these frames, and the backend uses the content-free `?observe=1` stream.
+  - **Leave it.**
+    - Pros: no contract change.
+    - Cons: frames keep the duplicate.
+- **What happens at the notification queue's bound (BR-13)?** Done 2026-11-04 with the first option.
+  - **Drop the backlog and replace the child through the existing restart path (recommended, taken).**
+    - Pros: a stream with a dropped notification cannot be trusted, and generation recovery re-reads authoritative state; the running turn fails as a restart, which a workflow can continue.
+    - Cons: running turns are interrupted, so the limit sits far above what one stdout chunk can hold.
+  - **Only measure.**
+    - Pros: no new failure mode.
+    - Cons: keeps the breach of invariant 11.
+- **What should a timed-out Pi session list answer (BR-10)?** Done 2026-11-04 with the first option.
+  - **504 with a short fixed message, and abort the read (recommended, taken).**
+    - Pros: the existing path shows the reason; no orphaned read.
+    - Cons: a list that looked empty now shows an error.
+  - **Keep `[]` and log.**
+    - Pros: no behaviour change.
+    - Cons: the silent failure stays.
+- **Where does the ACP harness's default provider go (BR-16)?** Done 2026-11-04 with the first option.
+  - **A neutral `acp-fixture` id (recommended, taken).**
+    - Pros: nothing implies a Cursor provider on this bridge; the fixture has none of Grok's launch quirks, so existing cases keep testing generic ACP.
+    - Cons: a wider diff, though only in that name.
+  - **Grok.**
+    - Pros: the one real provider.
+    - Cons: fixtures would pick up Grok's auth check, read-only profile and model handling, which changes what those cases test.
 
 ### 7. Change tracking and git scans
 
@@ -972,6 +1011,18 @@ Made on 2026-11-03.
 - **One behaviour change.** The old listing threw a `TypeError` on an index
   line that parsed to `null` (`entry.id` of null); the cache skips that line,
   as hydrate always did.
+
+### Task 6: BR-7, BR-10, BR-12 to BR-14 and BR-16 (2026-11-04)
+
+- **BR-7, the cache key.** Keyed on `accumulator.version` alone. Every mutator already moves it through `ensureItem` or `touch`, a measurement and the turn ending around an unsettled item included, so a second check on `commandChanges` would add nothing. Kept apart from `completedItemParts`, whose key is the immutable source item.
+- **BR-7, a tick with nothing new.** A running card that did not change now produces no patch and moves no revision. Rendering a running card reads no clock, so an unchanged version means unchanged output.
+- **BR-10, what is hashed.** Name, size, mtime, ctime and inode, as BR-11 did, rather than the report's path, size and mtime: a same-size replacement should re-read. A digest keeps the entry a fixed size for any directory. A list over 2 MiB, the backend's own body limit, is not kept.
+- **BR-10, the directory.** Asked of `SessionManager.create(...).getSessionDir()`, because `getDefaultSessionDir` is not exported and the directory's name is Pi's own format. It writes no file; the directory creation is what `SessionManager.list` did anyway.
+- **BR-12, a module of its own.** `acp-context.ts` is close to the 2,000-line limit, and a pure framer can be tested against the old loop without a child process.
+- **BR-13, the bounds.** Tasks run synchronously between stdout chunks today, so depth is about one chunk's lines and no real high-water mark was read. 100,000 is far above any chunk. The byte bound was added beyond the report's count bound, because invariant 11 names both and a count alone allows 64 MiB per line. It is a line-length estimate, not a heap measurement.
+- **BR-13, order across keys.** A key's backlog now drains before the next key's starts, where promise chains interleaved them. Keys were already independent: account proof compares its own `sequence` because of that, and the engine's "a start delayed on another queue" tests cover it.
+- **BR-14, no fragment cache.** Followed the recommended option: no per-session cache of clean records. As with ACP's BR-1 remainder, a missed revision would write stale state, and writes only happen at turn and request edges.
+- **BR-16, how far it goes.** Removed what the report names and what only it used. The `cursor/*` handlers stayed because they are gated by method, not provider, so this change's evidence does not cover them.
 
 ### Task 7: stat-stamp settle window
 

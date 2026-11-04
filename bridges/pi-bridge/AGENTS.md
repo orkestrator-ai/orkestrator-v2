@@ -104,6 +104,10 @@ none. A retried response that a later answer replaces adds nothing.
 - A tool variant Pi adds — or a custom tool from a project extension, whose
   shape this bridge cannot know at all — must degrade to a plain card, never
   throw. These branches run mid-turn.
+- `GET /session/list` is kept while no session file changes
+  (`session-list-cache.ts`), because Pi parses every file in full and does not
+  export the per-file step. A timeout aborts the read and answers 504 with a
+  fixed message; it is never an empty list.
 - The conversation lives in Pi's own JSONL session file, not in this bridge.
   Losing the bridge's state costs a rendered transcript; it never costs the
   conversation. That is why `detachSession` keeps `sessionFile` and why a

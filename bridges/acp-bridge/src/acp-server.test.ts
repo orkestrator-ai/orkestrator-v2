@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 
 import {
   children,
-  here,
   nativeFetch,
   NativeAbortController,
   spawnBridge,

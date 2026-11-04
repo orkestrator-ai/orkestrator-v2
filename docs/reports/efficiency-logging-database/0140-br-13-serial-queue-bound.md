@@ -6,7 +6,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Tasks
 
-1. **Bound the queue and drain without promise chains**: an array per key, drained in one microtask loop, with a count bound. Status: open.
+1. **Bound the queue and drain without promise chains**: an array per key, drained in one microtask loop, with a count bound. Status: done 2026-11-04 ([1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 6).
 
 ### 1. Bound the queue and drain without promise chains
 

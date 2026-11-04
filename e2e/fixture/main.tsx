@@ -187,6 +187,9 @@ const SetupRecoveryFixture = lazy(async () => ({
   default: (await import("./SetupRecoveryFixture")).SetupRecoveryFixture,
 }));
 
+const AutoMergeErrorFixture = lazy(async () => ({
+  default: (await import("./AutoMergeErrorFixture")).AutoMergeErrorFixture,
+}));
 const EnvironmentSettingsDrawerFixture = lazy(async () => ({
   default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
 }));
@@ -1986,6 +1989,13 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <SidebarActivityProbeFixture />
+      </Suspense>
+    );
+  }
+  if (window.location.pathname === "/auto-merge-error") {
+    return (
+      <Suspense fallback={null}>
+        <AutoMergeErrorFixture />
       </Suspense>
     );
   }

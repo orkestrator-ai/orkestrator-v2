@@ -10,6 +10,7 @@ import { createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import { resolveEnvironmentActionDefault } from "./action-default-selection.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import type { Environment } from "./models.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import type { StorageService } from "./storage.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
@@ -287,23 +288,26 @@ export class PrAutoMergeController {
     }
   }
 
-  /** Revalidate the decision after asynchronous preparation. */
+  /**
+   * Revalidate the decision after asynchronous preparation, returning the
+   * environment as stored now, or null when the decision no longer holds.
+   */
   private async authorized(
     environment: Environment,
     kind: "merge" | "resolve",
     expectedHeadSha?: string,
-  ): Promise<boolean> {
+  ): Promise<Environment | null> {
     const policy = await this.policy();
     const current = await this.options.storage.getEnvironment(environment.id);
     const reading = this.options.monitorState(environment.id);
-    return (
-      !this.closed &&
+    return !this.closed &&
       !!current &&
       current.prUrl === environment.prUrl &&
       current.autoMergeEnabledAt === environment.autoMergeEnabledAt &&
       (expectedHeadSha === undefined || reading?.headSha === expectedHeadSha) &&
       decideAutoMerge(current, reading, policy).kind === kind
-    );
+      ? current
+      : null;
   }
 
   /** Read per decision, so a settings change applies at the next reading. */
@@ -323,16 +327,22 @@ export class PrAutoMergeController {
     );
   }
 
-  /** The Merge PR button's command, pinned to the observed PR and head. */
+  /**
+   * The Merge PR button's command, pinned to the observed PR and head. The
+   * pin makes the command refuse effects that differ from the ones it would
+   * apply, so ask for exactly those: a project's home checkout keeps its
+   * branch, and a cleanup the user already requested still runs.
+   */
   private async merge(environment: Environment): Promise<boolean> {
     const headSha = this.options.monitorState(environment.id)?.headSha;
-    if (!headSha || !(await this.authorized(environment, "merge", headSha)) || this.closed)
-      return false;
+    if (!headSha) return false;
+    const current = await this.authorized(environment, "merge", headSha);
+    if (!current || this.closed) return false;
     await this.options.invoke("merge_environment_pr", {
       environmentId: environment.id,
       method: "squash",
-      deleteBranch: true,
-      cleanupAfterMerge: false,
+      deleteBranch: !isProjectHomeEnvironment(current),
+      cleanupAfterMerge: Boolean(current.cleanupAfterMergeRequestedAt),
       expectedHeadSha: headSha,
       expectedPrUrl: environment.prUrl,
     });

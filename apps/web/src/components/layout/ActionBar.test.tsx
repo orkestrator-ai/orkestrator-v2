@@ -8701,4 +8701,32 @@ describe("ActionBar auto-merge", () => {
     view.rerender(<ActionBar />);
     expect(screen.queryByText("Auto-merge: GitHub refused the merge") === null).toBe(true);
   });
+
+  test("opens the whole failure in a tooltip from the keyboard", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    render(<ActionBar />);
+    fireEvent.focus(screen.getByText("Auto-merge: GitHub refused the merge"));
+    await waitFor(() =>
+      expect(screen.getAllByText("Auto-merge: GitHub refused the merge")).toHaveLength(2),
+    );
+  });
+
+  test("keeps the failure on its own row in the grid, which has no tooltips", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      autoMerge: true,
+      autoMergeError: "GitHub refused the merge",
+    };
+    render(<ActionBar presentation="grid" />);
+    const label = screen.getByText("Auto-merge: GitHub refused the merge");
+    expect(label.className).toContain("col-span-2");
+    expect(label.className).not.toContain("line-clamp");
+    expect(label.className).not.toContain("truncate");
+  });
 });

@@ -248,6 +248,20 @@ describe("PrAutoMergeController", () => {
     ]);
   });
 
+  // `merge_environment_pr` refuses a pinned merge whose effects differ from
+  // the ones it would apply ("The pull request or merge effects changed").
+  test("keeps the branch of a project's home checkout", async () => {
+    const h = harness(environment({ projectHome: true }));
+    await h.controller.evaluate("env-1");
+    expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: false, cleanupAfterMerge: false });
+  });
+
+  test("carries a cleanup the user already requested", async () => {
+    const h = harness(environment({ cleanupAfterMergeRequestedAt: new Date().toISOString() }));
+    await h.controller.evaluate("env-1");
+    expect(h.invocations[0]?.args).toMatchObject({ deleteBranch: true, cleanupAfterMerge: true });
+  });
+
   test("follows the machine's check requirement for an unstable PR", async () => {
     const required = harness(environment({ prMergeability: "unstable" }));
     required.requireChecks(true);

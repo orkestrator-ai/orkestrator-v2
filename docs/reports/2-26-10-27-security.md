@@ -797,7 +797,7 @@ write and terminal calls when the policy denies them.
 
 1. **H1 + M1.** Replace the token-valued cookie with an opaque session. Add a server-side `CSP: sandbox` on legacy previews and make the isolated transport the default. Together these close the cleanest container → host path.
 2. **H3.** `lstat` and realpath the `.env`/`opencode.json` sources and copy them instead of bind-mounting. This is a small change with large impact.
-3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The remaining follow-up is retiring in-container firewall enforcement, tracked in todo 0018 task 4 after gateway qualification.
+3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The `ORKESTRATOR_EGRESS=in-container` rollout cap was removed on 2026-11-04 (todo 0018 task 4). Existing runtimes without a gateway keep in-container enforcement until rebuilt; rootless gateway qualification remains open under [todo 0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.

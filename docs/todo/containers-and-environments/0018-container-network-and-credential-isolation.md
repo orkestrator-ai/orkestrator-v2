@@ -1,5 +1,9 @@
 # Container network and credential isolation
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
 Checked against `main` at `2459b05c` (2026-10-15); Claude credentials
 against `688f9f69` (2026-10-21); default allowlists and the external egress
 prototype against `b83ae534` (2026-10-22); the production egress gateway and
@@ -7,14 +11,10 @@ the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
 against `main` at `931e5541` (2026-10-31).
 
-## Task analysis
-
-Analysed 2026-10-27 against `main` at `863b5782`.
-
 ### Tasks
 
 1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; ticking it waits for the decision below).
-2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done.
+2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done (tamper, gateway restart and default-loopback checks passed 2026-11-04; rootless daemon restart remains open).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
 4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
 5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
@@ -64,7 +64,25 @@ In run 40409285999 the x64 network suite passed again. The only failure there wa
 - The 2026-10-25 run on a real rootless Engine 29.9.1 host passed the live firewall suite 2/2, including the policy 3 tuples, with `ip_set`, `xt_set` and `nf_tables` loaded (`container-qualification.md:215`). That answers this file's "a rootless kernel is still unconfirmed" for that kernel. The image was a review build, and whether it carried `egress-gateway=1` is not recorded.
 - The 2026-10-26 rootless review qualification ran with host loopback enabled and an image carrying `staged-inputs=3`. C22 "passed behind the real egress gateway" (`container-qualification.md:312`-`:314`), but that write-up does not list the firewall suite.
 
-Still unproved on rootless with a current image: the firewall suite's gateway-specific checks (tampering, gateway restart) and the default host-loopback-disabled daemon behind a gateway. 0109 decision 4 also notes that existing gateway runtimes need a rebuild after host loopback is enabled.
+Before the 2026-11-04 review repair, rootless evidence did not cover the firewall suite's gateway-specific checks (tampering, gateway restart) or the default host-loopback-disabled daemon behind a gateway. 0109 decision 4 also notes that existing gateway runtimes need a rebuild after host loopback is enabled.
+
+**Result (2026-11-04 review repair).** On a disposable host rootless Engine
+29.9.2 (RootlessKit 2.3.5, VPNKit, builtin ports, host loopback disabled), the
+live firewall suite passed 2/2 against the gateway-capable
+`orkestrator-v2:dev-1e785cae5ca6` image. This proves the gateway-specific root
+tampering refusals, published ports and fail-closed gateway-restart recovery
+on this topology. A separate live probe passed behind a backend-created
+gateway: host discovery reported `blocked` with the rootless daemon-setting
+remediation, and the runtime could not reach the host listener. Details and
+scope are in [container qualification](../../development/container-qualification.md#rollout-cap-retirement-review-qualification-2026-11-04).
+The same checks then passed on slirp4netns 1.3.3: firewall 2/2, blocked-host
+probe 1/1. With host loopback enabled on slirp4netns, the firewall passed
+2/2, the full network suite passed 4/4 after aligning its live start helper
+with production port-collision recovery, and C22's authenticated agent-tools
+reply passed 1/1. VPNKit's enabled
+host-service path remained blocked; that limitation is recorded in the guide.
+Task 2 stays partly done because a rootless daemon restart with runtimes
+remains unqualified.
 
 **Decisions.**
 
@@ -211,11 +229,14 @@ cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
   manifest does not declare `egress-gateway`. On a real image derived from
   `orkestrator-v2:dev-1e785cae5ca6`, the backend read the edited manifest and
   chose `container`, and chose `gateway` for the base image.
-- **Needs live evidence:** those scenarios have not passed since the rework. The
-  one run on the shared host, on 2026-11-04, failed 7 of 7 before any boot
-  because Docker had no free address range ("all predefined address pools have
-  been fully subnetted", 33 networks in use). Run them on a disposable daemon,
-  or on a host with free pools, as listed in the container qualification guide.
+- **Live evidence (2026-11-04 review repair):** the seven C09/C23 readiness
+  scenarios passed on the disposable host rootless daemon described under task
+  2 (192.4 s, 2 unrelated tests filtered out). This reruns the fault suite after
+  its manifest-based topology selection: missing firewall, gateway refusal,
+  DNS failure, unwritable status, torn status, restart during launch and
+  fail-closed firewall re-run. The earlier shared-host attempt failed 7/7
+  before boot because its default address pools were exhausted; no shared
+  networks were deleted to obtain this pass.
 
 ### 5. Claude host refresh and mid-session pickup
 
@@ -661,7 +682,8 @@ and renewal delivery with real, fresh provider logins.
     and 3 PIDs.
 - Egress gateway on Linux Engine and rootless (high; on by default for
   restricted runtimes on a current image). Still owed: a rootless daemon
-  (task 2), and the decision whether the CI runs below count as the rootful
+  restart with runtimes (task 2; the 2026-11-04 live gateway checks are
+  recorded above), and the decision whether the CI runs below count as the rootful
   pass (task 1). On a rootless host run the live suites against an image
   built there. The `ORKESTRATOR_EGRESS=in-container` fallback was removed on
   2026-11-04, before these were recorded (task 4), so a gateway failure on a
@@ -916,6 +938,17 @@ and renewal delivery with real, fresh provider logins.
   in-container firewall keep the documented behaviour until they are rebuilt.
 
 ## Assumptions and decisions
+
+### Tasks 2 and 4: review qualification on a disposable rootless daemon
+
+Chosen: run the existing live suites on a private host rootless daemon with
+its own address pool, and use a focused live probe for the intentionally
+blocked host-service path. This avoids deleting other owners' networks on the
+exhausted shared daemon. Alternative: reclaim shared networks or reconfigure
+its pools; that would make the original topology available but risks production
+work and requires authority this repair does not have. The private daemon
+proves real kernel firewall and gateway behavior, but VPNKit evidence does not
+qualify every rootless network driver; keep those limits explicit.
 
 Recorded 2026-10-25, while implementing items 1–7.
 

@@ -1,19 +1,14 @@
-import { lazy, useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, FileText, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, FileText } from "lucide-react";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import type { SaveFile } from "@/hooks/useFileSave";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  RenderedRawFileShell,
+  type RenderedRawMode,
+} from "@/components/terminal/RenderedRawFileShell";
 import { TiptapMarkdownEditor, type TiptapMarkdownEditorHandle } from "./TiptapMarkdownEditor";
 import { assessMarkdownForRichEditing } from "./tiptap-extensions";
-import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
-
-const LazyMonacoFileEditor = lazy(async () => ({
-  default: (await import("@/components/terminal/MonacoFileEditor")).MonacoFileEditor,
-}));
-
-type MarkdownEditorMode = "rendered" | "raw";
 
 interface MarkdownEditorTabProps {
   tabId: string;
@@ -48,7 +43,7 @@ export function MarkdownEditorTab({
   );
   const setContent = useFileDirtyStore((state) => state.setContent);
   const [initialAssessment] = useState(() => assessMarkdownForRichEditing(markdown));
-  const [mode, setMode] = useState<MarkdownEditorMode>(
+  const [mode, setMode] = useState<RenderedRawMode>(
     lineNumber ? "raw" : initialAssessment.safe ? "rendered" : "raw",
   );
   const [parseError, setParseError] = useState<string | null>(initialAssessment.reason);
@@ -73,9 +68,7 @@ export function MarkdownEditorTab({
   }, [lineNumber, mode, navigationRequestId]);
 
   const handleModeChange = useCallback(
-    (nextMode: string) => {
-      if (nextMode !== "rendered" && nextMode !== "raw") return;
-
+    (nextMode: RenderedRawMode) => {
       if (mode === "rendered" && nextMode === "raw") {
         editorRef.current?.flushPendingChanges();
       }
@@ -100,79 +93,38 @@ export function MarkdownEditorTab({
   }, []);
 
   return (
-    <Tabs
-      value={mode}
-      onValueChange={handleModeChange}
-      className={cn("absolute inset-0 gap-0", !isActive && "pointer-events-none opacity-0")}
-      style={{ backgroundColor: terminalAppearance.backgroundColor }}
+    <RenderedRawFileShell
+      mode={mode}
+      onModeChange={handleModeChange}
+      icon={FileText}
+      filePath={filePath}
+      language={language}
+      value={markdown}
+      lineNumber={lineNumber}
+      columnNumber={columnNumber}
+      navigationRequestId={navigationRequestId}
+      isActive={isActive}
+      isSaving={isSaving}
+      onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
+      onSave={onSave}
+      notice={
+        parseError && mode === "raw" ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>Rendered mode is unavailable for this file: {parseError}</span>
+          </div>
+        ) : null
+      }
     >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-4 text-xs text-muted-foreground">
-        <FileText className="h-3 w-3 shrink-0" />
-        <span className="min-w-0 truncate font-mono">{filePath}</span>
-
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          {isSaving && (
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Saving...
-            </span>
-          )}
-          <TabsList className="h-7 rounded-md p-0.5">
-            <TabsTrigger className="h-6 px-2 text-xs" value="rendered">
-              Rendered
-            </TabsTrigger>
-            <TabsTrigger className="h-6 px-2 text-xs" value="raw">
-              Raw
-            </TabsTrigger>
-          </TabsList>
-        </div>
-      </div>
-
-      {parseError && mode === "raw" && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          <span>Rendered mode is unavailable for this file: {parseError}</span>
-        </div>
-      )}
-
-      <TabsContent value="rendered" className="min-h-0 overflow-auto">
-        <TiptapMarkdownEditor
-          ref={editorRef}
-          markdown={markdown}
-          fontFamily={terminalAppearance.fontFamily}
-          fontSize={terminalAppearance.fontSize}
-          onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
-          onSave={onSave}
-          onParseError={handleParseError}
-        />
-      </TabsContent>
-
-      <TabsContent value="raw" className="min-h-0">
-        <LazyLoadBoundary
-          loadingFallback={
-            <div className="flex h-full items-center justify-center text-muted-foreground">
-              <span
-                role="status"
-                aria-label="Loading raw editor…"
-                className="flex items-center justify-center"
-              >
-                <Loader2 className="h-6 w-6 animate-spin" />
-              </span>
-            </div>
-          }
-        >
-          <LazyMonacoFileEditor
-            language={language}
-            value={markdown}
-            lineNumber={lineNumber}
-            columnNumber={columnNumber}
-            navigationRequestId={navigationRequestId}
-            isActive={isActive && mode === "raw"}
-            onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
-            onSave={onSave}
-          />
-        </LazyLoadBoundary>
-      </TabsContent>
-    </Tabs>
+      <TiptapMarkdownEditor
+        ref={editorRef}
+        markdown={markdown}
+        fontFamily={terminalAppearance.fontFamily}
+        fontSize={terminalAppearance.fontSize}
+        onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
+        onSave={onSave}
+        onParseError={handleParseError}
+      />
+    </RenderedRawFileShell>
   );
 }

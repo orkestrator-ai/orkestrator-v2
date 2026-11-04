@@ -796,9 +796,8 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
 - Other residuals from the 2026-09-15 security review: restricted containers
   still need `NET_ADMIN`
   ([0018-container-network-and-credential-isolation.md](../containers-and-environments/0018-container-network-and-credential-isolation.md)).
-  Renderer windows keep `sandbox: false` as a documented exception for ESM
-  preloads (`apps/desktop/electron/window.ts`); emitting CJS preloads would
-  allow `sandbox: true`.
+  Renderer windows now run `sandbox: true` on CommonJS preloads
+  ([renderer-security.md](../../architecture/renderer-security.md#os-sandbox)).
 - Living-doc drift: the flake registry reuses 29 IDs across 74 case files:
   0147, 0151, 0161–0164, 0176, 0512–0514, 0515 (four), 0516, 0517, 0518
   (three), 0632, 0671 (seven), 0672 (five), 0673, 0692, 0694 (three), 0721,

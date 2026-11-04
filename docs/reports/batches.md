@@ -18,7 +18,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | --- | --- | --- |
 | X1 | [security/0090-x1-coordinator-trust-boundary.md](security/0090-x1-coordinator-trust-boundary.md) | `Security 0090`, `Security 0180`, `Security 0210`, `Coordinator 0120`, `Coordinator 0310` |
 | S2 | [security/0040-s2-bridge-credential.md](security/0040-s2-bridge-credential.md) | `0040`, `0120`, `0250` |
-| S3 | [security/0050-s3-electron-renderer.md](security/0050-s3-electron-renderer.md) | `0050`, `0130`, `0060` |
 | S5 | [security/0140-s5-release-chain.md](security/0140-s5-release-chain.md) | `0140`, `0240` |
 | C1 | [coordinator/0010-c1-wake-reliability.md](coordinator/0010-c1-wake-reliability.md) | `0010`, `0050`, `0090`, `0290`, `0300`, `0270` |
 | C5 | [coordinator/0030-c5-prompt-and-context.md](coordinator/0030-c5-prompt-and-context.md) | `0360`, `0170`, `0140`, `0030`, `0460` |
@@ -67,7 +66,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Change tracking | 1. E2 (Measurement rows)<br>2. E3 (Retention and deletion)<br>3. E4 (Object store) | `apps/backend/src/core/change-tracking/` |
 | Storage | 1. E6 (Store writes)<br>2. E5 (Database upkeep)<br>3. S-0190 (Provider secrets at rest) | `storage-database.ts`, `storage-backups.ts`, `storage-stores.ts` |
 | Git scans and file reads | 1. E7 (Diff scans)<br>2. E-0580 (File RPC and usage report) | `commands-files.ts`, `git-scopes.ts`, `diff-stats-service.ts` |
-| Desktop | 1. S3 (Electron renderer)<br>2. E26 (Local desktop transport)<br>3. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
+| Desktop | 1. E26 (Local desktop transport)<br>2. E-0691 (Preview capture data URLs) | `apps/desktop/electron/` windows, IPC and preloads, `backend-process.ts` |
 | Gateway | 1. E19 (Terminal WebSocket)<br>2. E-0120 (Bearer terminal streams)<br>3. S-0200 (Workspace grant allowlist)<br>4. E18 (Gateway events)<br>5. E24 (Gateway static and preview)<br>6. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E13 (Silent failures)<br>2. E17 (Dead code)<br>3. E15 (Health and diagnostics)<br>4. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -114,8 +113,6 @@ Don't run these pairs at the same time.
 | S2 (Bridge credential) | E13 (Silent failures) | Bridge `http.ts` files, `acp-context.ts`, `acp-server.ts`, `commands-registry-servers.ts` |
 | S2 (Bridge credential) | E20 (ACP bridge) | `acp-context.ts` |
 | S2 (Bridge credential) | E21 (Pi bridge) | `bridges/pi-bridge/src/http.ts` |
-| S3 (Electron renderer) | E16 (Log controls) | `window.ts`, `artifact-host-session.ts`, `browser-preview-manager.ts` |
-| S3 (Electron renderer) | E24 (Gateway static and preview) | `gateway-proxy.ts`, `gateway-support-extra.ts` |
 | E3 (Retention and deletion) | E7 (Diff scans) | `change-tracking/service.ts` |
 | E5 (Database upkeep) | E15 (Health and diagnostics) | `storage-backups.ts` |
 | E8 (Agent tab polling) | E26 (Local desktop transport) | `web-gateway.ts` |

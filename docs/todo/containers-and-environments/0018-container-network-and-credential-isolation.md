@@ -1,5 +1,9 @@
 # Container network and credential isolation
 
+## Task analysis
+
+Analysed 2026-10-27 against `main` at `863b5782`.
+
 Checked against `main` at `2459b05c` (2026-10-15); Claude credentials
 against `688f9f69` (2026-10-21); default allowlists and the external egress
 prototype against `b83ae534` (2026-10-22); the production egress gateway and
@@ -7,16 +11,12 @@ the credential-delivery items against branch
 `todo-0018-container-isolation-e228f2a04b8e` (2026-10-25); tasks 3 and 9
 against `main` at `931e5541` (2026-10-31).
 
-## Task analysis
-
-Analysed 2026-10-27 against `main` at `863b5782`.
-
 ### Tasks
 
 1. **Gateway on rootful Linux Engine**: qualify the egress gateway on Linux Engine amd64 and arm64. Status: partly done (CI evidence recorded 2026-10-31 under Qualification; ticking it waits for the decision below).
-2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done.
+2. **Gateway on rootless**: run the gateway suites against a current image on a rootless daemon. Status: partly done (tamper, gateway restart and default-loopback checks passed 2026-11-04; rootless daemon restart remains open).
 3. **IPv6, daemon restart and DNS rotation**: the three gateway conditions no run has covered on any engine. Status: done 2026-10-31 on a disposable rootful Linux Engine 29.9.2; DNS rotation found and fixed a revocation gap. A rootless daemon restart stays with task 2.
-4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch once tasks 1 to 3 pass. Status: blocked (on tasks 1 to 3).
+4. **Retire the `ORKESTRATOR_EGRESS=in-container` rollout cap**: remove the switch. Status: done 2026-11-04, at the user's request and ahead of task 2; see the result under task 4.
 5. **Claude host refresh and mid-session pickup**: first live run of `refreshHostClaudeLogin`, plus re-checking the trigger against the current Claude Code pin. Status: open.
 6. **Container-made Claude MCP login survival**: a live `claude /mcp` sign-in inside a container survives a keeper push and a restart. Status: open.
 7. **Grok renewal pickup and past-expiry sign-out**: live Grok checks for items 5 and 7 and the past-expiry property. Status: blocked (on a fresh host Grok login).
@@ -64,7 +64,25 @@ In run 40409285999 the x64 network suite passed again. The only failure there wa
 - The 2026-10-25 run on a real rootless Engine 29.9.1 host passed the live firewall suite 2/2, including the policy 3 tuples, with `ip_set`, `xt_set` and `nf_tables` loaded (`container-qualification.md:215`). That answers this file's "a rootless kernel is still unconfirmed" for that kernel. The image was a review build, and whether it carried `egress-gateway=1` is not recorded.
 - The 2026-10-26 rootless review qualification ran with host loopback enabled and an image carrying `staged-inputs=3`. C22 "passed behind the real egress gateway" (`container-qualification.md:312`-`:314`), but that write-up does not list the firewall suite.
 
-Still unproved on rootless with a current image: the firewall suite's gateway-specific checks (tampering, gateway restart) and the default host-loopback-disabled daemon behind a gateway. 0109 decision 4 also notes that existing gateway runtimes need a rebuild after host loopback is enabled.
+Before the 2026-11-04 review repair, rootless evidence did not cover the firewall suite's gateway-specific checks (tampering, gateway restart) or the default host-loopback-disabled daemon behind a gateway. 0109 decision 4 also notes that existing gateway runtimes need a rebuild after host loopback is enabled.
+
+**Result (2026-11-04 review repair).** On a disposable host rootless Engine
+29.9.2 (RootlessKit 2.3.5, VPNKit, builtin ports, host loopback disabled), the
+live firewall suite passed 2/2 against the gateway-capable
+`orkestrator-v2:dev-1e785cae5ca6` image. This proves the gateway-specific root
+tampering refusals, published ports and fail-closed gateway-restart recovery
+on this topology. A separate live probe passed behind a backend-created
+gateway: host discovery reported `blocked` with the rootless daemon-setting
+remediation, and the runtime could not reach the host listener. Details and
+scope are in [container qualification](../../development/container-qualification.md#rollout-cap-retirement-review-qualification-2026-11-04).
+The same checks then passed on slirp4netns 1.3.3: firewall 2/2, blocked-host
+probe 1/1. With host loopback enabled on slirp4netns, the firewall passed
+2/2, the full network suite passed 4/4 after aligning its live start helper
+with production port-collision recovery, and C22's authenticated agent-tools
+reply passed 1/1. VPNKit's enabled
+host-service path remained blocked; that limitation is recorded in the guide.
+Task 2 stays partly done because a rootless daemon restart with runtimes
+remains unqualified.
 
 **Decisions.**
 
@@ -196,6 +214,29 @@ starts runtimes through the backend (`createDockerContainer`,
   - **No, drop it with the cap.**
     - Pros: less test code.
     - Cons: legacy runtimes lose their live coverage.
+
+**Result (2026-11-04).** `egressEnforcement` no longer takes an override and
+the backend no longer reads `ORKESTRATOR_EGRESS`, so a gateway-capable image's
+restricted runtime always gets a gateway. The value the backend sets on a
+gateway runtime (`ORKESTRATOR_EGRESS=gateway`), which
+`network-policy-entrypoint.sh` records, is separate and unchanged. Older images
+and policy 1 still take the in-container path, and a runtime created under the
+cap keeps its firewall until it is rebuilt. This came ahead of task 2; see
+"Assumptions and decisions".
+- Unit coverage: `egress-gateway.test.ts` and `docker-image.test.ts`, including
+  that setting the old value still creates a gateway.
+- The in-container readiness scenarios now select that path with an image whose
+  manifest does not declare `egress-gateway`. On a real image derived from
+  `orkestrator-v2:dev-1e785cae5ca6`, the backend read the edited manifest and
+  chose `container`, and chose `gateway` for the base image.
+- **Live evidence (2026-11-04 review repair):** the seven C09/C23 readiness
+  scenarios passed on the disposable host rootless daemon described under task
+  2 (192.4 s, 2 unrelated tests filtered out). This reruns the fault suite after
+  its manifest-based topology selection: missing firewall, gateway refusal,
+  DNS failure, unwritable status, torn status, restart during launch and
+  fail-closed firewall re-run. The earlier shared-host attempt failed 7/7
+  before boot because its default address pools were exhausted; no shared
+  networks were deleted to obtain this pass.
 
 ### 5. Claude host refresh and mid-session pickup
 
@@ -382,10 +423,11 @@ and renewal delivery with real, fresh provider logins.
   the firewall. The runtime has no `NET_ADMIN`, so a root terminal cannot
   change the rules. [Container lifecycle](../../architecture/container-lifecycle.md),
   "Egress gateway", describes creation, the start gate, boot verification,
-  stop, removal and the orphan sweep. Older images and
-  `ORKESTRATOR_EGRESS=in-container` (rollout cap) keep the in-container
-  firewall with `NET_ADMIN`, where a root terminal can still change it;
-  full-mode containers get neither.
+  stop, removal and the orphan sweep. Older images, and runtimes created
+  under the `ORKESTRATOR_EGRESS=in-container` rollout cap (removed
+  2026-11-04), keep the in-container firewall with `NET_ADMIN` until they are
+  rebuilt, and a root terminal can still change it there; full-mode
+  containers get neither.
 - sudo: `docker/Dockerfile` writes `/etc/sudoers.d/node-firewall` with two
   `NOPASSWD` grants for `node`: `network-policy-entrypoint.sh *` (which now
   runs the firewall step as root before dropping privileges) and
@@ -640,10 +682,12 @@ and renewal delivery with real, fresh provider logins.
     and 3 PIDs.
 - Egress gateway on Linux Engine and rootless (high; on by default for
   restricted runtimes on a current image). Still owed: a rootless daemon
-  (task 2), and the decision whether the CI runs below count as the rootful
+  restart with runtimes (task 2; the 2026-11-04 live gateway checks are
+  recorded above), and the decision whether the CI runs below count as the rootful
   pass (task 1). On a rootless host run the live suites against an image
-  built there. Until both are recorded, `ORKESTRATOR_EGRESS=in-container`
-  restores the in-container firewall.
+  built there. The `ORKESTRATOR_EGRESS=in-container` fallback was removed on
+  2026-11-04, before these were recorded (task 4), so a gateway failure on a
+  host now needs a release.
   - Linux Engine CI (`container-live-qualification.yml`, recorded
     2026-10-31 from `gh run view`). Run 40999226305 (head `79c35c0b`,
     2026-10-30, Engine 28.0.4, image capabilities including
@@ -895,6 +939,17 @@ and renewal delivery with real, fresh provider logins.
 
 ## Assumptions and decisions
 
+### Tasks 2 and 4: review qualification on a disposable rootless daemon
+
+Chosen: run the existing live suites on a private host rootless daemon with
+its own address pool, and use a focused live probe for the intentionally
+blocked host-service path. This avoids deleting other owners' networks on the
+exhausted shared daemon. Alternative: reclaim shared networks or reconfigure
+its pools; that would make the original topology available but risks production
+work and requires authority this repair does not have. The private daemon
+proves real kernel firewall and gateway behavior, but VPNKit evidence does not
+qualify every rootless network driver; keep those limits explicit.
+
 Recorded 2026-10-25, while implementing items 1–7.
 
 - **Gateway image.**
@@ -964,10 +1019,24 @@ Recorded 2026-10-25, while implementing items 1–7.
   without `--user` run as root. A gateway runtime has no `NET_ADMIN` to
   regain, so the remaining sudo grants give root only inside a namespace
   root cannot change.
-- **Rollout cap.** `ORKESTRATOR_EGRESS=in-container` keeps the old topology
-  on a gateway-capable image, like `ORKESTRATOR_NETWORK_POLICY=2`. It is
-  listed in the lifecycle doc's rollout switches, and is to be removed once
-  Linux Engine and rootless pass.
+- **Rollout cap.** `ORKESTRATOR_EGRESS=in-container` kept the old topology
+  on a gateway-capable image, like `ORKESTRATOR_NETWORK_POLICY=2`. It was
+  listed in the lifecycle doc's rollout switches, to be removed once Linux
+  Engine and rootless passed. Removed 2026-11-04 (task 4, next two entries).
+- **Task 4: removed ahead of task 2 (2026-11-04).** The user asked for the
+  removal while task 2 was still partly done, overriding this file's
+  recommended order. Linux Engine has CI evidence, though task 1's decision
+  to count it is still open. The rootless tamper and gateway-restart checks
+  and the default host-loopback-disabled daemon were unproved at that point;
+  task 2's 2026-11-04 result has since covered them, leaving a rootless daemon
+  restart. The cost is the one task 4 named: a gateway problem on a host now
+  needs a release instead of a setting.
+- **Task 4: in-container live coverage kept, selected by image.** The readiness
+  scenarios run on derived images whose manifest no longer declares
+  `egress-gateway`, which is the condition an older image takes through
+  `egressEnforcement`. The live firewall suite takes such an image through
+  `ORKESTRATOR_QUALIFICATION_IMAGE`. Legacy runtimes still use this path until
+  they are rebuilt, so dropping the coverage would have left them untested.
 - **Item 2, in-place mode change: not built.**
   - Options: switch a running gateway between restricted and full; or keep
     "mode change is a rebuild".
@@ -1086,6 +1155,8 @@ Recorded 2026-10-31, while doing tasks 3 and 9.
   [0042-service-preview-rollout.md](../previews-and-annotations/0042-service-preview-rollout.md) (the container
   preview relay), [0040-mcp-environment-delivery.md](../mcp/0040-mcp-environment-delivery.md)
   (network and auth for MCP outside the backend host).
+- [4220-disposable-docker-daemon-for-live-suites.md](4220-disposable-docker-daemon-for-live-suites.md):
+  a repo-owned daemon for task 2's rootless restart.
 - [Container lifecycle](../../architecture/container-lifecycle.md): "Environment
   networks", "Agent tools reachability" and "Portable inputs".
 

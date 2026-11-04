@@ -280,6 +280,7 @@
     "./design-canvas": "./src/design-canvas.ts",
     "./design-operations": "./src/design-operations.ts",
     "./design-runtime": "./src/design-runtime.ts",
+    "./renderer-content-security-policy": "./src/renderer-content-security-policy.ts",
     "./web-annotations": "./src/web-annotations.ts",
     "./web-annotations-validation": "./src/web-annotations-validation.ts",
     "./testing/web-annotations-fixtures": "./src/testing/web-annotations-fixtures.ts",

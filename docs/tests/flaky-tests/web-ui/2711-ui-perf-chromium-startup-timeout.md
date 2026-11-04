@@ -173,3 +173,21 @@ so Chromium's start-up cost is paid there, and gives each case a 30 s budget.
 No assertion was changed. The timeout could not be reproduced locally: with
 32 busy-loop processes on a 16-core host, both the old and new file passed
 3 of 3 runs. Mark this resolved once CI on that change shows the file green.
+
+## Security branch main merge — 2026-11-04
+
+While merging `56ff6101a` into `b8bf951e1`, the logged default aggregate
+(`mise run test:logged -- --name merge-tests -- mise run test`, one root worker)
+reported `in-page deadlines > (unnamed)` at 5001.34 ms. The root group finished
+with 3534 pass and 1 fail across 175 files in 275.29 s.
+
+The unchanged owner passed alone:
+
+```sh
+mise run test:logged -- --name merge-root-failure -- bun test ./tests/unit/multi-environment-ui-perf.integration.test.ts --parallel=1 --only-failures
+```
+
+The rerun exited 0 in 4.2 s. Aggregate evidence is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.GQY0uW/root-and-agent-support-tests.log.gz`.
+This is another aggregate-only timeout observation; the cause remains unproven.
+No timeout, assertion or skip changed.

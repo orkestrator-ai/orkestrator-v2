@@ -32,7 +32,7 @@ governs, marked "Decided".
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
-7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3 and ST-16 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13 to ST-15 and ST-17 to ST-21 open).
+7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5, ST-6, ST-13, ST-17 and ST-19 to ST-21 open).
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
@@ -465,9 +465,22 @@ What BR-5 does not remove: Pi resends a running tool's whole accumulated output 
 
 Done on 2026-11-04: ST-3 (`ObjectStore.reuse` leaves a fence younger than half the orphan grace alone, and the closure check skips objects proven present in the pass; `capture-orphan-fence.test.ts`, [change-tracking.md](../../architecture/change-tracking.md) "Retention and backup") and ST-16's minimum gap (`LOCAL_SCAN_MIN_GAP_MS`; `worktree-snapshots.test.ts` "minimum scan gap", [git-scan-caches.md](../../architecture/git-scan-caches.md)). Container helper captures stay out of scope.
 
+Also done on 2026-11-04: ST-14 (one `git diff --raw --numstat -z -M` per scan on local, container and Git-scope paths, the base's commit reused, the exclude file ensured once per worktree or container), ST-15 (a per-worktree count cache keyed by stat stamp with the settle-window rule, and bounded concurrency in `git-scopes.ts`) and ST-18 (scope demand lasts `gitScopeDemandTtlMs` from the last read; expiry sends a `reset` event so an open view reads again). Tests: `git-diff-summary.test.ts`, `local-git-scan-caches.test.ts`, `commands-files-local-scan.test.ts`, `git-scopes.test.ts` "Git scope demand". [git-scan-caches.md](../../architecture/git-scan-caches.md) has the design and [change-tracking.md](../../architecture/change-tracking.md) the demand rule.
+
 **Grace-window reasoning (ST-3).** An object's mtime is the orphan fence: `sweep` deletes an unreachable object only when its mtime is more than `orphanGraceMs` old (1 h), and that fence is the only thing protecting an object a capture has adopted but no ledger row names yet. A sweep's reachable set can also be stale, because it is built before the sweep takes the store lock. So a reused object needs to stay undeletable until the capture has committed and a later sweep can see the commit. Skipping the renewal below half the grace leaves at least the other half (30 min) for that, against capture deadlines of 10 to 30 s plus the sweep's walk of the ledger. Without the skip the same assumption held with a full hour; the margin shrinks, the assumption does not change. Past half the grace the object is renewed as before, under the store lock, so the renewal can never land between a sweep's `lstat` and its `rm`.
 
-**Investigation.** Re-checked on 2026-11-04 against `main` at `96ee1eb3`: `reuse` still called `utimes` under the store lock for every unchanged file, the closure still called `has` for every entry, and `DiffStatsService.request` started a scan for every hint with none running. Micro-benchmark over 10,000 objects (median of 7, same host):
+**Investigation.** ST-14, ST-15 and ST-18, re-checked on 2026-11-04 against `main` at `a8bdce444`: a warm local scan spawned 7 git processes, or 8 with no `origin/<ref>` (the exclude path, the base check, the filter config, two diffs, status, the base oid). A scope view reads a resource once on mount and on a resync, then follows `change-projection-changed` events with no timers (`apps/web/src/lib/changes/subscriptions.ts`); the `reset` event was already in the protocol and handled by both the local and the federated client, but the backend never sent it. `bun scripts/benchmark-local-diff-scan.ts`, workload `scan-1k` (1,000 tracked files, 20 modified, 5 renamed with an edit, 5 deleted, 200 untracked, settled), three interleaved rounds of old and new code, 30 warm scans each, p50 range, load average 10 to 18 on the shared build host (the last row: 2,000 untracked, two rounds of 15):
+
+| Workload | Git processes per scan | Untracked files read | Scan time |
+| --- | --- | --- | --- |
+| Commit base, before | 7 | 200 | 17.0–25.4 ms |
+| Commit base, after | 4 | 0 | 14.8–16.5 ms |
+| Tracking base, before | 7 | 200 | 19.6–26.5 ms |
+| Tracking base, after | 4 | 0 | 15.0–16.2 ms |
+| Commit base, 2,000 untracked, before | 7 | 2,000 | 42.5–48.6 ms |
+| Commit base, 2,000 untracked, after | 4 | 0 | 17.9–30.4 ms |
+
+Earlier, re-checked on 2026-11-04 against `main` at `96ee1eb3`: `reuse` still called `utimes` under the store lock for every unchanged file, the closure still called `has` for every entry, and `DiffStatsService.request` started a scan for every hint with none running. Micro-benchmark over 10,000 objects (median of 7, same host):
 
 | Per-object call | 10,000 objects |
 | --- | --- |
@@ -590,6 +603,44 @@ A micro-benchmark over 10,000 small files two directories deep (5 rounds, median
   - **Filter hints against the worktree's ignore rules.**
     - Pros: no scans at all for writes that truly are ignored.
     - Cons: needs an ignore matcher kept current per worktree, and a wrong answer freezes the counts until the two-minute safety scan.
+- **What ends a Git scope's demand (ST-18)?** Done as recommended.
+  - **A TTL since the last read, and at expiry a `reset` event that makes any open view read again (recommended).**
+    - Pros: no new protocol, client change or bookkeeping across reconnects, since the event and its handling already exist; with nothing open a scope costs nothing after one event; an open view stays correct for one extra read per TTL under activity; a lost event is recovered by the resync read.
+    - Cons: a closed view still costs recomputes for up to the TTL; an idle environment with an open view re-reads on each two-minute safety scan, as it recomputed before.
+  - **A TTL alone, as the report suggests.**
+    - Pros: the smallest change.
+    - Cons: views read once and then follow events, so a view left open would silently stop updating when the TTL passed. Rejected for that reason.
+  - **Tie demand to live subscriptions.**
+    - Pros: exact; a closed view stops costing anything at once.
+    - Cons: needs a release or lease call in the protocol from every client, including federated ones, and has to survive a client dying without releasing and a reconnect, so it needs a lease and a renewal timer in a renderer that has no timers here today.
+- **How long does demand last?** Done as recommended.
+  - **Two minutes (recommended).**
+    - Pros: a reset costs an open view only one read, so a short window loses little; a closed view stops within two minutes; matches the safety scan, so an idle environment's cost is unchanged.
+    - Cons: under constant activity an open view does one extra read every two minutes.
+  - **Longer, such as ten minutes.**
+    - Pros: fewer resets.
+    - Cons: a closed view in a container keeps costing several `docker exec`s per scan for ten minutes.
+- **Stat cache: what does a scan keep (ST-15)?** Done as recommended.
+  - **Only counts whose stamp was already settled when read, process-wide by worktree path (recommended).**
+    - Pros: the rule captures already use, so a racy same-size rewrite cannot publish a stale count; no extra `lstat` for files being written; diff stats and Git scopes share it; every entry is checked against the file.
+    - Cons: a file being written is read on every scan until it is 2 s old.
+  - **One cache per `DiffStatsTracking`.**
+    - Pros: its lifetime follows the backend's.
+    - Cons: `GitScopeService` and ad hoc readers would need it passed in, and the entries describe files on the host rather than anything per backend.
+- **Exclude file: how long does "ensured" last (ST-14)?** Done as recommended.
+  - **Remember the file and its stamp, and compare one `stat` per scan (recommended).**
+    - Pros: no process and no read after the first scan; a file rewritten or removed by something else is repaired on the next scan.
+    - Cons: one `stat` per scan; an extra `stat` and read beside each ensure.
+  - **A bounded set of ensured worktrees, as `0420-e7-diff-scans.md` recommended.**
+    - Pros: no system call at all.
+    - Cons: an exclude file edited away is not restored until a restart. `commands-integration.test.ts` already requires that repair.
+- **Container wire format (ST-14)?** Done as recommended.
+  - **One new `ORKESTRATOR_DIFF` frame replacing the two old ones (recommended).**
+    - Pros: one parser for every path; the host builds the script on every call, so no response from an older script can arrive.
+    - Cons: every fixture of the framing changed.
+  - **Keep both frames, split from the one run in the script.**
+    - Pros: no fixture changes.
+    - Cons: splitting NUL-delimited output in shell is exactly what the framing exists to avoid.
 
 ### 8. tmux and container polling
 
@@ -1652,6 +1703,27 @@ what one hint does at once on a clock that does not advance. The "minimum scan
 gap" cases and the real-Git case in `worktree-snapshots-git.test.ts` use the
 real value.
 
+### Task 7: a request during a recompute runs one more (ST-18)
+
+Made on 2026-11-04. A scan or read that arrives while a scope computes now starts
+one pass after it, and whoever joined waits for that pass. Before, it joined a
+pass that might already have read the tree, which matters more now that a read
+after expiry is what makes a view correct. Bounded at one follow-up per scope, it
+stops once the service shuts down, and a retired scope is not rerun.
+
+### Task 7: stale marker at expiry (ST-18)
+
+Made on 2026-11-04. An expired resource is marked stale without a bump or a
+`projection` event: every `changes_get_view` recomputes first, so no client sees
+the mark unless a recompute fails, and an open view does not flash a stale tag
+between the `reset` and its read.
+
+### Task 7: no test seam for the demand or settle clocks (ST-15, ST-18)
+
+Made on 2026-11-04. The tests move `Date.now` with `spyOn` instead of adding a
+clock option, because both checks are one comparison. mtime and ctime are real, and
+ctime cannot be set back, so a real settled file needs either this or a 2 s wait.
+
 ### Task 12: a renderer-side composition rather than a preload-side stream (DK-1, DK-2)
 
 Chose to compose `window.orkestrator` in the renderer from a preload host and the existing gateway client. Running the stream in the preload needs no renderer change, but each event and command would still be copied across the context bridge, and it would duplicate the gateway client's reconnect and terminal recovery. Cost: the preload exposes `orkestratorDesktopHost` instead of `orkestrator` for these windows, and `waitForDesktopConnection` has to look at both.
@@ -1698,7 +1770,11 @@ browser and real-stack suites were not run.
 - The compression default under real remote load: tracked in 0052 task 2.
 - Task 7: `lstatSync` and warm-capture numbers come from this Linux host only;
   macOS was not measured. ST-16's scan rate comes from a fake watcher and clock;
-  a real install was not measured.
+  a real install was not measured. ST-14 and ST-15's numbers are from `scan-1k` on
+  this host; macOS, where each spawn costs more, and a real container were not
+  measured. The container script's changes ran against real Git through `bash`,
+  not in a container. ST-18's open-view path is proved at the backend and by the
+  renderer's existing `reset` test, not in a live browser session.
 
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
 

@@ -31,6 +31,7 @@ import {
   buildContainerFetchScript,
   buildFileTree,
   CONTAINER_FILE_TREE_LISTER,
+  dropLocalGitScanCaches,
   getContainerGitStatusDetailed,
   getLocalGitStatusDetailed,
   MAX_FILE_TREE_NODES,
@@ -51,6 +52,7 @@ import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("diff-stats");
+const MAX_ENSURED_CONTAINER_EXCLUDES = 1_024;
 
 /**
  * How long an *unwatched* target's file list or tree (a container, or a local
@@ -127,6 +129,10 @@ export class DiffStatsTracking {
   readonly sharedWatchers: SharedWatcherRegistry;
   readonly sharedScans: SharedScanQueue<DiffScanResult>;
   private readonly ownedWorktreePaths = new Set<string>();
+  /** Local worktrees of the environments seen last, whose scan caches are kept. */
+  private scanCacheWorktreePaths = new Set<string>();
+  /** Running containers whose exclude file a status read already ensured. */
+  private readonly ensuredContainerExcludes = new Set<string>();
   private readonly endedContainers = new Map<string, string>();
 
   /** An end event fences recurring work even if Docker inspect is unavailable. */
@@ -208,6 +214,16 @@ export class DiffStatsTracking {
     const containerStatus: ContainerGitStatusDeps = {
       exec: (id, script) => dockerExec(id, script),
       fetches: this.containerGitFetchPolicy,
+      ensuredExcludes: {
+        has: (containerId) => this.ensuredContainerExcludes.has(containerId),
+        add: (containerId) => {
+          // Forgetting only repeats a harmless housekeeping step.
+          if (this.ensuredContainerExcludes.size >= MAX_ENSURED_CONTAINER_EXCLUDES) {
+            this.ensuredContainerExcludes.clear();
+          }
+          this.ensuredContainerExcludes.add(containerId);
+        },
+      },
     };
     this.service = new DiffStatsService({
       emit: options.emit,
@@ -366,6 +382,17 @@ export class DiffStatsTracking {
             this.ownedWorktreePaths.add(environment.worktreePath);
           }
         }
+        const liveWorktreePaths = new Set(
+          environments.flatMap((environment) =>
+            environment.environmentType === "local" && environment.worktreePath
+              ? [environment.worktreePath]
+              : [],
+          ),
+        );
+        for (const worktreePath of this.scanCacheWorktreePaths) {
+          if (!liveWorktreePaths.has(worktreePath)) dropLocalGitScanCaches(worktreePath);
+        }
+        this.scanCacheWorktreePaths = liveWorktreePaths;
         const live = new Set<string>();
         for (const environment of environments) {
           live.add(environment.id);
@@ -422,15 +449,18 @@ export class DiffStatsTracking {
         // Fetch state belongs to a running container generation: a stopped,
         // recreated or deleted container starts over (the lifecycle
         // invalidation of the container fetch policy).
-        this.containerGitFetchPolicy.retainContainers(
-          environments.flatMap((environment) =>
-            environment.environmentType !== "local" &&
-            environment.status === "running" &&
-            environment.containerId
-              ? [environment.containerId]
-              : [],
-          ),
+        const runningContainers = environments.flatMap((environment) =>
+          environment.environmentType !== "local" &&
+          environment.status === "running" &&
+          environment.containerId
+            ? [environment.containerId]
+            : [],
         );
+        this.containerGitFetchPolicy.retainContainers(runningContainers);
+        const retainedExcludes = new Set(runningContainers);
+        for (const containerId of Array.from(this.ensuredContainerExcludes)) {
+          if (!retainedExcludes.has(containerId)) this.ensuredContainerExcludes.delete(containerId);
+        }
       });
     this.syncQueue = operation;
     await operation;

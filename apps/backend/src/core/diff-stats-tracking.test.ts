@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Environment } from "./models.js";
 import { createEnvironment } from "./storage.js";
 import { runCommand } from "./shell.js";
+import { countUntrackedFileLines, localGitScanCacheStats } from "./local-git-scan-caches.js";
 import * as baselineGit from "./diff-baseline.js";
 import * as remoteGit from "./git-noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
@@ -223,6 +224,48 @@ test("sync retains fetch state only for current running container generations", 
     expect(policy.freshness(containerId, "main")).toBeUndefined();
   for (const containerId of ["live", "replacement"])
     expect(policy.freshness(containerId, "main")).toEqual(retained.get(containerId));
+});
+
+test("what scans remember about a worktree or container goes with its environment", async () => {
+  const { h, tracking } = await harness();
+  const { projectPath } = await h.createRepository("scan-caches");
+  const local = {
+    ...createEnvironment("project", { environmentType: "local" }),
+    id: "local-worker",
+    worktreePath: projectPath,
+  };
+  const container = {
+    ...createEnvironment("project"),
+    id: "container-worker",
+    status: "running" as const,
+    containerId: "live",
+  };
+  await h.storage.addEnvironment(local);
+  await h.storage.addEnvironment(container);
+  const ensured = (tracking as unknown as { ensuredContainerExcludes: Set<string> })
+    .ensuredContainerExcludes;
+  ensured.add("live").add("gone");
+  const exec = spyOn(containerExec, "dockerExec").mockResolvedValue("");
+  const track = spyOn(tracking.service, "track").mockImplementation(() => undefined);
+  try {
+    await tracking.sync(h.context);
+    await countUntrackedFileLines(projectPath, "README.md");
+    expect(localGitScanCacheStats(projectPath)).not.toBeNull();
+    expect([...ensured]).toEqual(["live"]);
+
+    // Still an environment: kept across a reconcile.
+    await tracking.sync(h.context);
+    expect(localGitScanCacheStats(projectPath)).not.toBeNull();
+
+    await h.storage.removeEnvironment(local.id);
+    await h.storage.removeEnvironment(container.id);
+    await tracking.sync(h.context);
+    expect(localGitScanCacheStats(projectPath)).toBeNull();
+    expect([...ensured]).toEqual([]);
+  } finally {
+    exec.mockRestore();
+    track.mockRestore();
+  }
 });
 
 test("a worker that takes in newer target history is retargeted to where its branch now leaves it", async () => {

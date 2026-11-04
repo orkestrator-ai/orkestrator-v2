@@ -33,6 +33,8 @@ export interface ChangeTrackingPolicy {
   // Live bodies and refresh.
   liveBodyCoalesceMs: number;
   manualRefreshDeadlineMs: number;
+  /** How long after its last read a scan still recomputes a Git scope. */
+  gitScopeDemandTtlMs: number;
   // Responses.
   diffInitialBodyBytes: number;
   diffBatchBytes: number;
@@ -77,6 +79,7 @@ export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.
   provisionalSpacingRemoteMs: 5_000,
   liveBodyCoalesceMs: 250,
   manualRefreshDeadlineMs: 15_000,
+  gitScopeDemandTtlMs: 120_000,
   diffInitialBodyBytes: 256 * 1024,
   diffBatchBytes: 1024 * 1024,
   filePageRows: 200,

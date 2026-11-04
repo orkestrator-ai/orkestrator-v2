@@ -50,6 +50,8 @@ interface EnvironmentState {
 
   setEnvironments: (environments: Environment[]) => void;
   mergeEnvironmentsForProject: (projectId: string, environments: Environment[]) => void;
+  /** Installs one environment's authoritative snapshot; `null` means it is gone. */
+  applyEnvironmentSnapshot: (environmentId: string, snapshot: Environment | null) => void;
   addEnvironment: (environment: Environment) => void;
   removeEnvironment: (environmentId: string) => void;
   updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
@@ -94,6 +96,29 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
           ...state.environments.filter((environment) => environment.projectId !== projectId),
           ...sorted,
         ]),
+      };
+    }),
+
+  applyEnvironmentSnapshot: (environmentId, snapshot) =>
+    set((state) => {
+      const previous = state.environments.find((environment) => environment.id === environmentId);
+      if (!snapshot) {
+        return previous
+          ? {
+              environments: state.environments.filter(
+                (environment) => environment.id !== environmentId,
+              ),
+            }
+          : state;
+      }
+      const next = reuseUnchangedFields(previous, snapshot);
+      if (next === previous) return state;
+      if (!previous) return { environments: sortByOrder([...state.environments, next]) };
+      const environments = state.environments.map((environment) =>
+        environment === previous ? next : environment,
+      );
+      return {
+        environments: next.order === previous.order ? environments : sortByOrder(environments),
       };
     }),
 

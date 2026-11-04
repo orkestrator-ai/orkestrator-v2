@@ -38,6 +38,7 @@ import {
   activateProjectForEnvironmentCleanup,
   startEnvironmentCleanupSelectionSync,
 } from "@/lib/environment-cleanup-selection";
+import { classifyReadError } from "@/lib/read-coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.environment");
@@ -220,6 +221,44 @@ export function cleanupSubscriptionsRemovedByProjectSnapshot(
       cleanupDeletedEnvironmentSubscriptions(environment.id);
     }
   }
+}
+
+/**
+ * Installs one environment's authoritative snapshot, for a change announcement
+ * that named only it. Resolves `false` when the backend predates the read, so
+ * the caller reads the project's list instead.
+ */
+export async function refreshEnvironmentSnapshot(
+  projectId: string,
+  environmentId: string,
+): Promise<boolean> {
+  const creationGeneration = getEnvironmentCreationState(projectId).generation;
+  const attemptRevisions = lifecycleAttemptRevisions();
+  let snapshot: Environment | null;
+  try {
+    snapshot = await backend.getEnvironmentSnapshot(environmentId);
+  } catch (error) {
+    if (classifyReadError(error) === "unsupported") return false;
+    throw error;
+  }
+  const store = useEnvironmentStore.getState();
+  const creation = getEnvironmentCreationState(projectId);
+  // Not held yet, so it may be a creation this client is still waiting on: its
+  // own response adds it, and adding it here as well would list it twice.
+  if (
+    !store.getEnvironmentById(environmentId) &&
+    (creation.activeCreations > 0 || creation.generation !== creationGeneration)
+  ) {
+    return true;
+  }
+  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId);
+  store.applyEnvironmentSnapshot(
+    environmentId,
+    snapshot &&
+      preserveLifecycleAttemptState(snapshot, attemptRevisions.get(environmentId)).environment,
+  );
+  reconcileEnvironmentLifecycleErrors();
+  return true;
 }
 
 let setupSnapshotReconciliation: Promise<void> | null = null;
@@ -1220,6 +1259,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     isLoading,
     error,
     loadEnvironments,
+    refreshEnvironmentSnapshot,
     createEnvironment,
     forkEnvironment,
     deleteEnvironment,

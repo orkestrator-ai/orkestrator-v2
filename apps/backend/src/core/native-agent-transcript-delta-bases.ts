@@ -208,7 +208,9 @@ export function chainedTranscriptDelta(
       next.messages.map(idOf),
       !next.historyComplete || next.historyCursor !== undefined,
     );
-    for (const id of removed) if (!window.has(id)) deleted.add(id);
+    for (const id of removed) deleted.add(id);
+    // Restoration cancels an earlier deletion even if the row later ages out.
+    for (const message of next.messages) deleted.delete(idOf(message));
   }
 
   const heldRows = new Map(base.messages.map((message) => [idOf(message), message] as const));

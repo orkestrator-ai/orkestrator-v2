@@ -499,6 +499,41 @@ describe("chainedTranscriptDelta", () => {
     expect(merged.deletedMessageIds).toEqual([]);
   });
 
+  test.each([false, true])(
+    "restoration cancels deletion before aging out (deleted again: %s)",
+    (deletedAgain) => {
+      const [a, b, c, d, e] = ["a", "b", "c", "d", "e"].map((id) => row(id));
+      const base = view([a, b, c, d]);
+      const removed = view([a, c, d]);
+      const restored = view([a, b, c, d]);
+      const current = view([c, d, e]);
+      const later = [removed, restored, ...(deletedAgain ? [removed] : [])];
+      const merged = chainedTranscriptDelta(
+        delta(current, { messageUpserts: [e] }),
+        { base, later },
+        current,
+      )!;
+      expect(merged.deletedMessageIds).toEqual(deletedAgain ? ["b"] : []);
+
+      // A reader keeps aged-out rows outside its live window. Compare that held
+      // history with a reader that consumed the deletion and restoration live.
+      const applyHeld = (held: Map<string, unknown>, update: NativeAgentTranscriptDelta) => {
+        for (const id of update.deletedMessageIds) held.delete(id);
+        for (const message of [...update.messageUpserts, ...(update.revisedMessages ?? [])]) {
+          held.set((message as Row).id, message);
+        }
+      };
+      const sequential = new Map(base.messages.map((message) => [(message as Row).id, message]));
+      applyHeld(sequential, delta(removed, { deletedMessageIds: ["b"] }));
+      applyHeld(sequential, delta(restored, { messageUpserts: [b] }));
+      if (deletedAgain) applyHeld(sequential, delta(removed, { deletedMessageIds: ["b"] }));
+      applyHeld(sequential, delta(current, { messageUpserts: [e] }));
+      const chained = new Map(base.messages.map((message) => [(message as Row).id, message]));
+      applyHeld(chained, merged);
+      expect([...chained.entries()].sort()).toEqual([...sequential.entries()].sort());
+    },
+  );
+
   test("carries a held row that changed before it aged out", () => {
     const [a, b, c, d] = ["a", "b", "c", "d"].map((id) => row(id));
     const edited = row("a", "a edited");

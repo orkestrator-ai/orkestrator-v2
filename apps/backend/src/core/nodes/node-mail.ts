@@ -425,6 +425,8 @@ export class LeafNodeMail {
                   ...state.outbox,
                   [controllerId]: {
                     ...current,
+                    // Capability withdrawal explicitly hands ownership back, including
+                    // batches collected but deferred before the downgrade.
                     items: current.items.map((entry) =>
                       claimed.has(entry.seq) ? { ...entry, collected: true as const } : entry,
                     ),
@@ -478,10 +480,10 @@ export class LeafNodeMail {
                   ...state.outbox,
                   [controllerId]: {
                     ...current,
+                    // Capability withdrawal explicitly hands ownership back, including
+                    // batches collected but deferred before the downgrade.
                     items: current.items.map((entry) =>
-                      entry.coordinatorNotice && !entry.collected
-                        ? { ...entry, handedBack: true as const }
-                        : entry,
+                      entry.coordinatorNotice ? { ...entry, handedBack: true as const } : entry,
                     ),
                   },
                 },
@@ -515,12 +517,7 @@ export class LeafNodeMail {
             .filter((item) => {
               // A collected item may already have been delivered: never reroute it.
               // Once its controller detaches, retire that ambiguous ownership explicitly.
-              if (
-                item.coordinatorNotice &&
-                item.collected &&
-                (!controller || silent) &&
-                !item.handedBack
-              ) {
+              if (item.coordinatorNotice && item.collected && !controller && !item.handedBack) {
                 retired = true;
                 createLogger("nodes").warn("notice.collected-retired", {
                   error: "collected-notice-controller-detached",

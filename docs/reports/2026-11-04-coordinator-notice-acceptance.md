@@ -248,8 +248,7 @@ hierarchy tests are in `coordinator-notice-hierarchy.test.ts`, shortened to
   that advertised it (`older-command-node` route).
   `docs/architecture/version-compatibility.md` records it.
 - Tests: hierarchy "an older command node leaves notices with the leaf's
-  coordinator", "an older leaf is never sent the new collect key", "a command
-  node downgraded with notices queued hands them back to the leaf".
+  coordinator", "an older leaf is never sent the new collect key", "a downgraded command node hands back deferred notices (collected=%s)".
 
 ### AC18
 

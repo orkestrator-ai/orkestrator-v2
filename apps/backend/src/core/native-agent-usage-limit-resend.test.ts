@@ -677,3 +677,57 @@ test("a workflow on a provider without accounts reports its stop and stays stopp
     session: { label: "Build Session" },
   });
 });
+
+test.each(["coordinator", "grok"])(
+  "%s notice read retries after rejection without a queue hold",
+  async (kind) => {
+    const h = harness({
+      reports: true,
+      session: sessionWith(
+        kind === "grok"
+          ? ({ agent: "grok" } as never)
+          : ({ origin: "coordinator", environmentId: "coordinator:c1:conversation-1" } as never),
+      ),
+    });
+    h.requestOutcome.mockRejectedValueOnce(new Error("temporary read failure"));
+    h.resend.noteActivity(h.state.session, "idle", "working");
+    await h.settle();
+    expect(h.resend.isPending(h.state.session.key)).toBe(false);
+    h.advance(15_000);
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    h.resend.noteActivity(h.state.session, "idle", "idle");
+    await h.settle();
+    expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
+    expect(h.dispatches).toHaveLength(0);
+  },
+);
+test("auto-switch off releases the queue while the notice outcome is pending", async () => {
+  const h = harness({ automatic: false, reports: true, outcome: { outcome: "pending" } });
+  h.resend.noteActivity(h.state.session, "idle", "working");
+  await h.settle();
+  expect(h.resend.isPending(h.state.session.key)).toBe(false);
+  h.state.outcome = { outcome: "failed", error: LIMIT };
+  h.advance(15_000);
+  h.resend.noteActivity(h.state.session, "idle", "idle");
+  await h.settle();
+  expect(h.noteUnresentStop).toHaveBeenCalledTimes(1);
+  expect(h.dispatches).toHaveLength(0);
+});
+
+test("notice read retries expire without holding the queue", async () => {
+  const h = harness({
+    reports: true,
+    session: sessionWith({ agent: "grok" } as never),
+    outcome: { outcome: "pending" },
+  });
+  h.resend.noteActivity(h.state.session, "idle", "working");
+  await h.settle();
+  expect(h.resend.hasCandidate(h.state.session.key)).toBe(true);
+  h.advance(USAGE_LIMIT_CANDIDATE_MAX_MS);
+  h.resend.noteActivity(h.state.session, "idle", "idle");
+  await h.settle();
+  expect(h.resend.hasCandidate(h.state.session.key)).toBe(false);
+  expect(h.resend.isPending(h.state.session.key)).toBe(false);
+  expect(h.noteUnresentStop).not.toHaveBeenCalled();
+});

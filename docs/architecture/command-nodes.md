@@ -356,7 +356,9 @@ A command node attached to another command node operates in leaf mode:
   before delivery, excluding concurrent collection. Once collected, the command
   node owns delivery until it acknowledges or explicitly declines: a lost ack
   is ambiguous, so timeout or detach cannot safely send a second copy locally.
-  Collected notices remain pending across temporary disconnects. Once the controller
+  Collected notices remain pending through silence, including outages longer than
+  an hour, while that controller stays attached. A capability downgrade explicitly
+  hands collected, deferred notices back to the leaf. Once the controller
   detaches, ambiguous collected notices are retired with `notice.collected-retired`
   rather than silently occupying the outbox or risking duplicate local delivery.
   A policy-parked notice (no open main and creation disallowed) stays queued but

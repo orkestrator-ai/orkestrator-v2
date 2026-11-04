@@ -50,7 +50,6 @@ const RETRY_MS = 15_000;
 /** A stop still undecided after this stays stopped, and the queue it holds is let go. */
 export const USAGE_LIMIT_CANDIDATE_MAX_MS = 45 * 60_000;
 const MAX_TRACKED_SESSIONS = 1_024;
-const NOTICE_ONLY_ATTEMPTS = 3;
 
 /** The tab a native session belongs to, from its logical key. */
 function sessionTabId(session: PersistedNativeAgentSession): { tabId?: string } {
@@ -118,6 +117,7 @@ type Candidate = {
 
 export class NativeAgentUsageLimitResend {
   private readonly candidates = new Map<string, Candidate>();
+  private readonly noticeCandidates = new Map<string, Candidate>();
   private readonly tasks = new Map<string, Promise<void>>();
   /** Reads for sessions that can only get a notice; they hold no queue, unlike `tasks`. */
   private readonly noticeTasks = new Map<string, Promise<void>>();
@@ -141,7 +141,7 @@ export class NativeAgentUsageLimitResend {
 
   /** A retained candidate keeps its group from settling as idle, so it is looked at again. */
   hasCandidate(key: string): boolean {
-    return this.candidates.has(key);
+    return this.candidates.has(key) || this.noticeCandidates.has(key);
   }
 
   /**
@@ -168,6 +168,7 @@ export class NativeAgentUsageLimitResend {
 
   clear(): void {
     this.candidates.clear();
+    this.noticeCandidates.clear();
     this.seenRequests.clear();
     this.turnsSeen.clear();
     this.bridgeSends.clear();
@@ -192,6 +193,7 @@ export class NativeAgentUsageLimitResend {
     }
     if (state !== "idle") {
       this.candidates.delete(session.key);
+      this.noticeCandidates.delete(session.key);
       return;
     }
     const seen = this.seenRequests.get(session.key);
@@ -205,6 +207,7 @@ export class NativeAgentUsageLimitResend {
     // A first observation is a restart or an adopted session, not a turn ending
     // here. Its stop, whatever it was, stays stopped.
     const newRequest = previous !== undefined && seen !== undefined && requestId !== seen;
+    if (this.noticeCandidates.has(session.key)) this.reportNoticeOnlyStop(session);
     if (!this.appliesTo(session)) {
       if ((turnEnded || newRequest) && this.noticeOnly(session)) this.reportNoticeOnlyStop(session);
       return;
@@ -224,12 +227,34 @@ export class NativeAgentUsageLimitResend {
     this.schedule(session);
   }
 
-  /** One turn's end, looked at briefly: an unknown outcome is not a stop anyone can report. */
-  private reportNoticeOnlyStop(session: PersistedNativeAgentSession, attempt = 1): void {
+  /** Sweep-driven notice reads retry without holding the prompt queue; unknown is never a stop. */
+  private reportNoticeOnlyStop(session: PersistedNativeAgentSession): void {
     const requestId = session.dispatchedRequestIds?.at(-1);
     const stops = this.deps.stops();
     if (!requestId || !stops?.noteUnresentStop || this.deps.isStopped()) return;
-    const key = `notice\0${session.key}\0${requestId}`;
+    let candidate = this.noticeCandidates.get(session.key);
+    if (
+      candidate &&
+      (candidate.requestId !== requestId ||
+        candidate.providerSessionId !== session.providerSessionId ||
+        this.deps.now() - candidate.firstSeenAt >= USAGE_LIMIT_CANDIDATE_MAX_MS)
+    ) {
+      this.noticeCandidates.delete(session.key);
+      return;
+    }
+    if (!candidate) {
+      if (this.noticeCandidates.size >= MAX_TRACKED_SESSIONS) return;
+      candidate = {
+        requestId,
+        providerSessionId: session.providerSessionId,
+        firstSeenAt: this.deps.now(),
+        retryAt: 0,
+      };
+      this.noticeCandidates.set(session.key, candidate);
+    }
+    if (candidate.retryAt > this.deps.now()) return;
+    const retained = candidate;
+    const key = `notice\0${session.key}\0${session.providerSessionId}\0${requestId}`;
     if (this.noticeTasks.has(key)) return;
     const task = this.deps
       .requestOutcome({
@@ -240,12 +265,15 @@ export class NativeAgentUsageLimitResend {
         expectedProviderSessionId: session.providerSessionId,
       })
       .then(async (outcome) => {
-        if (outcome.outcome === "pending" && attempt < NOTICE_ONLY_ATTEMPTS) {
-          const timer = setTimeout(() => this.reportNoticeOnlyStop(session, attempt + 1), RETRY_MS);
-          timer.unref?.();
+        if (this.noticeCandidates.get(session.key) !== retained) return;
+        if (outcome.outcome === "pending") {
+          retained.retryAt = this.deps.now() + RETRY_MS;
           return;
         }
-        if (outcome.outcome !== "failed" || !classifyUsageLimitError(outcome.error)) return;
+        if (outcome.outcome !== "failed" || !classifyUsageLimitError(outcome.error)) {
+          this.noticeCandidates.delete(session.key);
+          return;
+        }
         await stops.noteUnresentStop?.({
           platform: session.agent,
           environmentId: session.environmentId,
@@ -253,8 +281,12 @@ export class NativeAgentUsageLimitResend {
           error: outcome.error,
           session: sessionTabId(session),
         });
+        if (this.noticeCandidates.get(session.key) === retained)
+          this.noticeCandidates.delete(session.key);
       })
       .catch(() => {
+        if (this.noticeCandidates.get(session.key) === retained)
+          retained.retryAt = this.deps.now() + RETRY_MS;
         log.warn("usage-limit.notice-failed", { environmentId: session.environmentId });
       })
       .finally(() => {
@@ -330,7 +362,13 @@ export class NativeAgentUsageLimitResend {
       requestId,
       expectedProviderSessionId: candidate.providerSessionId,
     });
-    if (outcome.outcome === "pending") return "retry";
+    if (outcome.outcome === "pending") {
+      if (!resendable) {
+        this.reportNoticeOnlyStop(session);
+        return "done";
+      }
+      return "retry";
+    }
     if (outcome.outcome !== "failed") return "done";
 
     const turn = this.turnsSeen.get(session.key);

@@ -3,6 +3,7 @@
  * command node, joined by a fake node link. Only the agents and the link are
  * simulated; routing, the outbox, the mail store and session creation are real.
  */
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { AgentAccountSummary } from "@orkestrator/protocol/agent-accounts";
 import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
@@ -388,26 +389,32 @@ describe("who hears a notice", () => {
     f.dispose();
   });
 
-  test("a command node downgraded with notices queued hands them back to the leaf", async () => {
-    const f = await fleet();
-    await f.collect();
-    await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
-    // It collects again without saying it takes notices, as an older one does.
-    const mail = new LeafNodeMail(
-      f.store,
-      {
-        attachedControllers: () => [{ controllerId: COMMAND, displayName: "Command" }],
-        mostRecentControllerId: () => COMMAND,
-      },
-      () => undefined,
-    );
-    expect((await mail.collect(COMMAND, 0, true)).items).toHaveLength(0);
-    expect(f.store.state.noticeRoutes?.[COMMAND]).toBeUndefined();
-    await f.takeBack();
-    await f.leaf.deliver();
-    expect(f.leaf.wakes(await f.leaf.main())).toBe(1);
-    f.dispose();
-  });
+  test.each([false, true])(
+    "a downgraded command node hands back deferred notices (collected=%s)",
+    async (collected) => {
+      const f = await fleet();
+      await f.collect();
+      await f.leaf.coordinator.noticeRouter.deliver(repositoryNotice(f.leaf));
+      // Collection can have returned without any mailbox delivery.
+      // It collects again without saying it takes notices, as an older one does.
+      const mail = new LeafNodeMail(
+        f.store,
+        {
+          attachedControllers: () => [{ controllerId: COMMAND, displayName: "Command" }],
+          mostRecentControllerId: () => COMMAND,
+        },
+        () => undefined,
+      );
+      if (collected)
+        await mail.collect(COMMAND, 0, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
+      expect((await mail.collect(COMMAND, 0, true)).items).toHaveLength(0);
+      expect(f.store.state.noticeRoutes?.[COMMAND]).toBeUndefined();
+      await f.takeBack();
+      await f.leaf.deliver();
+      expect(f.leaf.wakes(await f.leaf.main())).toBe(1);
+      f.dispose();
+    },
+  );
 });
 
 describe("a notice with no main coordinator running", () => {
@@ -1530,7 +1537,7 @@ test("stops arriving during a blocked flush are all filed without overlapping ac
   }
 });
 
-test("a collected batch is explicitly retired after silent ownership expires", async () => {
+test("a collected batch survives silence and delivers once on reconnect", async () => {
   const f = await fleet();
   try {
     await f.collect();
@@ -1553,6 +1560,15 @@ test("a collected batch is explicitly retired after silent ownership expires", a
     );
     await mail.collect(COMMAND, 0, false, { repositoryHints: [repositoryHint(GIT_URL)!] });
     expect(await mail.noticesToTakeBack()).toHaveLength(0);
+    expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(1);
+    const requestId = f.store.state.outbox[COMMAND]!.items[0]!.requestId;
+    await f.collect();
+    await f.collect();
+    const messages = await inbox(f.command, await f.command.main());
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.requestId).toBe(
+      `node:${LEAF}:notice:${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`,
+    );
     expect(f.store.state.outbox[COMMAND]!.items).toHaveLength(0);
   } finally {
     f.dispose();
@@ -1614,3 +1630,63 @@ test("recollecting a parked batch does not rewrite unchanged leaf state", async 
     f.dispose();
   }
 });
+
+test.each(["hourly", "loop"])(
+  "quiet relayed notices bypass exhausted %s budgets and stay stored after release",
+  async (budget) => {
+    const f = await fleet();
+    try {
+      await f.collect();
+      const config = await f.command.storage.loadConfig();
+      const settings = {
+        ...config.global.agentMessaging!,
+        hourlyWakeLimit: budget === "hourly" ? 1 : 100,
+        autonomousWakeBudget: budget === "loop" ? 1 : 10,
+      };
+      await f.command.storage.updateGlobalConfig({ ...config.global, agentMessaging: settings });
+      const resource = "pipeline:quiet";
+      await f.leaf.coordinator.noticeRouter.deliver(
+        repositoryNotice(f.leaf, { upwardRequestId: "first-budget", statusBudgetKey: resource }),
+      );
+      await f.collect();
+      await f.leaf.coordinator.noticeRouter.deliver(
+        repositoryNotice(f.leaf, { upwardRequestId: "exhaust-budget", statusBudgetKey: resource }),
+      );
+      await f.collect();
+      expect(
+        (await inbox(f.command, await f.command.main())).some(
+          (m) =>
+            m.placementReason === (budget === "loop" ? "loop-budget-exhausted" : "hourly-limit"),
+        ),
+      ).toBe(true);
+      await f.command.storage.updateGlobalConfig({
+        ...config.global,
+        agentMessaging: { ...settings, coordinatorStatusWakes: "off" },
+      });
+      await f.leaf.coordinator.noticeRouter.deliver(
+        repositoryNotice(f.leaf, { upwardRequestId: "quiet-budget", statusBudgetKey: resource }),
+      );
+      await f.collect();
+      const readQuiet = async () =>
+        (await inbox(f.command, await f.command.main())).find(
+          (m) => m.placementReason === "Coordinator status wakes are off.",
+        )!;
+      expect(await readQuiet()).toMatchObject({
+        placement: "stored",
+        placementReason: "Coordinator status wakes are off.",
+      });
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 2 * 60 * 60_000);
+      try {
+        await f.command.storage.releaseHourlyHeldAgentMail();
+      } finally {
+        clock.mockRestore();
+      }
+      expect(await readQuiet()).toMatchObject({
+        placement: "stored",
+        placementReason: "Coordinator status wakes are off.",
+      });
+    } finally {
+      f.dispose();
+    }
+  },
+);

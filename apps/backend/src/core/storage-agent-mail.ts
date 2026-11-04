@@ -781,7 +781,10 @@ export class AgentMailRepository {
             )
           : undefined;
       const heldForDelegation =
-        Boolean(holdingDelegation) && nextThreadDepth < depthLimit && !overHourlyLimit;
+        !options.keepWithoutWake &&
+        Boolean(holdingDelegation) &&
+        nextThreadDepth < depthLimit &&
+        !overHourlyLimit;
       const shouldScheduleInject =
         !options.keepWithoutWake &&
         (effectivePolicy === "idle" || routeWakes) &&
@@ -794,9 +797,18 @@ export class AgentMailRepository {
         !overHourlyLimit &&
         canInject;
       const heldForLoopBudget =
-        routeWakes && !recipient.mutedInbound && nextThreadDepth >= depthLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        nextThreadDepth >= depthLimit &&
+        canInject;
       const heldForHourlyLimit =
-        routeWakes && !recipient.mutedInbound && !heldForLoopBudget && overHourlyLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        !heldForLoopBudget &&
+        overHourlyLimit &&
+        canInject;
       const message: AgentMailMessage = {
         version: 1,
         id,

@@ -1,5 +1,13 @@
 import { linkBrowserTarget, serviceLinkTarget } from "@/lib/preview-service-entry";
-import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useCallback,
+  useState,
+  type MouseEvent,
+} from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import {
@@ -121,9 +129,12 @@ export function TerminalContainer({
 }: TerminalContainerProps) {
   const activeWriteRef = useRef<((data: string) => Promise<void>) | null>(null);
   const obscuredRef = useRef(obscured);
-  obscuredRef.current = obscured;
   const onRevealRef = useRef(onReveal);
-  onRevealRef.current = onReveal;
+  // Latest props for handlers that outlive a render, published at commit.
+  useLayoutEffect(() => {
+    obscuredRef.current = obscured;
+    onRevealRef.current = onReveal;
+  });
 
   // Track currently dragged tab ID for cross-pane visual feedback
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -296,7 +307,9 @@ export function TerminalContainer({
   // it captured, or a turn that finished mid-flight is recorded as if it had
   // been checked after setup completed.
   const backendSetupRunningRef = useRef(backendSetupRunning);
-  backendSetupRunningRef.current = backendSetupRunning;
+  useLayoutEffect(() => {
+    backendSetupRunningRef.current = backendSetupRunning;
+  });
   // Keyed by environment, not a single "last handed off" id: this component is
   // reused across environment selections (see the container-change effect
   // below), so a scalar would be re-armed by every switch away and back.
@@ -1041,6 +1054,9 @@ export function TerminalContainer({
       const initialPaneId = initialPaneState?.activePaneId ?? "default";
 
       const launchAgent = claudeOptions?.launchAgent ?? false;
+      // Recorded in the effect that consumes the options, in the same pass as
+      // the tabs it seeds below, so a later effect can clear them afterwards.
+      // oxlint-disable-next-line react/set-state-in-effect
       if (launchAgent) setHasAppliedClaudeOptions(true);
 
       if (backendSetupRunning) {

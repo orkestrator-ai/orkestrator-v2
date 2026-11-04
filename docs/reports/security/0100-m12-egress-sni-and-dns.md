@@ -88,4 +88,4 @@ Narrower than when the report was written, so not in Tasks: rules live in the ga
 
 - [Security report, M12](../2-26-10-27-security.md#m12-egress-firewall-limitations-design)
 - [Todo 0018](../../todo/containers-and-environments/0018-container-network-and-credential-isolation.md): the egress gateway and its qualification
-- [0070](0070-h5-host-github-token-default.md): GitHub egress as a channel
+- [0070](0070-s1-github-token.md#0070-stop-handing-the-host-github-token-to-every-container-by-default): GitHub egress as a channel

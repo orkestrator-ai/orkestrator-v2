@@ -138,7 +138,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
-Done, so not in Tasks: the report's fourth point, Cursor and Pi accepting policy fields from the body, closed with the narrow-only routes (`bridges/cursor-bridge/src/http.ts:216`, `bridges/pi-bridge/src/http.ts:284`; commits `2d4528dc5`, `a2bba9d80`). `readOnly` from the body remains, in [0040](0040-s2-bridge-credential.md#0040-keep-the-bridge-control-credential-away-from-the-agent-it-controls).
+Done, so not in Tasks: the report's fourth point, Cursor and Pi accepting policy fields from the body, closed with the narrow-only routes (`bridges/cursor-bridge/src/http.ts:216`, `bridges/pi-bridge/src/http.ts:284`; commits `2d4528dc5`, `a2bba9d80`). `readOnly` from the body stays, and only the backend now holds the token that can send it ([todo 4210](../../todo/containers-and-environments/4210-read-only-boundary-from-a-token-holder.md)).
 
 ### Needs verification
 

@@ -69,8 +69,8 @@ This index only changes when a branch merges, so it can't show what is running n
 | Batch | Name | Parts | Lane and position | Finish first | Not at the same time as |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180`, `0190`, `0400` and E8 | No lane | None | None |
-| E14 | [Docker logs](0740-e14-docker-logs.md) | `0740`, `0850` | Containers, 5 of 6 | None | None |
-| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 6 of 6 | None | None |
+| E14 | [Docker logs](0740-e14-docker-logs.md) | `0740`, `0850` | Containers, 4 of 5 | None | None |
+| E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 5 of 5 | None | None |
 | E8 | [Agent tab polling](0170-e8-agent-tab-polling.md) | `0170`, `0410` | Transcript, 1 of 5 | E1 (Baseline run) | C6 (Errors and dead ends), E26 (Local desktop transport), E-0120 (Bearer terminal streams) |
 | E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 2 of 5 | E1 (Baseline run) | None |
 | E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 3 of 5 | E1 (Baseline run) | None |
@@ -86,12 +86,12 @@ This index only changes when a branch merges, so it can't show what is running n
 | E19 | [Terminal WebSocket](0100-e19-terminal-websocket.md) | `0100`, `0375`, `0610` | Gateway, 1 of 6 | None | None |
 | E18 | [Gateway events](0280-e18-gateway-events.md) | `0280`, `0290`, `0300`, `0370` | Gateway, 4 of 6 | None | None |
 | E24 | [Gateway static and preview](0310-e24-gateway-static-and-preview.md) | `0310`, `0365` | Gateway, 5 of 6 | None | None |
-| E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | S2 (Bridge credential), E20 (ACP bridge), E21 (Pi bridge) |
+| E13 | [Silent failures](0720-e13-silent-failures.md) | `0720`, `0830` | Logging and diagnostics, 1 of 4 | None | E20 (ACP bridge), E21 (Pi bridge) |
 | E17 | [Dead code](0770-e17-dead-code.md) | `0770`, `0930` | Logging and diagnostics, 2 of 4 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 3 of 4 | None | E5 (Database upkeep) |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | None |
-| E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
-| E21 | [Pi bridge](0130-e21-pi-bridge.md) | `0130`, `0355` | No lane | None | S2 (Bridge credential), E13 (Silent failures) |
+| E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | E13 (Silent failures) |
+| E21 | [Pi bridge](0130-e21-pi-bridge.md) | `0130`, `0355` | No lane | None | E13 (Silent failures) |
 | E22 | [Chat rendering](0600-e22-chat-rendering.md) | `0600`, `0670` | No lane | None | None |
 | E23 | [Renderer polling](0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` | No lane | None | C7 (Work panel and navigation) |
 

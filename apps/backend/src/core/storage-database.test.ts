@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -717,6 +718,160 @@ describe("StorageDatabase space reclamation", () => {
     db.deleteStore("records");
     db.scrubDeletedContent();
     expect(pages()).toBeLessThan(before / 2);
+  });
+});
+
+describe("StorageDatabase failure logging", () => {
+  const SENTINEL = "SENTINEL-SQLITE-MESSAGE";
+  const failure = () => Object.assign(new Error(SENTINEL), { code: "SQLITE_IOERR" });
+
+  test("a scrub checkpoint a reader blocks is logged, and recovers on the next success", async () => {
+    const directory = await dataDir();
+    const writer = database(directory, { busyTimeoutMs: 0 });
+    const reader = database(directory, { busyTimeoutMs: 0 });
+    writer.writeStore("records", { first: "value" });
+    reader.db.exec("BEGIN");
+    reader.db.query("SELECT count(*) FROM store_rows").get();
+    writer.writeStore("records", { first: "changed" });
+    const logs = captureLogs();
+    try {
+      writer.scrubDeletedContent();
+      writer.scrubDeletedContent();
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          area: "storage",
+          event: "scrub.checkpoint-failed",
+          fields: { scope: "scrub", kind: "busy" },
+        },
+      ]);
+      reader.db.exec("COMMIT");
+      writer.scrubDeletedContent();
+      expect(logs.records().at(-1)).toMatchObject({
+        level: "warn",
+        event: "throttle.recovered",
+        fields: { site: "scrub.checkpoint-failed", scope: "scrub", failures: 2 },
+      });
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a scrub checkpoint that throws is logged without its message and never throws", async () => {
+    const db = database(await dataDir());
+    const logs = captureLogs();
+    const exec = spyOn(db.db, "exec").mockImplementation(() => {
+      throw failure();
+    });
+    try {
+      expect(() => db.scrubDeletedContent()).not.toThrow();
+      expect(() => db.scrubDeletedContent()).not.toThrow();
+      exec.mockRestore();
+      db.scrubDeletedContent();
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          event: "scrub.checkpoint-failed",
+          fields: { scope: "scrub", kind: "SQLITE_IOERR", error: { code: "SQLITE_IOERR" } },
+        },
+        { event: "throttle.recovered", fields: { site: "scrub.checkpoint-failed", failures: 2 } },
+      ]);
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    } finally {
+      exec.mockRestore();
+      logs.restore();
+    }
+  });
+
+  test("a successful scrub with no fault writes nothing", async () => {
+    const db = database(await dataDir());
+    const logs = captureLogs();
+    try {
+      db.scrubDeletedContent();
+      expect(logs.records()).toEqual([]);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  test("a heartbeat cannot report recovery after another connection reclaims the lease", async () => {
+    const directory = await dataDir();
+    const first = database(directory);
+    const second = database(directory);
+    jest.useFakeTimers();
+    const logs = captureLogs();
+    const releaseFirst = await first.acquireLease("reclaimed-heartbeat", "test");
+    const realQuery = first.db.query.bind(first.db);
+    const failHeartbeats = spyOn(first.db, "query").mockImplementation(((sql: string) => {
+      if (sql.startsWith("UPDATE leases")) throw failure();
+      return realQuery(sql);
+    }) as typeof first.db.query);
+    let releaseSecond: (() => Promise<void>) | undefined;
+    try {
+      jest.advanceTimersByTime(5_000);
+      // Offset the new holder's timer so this assertion observes only the
+      // original holder's next beat, not a successful renewal by its successor.
+      jest.advanceTimersByTime(1);
+      second.db.query("UPDATE leases SET heartbeat_at = 0").run();
+      releaseSecond = await second.acquireLease("reclaimed-heartbeat", "test");
+      failHeartbeats.mockRestore();
+      jest.advanceTimersByTime(4_999);
+      expect(logs.records()).toMatchObject([
+        {
+          level: "warn",
+          event: "lease.heartbeat-failed",
+          fields: { scope: "reclaimed-heartbeat" },
+        },
+      ]);
+      await releaseFirst();
+      expect(second.db.query("SELECT name FROM leases").all()).toHaveLength(1);
+    } finally {
+      failHeartbeats.mockRestore();
+      await releaseFirst();
+      await releaseSecond?.();
+      jest.useRealTimers();
+      logs.restore();
+    }
+  });
+
+  test("a failed lease heartbeat is logged once per lease, and recovers on the next beat", async () => {
+    const db = database(await dataDir());
+    jest.useFakeTimers();
+    const logs = captureLogs();
+    const release = await db.acquireLease("store-a", "test");
+    const realQuery = db.db.query.bind(db.db);
+    const failHeartbeats = spyOn(db.db, "query").mockImplementation(((sql: string) => {
+      if (sql.startsWith("UPDATE leases")) throw failure();
+      return realQuery(sql);
+    }) as typeof db.db.query);
+    try {
+      jest.advanceTimersByTime(5_000);
+      jest.advanceTimersByTime(5_000);
+      failHeartbeats.mockRestore();
+      jest.advanceTimersByTime(5_000);
+      jest.advanceTimersByTime(5_000);
+      const records = logs.records();
+      expect(records).toMatchObject([
+        {
+          level: "warn",
+          area: "storage",
+          event: "lease.heartbeat-failed",
+          fields: { scope: "store-a", kind: "SQLITE_IOERR", error: { code: "SQLITE_IOERR" } },
+        },
+        {
+          level: "warn",
+          event: "throttle.recovered",
+          fields: { site: "lease.heartbeat-failed", scope: "store-a", failures: 2 },
+        },
+      ]);
+      expect(JSON.stringify(records)).not.toContain(SENTINEL);
+    } finally {
+      failHeartbeats.mockRestore();
+      jest.useRealTimers();
+      logs.restore();
+      await release();
+    }
   });
 });
 

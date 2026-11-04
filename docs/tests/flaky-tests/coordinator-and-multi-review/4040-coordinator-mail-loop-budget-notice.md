@@ -1,7 +1,7 @@
 # Coordinator mail loop-budget notice missing in aggregate
 
 - **ID:** 4040
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-03
 - **Test:** `command node coordinator ↔ leaf coordinator > budgets stop two coordinators from waking each other endlessly`
 - **Owning file:** `apps/backend/src/core/coordinator-node-coordinator-mail.test.ts:613`
@@ -38,3 +38,12 @@ credible flake. A missing notice at assertion time is consistent with
 asynchronous mail delivery, but the cause has not been established.
 No assertion, timeout or implementation was changed. The isolated pass does
 not turn the failed aggregate into a passing run.
+
+## Resolution — 2026-11-04
+
+The R6a review repair demonstrated the same failure by forcing delivery
+before the test captured its wake baseline. The test now captures the count
+before sending and retains the forced ordering; its budget and notice
+assertions are unchanged. The complete owner passed after the repair.
+See [case 3611](3611-node-coordinator-mail-budget-notice.md#resolution--2026-11-04)
+for the cause, controlled failure artifact, fix reference and verification.

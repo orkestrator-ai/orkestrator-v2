@@ -59,8 +59,10 @@ import {
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
+import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
 import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { resolveContainerGitHubToken } from "./github-credentials.js";
 import { createEnvironment } from "./storage.js";
 import {
   asString,
@@ -72,8 +74,6 @@ import {
   toClientEnvironment,
   getDockerStatus,
   getHostPort,
-  resolveGitHubToken,
-  syncContainerGitHubCredential,
   ensureContainerProjectFilesAccess,
   createDockerContainer,
   enqueueEnvironmentLifecycleOperation,
@@ -264,7 +264,12 @@ export function registerDockerCommands(
     }
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
-      await syncContainerGitHubCredential(id, await resolveGitHubToken(config.global));
+      await syncRuntimeGitHubCredential(
+        assigned ?? null,
+        id,
+        await resolveContainerGitHubToken(config.global),
+        context,
+      );
     }
     await syncContainerAgentAccountsOnStart(context, assigned ?? null, id, config.global);
   });
@@ -652,9 +657,10 @@ export function registerDockerCommands(
     };
     return toClientEnvironment(await storage.addEnvironment(env));
   });
-  register("propagate_github_token_to_containers", async (_args, { storage, runtime }) => {
+  register("propagate_github_token_to_containers", async (_args, context) => {
+    const { storage, runtime } = context;
     const config = await storage.loadConfig();
-    const githubToken = await resolveGitHubToken(config.global);
+    const githubToken = await resolveContainerGitHubToken(config.global);
     const environments = await storage.loadEnvironments();
     const updated: string[] = [];
     const failed: [string, string][] = [];
@@ -667,7 +673,7 @@ export function registerDockerCommands(
       try {
         const containerId = env.containerId;
         await runtime.prMonitor.viewerPermissions.rotateScope(`container:${containerId}`, () =>
-          syncContainerGitHubCredential(containerId, githubToken),
+          syncRuntimeGitHubCredential(env, containerId, githubToken, context),
         );
         updated.push(env.id);
       } catch (error) {

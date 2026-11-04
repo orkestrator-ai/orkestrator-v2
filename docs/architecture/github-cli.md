@@ -95,9 +95,10 @@ Missing-`gh` errors from project creation and the clone browser point there.
 ## Selected credential
 
 **Use host GitHub CLI credentials** (`useHostGitHubCredentials`, on unless set
-to false) selects the credential for backend GitHub API calls, host `gh`
+to false) selects the credential for backend GitHub API calls and host `gh`
 operations (including clone discovery, repository creation, PR detection,
-reviews, merges and branch deletion), and container token sync.
+reviews, merges and branch deletion). Containers have their own setting; see
+[Container credential](#container-credential).
 
 - **Host mode** reads the stored `gh auth login` account. Both host token lookup
   and authenticated host `gh` subprocesses remove inherited `GH_TOKEN` and
@@ -107,8 +108,8 @@ reviews, merges and branch deletion), and container token sync.
   Host `gh` subprocesses receive it as `GH_TOKEN`; inherited token variables
   cannot override it. A missing, empty or whitespace-only PAT makes authenticated
   operations fail with a Settings action before invoking `gh`; there is no host
-  account fallback. API resolution and container credential status likewise
-  report the selected token as unavailable.
+  account fallback. API resolution likewise reports the selected token as
+  unavailable.
 - **Project clone and initial push** also use the selected PAT. Their temporary
   Git configuration clears host credential helpers and installs an HTTPS helper
   that only supplies credentials for `https://github.com`. An exact per-transfer
@@ -120,15 +121,59 @@ reviews, merges and branch deletion), and container token sync.
 
 `github-credentials.ts` owns credential selection, host token lookup and the
 host `gh` environment. `github-git-credentials.ts` adapts the PAT for project
-Git transfers. `get_container_github_credential_status` reports the selected
+Git transfers. `get_container_github_credential_status` reports the containers'
 source and whether it has a token. The in-app sign-in only writes the host `gh`
 login; signing in does not replace a PAT or change the selected mode.
+
+## Container credential
+
+**GitHub access for containers** (`containerGitHubCredential`) selects what
+containers receive, independently of the backend's credential. An agent in a
+container can read what it receives and use it over GitHub egress, which every
+restricted container keeps, so this is a decision about every repository the
+credential reaches.
+
+| Value | Containers receive |
+| --- | --- |
+| `none` | Nothing. A new install's default. The host login is not read at all. |
+| `pat` | The stored `githubToken`. |
+| `host-cli` | The host's `gh auth login` token. Settings warns about its scope while selected. |
+
+A config stored before this setting existed has no value, and is migrated once
+to what its containers were already getting: `host-cli` if it used the host
+login, `pat` if not (`storage-shared-config.ts`). Absent in memory means `none`.
+A value that is present but unknown also means `none`.
+
+Without a credential a container reaches public repositories only. Private
+clones and pushes fail, and so do the backend's `gh` calls inside it: the PR
+monitor, reviews and a pipeline's PR step. Creating a container warns first.
+
+The token goes to the owner-only `/tmp/orkestrator-ai/github-token`. An image
+with the `github-git-credential` capability has a Git credential helper,
+`orkestrator-git-credential`, that answers from that file on each request, for
+`https://github.com` only, so the token never enters `~/.gitconfig` or `origin`
+and a rotated or cleared token applies at once. The helper is configured for
+`credential.https://github.com`, with an empty value first to drop any helper a
+copied host config names for GitHub, plus a token-free rewrite that carries
+`git@github.com:` remotes onto HTTPS. `workspace-setup.sh` installs it again
+after clearing `credential.helper`, because an empty value later in the file
+would switch it off. `syncRuntimeGitHubCredential` picks the form from the image
+manifest: an older image, or one the backend cannot read, keeps the rewrite with
+the token in it. Every sync removes such a rewrite when it is not writing one,
+and takes a token out of an `origin` an earlier clone left behind, which a
+preserving rebuild would otherwise carry forward.
+
+The helper removes copies of the token, not access to it: the agent can still
+read the file.
 
 ## Tests
 
 - `apps/backend/src/core/github-credentials.test.ts` — inherited-token isolation,
-  fail-closed missing PATs, host token lookup, selected-token resolution and
-  container credential status.
+  fail-closed missing PATs, host token lookup, selected-token resolution, the
+  independent container credential and its status.
+- `apps/backend/tests/commands-container-exec.test.ts` — the credential helper
+  through real `git credential fill`: token out of the config, rotation, other
+  hosts, setup ordering, a copied host helper, withheld sessions and old `origin`s.
 - `apps/backend/src/core/github-cli-operations.test.ts` — selected credentials
   through PR detection/check queries and local review, merge and branch-delete
   runners, including caller-provided environments.

@@ -605,6 +605,34 @@ removed afterwards.
   request that changes them), rootless, IPv6-enabled daemons, a Docker daemon
   restart, and DNS rotation beyond the refresh the firewall suite runs.
 
+## Project seed files and gateway reach on Docker Desktop (2026-11-04)
+
+The security report's H3 check, and the reachability question behind accepting
+a leaked gateway session (`docs/architecture/remote-gateway.md`, Security notes).
+
+- **Host:** macOS on Apple Silicon, Docker Desktop, engine 29.9.2.
+- **Image:** `orkestrator-v2:dev-cc80206a42eb`, network policy 3.
+- **H3:** `apps/backend/tests/container-project-seed-docker.test.ts` passed with
+  `ORKESTRATOR_SEED_TEST_IMAGE` set: seed files arrive by `docker cp` with private
+  `node` ownership.
+- **Gateway reach:** a throwaway HTTP listener bound to the host's `127.0.0.1`
+  stood in for the gateway, called from inside a container through
+  `host.docker.internal`. A second listener was named in
+  `ORKESTRATOR_HOST_SERVICE_PORTS` as a positive control. The firewall ran inside
+  the container (`firewall-boot` `applied`), not in an egress gateway.
+
+  | Network mode | Gateway stand-in | Named service port | Peer the listener saw |
+  | --- | --- | --- | --- |
+  | `restricted` | Refused at once | Answered | `127.0.0.1` (named port) |
+  | `full` | Answered | Answered | `127.0.0.1` |
+
+  A container's `Host` was `host.docker.internal:<port>`. The peer is loopback on
+  this platform, so binding a session to its peer address would not separate a
+  container from the browser that signed in.
+- **Not covered:** a rootless daemon, Linux Engine, and a real gateway on a
+  Tailscale address
+  ([0260](../reports/security/0260-live-checks-on-other-platforms.md)).
+
 ## Rootless Linux host (2026-10-25)
 
 The first run on a real rootless Linux daemon, not a nested

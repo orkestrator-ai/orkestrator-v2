@@ -615,6 +615,10 @@ async function attach(state: SessionState): Promise<SDKAgent> {
             { cause: error },
           );
         }
+        log.warn("session.resume-fell-back", {
+          sessionId: state.id,
+          error: formatLogError(error, { message: false }),
+        });
         state.agentId = undefined;
       }
     }
@@ -1179,7 +1183,11 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
   state.status = "running";
   state.turnStartedAt = active.createdAt;
   beginAssistantTurn(state);
-  state.cancelTurn = () => active.cancel();
+  state.turnCancelRequested = undefined;
+  state.cancelTurn = () => {
+    state.turnCancelRequested = true;
+    return active.cancel();
+  };
   state.revision += 1;
   const unsubscribe = active.onDidChangeStatus(() => {
     state.revision += 1;
@@ -1215,7 +1223,16 @@ async function recoverActiveRun(state: SessionState): Promise<void> {
       await hydrateHistory(state);
       state.status = active.status === "error" ? "error" : "idle";
       state.error = active.error?.message;
+      if (active.status === "error" && state.turnCancelRequested !== true) {
+        log.warn("turn.recovery-failed", { sessionId: state.id });
+      }
     } catch (error) {
+      if (state.turnCancelRequested !== true) {
+        log.warn("turn.recovery-failed", {
+          sessionId: state.id,
+          error: formatLogError(error, { message: false }),
+        });
+      }
       state.status = "error";
       state.error = error instanceof Error ? error.message : "Cursor run recovery failed";
     } finally {

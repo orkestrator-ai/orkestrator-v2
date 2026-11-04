@@ -22,3 +22,12 @@ Hypothesis, not established: the test waits only for `status === "idle"`, so the
 snapshot may have been read before the trailing "Recovered summary." chunk was
 applied as its own part. This establishes intermittency; it does not establish
 the cause. No bridge source, assertion, timeout or skip changed.
+
+## CI recurrences (2026-11-03)
+
+Failed in the `Tests (root-bridges)` shard on `main` at
+[`0bd2cea99`](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/41735714522/job/126264255616)
+and `b7f41b692` (306.56 ms), with the same 1 part instead of 2 at
+`acp-transcript.test.ts:3347`. The owning file passed alone on 2026-11-04
+(`bun test --cwd bridges/acp-bridge ./src/acp-transcript.test.ts --parallel=1 --only-failures`,
+exit zero, 22.3 s). The cause remains unconfirmed.

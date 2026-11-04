@@ -46,6 +46,9 @@ export function createDefaultGlobalConfig() {
     containerResources: { cpuCores: 2, memoryGb: 4 },
     envFilePatterns: [...DEFAULT_ENV_FILE_PATTERNS],
     useHostGitHubCredentials: true,
+    // New installs only: an existing config without this field keeps the
+    // credential its containers already received (`storage-shared-config.ts`).
+    containerGitHubCredential: "none" as const,
     useHostClaudeCredentials: true,
     allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
     enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],

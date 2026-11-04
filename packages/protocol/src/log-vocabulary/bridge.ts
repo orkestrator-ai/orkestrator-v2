@@ -43,6 +43,10 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "evidence.record-failed": "Change evidence could not be recorded; the read loop carries on.",
       "evidence.shell-record-failed": "A shell observation could not be recorded.",
       "evidence.turn-record-failed": "Turn change evidence could not be recorded.",
+      "agent.exited":
+        "An ACP agent process exited, with its `code` and `signal`, always at `warn`. `requested` is true when the bridge closed it normally, false for an unrequested or fault-driven exit.",
+      "http.route-failed":
+        "An HTTP route answered 500; its error message is not logged because it can hold content.",
       "server.listening": "The HTTP server is listening.",
       "session.policy-widening-refused":
         "A request tried to widen a live session's execution policy and was refused; widened names the axes.",
@@ -254,6 +258,16 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "state.publication-recovered": "Saving bridge state recovered.",
       "state.transcripts-shortened":
         "The state file reached its limit, so some sessions were saved with a shortened transcript copy.",
+      "session.resume-fell-back":
+        "A saved conversation could not be resumed, so a new one started; its error message is not logged because it can hold content.",
+      "turn.failed":
+        "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
+      "turn.recovery-failed":
+        "A run recovered after a bridge restart ended in failure, or could not be followed. A cancelled run is not a failure.",
+      "turn.send-failed":
+        "Sending a prompt to Cursor failed, so whether its run started is unknown; its error message is not logged because it can hold content.",
+      "turn.timed-out":
+        "A turn outlived its time budget, so its run was asked to cancel; `turn.failed` follows if it never stops.",
     },
   },
   "bridge.pi": {
@@ -267,6 +281,14 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "The state file stayed over budget after shedding transcripts, so the write was skipped.",
       "state.transcripts-shed":
         "The state file was over budget, so some sessions were saved without their transcript.",
+      "session.resume-fell-back":
+        "A saved conversation could not be reopened, so a new one started; its error message is not logged because it can hold content.",
+      "turn.failed":
+        "A turn failed; its error message is not logged because it can hold content. A cancelled turn is not a failure.",
+      "turn.refused":
+        "Pi refused a prompt before starting a run, so nothing ran; its error message is not logged because it can hold content.",
+      "turn.startup-timed-out":
+        "Pi did not start a turn within its startup deadline, so the prompt was abandoned.",
     },
   },
 });

@@ -173,6 +173,15 @@ if [ "$1" = "exec" ]; then
     *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
     *opencode-github-env-plugin-fingerprint*) printf '%s' "\${FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT:-}" ;;
     *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
+    *opencode-serve.prev.log*) printf 'previous opencode log\n' ;;
+    *claude-bridge.prev.log*) printf 'previous claude log\nmcp auth failed: %s\n' '${AUTH_SECRET_CANARIES.anthropicApiKey}' ;;
+    *codex-bridge.prev.log*) printf 'previous codex log\n' ;;
+    *cursor-bridge.prev.log*) printf 'previous cursor log\n' ;;
+    *grok-acp-bridge.prev.log*) printf 'previous grok log\n' ;;
+    *pi-bridge.prev.log*) printf '' ;;
+    *cursor-bridge.log*) printf 'cursor log\n' ;;
+    *grok-acp-bridge.log*) printf 'grok log\n' ;;
+    *pi-bridge.log*) printf 'pi log\n' ;;
     *opencode-serve.log*) printf 'opencode log\n' ;;
     *claude-bridge.log*) printf 'claude log\nmcp auth failed: %s\n' '${AUTH_SECRET_CANARIES.anthropicApiKey}' ;;
     *codex-bridge.log*) printf 'codex log\n' ;;
@@ -823,6 +832,33 @@ describe("process and platform command behavior", () => {
     expect(await invoke("get_codex_server_log", { containerId: "container-a" })).toBe(
       "codex log\n",
     );
+    expect(await invoke("get_cursor_server_log", { containerId: "container-a" })).toBe(
+      "cursor log\n",
+    );
+    expect(await invoke("get_grok_server_log", { containerId: "container-a" })).toBe("grok log\n");
+    expect(await invoke("get_pi_server_log", { containerId: "container-a" })).toBe("pi log\n");
+
+    // `previous` reads the run before the last relaunch, redacted the same way.
+    for (const [command, previousLog] of [
+      ["get_opencode_server_log", "previous opencode log\n"],
+      ["get_claude_server_log", "previous claude log\nmcp auth failed: [redacted]\n"],
+      ["get_codex_server_log", "previous codex log\n"],
+      ["get_cursor_server_log", "previous cursor log\n"],
+      ["get_grok_server_log", "previous grok log\n"],
+      // No relaunch yet: nothing to read, and not an error.
+      ["get_pi_server_log", ""],
+    ] as const) {
+      expect(await invoke(command, { containerId: "container-a", previous: true })).toBe(
+        previousLog,
+      );
+    }
+    // Only an explicit true selects it.
+    expect(
+      await invoke("get_codex_server_log", { containerId: "container-a", previous: "1" }),
+    ).toBe("codex log\n");
+    expect(
+      await invoke("get_codex_server_log", { containerId: "container-a", previous: false }),
+    ).toBe("codex log\n");
 
     process.env.FAKE_DOCKER_NO_PORT = "1";
     expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({

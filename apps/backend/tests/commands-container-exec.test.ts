@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { withheldGitHubCredentialEnvironment } from "@orkestrator/protocol/native-agent";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -57,7 +58,7 @@ describe("Electron backend command registry", () => {
     expect(context.runtime.environments.isDeleting(environment.id)).toBe(false);
   });
 
-  test("keeps credential sync compatible with repeated workspace Git configuration", async () => {
+  test("gives an image without the helper the token-bearing rewrite, idempotently", async () => {
     const home = await createTempDir("ork-github-config-home-");
     const credentialFile = path.join(home, "runtime", "github-token");
     // Git prefers $XDG_CONFIG_HOME/git/config over $HOME/.gitconfig. In an
@@ -70,32 +71,14 @@ describe("Electron backend command registry", () => {
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"),
-      GITHUB_TOKEN: "token-value",
-      GH_TOKEN: "",
     };
-    const sync = spawnSync(
-      "bash",
-      ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile)],
-      { env, input: "token-value", encoding: "utf8" },
-    );
-    expect(sync.status).toBe(0);
-
-    const workspaceSetup = await fs.readFile(
-      path.join(import.meta.dir, "../../../docker/workspace-setup.sh"),
-      "utf8",
-    );
-    const start = workspaceSetup.indexOf('TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"');
-    const end = workspaceSetup.indexOf("\nprint_workspace_disk_status()", start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const credentialSetup = workspaceSetup.slice(start, end);
-
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const configured = spawnSync("bash", ["-c", credentialSetup], {
-        env,
-        encoding: "utf8",
-      });
-      expect(configured.status).toBe(0);
+      const sync = spawnSync(
+        "bash",
+        ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile)],
+        { env, input: "token-value", encoding: "utf8" },
+      );
+      expect(sync.status).toBe(0);
     }
 
     const values = spawnSync(
@@ -114,29 +97,205 @@ describe("Electron backend command registry", () => {
       "https://github.com",
       "git@github.com:",
     ]);
+  });
 
-    const conflictingEnv = { ...env, GH_TOKEN: "gh-preferred-token" };
-    const configured = spawnSync("bash", ["-c", credentialSetup], {
-      env: conflictingEnv,
-      encoding: "utf8",
+  describe("GitHub credential helper", () => {
+    const repoRoot = path.join(import.meta.dir, "../../..");
+    let helper = "";
+
+    async function helperEnvironment() {
+      const home = await createTempDir("ork-github-helper-home-");
+      // The image build marks it executable; the checkout need not.
+      helper = path.join(home, "git-credential");
+      await fs.copyFile(path.join(repoRoot, "docker/orkestrator-git-credential.sh"), helper);
+      await fs.chmod(helper, 0o755);
+      const credentialFile = path.join(home, "runtime", "github-token");
+      return {
+        home,
+        credentialFile,
+        // See the note on the test above: never let this reach a real Git config.
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"),
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_TERMINAL_PROMPT: "0",
+          ORKESTRATOR_GITHUB_CREDENTIAL_FILE: credentialFile,
+          GITHUB_TOKEN: "",
+          GH_TOKEN: "",
+        },
+      };
+    }
+
+    function sync(env: NodeJS.ProcessEnv, credentialFile: string, token: string) {
+      const result = spawnSync(
+        "bash",
+        ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile, helper)],
+        { env, input: token, encoding: "utf8" },
+      );
+      expect(result.status).toBe(0);
+    }
+
+    // What Git itself would send, through whichever helpers its config selects.
+    function fill(env: NodeJS.ProcessEnv, url: string, extraEnv: NodeJS.ProcessEnv = {}) {
+      return spawnSync("git", ["credential", "fill"], {
+        env: { ...env, ...extraEnv },
+        input: `url=${url}\n\n`,
+        encoding: "utf8",
+      }).stdout;
+    }
+
+    async function setupCredentialBlock(): Promise<string> {
+      const script = await fs.readFile(path.join(repoRoot, "docker/workspace-setup.sh"), "utf8");
+      const start = script.indexOf('TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"');
+      const end = script.indexOf("\nprint_workspace_disk_status()", start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return script
+        .slice(start, end)
+        .replaceAll("/usr/local/bin/orkestrator-git-credential", helper);
+    }
+
+    test("answers Git from the token file and keeps the token out of the config", async () => {
+      const { env, home, credentialFile } = await helperEnvironment();
+      sync(env, credentialFile, "first-token");
+
+      expect(fill(env, "https://github.com/owner/repo.git")).toContain("password=first-token");
+      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("first-token");
+
+      // A rotated token applies with no config change; SSH remotes come along.
+      await fs.writeFile(credentialFile, "second-token");
+      expect(fill(env, "https://github.com/owner/repo.git")).toContain("password=second-token");
+      const rewrite = spawnSync(
+        "git",
+        ["config", "--global", "--get", "url.https://github.com/.insteadOf"],
+        { env, encoding: "utf8" },
+      );
+      expect(rewrite.stdout.trim()).toBe("git@github.com:");
     });
-    expect(configured.status).toBe(0);
-    const preferred = spawnSync(
-      "git",
-      [
-        "config",
-        "--global",
-        "--get-all",
-        "url.https://x-access-token:gh-preferred-token@github.com/.insteadOf",
-      ],
-      { env: conflictingEnv, encoding: "utf8" },
-    );
-    expect(preferred.status).toBe(0);
-    expect(preferred.stdout.trim().split("\n")).toEqual([
-      "https://github.com/",
-      "https://github.com",
-      "git@github.com:",
-    ]);
+
+    test("never hands the token to another host or over plain HTTP", async () => {
+      const { env, credentialFile } = await helperEnvironment();
+      sync(env, credentialFile, "secret-token");
+      for (const url of [
+        "https://example.com/owner/repo.git",
+        "https://github.com.example.com/owner/repo.git",
+        "http://github.com/owner/repo.git",
+      ]) {
+        expect(fill(env, url)).not.toContain("secret-token");
+      }
+      // Not through the helper directly either, whatever the config scoping.
+      const direct = spawnSync(helper, ["get"], {
+        env,
+        input: "protocol=https\nhost=example.com\n\n",
+        encoding: "utf8",
+      });
+      expect(direct.stdout).toBe("");
+      const store = spawnSync(helper, ["store"], {
+        env,
+        input: "protocol=https\nhost=github.com\n\n",
+        encoding: "utf8",
+      });
+      expect(store.stdout).toBe("");
+    });
+
+    test("an empty token removes the helper and the SSH rewrite", async () => {
+      const { env, home, credentialFile } = await helperEnvironment();
+      sync(env, credentialFile, "secret-token");
+      sync(env, credentialFile, "");
+
+      const config = await fs.readFile(path.join(home, ".gitconfig"), "utf8");
+      expect(config).not.toContain(helper);
+      expect(config).not.toContain("git@github.com:");
+      expect(fill(env, "https://github.com/owner/repo.git")).not.toContain("password=");
+    });
+
+    test("removes a token-bearing rewrite an older image or backend left behind", async () => {
+      const { env, home, credentialFile } = await helperEnvironment();
+      const legacy = spawnSync(
+        "bash",
+        ["-c", commandTesting.buildSyncContainerGitHubCredentialCommand(credentialFile)],
+        { env, input: "old-token", encoding: "utf8" },
+      );
+      expect(legacy.status).toBe(0);
+      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).toContain("old-token");
+
+      sync(env, credentialFile, "new-token");
+      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("old-token");
+    });
+
+    test("keeps working after setup clears credential.helper, on either order", async () => {
+      const { env, home, credentialFile } = await helperEnvironment();
+      const setup = await setupCredentialBlock();
+      // A container with no host gitconfig: nothing has set credential.helper
+      // yet, so setup's reset is appended after what sync installed.
+      sync(env, credentialFile, "secret-token");
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const configured = spawnSync("bash", ["-c", setup], {
+          env: { ...env, GH_TOKEN: "secret-token" },
+          encoding: "utf8",
+        });
+        expect(configured.status).toBe(0);
+        expect(fill(env, "https://github.com/owner/repo.git")).toContain("password=secret-token");
+      }
+      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain(
+        "secret-token",
+      );
+
+      sync(env, credentialFile, "secret-token");
+      expect(fill(env, "https://github.com/owner/repo.git")).toContain("password=secret-token");
+    });
+
+    test("replaces a GitHub helper copied from a host config", async () => {
+      const { env, home, credentialFile } = await helperEnvironment();
+      // What `gh auth setup-git` writes on a Mac; the path does not exist here.
+      await fs.writeFile(
+        path.join(home, ".gitconfig"),
+        '[credential "https://github.com"]\n\thelper =\n\thelper = !/opt/homebrew/bin/gh auth git-credential\n',
+      );
+      sync(env, credentialFile, "secret-token");
+
+      const filled = spawnSync("git", ["credential", "fill"], {
+        env,
+        input: "url=https://github.com/owner/repo.git\n\n",
+        encoding: "utf8",
+      });
+      expect(filled.stdout).toContain("password=secret-token");
+      expect(filled.stderr).not.toContain("homebrew");
+      expect(await fs.readFile(path.join(home, ".gitconfig"), "utf8")).not.toContain("homebrew");
+    });
+
+    test("a session whose GitHub credential is withheld gets nothing from it", async () => {
+      const { env, credentialFile } = await helperEnvironment();
+      sync(env, credentialFile, "secret-token");
+      const withheld = withheldGitHubCredentialEnvironment(env, { ghConfigDir: "/nonexistent" });
+      expect(
+        fill(withheld as NodeJS.ProcessEnv, "https://github.com/owner/repo.git"),
+      ).not.toContain("secret-token");
+    });
+
+    test("takes a token out of an origin left by an earlier clone", async () => {
+      const { env, credentialFile } = await helperEnvironment();
+      const workspace = await createTempDir("ork-github-helper-workspace-");
+      await runGit(workspace, ["init", "-b", "work", "."]);
+      await runGit(workspace, [
+        "remote",
+        "add",
+        "origin",
+        "https://x-access-token:old-token@github.com/owner/repo.git",
+      ]);
+      const command = commandTesting
+        .buildSyncContainerGitHubCredentialCommand(credentialFile, helper)
+        .replaceAll("git -C /workspace", `git -C ${workspace}`);
+      const result = spawnSync("bash", ["-c", command], { env, input: "", encoding: "utf8" });
+      expect(result.status).toBe(0);
+
+      const origin = spawnSync("git", ["-C", workspace, "remote", "get-url", "origin"], {
+        env,
+        encoding: "utf8",
+      });
+      expect(origin.stdout.trim()).toBe("https://github.com/owner/repo.git");
+    });
   });
 
   test(

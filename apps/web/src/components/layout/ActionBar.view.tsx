@@ -80,6 +80,7 @@ import {
   StackedEyes,
 } from "@/components/review/MultiReviewLaunchDialog";
 import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
+import { LocalEnvironmentDeleteDialog } from "@/components/environments/LocalEnvironmentDeleteDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
@@ -297,6 +298,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     isPRClosed,
     isPRFinished,
     isSelectedEnvironmentDeleting,
+    isSelectedEnvironmentDeleteInFlight,
+    deleteTarget,
+    setDeleteTargetId,
+    handleConfirmDelete,
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,
@@ -548,6 +553,31 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       </Button>
     </ToolbarTooltipTrigger>
   );
+
+  /*
+   * Placed like the Create PR control above. The same as a row's Delete, so it
+   * opens that confirmation. A finished PR already offers Clean Up, whose dialog
+   * describes that state; the project home's page would read it as deleting the
+   * project.
+   */
+  const deleteEnvironmentControl =
+    selectedEnvironment && !selectedEnvironment.projectHome && !isPRFinished ? (
+      <ToolbarTooltipTrigger
+        tooltip={isMerging ? "Merge in progress..." : "Delete this environment"}
+      >
+        <Button
+          variant={isGrid ? "ghost" : "destructive"}
+          size="icon-sm"
+          className={cn(isGrid && "text-destructive hover:text-destructive")}
+          onClick={() => setDeleteTargetId(selectedEnvironment.id)}
+          disabled={isMerging || isSelectedEnvironmentDeleteInFlight}
+          aria-label="Delete environment"
+        >
+          <Trash2 className="h-4 w-4" />
+          {isGrid && <span className="truncate text-xs">Delete environment</span>}
+        </Button>
+      </ToolbarTooltipTrigger>
+    ) : null;
 
   /*
    * The project page's tabs. The desktop toolbar gives them a row of their own
@@ -1454,12 +1484,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   )}
                 </>
               )}
+
+              {isGrid && deleteEnvironmentControl}
             </div>
 
             {/* Spacer to push right side content to the end */}
             <div className={cn("min-w-4 flex-1", isGrid && "hidden")} />
 
-            {/* Right side: Create PR and the Files toggle (the grid adds the project tabs) */}
+            {/* Right side: Create PR, Delete and the Files toggle (the grid adds the project tabs) */}
             <div
               className={cn(
                 isGrid ? "col-span-2 grid grid-cols-2 gap-2" : "flex shrink-0 items-center gap-2",
@@ -1474,6 +1506,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               ) : null}
 
               {!isGrid && selectedEnvironment && !hasPR && createPrControl}
+              {!isGrid && deleteEnvironmentControl}
 
               {(isGrid || canToggleFilesPanel) && (
                 <ToolbarTooltipTrigger
@@ -1673,6 +1706,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {deleteTarget && (
+        <LocalEnvironmentDeleteDialog
+          environment={deleteTarget}
+          onCancel={() => setDeleteTargetId(null)}
+          onConfirm={() => void handleConfirmDelete()}
+        />
+      )}
 
       {/* Cleanup Environment Confirmation Dialog */}
       <AlertDialog

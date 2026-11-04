@@ -59,16 +59,6 @@ export function registerSuborkTools(
       try {
         resolved = await assertCallerMailbox(storage, scope, tabId);
       } catch (error) {
-        // A live tab the shared connection may not act as has its own
-        // credential, so this call is not that tab's own turn: it may be a
-        // subork, and is told so.
-        if (
-          error instanceof AgentMailError &&
-          !scope.tabId &&
-          tabId &&
-          (await storage.listAgentMailPullTabIds(scope.environmentId)).includes(tabId)
-        )
-          throw new Error(REFUSAL);
         if (error instanceof AgentMailError) throw new Error(error.message);
         throw error;
       }
@@ -78,9 +68,6 @@ export function registerSuborkTools(
           `${SUBORK_TOOL_NAME} works in agent tabs and coordinator conversations: a ${descriptor.kind} tab cannot be woken with the answers.`,
         );
       }
-      // Every native tab but OpenCode's has its own credential. One arriving on
-      // the shared connection is not that tab's own turn: it may be a subork.
-      if (!scope.tabId && descriptor.agent !== "opencode") throw new Error(REFUSAL);
       if (descriptor.mutedInbound) {
         throw new Error(
           "This tab's inbound mail is muted, and suborks answer by mail. Unmute it first.",

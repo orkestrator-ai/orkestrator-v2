@@ -11,6 +11,7 @@ import {
   normalizeAgentMessagingSettings,
   classifyAgentMailRoute,
   agentMailCapabilities,
+  sharedConnectionMayActAs,
   agentMailboxId,
   agentMailConversationKey,
   agentMailNeedsAttention,
@@ -47,6 +48,12 @@ describe("agent mail protocol", () => {
   test("round trips opaque mailbox ids", () => {
     const id = agentMailboxId("env:one", "tab:two");
     expect(splitAgentMailboxId(id)).toEqual({ environmentId: "env:one", tabId: "tab:two" });
+  });
+
+  test("shared credentials exclude every native platform with a private connection", () => {
+    for (const agent of AGENT_PLATFORMS) {
+      expect(sharedConnectionMayActAs("agent-native", agent)).toBe(agent === "opencode");
+    }
   });
 
   test("has explicit platform capabilities", () => {

@@ -814,7 +814,8 @@ async function createAgentToolServer(
   }
   const globalConfig = (await storage.loadConfig()).global;
   const messagingEnabled = globalConfig.agentMessaging?.enabled === true;
-  const messagingScope = messagingEnabled ? scope : null;
+  const callerScope = { ...scope, sharedConnection: !scope.tabId };
+  const messagingScope = messagingEnabled ? callerScope : null;
   let messagingInstructions = "";
   // Only `initialize` and `server/discover` answer with the instructions, so
   // every other request (each `tools/list` and `tools/call`) skips the
@@ -893,7 +894,9 @@ async function createAgentToolServer(
   // with messaging, and only while experimental scheduling is on. They act
   // as the caller's own mailbox tab.
   if (messagingScope && schedules && globalConfig.experimentalScheduling === true) {
-    registerScheduleTools(server, "agent", () => agentScheduleBackend(storage, scope, schedules));
+    registerScheduleTools(server, "agent", () =>
+      agentScheduleBackend(storage, callerScope, schedules),
+    );
   }
   if (annotationTools) {
     registerWebAnnotationTools(
@@ -910,7 +913,7 @@ async function createAgentToolServer(
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
 
-  if (suborkTools) registerSuborkTools(server, storage, scope, suborkTools, consumeRateLimit);
+  if (suborkTools) registerSuborkTools(server, storage, callerScope, suborkTools, consumeRateLimit);
 
   if (keyInformation) await registerKeyInformationTools(server, keyInformation, pipelineScope);
 

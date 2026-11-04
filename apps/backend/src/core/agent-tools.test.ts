@@ -3,9 +3,11 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import type { ScheduledJobService } from "./scheduled-jobs/service.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -290,7 +292,7 @@ describe("agent Kanban tools", () => {
   async function addMessagingEnvironment(
     environmentId: string,
     projectId: string,
-    tabIds: Array<string | { id: string; platform: "claude" | "opencode" }>,
+    tabIds: Array<string | { id: string; platform: AgentPlatform }>,
   ): Promise<void> {
     const tabs = tabIds.map((tab) =>
       typeof tab === "string" ? { id: tab, platform: "claude" as const } : tab,
@@ -305,23 +307,24 @@ describe("agent Kanban tools", () => {
         order: 0,
       });
     }
-    await storage.addEnvironment({
-      id: environmentId,
-      projectId,
-      name: environmentId,
-      branch: "main",
-      containerId: null,
-      status: "running",
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-      createdAt: new Date(0).toISOString(),
-      networkAccessMode: "restricted",
-      order: 0,
-      environmentType: "local",
-      setupPhase: "ready",
-      setupScriptsComplete: true,
-    });
+    if (!(await storage.loadEnvironments()).some((environment) => environment.id === environmentId))
+      await storage.addEnvironment({
+        id: environmentId,
+        projectId,
+        name: environmentId,
+        branch: "main",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
     await storage.savePaneLayout(
       environmentId,
       {
@@ -340,7 +343,7 @@ describe("agent Kanban tools", () => {
           activeTabId: tabs[0]?.id ?? null,
         },
       },
-      0,
+      (await storage.getPaneLayout(environmentId))?.revision ?? 0,
     );
     await storage.synchronizeAgentMailboxes();
   }
@@ -903,21 +906,106 @@ describe("agent Kanban tools", () => {
     expect(wrongDirectoryClaim.body.result?.isError).toBe(true);
   });
 
+  test("graph result credentials retain mail and schedule access to native mailboxes", async () => {
+    await addMessagingEnvironment("env-graph", "project-mail", ["claude-tab"]);
+    await server.stop();
+    const results = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", results);
+    server.setGraphActivationToolHost({
+      resolve: async () => ({ groups: ["mail", "schedules"], register: () => {} }),
+      registerBroker: () => {},
+    });
+    const owners: unknown[] = [];
+    server.setScheduledJobs({
+      list: async (owner: unknown) => {
+        owners.push(owner);
+        return [];
+      },
+    } as unknown as ScheduledJobService);
+    await server.start();
+    const resultKey = crypto.randomUUID();
+    await results.prepare({
+      resultKey,
+      kind: "graph-output",
+      environmentId: "env-graph",
+      projectId: "project-mail",
+      provider: "claude",
+    });
+    const connection = server.workflowResultConnection(
+      "env-graph",
+      "project-mail",
+      "host",
+      resultKey,
+    );
+    const call = (name: string, args: Record<string, unknown> = {}) =>
+      rpc(connection.url, connection.token, "tools/call", { name, arguments: args });
+    const inbox = await call("check_inbox");
+    expect(inbox.body.result?.isError).not.toBe(true);
+    expect(inbox.body.result?.structuredContent?.identity).toMatchObject({ tabId: "claude-tab" });
+    expect((await call("list_schedules")).body.result?.isError).not.toBe(true);
+    expect(owners).toEqual([
+      { kind: "agent", environmentId: "env-graph", projectId: "project-mail", tabId: "claude-tab" },
+    ]);
+    await addMessagingEnvironment("env-graph", "project-mail", [
+      "claude-tab",
+      { id: "opencode-tab", platform: "opencode" },
+    ]);
+    expect((await call("check_inbox")).body.result?.isError).toBe(true);
+    expect(
+      (await call("check_inbox", { tabId: "claude-tab" })).body.result?.structuredContent?.identity,
+    ).toMatchObject({ tabId: "claude-tab", resolved: "claimed" });
+    expect((await call("list_schedules", { tabId: "claude-tab" })).body.result?.isError).not.toBe(
+      true,
+    );
+    expect(owners.at(-1)).toMatchObject({ tabId: "claude-tab" });
+  });
+
+  test("all native private-connection mailboxes reject shared claims", async () => {
+    for (const platform of AGENT_PLATFORMS.filter((agent) => agent !== "opencode")) {
+      const environmentId = `env-private-${platform}`;
+      await addMessagingEnvironment(environmentId, "project-mail", [
+        { id: "native-tab", platform },
+      ]);
+      const shared = server.connection(environmentId, "project-mail", "host");
+      const denied = await rpc(shared.url, shared.token, "tools/call", {
+        name: "check_inbox",
+        arguments: { tabId: "native-tab" },
+      });
+      expect(denied.body.result?.isError).toBe(true);
+      expect(denied.body.result?.content?.[0]?.text).toContain(
+        "has its own Orkestrator connection",
+      );
+      const own = server.connection(environmentId, "project-mail", "host", "native-tab");
+      const inbox = await rpc(own.url, own.token, "tools/call", {
+        name: "check_inbox",
+        arguments: {},
+      });
+      expect(inbox.body.result?.structuredContent?.identity).toMatchObject({
+        tabId: "native-tab",
+        resolved: "credential",
+      });
+    }
+  });
+
   test("the shared connection never acts as a native tab with its own connection", async () => {
     await addMessagingEnvironment("env-mixed", "project-mail", [
       "claude-tab",
       { id: "opencode-tab", platform: "opencode" },
     ]);
     const shared = server.connection("env-mixed", "project-mail", "host");
-    // The Claude tab has its own credential, so the OpenCode tab is the only
-    // mailbox the shared connection can be.
-    const inbox = await rpc(shared.url, shared.token, "tools/call", {
+    // Filtering must not turn an ambiguous caller into OpenCode's identity.
+    const ambiguous = await rpc(shared.url, shared.token, "tools/call", {
       name: "check_inbox",
       arguments: {},
     });
+    expect(ambiguous.body.result?.isError).toBe(true);
+    const inbox = await rpc(shared.url, shared.token, "tools/call", {
+      name: "check_inbox",
+      arguments: { tabId: "opencode-tab" },
+    });
     expect(inbox.body.result?.structuredContent?.identity).toMatchObject({
       tabId: "opencode-tab",
-      resolved: "unique",
+      resolved: "claimed",
     });
     for (const [name, args] of [
       ["check_inbox", { tabId: "claude-tab" }],

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 
 import { promises as fs } from "node:fs";
@@ -1541,6 +1542,62 @@ describe("NativeAgentService", () => {
         },
       );
     }
+  });
+
+  test("tab mail is absent for unrelated session keys, non-environment owners and config failure", async () => {
+    const stub = createProviderStub("opencode");
+    await withService(
+      { prefix: "ork-tab-mail-boundaries-", provider: async () => stub.provider },
+      async ({ storage, service }) => {
+        // Exercise the optional dispatch metadata independently of provider setup,
+        // which also reads configuration for unrelated purposes.
+        const metadata = service as unknown as {
+          tabMailFor(session: {
+            agent: "opencode";
+            environmentId: string;
+            logicalSessionKey: string;
+            owner?: AgentSessionOwner;
+          }): Promise<unknown>;
+        };
+        const config = await storage.loadConfig();
+        await storage.saveConfig({
+          ...config,
+          global: {
+            ...config.global,
+            agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: true },
+          },
+        });
+        const session = {
+          agent: "opencode" as const,
+          environmentId: "env-1",
+          logicalSessionKey: "env-env-1:tab-1",
+          owner: { kind: "environment" as const, projectId: "project-1", environmentId: "env-1" },
+        };
+        expect(await metadata.tabMailFor(session)).toEqual({
+          environmentId: "env-1",
+          tabId: "tab-1",
+        });
+        for (const logicalSessionKey of ["workflow-session", "env-other:tab-1", "env-env-1:"]) {
+          expect(await metadata.tabMailFor({ ...session, logicalSessionKey })).toBeUndefined();
+        }
+        expect(await metadata.tabMailFor({ ...session, owner: undefined })).toBeUndefined();
+        expect(
+          await metadata.tabMailFor({
+            ...session,
+            owner: { kind: "coordinator", projectId: "project-1", coordinatorId: "coordinator-1" },
+          }),
+        ).toBeUndefined();
+        const loadConfig = storage.loadConfig;
+        storage.loadConfig = async () => {
+          throw new Error("config unavailable");
+        };
+        try {
+          expect(await metadata.tabMailFor(session)).toBeUndefined();
+        } finally {
+          storage.loadConfig = loadConfig;
+        }
+      },
+    );
   });
 
   test("retains ambiguous dispatch grants until reconciliation and revokes rejected dispatches", async () => {

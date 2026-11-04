@@ -176,7 +176,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                     className={cn(
                       "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
                       activeSection === item.id
-                        ? "border-blue-500 bg-zinc-900/80 text-foreground"
+                        ? "border-ring bg-zinc-900/80 text-foreground"
                         : "border-transparent text-muted-foreground hover:bg-zinc-900/50 hover:text-foreground",
                     )}
                   >
@@ -197,7 +197,7 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
                 >
                   <SelectTrigger
                     aria-label="Settings section"
-                    className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:ring-0 md:hidden"
+                    className="h-10 min-w-0 flex-1 border-0 !bg-transparent px-0 text-foreground shadow-none focus-visible:outline-none md:hidden"
                   >
                     <SelectValue>
                       <span className="flex min-w-0 items-center gap-2 text-sm font-medium">

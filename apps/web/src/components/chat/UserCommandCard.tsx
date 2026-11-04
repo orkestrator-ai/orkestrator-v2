@@ -156,7 +156,7 @@ export function UserCommandCard({ command }: { command: UserCommandRecord }) {
                 : "Send a line to the command"
             }
             aria-label="Input for the running command"
-            className="min-w-0 flex-1 rounded-md border border-border/60 bg-background/40 px-2 py-1 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="min-w-0 flex-1 rounded-md border border-border/60 bg-background/40 px-2 py-1 font-mono text-xs outline-none focus-hairline"
           />
           <Button
             type="submit"

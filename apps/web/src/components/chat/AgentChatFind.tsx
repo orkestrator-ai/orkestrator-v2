@@ -275,7 +275,7 @@ export function AgentChatFindBar({
           aria-label="Find in chat"
           autoComplete="off"
           spellCheck={false}
-          className="h-8 min-w-0 flex-1 border-0 px-1.5 text-sm shadow-none focus-visible:ring-0"
+          className="h-8 min-w-0 flex-1 border-0 px-1.5 text-sm shadow-none focus-visible:outline-none"
         />
         <span
           aria-live="polite"

@@ -213,7 +213,7 @@ export function RichToolbarButton({
       onClick={onClick}
       data-rich-chrome="true"
       className={cn(
-        "inline-flex h-6 min-w-6 select-none items-center justify-center gap-1 rounded px-1 text-muted-foreground outline-none transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5",
+        "inline-flex h-6 min-w-6 select-none items-center justify-center gap-1 rounded px-1 text-muted-foreground outline-none transition-colors hover:bg-elevated hover:text-foreground focus-hairline disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5",
         pressed && "bg-elevated text-foreground",
       )}
     >

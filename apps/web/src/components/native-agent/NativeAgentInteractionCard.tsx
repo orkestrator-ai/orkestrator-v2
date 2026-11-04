@@ -542,7 +542,7 @@ export function NativeAgentInteractionCard({
                       disabled={submitting || expired}
                       aria-label={`${question.prompt} response`}
                       rows={3}
-                      className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
+                      className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus-hairline"
                       onKeyDown={answerOnShortcut}
                       onChange={(event) =>
                         setQuestionAnswer(question.id, false, (current) => ({
@@ -567,7 +567,7 @@ export function NativeAgentInteractionCard({
               disabled={submitting || expired}
               aria-label="Plan revision feedback"
               rows={3}
-              className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
+              className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus-hairline"
               onKeyDown={requestChangesOnShortcut}
               onChange={(event) => setFeedback(event.target.value)}
             />

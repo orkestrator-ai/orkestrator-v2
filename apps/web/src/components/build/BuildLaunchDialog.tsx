@@ -1056,7 +1056,7 @@ export function BuildLaunchDialog({
                       <label
                         htmlFor={id}
                         className={cn(
-                          "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-cyan-400/70",
+                          "flex min-h-16 cursor-pointer flex-col rounded-lg border px-3 py-2.5 transition-colors peer-focus-visible:border-ring",
                           disabled && "cursor-not-allowed opacity-50",
                           selected
                             ? "border-cyan-400/55 bg-cyan-500/10 text-zinc-100"

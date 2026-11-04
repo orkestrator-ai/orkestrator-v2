@@ -219,7 +219,7 @@ export function GraphLaunchEnvironmentField({
               className={cn(
                 "rounded-md border px-2.5 py-1 text-xs",
                 checked
-                  ? "border-primary bg-primary/10 text-foreground"
+                  ? "border-ring bg-primary/10 text-foreground"
                   : "border-border text-muted-foreground hover:text-foreground",
               )}
             >

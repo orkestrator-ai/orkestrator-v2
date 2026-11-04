@@ -253,7 +253,7 @@ export function DestinationPicker({
                 data-destination={option.destination.tabId}
                 onClick={() => choose(option)}
                 className={cn(
-                  "block w-full min-w-0 rounded border px-2 py-1.5 text-left break-words text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  "block w-full min-w-0 rounded border px-2 py-1.5 text-left break-words text-[11px] outline-none focus-hairline",
                   selected ? "border-primary/60 bg-primary/10" : "border-border/60",
                 )}
               >

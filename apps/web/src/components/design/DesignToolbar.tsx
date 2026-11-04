@@ -83,7 +83,7 @@ function RenameField({
     return (
       <button
         type="button"
-        className="mr-auto min-w-0 truncate rounded-sm px-1 text-left text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:hover:bg-transparent"
+        className="mr-auto min-w-0 truncate rounded-sm px-1 text-left text-sm font-medium hover:bg-muted focus-hairline disabled:hover:bg-transparent"
         disabled={disabled}
         title={disabled ? name : "Rename design"}
         aria-label={`Design name: ${name}. Rename`}
@@ -368,7 +368,7 @@ export function DesignToolbar(props: DesignToolbarProps) {
             <button
               key={tool.id}
               type="button"
-              className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              className="min-w-11 rounded-sm px-1 text-xs tabular-nums hover:bg-muted focus-hairline"
               aria-label={tool.label}
               title={tool.title}
               onClick={tool.onSelect}

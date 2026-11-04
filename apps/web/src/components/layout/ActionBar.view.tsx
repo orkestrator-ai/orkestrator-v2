@@ -602,7 +602,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? "col-span-2 grid w-full grid-cols-2 gap-2"
             : "max-w-[min(100%,48rem)] gap-0.5 overflow-x-auto",
         )}
-        buttonClassName="h-6 shrink-0 px-2 text-xs focus-visible:ring-inset"
+        buttonClassName="h-6 shrink-0 px-2 text-xs"
         options={
           [
             ...(hasProjectCheckout
@@ -627,10 +627,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </CoordinatorActivityIcon>
               ),
               overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
-              // The default ring is the selected fill's blue, and forced colours
-              // drop box-shadows, so either would leave this tab's focus unseen.
-              className:
-                "focus-visible:ring-current forced-colors:focus-visible:outline-2 forced-colors:focus-visible:-outline-offset-2 forced-colors:focus-visible:outline-solid forced-colors:focus-visible:outline-[Highlight]",
               panelId: "project-panel-coordinator",
             },
             {

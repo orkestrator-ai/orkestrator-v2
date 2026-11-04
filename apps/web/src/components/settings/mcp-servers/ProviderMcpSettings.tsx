@@ -337,7 +337,7 @@ export function ProviderMcpSettings() {
             <h2
               ref={headingRef}
               tabIndex={-1}
-              className="text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="text-sm font-medium text-foreground focus-hairline focus-hairline-outset"
             >
               Configured servers
             </h2>

@@ -55,9 +55,9 @@ export function OptionCards<T extends string>({
           disabled={disabled}
           onClick={() => onChange(entry.value)}
           className={cn(
-            "rounded-lg border-2 p-3 text-left transition-colors",
+            "rounded-lg border p-3 text-left transition-colors",
             value === entry.value
-              ? "border-primary bg-primary/5"
+              ? "border-ring bg-primary/5"
               : "border-transparent bg-zinc-900 hover:border-zinc-600",
             disabled && "cursor-not-allowed opacity-50",
           )}

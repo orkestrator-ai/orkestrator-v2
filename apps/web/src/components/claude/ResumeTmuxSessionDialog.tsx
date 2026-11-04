@@ -105,7 +105,7 @@ export function ResumeTmuxSessionDialog({
                     className={cn(
                       "w-full text-left px-3 py-2 rounded-md transition-colors",
                       "hover:bg-accent hover:text-accent-foreground",
-                      "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+                      "focus-hairline focus-hairline-outset",
                     )}
                   >
                     <div className="flex items-start gap-3">

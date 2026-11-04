@@ -205,7 +205,7 @@ export function SystemUsageMeters({
     <button
       ref={triggerRef}
       type="button"
-      className="flex items-center gap-1.5 rounded-md px-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="flex items-center gap-1.5 rounded-md px-0.5 text-muted-foreground transition-colors hover:text-foreground focus-hairline"
       onClick={onToggle}
       aria-label={open ? "Close environment process usage" : "Open environment process usage"}
       aria-expanded={open}

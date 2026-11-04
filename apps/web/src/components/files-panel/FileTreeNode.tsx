@@ -255,7 +255,7 @@ export const FileTreeNode = memo(function FileTreeNode({
                   <button
                     type="button"
                     aria-label={`Retry loading ${item.path}`}
-                    className="rounded text-foreground underline underline-offset-2 hover:text-primary focus-visible:outline focus-visible:outline-2"
+                    className="rounded text-foreground underline underline-offset-2 hover:text-primary focus-hairline focus-hairline-outset"
                     onClick={() => retryFolderLoad(item.path)}
                   >
                     Retry

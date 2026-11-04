@@ -92,7 +92,7 @@ function showStartupScreen(document: Document, failed: boolean, reload: () => vo
     const button = document.createElement("button");
     button.type = "button";
     button.className =
-      "rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-2";
+      "rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground focus-hairline focus-hairline-outset";
     button.textContent = "Reload window";
     button.addEventListener("click", reload);
     panel.append(button);

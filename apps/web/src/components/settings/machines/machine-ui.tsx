@@ -101,7 +101,7 @@ export function TokenInput({
       />
       <button
         type="button"
-        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-zinc-500 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-orange-500/60"
+        className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-zinc-500 hover:text-zinc-200 focus-hairline"
         onClick={() => setVisible((current) => !current)}
         aria-label={visible ? "Hide gateway token" : "Show gateway token"}
         disabled={disabled}

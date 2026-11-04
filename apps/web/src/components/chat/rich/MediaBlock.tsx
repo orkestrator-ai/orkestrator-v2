@@ -340,7 +340,7 @@ function MarkdownImageSource({ src, alt, title }: { src?: string; alt?: string; 
           placeholder ? { aspectRatio: MEDIA_PLACEHOLDER_ASPECT_RATIO, width: "10rem" } : undefined
         }
         className={cn(
-          "relative my-1 inline-block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border align-top focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "relative my-1 inline-block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border align-top focus-hairline",
           !url && "animate-pulse bg-muted/50 motion-reduce:animate-none",
         )}
       >
@@ -416,7 +416,7 @@ function FailureAction({
       aria-label={label}
       data-rich-chrome="true"
       onClick={onClick}
-      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground hover:bg-muted focus-hairline"
     >
       {children}
     </button>

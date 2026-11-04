@@ -238,7 +238,7 @@ export const MailTile = memo(function MailTile({
             aria-expanded={open}
             aria-controls={bodyId}
             onClick={() => setOpen(!open)}
-            className="flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2.5 pt-2 pb-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2.5 pt-2 pb-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-hairline"
           >
             <Icon className={cn("mt-0.5 size-4 shrink-0", style.accent)} aria-hidden="true" />
             <span className="sr-only">{style.label}: </span>
@@ -278,7 +278,7 @@ export const MailTile = memo(function MailTile({
               aria-label="Open conversation"
               title="Open conversation"
               onClick={() => openAgentMailConversation(participants[0], participants[1])}
-              className="mt-1 mr-1.5 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mt-1 mr-1.5 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground focus-hairline"
             >
               <MessagesSquare className="size-3.5" aria-hidden="true" />
             </button>

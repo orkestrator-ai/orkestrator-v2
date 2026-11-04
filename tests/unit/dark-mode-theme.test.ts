@@ -1,3 +1,4 @@
+import { Glob } from "bun";
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ describe("forced dark mode theming", () => {
       "--color-accent-foreground": "#f2f4f8",
       "--color-destructive": "#e5534b",
       "--color-destructive-foreground": "#ffffff",
-      "--color-ring": "#3b82f6",
+      "--color-ring": "color-mix(in srgb, var(--color-primary) 65%, var(--color-zinc-900))",
       // Named shell surfaces. `elevated` in particular is the control surface
       // that survives the central panel's terminal-background override, so a
       // rename here silently flattens every button onto its own background.
@@ -120,20 +121,23 @@ describe("forced dark mode theming", () => {
     expect(read("apps/web/src/components/chat/NativeComposeBar.tsx")).toContain("bg-input-surface");
   });
 
-  test("form controls use the same visible focus ring even when borders are overridden", () => {
+  test("form controls use the shared focus hairline", () => {
     for (const source of [
       "apps/web/src/components/ui/input.tsx",
       "apps/web/src/components/ui/textarea.tsx",
       "apps/web/src/components/ui/select.tsx",
     ]) {
-      const contents = read(source);
-      expect(contents).toContain("focus-visible:border-ring");
-      expect(contents).toContain("focus-visible:ring-ring/50");
-      expect(contents).toContain("focus-visible:ring-[3px]");
+      expect(read(source)).toContain("focus-hairline");
     }
+  });
 
-    const settings = read("apps/web/src/components/settings/GlobalSettings.sections.tsx");
-    expect(settings).not.toContain("focus-visible:outline-1 focus-visible:outline-ring");
+  test("no component draws its own focus ring instead of the shared hairline", () => {
+    const ownFocusStyle =
+      /(?:^|[\s"'`])(?:focus|focus-visible):(?:ring-(?!0\b)\S+|ring\b|outline-(?!none\b|hidden\b)\S+|border-(?:ring|primary)\S*)/;
+    const offenders = Array.from(new Glob("apps/web/src/**/*.{ts,tsx}").scanSync(repoRoot)).filter(
+      (file) => !/\.test\.tsx?$/.test(file) && ownFocusStyle.test(read(file)),
+    );
+    expect(offenders).toEqual([]);
   });
 
   test("native scrollbar tracks inherit the panel surface", () => {

@@ -167,7 +167,7 @@ export function RichTable({
         role="region"
         aria-label="Table contents, scroll horizontally"
         tabIndex={0}
-        className="max-w-full overflow-x-auto overscroll-x-contain outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        className="max-w-full overflow-x-auto overscroll-x-contain outline-none focus-hairline"
       >
         <table className={tableClassName}>{children}</table>
       </div>

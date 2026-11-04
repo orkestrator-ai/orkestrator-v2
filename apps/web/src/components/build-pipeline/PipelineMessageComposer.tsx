@@ -367,7 +367,7 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
             onChange={(event) => setDraft(event.target.value)}
             maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
             rows={2}
-            className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
+            className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:outline-none"
             placeholder="Send a message to the agent..."
             aria-label="Send a message to the agent"
             onKeyDown={handleKeyDown}

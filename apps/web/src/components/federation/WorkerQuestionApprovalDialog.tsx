@@ -237,7 +237,7 @@ export function WorkerQuestionApprovalDialog({
                             onClick={() => toggleOption(question, option.id)}
                             className={cn(
                               "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
-                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                              "focus-hairline",
                               selected
                                 ? "border-primary/50 bg-primary/10"
                                 : "border-border/60 hover:bg-white/[0.03]",

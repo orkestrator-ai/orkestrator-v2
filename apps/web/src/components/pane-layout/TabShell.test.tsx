@@ -44,7 +44,7 @@ describe("TabShell", () => {
     expect(close.className).toContain("text-muted-foreground");
     expect(close.className).toContain("md:hover-fine:opacity-0");
     expect(close.className).toContain("md:hover-fine:focus-visible:opacity-100");
-    expect(close.className).toContain("focus-visible:ring-2");
+    expect(close.className).toContain("focus-hairline");
     expect(screen.getByText("Trailing control")).toBeTruthy();
 
     fireEvent.mouseDown(close);

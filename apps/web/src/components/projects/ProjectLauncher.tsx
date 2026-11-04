@@ -85,7 +85,7 @@ export function ProjectLauncherContent({
             >
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left outline-none focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left outline-none focus-visible:bg-accent focus-hairline"
                 onClick={() => onOpenProject(project.id)}
                 aria-label={`Open ${project.name}`}
               >

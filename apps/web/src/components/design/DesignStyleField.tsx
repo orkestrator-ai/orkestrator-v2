@@ -129,7 +129,7 @@ export function DesignStyleField({
     "aria-describedby": describedBy,
     "data-changed": changed ? "true" : undefined,
   };
-  const changedClass = changed ? "border-primary ring-1 ring-primary/40" : "";
+  const changedClass = changed ? "border-ring" : "";
   // Controls are named by the visible label, so speech input can say what it
   // sees (WCAG 2.5.3); tests and tooling address the CSS property through
   // data-property.
@@ -162,7 +162,7 @@ export function DesignStyleField({
           {onRevert && (
             <button
               type="button"
-              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-ring disabled:opacity-50"
+              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-hairline disabled:opacity-50"
               aria-label={`Revert ${property.label}`}
               title="Discard the unsent value"
               disabled={disabled}
@@ -174,7 +174,7 @@ export function DesignStyleField({
           {onReset && (
             <button
               type="button"
-              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-ring disabled:opacity-50"
+              className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-hairline disabled:opacity-50"
               aria-label={`Reset ${property.label}`}
               title="Remove the inline declaration and use the stylesheet"
               disabled={disabled}

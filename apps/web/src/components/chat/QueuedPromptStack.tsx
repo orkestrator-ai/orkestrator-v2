@@ -248,7 +248,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
 
     if (length === 0) return null;
     const actionClass =
-      "shrink-0 rounded text-muted-foreground outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 aria-disabled:cursor-wait aria-disabled:opacity-50";
+      "shrink-0 rounded text-muted-foreground outline-none transition-colors focus-hairline focus-hairline-outset aria-disabled:cursor-wait aria-disabled:opacity-50";
     return (
       <div
         data-testid="compose-queue-strip"
@@ -266,7 +266,7 @@ export const QueuedPromptStack = forwardRef<QueuedPromptStackHandle, QueuedPromp
             <button
               type="button"
               onClick={queue.onOpen}
-              className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+              className="shrink-0 rounded outline-none transition-colors hover:text-foreground focus-hairline focus-hairline-outset"
               aria-label={
                 queue.error
                   ? `${length} queued prompts blocked: ${queue.error.message}`

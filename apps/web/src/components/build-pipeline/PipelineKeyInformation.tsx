@@ -231,7 +231,7 @@ export function KeyInformationBody({
                   aria-current={active ? "location" : undefined}
                   title={section.title}
                   className={cn(
-                    "w-full truncate rounded-md px-2 py-1 text-left text-xs whitespace-nowrap transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+                    "w-full truncate rounded-md px-2 py-1 text-left text-xs whitespace-nowrap transition-colors focus-hairline",
                     active
                       ? "bg-muted font-medium text-foreground"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",

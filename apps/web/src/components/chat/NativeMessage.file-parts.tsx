@@ -358,7 +358,7 @@ export function FilePart({
               // (82% of max-w-3xl, less its padding), so attachments pair up.
               "group relative block w-72 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5 bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "focus-hairline focus-hairline-outset",
           loading && "opacity-50",
         )}
       >

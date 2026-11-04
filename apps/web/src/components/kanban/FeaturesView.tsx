@@ -987,7 +987,7 @@ export function NativeStyleChatPanel({
             onChange={(event) => setDraft(event.target.value)}
             placeholder={placeholder}
             rows={1}
-            className="max-h-[160px] min-h-7 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0"
+            className="max-h-[160px] min-h-7 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:outline-none"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

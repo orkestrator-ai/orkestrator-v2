@@ -314,7 +314,7 @@ export function NativeChartBody({
             onClick={() => onToggleSeries(entry.id)}
             data-legend-series={entry.id}
             className={cn(
-              "inline-flex max-w-full items-center gap-1.5 rounded border border-border px-1.5 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              "inline-flex max-w-full items-center gap-1.5 rounded border border-border px-1.5 py-0.5 text-[11px] outline-none focus-hairline",
               entry.hidden ? "text-muted-foreground line-through opacity-60" : "text-foreground",
             )}
             title={entry.hidden ? `Show ${entry.label}` : `Hide ${entry.label}`}
@@ -340,7 +340,7 @@ export function NativeChartBody({
           <button
             type="button"
             onClick={onReset}
-            className="rounded border border-border px-2 py-1 text-foreground outline-none hover:bg-elevated focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="rounded border border-border px-2 py-1 text-foreground outline-none hover:bg-elevated focus-hairline"
           >
             Reset view
           </button>

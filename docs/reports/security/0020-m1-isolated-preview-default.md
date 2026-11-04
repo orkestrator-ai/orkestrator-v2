@@ -35,7 +35,7 @@ Done, so not in Tasks: every `browser/loopback` response carries `Content-Securi
 
 ## Needs verification
 
-- Browser behaviour of the sandbox header in Chromium and Safari; see [0260](0010-s4-gateway-login.md#0260-run-the-outstanding-dynamic-security-checks).
+- Browser behaviour of the sandbox header in shipping Safari; see [0260](0260-live-checks-on-other-platforms.md). Chromium, Firefox and WebKit pass `e2e/preview/gateway-browser-security.spec.ts`.
 
 ## Related
 

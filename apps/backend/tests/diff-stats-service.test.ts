@@ -481,6 +481,58 @@ describe("DiffStatsService", () => {
     expect(harness.scans).toHaveLength(2);
   });
 
+  test("a retarget does not wait for a superseded scan that never settles", async () => {
+    const harness = createHarness();
+    harness.setScan((target) =>
+      target.comparisonRef === "main"
+        ? new Promise(() => undefined)
+        : Promise.resolve({ stats: stats({ additions: 7 }), changes: [{ path: "new.ts" }] }),
+    );
+
+    harness.service.track(localTarget());
+    await settle();
+    harness.service.track(localTarget({ comparisonRef: "develop" }));
+    await settle();
+
+    expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main", "develop"]);
+    expect(harness.service.snapshot()).toEqual([
+      expect.objectContaining({ comparisonRef: "develop", stats: stats({ additions: 7 }) }),
+    ]);
+    await expect(
+      harness.service.readFileList({
+        lookup: { worktreePath: "/tmp/env-local-worktree" },
+        comparisonRef: "develop",
+        includeUncommitted: true,
+        refresh: true,
+      }),
+    ).resolves.toMatchObject({ changes: [{ path: "new.ts" }] });
+  });
+
+  test("a superseded scan settling late neither publishes nor rescans", async () => {
+    const harness = createHarness();
+    let releaseSuperseded: (() => void) | undefined;
+    harness.setScan((target) =>
+      target.comparisonRef === "main"
+        ? new Promise((resolve) => {
+            releaseSuperseded = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
+          })
+        : Promise.resolve({ stats: stats({ additions: 7 }), changes: [] }),
+    );
+
+    harness.service.track(localTarget());
+    await settle();
+    harness.service.track(localTarget({ comparisonRef: "develop" }));
+    await settle();
+    releaseSuperseded?.();
+    await settle();
+
+    expect(harness.scans.map((target) => target.comparisonRef)).toEqual(["main", "develop"]);
+    expect(harness.service.snapshot()).toEqual([
+      expect.objectContaining({ comparisonRef: "develop", stats: stats({ additions: 7 }) }),
+    ]);
+    expect(harness.service.status().inFlight).toBe(0);
+  });
+
   test("tracking an unchanged target is a no-op", async () => {
     const harness = createHarness();
     harness.service.track(localTarget());

@@ -860,6 +860,11 @@ export class DiffStatsService {
 
   private beginLineage(entry: DiffStatsEntry): void {
     entry.inFlight?.abort.abort();
+    // The superseded scan can no longer publish, so nothing in the new lineage
+    // waits for it. It may take as long as its slowest child's timeout, and a
+    // Git child can look unfinished after it has exited
+    // (docs/tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md).
+    entry.inFlight = undefined;
     entry.targetGeneration = this.nextTargetGeneration++;
     entry.mutationGeneration += 1;
     entry.fileList = undefined;
@@ -1080,8 +1085,8 @@ export class DiffStatsService {
    * Requests a scan, collapsing bursts.
    *
    * A watcher can fire many times for one save, and the safety net can land on
-   * top of a scan already running. At most one scan per environment runs at a
-   * time. A genuine change (hint, mutation, refresh, retarget) that arrives
+   * top of a scan already running. At most one scan per environment and lineage
+   * runs at a time. A genuine change (hint, mutation, refresh) that arrives
    * during one advances the epoch, which is what queues the single rerun; a
    * periodic tick or read landing during a scan joins it and queues nothing,
    * so a slow scan cannot turn the clock into a permanent rerun loop.
@@ -1118,9 +1123,11 @@ export class DiffStatsService {
     entry.inFlight = attempt;
     attempt.promise = this.runScan(entry, attempt, priority).finally(() => {
       if (entry.inFlight === attempt) entry.inFlight = undefined;
+      // A superseded attempt owes nothing: its lineage started its own scan.
       if (
         entry.active &&
         this.entries.get(entry.target.environmentId) === entry &&
+        entry.targetGeneration === attempt.targetGeneration &&
         entry.dirtyEpoch > attempt.epoch
       ) {
         this.request(entry, "rerun");

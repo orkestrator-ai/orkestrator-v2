@@ -15,6 +15,7 @@
     "./agent-system-instructions": "./src/agent-system-instructions.ts",
     "./agents-md-orkestrator": "./src/agents-md-orkestrator.ts",
     "./agent-activity": "./src/agent-activity.ts",
+    "./suborks": "./src/suborks.ts",
     "./ticket-sections": "./src/ticket-sections.ts",
     "./ticket-sync": "./src/ticket-sync.ts",
     "./agent-platforms": "./src/agent-platforms.ts",

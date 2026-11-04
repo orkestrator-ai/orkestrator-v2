@@ -1,11 +1,22 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
-import { getNativeAgentGoal, runNativeAgentGoalCommand, runUserCommand } from "@/lib/backend";
+import {
+  getNativeAgentGoal,
+  runNativeAgentGoalCommand,
+  runUserCommand,
+  stopNativeAgentSuborks,
+} from "@/lib/backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
 import { GoalPanel } from "@/components/chat/GoalPanel";
 import { GoalPill } from "@/components/chat/GoalPill";
+import {
+  SuborkGroupActionsContext,
+  type SuborkGroupActions,
+} from "@/components/chat/subork-context";
+import { SuborkTranscriptDialog } from "@/components/chat/SuborkTranscriptDialog";
+import { withSuborkGroupRows, withSuborkRequestText } from "@/lib/chat/subork-messages";
 import {
   createGoalTurnNativeMessage,
   hasBackendTurnClock,
@@ -749,7 +760,7 @@ export function SharedNativeAgentController({
           return createPeerMailNativeMessagesFromCarrier(message);
         }
         // A goal turn is the loop's text, never something the user typed.
-        return [createGoalTurnNativeMessage(message) ?? message];
+        return [createGoalTurnNativeMessage(message) ?? withSuborkRequestText(message)];
       }),
     [decoratedMessages],
   );
@@ -1038,16 +1049,17 @@ export function SharedNativeAgentController({
       ruleSession.applications.length === 0
         ? withCommands
         : withPermissionRuleRows(withCommands, ruleSession.applications, ruleSession.rules);
-    return sessionGoal
-      ? withGoalStatusRows(withRules, sessionGoal, {
-          canLoadEarlier: projection?.messageWindow?.canLoadEarlier === true,
-        })
+    const canLoadEarlier = projection?.messageWindow?.canLoadEarlier === true;
+    const withGoal = sessionGoal
+      ? withGoalStatusRows(withRules, sessionGoal, { canLoadEarlier })
       : withRules;
+    return withSuborkGroupRows(withGoal, projection?.suborks, { canLoadEarlier });
   }, [
     backgroundTaskRows,
     displayMessages,
     projection?.backgroundTasks,
     projection?.messageWindow?.canLoadEarlier,
+    projection?.suborks,
     sessionGoal,
     ruleSession.applications,
     ruleSession.rules,
@@ -1844,6 +1856,26 @@ export function SharedNativeAgentController({
       await runGoalCommand(text);
     },
     [pendingHandoff, runGoalCommand],
+  );
+  const [openSubork, setOpenSubork] = useState<{ batchId: string; suborkId: string } | null>(null);
+  const suborkActions = useMemo<SuborkGroupActions>(
+    () => ({
+      openTranscript: (batchId, suborkId) => setOpenSubork({ batchId, suborkId }),
+      stop: (batchId) =>
+        stopNativeAgentSuborks({
+          environmentId: data.environmentId,
+          agent: platform,
+          logicalSessionKey: sessionKey,
+          batchId,
+        }),
+    }),
+    [data.environmentId, platform, sessionKey],
+  );
+  const openSuborkBatch = openSubork
+    ? projection?.suborks?.find((batch) => batch.id === openSubork.batchId)
+    : undefined;
+  const openSuborkView = openSuborkBatch?.suborks.find(
+    (subork) => subork.id === openSubork?.suborkId,
   );
   const loadGoalDetail = useCallback(
     () =>
@@ -4281,14 +4313,25 @@ export function SharedNativeAgentController({
       <NativeChangeScopeContext.Provider value={nativeChangeScope}>
         <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
           <GoalDetailLoaderContext.Provider value={loadGoalDetail}>
-            <div className="@container flex h-full min-h-0 flex-col">
-              <ThreadChangesHeader
-                environmentId={data.environmentId}
-                logicalSessionKey={sessionKey}
-                turnActive={isTurnActive}
-              />
-              <div className="min-h-0 flex-1">{chatShell}</div>
-            </div>
+            <SuborkGroupActionsContext.Provider value={suborkActions}>
+              <div className="@container flex h-full min-h-0 flex-col">
+                <ThreadChangesHeader
+                  environmentId={data.environmentId}
+                  logicalSessionKey={sessionKey}
+                  turnActive={isTurnActive}
+                />
+                <div className="min-h-0 flex-1">{chatShell}</div>
+              </div>
+              {openSubork && openSuborkView ? (
+                <SuborkTranscriptDialog
+                  environmentId={data.environmentId}
+                  containerId={data.containerId}
+                  batchId={openSubork.batchId}
+                  subork={openSuborkView}
+                  onClose={() => setOpenSubork(null)}
+                />
+              ) : null}
+            </SuborkGroupActionsContext.Provider>
           </GoalDetailLoaderContext.Provider>
         </RichTranscriptScopeContext.Provider>
       </NativeChangeScopeContext.Provider>

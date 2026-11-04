@@ -151,6 +151,7 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("claude").composer.promptSuggestions).toBe(true);
     expect(nativeAgentCapabilities("claude").actions).toEqual({
       goal: true,
+      subork: true,
       compact: true,
       compactInstructions: true,
       rewindFiles: true,
@@ -163,6 +164,7 @@ describe("native agent capability table", () => {
     });
     expect(nativeAgentCapabilities("codex").actions).toEqual({
       goal: true,
+      subork: true,
       compact: true,
       steer: true,
       review: true,
@@ -195,6 +197,7 @@ describe("native agent capability table", () => {
         compact: true,
         compactInstructions: true,
         steer: true,
+        subork: true,
         rewindMessages: true,
         branches: true,
       },
@@ -242,8 +245,15 @@ describe("native agent capability table", () => {
       // Cursor through the SDK's `agent.summarize()`.
       expect(nativeAgentCapabilities(platform).actions).toEqual(
         platform === "cursor"
-          ? { goal: true, steer: true, rewindMessages: true, compact: true, archive: true }
-          : { compact: true, goal: true },
+          ? {
+              goal: true,
+              subork: true,
+              steer: true,
+              rewindMessages: true,
+              compact: true,
+              archive: true,
+            }
+          : { compact: true, goal: true, subork: true },
       );
     }
   });

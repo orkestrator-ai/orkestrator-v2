@@ -51,6 +51,7 @@ import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinato
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { AGENT_SUBORK_TOOL_NAMES, SUBORK_TOOL_NAME } from "@orkestrator/protocol/suborks";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
@@ -315,9 +316,12 @@ const OPENCODE_COORDINATOR_TOOL_PERMISSIONS = Object.freeze(
  * `<server>_<tool>` naming.
  */
 const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
-  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
-    (name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`,
-  ),
+  [
+    ...AGENT_MAIL_TOOL_NAMES,
+    ...ARTIFACT_TOOL_NAMES,
+    ...AGENT_GOAL_TOOL_NAMES,
+    ...AGENT_SUBORK_TOOL_NAMES,
+  ].map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 
 /**
@@ -410,6 +414,9 @@ export function openCodeWorkflowResultTurnTools(
     for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool, extraTools)) {
       tools[openCodeWorkflowResultToolId(tool)] = true;
     }
+    // OpenCode's Orkestrator connection is environment-wide, so this is what
+    // keeps a workflow turn, a subork's included, from starting suborks.
+    tools[`${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${SUBORK_TOOL_NAME}`] = false;
   }
   return tools;
 }

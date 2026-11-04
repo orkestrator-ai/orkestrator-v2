@@ -111,6 +111,7 @@ export function pendingHandoffCommandRefusal(plan: CommandDispatchPlan): string 
   if (plan.kind === "prompt") {
     return plan.command ? AGENT_HANDOFF_PENDING_COMMAND_MESSAGE : undefined;
   }
+  if (plan.kind === "subork") return AGENT_HANDOFF_PENDING_COMMAND_MESSAGE;
   if (plan.kind !== "goal") return undefined;
   const goal = parseGoalCommandArguments(plan.arguments);
   return goal.kind === "set" || goal.kind === "resume"

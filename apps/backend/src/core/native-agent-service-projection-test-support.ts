@@ -241,6 +241,7 @@ export async function withService(
     directHistoryPageCacheLimits?: NativeAgentServiceOptions["directHistoryPageCacheLimits"];
     artifactLedger?: NativeAgentServiceOptions["artifactLedger"];
     beforeMailInject?: NativeAgentServiceOptions["beforeMailInject"];
+    suborks?: NativeAgentServiceOptions["suborks"];
   },
   run: (context: { storage: StorageService; service: NativeAgentService }) => Promise<void>,
 ): Promise<void> {
@@ -249,6 +250,7 @@ export async function withService(
   await addEnvironment(storage, setup.environment);
   const service = new NativeAgentService(storage, setup.invoke ?? refusingInvoke, {
     ...(setup.provider ? { provider: setup.provider } : {}),
+    ...(setup.suborks ? { suborks: setup.suborks } : {}),
     ...(setup.environmentFence ? { environmentFence: setup.environmentFence } : {}),
     ...(setup.now ? { now: setup.now } : {}),
     ...(setup.delay ? { delay: setup.delay } : {}),

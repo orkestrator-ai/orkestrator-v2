@@ -68,6 +68,16 @@ export const NATIVE_AGENT_LOG_AREAS = defineLogAreas({
       "recover.failed": "Goals could not be recovered at startup.",
     },
   },
+  "native-agent.subork": {
+    description: "Suborks: the ask_agents calls a native agent makes. Content-free.",
+    events: {
+      "pass.failed": "A pass over a call failed, so a later pass retries. Counts only.",
+      "delivery.failed":
+        "A call's answers could not be placed in the caller's mailbox yet. Error class only.",
+      "retention.failed": "An old call could not be removed.",
+      "sweep.failed": "A running call's caller could not be checked; the next sweep looks again.",
+    },
+  },
   "native-agent.opencode": {
     description: "The OpenCode provider: its request monitor, retries and agent tools.",
     events: {

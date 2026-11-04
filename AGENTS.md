@@ -32,6 +32,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
 | The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
+| Suborks (`native-agent-subork*`, `agent-tools-suborks.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
 | Graphs plan work items (`plans/graphs/`): starting one, updating its status | [`plans/graphs/AGENTS.md`](plans/graphs/AGENTS.md) |
 | Goals plan work items (`plans/goals/`): starting one, updating its status | [`plans/goals/AGENTS.md`](plans/goals/AGENTS.md) |
 

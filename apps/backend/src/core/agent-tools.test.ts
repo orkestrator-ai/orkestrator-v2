@@ -779,6 +779,8 @@ describe("agent Kanban tools", () => {
         "validate_workflow_result",
         workflowResultToolName(kind),
         "get_workflow_result_status",
+        // A subork finds a refusal rather than a missing tool.
+        ...(kind === "subork-answer" ? ["ask_agents"] : []),
       ]);
       const submission = listed.body.result?.tools?.[1];
       expect(submission?.inputSchema).toMatchObject({

@@ -668,6 +668,29 @@ export async function getNativeAgentGoal(input: {
   return invoke("get_native_agent_goal", input);
 }
 
+/** Stops a session's running suborks: one call's, or every call's when `batchId` is absent. */
+export async function stopNativeAgentSuborks(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  batchId?: string;
+}): Promise<void> {
+  await invoke("stop_native_agent_suborks", input);
+}
+
+/** One subork's stored transcript. Reading it touches no provider. */
+export type NativeAgentSuborkTranscript =
+  | { status: "found"; messages: unknown[]; agent?: string }
+  | { status: "missing" | "none" | "unavailable" };
+
+export async function getNativeAgentSuborkTranscript(input: {
+  environmentId: string;
+  batchId: string;
+  suborkId: string;
+}): Promise<NativeAgentSuborkTranscript> {
+  return invoke("native_agent_subork_transcript", input);
+}
+
 export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;

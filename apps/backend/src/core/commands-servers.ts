@@ -1670,6 +1670,7 @@ export async function deleteEnvironment(
       // A graph run is scoped to one environment (D7) and its artifacts to the
       // run: both go with it, like a pipeline.
       if (storage.graphRuns) await storage.graphRuns.deleteGraphRunsByEnvironment(environmentId);
+      if (storage.suborks) await storage.suborks.deleteSuborkBatchesByEnvironment(environmentId);
       // Its "Describe a graph" job can never run again either (item 215).
       storage.graphDescribe?.deleteGraphDescribeJob(environmentId);
       // Queued prompts for a deleted environment can never be dispatched.

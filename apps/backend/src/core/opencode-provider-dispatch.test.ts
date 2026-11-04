@@ -2427,6 +2427,14 @@ describe("OpenCode workflow-result tool masks", () => {
   test("only a reviewer's turn exposes report_finding, and ordinary turns hide it", () => {
     const finding = openCodeWorkflowResultToolId("report_finding");
     expect(openCodeWorkflowResultTurnTools("submit_review_report")[finding]).toBe(true);
+    // The connection is environment-wide, so a subork's turn must not see the tool.
+    expect(openCodeWorkflowResultTurnTools("submit_subork_answer").orkestrator_ask_agents).toBe(
+      false,
+    );
+    expect(openCodeWorkflowResultTurnTools("submit_subork_answer")).toMatchObject({
+      orkestrator_workflow_result_submit_subork_answer: true,
+    });
+    expect(openCodeWorkflowResultTurnTools()).not.toHaveProperty("orkestrator_ask_agents");
     expect(openCodeWorkflowResultTurnTools("submit_fix_result")[finding]).toBe(false);
     expect(openCodeWorkflowResultTurnTools()[finding]).toBe(false);
     const allowed = (tool: string) =>

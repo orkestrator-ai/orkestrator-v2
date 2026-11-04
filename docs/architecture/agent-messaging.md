@@ -453,6 +453,7 @@ Tools (always the same set; enforcement is at call time):
 | `ack_message` | Agent receipt |
 | `reply_message` | Derived destination; acks the parent |
 | `get_message_status` | Placement and receipts for mail this tab sent |
+| `ask_agents` | Ask other agents; the answers come back as mail ([suborks.md](suborks.md)) |
 | `create_schedule`, `list_schedules`, `cancel_schedule` | Mail (or a reminder to this tab) sent later by the backend, as this tab; see [scheduled-jobs.md](scheduled-jobs.md) |
 
 If the resolved mailbox has `canPull: false`, every tool returns
@@ -537,7 +538,9 @@ wins.
 | Cursor | Never asks |
 
 `report_goal` shares the mail tools' footing: it never prompts, and it writes only
-to Orkestrator's own record ([goals.md](goals.md)).
+to Orkestrator's own record ([goals.md](goals.md)). So does `ask_agents`, which
+writes only to that record and starts read-only sessions. Its answers come back as
+a system-route notice ([suborks.md](suborks.md#results-delivery)).
 
 ## How each provider gets the tools
 

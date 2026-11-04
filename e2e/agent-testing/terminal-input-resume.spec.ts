@@ -166,7 +166,10 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     const focusTerminal = async () => {
       const terminal = page.locator(".xterm:visible").first();
       await expect(terminal).toBeVisible({ timeout: 60_000 });
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
     };
     await openEnvironment(target.name);
     await focusTerminal();
@@ -202,8 +205,11 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     // simply what the prompt would echo.
     await page.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
     await page.keyboard.press("Enter");
-    await expect.poll(output).toContain("resume.txt");
-    await page.keyboard.type("ibefore-");
+    // The shell echoes the filename before the editor is ready. Wait for
+    // the empty editor's ruler so startup cannot discard the first input.
+    await expect.poll(screen).toMatch(/resume\.txt[^\n]*0,0-1/);
+    await focusTerminal();
+    await page.keyboard.insertText("ibefore-");
     await expect.poll(screen).toContain("before-");
     // nvim's terminal queries are answered as writes. Let them finish so the
     // write lost below is the keystroke.
@@ -482,7 +488,10 @@ for (const transport of ["http-sse", "websocket"] as const) {
       };
       await openEnvironment(target.name);
       const terminal = page.locator(".xterm:visible").first();
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
       await page.keyboard.type("echo READY_PID=$$");
       await page.keyboard.press("Enter");
       const creates = () =>
@@ -537,7 +546,10 @@ for (const transport of ["http-sse", "websocket"] as const) {
         )
         .toBe(true);
       // Stable terminal keys can reuse an id; compare actual shell PIDs.
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
       await page.keyboard.type("echo RECOVERY_PID=$$");
       await page.keyboard.press("Enter");
       await expect.poll(() => output(replacement)).toMatch(/RECOVERY_PID=\d+/);
@@ -571,7 +583,10 @@ for (const transport of ["http-sse", "websocket"] as const) {
       await page.reload();
       await openEnvironment(target.name);
       await expect.poll(renderedOutput).toContain("recovered-background");
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
       await page.keyboard.type("echo after-reload");
       await page.keyboard.press("Enter");
       await expect.poll(() => output(replacement)).toMatch(/after-reload\r?\n/);

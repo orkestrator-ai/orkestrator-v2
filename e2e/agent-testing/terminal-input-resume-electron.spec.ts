@@ -242,7 +242,10 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     const focusTerminal = async () => {
       const terminal = window.locator(".xterm:visible").first();
       await expect(terminal).toBeVisible({ timeout: 60_000 });
-      await terminal.click();
+      // Run actionability/modal handlers away from the toast, without sending
+      // a mouse event that would move vim's cursor.
+      await terminal.click({ trial: true, position: { x: 12, y: 12 } });
+      await terminal.locator(".xterm-helper-textarea").focus();
     };
     await openEnvironment(window, target.name);
     await focusTerminal();
@@ -268,8 +271,11 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
 
     await window.keyboard.type(`${editor} -u NONE -N -n resume.txt`);
     await window.keyboard.press("Enter");
-    await expect.poll(output).toContain("resume.txt");
-    await window.keyboard.type("ibefore-");
+    // The shell echoes the filename before the editor is ready. Wait for
+    // the empty editor's ruler so startup cannot discard the first input.
+    await expect.poll(screen).toMatch(/resume\.txt[^\n]*0,0-1/);
+    await focusTerminal();
+    await window.keyboard.insertText("ibefore-");
     await expect.poll(screen).toContain("before-");
 
     // Let nvim’s terminal-query replies settle before losing a keystroke response.

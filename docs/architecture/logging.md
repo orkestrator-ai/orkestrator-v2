@@ -485,6 +485,33 @@ Text is the default: one line per entry, in the old `[tag] message` shape.
   `console.debug`, because `console.trace` prints a stack of its own and neither
   the bounded console nor the file tee wraps it.
 
+## The file writer
+
+`installProductionApplicationLogging` tees each console call into a queue, and one
+serialized chain moves the queue to the daily file. A burst costs one `appendFile`,
+however many lines it holds.
+
+- **When it writes.** On the next event-loop turn after a line arrives, or after the
+  append in flight finishes. Lines logged during an append share the next one. There
+  is no timer, so a lone line waits for nothing else. A blocked main thread still
+  delays it.
+- **How much at once.** Everything queued, in appends of at most 256 KiB
+  (`maxBatchBytes`), or more for a single larger entry. A batch splits where the file
+  rolls, so one line is never cut across two appends by the writer.
+- **Order and completion.** Lines reach the file in the order they were logged.
+  `flush` and `stop` wait for every line accepted before the call, which is how a
+  quit or a standalone backend's shutdown keeps them. A process that exits without
+  calling them can lose what is queued.
+- **The directory.** `mkdir` runs before the first write and again only after a failed
+  write. When the log folder is removed while running, the failed append's `ENOENT`
+  makes the writer create it, recount the file sizes and retry those lines once.
+- **A failed write.** Any other failure loses that batch and writes one `logging`
+  `write.failed` line, with `entries` and `bytes`, to the console. The file has no
+  marker for it. It never reaches the code that logged, and the next batch tries again.
+- **Bounds.** The queue holds at most 4 MiB (`maxPendingBytes`) and 65,536 entries
+  (`maxPendingEntries`), counting what is being written. A line past either is
+  dropped, and the next line that fits writes `entries.dropped` first.
+
 ## Live settings
 
 **Settings → Debug** has two controls. Neither needs a restart, and neither
@@ -657,8 +684,8 @@ Two alternatives were rejected. A one-character level prefix needs a second gram
 and loses the fields. A separate pipe avoids any parsing but adds a stream with its
 own backpressure and no ordering against stdout and stderr.
 
-The rest of the relay and writer work (batching, a line length bound, skipping the
-relay when nothing consumes it) is undecided and not built.
+The rest of the relay work (a line length bound, skipping the relay when nothing
+consumes it) is undecided and not built.
 
 `writeProcessOutputLine` is how raw text enters the log. Only a stdio relay may
 call it: it bypasses levels because such text has none.

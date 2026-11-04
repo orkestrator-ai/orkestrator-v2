@@ -28,6 +28,10 @@ export const DESKTOP_SUPERVISED_ENV = "ORKESTRATOR_DESKTOP_SUPERVISED";
 const LOG_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const LOG_SHUTDOWN_FLUSH_MS = 2_000;
 const MAX_PENDING_LOG_BYTES = 4 * 1024 * 1024;
+// Above what the byte bound admits at a typical line length. It is there for a
+// flood of very short lines, each of which costs far more than its bytes.
+const MAX_PENDING_LOG_ENTRIES = 64 * 1024;
+const MAX_LOG_BATCH_BYTES = 256 * 1024;
 const MAX_LOG_ENTRY_BYTES = 64 * 1024;
 const MAX_LOG_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_LOG_DIRECTORY_BYTES = 512 * 1024 * 1024;
@@ -48,6 +52,10 @@ const MAX_LOG_BUDGET_FILES = 100_000;
 export type ApplicationLogBounds = {
   /** In-memory queue ceiling. Entries past it are dropped and reported. */
   maxPendingBytes: number;
+  /** The same queue's ceiling by count. Entries past it are handled the same way. */
+  maxPendingEntries: number;
+  /** Most bytes one append carries, unless a single entry is larger on its own. */
+  maxBatchBytes: number;
   /** Per-entry ceiling. A longer entry is truncated with an explicit marker. */
   maxEntryBytes: number;
   /** Per-file ceiling. Exceeding it rolls to the next numbered file. */
@@ -58,9 +66,17 @@ export type ApplicationLogBounds = {
 
 export const DEFAULT_APPLICATION_LOG_BOUNDS: ApplicationLogBounds = {
   maxPendingBytes: MAX_PENDING_LOG_BYTES,
+  maxPendingEntries: MAX_PENDING_LOG_ENTRIES,
+  maxBatchBytes: MAX_LOG_BATCH_BYTES,
   maxEntryBytes: MAX_LOG_ENTRY_BYTES,
   maxFileBytes: MAX_LOG_FILE_BYTES,
   maxDirectoryBytes: MAX_LOG_DIRECTORY_BYTES,
+};
+
+/** The two filesystem calls the writer makes per batch; injectable so a test can count or fail them. */
+export type ApplicationLogFileOperations = {
+  mkdir(directory: string, options: { recursive: true; mode: number }): Promise<unknown>;
+  appendFile(target: string, data: Buffer, options: { mode: number }): Promise<void>;
 };
 
 export type ApplicationLogSettings = {
@@ -357,6 +373,28 @@ function boundedEntry(value: string, maxEntryBytes: number): Buffer {
   return Buffer.concat([encoded.subarray(0, keep), suffix]);
 }
 
+type QueuedLogEntry = { payload: Buffer; format: LogFormat };
+
+function queuedBytes(entries: QueuedLogEntry[]): number {
+  return entries.reduce((sum, entry) => sum + entry.payload.byteLength, 0);
+}
+
+/** Removes and returns the next entries that fit `maxBytes`, always at least one. */
+function takeBatch(entries: QueuedLogEntry[], maxBytes: number): QueuedLogEntry[] {
+  let count = 1;
+  let bytes = entries[0]!.payload.byteLength;
+  while (count < entries.length) {
+    bytes += entries[count]!.payload.byteLength;
+    if (bytes > maxBytes) break;
+    count += 1;
+  }
+  return entries.splice(0, count);
+}
+
+function nextEventLoopTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 export function installProductionApplicationLogging(options: {
   dataDir: string;
   /** Daily file name prefix; defaults to the desktop app's own log. */
@@ -364,6 +402,7 @@ export function installProductionApplicationLogging(options: {
   now?: () => Date;
   cleanupIntervalMs?: number;
   bounds?: Partial<ApplicationLogBounds>;
+  files?: ApplicationLogFileOperations;
 }): InstalledApplicationLogging {
   let settings = readApplicationLogSettings(options.dataDir);
 
@@ -371,6 +410,7 @@ export function installProductionApplicationLogging(options: {
   const filePrefix = options.filePrefix ?? DESKTOP_LOG_FILE_PREFIX;
   const now = options.now ?? (() => new Date());
   const bounds: ApplicationLogBounds = { ...DEFAULT_APPLICATION_LOG_BOUNDS, ...options.bounds };
+  const files: ApplicationLogFileOperations = options.files ?? { mkdir, appendFile };
   const originalMethods = {
     debug: console.debug,
     error: console.error,
@@ -379,17 +419,30 @@ export function installProductionApplicationLogging(options: {
     warn: console.warn,
   };
   let pending = Promise.resolve();
+  const queue: QueuedLogEntry[] = [];
+  let batchScheduled = false;
+  let directoryReady = false;
   let pendingBytes = 0;
+  let pendingEntries = 0;
   let stopped = false;
   let droppedEntries = 0;
   let droppedBytes = 0;
   let active: { base: string; format: LogFormat; index: number; bytes: number } | null = null;
 
-  const reportWriteFailure = (error: unknown) => {
-    originalMethods.error.call(
-      console,
-      renderLogLine("error", "logging", "write.failed", { error: formatLogError(error) }),
-    );
+  const reportWriteFailure = (error: unknown, lost: QueuedLogEntry[]) => {
+    // Runs inside the write chain, which nothing else can restart if it rejects.
+    try {
+      originalMethods.error.call(
+        console,
+        renderLogLine("error", "logging", "write.failed", {
+          error: formatLogError(error),
+          entries: lost.length,
+          bytes: queuedBytes(lost),
+        }),
+      );
+    } catch {
+      // Nowhere left to report it.
+    }
   };
 
   /**
@@ -434,17 +487,86 @@ export function installProductionApplicationLogging(options: {
     return Buffer.from(getLogFormat() === "json" ? `${line}\n` : `${timestamp} WARN ${line}\n`);
   };
 
+  const ensureLogDirectory = async () => {
+    if (directoryReady) return;
+    await files.mkdir(logDirectory, { recursive: true, mode: 0o700 });
+    directoryReady = true;
+  };
+
+  /** One run per target file, so a batch splits only where `resolveTarget` rolls. */
+  const groupByTarget = async (entries: QueuedLogEntry[]) => {
+    const runs: Array<{ target: string; payloads: Buffer[] }> = [];
+    for (const { payload, format } of entries) {
+      const target = await resolveTarget(payload.byteLength, format);
+      const last = runs.at(-1);
+      if (last?.target === target) last.payloads.push(payload);
+      else runs.push({ target, payloads: [payload] });
+    }
+    return runs;
+  };
+
+  /**
+   * Appends a batch and never rejects. `ENOENT` means the log folder went away
+   * while running, so the unwritten entries get one retry through a fresh
+   * `mkdir`. Anything else loses them: holding on would only trade them for
+   * newer lines at the queue bound. The next batch then starts from `mkdir`.
+   */
+  const writeBatch = async (entries: QueuedLogEntry[]) => {
+    let written = 0;
+    let recovered = false;
+    try {
+      await ensureLogDirectory();
+      while (written < entries.length) {
+        try {
+          for (const run of await groupByTarget(entries.slice(written))) {
+            await files.appendFile(run.target, Buffer.concat(run.payloads), { mode: 0o600 });
+            written += run.payloads.length;
+          }
+        } catch (error) {
+          // The failed write may have taken the sizes `active` counted with it.
+          active = null;
+          directoryReady = false;
+          if (recovered || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          recovered = true;
+          await ensureLogDirectory();
+        }
+      }
+    } catch (error) {
+      reportWriteFailure(error, entries.slice(written));
+    }
+  };
+
+  /**
+   * Each link of the chain writes everything queued when it starts, in pieces no
+   * larger than `maxBatchBytes`, so entries logged while an append is in flight
+   * share the next link. `pending` is therefore always the link that will take
+   * the newest entry, which is what `flush` and `stop` rely on.
+   */
+  const writeQueued = async () => {
+    batchScheduled = false;
+    const entries = queue.splice(0);
+    while (entries.length > 0) {
+      const batch = takeBatch(entries, bounds.maxBatchBytes);
+      await writeBatch(batch);
+      pendingBytes -= queuedBytes(batch);
+      pendingEntries -= batch.length;
+    }
+  };
+
+  // The next event-loop turn, not a timer, so a lone line waits for nothing but
+  // an append already in flight. A blocked main thread delays it regardless
+  // (to-do 0880), and a longer delay would only widen that window.
+  const scheduleBatch = () => {
+    if (batchScheduled) return;
+    batchScheduled = true;
+    pending = pending.then(nextEventLoopTurn).then(writeQueued);
+  };
+
   const write = (payload: Buffer, format: LogFormat) => {
     pendingBytes += payload.byteLength;
-    pending = pending
-      .then(async () => {
-        await mkdir(logDirectory, { recursive: true, mode: 0o700 });
-        await appendFile(await resolveTarget(payload.byteLength, format), payload, { mode: 0o600 });
-      })
-      .catch(reportWriteFailure)
-      .finally(() => {
-        pendingBytes -= payload.byteLength;
-      });
+    pendingEntries += 1;
+    queue.push({ payload, format });
+    scheduleBatch();
   };
 
   const enqueue = (level: string, args: unknown[]) => {
@@ -462,7 +584,10 @@ export function installProductionApplicationLogging(options: {
         : boundedEntry(`${timestamp} ${level.toUpperCase()} ${formatted}\n`, bounds.maxEntryBytes);
     const marker = dropMarker(timestamp);
     const payload = marker ? Buffer.concat([marker, entry]) : entry;
-    if (pendingBytes + payload.byteLength > bounds.maxPendingBytes) {
+    if (
+      pendingBytes + payload.byteLength > bounds.maxPendingBytes ||
+      pendingEntries >= bounds.maxPendingEntries
+    ) {
       // A dropped entry leaves a hole, so record it; the next entry that fits
       // announces the gap rather than letting the log read as continuous.
       droppedEntries += 1;

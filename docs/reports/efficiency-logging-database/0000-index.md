@@ -282,7 +282,7 @@ When one of these becomes ready, it joins the lane shown.
 | DK-15 | Done | Rename, repair and `EXDEV` fallback, `environment-move.ts:428`, `:470`, `:559` (2525fc05c). |
 | DK-16 | Partly done | Transcript `knownToken`, `session.ts:1085`, `actions-transcript.ts:154` (b68b6e710); `attention --follow` remains, see 0694. |
 | DK-17 | Done | One bounded read, `packages/cli/src/client/transport.ts:134` (b68b6e710). |
-| DK-18 | Open | `mkdir` and `appendFile` per entry, `packages/protocol/src/node/application-logging.ts:441-442`; see [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
+| DK-18 | Done | One `appendFile` per event-loop turn and `mkdir` only after a failure, in `packages/protocol/src/node/application-logging.ts`; see [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 16 and [E26 part 0860](0400-e26-local-desktop-transport.md#0860-finish-the-electron-relay-and-file-writer), task 1, shared with R7. |
 
 ## Status of every logging and database item
 

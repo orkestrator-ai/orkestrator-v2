@@ -31,6 +31,12 @@ export interface RemoteGatewayRequestAuthOptions {
    * preview targets; without it the gateway refuses them.
    */
   previewViewEnvironment?: (webContentsId: number | undefined) => string | null | undefined;
+  /**
+   * The `Origin` an authorized request presents, instead of the hosted
+   * client's. A window's own local backend answers its own origin whatever
+   * origins this launch allowed.
+   */
+  requestOrigin?: (url: string) => string | null | undefined;
 }
 
 /** `<origin>/__orkestrator/browser/loopback/<port>` for a gateway preview URL, else null. */
@@ -141,7 +147,7 @@ export function installRemoteGatewayRequestAuth(
       requestHeaders: {
         ...requestHeaders,
         Authorization: authorization,
-        Origin: "https://orkestrator.dev",
+        Origin: options.requestOrigin?.(details.url) ?? "https://orkestrator.dev",
         ...(environmentId ? { [BROWSER_PREVIEW_ENVIRONMENT_HEADER]: environmentId } : {}),
       },
     });

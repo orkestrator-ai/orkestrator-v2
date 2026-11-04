@@ -82,6 +82,8 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
   let remote: boolean;
   let failAttach: Error | null;
   let beforeAttach: (() => Promise<void>) | undefined;
+  /** Attachments omit `multiplexSubprotocol`, as from a backend that predates tunnel v2. */
+  let legacyBackend: boolean;
   const sessions = new Map<string, FakeSession>();
   const invoked: string[] = [];
 
@@ -118,6 +120,7 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     remote = true;
     failAttach = null;
     beforeAttach = undefined;
+    legacyBackend = false;
     invoked.length = 0;
     sessions.clear();
     manager = new PreviewTransportManager({
@@ -125,7 +128,13 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
         invoked.push(command);
         if (command === "create_preview_attachment") await beforeAttach?.();
         if (failAttach && command === "create_preview_attachment") throw failAttach;
-        return (await commands.get(command)!(args, context)) as T;
+        const result = await commands.get(command)!(args, context);
+        if (legacyBackend && command === "create_preview_attachment") {
+          const attachment = result as PreviewAttachmentDescriptor;
+          const { multiplexSubprotocol: _omitted, ...tunnel } = attachment.tunnel!;
+          return { ...attachment, tunnel } as T;
+        }
+        return result as T;
       },
       tunnelUrl: () => `ws://127.0.0.1:${gatewayPort}/__orkestrator/preview/tunnel`,
       isRemote: () => remote,
@@ -275,6 +284,40 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
     await get(`${descriptor.origin}/assets/app.css`, headers);
     await get(`${descriptor.origin}/assets/app.js`, headers);
     expect(tunnel.stats().admission.admitted).toBe(1);
+  });
+
+  test("parallel connections share one authenticated tunnel socket", async () => {
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    let upgrades = 0;
+    gateway.prependListener("upgrade", () => (upgrades += 1));
+    const paths = ["/health", "/assets/app.css", "/assets/app.js", "/health", "/assets/app.css"];
+    const responses = await Promise.all(
+      paths.map((path) => get(`${descriptor.origin}${path}`, headers)),
+    );
+    expect(responses.map((response) => response.status)).toEqual(paths.map(() => 200));
+    // Five upstream connections, one WebSocket handshake and one HELLO.
+    expect(tunnel.stats().admission.admitted).toBe(paths.length);
+    expect(upgrades).toBe(1);
+    expect(tunnel.stats().sessions).toBe(1);
+    expect(manager.stats().tunnelSessions).toBe(1);
+  });
+
+  test("against a backend without tunnel v2, each connection opens its own socket", async () => {
+    legacyBackend = true;
+    const descriptor = await manager.acquire(target(), "tab-1");
+    const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
+    let upgrades = 0;
+    gateway.prependListener("upgrade", () => (upgrades += 1));
+    const responses = await Promise.all([
+      get(`${descriptor.origin}/health`, headers),
+      get(`${descriptor.origin}/assets/app.css`, headers),
+      get(`${descriptor.origin}/assets/app.js`, headers),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(upgrades).toBe(3);
+    expect(tunnel.stats().sessions).toBe(0);
+    expect(manager.stats().tunnelSessions).toBe(0);
   });
 
   test("application websockets pass through the ingress with subprotocols", async () => {
@@ -515,6 +558,9 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
   });
 
   test("a connection refused after its attachment was replaced retries without reattaching", async () => {
+    // Two tunnel handshakes racing needs one socket per connection: on v2 the
+    // second request joins the first's session.
+    legacyBackend = true;
     const descriptor = await manager.acquire(target(), "tab-1");
     const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
     harness.runtime.access.revokeServices([serviceId], "operator-revoked");
@@ -560,6 +606,8 @@ describe("PreviewTransportManager (desktop tunnel end to end)", () => {
 
   for (const recovery of ["revoked replacement", "pending attach", "refused final open"] as const) {
     test(`a delayed refusal recovers across a second revocation (${recovery})`, async () => {
+      // Needs two racing handshakes, so one socket per connection (v1).
+      legacyBackend = true;
       const descriptor = await manager.acquire(target(), "tab-1");
       const headers = await sessions.get(descriptor.partition)!.headersFor(descriptor.url);
       const held: Array<() => void> = [];

@@ -1682,6 +1682,7 @@ export async function startEnvironmentOnce(
     const config = await storage.loadConfig();
     if (context.runtimeFlavor !== "agent-test") {
       const githubToken = await resolveContainerGitHubToken(config.global);
+      const environmentId = environment.id;
       await context.runtime.prMonitor.viewerPermissions.rotateScope(
         `container:${containerId}`,
         async () => {

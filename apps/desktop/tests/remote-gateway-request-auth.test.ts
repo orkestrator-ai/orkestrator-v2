@@ -43,6 +43,25 @@ function installHarness(options: RemoteGatewayRequestAuthOptions = {}) {
 }
 
 describe("remote gateway renderer request authentication", () => {
+  test("presents the origin it is given in place of the hosted client's", () => {
+    const harness = installHarness({ requestOrigin: () => "https://desk.example" });
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()(
+      {
+        url: "https://desk.example/__orkestrator/invoke",
+        requestHeaders: { Origin: "file://" },
+        resourceType: "xhr",
+      },
+      callback,
+    );
+    expect(callback).toHaveBeenCalledWith({
+      requestHeaders: {
+        Authorization: "Bearer gateway-token",
+        Origin: "https://desk.example",
+      },
+    });
+  });
+
   test("replaces sensitive request headers and rewrites CORS only for authorized gateway URLs", () => {
     const harness = installHarness();
 

@@ -31,7 +31,7 @@ export interface PreviewTunnelOpenOptions {
   pingIntervalMs?: number;
 }
 
-const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
+export const CATEGORY_FOR_CLOSE: Record<number, PreviewErrorCategory> = {
   [PREVIEW_TUNNEL_CLOSE.unauthenticated]: "access-expired",
   [PREVIEW_TUNNEL_CLOSE.forbidden]: "forbidden",
   [PREVIEW_TUNNEL_CLOSE.revoked]: "access-expired",
@@ -130,19 +130,28 @@ export class PreviewTunnelStream extends Duplex {
 }
 
 /**
- * Open an authorized tunnel connection: WebSocket handshake, HELLO with the
- * attachment credential, OPEN (no destination fields), then OPEN_OK. HELLO
- * and OPEN are pipelined; application bytes wait for OPEN_OK.
+ * Open an authorized v1 tunnel connection: WebSocket handshake, HELLO with
+ * the attachment credential, OPEN (no destination fields), then OPEN_OK.
+ * HELLO and OPEN are pipelined; application bytes wait for OPEN_OK.
+ * `PreviewTunnelConnector` (`preview-tunnel-session.ts`) prefers v2.
  */
 export async function openPreviewTunnel(
   options: PreviewTunnelOpenOptions,
 ): Promise<PreviewTunnelStream> {
   const started = performance.now();
-  let ws: PreviewWebSocket;
+  const ws = await connectPreviewTunnelSocket(options, PREVIEW_TUNNEL_SUBPROTOCOL);
+  return startV1Tunnel(ws, options, started);
+}
+
+/** The tunnel WebSocket handshake, offering `protocol` (several in preference order). */
+export async function connectPreviewTunnelSocket(
+  options: PreviewTunnelOpenOptions,
+  protocol: string | readonly string[],
+): Promise<PreviewWebSocket> {
   try {
-    ws = await connectPreviewWebSocket({
+    return await connectPreviewWebSocket({
       url: options.url,
-      protocol: PREVIEW_TUNNEL_SUBPROTOCOL,
+      protocol,
       maxPayload: PREVIEW_LIMITS.tunnelFrameMaxBytes,
       connectTimeoutMs: options.connectTimeoutMs ?? PREVIEW_LIMITS.connectTimeoutMs,
       handshakeTimeoutMs: options.handshakeTimeoutMs ?? PREVIEW_LIMITS.connectTimeoutMs,
@@ -157,6 +166,14 @@ export async function openPreviewTunnel(
       message: "The preview tunnel could not be reached.",
     });
   }
+}
+
+/** Run v1 on a socket that negotiated it: HELLO and OPEN, then wait for OPEN_OK. */
+export function startV1Tunnel(
+  ws: PreviewWebSocket,
+  options: PreviewTunnelOpenOptions,
+  started: number,
+): Promise<PreviewTunnelStream> {
   return new Promise<PreviewTunnelStream>((resolve, reject) => {
     let settled = false;
     const finish = (error: Error | null) => {

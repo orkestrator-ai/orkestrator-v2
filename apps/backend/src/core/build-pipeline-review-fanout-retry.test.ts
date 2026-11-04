@@ -605,3 +605,35 @@ describe("build pipeline reviewer retry", () => {
     expect(reviewerSessionKey(pipeline as never, reviewer)).toBe(`${first}:attempt-3`);
   });
 });
+
+test("retrying a reviewer after cancellation clears the cancellation classification", async () => {
+  await withPipeline(async ({ service, storage, read, provider }) => {
+    provider.failingModels.add("sonnet");
+    provider.runningModels.add("opus");
+    const started = await service.start(startInput(PANEL));
+    await advanceUntil(service, read, started.id, "reviewing");
+    let reviewing = await read(started.id);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (reviewing.reviewFanout?.reviewers[1]?.status === "failed") break;
+      await service.advanceNow(started.id);
+      reviewing = await read(started.id);
+    }
+    const reviewerId = reviewing.reviewFanout!.reviewers[1]!.id;
+    await rewritePipeline(storage, started.id, (snapshot) => {
+      snapshot.phase = "failed";
+      snapshot.failureContext = { phase: "reviewing", kind: "stage-transition" };
+    });
+    await service.cancel(started.id);
+    expect((await read(started.id)).cancelledAt).toBeDefined();
+    provider.failingModels.delete("sonnet");
+    expect((await service.retryReviewer(started.id, reviewerId)).cancelledAt).toBeUndefined();
+    await rewritePipeline(storage, started.id, (snapshot) => {
+      snapshot.phase = "failed";
+      snapshot.error = "genuine failure";
+      snapshot.failureContext = { phase: "reviewing", kind: "stage-transition" };
+    });
+    expect(
+      (await service.restartForCoordinator(started.id, undefined)).pipeline.cancelledAt,
+    ).toBeUndefined();
+  });
+});

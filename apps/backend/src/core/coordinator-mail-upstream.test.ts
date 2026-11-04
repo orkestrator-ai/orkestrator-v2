@@ -138,6 +138,18 @@ describe("fastForwardBeforeCoordinatorMail", () => {
     expect(git.fetch).toHaveBeenCalledTimes(2);
   });
 
+  test("mail held behind a running turn does not spend the cooldown", async () => {
+    // The mail is held while the turn runs and redelivered when it ends; that
+    // delivery is the one the checkout has to be current for.
+    let running = true;
+    const git = fakeGit({ isCheckoutBusy: mock(async () => running) });
+    const deps = { storage: storageWith(), git, now: () => 100 };
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe("busy");
+    running = false;
+    expect(await fastForwardBeforeCoordinatorMail(deps, runtimeId)).toBe("fast-forwarded");
+    expect(git.fetch).toHaveBeenCalledTimes(1);
+  });
+
   test("never throws: a failing lookup or Git service reads as failed", async () => {
     const storage = {
       coordinators: {

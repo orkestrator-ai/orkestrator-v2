@@ -360,9 +360,6 @@ export class TerminalWebSocketGateway {
   private accept(ws: WebSocket, request: IncomingMessage): void {
     const authenticated = this.options.tokenMatches(request);
     const cumulativeInputResults = ws.protocol === TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL;
-    if (!cumulativeInputResults) {
-      compatibilityPathUsage.record("terminal-websocket.per-input-results");
-    }
     const state: SocketState = {
       ws,
       authenticated,
@@ -886,6 +883,9 @@ export class TerminalWebSocketGateway {
   }
 
   private ready(state: SocketState): void {
+    if (!state.cumulativeInputResults) {
+      compatibilityPathUsage.record("terminal-websocket.per-input-results");
+    }
     this.sendControl(state, {
       type: "ready",
       version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
@@ -977,7 +977,7 @@ export class TerminalWebSocketGateway {
     let budget = 64 * 1024;
     // Control frames ignore the watermark: a keystroke's result or a desync notice
     // must not wait behind another terminal's output. Their own hard limit is in
-    // `sendControl`.
+    // `queueControl`.
     while (state.controlQueue.length > 0 && budget > 0) {
       const frame = state.controlQueue.shift()!;
       state.queuedBytes -= frame.bytes;

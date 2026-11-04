@@ -2271,3 +2271,34 @@ Kept the report's recommended per-flush batching after measuring it, although a 
 
 Report `docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md` was checked item by item and deleted; `git show e198fd4a7:<that path>` still reads it. Its GW-6 and WEB-11 work was confirmed in code and tests. What needs evidence no host here could give went to [5080](5080-terminal-websocket-live-evidence.md).
 
+
+#### E19 retained task outcome table
+
+The complete pre-retirement report is readable with:
+`git show 48d2ed40c87dfda6cd1d681fa54bc930e26e03f8:docs/reports/efficiency-logging-database/0100-e19-terminal-websocket.md`.
+The six rows below preserve its original part/task numbering; the report stays deleted.
+
+| Original part / task | Outcome | Code and validation evidence |
+| --- | --- | --- |
+| 0100 task 1 — stop channel flushing above the socket watermark (GW-6) | Done; existing implementation confirmed | `apps/backend/src/terminal-websocket-server.ts`: `flush`, `socketBackedUp` and send-callback resume; `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `terminal-websocket-stalled.integration.test.ts`; task 11 measurements above and `apps/backend/scripts/gateway-frame-costs.ts` terminal-flood workload. |
+| 0375 task 1 — refresh idle timers (GW-16) | Done | `apps/backend/src/gateway-proxy.ts` and `packages/protocol/src/node/preview-forward.ts`; `apps/backend/tests/gateway-proxy-idle-timers.test.ts` and `packages/protocol/src/node/preview-forward.test.ts` cover steady traffic, last-chunk silence deadlines and one timer per body. |
+| 0375 task 2 — reuse decoders (GW-16) | Done | Module-level fatal control and non-fatal input decoders in `apps/backend/src/terminal-websocket-server.ts`; `apps/backend/tests/terminal-websocket-input-results.test.ts` covers allocation counts, split UTF-8 and recovery after malformed input. |
+| 0375 task 3 — batch input operation results (GW-16) | Done; remote qualification moved | `packages/protocol/src/terminal-websocket.ts`, server `operationResult` / `queueInputResults`, client `resolveInputThrough`; protocol, server input-results, client-gateway and renderer client tests cover ordering, failures and v1 compatibility. Remote/browser matrix remains [5080 task 3](5080-terminal-websocket-live-evidence.md). |
+| 0375 task 4 — reduce advisory terminal acknowledgements (GW-16) | Done | `apps/web/src/lib/native/terminal-websocket-client.ts` default acknowledgement delay is 1 s; its owning tests cover coalescing; task 11 benchmark above records 100 to 5 acknowledgements in 5 seconds. |
+| 0610 task 1 — rebuild only unhealthy sockets on visibility return (WEB-11) | Done; device qualification moved | Client visibility probe and server ping handler; `apps/web/src/lib/native/terminal-websocket-client.visibility.test.ts` and `apps/backend/tests/gateway-terminal-liveness.test.ts`; [5080 task 2](5080-terminal-websocket-live-evidence.md) retains mobile/slow-link evidence. |
+
+| Original verification item or remaining qualification | Outcome / retained evidence |
+| --- | --- |
+| 0100: Bun `bufferedAmount`, send callbacks and quiet-channel desync reproduction | Done; task 11 measurements and backpressure / real stalled-peer tests above; terminal-flood workload reproduced the old desync. |
+| 0375: exercise `timer.refresh()` under Bun on these paths | Done; gateway and preview-forward owning tests exercise refresh, single allocation and cleanup. These real socket/wall-clock files are assigned to the slow tier; they remain runnable directly. |
+| 0610: how many users enabled the opt-in transport | Moved to [5080 task 1](5080-terminal-websocket-live-evidence.md); no real-install usage evidence collected. |
+| WEB-11 probe on a mobile WebView and slow link | Moved to [5080 task 2](5080-terminal-websocket-live-evidence.md). |
+| Negotiated results over Tailscale Serve, browser command-node relay, WebKit/mobile and a real-latency link | Moved to [5080 task 3](5080-terminal-websocket-live-evidence.md); earlier loopback Chromium evidence is recorded above. |
+
+### Task 11 review decisions (2026-11-04)
+
+**Task 11 — real-time validation.** Keep the actual socket and runtime timer tests and assign both owning files to the slow tier. This preserves integration evidence without making the deterministic default depend on host scheduling. A fake-clock rewrite could run in the default tier but would not exercise Bun's real `refresh()` and network paths. Silence assertions now measure from the final chunk.
+
+**Task 11 — compatibility usage.** Count the v1 path when an authenticated socket becomes ready, for both header and in-band authentication. Counting upgrades included peers that never authenticated; counting only input results would omit authenticated older peers before their first write. Tests cover unauthenticated, in-band and header-authenticated sockets.
+
+**Task 11 — coverage.** Added queue-saturation rejection between successful input results and a delayed successful result after channel unsubscribe. Corrected the flush comment to identify `queueControl` as the hard-limit owner.

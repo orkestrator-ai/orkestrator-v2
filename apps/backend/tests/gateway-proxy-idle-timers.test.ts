@@ -89,6 +89,7 @@ describe.each([
   });
 
   test("silence after a chunk still ends the body at the deadline", async () => {
+    let lastChunkAt = 0;
     const port = await upstream(async (response) => {
       response.writeHead(200, {
         "content-type": contentType,
@@ -96,14 +97,15 @@ describe.each([
       });
       response.write(CHUNK);
       await sleep(60);
+      lastChunkAt = Date.now();
       response.write(CHUNK);
     });
-    const started = Date.now();
     const result = await fetchBody(port);
     expect(result.status).toBe(502);
     expect(result.body).toContain(stalledMessage);
     // Measured from the second chunk, not the first: the deadline moved.
-    expect(Date.now() - started).toBeGreaterThanOrEqual(IDLE_MS);
+    expect(lastChunkAt).toBeGreaterThan(0);
+    expect(Date.now() - lastChunkAt).toBeGreaterThanOrEqual(IDLE_MS);
   });
 });
 

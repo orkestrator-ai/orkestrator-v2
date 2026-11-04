@@ -10,6 +10,7 @@ import {
 } from "@orkestrator/protocol/terminal-websocket";
 import type { WebSocket } from "ws";
 
+import { TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION } from "../src/terminal-websocket-server";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import {
   nextTerminalControl,
@@ -99,7 +100,7 @@ async function readResults(
 }
 
 const inputResult = (channelId: number, throughOperationId: number) => ({
-  type: "input-results",
+  type: "input-results" as const,
   channelId,
   throughOperationId,
 });
@@ -160,6 +161,62 @@ describe("terminal WebSocket cumulative input results", () => {
     ] as typeof frames);
     await waitUntil(() => writes.length === sent.length, "Writes did not all run");
     expect(writes).toEqual(sent);
+    socket.terminate();
+  });
+
+  test("queue saturation gets a standalone failure between cumulative successes", async () => {
+    const { backend, writes, open } = gatedBackend();
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info, options);
+    const channel = await subscribe(socket, inbox, "session", 1);
+    open();
+    sendInput(socket, channel, 1, "first");
+    expect(await nextTerminalControl(inbox, "input-results")).toEqual(inputResult(channel, 1));
+
+    const blocked = Promise.withResolvers<void>();
+    const invoke = backend.invoke.getMockImplementation()!;
+    backend.invoke.mockImplementation(async (command, args) => {
+      if (command === "terminal_write" && args.sessionId === "session") await blocked.promise;
+      return invoke(command, args);
+    });
+    const count = TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION;
+    for (let id = 2; id <= count + 2; id += 1) sendInput(socket, channel, id, `key-${id}`);
+    const rejected = await nextTerminalControl(inbox, "operation-result");
+    expect(rejected).toEqual({
+      type: "operation-result",
+      channelId: channel,
+      operationId: count + 2,
+      operation: "input",
+      ok: false,
+      message: "Terminal operation queue is full",
+    });
+    blocked.resolve();
+    expect(await nextTerminalControl(inbox, "input-results")).toEqual(
+      inputResult(channel, count + 1),
+    );
+    sendInput(socket, channel, count + 3, "after");
+    expect(await nextTerminalControl(inbox, "input-results")).toEqual(
+      inputResult(channel, count + 3),
+    );
+    expect(writes).not.toContain(`key-${count + 2}`);
+    expect(writes).toHaveLength(count + 2);
+    socket.terminate();
+  });
+
+  test("an accepted write still reports success after its channel unsubscribes", async () => {
+    const { backend, writes, open } = gatedBackend();
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info, options);
+    const channel = await subscribe(socket, inbox, "session", 1);
+    sendInput(socket, channel, 1, "retired");
+    await waitUntil(() => writes.length === 1, "Write did not start");
+    socket.send(JSON.stringify({ type: "unsubscribe", channelId: channel }));
+    expect(await nextTerminalControl(inbox, "unsubscribed")).toEqual({
+      type: "unsubscribed",
+      channelId: channel,
+    });
+    open();
+    expect(await nextTerminalControl(inbox, "input-results")).toEqual(inputResult(channel, 1));
     socket.terminate();
   });
 
@@ -272,6 +329,29 @@ describe("terminal WebSocket cumulative input results", () => {
 describe("terminal WebSocket subprotocol negotiation", () => {
   const perInputCount = () =>
     compatibilityPathUsage.snapshot().paths["terminal-websocket.per-input-results"]?.count ?? 0;
+
+  test("unauthenticated v1 sockets are counted only after valid authentication", async () => {
+    const { info } = await startGateway();
+    const before = perInputCount();
+    const { socket, inbox } = await openTerminalSocket(info, { authenticate: false });
+    expect(perInputCount()).toBe(before);
+    socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+    await nextTerminalControl(inbox, "ready");
+    expect(perInputCount()).toBe(before + 1);
+    socket.terminate();
+  });
+
+  test("header-authenticated v1 sockets are counted", async () => {
+    const { info } = await startGateway();
+    const before = perInputCount();
+    const { socket, inbox } = await openTerminalSocket(info, {
+      authenticate: false,
+      headers: { authorization: `Bearer ${info.token}`, origin: new URL(info.url).origin },
+    });
+    await nextTerminalControl(inbox, "ready");
+    expect(perInputCount()).toBe(before + 1);
+    socket.terminate();
+  });
 
   test("a client that offers both gets input results and takes no older path", async () => {
     const { info } = await startGateway();

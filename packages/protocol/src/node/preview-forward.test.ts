@@ -1188,15 +1188,17 @@ describe("forwardPreviewRequest body idle deadline", () => {
       expect(idleTimers).toBe(1);
 
       idleTimers = 0;
+      let lastChunkAt = 0;
       const stalled = await forwarding(async (response) => {
         response.write("x");
         await Bun.sleep(60);
+        lastChunkAt = Date.now();
         response.write("y");
       });
-      const started = Date.now();
       const outcome = await read(stalled);
       expect(outcome).toEqual({ body: "xy", ended: false });
-      expect(Date.now() - started).toBeGreaterThanOrEqual(IDLE_MS);
+      expect(lastChunkAt).toBeGreaterThan(0);
+      expect(Date.now() - lastChunkAt).toBeGreaterThanOrEqual(IDLE_MS);
       expect(idleTimers).toBe(1);
     } finally {
       globalThis.setTimeout = realSetTimeout;

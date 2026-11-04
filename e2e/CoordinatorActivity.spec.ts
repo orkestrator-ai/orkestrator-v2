@@ -216,26 +216,81 @@ for (const palette of ["dark", "simulated-light"] as const) {
   }
 }
 
-test("forced colours keep a focus indicator around the tab's static outline", async ({ page }) => {
-  await page.emulateMedia({ forcedColors: "active" });
-  await page.goto("/coordinator-activity");
-  const tab = coordinatorTab(page);
-  await expect(tab.getByTestId("coordinator-working-outline-ring")).toBeVisible();
+for (const selected of [true, false]) {
+  test(`forced colours keep a Highlight focus indicator: selected=${selected}`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ forcedColors: "active" });
+    await page.goto("/coordinator-activity");
+    const tab = coordinatorTab(page);
+    await expect(tab.getByTestId("coordinator-working-outline-ring")).toBeVisible();
+    if (!selected) {
+      await page.getByRole("tab", { name: "Kanban", exact: true }).click();
+      await page.keyboard.press("Shift");
+    }
+    await expect(tab).toHaveAttribute("aria-selected", String(selected));
+    const outlineBefore = await tab.evaluate((element) => getComputedStyle(element).outlineStyle);
+    expect(outlineBefore).toBe("none");
 
-  const outlineBefore = await tab.evaluate((element) => getComputedStyle(element).outlineStyle);
-  expect(outlineBefore).toBe("none");
-
-  await tab.focus();
-  const style = await tab.evaluate((element) => {
-    const computed = getComputedStyle(element);
-    return {
-      line: computed.outlineStyle,
-      width: computed.outlineWidth,
-      offset: computed.outlineOffset,
-    };
+    // Resolve the platform's system color rather than hard-coding Chromium's palette.
+    const highlight = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.cssText = "color: Highlight; forced-color-adjust: none";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    await tab.focus();
+    await expect(tab).toBeFocused();
+    expect(await tab.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+    const style = await tab.evaluate((element) => {
+      const computed = getComputedStyle(element);
+      return {
+        line: computed.outlineStyle,
+        width: computed.outlineWidth,
+        offset: computed.outlineOffset,
+        color: computed.outlineColor,
+      };
+    });
+    expect(style).toEqual({ line: "solid", width: "2px", offset: "-2px", color: highlight });
   });
-  expect(style).toEqual({ line: "solid", width: "2px", offset: "-2px" });
-});
+}
+
+for (const presentation of ["bar", "grid"] as const) {
+  test(`reduced motion keeps the ${presentation} working outline visible and static`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto(`/coordinator-activity?presentation=${presentation}`);
+    const ring = coordinatorTab(page).getByTestId("coordinator-working-outline-ring");
+    await expect(ring).toBeVisible();
+    expect(await spinning(ring)).toBe(false);
+    const style = await ring.evaluate((element) => {
+      const computed = getComputedStyle(element);
+      const paint = getComputedStyle(element, "::before");
+      return {
+        animation: computed.animationName,
+        opacity: computed.opacity,
+        paintDisplay: paint.display,
+        paintOpacity: paint.opacity,
+        gradient: paint.backgroundImage,
+      };
+    });
+    expect(style.animation).toBe("none");
+    expect(style.opacity).toBe("1");
+    expect(style.paintDisplay).not.toBe("none");
+    expect(style.paintOpacity).toBe("1");
+    expect(style.gradient).toContain("conic-gradient");
+
+    // The same mounted outline resumes animation when the preference is lifted.
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect.poll(() => spinning(ring)).toBe(true);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(() => spinning(ring)).toBe(false);
+    await expect(ring).toBeVisible();
+  });
+}
 
 test("forced colours replace the tab's spinner with a static outline", async ({ page }) => {
   await page.emulateMedia({ forcedColors: "active" });

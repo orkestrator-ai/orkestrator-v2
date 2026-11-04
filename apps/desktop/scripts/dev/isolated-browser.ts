@@ -216,7 +216,9 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     });
   }
   const startupTimeout = options.startupTimeoutMs ?? (options.docker ? 300_000 : 120_000);
-  const testTimeout = options.testTimeoutMs ?? 900_000;
+  // The browser suite has taken from 640 s to past 900 s on a busy Linux host; a
+  // run cut off here reports no result for the cases it never reached.
+  const testTimeout = options.testTimeoutMs ?? 1_500_000;
   const cleanupTimeout = options.cleanupTimeoutMs ?? 45_000;
   const launchTask = (
     task: string,

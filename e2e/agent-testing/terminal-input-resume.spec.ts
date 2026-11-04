@@ -219,8 +219,10 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     );
     await expect(toast.getByRole("button", { name: "Resume input" })).toBeVisible();
     await expect(toast.getByRole("button", { name: "Reconnect" })).toBeVisible();
-    // The keystroke did land, which is exactly why the client may not guess.
-    await expect.poll(screen).toContain("before-X");
+    // The keystroke did land, which is exactly why the client may not guess. An
+    // editor can draw it as its own cell, so it need not touch the earlier text;
+    // the saved buffer below is the precise check.
+    await expect.poll(screen).toMatch(/before-[^]*X/);
 
     // Restore the backend, then change the layout: the resize goes through but
     // does not re-arm input.
@@ -237,7 +239,7 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     await expect(toast).toBeVisible();
     await page.waitForTimeout(1_000);
     expect(writes().length).toBe(writesWhileFenced);
-    expect(await screen()).not.toContain("before-XY");
+    expect(await screen()).not.toMatch(/before-[^]*X[^]*Y/);
 
     // Resume is answered by the client: nothing new reaches the backend.
     const sentBeforeResume = sent.length;

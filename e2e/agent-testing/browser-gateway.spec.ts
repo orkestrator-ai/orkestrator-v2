@@ -779,6 +779,11 @@ test("file rename preserves selection, survives reload and cancels on workspace 
 test("capped file tree loads subtrees, retries failures and refreshes across inactive views and reload", async ({
   page,
 }) => {
+  // 5,100 rows, two reloads and a viewport change. With these rows on a busy host
+  // the page has taken 17 s to handle a response it already had, so a default 5 s
+  // wait can end first (flake 2930).
+  test.setTimeout(240_000);
+  const treeExpect = expect.configure({ timeout: 30_000 });
   const status = await profileStatus();
   expect(status.status).toBe("ready");
   let subtreeReads = 0;
@@ -872,60 +877,62 @@ test("capped file tree loads subtrees, retries failures and refreshes across ina
     await page.reload();
     await openFiles();
     await expandFolder("src");
-    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+    await treeExpect(
+      page.getByRole("button", { name: "cap-source.ts", exact: true }),
+    ).toBeVisible();
     await expandFolder("empty-folder");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }),
     ).toHaveCount(0);
     await expandFolder("build");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
     await expandFolder(".turbo");
     const folderContentsId = await page
       .getByRole("button", { name: ".turbo", exact: true })
       .getAttribute("aria-controls");
-    await expect(
+    await treeExpect(
       page.locator(`[id="${folderContentsId}"]`).getByText("Loading folder…", { exact: true }),
     ).toBeVisible();
     releaseFailure();
-    await expect(page.getByText("Could not load folder.", { exact: true })).toBeVisible();
+    await treeExpect(page.getByText("Could not load folder.", { exact: true })).toBeVisible();
     const retry = page.getByRole("button", { name: "Retry loading build/.turbo", exact: true });
     await retry.focus();
     failSubtreeReads = false;
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toBeVisible();
-    await expect(retry).toHaveCount(0);
+    await treeExpect(page.getByRole("button", { name: "hidden.o", exact: true })).toBeVisible();
+    await treeExpect(retry).toHaveCount(0);
     // The bounded walk never opens .turbo; its digest cannot see these edits.
     await fs.rename(
       path.join(root, "build", ".turbo", "hidden.o"),
       path.join(root, "build", ".turbo", "fresh.o"),
     );
-    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible({
-      timeout: 15_000,
-    });
-    await expect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
+    await treeExpect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "hidden.o", exact: true })).toHaveCount(0);
     await page.getByRole("tab", { name: /^Changes\b/ }).click();
     await fs.writeFile(path.join(root, "build", ".turbo", "inactive.o"), "");
     await page.getByRole("tab", { name: "All files", exact: true }).click();
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     const previousReads = subtreeReads;
     await page.getByRole("button", { name: "build", exact: true }).click();
     await expandFolder("build");
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     expect(subtreeReads).toBeGreaterThan(previousReads);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await openFiles();
     await expandFolder("build");
-    await expect(
+    await treeExpect(
       page.getByText("Some folder contents are not shown.", { exact: true }).first(),
     ).toBeVisible();
     await expandFolder(".turbo");
-    await expect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "fresh.o", exact: true })).toBeVisible();
+    await treeExpect(page.getByRole("button", { name: "inactive.o", exact: true })).toBeVisible();
     await expandFolder("src");
-    await expect(page.getByRole("button", { name: "cap-source.ts", exact: true })).toBeVisible();
+    await treeExpect(
+      page.getByRole("button", { name: "cap-source.ts", exact: true }),
+    ).toBeVisible();
   } finally {
     releaseFailure();
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);

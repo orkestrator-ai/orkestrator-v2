@@ -285,7 +285,9 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     );
     await expect(toast.getByRole("button", { name: "Resume input" })).toBeVisible();
     await expect(toast.getByRole("button", { name: "Reconnect" })).toBeVisible();
-    await expect.poll(screen).toContain("before-X");
+    // An editor can draw the keystroke as its own cell; the saved buffer is the
+    // precise check.
+    await expect.poll(screen).toMatch(/before-[^]*X/);
 
     // Restore the backend, then resize the native window.
     await setFault("none");

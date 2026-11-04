@@ -2,12 +2,14 @@
 
 ## Task analysis
 
-Analysed 2026-11-03 against `main` at `a2827f52f`.
+Analysed 2026-11-03 against `main` at `a2827f52f`. Task 3 added 2026-11-04 on the same
+base.
 
 ### Tasks
 
 1. **Two Multi Review layout assertions in `test:browser`**: they fail every time on beelink with the renderer unchanged. Status: open.
 2. **`terminal-input-resume.spec.ts` needs `vim`**: the host has no `vim`, so the first case failed in the isolated suite. Status: done 2026-11-04.
+3. **The browser suite loses cases to Docker network churn**: on a busy Linux host an isolated run fails a varying few cases that have nothing wrong with them. Status: open.
 
 ### 1. Two Multi Review layout assertions in `test:browser`
 
@@ -48,7 +50,32 @@ Analysed 2026-11-03 against `main` at `a2827f52f`.
     - Pros: keeps coverage here.
     - Cons: the flags and redraw behaviour differ, and the spec's comments describe vim's.
 
+### 3. The browser suite loses cases to Docker network churn
+
+**Problem.** Chromium aborts in-flight requests when a host interface changes (flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)), so an isolated browser run beside other Docker work fails cases at random, and only a read of each trace shows why. The run at `b16b51da1` lost `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239` and `graph-run-view.spec.ts:48` this way, as well as `headless-profile.spec.ts`, which [2181](2181-dev-test-electron-opens-on-the-linux-desktop.md) has since made immune.
+
+**Context.** The specs mostly import `test` from `@playwright/test` directly, so nothing shared wraps their pages, and a Playwright config cannot add a route. Some specs create extra contexts for a second client. No Chromium switch or feature name for ignoring these changes was found in the binaries. `network-churn-report.ts` now names the affected cases in a run's output.
+
+**Investigation.** Under `docker network create`/`rm` every 0.3 s, `headless-profile.spec.ts` failed 3 of 3 before its modules went through `route.fetch()` and passed 3 of 3 in 8 s after. That is one spec; the rest of the suite was not run this way.
+
+**Decisions.**
+
+- **How should the suite handle this?**
+  - **A shared `test` with a `page` fixture that fetches modules outside Chromium (recommended).**
+    - Pros: the measured fix; about 0.9 s more per load in the one spec measured; scripts and styles only, so commands and event streams still go through the browser.
+    - Cons: touches every spec's import; extra contexts need the same treatment; module loading is no longer exercised through Chromium's stack, so a gateway fault that only affects browsers could be missed unless one spec stays direct.
+  - **Leave it, and rely on the report.**
+    - Pros: no spec changes; the suite still tests a real browser's whole network path.
+    - Cons: a busy host still gets a red run, and reruns are what that costs.
+  - **Run the whole stack in a private network namespace.**
+    - Pros: no spec changes; flake 2340 measured this working for the component suites.
+    - Cons: 2340 says it only suits suites that need nothing beyond loopback, and this one starts a real backend beside Docker; untested here.
+
 ## Assumptions and decisions
+
+### Task 2: the fenced-keystroke checks (2026-11-04)
+
+The note below that the state snapshot makes `not.toContain("before-XY")` a real check did not hold on `nvim`. In the isolated run at `b16b51da1`, `poll(screen).toContain("before-X")` failed with the keystroke present: the snapshot's text ended `before-…-- INSERT --…X9`, because the editor drew it as its own cell. Both specs now require `before-` followed later by `X`, and the browser spec's fenced check requires no `Y` after that. The saved buffer, `before-XZ\n`, is still the precise check. The browser case then passed 5 of 5 with `--repeat-each=5 --workers=1` on a `--headless --fixture` profile. The Electron spec's one line has not run, because this host has no Xvfb.
 
 ### Task 2: driving `nvim` when `vim` is absent
 

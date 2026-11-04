@@ -34,7 +34,7 @@ mise run test:agent:design:isolated
 Each task creates a unique disposable profile, starts `dev:test` concurrently,
 polls `dev:status --json` until all runtime processes are ready, runs Playwright,
 and stops/resets the profile in `finally`. Startup is bounded to two minutes,
-the browser suite to fifteen minutes, and each cleanup command to 45 seconds.
+the browser suite to twenty-five minutes, and each cleanup command to 45 seconds.
 An IPC-owned supervisor also cleans up when the caller is cancelled or killed.
 Test failures and cleanup failures return a nonzero exit status. Artifacts stay
 under `output/agent-testing/<unique-profile>/browser/`; profile state is removed.
@@ -100,8 +100,12 @@ On Linux, Chromium aborts in-flight requests, including loopback ones, with
 `net::ERR_NETWORK_CHANGED` whenever a network interface or address changes,
 and Docker adds or removes a bridge or veth for every network and container it
 creates or deletes. A browser suite running beside other Docker work on the
-same host can therefore lose Vite module loads and render a blank page; see
+same host can therefore lose Vite module loads and render a blank page or the
+"Orkestrator couldn't connect" screen; see
 flake [2340](../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md).
+When a browser run fails, it prints which failed cases have that error in their
+trace; the run's result does not change. `headless-profile.spec.ts` fetches its
+modules outside Chromium's network stack, so this does not fail the headless check.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build
 the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives

@@ -131,6 +131,14 @@ adding load waits or retries to each spec had already failed: the `load` wait re
 the failures, and the next run hit the same 502 in another case. The same handler serves
 browser previews, so they get the fix too.
 
+### Task 1: surviving network churn in the headless check
+
+The spec fetches scripts and styles with `route.fetch()`, and retries its navigation with a new single-use login link, rather than relying on a quiet host. Its `/proc` assertions run first and are not retried. That keeps the proof independent of other builds' Docker work, which failed the previous version every time when reproduced. Only this spec changed: applying it across the suite changes what those journeys exercise, so that choice is left to [4222](4222-browser-failures-left-after-headless-qualification.md) task 3. Retries for the whole browser config were not used, since they would also pass real intermittent failures.
+
+### Task 1: the runner's test budget
+
+Raised the default in `isolated-browser.ts` from 15 to 25 minutes, which reverses "making the isolated suite finish" above on this one point. Runs on this host took 637 s, 760 s and 864 s, and one reached 900 s and was stopped. A hung suite is still caught sooner by the scheduler's 300 s no-progress limit when it runs through review preparation.
+
 ### Task 1: the terminal history assertion
 
 Changed the spec rather than the 256-record bound. The bound and its gap report are the
@@ -201,6 +209,23 @@ last two were 47 passed, 94 skipped and 3 failed. All three causes are now found
 These were focused runs. The whole isolated suite is run by the next review preparation
 and was not rerun here. `headless-profile.spec.ts` skipped in them because that run did
 not set `ORKESTRATOR_AGENT_TEST_HEADLESS=1`; it passed in the `0f586e738` isolated run.
+
+### Repairs after the `b16b51da1` isolated run, 2026-11-04
+
+That run ended 44 passed, 94 skipped and 6 failed, and took 14.4 minutes of its 15-minute
+budget; the run before it hit the budget and was stopped. Reading each saved trace gave:
+
+| Case | Cause | Fix | Focused result |
+| --- | --- | --- | --- |
+| `a headless profile's Electron…` | Host network churn aborted its module loads (flake [2340](../../tests/flaky-tests/aggregate-validation-runs/2340-chromium-network-changed-under-docker-churn.md)); its `/proc` checks had already passed | Modules fetched outside Chromium; a retried navigation with a new login link | Under bridge churn: previous spec 0 of 3, repaired spec 3 of 3 in 8 s |
+| `capped file tree…` | A 5 s assertion ended while the page took 17 s to handle a response (flake [2930](../../tests/flaky-tests/previews-annotations-and-gateway/2930-capped-file-tree-exceeds-test-budget.md)) | 240 s test budget, 30 s tree assertions | 3 of 3 at 81–84 s |
+| `a lost terminal write…` | Expected `before-X` as one run of text, which `nvim` need not draw ([4222](4222-browser-failures-left-after-headless-qualification.md)) | Checks `X` after `before-`; the saved buffer stays the precise check | 5 of 5 |
+| `design-canvas.spec.ts:16`, `graph-designer.spec.ts:239`, `graph-run-view.spec.ts:48` | Host network churn, with 82, 119 and 133 aborted requests in their traces (2340) | None here: nothing is wrong with these cases. A run now prints which failed cases have this error. Handling it across the suite is [4222](4222-browser-failures-left-after-headless-qualification.md) task 3 | Not rerun |
+
+The runner's test budget went from 15 to 25 minutes, because a run cut off at the limit
+reports nothing for the cases it never reached. These were focused runs; the whole
+isolated suite is run by the next review preparation and was not rerun here. A run on a
+busy host can still fail cases through 2340.
 
 ### `test:browser`
 

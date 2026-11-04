@@ -59,7 +59,7 @@ function stallSocket(ws: WebSocket) {
     callback: (error?: Error) => void,
   ) => void;
   const realSend = ws.send.bind(ws) as unknown as Send;
-  const held: Array<{ data: string | Uint8Array; release: () => void }> = [];
+  const held: Array<{ data: string | Uint8Array; release: () => void; fail: () => void }> = [];
   let buffered = 0;
   let peakBuffered = 0;
   let sends = 0;
@@ -74,6 +74,10 @@ function stallSocket(ws: WebSocket) {
     peakBuffered = Math.max(peakBuffered, buffered);
     held.push({
       data,
+      fail: () => {
+        buffered -= bytes;
+        callback(new Error("send failed"));
+      },
       release: () => {
         buffered -= bytes;
         realSend(data, options, callback);
@@ -242,6 +246,37 @@ describe("terminal WebSocket back-pressure", () => {
       "Queued frames never arrived",
     );
     received.stop();
+    socket.terminate();
+  });
+
+  test("a send callback error terminates a paused socket and releases its backlog", async () => {
+    const { gateway, info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    await subscribe(socket, inbox, "paused", 1);
+    const ws = serverSocket(gateway);
+    const stall = stallSocket(ws);
+    for (let revision = 1; revision <= 25; revision++) {
+      gateway.emit("terminal-output-paused", {
+        text: frameText(revision),
+        generation: 1,
+        revision,
+      });
+      await nextTurn();
+    }
+    await settleTurns();
+    const terminal = (
+      gateway as unknown as {
+        terminalWebSocket: {
+          sockets: Set<{ flushPaused: boolean; inFlightSends: number; queuedBytes: number }>;
+        };
+      }
+    ).terminalWebSocket;
+    const state = terminal.sockets.values().next().value!;
+    expect(state.flushPaused).toBe(true);
+    for (const send of stall.held.splice(0)) send.fail();
+    await waitUntil(() => terminal.sockets.size === 0, "Failed socket was not removed");
+    expect(state.inFlightSends).toBe(0);
+    expect(state.queuedBytes).toBe(0);
     socket.terminate();
   });
 

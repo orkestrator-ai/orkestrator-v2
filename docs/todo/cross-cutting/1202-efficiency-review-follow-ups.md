@@ -732,7 +732,7 @@ Bun's `ws` was checked directly, since 0100 had only read it from code. With a r
 | | Noisy frames delivered before its desync | 383–385 | 273–275 |
 | | Peak queued bytes | 2,096,561–2,097,093 | 783,640–784,172 |
 | `terminal-burst` (GW-6 regression check): the same emission, peer keeps reading | Desyncs, either channel | 0 | 0 |
-| | Time to deliver the burst | 113–162 ms | 113–127 ms |
+| | Time to deliver the burst (corrected 2026-11-04; no fixed sleep) | 14–35 ms | 19–33 ms |
 | `fan-out` (GW-5): 200 × 64 KiB authoritative events, 4 event streams | Frame measures (`Buffer.byteLength`) per emit | 13 | 0 |
 | | Time inside `emit` per event | 433–565 µs | 258–426 µs |
 | `scoped-replay` (GW-12): `?events=menu-` reconnects across 1,500 skipped, 1 matching, 500 skipped | Cursor frames | 2,000 | 2 |
@@ -740,6 +740,8 @@ Bun's `ws` was checked directly, since 0100 had only read it from code. With a r
 | | Ends on the latest cursor | yes | yes |
 | `replay-lookup` (GW-14): full 2,048-frame window | `since()`, newest 64 frames | 2,454–2,593 ns | 68–260 ns |
 | | `since()`, whole window | 7,963–8,762 ns | 2,060–7,099 ns |
+
+Review correction (2026-11-04): the original burst timings included a fixed 100 ms sleep and are superseded. The corrected script sleeps only for the stalled-peer workload. Five runs each with the current terminal server and the terminal server from a8bdce444 (all other gateway sources held current), delivered 1,024 noisy and 32 quiet frames in order with no desync in every run. Raw aggregates: `output/efficiency/gateway-frame-costs/burst-corrected-before.json` and `burst-corrected-after.json`. These synthetic ranges overlap; they do not establish zero latency cost.
 
 The noisy channel now desyncs sooner: about 110 frames (1.8 MB) earlier in this workload, because it no longer has the socket's 2 MiB to fill. The timings move with the host: an earlier `fan-out` pair on the same builds gave 447–481 µs before and 192–403 µs after, and the whole-window `since()` range after the change is wide. The desync, frame-measure and cursor counts did not vary between runs.
 
@@ -784,7 +786,7 @@ Not re-checked: GW-10, GW-11, GW-15, GW-16.
     - Cons: loses whether the upstream tag was weak, so Vite would never answer 304; a rewriter change would revalidate stale rewrites.
 - **How does a paused flush resume (GW-6)?** Done.
   - **From the `ws.send` callback, pausing only while a send is in flight (recommended).**
-    - Pros: no work while a socket is stalled; a pause can never be left with nothing to wake it, whatever else `bufferedAmount` holds; `terminal-burst` shows no cost to a reading client.
+    - Pros: no work while a socket is stalled; a pause can never be left with nothing to wake it, whatever else `bufferedAmount` holds; corrected `terminal-burst` runs delivered all frames without desync (14–35 ms before, 19–33 ms after; insufficient to claim zero latency cost).
     - Cons: a single flooding channel desyncs at about 768 KiB of backlog rather than about 2 MiB.
   - **Keep rescheduling with `setImmediate` and skip while above the watermark.**
     - Pros: the smallest change.
@@ -1698,3 +1700,12 @@ bound. The 2.5 s timeout is a judgment, not a measurement: long enough for a
 round trip over a slow remote link, short enough that a dead mobile socket is
 replaced soon after the page returns. A probe whose page is hidden again before
 it settles replaces nothing, so hiding alone never cuts background work.
+
+
+### Task 11 review repairs (2026-11-04)
+
+**Choice.** Serialize a replay frame before publishing its revision. This preserves the contiguous-window invariant required by indexed lookup without restoring a full-window filter. Regression tests exercise BigInt, circular payloads and a throwing `toJSON`, followed by successful appends and every valid reconnect cursor.
+
+**Coverage.** Added a real stalled TCP peer integration test, a paused send-callback failure test, and scoped/unscoped removal during replay. The real-peer test is explicitly slow-tier by its integration filename.
+
+**Measurement.** Removed the healthy-peer sleep and replaced the old timing row above; retain the stall delay only to build stalled-peer backpressure. The corrected figures support successful ordered delivery, not a claim of zero latency overhead.

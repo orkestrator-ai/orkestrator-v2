@@ -370,6 +370,37 @@ describe("scoped replay cursor frames", () => {
     unscoped.close();
   });
 
+  test.each([false, true])("removal mid-window stops replay (scoped=%s)", (scoped) => {
+    const gateway = offlineGateway();
+    const replay = replayOf(gateway);
+    const frames = [
+      replay.append("menu-first", 1),
+      replay.append("environment-renamed", 2),
+      replay.append("menu-last", 3),
+    ];
+    const { client, writes } = fakeClient();
+    const internals = gateway as unknown as {
+      clients: Map<object, unknown>;
+      writeReplayFrames(client: object, state: object, frames: readonly unknown[]): boolean;
+    };
+    const state = {
+      prefixes: scoped ? ["menu-"] : null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+    };
+    internals.clients.set(client, state);
+    client.write.mockImplementation((chunk, bytes) => {
+      writes.push({ chunk, bytes });
+      internals.clients.delete(client);
+      return true;
+    });
+    expect(internals.writeReplayFrames(client, state, frames)).toBe(false);
+    expect(writes).toHaveLength(1);
+    expect(String(writes[0]!.chunk)).toContain("menu-first");
+    replay.releaseRetained();
+  });
+
   test("a skip run's cursor at the hard limit drops the client instead of skipping it", () => {
     const gateway = offlineGateway();
     const replay = replayOf(gateway);

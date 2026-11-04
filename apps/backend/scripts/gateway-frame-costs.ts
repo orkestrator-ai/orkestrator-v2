@@ -176,113 +176,116 @@ class ServerFrameReader {
 
 type ChannelTally = { frames: number; desyncs: number; inOrder: boolean; lastRevision: number };
 
-async function terminalFlood(options = { peerStalls: true }) {
+export async function terminalFlood(options = { peerStalls: true }) {
   const { gateway, internals, url, token, stop } = await startGateway();
   const raw = netConnect({ host: url.hostname, port: Number(url.port) });
-  await new Promise<void>((resolve, reject) => {
-    raw.once("connect", resolve);
-    raw.once("error", reject);
-  });
-  let upgraded = false;
-  let closed = false;
-  raw.once("close", () => {
-    closed = true;
-  });
-  const sessionByChannel = new Map<number, string>();
-  const tallies = new Map<string, ChannelTally>();
-  const tally = (session: string) => {
-    let entry = tallies.get(session);
-    if (!entry) {
-      entry = { frames: 0, desyncs: 0, inOrder: true, lastRevision: 0 };
-      tallies.set(session, entry);
-    }
-    return entry;
-  };
-  const reader = new ServerFrameReader((opcode, payload) => {
-    if (opcode === 1) {
-      const frame = parseTerminalWebSocketServerControlFrame(payload.toString("utf8"));
-      if (frame.type === "subscribed") sessionByChannel.set(frame.channelId, frame.sessionId);
-      if (frame.type === "desync") tally(sessionByChannel.get(frame.channelId)!).desyncs += 1;
-    } else if (opcode === 2) {
-      const frame = decodeTerminalBinaryFrame(payload);
-      const entry = tally(sessionByChannel.get(frame.channelId)!);
-      entry.frames += 1;
-      if (frame.revision !== entry.lastRevision + 1) entry.inOrder = false;
-      entry.lastRevision = frame.revision;
-    }
-  });
-  raw.on("data", (chunk: Buffer) => {
-    if (upgraded) {
-      reader.push(chunk);
-      return;
-    }
-    const end = chunk.indexOf("\r\n\r\n");
-    if (end < 0) throw new Error("Upgrade response split across chunks");
-    upgraded = true;
-    if (end + 4 < chunk.byteLength) reader.push(chunk.subarray(end + 4));
-  });
-  raw.write(
-    `GET /__orkestrator/terminal HTTP/1.1\r\n` +
-      `Host: ${url.host}\r\n` +
-      `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
-      `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n` +
-      `Sec-WebSocket-Version: 13\r\n` +
-      `Sec-WebSocket-Protocol: ${TERMINAL_WEBSOCKET_SUBPROTOCOL}\r\n` +
-      `Origin: http://${url.host}\r\n` +
-      `Authorization: Bearer ${token}\r\n\r\n`,
-  );
-  await waitUntil(() => upgraded, "Terminal socket never upgraded");
-  sendMaskedText(raw, JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "noisy" }));
-  sendMaskedText(raw, JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "quiet" }));
-  await waitUntil(() => sessionByChannel.size === 2, "Terminal channels never subscribed");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-
-  if (options.peerStalls) raw.pause();
-  const noisyText = "x".repeat(NOISY_FRAME_BYTES);
-  const quietText = "q".repeat(QUIET_FRAME_BYTES);
-  let quietRevision = 0;
-  const floodStartedAt = performance.now();
-  for (let revision = 1; revision <= NOISY_FRAMES; revision += 1) {
-    gateway.emit("terminal-output-noisy", { text: noisyText, generation: 1, revision });
-    if (revision % QUIET_FRAME_EVERY === 0) {
-      quietRevision += 1;
-      gateway.emit("terminal-output-quiet", {
-        text: quietText,
-        generation: 1,
-        revision: quietRevision,
-      });
-    }
-    await nextTurn();
-  }
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const metricsAtStall = internals.metrics.snapshot().terminalWebSocket;
-
-  if (options.peerStalls) raw.resume();
-  else {
-    await waitUntil(
-      () => tally("noisy").frames + tally("noisy").desyncs * NOISY_FRAMES >= NOISY_FRAMES,
-      "A reading peer never received the burst",
+  try {
+    await new Promise<void>((resolve, reject) => {
+      raw.once("connect", resolve);
+      raw.once("error", reject);
+    });
+    let upgraded = false;
+    let closed = false;
+    raw.once("close", () => {
+      closed = true;
+    });
+    const sessionByChannel = new Map<number, string>();
+    const tallies = new Map<string, ChannelTally>();
+    const tally = (session: string) => {
+      let entry = tallies.get(session);
+      if (!entry) {
+        entry = { frames: 0, desyncs: 0, inOrder: true, lastRevision: 0 };
+        tallies.set(session, entry);
+      }
+      return entry;
+    };
+    const reader = new ServerFrameReader((opcode, payload) => {
+      if (opcode === 1) {
+        const frame = parseTerminalWebSocketServerControlFrame(payload.toString("utf8"));
+        if (frame.type === "subscribed") sessionByChannel.set(frame.channelId, frame.sessionId);
+        if (frame.type === "desync") tally(sessionByChannel.get(frame.channelId)!).desyncs += 1;
+      } else if (opcode === 2) {
+        const frame = decodeTerminalBinaryFrame(payload);
+        const entry = tally(sessionByChannel.get(frame.channelId)!);
+        entry.frames += 1;
+        if (frame.revision !== entry.lastRevision + 1) entry.inOrder = false;
+        entry.lastRevision = frame.revision;
+      }
+    });
+    raw.on("data", (chunk: Buffer) => {
+      if (upgraded) {
+        reader.push(chunk);
+        return;
+      }
+      const end = chunk.indexOf("\r\n\r\n");
+      if (end < 0) throw new Error("Upgrade response split across chunks");
+      upgraded = true;
+      if (end + 4 < chunk.byteLength) reader.push(chunk.subarray(end + 4));
+    });
+    raw.write(
+      `GET /__orkestrator/terminal HTTP/1.1\r\n` +
+        `Host: ${url.host}\r\n` +
+        `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+        `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n` +
+        `Sec-WebSocket-Version: 13\r\n` +
+        `Sec-WebSocket-Protocol: ${TERMINAL_WEBSOCKET_SUBPROTOCOL}\r\n` +
+        `Origin: http://${url.host}\r\n` +
+        `Authorization: Bearer ${token}\r\n\r\n`,
     );
+    await waitUntil(() => upgraded, "Terminal socket never upgraded");
+    sendMaskedText(raw, JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "noisy" }));
+    sendMaskedText(raw, JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "quiet" }));
+    await waitUntil(() => sessionByChannel.size === 2, "Terminal channels never subscribed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    if (options.peerStalls) raw.pause();
+    const noisyText = "x".repeat(NOISY_FRAME_BYTES);
+    const quietText = "q".repeat(QUIET_FRAME_BYTES);
+    let quietRevision = 0;
+    const floodStartedAt = performance.now();
+    for (let revision = 1; revision <= NOISY_FRAMES; revision += 1) {
+      gateway.emit("terminal-output-noisy", { text: noisyText, generation: 1, revision });
+      if (revision % QUIET_FRAME_EVERY === 0) {
+        quietRevision += 1;
+        gateway.emit("terminal-output-quiet", {
+          text: quietText,
+          generation: 1,
+          revision: quietRevision,
+        });
+      }
+      await nextTurn();
+    }
+    if (options.peerStalls) await new Promise((resolve) => setTimeout(resolve, 100));
+    const metricsAtStall = internals.metrics.snapshot().terminalWebSocket;
+
+    if (options.peerStalls) raw.resume();
+    else {
+      await waitUntil(
+        () => tally("noisy").frames + tally("noisy").desyncs * NOISY_FRAMES >= NOISY_FRAMES,
+        "A reading peer never received the burst",
+      );
+    }
+    const deliveredMs = Math.round(performance.now() - floodStartedAt);
+    await waitForIdle(() => reader.bytes, 500);
+    const noisy = tally("noisy");
+    const quiet = tally("quiet");
+    const result = {
+      noisyDesyncs: noisy.desyncs,
+      quietDesyncs: quiet.desyncs,
+      noisyFramesDelivered: noisy.frames,
+      noisyInOrder: noisy.inOrder,
+      quietFramesEmitted: quietRevision,
+      quietFramesDelivered: quiet.frames,
+      quietInOrder: quiet.inOrder,
+      peakQueuedBytes: metricsAtStall.peakQueuedBytes,
+      socketClosed: closed,
+      ...(options.peerStalls ? {} : { deliveredMs }),
+    };
+    return result;
+  } finally {
+    raw.destroy();
+    await stop();
   }
-  const deliveredMs = Math.round(performance.now() - floodStartedAt);
-  await waitForIdle(() => reader.bytes, 500);
-  const noisy = tally("noisy");
-  const quiet = tally("quiet");
-  const result = {
-    noisyDesyncs: noisy.desyncs,
-    quietDesyncs: quiet.desyncs,
-    noisyFramesDelivered: noisy.frames,
-    noisyInOrder: noisy.inOrder,
-    quietFramesEmitted: quietRevision,
-    quietFramesDelivered: quiet.frames,
-    quietInOrder: quiet.inOrder,
-    peakQueuedBytes: metricsAtStall.peakQueuedBytes,
-    socketClosed: closed,
-    ...(options.peerStalls ? {} : { deliveredMs }),
-  };
-  raw.destroy();
-  await stop();
-  return result;
 }
 
 type EventStream = {
@@ -443,19 +446,21 @@ function argument(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-configureLogger({ level: "error" });
-const selected = argument("workloads")?.split(",") ?? Object.keys(WORKLOADS);
-const runs = Number(argument("runs") ?? 5);
-const results: Record<string, unknown[]> = {};
-for (const name of selected) {
-  const workload = WORKLOADS[name];
-  if (!workload) throw new Error(`Unknown workload: ${name}`);
-  const workloadResults: unknown[] = [];
-  results[name] = workloadResults;
-  for (let run = 0; run < runs; run += 1) workloadResults.push(await workload());
+if (import.meta.main) {
+  configureLogger({ level: "error" });
+  const selected = argument("workloads")?.split(",") ?? Object.keys(WORKLOADS);
+  const runs = Number(argument("runs") ?? 5);
+  const results: Record<string, unknown[]> = {};
+  for (const name of selected) {
+    const workload = WORKLOADS[name];
+    if (!workload) throw new Error(`Unknown workload: ${name}`);
+    const workloadResults: unknown[] = [];
+    results[name] = workloadResults;
+    for (let run = 0; run < runs; run += 1) workloadResults.push(await workload());
+  }
+  const output = `${JSON.stringify(results, null, 2)}\n`;
+  const out = argument("out");
+  if (out) await writeFile(out, output);
+  else process.stdout.write(output);
+  process.exit(0);
 }
-const output = `${JSON.stringify(results, null, 2)}\n`;
-const out = argument("out");
-if (out) await writeFile(out, output);
-else process.stdout.write(output);
-process.exit(0);

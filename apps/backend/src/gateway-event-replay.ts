@@ -130,9 +130,11 @@ export class GatewayEventReplay {
   }
 
   append(event: string, payload: unknown): GatewayReplayFrame {
-    this.revision += 1;
-    const cursor = formatGatewayCursor(this.generation, this.revision);
+    // Serialization may throw; publish a revision only once its frame exists.
+    const revision = this.revision + 1;
+    const cursor = formatGatewayCursor(this.generation, revision);
     const message = formatDataMessage(cursor, event, payload);
+    this.revision = revision;
     const frame: GatewayReplayFrame = {
       revision: this.revision,
       cursor,

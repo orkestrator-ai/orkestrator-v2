@@ -457,3 +457,32 @@ describe("GatewayEventReplay idle retention", () => {
     });
   });
 });
+
+test("failed serialization does not consume revisions or omit later replay frames", () => {
+  const circular: Record<string, unknown> = {};
+  circular.self = circular;
+  for (const payload of [
+    1n,
+    circular,
+    {
+      toJSON() {
+        throw new Error("serialization");
+      },
+    },
+  ]) {
+    const replay = new GatewayEventReplay("serialization");
+    const first = replay.append("event", { valid: 1 });
+    expect(() => replay.append("event", payload)).toThrow();
+    expect(replay.latestRevision).toBe(first.revision);
+    const second = replay.append("event", { valid: 2 });
+    const third = replay.append("event", { valid: 3 });
+    const frames = [first, second, third];
+    expect(frames.map((frame) => frame.revision)).toEqual([1, 2, 3]);
+    for (let cursor = 0; cursor <= 3; cursor++) {
+      const result = replay.since(cursor);
+      expect(result.complete).toBe(true);
+      expect(result.frames).toEqual(frames.filter((frame) => frame.revision > cursor));
+    }
+    replay.releaseRetained();
+  }
+});

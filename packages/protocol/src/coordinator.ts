@@ -423,6 +423,8 @@ export interface CoordinatorWorkflowAssociation {
   createdAt: string;
   lastNotifiedRevision?: number;
   terminalNotifiedAt?: string;
+  /** Durable restart episode; absent on follows created before the first restart. */
+  statusWakeEpisode?: string;
   /** Last status wake sent for this resource; see `coordinator-status-wakes.ts`. */
   statusNotice?: CoordinatorStatusNoticeRecord;
   adoptedByConversationId?: string;
@@ -532,6 +534,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "request_project_on_node",
   "request_root_changes",
   "resolve_conflicts",
+  "restart_build_pipeline_step",
   "resume_build_pipeline",
   "resume_schedule",
   "run_worker_command",

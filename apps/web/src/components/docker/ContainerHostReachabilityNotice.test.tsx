@@ -158,6 +158,19 @@ describe("ContainerHostReachabilityNotice", () => {
     expect(await screen.findByTestId("container-host-reachability-banner")).toBeTruthy();
   });
 
+  test("the banner uses the app's popover surface and keeps an amber warning icon", async () => {
+    current = blocked;
+    window.sessionStorage.setItem(
+      "orkestrator.containerHostReachability.autoOpened",
+      "blocked::38179",
+    );
+    render(<ContainerHostReachabilityNotice />);
+    const banner = await screen.findByTestId("container-host-reachability-banner");
+    expect(banner.className).toContain("bg-popover");
+    expect(banner.className).not.toMatch(/\bbg-amber-/);
+    expect(banner.querySelector("svg")?.getAttribute("class")).toContain("text-amber-400");
+  });
+
   test("Check again clears the warning once the firewall is fixed", async () => {
     current = blocked;
     afterCheck = reachable;

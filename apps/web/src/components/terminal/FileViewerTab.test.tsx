@@ -118,7 +118,8 @@ mock.module("./DiffViewerTab", () => ({
   ),
 }));
 
-const { FileViewerTab, getFileViewerKind, isMarkdownFile } = await import("./FileViewerTab");
+const { FileViewerTab, getFileViewerKind, isHtmlFile, isMarkdownFile } =
+  await import("./FileViewerTab");
 
 const RESOURCE_KEY = "environment-net/environment/env-1/live";
 const liveTarget: ChangeDiffTarget = {
@@ -210,6 +211,24 @@ describe("FileViewerTab routing", () => {
     ).toBe("markdown");
   });
 
+  test("routes HTML extensions to the rendered view", () => {
+    expect(isHtmlFile("docs/report.html")).toBe(true);
+    expect(isHtmlFile("index.HTM")).toBe(true);
+    expect(isHtmlFile("page.html.tmpl")).toBe(false);
+    expect(
+      getFileViewerKind("docs/report.html", {
+        showDiff: false,
+        hasDiffData: false,
+      }),
+    ).toBe("html");
+    expect(
+      getFileViewerKind("docs/report.html", {
+        showDiff: true,
+        hasDiffData: true,
+      }),
+    ).toBe("diff");
+  });
+
   test("keeps non-Markdown text files in Monaco", () => {
     expect(isMarkdownFile("src/index.ts")).toBe(false);
     expect(isMarkdownFile("component.mdx")).toBe(false);
@@ -266,6 +285,55 @@ describe("FileViewerTab component", () => {
     expect(screen.getByText("# Loaded Markdown")).toBeTruthy();
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
     expect(useFileDirtyStore.getState().getContent("markdown-tab")).toBe("# Loaded Markdown");
+  });
+
+  test("opens a local HTML file on its rendered view, with Raw one click away", async () => {
+    readLocalFileMock.mockImplementationOnce(async () => ({
+      content: "<h1>Report</h1>",
+      language: "html",
+    }));
+    render(
+      <FileViewerTab
+        tabId="html-tab"
+        filePath="docs/report.html"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+      />,
+    );
+
+    const frame = await screen.findByTitle("Rendered view of docs/report.html");
+    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("srcdoc")).toContain("<h1>Report</h1>");
+    expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "docs/report.html");
+    expect(useFileDirtyStore.getState().getContent("html-tab")).toBe("<h1>Report</h1>");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
+    const editor = await screen.findByRole("textbox", { name: "Monaco html" });
+    expect((editor as HTMLTextAreaElement).value).toBe("<h1>Report</h1>");
+  });
+
+  test("a changed HTML file opens on its diff and renders from View file", async () => {
+    readLocalFileMock.mockImplementationOnce(async () => ({
+      content: "<h1>Report</h1>",
+      language: "html",
+    }));
+    render(
+      <FileViewerTab
+        tabId="html-diff-tab"
+        filePath="docs/report.html"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+        changeDiff={{ ...liveTarget, path: "docs/report.html", title: "report.html" }}
+      />,
+    );
+
+    expect(await screen.findByTestId("diff-viewer")).toBeTruthy();
+    expect(readLocalFileMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "View file" }));
+    expect(await screen.findByTitle("Rendered view of docs/report.html")).toBeTruthy();
   });
 
   test("loads container text into Monaco and tracks changes", async () => {

@@ -17,6 +17,7 @@ import { requestToolApproval } from "./interactions.js";
 import {
   closePiMcp,
   isOrkestratorMailTool,
+  isOwnWorkflowResultCall,
   isOrkestratorMcpTool,
   mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
@@ -95,6 +96,47 @@ function fakeTransport(options?: {
     },
   };
 }
+
+test("native ask_agents is registered and auto-allowed; result-only credentials refuse nesting", async () => {
+  const root = await tempRoot("pi-subork-policy-");
+  for (const resultOnly of [false, true]) {
+    setPiMcpTransportForTests({
+      async connect() {
+        return connectionFor([{ name: "ask_agents" }], {
+          async call() {
+            return resultOnly
+              ? { isError: true, content: [{ type: "text", text: "Suborks can't start suborks." }] }
+              : { content: [{ type: "text", text: "handle" }] };
+          },
+        });
+      },
+    });
+    const state = newSessionState();
+    state.status = "running";
+    state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "test-token" };
+    state.policy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "restricted",
+    };
+    if (resultOnly)
+      state.workflowResultTurn = { tool: "submit_subork_answer", resultKey: "answer-key" };
+    await preparePiMcp(state, { agentDir: join(root, "agent"), cwd: root, env: {} });
+    try {
+      const tool = registeredTools(state).find((tool) => tool.name === "ask_agents")!;
+      expect(tool).toBeDefined();
+      expect(await requestToolApproval(state, "ask", "ask_agents", {})).toEqual({ block: false });
+      if (resultOnly) expect(isOwnWorkflowResultCall(state, "ask_agents", {})).toBe(false);
+      if (resultOnly)
+        await expect(tool.execute("ask", {})).rejects.toThrow("Suborks can't start suborks");
+      else expect(JSON.stringify(await tool.execute("ask", {}))).toContain("handle");
+    } finally {
+      await closePiMcp(state);
+    }
+  }
+});
 
 describe("Pi MCP client", () => {
   test("registers Orkestrator tools under their real names and prefixes the rest", async () => {

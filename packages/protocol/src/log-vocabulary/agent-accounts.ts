@@ -4,6 +4,7 @@ export const AGENT_ACCOUNTS_LOG_AREAS = defineLogAreas({
   "agent-accounts": {
     description: "Agent accounts: automatic switching, staged logins and plan usage.",
     events: {
+      "limit-stop-notice.failed": "A session's usage-limit stop could not be reported.",
       "switch-notice.failed":
         "A notice about an automatic account switch failed; the switch stands. `audience` says whose.",
       "auto-switch.check-failed": "An automatic account check failed; the next nudge retries.",

@@ -11,6 +11,7 @@ import {
   formatBytes,
   formatProbeNetworkSweepSummary,
   formatReport,
+  gitMirrorRow,
   graphBranchWorktreeRow,
   legacyTurboArtifacts,
   previewPartitionRows,
@@ -221,6 +222,21 @@ describe("disk report", () => {
         "remove what the deletion of env-stuck-a, env-stuck-b left behind by hand; see docs/development/disk-usage.md",
     });
     expect(JSON.stringify(row)).not.toContain("/workspaces/");
+  });
+
+  test("the Git mirror row counts mirrors whose project is gone", async () => {
+    const dataDir = path.join(root, "data");
+    await mkdir(path.join(dataDir, "git-mirrors", "project-gone"), { recursive: true });
+    await mkdir(path.join(dataDir, "git-mirrors", "project-live"), { recursive: true });
+
+    // No project store to read: nothing can be called an orphan.
+    expect(gitMirrorRow(dataDir).orphaned).toBe("unknown");
+
+    const database = openBackendDatabase(dataDir);
+    database.writeStore("projects", [{ id: "project-live" }]);
+    database.close();
+
+    expect(gitMirrorRow(dataDir).orphaned).toBe("1 of 2");
   });
 
   test("names the first stuck deletions and counts the rest", async () => {

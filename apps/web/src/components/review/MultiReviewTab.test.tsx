@@ -1,5 +1,6 @@
 import * as backend from "@/lib/backend";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as coordinatedPoll from "@/lib/coordinated-poll";
 import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
@@ -4545,15 +4546,11 @@ describe("PR background state and review clock", () => {
 
   test("refreshes an inactive PR tab through blocked, error and idle and focuses its live session", async () => {
     const restorePane = installPrTab();
-    const originalTimeout = window.setTimeout;
-    let poll: (() => void) | undefined;
-    window.setTimeout = ((callback: () => void, delay?: number) => {
-      if (delay === 2_000) {
-        poll = callback;
-        return 123456;
-      }
-      return originalTimeout(callback, delay);
-    }) as typeof window.setTimeout;
+    let poll: (() => unknown) | undefined;
+    const polls = spyOn(coordinatedPoll, "startCoordinatedPoll").mockImplementation(({ read }) => {
+      poll = read;
+      return () => undefined;
+    });
     let sessionState: NativeAgentSessionStateUpdate = snapshot("running");
     const loadPrSessionState = mock(async () => sessionState);
     const workflow = launchedWorkflow();
@@ -4584,7 +4581,7 @@ describe("PR background state and review clock", () => {
       ] as const) {
         sessionState = snapshot(next);
         await act(async () => {
-          poll?.();
+          await poll?.();
         });
         expect(flowNode("Pull request,").dataset.flowState).toBe(state);
         expect(
@@ -4610,7 +4607,7 @@ describe("PR background state and review clock", () => {
       ).toBe("agent-job-pr");
     } finally {
       view.unmount();
-      window.setTimeout = originalTimeout;
+      polls.mockRestore();
       restorePane();
     }
   });

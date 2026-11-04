@@ -2804,14 +2804,18 @@ describe("sendPrompt", () => {
       { type: "result", subtype: "success" },
     ]);
 
-    const child = session.messages
-      .find((message) => message.role === "assistant")
-      ?.parts.find((part) => part.toolUseId === "child-a");
+    const parts = session.messages.find((message) => message.role === "assistant")?.parts;
+    const child = parts?.find((part) => part.toolUseId === "child-a");
     expect(child).toMatchObject({
       parentTaskUseId: "task-a",
       isMcpTool: true,
       mcpServerName: "team_tools",
     });
+    // Each sub-agent's card names the model its own responses reported.
+    expect(parts?.find((part) => part.toolUseId === "task-a")?.subagentModelId).toBe(
+      "claude-subagent",
+    );
+    expect(parts?.find((part) => part.toolUseId === "task-b")?.subagentModelId).toBeUndefined();
     expect(session.messages.every((message) => message.modelId === undefined)).toBe(true);
   });
 

@@ -730,6 +730,7 @@ export class BuildPipelineSupervisor {
         error: statusDetail,
         resends: session.usageLimitResends ?? 0,
         ...(session.turnStartedAt ? { turnStartedAt: session.turnStartedAt } : {}),
+        session: { label: session.label },
       });
       if (verdict === "wait") return;
       if (verdict === "resend") {

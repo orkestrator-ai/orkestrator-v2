@@ -208,6 +208,12 @@ export function registerEnvironmentCommands(
       ...mail.get(environment.id),
     }));
   });
+  // One environment as `get_environment_snapshots` lists it, for a client that
+  // was told exactly one changed. Reads only that row.
+  register("get_environment_snapshot", async ({ environmentId }, { storage }) => {
+    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    return environment ? toClientEnvironment(environment) : null;
+  });
   /**
    * The PR monitor health of a project's environments (check counts, merge
    * permission, whether the monitor vouches for the reading), from announced

@@ -1,0 +1,644 @@
+/**
+ * A per-project bare Git mirror that new container environments clone from
+ * (`docs/architecture/container-lifecycle.md#project-git-mirror`).
+ *
+ * It is a cache. Nothing depends on it existing: `workspace-setup.sh` checks it
+ * and falls back to its ordinary clone, and every clone from it is
+ * self-contained, so a mirror can be stale, rebuilt or removed at any moment.
+ *
+ * Layout, under `<data>/git-mirrors/<project id>/` (owner-only):
+ * - `mount/` is the bind source, world-readable because the container's user is
+ *   not the backend's user under rootless Docker. It exists for as long as the
+ *   project, whether or not it holds a mirror yet.
+ * - `mount/mirror.git` appears only by rename, once complete.
+ * - `state.json` and the `.building-*` and `.retired-*` scratch directories are
+ *   beside the bind source, so a container sees none of them.
+ *
+ * Every remote URL and credential is passed per transfer. No `remote` section
+ * is ever written, so the mirror's config holds nothing to leak.
+ */
+import { createHash, randomUUID } from "node:crypto";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  statfs,
+  writeFile,
+} from "node:fs/promises";
+import path from "node:path";
+import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import type { CommandContext } from "./commands-context.js";
+import { runRemoteGit } from "./git-noninteractive-env.js";
+import { gitHubGitCredentials } from "./github-git-credentials.js";
+import type { Project } from "./models.js";
+import { removeConfinedDirectory } from "./path-safety.js";
+import { runCommand } from "./shell.js";
+
+const log = createLogger("docker");
+
+export const GIT_MIRRORS_DIR = "git-mirrors";
+export const CONTAINER_GIT_MIRROR_MOUNT = "/orkestrator-git-mirror";
+export const CONTAINER_GIT_MIRROR_PATH = `${CONTAINER_GIT_MIRROR_MOUNT}/mirror.git`;
+const MIRROR_NAME = "mirror.git";
+
+/** Branches only: clones use `--no-tags`, and `refs/pull/*` can dwarf the repository. */
+const MIRROR_REFSPEC = "+refs/heads/*:refs/heads/*";
+/** A clone only pays the remote for what the mirror lacks, so this need not be tight. */
+export const GIT_MIRROR_REFRESH_INTERVAL_MS = 15 * 60_000;
+/**
+ * Each clone copies its history out of the mirror, so this bounds every
+ * environment's Git directory as well as the mirror. A larger repository stays
+ * on the blobless clone.
+ */
+export const GIT_MIRROR_MAX_BYTES = 2 * 1024 ** 3;
+const GIT_MIRROR_MIN_FREE_BYTES = 1024 ** 3;
+/** A repository rarely shrinks, so an oversized one is only looked at again weekly. */
+const GIT_MIRROR_OVERSIZED_RETRY_MS = 7 * 24 * 60 * 60_000;
+/** Fetch failures in a row before the mirror is rebuilt rather than updated. */
+const GIT_MIRROR_REBUILD_AFTER_FAILURES = 3;
+const GIT_MIRROR_SIZE_CHECK_MS = 5_000;
+const GIT_MIRROR_FETCH_TIMEOUT_MS = 30 * 60_000;
+const GIT_MIRROR_LOCAL_TIMEOUT_MS = 10 * 60_000;
+const GIT_MIRROR_COMPACT_ABOVE_PACKS = 30;
+const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/** `workspace-setup.sh` reports how a clone went on one line of its output. */
+const CLONE_OUTCOME_PATTERN = new RegExp(
+  `${String.fromCharCode(0x1e)}ORKESTRATOR_GIT_MIRROR:([a-z-]+)${String.fromCharCode(0x1f)}`,
+);
+const SUSPECT_OUTCOMES = new Set(["corrupt", "clone-failed", "not-self-contained"]);
+
+type MirrorState = {
+  /** Hash of the credential-free remote, so a changed project URL rebuilds. */
+  remote?: string;
+  lastAttemptAt?: number;
+  failures?: number;
+  oversizedUntil?: number;
+  /** A clone could not use the mirror: verify it before the next fetch. */
+  suspect?: boolean;
+  suspectRevision?: string;
+};
+
+export type GitMirrorRefreshOutcome =
+  | "built"
+  | "fetched"
+  | "skipped-recent"
+  | "skipped-oversized"
+  | "skipped-low-disk"
+  | "skipped-shutdown"
+  | "oversized"
+  | "empty"
+  | "failed"
+  | "cancelled";
+
+export type GitMirrorRefreshOptions = {
+  /** Ignore the refresh interval and a recent oversized verdict. */
+  force?: boolean;
+  now?: () => number;
+  maxBytes?: number;
+  freeBytes?: (directory: string) => Promise<number>;
+  run?: typeof runCommand;
+};
+
+type GitMirrorContext = Pick<CommandContext, "storage"> &
+  Partial<Pick<CommandContext, "environmentLifecycleTasks">>;
+
+type MirrorWriter = { controller: AbortController; done: Promise<GitMirrorRefreshOutcome> };
+
+/**
+ * One writer per mirror in this backend. A launch that arrives during a refresh
+ * joins it. Another backend on the same data directory holds no writer lease,
+ * so it creates no containers and starts no refresh.
+ */
+const writers = new Map<string, MirrorWriter>();
+
+function projectDirectory(dataDir: string, projectId: string): string {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("Invalid project id");
+  return path.join(dataDir, GIT_MIRRORS_DIR, projectId);
+}
+
+function mountDirectory(dataDir: string, projectId: string): string {
+  return path.join(projectDirectory(dataDir, projectId), "mount");
+}
+
+function remoteFingerprint(gitUrl: string): string {
+  return createHash("sha256").update(withoutUrlCredentials(gitUrl)).digest("hex");
+}
+
+async function readState(directory: string): Promise<MirrorState> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8"));
+    return parsed && typeof parsed === "object" ? (parsed as MirrorState) : {};
+  } catch {
+    return {};
+  }
+}
+
+const stateWrites = new Map<string, Promise<void>>();
+
+/** Serialize state publication with clone reports; a refresh may clear only the report it read. */
+async function writeState(
+  directory: string,
+  state: MirrorState,
+  clearRevision?: { revision: string | undefined },
+  cloneReport = false,
+): Promise<void> {
+  const previous = stateWrites.get(directory) ?? Promise.resolve();
+  const done = (async () => {
+    await previous.catch(() => undefined);
+    const current = await readState(directory);
+    const next = cloneReport
+      ? { ...current, suspect: true, suspectRevision: state.suspectRevision }
+      : { ...state };
+    if (!cloneReport && (!clearRevision || current.suspectRevision !== clearRevision.revision)) {
+      next.suspect = current.suspect;
+      next.suspectRevision = current.suspectRevision;
+    }
+    const temporary = path.join(directory, `.state-${randomUUID()}.tmp`);
+    await writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
+    await rename(temporary, path.join(directory, "state.json"));
+  })();
+  stateWrites.set(directory, done);
+  try {
+    await done;
+  } finally {
+    if (stateWrites.get(directory) === done) stateWrites.delete(directory);
+  }
+}
+
+/** A deleted project parent can be recreated by rootful Docker as root. */
+function permissionRemediation(error: unknown): string | undefined {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM"
+    ? "Restore backend-user ownership of git-mirrors/<project id> on the host; see docs/development/disk-usage.md#project-git-mirrors"
+    : undefined;
+}
+
+async function ensureProjectDirectories(dataDir: string, projectId: string): Promise<void> {
+  const root = path.join(dataDir, GIT_MIRRORS_DIR);
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await mkdir(projectDirectory(dataDir, projectId), { recursive: true, mode: 0o700 });
+  const mount = mountDirectory(dataDir, projectId);
+  await mkdir(mount, { recursive: true, mode: 0o755 });
+  // Whatever the umask: the workload user must be able to read what is inside.
+  await chmod(mount, 0o755).catch(async () => {
+    // A rootful daemon recreates a removed source as root (see below). It is
+    // empty, and this directory is ours, so it can be replaced.
+    await rmdir(mount);
+    await mkdir(mount, { mode: 0o755 });
+    await chmod(mount, 0o755);
+  });
+}
+
+/**
+ * The read-only mount and its pointer for a new container, or nothing when the
+ * mount cannot be set up, which only means the clone goes to the remote.
+ *
+ * `-v`, not `--mount`: a stopped container's start must survive its source being
+ * removed, and only `-v` has Docker recreate it instead of refusing to start.
+ * Verified against Docker Engine 29.9.2.
+ */
+export async function gitMirrorContainerArguments(
+  dataDir: string,
+  project: Pick<Project, "id">,
+): Promise<string[]> {
+  try {
+    await ensureProjectDirectories(dataDir, project.id);
+    const mount = mountDirectory(dataDir, project.id);
+    // `-v` splits on colons, so such a path could fail the whole container create.
+    if (mount.includes(":")) throw new Error("The data directory path contains a colon");
+    return [
+      "-v",
+      `${mount}:${CONTAINER_GIT_MIRROR_MOUNT}:ro`,
+      "-e",
+      `ORKESTRATOR_GIT_MIRROR=${CONTAINER_GIT_MIRROR_PATH}`,
+    ];
+  } catch (error) {
+    log.warn("git-mirror.mount-unavailable", {
+      projectId: project.id,
+      remediation: permissionRemediation(error),
+      error: formatLogError(error, { message: false }),
+    });
+    return [];
+  }
+}
+
+/** Starts a refresh in the background. Never rejects and never delays a launch. */
+export function scheduleProjectGitMirrorRefresh(
+  context: GitMirrorContext,
+  project: Pick<Project, "id" | "gitUrl">,
+): void {
+  void refreshProjectGitMirror(context, project);
+}
+
+/**
+ * Admission must be closed first. Wait for the entire writer, including local
+ * Git, scratch cleanup and state publication, before giving up the registry lease.
+ */
+export async function stopProjectGitMirrorRefreshes(dataDir: string): Promise<void> {
+  const prefix = path.join(dataDir, GIT_MIRRORS_DIR) + path.sep;
+  const active = Array.from(writers.entries()).filter(([key]) => key.startsWith(prefix));
+  for (const [, writer] of active) writer.controller.abort();
+  await Promise.all(active.map(([, writer]) => writer.done));
+}
+
+/** Creates or updates a project's mirror. Failures are logged, never thrown. */
+export function refreshProjectGitMirror(
+  context: GitMirrorContext,
+  project: Pick<Project, "id" | "gitUrl">,
+  options: GitMirrorRefreshOptions = {},
+): Promise<GitMirrorRefreshOutcome> {
+  if (context.environmentLifecycleTasks?.isAccepting() === false)
+    return Promise.resolve("skipped-shutdown");
+  const key = path.join(context.storage.getDataDir(), GIT_MIRRORS_DIR, project.id);
+  const running = writers.get(key);
+  if (running) return running.done;
+  const controller = new AbortController();
+  const done = runRefresh(context, project, options, controller)
+    .catch((error: unknown) => {
+      log.warn("git-mirror.refresh-failed", {
+        remediation: permissionRemediation(error),
+        projectId: project.id,
+        error: formatLogError(error, { message: false }),
+      });
+      return "failed" as const;
+    })
+    .finally(() => writers.delete(key));
+  writers.set(key, { controller, done });
+  return done;
+}
+
+async function runRefresh(
+  context: GitMirrorContext,
+  project: Pick<Project, "id" | "gitUrl">,
+  options: GitMirrorRefreshOptions,
+  controller: AbortController,
+): Promise<GitMirrorRefreshOutcome> {
+  if (context.environmentLifecycleTasks?.isAccepting() === false) return "skipped-shutdown";
+  const dataDir = context.storage.getDataDir();
+  const now = options.now ?? Date.now;
+  const maxBytes = options.maxBytes ?? GIT_MIRROR_MAX_BYTES;
+  const execute = options.run ?? runCommand;
+  const run: typeof runCommand = (command, args, settings) => {
+    controller.signal.throwIfAborted();
+    return execute(command, args, { ...settings, signal: controller.signal });
+  };
+  const directory = projectDirectory(dataDir, project.id);
+  await ensureProjectDirectories(dataDir, project.id);
+  const mirror = path.join(mountDirectory(dataDir, project.id), MIRROR_NAME);
+  const state = await readState(directory);
+  if (!options.force) {
+    if ((state.oversizedUntil ?? 0) > now()) return "skipped-oversized";
+    if (now() - (state.lastAttemptAt ?? 0) < GIT_MIRROR_REFRESH_INTERVAL_MS) {
+      return "skipped-recent";
+    }
+  }
+  await removeScratch(directory);
+  const remote = remoteFingerprint(project.gitUrl);
+  const next: MirrorState = { ...state, remote, lastAttemptAt: now() };
+  delete next.oversizedUntil;
+  await writeState(directory, next);
+
+  const exists = await isDirectory(path.join(mirror, "objects"));
+  const verified = !exists || !state.suspect || (await hasValidConnectivity(mirror, run));
+  const rebuild =
+    !exists ||
+    !verified ||
+    state.remote !== remote ||
+    (state.failures ?? 0) >= GIT_MIRROR_REBUILD_AFTER_FAILURES;
+  const free = await (options.freeBytes ?? availableBytes)(directory);
+  if (free < GIT_MIRROR_MIN_FREE_BYTES + (rebuild ? maxBytes : 0)) {
+    log.warn("git-mirror.low-disk", { projectId: project.id });
+    return "skipped-low-disk";
+  }
+
+  const transfer: Transfer = { context, project, run, controller, maxBytes, oversized: false };
+  try {
+    if (rebuild) {
+      const built = await buildMirror(transfer, directory, mirror);
+      if (built === "empty") {
+        await writeState(directory, { ...next, failures: 0 });
+        return "empty";
+      }
+    } else {
+      await fetchInto(transfer, mirror);
+      await compactMirror(project.id, mirror, run);
+    }
+    if ((await directoryBytes(mirror)) > maxBytes) {
+      transfer.oversized = true;
+      throw new Error("The mirror grew past its limit");
+    }
+  } catch (error) {
+    if (transfer.oversized) {
+      await retireMirror(directory, mirror);
+      await writeState(directory, {
+        ...next,
+        failures: 0,
+        suspect: false,
+        oversizedUntil: now() + GIT_MIRROR_OVERSIZED_RETRY_MS,
+      });
+      log.warn("git-mirror.oversized", { projectId: project.id, maxBytes });
+      return "oversized";
+    }
+    if (controller.signal.aborted) return "cancelled";
+    await writeState(directory, { ...next, failures: (state.failures ?? 0) + 1 });
+    log.warn("git-mirror.refresh-failed", {
+      remediation: permissionRemediation(error),
+      projectId: project.id,
+      rebuild,
+      // Git's own message can name the remote, credentials included.
+      error: formatLogError(error, { message: false }),
+    });
+    return "failed";
+  } finally {
+    await removeScratch(directory).catch(() => undefined);
+  }
+  if (controller.signal.aborted) return "cancelled";
+  await writeState(
+    directory,
+    { ...next, failures: 0, suspect: false },
+    { revision: state.suspectRevision },
+  );
+  log.info("git-mirror.refreshed", { projectId: project.id, rebuilt: rebuild });
+  return rebuild ? "built" : "fetched";
+}
+
+type Transfer = {
+  context: GitMirrorContext;
+  project: Pick<Project, "id" | "gitUrl">;
+  run: typeof runCommand;
+  controller: AbortController;
+  maxBytes: number;
+  oversized: boolean;
+};
+
+/** Builds a new mirror beside the mount and renames it in, so no reader sees a partial one. */
+async function buildMirror(
+  transfer: Transfer,
+  directory: string,
+  mirror: string,
+): Promise<"published" | "empty"> {
+  const building = await mkdtemp(path.join(directory, ".building-"));
+  const staged = path.join(building, MIRROR_NAME);
+  // No template: a mirror has no hooks. 0644 keeps it readable by the workload
+  // user under rootless Docker, whatever the backend's umask.
+  await transfer.run(
+    "git",
+    ["init", "--quiet", "--bare", "--template=", "--shared=0644", "--initial-branch=main", staged],
+    { timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS, env: gitLocalEnv() },
+  );
+  await fetchInto(transfer, staged);
+  const refs = await transfer.run(
+    "git",
+    [`--git-dir=${staged}`, "for-each-ref", "--count=1", "--format=%(objectname)", "refs/heads/"],
+    { timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS, env: gitLocalEnv() },
+  );
+  if (!refs.stdout.trim()) return "empty";
+  if ((await directoryBytes(staged)) > transfer.maxBytes) {
+    transfer.oversized = true;
+    throw new Error("The mirror is past its limit");
+  }
+  await retireMirror(directory, mirror);
+  await rename(staged, mirror);
+  return "published";
+}
+
+/** Fetches every branch, stopping the transfer if it passes the size limit. */
+async function fetchInto(transfer: Transfer, gitDir: string): Promise<void> {
+  const { context, project, run, controller, maxBytes } = transfer;
+  const credentials = await gitHubGitCredentials(context.storage, project.gitUrl);
+  const guard = setInterval(() => {
+    void packBytes(gitDir).then((bytes) => {
+      if (bytes > maxBytes) {
+        transfer.oversized = true;
+        controller.abort();
+      }
+    });
+  }, GIT_MIRROR_SIZE_CHECK_MS);
+  guard.unref?.();
+  try {
+    await runRemoteGit(
+      "fetch",
+      [
+        "--quiet",
+        "--prune",
+        "--no-tags",
+        // FETCH_HEAD would record the remote in a directory the container reads.
+        "--no-write-fetch-head",
+        "--",
+        project.gitUrl,
+        MIRROR_REFSPEC,
+      ],
+      {
+        cwd: path.dirname(gitDir),
+        timeoutMs: GIT_MIRROR_FETCH_TIMEOUT_MS,
+        signal: controller.signal,
+        redactValues: [project.gitUrl],
+        ...credentials,
+        gitOptions: [
+          `--git-dir=${gitDir}`,
+          // Compaction runs below, in this writer, not detached behind it.
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...credentials.gitOptions,
+        ],
+      },
+      run,
+    );
+  } finally {
+    clearInterval(guard);
+  }
+}
+
+/** Keeps repeated fetches from piling up packs. Git keeps old packs until new ones exist. */
+async function compactMirror(
+  projectId: string,
+  gitDir: string,
+  run: typeof runCommand,
+): Promise<void> {
+  try {
+    const packs = (await readdir(path.join(gitDir, "objects", "pack"))).filter((name) =>
+      name.endsWith(".pack"),
+    );
+    if (packs.length <= GIT_MIRROR_COMPACT_ABOVE_PACKS) return;
+    await run("git", [`--git-dir=${gitDir}`, "gc", "--quiet", "--prune=2.weeks.ago"], {
+      timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS,
+      env: gitLocalEnv(),
+    });
+  } catch (error) {
+    log.warn("git-mirror.compact-failed", {
+      projectId,
+      error: formatLogError(error, { message: false }),
+    });
+  }
+}
+
+async function hasValidConnectivity(gitDir: string, run: typeof runCommand): Promise<boolean> {
+  try {
+    await run("git", [`--git-dir=${gitDir}`, "fsck", "--connectivity-only", "--no-progress"], {
+      timeoutMs: GIT_MIRROR_LOCAL_TIMEOUT_MS,
+      env: gitLocalEnv(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Local plumbing reads no prompt and no remote. */
+function gitLocalEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+}
+
+/** Moves a published mirror out of the mount; the next launch's clone goes to the remote. */
+async function retireMirror(directory: string, mirror: string): Promise<void> {
+  if (!(await isDirectory(mirror))) return;
+  const retired = await mkdtemp(path.join(directory, ".retired-"));
+  await rename(mirror, path.join(retired, MIRROR_NAME));
+}
+
+/** What an earlier, interrupted refresh left, and what this one finished with. */
+async function removeScratch(directory: string): Promise<void> {
+  for (const name of await readdir(directory)) {
+    if (name.startsWith(".building-") || name.startsWith(".retired-")) {
+      await rm(path.join(directory, name), { recursive: true, force: true });
+    }
+  }
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+  return lstat(target).then(
+    (stats) => stats.isDirectory(),
+    () => false,
+  );
+}
+
+async function availableBytes(directory: string): Promise<number> {
+  const stats = await statfs(directory);
+  return Number(stats.bavail) * Number(stats.bsize);
+}
+
+/** The pack directory holds a running transfer's temporary pack too. */
+async function packBytes(gitDir: string): Promise<number> {
+  return directoryBytes(path.join(gitDir, "objects", "pack")).catch(() => 0);
+}
+
+async function directoryBytes(directory: string): Promise<number> {
+  let total = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) total += await directoryBytes(target);
+    else if (entry.isFile()) total += (await lstat(target).catch(() => null))?.size ?? 0;
+  }
+  return total;
+}
+
+/**
+ * Logs how a clone used the mirror, from the setup script's output. A mirror
+ * that could not serve a clone is verified before its next fetch.
+ */
+export async function noteGitMirrorCloneOutcome(
+  output: string,
+  dataDir: string,
+  projectId: string,
+): Promise<void> {
+  const outcome = CLONE_OUTCOME_PATTERN.exec(output)?.[1];
+  if (!outcome) return;
+  if (outcome === "used") {
+    log.info("git-mirror.clone-used", { projectId });
+    return;
+  }
+  // The first environment of a project normally finds no mirror yet.
+  log[outcome === "missing" ? "info" : "warn"]("git-mirror.clone-fallback", {
+    projectId,
+    reason: outcome,
+  });
+  if (!SUSPECT_OUTCOMES.has(outcome)) return;
+  try {
+    const directory = projectDirectory(dataDir, projectId);
+    await writeState(
+      directory,
+      { ...(await readState(directory)), suspect: true, suspectRevision: randomUUID() },
+      undefined,
+      true,
+    );
+  } catch (error) {
+    log.warn("git-mirror.state-write-failed", {
+      projectId,
+      error: formatLogError(error, { message: false }),
+    });
+  }
+}
+
+/**
+ * Removes a project's mirror with the project: stops any refresh first. A
+ * failure is logged and left to the orphan sweep, so it never blocks removing
+ * the project.
+ */
+export async function removeProjectGitMirror(
+  context: GitMirrorContext,
+  projectId: string,
+): Promise<void> {
+  const dataDir = context.storage.getDataDir();
+  try {
+    const key = projectDirectory(dataDir, projectId);
+    const writer = writers.get(key);
+    writer?.controller.abort();
+    await writer?.done;
+    if (!(await isDirectory(key))) return;
+    await removeConfinedDirectory(dataDir, `${GIT_MIRRORS_DIR}/${projectId}`);
+  } catch (error) {
+    log.warn("git-mirror.remove-failed", {
+      remediation: permissionRemediation(error),
+      projectId,
+      error: formatLogError(error, { message: false }),
+    });
+  }
+}
+
+/**
+ * Removes mirrors whose project no longer exists: a removal that failed or was
+ * interrupted. `projectIds` must be complete, so the caller refuses a store it
+ * cannot read rather than make every mirror look orphaned.
+ */
+export async function sweepOrphanedProjectGitMirrors(
+  dataDir: string,
+  projectIds: ReadonlySet<string>,
+  minAgeMs: number,
+  now: () => number = Date.now,
+): Promise<number> {
+  let names: string[];
+  try {
+    names = await readdir(path.join(dataDir, GIT_MIRRORS_DIR));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (!PROJECT_ID_PATTERN.test(name) || projectIds.has(name)) continue;
+    const target = path.join(dataDir, GIT_MIRRORS_DIR, name);
+    const stats = await lstat(target).catch(() => null);
+    if (!stats?.isDirectory() || now() - stats.mtimeMs < minAgeMs) continue;
+    try {
+      await removeConfinedDirectory(dataDir, `${GIT_MIRRORS_DIR}/${name}`);
+      removed += 1;
+    } catch (error) {
+      log.warn("git-mirror.remove-failed", {
+        remediation: permissionRemediation(error),
+        projectId: name,
+        error: formatLogError(error, { message: false }),
+      });
+    }
+  }
+  return removed;
+}

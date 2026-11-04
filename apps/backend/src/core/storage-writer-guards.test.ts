@@ -151,6 +151,7 @@ describe("StorageService store writers", () => {
       "agentHandoffs",
       "bugReports",
       "clientState",
+      "coordinatorNotices",
       "coordinators",
       "graphDescribe",
       "graphEffects",
@@ -161,6 +162,7 @@ describe("StorageService store writers", () => {
       "previewServices",
       "publicOperations",
       "setupApprovals",
+      "suborks",
       "watchedPullRequests",
     ]);
     expect(areas.get("kanban")).toContain("KanbanRepository.saveLinearAuth");

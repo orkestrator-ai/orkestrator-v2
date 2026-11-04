@@ -256,6 +256,35 @@ describe("classifyNativeCommandSubmission", () => {
     });
   });
 
+  describe("/subork", () => {
+    const SUBORK: NativeAgentSlashCommand = {
+      name: "/subork",
+      id: "orkestrator:subork",
+      source: "orkestrator",
+      executionKind: "session-action",
+      bindingRevision: "orkestrator:subork",
+      inputPolicy: { arguments: "required", attachments: "none" },
+    };
+    const commands = [REVIEW, SUBORK];
+
+    test("is sent as a command, busy or idle, so a busy turn queues it", () => {
+      for (const busy of [false, true]) {
+        expect(classify({ text: "/subork ask codex to look", commands, busy })).toMatchObject({
+          kind: "command",
+          command: SUBORK,
+        });
+      }
+    });
+
+    test("needs a request, and can't carry transferred history", () => {
+      expect(classify({ text: "/subork", commands }).kind).toBe("rejected");
+      expect(classify({ text: "/subork ask codex", commands, pendingHandoff: true })).toEqual({
+        kind: "rejected",
+        message: HANDOFF_COMMAND_MESSAGE,
+      });
+    });
+  });
+
   describe("/goal", () => {
     const commands = [REVIEW, GOAL];
 

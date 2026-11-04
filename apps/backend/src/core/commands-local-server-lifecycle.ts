@@ -10,6 +10,7 @@ import {
   CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
 } from "./container-scripts.js";
 import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
+import { noteGitMirrorCloneOutcome } from "./project-git-mirror.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
@@ -58,7 +59,7 @@ export async function readContainerHeadCommit(containerId: string): Promise<stri
 export async function prepareContainerWorkspace(
   containerId: string,
   onOutput?: (chunk: string) => void,
-): Promise<void> {
+): Promise<string> {
   const support = await dockerExec(
     containerId,
     CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
@@ -76,6 +77,7 @@ export async function prepareContainerWorkspace(
   if (!output.includes(CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL)) {
     throw new Error(`Workspace preparation did not report completion for container ${containerId}`);
   }
+  return output;
 }
 
 /**
@@ -109,7 +111,8 @@ export async function establishCreatedFromCommit(
       if (!(await isContainerRunning(current.containerId))) {
         throw new Error(`Container is not running: ${current.containerId}`);
       }
-      await prepareContainerWorkspace(current.containerId, onPrepareOutput);
+      const output = await prepareContainerWorkspace(current.containerId, onPrepareOutput);
+      await noteGitMirrorCloneOutcome(output, context.storage.getDataDir(), current.projectId);
       commit = await readContainerHeadCommit(current.containerId);
     }
 

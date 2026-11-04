@@ -2,6 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { GitHubCliLoginProgress, GitHubCliStatus } from "@/lib/backend";
 
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+
 const calls: string[] = [];
 let status: GitHubCliStatus;
 let login: GitHubCliLoginProgress;
@@ -78,7 +81,37 @@ describe("GitHubCliSetup", () => {
     statusError = undefined;
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    resetReadCoordinatorForTests();
+  });
+
+  test("pauses sign-in reads while hidden, resumes on return, and stops after settlement", async () => {
+    const { clock, document: visibility, coordinator } = installFakeReadCoordinator();
+    renderSetup();
+    await startSignIn();
+    const count = () => calls.filter((command) => command === "get_github_cli_login").length;
+    const initial = count();
+    visibility.setVisibility("hidden");
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(count()).toBe(initial);
+    login = { state: "succeeded", operationId: "login-1" };
+    status = { ...SIGNED_OUT, authenticated: true };
+    visibility.setVisibility("visible");
+    await act(async () => {
+      await clock.advance(500);
+    });
+    expect(count()).toBeGreaterThan(initial);
+    expect(screen.getByText("The GitHub CLI is installed and signed in.")).toBeTruthy();
+    const settled = count();
+    await act(async () => {
+      await clock.advance(30_000);
+    });
+    expect(count()).toBe(settled);
+    expect(coordinator.getDiagnostics().entries).toEqual([]);
+  });
 
   test("recovers from an initial status failure with an explicit retry", async () => {
     statusError = new Error("Status unavailable");

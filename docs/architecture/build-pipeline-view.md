@@ -361,6 +361,9 @@ it as a panel floating over the tab (`PipelineKeyInformation.tsx`; Escape, the
 close button or a click outside closes it). Its sections, each shown only once
 written:
 
+- **Summary**: one paragraph on the change as a whole, in plain language for a
+  reader who does not know the code. A brief written before this section
+  existed has none and opens on its Problem or Objective.
 - **Problem** or **Objective**: `framing` is `problem` by default, `objective`
   when the ticket adds or changes something that was not broken.
 - **Context**, **Solution**, **What was done**.
@@ -411,6 +414,12 @@ they have no per-attempt snapshots to restore, so stages rebuild the brief
 instead of showing superseded work as current. Every field is bounded
 (`KEY_INFORMATION_LIMITS`, about 200 KB at worst) and checked by
 `isBuildPipeline`.
+
+`updates[].sections` accepts only `KEY_INFORMATION_SECTIONS`, and a value a
+release does not know fails its whole pipeline snapshot. A new section therefore
+stays off that list until the support window's floor reads it: `summary` is
+stored and shown but not named in update history, so an older renderer or a
+downgraded backend ignores the field and keeps the pipeline.
 
 ## Inspector and actions
 

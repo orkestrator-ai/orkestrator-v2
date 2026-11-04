@@ -1206,6 +1206,7 @@ export class BuildPipelineReviewFanout {
         error: statusDetail,
         resends: consolidation.usageLimitResends ?? 0,
         turnStartedAt: consolidation.createdAt,
+        session: { label: "Review consolidation" },
       });
       if (verdict === "wait") return { kind: "working" };
       usageLimitResend = verdict === "resend";

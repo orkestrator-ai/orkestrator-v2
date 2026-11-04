@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -92,26 +93,24 @@ export function GitHubCliSetup({
   useEffect(() => {
     if (login.state !== "pending") return;
     let cancelled = false;
-    let timer: number;
-    const poll = async () => {
-      let pending = true;
-      try {
-        const next = await getGitHubCliLogin(machine);
-        if (cancelled) return;
-        pending = next.state === "pending";
-        setLogin(next);
-        setError(null);
-        if (!pending) await refresh();
-      } catch (cause) {
-        if (!cancelled) setError(messageOf(cause));
-      } finally {
-        if (!cancelled && pending) timer = window.setTimeout(poll, pollIntervalMs);
-      }
-    };
-    timer = window.setTimeout(poll, pollIntervalMs);
+    const stopPolling = startCoordinatedPoll({
+      resource: "github-cli-login",
+      intervalMs: pollIntervalMs,
+      read: async () => {
+        try {
+          const next = await getGitHubCliLogin(machine);
+          if (cancelled) return;
+          setLogin(next);
+          setError(null);
+          if (next.state !== "pending") await refresh();
+        } catch (cause) {
+          if (!cancelled) setError(messageOf(cause));
+        }
+      },
+    });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      stopPolling();
     };
   }, [login.state, login.operationId, machine, pollIntervalMs, refresh]);
 

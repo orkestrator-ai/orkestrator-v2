@@ -28,7 +28,7 @@ governs, marked "Decided".
 
 1. **Baseline and before-and-after numbers**: capture the report's measurements for the work already done and before each structural task. Status: open.
 2. **Storage keyed reads and writes**: the lease-held native session mutations, one shared decoded snapshot, the agent mail remainder, keyed-array row writes and the position index (TX-4 rest, BG-5, ST-9 rest, ST-10, ST-11). Status: open (ST-7, ST-8, BG-5, ST-11 and ST-10's compose drafts and environment writers done; TX-4 rest, ST-9 rest and ST-10's session and project writers open).
-3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: open (WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 done; WEB-7 and WEB-17 done 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 done 2026-11-04; WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 open).
+3. **Renderer re-renders and refetches**: WEB-6, WEB-7, WEB-9 to WEB-14 and WEB-16 to WEB-19, plus WEB-2's narrower subscriptions. Status: done (2026-11-04; WEB-2, WEB-3, WEB-4, WEB-5, WEB-8, WEB-15 and GW-13 earlier; WEB-7 and WEB-17 on 2026-11-03; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11, then WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 on 2026-11-04; a React Profiler run stays with task 1).
 4. **Live agent view requests**: discovery out of the 500 ms round, a combined read, then bridge state ETags and transcript deltas (WEB-1, GW-1, GW-3, TX-5, TX-6). Status: open.
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
@@ -40,7 +40,7 @@ governs, marked "Decided".
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
-15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: open (DK-12, DK-14 and DK-15 done; DK-13 open).
+15. **Container data transfer**: in-volume clone move, a per-project mirror, agent-home input stamps and same-device moves (DK-12 to DK-15). Status: done (2026-11-04; follow-ups in [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md)).
 16. **CLI and logging**: conditional `--follow` reads, transport buffering and the log sink (DK-16 to DK-18). Status: done (DK-16 and DK-17 done 2026-11-03; DK-18, the log sink, done 2026-11-04).
 
 ### 1. Baseline and before-and-after numbers
@@ -149,7 +149,7 @@ Done 2026-11-04 (branch `array-layout-writers-dd246b495d6d-r1`, re-checked again
 - WEB-15: the native tab's tail reads (latest assistant row, latest prompt, auth failure since it) are one memoised pass, `readTranscriptTail` in `components/native-agent/transcript-tail.ts` (`transcript-tail.test.ts` pins equality with the old expressions, goal turns included).
 - GW-13: `EnvironmentRebuildSection` follows `container-lifecycle-updated` through `listenAuthoritative` (subscribe, then read; re-read on resync), keeps the higher-revision snapshot when reads and events cross, and polls every 15 s while a rebuild runs instead of every 2 s (2 s again if the subscription fails). The event name and `ContainerLifecycleEvent` payload now live in `@orkestrator/protocol/container-lifecycle` (`EnvironmentRebuildSection.events.test.tsx`).
 
-**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. Not re-checked since the report: the smaller WEB-12 to WEB-14, WEB-16, WEB-18 and WEB-19 (WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below). No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
+**Investigation.** GW-13's other two sites were already event-driven when re-checked: `ProjectCopyDialog` listens to `project-copy-changed` over the portal transport and keeps a 3 s backstop only while a copy is tracked, and `useUserCommands` re-reads on `user-command` changes, resyncs and safety checks, with a 3 s backstop only while a command runs (the resource is ephemeral, absent from the revision manifest, so a missed hint is otherwise invisible). Both were left as they are. Two `container-lifecycle` writes in `commands-environment.ts` (retained storage on deletion, setup completion) bump the revision without emitting; neither changes the operation the rebuild section shows, and the next emitted or read snapshot carries the higher revision. WEB-7 and WEB-17 are in "WEB-7 and WEB-17" below; WEB-2's third fix, WEB-6, WEB-9, WEB-10 and WEB-11 are in "WEB-9, WEB-6, WEB-10, WEB-11 and WEB-2's third fix" below; the rest are in "WEB-12, WEB-13, WEB-14, WEB-16, WEB-18 and WEB-19" below. No React Profiler run was made for the 2026-11-02 batch; the numbers above are hook render counts and call counts from tests. Browser check of the batch: the 18 component-browser owners that failed in a loaded nine-worker `test:browser` run (53 failures, almost all 30 s timeouts) were rerun with three workers: 278 passed and 5 failed. The five are the four desktop Cursor `CloseRetention` cases, which fail identically on `main` at `38d55ee1` (flake case 0963), and the known mobile `ClaudeInteractions` route-disposal flake (0252), whose owner then passed alone.
 
 **Decisions.**
 
@@ -317,6 +317,83 @@ The first pass after opening find still reads every row once (179–1,197 ms at 
   - **Select individual fields with `useShallow`.**
     - Pros: no change to how the values are read.
     - Cons: subscribes to values only used as initial state, and a token that moves still re-renders.
+
+#### WEB-12, WEB-13, WEB-14, WEB-16, WEB-18 and WEB-19 (done 2026-11-04)
+
+Re-checked against `main` at `a8bdce444`, which includes #1747. All six still held, so none was left as "does not hold". Each landed as its own commit, with a test that fails on the previous code, except the WEB-19 timings, which are measurements.
+
+| Item | Measure | Before | After | Source |
+| --- | --- | --- | --- | --- |
+| WEB-12 | Reads for one rename | 1 whole-project list | 1 record, 0 lists | Chromium on a `dev:test` profile |
+| WEB-12 | Reads for one deletion | 1 or more lists | 2 records, 0 lists | Chromium |
+| WEB-13 | 12 s with one expanded truncated folder | 2 reads, each with the contents, each replacing `fileSubtrees` | 2 reads, 2 `unchanged`, 0 with contents, `fileSubtrees` keeps its identity | Chromium; before read from code |
+| WEB-14 | Maps copied by a poll's `setProjection` | 4 | 1 (2 when the messages changed) | `nativeAgentProjectionStore.test.ts` |
+| WEB-14 | Rewriting the newest projection | Copies 4 Maps and notifies every subscriber | Publishes nothing | same |
+| WEB-16 | Container renders for unrelated fields, or another environment, in one batch | 1 | 0 | `TerminalContainer.render-count.test.tsx` |
+| WEB-18 | All renderer commands in 12 s, Files panel open | Not comparable: only the polls moved here changed | 8 visible, 0 hidden; 5 in the 3 s after return, including the overdue `check_docker` | Chromium |
+| WEB-18 | Reads by a 3 s poll in 10 min hidden | 200 | 0 | `coordinated-poll.test.ts` |
+| WEB-19 | Median per streamed update, 5 KB message | 3.3 ms | 2.2 ms | Production React under Happy DOM, one local run |
+| WEB-19 | Same, 10 KB | 4.5 ms | 2.1 ms | same |
+| WEB-19 | Same, 20 KB | 6.7 ms | 2.4 ms | same |
+| WEB-19 | Same, 30 KB (the parser cap is 32,000 characters) | 10.2 ms | 3.7 ms | same |
+
+The "before" WEB-12 and WEB-13 browser rows come from the code rather than a browser run on the old commit; the counts follow directly from it.
+
+**WEB-14.** `setProjection` and `setProgressiveCache` copy each Map the first time they have to change it (`copyOnWrite`, `nativeAgentProjectionStore.ts`). A byte Map is left alone when the size is unchanged. No reader depends on its order: eviction walks the entry Maps. Rewriting the projection already at the most-recent end, clearing an absent progressive entry and an eviction with nothing to release now publish nothing.
+
+**WEB-16.** The container selected its whole environment object but reads only a few of its fields, which are now selected one by one with `useShallow`. That alone was not enough: `mergeEnvironmentsForProject` gave every environment in the project a new object whenever one changed, nested `agentSettings` included. `reuseUnchangedFields` (`environmentStore.ts`) keeps the identity of every environment and field a snapshot left unchanged, in `setEnvironments`, `mergeEnvironmentsForProject`, `applyEnvironmentSnapshot` and `updateEnvironment`, so this helps every subscriber of the store. Removing the effect's `exhaustive-deps` suppression exposed the React Compiler rules to the whole component for the first time: three refs written during render now publish in a layout effect, and one state write that has to stay in its effect keeps a directive with its reason.
+
+**WEB-12.** The announcement already names the environment and its project. `get_environment_snapshot` returns that one record as the list would (one keyed row, `toClientEnvironment`), and `refreshEnvironmentSnapshot` (`useEnvironments.ts`) applies it, removing the environment on `null`. It keeps the list path's lifecycle-attempt and subscription handling. A record not held yet is ignored while a creation in this client is running or just finished, because the creation's own response adds it and `addEnvironment` does not deduplicate. `useEnvironmentListSync` uses it only for one pending change: several waiting at once (a reorder announces per moved environment), an announcement without a project and every explicit resync read the list, and manifest recovery still reads every list, so a missed event stays detectable. Backends without the command fall back to the list until the next explicit resync (row in the [version compatibility register](../../architecture/version-compatibility.md#register)).
+
+**WEB-13.** `get_file_subtree` and `get_local_file_subtree` take `knownDigest` and answer `{ unchanged, digest, value? }` through the existing `conditionalSnapshot`. The store holds each folder's digest beside its contents and drops it with them on collapse, retry or target change, so a folder not held is always read whole. An unchanged answer clears the loading and failure marks and leaves `fileSubtrees` alone, so nothing merges the tree again. The backend still walks the folder: nothing else can say an ignored folder has not changed, and that walk is what makes a change appear. In Chromium a new file appeared 1.35 s after it was written. Without `knownDigest` the commands answer as before; a backend that ignores it sends the directory, which reads as changed with no digest (register row added).
+
+**WEB-18.** `startCoordinatedPoll` (`lib/coordinated-poll.ts`) replaces `setInterval` where it stands and hands the schedule to the read coordinator: nothing while the window is hidden or the transport has declared itself disconnected, and one read after it returns if the interval has passed, `critical` polls first. A failed read logs (`poll.read-failed`) and keeps its interval. Moved: the Docker probe (60 s), user commands (3 s), annotation selection (400 ms, `critical`), Docker settings' probe and stats (5 s each), the Docker image task (2 s), recovery copies (3 s), the rebuild section (2 s or 15 s), project copy (3 s), machine maintenance (2.5 s or 20 s), the bug report draft (3 s), GitHub CLI login (1.5 s) and the Multi Review pull request phase (2 s). `coordinated-poll.test.ts` covers the behaviour and checks each of these files uses it; `useUserCommands`, `useAnnotationCapture` and the rebuild section also have a hidden-window test of their own.
+
+Left on their own timers, and why: `CAPTURE_RESUME_INTERVAL_MS` in `useAnnotationCapture` retries uploads, which is a mutation the coordinator must not own. The sign-in reads in `AgentInfoButton` are bounded to 60 reads or the device-code deadline and already read on focus. `ContainerLogViewer` (1 s) holds a backend log subscription, and whether that survives a long pause was not checked. `WorkflowLiveInspector` schedules itself adaptively. `TicketSyncStrip` (30 s) and `useMaintenanceSummaries` (5 min) were not in the finding. `ServerConnectionSwitcher`, `pullRequestsStore` and the web annotation sync already skip while hidden. `lib/portal/workspaces.ts` renews a lease.
+
+**WEB-19.** The finding holds, and fixing it was worth it: 10.2 ms per update at the parser cap is about 20% of a core at the 20 updates per second limit, and it grew with the message. Each completed segment now runs through `react-markdown` once (`IncrementalMarkdownCache.render`, `incremental-parse.ts`) and its React elements are reused, so React skips them. The cost is now close to flat with length. Equivalence: `incremental-parse.test.tsx` compares HTML and top-level keys with a full render at every prefix of 16 fixtures, rich and plain, including open and closed fences, partial tables, definitions, footnotes, HTML and CRLF. `MessageMarkdown.incremental.test.tsx` compares the DOM with one pass over the whole text every 3 characters through the real rich components, and shows finished blocks do not render again and the final render remounts nothing. A block is treated as finished only once a later line has ended, so the last two blocks render per update. The thin rich adapters that read `RichMarkdownRenderContext` still re-render, because the context carries the source; the heavy blocks under them are memoized on their own props.
+
+**Browser and real-stack checks.** On a credential-free `dev:test` profile (`web-refetch-qa`, stopped and reset) in Chromium: a rename and a deletion reached the sidebar and the name survived a reload; the WEB-13 and WEB-18 numbers above; no page error. `e2e/StreamingTranscript.spec.ts` and `e2e/TranscriptArrival.spec.ts` with one worker: 46 passed and 4 failed on this branch, 46 passed and 4 failed on `a8bdce444`, with different tests each time, mostly the page not appearing in time. Of the branch's failures, only `scrollbar departure after find` (flake [0767](../../tests/flaky-tests/native-agents-and-transcripts/0767-streaming-find-convergence-aggregate-timeout.md)) failed again alone, in 2 of 4 runs, against 1 of 4 on the base commit.
+
+**Decisions.**
+
+- **How should one environment change reach the store (WEB-12)?**
+  - **A new one-record read used only when exactly one change is waiting (recommended, done).**
+    - Pros: announcements stay body-free, as the change feed requires; one keyed row on the backend; a burst still costs one list read; unknown-command fallback is detectable.
+    - Cons: a new command and one compatibility path; two different changes in sequence read two records.
+  - **An `environmentId` argument on `get_environment_snapshots`.**
+    - Pros: an older backend answers with the list, so no failed request.
+    - Cons: one command with two answer shapes, and the argument's meaning is invisible to the conditional manifest path it shares.
+  - **Carry the environment in the announcement.**
+    - Pros: no read at all.
+    - Cons: `resource-events.ts` rules it out: a client must never trust a body delivered out of band, and a mutation would have to serialize the record for every client.
+- **Where should WEB-16's fix live?**
+  - **Narrow the container's selector and keep unchanged identities in the store (recommended, done).**
+    - Pros: the selector alone would still re-render on `agentSettings`, a new object in every snapshot; the store change helps every other subscriber.
+    - Cons: one deep comparison per field of each environment in a merge, about what the whole-record comparison it replaces already cost.
+  - **Narrow the selector only, comparing `agentSettings` deeply there.**
+    - Pros: touches one file.
+    - Cons: every other selector of a nested environment field keeps the problem.
+- **How should polls pause (WEB-18)?**
+  - **`startCoordinatedPoll`, a one-for-one replacement built on the coordinator (recommended, done).**
+    - Pros: each effect keeps its closures and cleanup; one implementation of return, reconnect and server switch; no state for a poll that does not need it.
+    - Cons: every owning test that captured `setInterval` had to change; a tick is skipped while a read runs, rather than overlapping.
+  - **`useCoordinatedRead` at each site.**
+    - Pros: the documented hook.
+    - Cons: most sites define their read inside an effect, against that effect's own closures, so each would have to be restructured.
+  - **A `document.hidden` check inside each interval.**
+    - Pros: smallest diff.
+    - Cons: no read on return unless every site also adds a listener, and timers keep firing while hidden.
+- **How should finished markdown blocks be kept (WEB-19)?**
+  - **Reuse React elements from `react-markdown`, called as a function (recommended, done).**
+    - Pros: no copy of its pipeline; the plugins still see the whole document, so offsets and block ids are unchanged; the same keys as a full render, so the final render updates in place.
+    - Cons: depends on `react-markdown` staying a plain function and on `hast-util-to-jsx-runtime`'s `name-count` keys, both of which the tests pin; the top-level `<Markdown>` element is gone.
+  - **Render each completed block in its own memoized `<Markdown>`.**
+    - Pros: plain React.
+    - Cons: a different tree shape from the final render, so finishing a message would remount every block, and code highlighting and diagrams would start over.
+  - **Leave it, as the finding's medium confidence allowed.**
+    - Pros: no change.
+    - Cons: about 20% of a core per long streaming answer, growing with its length.
 
 ### 4. Live agent view requests
 
@@ -1056,7 +1133,7 @@ Not addressed, for a later pass: the Playwright layer (1.07 GB: Chromium, the he
 
 ### 15. Container data transfer
 
-**Problem.** Each environment clones from the remote again (DK-13) and copies agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
+**Problem.** Until 2026-11-04 each environment cloned from the remote again (DK-13) and copied agent-home inputs in full on every start (DK-14). Until 2026-11-02 it also copied its clone byte for byte inside one volume (DK-12), and a same-disk move of a worktree with submodules copied the whole worktree (DK-15).
 
 **Context.** Decided 2026-11-01: do this now, ahead of the measurement gate. Files: `docker/workspace-setup.sh` (DK-12, DK-13), `portable-inputs.ts` and the entrypoints (DK-14), `environment-move.ts` (DK-15). Container storage rules in `docs/architecture/container-lifecycle.md` apply: no removal outside lifecycle operations.
 
@@ -1070,7 +1147,13 @@ Done 2026-11-04 against `main` at `96ee1eb3`:
 
 - DK-14: `import_agent_input` in `docker/entrypoint.sh` leaves an input alone when copying it would change nothing, and removes what an earlier boot imported once it leaves the mounts (`staged-inputs=5`). Logins are imported on every start (`forget_unchanged_agent_login`, `remember_agent_login`). Tests: `apps/backend/tests/portable-inputs-stamps.test.ts`, `portable-inputs-stamps-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Input stamps") describes the behaviour. Follow-ups: [4580](../containers-and-environments/4580-input-stamp-follow-ups.md).
 
-**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move. Still unverified: whether blobless clones pay many lazy round trips for history-heavy diffs, which affects DK-13.
+Done 2026-11-04 against `main` at `a8bdce44`:
+
+- DK-13: a new container environment clones from a per-project bare mirror (`git clone --no-tags --reference <mirror> --dissociate <url>`), bound read-only, and falls back to the old clone on any problem with it (`git-mirror=1`). `apps/backend/src/core/project-git-mirror.ts` builds, refreshes, bounds and removes the mirror; `clone_from_git_mirror` in `docker/workspace-setup.sh` uses it. Tests: `tests/unit/workspace-setup-git-mirror.test.ts`, `apps/backend/tests/project-git-mirror.integration.test.ts`, `project-git-mirror-create.test.ts`, `project-git-mirror-docker.test.ts`. `docs/architecture/container-lifecycle.md` ("Project Git mirror") and `docs/development/disk-usage.md` ("Project Git mirrors") describe it. Follow-ups: [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+
+**Investigation.** Re-checked on 2026-11-02: DK-12 and DK-15 were still as the report describes. A same-disk worktree without submodules already moved by rename (`git worktree move`); the copy happened only for worktrees with submodules, which git refuses to move.
+
+**Do blobless clones pay many lazy round trips for history-heavy diffs? Yes** (measured 2026-11-04, table below). Each batch of missing blobs is one more fetch from the remote, and `git log -p`, `git log --stat` and `git blame` ask in small batches, so an ordinary read of history takes minutes on `git/git`. That decided the clone flags: a clone from the mirror holds the whole history rather than a partial one.
 
 Measurements, beelink (btrfs host, about ten builds running at once, so timings are noisy), three runs each:
 
@@ -1094,6 +1177,40 @@ DK-14, beelink (btrfs host, other builds running, so timings are noisy), rootful
 
 The first start's hashing did not show above the noise. Real homes were not measured: fixture homes only, so the sizes above are chosen rather than typical. The numbers came from a throwaway script that bound the image's own entrypoint with timing lines added, then started and stopped each container.
 
+DK-13, beelink, 2026-11-04 (btrfs host, other builds running, load average 5–10, so timings are noisy), Docker Engine 29.9.2, default bridge, image `orkestrator-v2:dev-04afd6671451` with this branch's `workspace-setup.sh` bound over its own, writable-layer workspace, git 2.47.3 in the container and 2.56.0 on the host. Each cell is three containers of `workspace-setup.sh --prepare-only`. Network is the container's `eth0` receive counter. Disk is `du -sb`. "Before" is the blobless clone that was the only path until now; "after" is a second environment, with the mirror published.
+
+| Repository | Clone time before | Clone time after | Network before | Network after | Workspace before | Workspace after | Git directory before | Git directory after |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `orkestrator-ai/orkestrator-v2` | 6.5–7.1 s | 1.4–1.6 s | 43.2–43.4 MiB | 0.01 MiB | 160 MiB | 202 MiB | 45 MiB | 87 MiB |
+| `git/git` | 9.6–11.2 s | 4.3–4.7 s | 124.4–124.6 MiB | 0.01 MiB | 179 MiB | 371 MiB | 131 MiB | 323 MiB |
+
+The mirror itself, built on the host by `refreshProjectGitMirror`: 5.6 s and 86 MiB for `orkestrator-ai/orkestrator-v2`, 16.6 s and 322 MiB for `git/git`. A refresh with nothing new took 0.34–0.35 s. So the first environment of a project pays its blobless clone and, in the background, the mirror; the second and later ones save the network but hold more disk, since `--dissociate` copies the history into each.
+
+Reads of history after each clone of `git/git`, from one run of each in the same image. "Lazy fetches" counts `child_start` fetches in `GIT_TRACE2_EVENT`:
+
+| Read | Blobless (today's clone) | Full, from the mirror |
+| --- | --- | --- |
+| Objects missing after the clone | 162,097 | 0 |
+| `git diff HEAD~1 HEAD` | 0.4 s, 1 lazy fetch | 0.0 s, none |
+| `git log -p -20` | 1.4 s, 3 lazy fetches | 0.0 s, none |
+| `git log -p -200` | 43.0 s, 106 lazy fetches, 3.2 MiB | 0.1 s, none |
+| `git diff --stat HEAD~300 HEAD` | 3.1 s, 2 lazy fetches, 5.4 MiB | 0.2 s, none |
+| `git log --stat -500` | 78.5 s, 194 lazy fetches, 6.9 MiB | 0.3 s, none |
+| `git blame Makefile` | Stopped at the 150 s limit, 354 lazy fetches, 14.2 MiB | 0.7 s, none |
+| Git directory after those reads | 140 MiB | 323 MiB |
+
+The combination the report's fix could have used, `--filter=blob:none` with `--reference --dissociate`, on `git/git`:
+
+| Mirror | Clone | Network | Git directory | Objects missing |
+| --- | --- | --- | --- | --- |
+| Up to date | 4.4 s | 0.0 MiB | 323 MiB | 0, and reads as above, but still marked partial |
+| 2,000 commits behind | 9.7 s | 29.3 MiB | 32 MiB | 31,276; `git blame Makefile` then took 113 s and 262 lazy fetches |
+| The same, 2,000 behind, no `--filter` | 16.5 s | 73.2 MiB | 319 MiB | 0; reads as above |
+
+Without `--filter`, a stale mirror costs a real download of what it lacks. With it, `--dissociate` discards what the mirror held (`repack` treats objects a partial clone's pack refers to as the promisor remote's), so the result depends on how stale the mirror happens to be, and the clone goes back to the remote for them.
+
+The numbers came from throwaway scripts: one bound the real setup script into containers and read the counters above, the other ran the flag variants and reads directly with the image's git. Neither is committed. Rootless Docker and Docker Desktop were not measured.
+
 The DK-12 numbers came from a throwaway script that runs the old and new steps on a scratch volume. The DK-15 numbers came from a temporary benchmark test that was not committed: it timed `moveEnvironmentTask` and sampled `statfs` every 5 ms, once with the old `environment-move.ts` and once with the new one.
 
 **Decisions.**
@@ -1106,6 +1223,51 @@ The DK-12 numbers came from a throwaway script that runs the old and new steps o
     - Pros: the largest saving for big repositories.
     - Cons: a new mounted resource to create, refresh, bound and clean up before anything else lands.
   - Taken 2026-11-02: DK-12 and DK-15 now; DK-14 next, once the other `portable-inputs.ts` build has merged, then DK-13.
+- **DK-13: which clone flags?** (decided 2026-11-04, measured above)
+  - **`--no-tags --reference <mirror> --dissociate`, with no `--filter` (taken).**
+    - Pros: no download on a fresh mirror; a stale one pays only the difference; self-contained, so reads and later mirror removal need nothing else. Reads of history go from minutes to under a second.
+    - Cons: each environment's Git directory holds the history: 45 to 87 MiB and 131 to 323 MiB on the two repositories measured, where the blobless clone leaves it on the remote.
+  - **Add `--filter=blob:none` as well.**
+    - Pros: looks like the smallest change, and keeps today's flags.
+    - Cons: not stable. With a mirror behind the remote, `--dissociate` drops what the mirror held and the environment fetches it back lazily, so it pays both the mirror and the remote.
+  - **A blobless clone over `file://` from the mirror, then point `origin` at the remote.**
+    - Pros: the same disk as today with no download.
+    - Cons: keeps the lazy round trips measured above; needs `safe.directory` and `uploadpack.allowFilter` for the mirror, and several more steps between clone and checkout to fail partway through.
+- **DK-13: where does the mirror live?** (decided 2026-11-04)
+  - **A host directory, `<data>/git-mirrors/<project id>/mount/mirror.git`, bound read-only (taken).**
+    - Pros: the backend fetches with host Git and the project's existing credential path. A rename publishes it. No Docker lifecycle of its own, and the ticket names it a host resource.
+    - Cons: a bind source can go away underneath a stopped container, which is why the mount is `-v` rather than `--mount`; world-readable inside an owner-only parent, for rootless Docker.
+  - **A labelled named volume.**
+    - Pros: Docker refuses to remove one a container references, and it is fast on Docker Desktop.
+    - Cons: the host cannot write it, so every refresh needs a helper container with network access and the project's credentials inside it, which the ticket rules out.
+- **DK-13: when does it refresh?** (decided 2026-11-04)
+  - **In the background on each container creation, at most every 15 minutes per project, never waited for (taken).**
+    - Pros: a launch is never delayed or blocked, an idle project makes no requests, and staleness only costs the difference. Git publishes a pack before the refs that reach it, so a clone may read during a refresh.
+    - Cons: the first environment pays its clone and the mirror's own download; the second is the first to benefit. [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md) task 1 can seed the first mirror from the host checkout.
+  - **Wait for the first build, then clone from it.**
+    - Pros: one download rather than two for a new project.
+    - Cons: delays the first environment by a whole clone, and a slow or failing remote would hold up a launch, which the ticket forbids.
+  - **A periodic timer per project.**
+    - Pros: always fresh.
+    - Cons: network traffic for projects nobody is using, for no benefit: a clone already fetches what is missing.
+- **DK-13: how is it locked?** (decided 2026-11-04)
+  - **One refresh per mirror in the backend, launches join it, with no lock for readers (taken).**
+    - Pros: no lock to go stale; a crash cannot block anyone. A second backend on the same data directory holds no writer lease, so it creates no containers and starts no refresh. Tested with clones, refreshes and a compaction at once, followed by `git fsck --full`.
+    - Cons: relies on the writer lease across processes, though Git's own ref locks still apply if that ever failed. A lock left by a crash fails fetches until the third failure rebuilds the mirror; clones are unaffected.
+  - **A lock file readers also honour.**
+    - Pros: explicit.
+    - Cons: the mount is read-only, so a container could not take it, and a stale one is exactly the failure this must not have.
+- **DK-13: how is disk bounded?** (decided 2026-11-04)
+  - **2 GiB per project, past which it has no mirror and the blobless clone stays, retried weekly (taken).**
+    - Pros: bounds each environment's copy as well as the mirror. A size check every 5 s stops a transfer that passes the limit. Also: 3 GiB free needed to build, 1 GiB to fetch, compaction past 30 packs, branches only.
+    - Cons: a fixed number, not a setting. A repository just over it loses the mirror entirely.
+  - **Remove mirrors idle for some time.**
+    - Pros: also reclaims projects nobody launches.
+    - Cons: another background removal for a resource bounded per project anyway. Not done; the disk report shows them.
+- **DK-13: when is it removed?** (decided 2026-11-04)
+  - **With the project in `cleanupProjectForRemoval`, by the orphan sweep for what that left, and by its own refresh past the limit (taken).**
+    - Pros: shared by `remove_project` and `project.remove`; a failure never blocks removing the project, and the sweep retries, refusing an unreadable project store. Any stopped container still starts, because a clone needs nothing from it and `-v` recreates the source.
+    - Cons: deleting a project's last environment keeps the mirror until the project goes, so the next environment is quick.
 - **DK-14: what makes a skip safe?** (decided 2026-11-04)
   - **Hash each input's content and compare it with the stamp and with what the home holds; skip only when all three agree (taken).**
     - Pros: skips exactly when the copy would change nothing, so an edited or deleted import comes back as it does today, and a stale or forged stamp can only cause a copy. It survives the backend rewriting a revision in place and the relay's new inodes and whole-second times.
@@ -1232,6 +1394,22 @@ row writer with no lease, whose read would then race the others.
 `commands-environment.ts` failed `bun check` on a clean `96ee1eb3e`: a closure
 read `environment.id` from a reassigned `let`. It now uses the `environmentId`
 parameter, the same value, so the backend typecheck can pass.
+
+### Task 3: which polls WEB-18 covers (2026-11-04)
+
+The report names "dialog polls at 2–5 s" without listing them. Took that as every bare timer reading state for a dialog, settings panel or sheet at about that rate, and added two like them: GitHub CLI login (1.5 s) and the Multi Review pull request phase (2 s). Left the slower `TicketSyncStrip` and `useMaintenanceSummaries`, which the finding does not name, and the others listed under WEB-18 for the reasons there.
+
+### Task 3: a poll's priority on return (2026-11-04)
+
+Annotation selection is `critical`, so a selection that ended while hidden clears within 50 ms. The Docker probe is `auxiliary`, up to about 1.5 s. Everything else is `standard`, up to about 0.6 s. These are the coordinator's existing bands, and a shown window repaints before any of them.
+
+### Task 3: an unrecognised record on the single-environment read (2026-11-04)
+
+A record not held yet is ignored while a creation is active or just finished, rather than added. If that record belonged to another client's creation, it arrives with the next announcement or resync. This matches what the list path does in the same window, which drops the whole snapshot.
+
+### Task 3: the digest and the file tree (2026-11-04)
+
+Used `conditionalSnapshot`, not `snapshotResponse`, because `snapshotResponse` counts outcomes under `file-tree-read` and a folder read is not one. Folder reads therefore have no recurring-work outcome counter yet.
 
 ### Task 3: what counts as the WEB-9 startup closure (2026-11-04)
 
@@ -1776,6 +1954,10 @@ browser and real-stack suites were not run.
   not in a container. ST-18's open-view path is proved at the backend and by the
   renderer's existing `reset` test, not in a live browser session.
 
+- DK-13 on a real rootless daemon and on Docker Desktop: only Docker Engine 29.9.2, rootful, was run. A foreign uid reading the mirror (`--user 12345`) stands in for a rootless workload user. See [4820](../containers-and-environments/4820-project-git-mirror-follow-ups.md).
+
+- WEB-12, WEB-13 and WEB-18 with `localWindowGatewayTransport` on and off in a real Electron window: `local-gateway-transport-electron.spec.ts` was not run, because this host has no disposable display (`xvfb-run`). From code, the polls and the new reads all go through the same `invoke`, and neither the gateway nor the relay filters commands by name; the Chromium run exercised the gateway path only.
+- WEB-19 timings in Chromium: the numbers are production React under Happy DOM; no React Profiler run was made.
 - WEB-11 on a real mobile WebView and over a slow remote link: that a socket left dead in the background gets no pong and is replaced, and that 2.5 s is long enough for a healthy pong. Only fake-socket client tests and the real gateway's ping handling in a backend test have run.
 
 ## Related
@@ -1786,6 +1968,18 @@ browser and real-stack suites were not run.
 - [Flake 1314](../../tests/flaky-tests/design-canvas-and-artifacts/1314-design-profile-ledger-cleanup-race.md).
 
 ## Assumptions and decisions
+
+### Task 15: DK-13's mirror holds branches only
+
+The ticket asked for a mirror without saying which refs. Took `+refs/heads/*` because clones use `--no-tags`, and `refs/pull/*` can dwarf a repository on GitHub. A tag or pull request an environment later asks for comes from the remote, as it did before.
+
+### Task 15: `--reference`, not the suggested `--reference-if-able`
+
+The report and the ticket suggested `--reference-if-able`. With no `--filter`, a mirror removed between the check and the clone would then download the whole history silently. `--reference` fails instead, so that race falls back to the blobless clone and says why. The script does the check itself, so the flag's tolerance added nothing.
+
+### Task 15: stale means the difference, not a fallback
+
+The ticket lists a stale mirror among those that fall back to today's clone. A clone from a stale mirror already works and downloads only what it lacks (73 MiB rather than the 124 MiB of a blobless clone, in the 2,000-commit case above), so it is not treated as a failure. It is logged as `used`.
 
 ### Task 3: terminal foreground recovery after review
 

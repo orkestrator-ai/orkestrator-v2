@@ -167,7 +167,20 @@ export class BuildPipelinesRepository {
         if (!pipelines) return true;
         if (pipelines.has(pipelineTag)) return true;
         // Graph runs keep their activation transcripts here too (item 211).
-        return this.liveGraphRunTags()?.has(pipelineTag) ?? true;
+        const graphTags = this.liveGraphRunTags();
+        if (!graphTags || graphTags.has(pipelineTag)) return true;
+        // Suborks share graph transcript storage, but own separate control rows.
+        try {
+          return this.context.database
+            .rows("native-agent-suborks")
+            .list({ values: false })
+            .some(
+              ({ key }) =>
+                transcriptPipelineTag(graphRunTranscriptOwner(`subork:${key}`)) === pipelineTag,
+            );
+        } catch {
+          return true; // Unreadable ownership must never authorize deletion.
+        }
       },
       faults: () => this.buildPipelineTranscriptFaultHooks,
       ...(this.buildPipelineTranscriptLimitOverrides

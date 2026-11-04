@@ -320,6 +320,9 @@ export function registerTeardownCommands(
     // A provider id supplied by a renderer is not close authority on its own.
     // Legacy/unmapped sessions are left to orphan reconciliation rather than
     // risking closing another tab's conversation.
+    // Closing the caller's tab stops what it asked for, before anything else
+    // can wait on the provider. The sweep covers a session that left another way.
+    await context.nativeAgents?.stopSuborksForSession?.(storageKey);
     const providerSessionId = persistedSession?.providerSessionId;
     let resumable = intent.resumableSessionId;
     if (!providerSessionId) {

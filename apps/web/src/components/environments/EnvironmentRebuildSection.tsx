@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -172,12 +173,13 @@ export function EnvironmentRebuildSection({
   // subscription it is the only source of progress, so it stays quick.
   useEffect(() => {
     if (!running) return;
-    const timer = setInterval(
-      () => void refreshSnapshot(),
-      eventsLive ? REBUILD_BACKSTOP_POLL_MS : REBUILD_POLL_MS,
-    );
-    return () => clearInterval(timer);
-  }, [eventsLive, running, refreshSnapshot]);
+    return startCoordinatedPoll({
+      resource: "environment-rebuild",
+      target: environment.id,
+      intervalMs: eventsLive ? REBUILD_BACKSTOP_POLL_MS : REBUILD_POLL_MS,
+      read: refreshSnapshot,
+    });
+  }, [environment.id, eventsLive, running, refreshSnapshot]);
 
   const openConfirm = async () => {
     setLoadingPreview(true);

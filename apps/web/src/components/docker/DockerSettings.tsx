@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   AlertDialog,
@@ -102,10 +103,15 @@ function MachineDockerSettings() {
       }
     };
     void probe();
-    const timer = setInterval(() => void probe(), STATS_REFRESH_MS);
+    const stopPolling = startCoordinatedPoll({
+      resource: "docker-settings-probe",
+      target: machine ?? "",
+      intervalMs: STATS_REFRESH_MS,
+      read: probe,
+    });
     return () => {
       active = false;
-      clearInterval(timer);
+      stopPolling();
     };
   }, [machine, windowMachine]);
 
@@ -211,8 +217,11 @@ function DockerSettingsPanel() {
   // Docker calls within its interval. The first load clears the spinner.
   useEffect(() => {
     fetchData(false);
-    const timer = setInterval(() => fetchData(true), STATS_REFRESH_MS);
-    return () => clearInterval(timer);
+    return startCoordinatedPoll({
+      resource: "docker-settings-stats",
+      intervalMs: STATS_REFRESH_MS,
+      read: () => fetchData(true),
+    });
   }, [fetchData]);
 
   const handleStopContainer = async (containerId: string) => {

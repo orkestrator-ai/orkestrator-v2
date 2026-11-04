@@ -25,6 +25,8 @@ export const WORKFLOW_RESULT_KINDS = [
   "fix-result",
   "verification-result",
   "pr-result",
+  /** One subork's response (`suborks.ts`). */
+  "subork-answer",
   /**
    * A graph output port (plan P1.3). Its schema and submission tool come from
    * the slot (`schema`, `toolName`), not from the kind.
@@ -175,6 +177,7 @@ const WORKFLOW_RESULT_TOOL_NAMES: Record<WorkflowResultKind, string> = {
   "pr-result": "submit_pr_result",
   "graph-output": "submit_graph_output",
   "graph-template": "submit_graph_template",
+  "subork-answer": "submit_subork_answer",
 };
 
 export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";

@@ -294,9 +294,10 @@ export class AgentMailRepository {
   /**
    * Give a main coordinator that has never run its default agent, so an agent
    * in its own project can wake it. User, external and cross-project mail wakes
-   * nobody, and a workflow notice does not start a coordinator by itself, so
-   * finished work cannot wake a fresh one. A failure leaves the mail filed for
-   * the unassigned mailbox, where the user can see it.
+   * nobody. A workflow notice does not start one here either: whether a notice
+   * starts a coordinator is decided once, before it is sent, by
+   * `CoordinatorNoticeRouter`. A failure leaves the mail filed for the unassigned
+   * mailbox, where the user can see it.
    */
   private async startUnassignedMain(
     sender: AgentMailSender,
@@ -498,6 +499,8 @@ export class AgentMailRepository {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence, checked under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       /** Backend-owned node transport metadata; never accepted from an agent directly. */
       nodeParent?: { id: string; threadId: string; hopCount: number };
@@ -524,6 +527,18 @@ export class AgentMailRepository {
        * command node's coordinator whose mail its node link delivered.
        */
       steer?: boolean;
+      /**
+       * File this notice for its reader without a wake, under this placement
+       * reason. Backend-owned; a usage-limit notice whose coordinator could not
+       * be moved off the limited account, or a later stop in a notified window.
+       */
+      keepWithoutWake?: string;
+      /**
+       * A notice a leaf sent up the coordinator hierarchy, not a message between
+       * two agents: it wakes without counting against the node's pair budget, so
+       * an exhausted budget cannot hold it. Honoured only for a node sender.
+       */
+      relayedNotice?: boolean;
     } = {},
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
@@ -535,7 +550,10 @@ export class AgentMailRepository {
         ? normalizeAgentMailAttachments(input.attachments)
         : [];
     const statusBudgetKey =
-      sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
+      (sender.kind === "system" || (sender.kind === "node" && options.relayedNotice)) &&
+      options.statusBudgetKey
+        ? options.statusBudgetKey
+        : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const nodeParent = sender.kind === "node" ? options.nodeParent : undefined;
@@ -583,6 +601,8 @@ export class AgentMailRepository {
 
     const placed = await this.store.enqueue(async () => {
       const store = await this.store.load();
+      if (options.isStillWanted && !options.isStillWanted())
+        throw new Error("Mail delivery cancelled");
       const { actor, senderScope, senderMailbox } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
       const fingerprint = sendFingerprint({
@@ -736,7 +756,11 @@ export class AgentMailRepository {
       // node mail, or for a workflow status notice the resource it reports on.
       const budgetSenderId =
         senderMailbox?.mailboxId ??
-        (sender.kind === "node" ? nodeMailSenderKey(sender) : statusBudgetKey);
+        (sender.kind === "node"
+          ? options.relayedNotice
+            ? statusBudgetKey
+            : nodeMailSenderKey(sender)
+          : statusBudgetKey);
       const pairDepth =
         routeWakes && budgetSenderId
           ? latestMailboxPairDepth(store, budgetSenderId, destinationId, lineageCutoff)
@@ -815,8 +839,12 @@ export class AgentMailRepository {
             )
           : undefined;
       const heldForDelegation =
-        Boolean(holdingDelegation) && nextThreadDepth < depthLimit && !overHourlyLimit;
+        !options.keepWithoutWake &&
+        Boolean(holdingDelegation) &&
+        nextThreadDepth < depthLimit &&
+        !overHourlyLimit;
       const shouldScheduleInject =
+        !options.keepWithoutWake &&
         (effectivePolicy === "idle" || routeWakes) &&
         !recipient.mutedInbound &&
         !heldForDelegation &&
@@ -827,9 +855,18 @@ export class AgentMailRepository {
         !overHourlyLimit &&
         canInject;
       const heldForLoopBudget =
-        routeWakes && !recipient.mutedInbound && nextThreadDepth >= depthLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        nextThreadDepth >= depthLimit &&
+        canInject;
       const heldForHourlyLimit =
-        routeWakes && !recipient.mutedInbound && !heldForLoopBudget && overHourlyLimit && canInject;
+        !options.keepWithoutWake &&
+        routeWakes &&
+        !recipient.mutedInbound &&
+        !heldForLoopBudget &&
+        overHourlyLimit &&
+        canInject;
       const message: AgentMailMessage = {
         version: 1,
         id,
@@ -891,7 +928,8 @@ export class AgentMailRepository {
                     // Stored is a decision, not a default: name why nobody will
                     // be woken so the sender and the user can see it.
                     placementReason:
-                      trust === "cross-project" || trust === "external"
+                      options.keepWithoutWake ??
+                      (trust === "cross-project" || trust === "external"
                         ? "untrusted-sender"
                         : !canInject
                           ? "recipient-cannot-inject"
@@ -901,7 +939,7 @@ export class AgentMailRepository {
                               : "inject-policy-off"
                             : injectDepth !== 0 && !routeWakes
                               ? "reply-to-injected-turn"
-                              : "hop-limit",
+                              : "hop-limit"),
                   }),
         revision: 1,
       };

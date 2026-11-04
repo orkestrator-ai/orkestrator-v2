@@ -22,6 +22,7 @@ import {
   GOAL_COMMAND_ID,
   parseCommandToken,
   resolveCommandInvocation,
+  SUBORK_COMMAND_ID,
 } from "@orkestrator/protocol/agent-slash-commands";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
@@ -57,6 +58,8 @@ export type CommandDispatchPlan =
     }
   /** Acts on the goal record: nothing is journaled and no turn is disturbed. */
   | { kind: "goal"; commandName: string; arguments: string }
+  /** Goes to the agent as an instruction to call `ask_agents`, never as a provider command. */
+  | { kind: "subork"; commandName: string; request: string }
   | {
       kind: "rejected";
       message: string;
@@ -181,6 +184,9 @@ export function planCommandDispatch(input: CommandDispatchInput): CommandDispatc
     }
     if (command.id === GOAL_COMMAND_ID) {
       return { kind: "goal", commandName: command.name, arguments: token.arguments };
+    }
+    if (command.id === SUBORK_COMMAND_ID) {
+      return { kind: "subork", commandName: command.name, request: token.arguments.trim() };
     }
     // `/steer` reaching the prompt path means no turn was running when the
     // composer looked. Providers answer it locally with usage text rather

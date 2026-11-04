@@ -20,7 +20,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `docs/architecture/suborks.md` describes the path. A subork uses the same plan-turn and result-tool path as a goal's verifier, which passed live on all six providers (`docs/architecture/goals.md`, Qualification), so a surprise is more likely in `ask_agents` being reached and in the wake than in the subork's turn.
 
-**Investigation.** Not run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
+**Investigation.** No live model has run it. On 2026-11-04 `native-agent-suborks-opencode.live.test.ts` ran the pinned `opencode serve` (1.19.5) against a scripted model on loopback, as caller and as target, and passed. It found that a reviewer-session subork on OpenCode was offered `orkestrator_ask_agents` and the environment-wide ticket tools, and the same change denies both (see Assumptions and decisions). The other five providers have no real-process run. Worth watching: Codex and Grok tool approval for `ask_agents`; whether each provider surfaces the handle; the mail wake after a real turn end; `suborkLatestAction` against each provider's real rows, because the fake rows are hand-written.
 
 **Decisions.** Where to run it:
 - A new `e2e/agent-testing` spec driven by `test:agent:browser:isolated` (recommended). Pros: repeatable at the next provider bump, like `goals-*-live.spec.ts`. Cons: spends real turns on each run.
@@ -32,7 +32,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `SUBORK_TOOL_DESCRIPTION` in `apps/backend/src/core/agent-tools-subork-schema.ts`, shared by the agent tools server and the coordinator's control MCP. Some providers have their own sub-agent tools competing for the same request.
 
-**Investigation.** Not run.
+**Investigation.** A test proves the tool and description are offered (`native-agent-suborks.test.ts`). The real-OpenCode test shows a plain-text request reaching `ask_agents` through OpenCode's own MCP client with that description, but its script, not a model, chooses the tool. Real models not run.
 
 **Decisions.** If a provider prefers its own sub-agents:
 - Sharpen the tool description first (recommended). Pros: the same text on every provider, in keeping with the design. Cons: may not be enough for every model.
@@ -44,7 +44,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3e`.
 
 **Context.** `SuborkBranchHost.agentMcp` and `graphAgentBridgeConnection`.
 
-**Investigation.** Not run.
+**Investigation.** Not run in a container. The local path now has real-process evidence on OpenCode (task 1).
 
 **Decisions.** No material choice: run the task 1 scenario on a `--fixture-environments local,container` profile.
 
@@ -101,6 +101,10 @@ A coordinator has no environment, and suborks need one for their sessions, trans
 ### The guard covers every tier below `enforced` (task 7)
 
 Grok's gap was the reason, but Cursor, OpenCode and an unsandboxed Claude are also only provider-configured, so the same check applies to them. Codex, Pi and a sandboxed Claude are not guarded: their providers already block writes, and a guard there would only add a false failure when something else edits the workspace.
+
+### OpenCode subork turns deny `ask_agents` and the environment-wide tools by permission rule (task 1)
+
+A subork runs in a reviewer session, and OpenCode applies no per-turn tool map to one, so the tool map that hid `ask_agents` never reached a subork. `openCodeWorkflowResultPermissionRules` now denies `orkestrator_ask_agents` on every workflow turn, and on a subork's turn `orkestrator_*` apart from its own result tools, matching the result-only credential other providers get. The `ask_agents` deny is not lifted at settle, because only sessions Orkestrator runs itself take workflow turns, and those cannot start suborks.
 
 ## Related
 

@@ -365,6 +365,7 @@ env = { RUN_LIVE_OPENCODE_COMPATIBILITY = "1" }
 run = [
   "bun test --cwd apps/backend src/core/opencode-live-compatibility.live.test.ts",
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
+  "bun test --cwd apps/backend src/core/native-agent-suborks-opencode.live.test.ts",
 ]
 
 [tasks."verify:accounts:resend-live"]

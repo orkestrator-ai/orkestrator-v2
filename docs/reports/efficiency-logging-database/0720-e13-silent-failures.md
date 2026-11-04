@@ -190,7 +190,7 @@ The lease guards container mutation and already formats its refusal as a contain
 
 ### Task 1: there is no regained event
 
-`lost` is sticky, the heartbeat stops, and nothing reacquires: a lost lease lasts until the process restarts. A test pins this. A refresh racing `release` finds its own removal, so the transition ignores a released lease rather than warn at every shutdown.
+`lost` is sticky, the heartbeat stops, and nothing reacquires: a lost lease lasts until the process restarts. A test pins this. R6b later added `writer-lease.regained`, written by the backend that takes a stale lease over rather than by the one that lost it, so this stays true. A refresh racing `release` finds its own removal, so the transition ignores a released lease rather than warn at every shutdown.
 
 ### Task 2: stop intent is held per child, in `LocalServerRuntime.terminate`
 

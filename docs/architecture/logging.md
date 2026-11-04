@@ -262,7 +262,8 @@ and no site logs a stderr tail.
 
 | Area | Event | Level | Written when |
 | --- | --- | --- | --- |
-| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process, so there is no regained line. |
+| `docker` | `writer-lease.lost` | `warn` | The one held-to-lost transition, with `reason` (`reclaimed`, `unreadable`). Schedules stop and container changes are refused. A lost lease is final for the process; the backend that takes it over writes `writer-lease.regained`. |
+| `docker` | `writer-lease.regained` | `info` | A backend took the lease over from a holder that stopped refreshing it (crashed, killed or stalled), with `staleForMs` since that holder's last refresh. A lease a clean shutdown released is acquired silently. |
 | `storage` | `migration.failed` | `error` | The database could not reach this build's schema and did not open, with `fromVersion`, `toVersion` and `step` (`snapshot` for the safety copy, `migrate`). |
 | `process` | `rejection.unhandled` | `error`, throttled | A rejection reached the fatal rejection guard, beside the guard's own line. |
 | `process` | `uncaught-exception` | `error` | An exception reached the top of the backend, which then dies. See [the handler](#the-uncaught-exception-handler). |
@@ -391,6 +392,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
 | `docker` | `bridge.launched` | `provider`, `containerPort` | A bridge was launched in a container, for the first time there or as a relaunch. |
 | `docker` | `writer-lease.lost` | `reason` | This backend lost the registry writer lease. |
+| `docker` | `writer-lease.regained` | `staleForMs` | This backend took it over from a holder that stopped refreshing it. |
 | `docker` | `writer-lease.not-acquired` | `reason` | This backend started without it. |
 | `bridge.pi` | `session.resume-fell-back` | error | A saved conversation could not be reopened, so a new one started. |
 | `bridge.cursor` | `session.resume-fell-back` | error | The same. |
@@ -403,8 +405,11 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `logging` | `essential.stopped` | `owner` | It stopped, in an orderly exit. |
 | `logging` | `entries.dropped` | `entries`, `bytes`, `reason` | Entries were lost; see below. |
 
-There is **no regained lease event**, because nothing can regain one: a lost lease is
-final until the process restarts. `snapshot.skipped-low-disk` stays out as a skip
+A lease is **regained** by the next backend, not by the one that lost it: a lost lease
+is final until that process restarts, so `writer-lease.regained` is written by whichever
+backend removes the stale lease and takes it. Read with the previous holder's
+`writer-lease.lost` (`reason=reclaimed`), or with a `backend.exited` and no lost line
+when the holder crashed. `snapshot.skipped-low-disk` stays out as a skip
 rather than a failure, and the transcript artifact warnings stay silent.
 
 An `error` that is not flagged was not reviewed for this file, so it keeps less: its

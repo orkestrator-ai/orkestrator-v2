@@ -39,6 +39,12 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: { reason: "label" },
       },
+      "writer-lease.regained": {
+        description:
+          "This backend took the registry writer lease over from a holder that stopped refreshing it (it crashed, was killed or stalled), `staleForMs` after its last refresh. The counterpart of that holder's `writer-lease.lost` with reason `reclaimed`; a lease left by a clean shutdown is acquired silently.",
+        essential: true,
+        fields: { staleForMs: "number" },
+      },
       "writer-lease.not-acquired": {
         description:
           "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",

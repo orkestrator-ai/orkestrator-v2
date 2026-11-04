@@ -33,6 +33,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "docker bridge.launched",
   "docker writer-lease.lost",
   "docker writer-lease.not-acquired",
+  "docker writer-lease.regained",
   "event-loop stalled",
   "local-server bridge.exited",
   "local-server bridge.started",

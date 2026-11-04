@@ -154,7 +154,11 @@ The flag alone would have reviewed the event's name but not what a call site pas
 
 #### Task 3: what the curated list holds
 
-Every event the ticket names exists and is flagged, with these new ones: `local-server` `bridge.started`, `docker` `bridge.launched`, `storage` `migration.failed` and the `process` area's `rejection.unhandled` and `uncaught-exception`. `session.resume-fell-back` keeps no session id, because it can be the provider's. There is no regained lease event because a lost lease cannot be regained in a process. `snapshot.skipped-low-disk` stays out as a skip rather than a failure. Stalls are flagged with `minLevel: "error"`, because the same event at `warn` is a routine short stall.
+Every event the ticket names exists and is flagged, with these new ones: `local-server` `bridge.started`, `docker` `bridge.launched`, `storage` `migration.failed` and the `process` area's `rejection.unhandled` and `uncaught-exception`. `session.resume-fell-back` keeps no session id, because it can be the provider's. A lost lease cannot be regained in the process that lost it, so the regained event, `docker` `writer-lease.regained` with `staleForMs`, is written by the backend that takes a stale lease over from a holder that stopped refreshing it; a lease released by a clean shutdown is acquired silently. `snapshot.skipped-low-disk` stays out as a skip rather than a failure. Stalls are flagged with `minLevel: "error"`, because the same event at `warn` is a routine short stall.
+
+#### Task 3: the lease is regained by the backend that takes it over
+
+The ticket lists the writer lease being regained. A lost lease is final for the process that lost it, and making it re-acquire would change lease behaviour, which the ticket rules out. So `writer-lease.regained` is written where a lease does come back: the stale-lease takeover in `RegistryWriterLease.acquire`, after the previous holder stopped refreshing it. It carries one number, `staleForMs`, the lease's age when it was removed. A lease released by a clean shutdown is acquired without a line, so the event marks only a takeover. Nothing about acquisition changed.
 
 #### Task 3: `bridge.launched` covers a first start as well as a relaunch
 

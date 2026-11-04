@@ -308,6 +308,13 @@ describe("the curated events", () => {
     },
     {
       area: "docker",
+      event: "writer-lease.regained",
+      level: "info",
+      fields: { staleForMs: 45_000 },
+      kept: { staleForMs: 45_000 },
+    },
+    {
+      area: "docker",
       event: "writer-lease.not-acquired",
       level: "info",
       fields: { reason: "busy" },

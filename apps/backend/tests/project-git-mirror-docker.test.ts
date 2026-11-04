@@ -14,6 +14,8 @@ import { waitForContainerBoot } from "../src/core/container-readiness";
 import {
   gitMirrorContainerArguments,
   refreshProjectGitMirror,
+  removeProjectGitMirror,
+  sweepOrphanedProjectGitMirrors,
 } from "../src/core/project-git-mirror";
 import { runCommand } from "../src/core/shell";
 
@@ -200,6 +202,63 @@ test.skipIf(!enabled)(
     expect(await setup.build()).toBe("built");
     const third = await environmentContainer(setup);
     expect(await third.prepare()).toContain("ORKESTRATOR_GIT_MIRROR:used");
+
+    // Deleting the whole parent differs from deleting mount/: rootful Docker
+    // creates both as root. Do not silently promise an unprivileged repair.
+    await docker(["stop", "--time", "2", third.container]);
+    const projectDirectory = path.dirname(setup.mount);
+    await fs.rm(projectDirectory, { recursive: true, force: true });
+    await docker(["start", third.container]);
+    await waitForContainerBoot(third.container);
+    expect(await third.inContainer("git", "-C", "/workspace", "status", "--porcelain")).toBe("");
+    const foreignOwner = (await fs.stat(projectDirectory)).uid !== process.getuid!();
+    if (foreignOwner) {
+      const { captureLogs } = await import("@orkestrator/protocol/testing/log-capture");
+      const logs = captureLogs();
+      try {
+        expect(await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID })).toEqual([]);
+        expect(await setup.build()).toBe("failed");
+        for (const event of ["git-mirror.mount-unavailable", "git-mirror.refresh-failed"]) {
+          expect(
+            logs.records().find((record) => record.event === event)?.fields?.remediation,
+          ).toContain("Restore backend-user ownership");
+        }
+      } finally {
+        logs.restore();
+      }
+      const fallback = await environmentContainer(setup);
+      await fallback.prepare();
+      expect(await fallback.remoteSentObjects()).toBe(true);
+      await removeProjectGitMirror(
+        { storage: { getDataDir: () => setup.dataDir } } as never,
+        PROJECT_ID,
+      );
+      expect(await sweepOrphanedProjectGitMirrors(setup.dataDir, new Set(), 0)).toBe(0);
+      expect(await fs.stat(projectDirectory)).toBeDefined();
+
+      // Model the documented host operator repair, confined to this test's
+      // exact disposable project tree. Production never invokes this helper.
+      await docker([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        "0",
+        "--entrypoint",
+        "chown",
+        "-v",
+        `${projectDirectory}:/repair`,
+        image!,
+        "-R",
+        `${process.getuid!()}:${process.getgid!()}`,
+        "/repair",
+      ]);
+      await fs.chmod(projectDirectory, 0o700);
+    }
+    expect(await gitMirrorContainerArguments(setup.dataDir, { id: PROJECT_ID })).not.toEqual([]);
+    expect(await setup.build()).toBe("built");
+    expect(await sweepOrphanedProjectGitMirrors(setup.dataDir, new Set(), 0)).toBe(1);
   },
   300_000,
 );

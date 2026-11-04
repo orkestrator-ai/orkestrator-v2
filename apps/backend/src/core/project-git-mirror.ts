@@ -173,6 +173,14 @@ async function writeState(
   }
 }
 
+/** A deleted project parent can be recreated by rootful Docker as root. */
+function permissionRemediation(error: unknown): string | undefined {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM"
+    ? "Restore backend-user ownership of git-mirrors/<project id> on the host; see docs/development/disk-usage.md#project-git-mirrors"
+    : undefined;
+}
+
 async function ensureProjectDirectories(dataDir: string, projectId: string): Promise<void> {
   const root = path.join(dataDir, GIT_MIRRORS_DIR);
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -213,7 +221,11 @@ export async function gitMirrorContainerArguments(
       `ORKESTRATOR_GIT_MIRROR=${CONTAINER_GIT_MIRROR_PATH}`,
     ];
   } catch (error) {
-    log.warn("git-mirror.mount-unavailable", { error: formatLogError(error, { message: false }) });
+    log.warn("git-mirror.mount-unavailable", {
+      projectId: project.id,
+      remediation: permissionRemediation(error),
+      error: formatLogError(error, { message: false }),
+    });
     return [];
   }
 }
@@ -252,6 +264,7 @@ export function refreshProjectGitMirror(
   const done = runRefresh(context, project, options, controller)
     .catch((error: unknown) => {
       log.warn("git-mirror.refresh-failed", {
+        remediation: permissionRemediation(error),
         projectId: project.id,
         error: formatLogError(error, { message: false }),
       });
@@ -337,6 +350,7 @@ async function runRefresh(
     if (controller.signal.aborted) return "cancelled";
     await writeState(directory, { ...next, failures: (state.failures ?? 0) + 1 });
     log.warn("git-mirror.refresh-failed", {
+      remediation: permissionRemediation(error),
       projectId: project.id,
       rebuild,
       // Git's own message can name the remote, credentials included.
@@ -584,6 +598,7 @@ export async function removeProjectGitMirror(
     await removeConfinedDirectory(dataDir, `${GIT_MIRRORS_DIR}/${projectId}`);
   } catch (error) {
     log.warn("git-mirror.remove-failed", {
+      remediation: permissionRemediation(error),
       projectId,
       error: formatLogError(error, { message: false }),
     });
@@ -619,6 +634,7 @@ export async function sweepOrphanedProjectGitMirrors(
       removed += 1;
     } catch (error) {
       log.warn("git-mirror.remove-failed", {
+        remediation: permissionRemediation(error),
         projectId: name,
         error: formatLogError(error, { message: false }),
       });

@@ -144,12 +144,23 @@ What it costs, on the two repositories measured:
   blobless clone. A build needs 3 GiB free on the data directory's disk and a
   fetch 1 GiB; otherwise it is skipped and logged. Fetches compact themselves past
   30 packs.
-- **It is only a cache.** Deleting a project's directory by hand harms nothing:
-  new clones go to the remote, a stopped environment still starts, and the next
-  container creation builds it again.
+- **It is only a cache.** To reclaim it by hand, delete only
+  `<project id>/mount/mirror.git`, keeping the project directory and `mount/`.
+  Existing clones are self-contained and the next creation rebuilds the mirror.
+  Removing `mount/` also permits automatic recovery while its project parent
+  remains writable by the backend.
+  Do not delete the project parent while containers still reference it: rootful
+  Docker recreates missing bind sources and parents as root on restart. Existing
+  environments still start and new ones fall back to remote clones, but refresh
+  and cleanup then need host operator intervention. Restore ownership of that
+  exact `git-mirrors/<project id>` tree to the backend user's uid and gid
+  (including `mount/`), and restore the project directory to mode `0700`.
+  The next creation can then rebuild; the orphan sweep can retry cleanup.
+  Permission failures log this remediation hint. The backend does not elevate
+  privileges to change ownership.
 - **Removed with its project**, in the project's own cleanup. The hourly sweep
-  removes any whose project no longer exists, so a failed removal is not
-  permanent. Nothing removes one by age, and Settings > Disk usage does not list
+  retries removal of any whose project no longer exists. Ownership failures
+  require the host repair described above before a retry can succeed. Nothing removes one by age, and Settings > Disk usage does not list
   them: use `mise run disk:report`.
 
 ## What prunes itself

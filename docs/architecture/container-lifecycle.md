@@ -1572,7 +1572,11 @@ need it once cloned.
   next refresh, and its objects at a later compaction.
 - **`-v`, not `--mount`.** Docker refuses to start a container whose `--mount`
   source is gone. With `-v` it recreates the source, so a stopped environment
-  survives its mirror being removed by any route.
+  survives its mirror being removed by any route. If the project parent was
+  removed too, rootful Docker can recreate it as root: automatic rebuild and
+  cleanup then require host ownership repair. For manual cache reclamation,
+  remove only `mount/mirror.git`; see the
+  [ownership recovery instructions](../development/disk-usage.md#project-git-mirrors).
 - **Removal.** `cleanupProjectForRemoval` stops any refresh and removes the
   project's directory; a failure is logged and never blocks removing the project.
   `sweepOrphanedProjectGitMirrors`, in the admitted pre-ledger sweep, removes

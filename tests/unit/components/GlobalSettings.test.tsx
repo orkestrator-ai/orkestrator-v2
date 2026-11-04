@@ -2981,7 +2981,7 @@ describe("GlobalSettings", () => {
       expect(screen.queryByRole("switch", { name })).toBeNull();
       browser.unmount();
 
-      window.orkestrator = { ...original, isolatedViewState: true } as typeof window.orkestrator;
+      window.orkestrator = { ...original, isolatedViewState: true } as NonNullable<typeof original>;
       window.orkestratorGateway = { enabled: true, desktop: true, baseUrl: "https://desk.example" };
       const remote = render(<GlobalSettings activeSection="experimental" />);
       expect(screen.queryByRole("switch", { name })).toBeNull();

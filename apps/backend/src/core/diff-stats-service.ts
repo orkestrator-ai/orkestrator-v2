@@ -61,7 +61,9 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  *    Git metadata. An idle environment costs nothing, and an edit shows up in
  *    about half a second. A slow safety-net interval still runs, because a
  *    watcher can miss events under load and going quiet is worse than a wasted
- *    scan.
+ *    scan. A worktree under constant writes (an install, a build) settles a
+ *    burst every half second, so watcher-driven scans also keep
+ *    {@link LOCAL_SCAN_MIN_GAP_MS} between them, with one trailing scan.
  *  - **Container environments** cannot be watched from the host without paying
  *    the same `docker exec` a scan costs. On an image with the worktree
  *    signal (`container-worktree-signal.ts`) a watcher inside the container
@@ -185,6 +187,8 @@ export interface DiffStatsServiceOptions {
   pollIntervalMs?: number;
   /** Interval for watched environments; only covers missed events. */
   safetyNetIntervalMs?: number;
+  /** See {@link LOCAL_SCAN_MIN_GAP_MS}. */
+  localScanMinGapMs?: number;
   /** How long an unwatched target's file list may be served to a reader. */
   fileListMaxAgeMs?: number;
   /**
@@ -257,6 +261,18 @@ export const DIFF_SAFETY_NET_INTERVAL_MS = 120_000;
  * `CONTAINER_WORKTREE_SAFETY_SCAN_INTERVAL_MS`).
  */
 export const CONTAINER_SAFETY_NET_INTERVAL_MS = 60_000;
+/**
+ * Quiet time a local environment keeps between one scan ending and the next
+ * watcher-driven one starting; each scan spawns several git processes. Equal to
+ * the container signal's `CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS`, which
+ * already spaces a container's hints, so containers are not gapped twice.
+ *
+ * Measured from the end of a scan, so a slow scan cannot make the gap vanish. A
+ * first edit in a quiet worktree still scans at once. Only hints and the reruns
+ * they queue wait: a reader, a refresh, a known mutation or a new target needs
+ * its answer now, and always scans straight away.
+ */
+export const LOCAL_SCAN_MIN_GAP_MS = 2_000;
 /** Unwatched file lists: comfortably under the Files panel's 5 s cadence. */
 export const FILE_LIST_MAX_AGE_MS = 3_000;
 /**
@@ -307,7 +323,16 @@ export interface TreeReadResultWithView {
   view?: WorktreeReadStamp;
 }
 
-type ScanReason = "track" | "hint" | "refresh" | "read" | "periodic" | "retry" | "rerun";
+type ScanReason =
+  | "track"
+  | "hint"
+  | "refresh"
+  | "read"
+  | "periodic"
+  | "retry"
+  | "rerun"
+  /** The scan a minimum gap held back, now due. */
+  | "trailing";
 
 /** When the scan was asked for: a physical pass started later satisfies it. */
 export type ScanRequest = { requestedAtMs: number };
@@ -357,6 +382,8 @@ interface DiffStatsEntry {
   mutationGeneration: number;
   /** Advances on every hint, mutation and explicit refresh. */
   dirtyEpoch: number;
+  /** The newest epoch that came from something a minimum gap must not delay. */
+  urgentEpoch: number;
   inFlight?: ScanAttempt;
   last?: EnvironmentDiffStatsChange;
   /** Last good file list; served only while valid for the reader's epoch. */
@@ -366,6 +393,11 @@ interface DiffStatsEntry {
   failures: number;
   retryTimer?: unknown;
   lastScanStartedAt?: number;
+  /** The epoch the newest scan started at. */
+  lastScanEpoch?: number;
+  lastScanEndedAt?: number;
+  /** Armed while a minimum gap holds back a scan the epoch already asks for. */
+  gapTimer?: unknown;
   /** Last announced snapshot state; the snapshot command serves exactly this. */
   published?: WorktreeSnapshotState;
 }
@@ -406,6 +438,7 @@ export class DiffStatsService {
     onScanEvent?: DiffStatsServiceOptions["onScanEvent"];
     startContainerWatcher?: DiffStatsServiceOptions["startContainerWatcher"];
     containerSafetyNetIntervalMs: number;
+    localScanMinGapMs: number;
   };
   private readonly metrics: RecurringWorkMetrics;
   private readonly admission: WorkAdmissionPool | null;
@@ -445,6 +478,7 @@ export class DiffStatsService {
       startContainerWatcher: options.startContainerWatcher,
       containerSafetyNetIntervalMs:
         options.containerSafetyNetIntervalMs ?? CONTAINER_SAFETY_NET_INTERVAL_MS,
+      localScanMinGapMs: options.localScanMinGapMs ?? LOCAL_SCAN_MIN_GAP_MS,
       onWarning: options.onWarning,
       remoteFreshness: options.remoteFreshness,
       onScanEvent: options.onScanEvent,
@@ -565,6 +599,7 @@ export class DiffStatsService {
       targetGeneration: 0,
       mutationGeneration: 0,
       dirtyEpoch: 0,
+      urgentEpoch: 0,
       fileListRevision: 0,
       failures: 0,
     };
@@ -773,6 +808,7 @@ export class DiffStatsService {
     if (!entry) return;
     entry.mutationGeneration += 1;
     entry.dirtyEpoch += 1;
+    entry.urgentEpoch = entry.dirtyEpoch;
     this.tree.invalidate(entry.target.environmentId);
   }
 
@@ -872,6 +908,7 @@ export class DiffStatsService {
     entry.failure = undefined;
     entry.failures = 0;
     entry.watcherFailures = 0;
+    entry.lastScanEndedAt = undefined;
     this.cancelRetryTimers(entry);
     this.tree.register(this.treeTarget(entry));
   }
@@ -1043,6 +1080,12 @@ export class DiffStatsService {
     if (entry.watcherRetryTimer !== undefined) this.options.cancelDelay(entry.watcherRetryTimer);
     entry.retryTimer = undefined;
     entry.watcherRetryTimer = undefined;
+    this.cancelGapTimer(entry);
+  }
+
+  private cancelGapTimer(entry: DiffStatsEntry): void {
+    if (entry.gapTimer !== undefined) this.options.cancelDelay(entry.gapTimer);
+    entry.gapTimer = undefined;
   }
 
   private restartTimer(entry: DiffStatsEntry): void {
@@ -1090,16 +1133,44 @@ export class DiffStatsService {
    * during one advances the epoch, which is what queues the single rerun; a
    * periodic tick or read landing during a scan joins it and queues nothing,
    * so a slow scan cannot turn the clock into a permanent rerun loop.
+   *
+   * A hint or rerun inside a local environment's minimum gap is coalesced the
+   * same way. The epoch has already moved, so a reader arriving during the gap
+   * scans for itself, and the trailing scan starts after every change the gap
+   * absorbed, so it reports them.
    */
   private request(entry: DiffStatsEntry, reason: ScanReason): void {
     if (!entry.active) return;
     if (reason === "track" || reason === "hint" || reason === "refresh") entry.dirtyEpoch += 1;
+    if (reason === "track" || reason === "refresh") entry.urgentEpoch = entry.dirtyEpoch;
     this.metrics.requested("diff-scan");
     if (entry.inFlight) {
       this.metrics.coalesced("diff-scan");
       return;
     }
+    const gapRemainingMs = this.scanGapRemaining(entry, reason);
+    if (gapRemainingMs > 0) {
+      this.metrics.coalesced("diff-scan");
+      // Never pushed back by a later hint: under constant writes the timer has
+      // to fire, or the count would freeze for as long as the writes last.
+      entry.gapTimer ??= this.options.delay(() => {
+        entry.gapTimer = undefined;
+        this.request(entry, "trailing");
+      }, gapRemainingMs);
+      return;
+    }
     this.startScan(entry, priorityFor(reason));
+  }
+
+  /** How long a minimum gap still holds this request back; 0 runs it now. */
+  private scanGapRemaining(entry: DiffStatsEntry, reason: ScanReason): number {
+    const gapMs = this.options.localScanMinGapMs;
+    if (entry.target.kind !== "local" || (reason !== "hint" && reason !== "rerun")) return 0;
+    if (entry.lastScanEndedAt === undefined) return 0;
+    if (entry.urgentEpoch > (entry.lastScanEpoch ?? -1)) return 0;
+    const remainingMs = entry.lastScanEndedAt + gapMs - this.options.monotonicNow();
+    // Above the gap means the clock went backwards: scan rather than wait it out.
+    return remainingMs > gapMs ? 0 : Math.max(0, remainingMs);
   }
 
   private startScan(
@@ -1119,10 +1190,15 @@ export class DiffStatsService {
       abort: new AbortController(),
       promise: Promise.resolve(),
     };
+    this.cancelGapTimer(entry);
     entry.lastScanStartedAt = this.options.monotonicNow();
+    entry.lastScanEpoch = attempt.epoch;
     entry.inFlight = attempt;
     attempt.promise = this.runScan(entry, attempt, priority).finally(() => {
-      if (entry.inFlight === attempt) entry.inFlight = undefined;
+      if (entry.inFlight === attempt) {
+        entry.inFlight = undefined;
+        entry.lastScanEndedAt = this.options.monotonicNow();
+      }
       // A superseded attempt owes nothing: its lineage started its own scan.
       if (
         entry.active &&
@@ -1293,7 +1369,10 @@ export class DiffStatsService {
     this.metrics.requested("file-list-read");
     // A manual refresh is itself an invalidation: it needs a scan that starts
     // after the click, never the answer of one already running.
-    if (request.refresh) entry.dirtyEpoch += 1;
+    if (request.refresh) {
+      entry.dirtyEpoch += 1;
+      entry.urgentEpoch = entry.dirtyEpoch;
+    }
     const required = entry.dirtyEpoch;
     const lineage = entry.targetGeneration;
     let counted = false;
@@ -1509,6 +1588,7 @@ function priorityFor(reason: ScanReason): Exclude<RecurringPriorityClass, "criti
       return "interactive";
     case "hint":
     case "rerun":
+    case "trailing":
       return "progress";
     default:
       return "discovery";

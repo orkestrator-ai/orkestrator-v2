@@ -337,6 +337,80 @@ describe("Git scope demand (ST-18)", () => {
     expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(1);
   });
 
+  for (const action of ["stop", "forget"] as const) {
+    test(`a pending follow-up is dropped after ${action}`, async () => {
+      const h = createHarness();
+      harnesses.push(h);
+      writeFileSync(join(h.repo, "gate.txt"), "first\n");
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const original = fs.open.bind(fs);
+      const spy = spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] === join(h.repo, "gate.txt")) {
+          entered.resolve();
+          await release.promise;
+        }
+        return original(...args);
+      });
+      try {
+        const count = await diffsSpawnedBy(async () => {
+          const first = h.service.gitScopes.ensure(key);
+          await entered.promise;
+          h.service.gitScopes.invalidate("env-1");
+          if (action === "stop") h.service.gitScopes.stop();
+          else h.service.gitScopes.forget("env-1");
+          release.resolve();
+          await first;
+          await h.service.gitScopes.idle();
+        });
+        expect(count).toBe(1);
+      } finally {
+        release.resolve();
+        spy.mockRestore();
+      }
+    });
+  }
+
+  test("a read joining a running computation waits for the follow-up and sees current data", async () => {
+    const h = createHarness();
+    harnesses.push(h);
+    writeFileSync(join(h.repo, "gate.txt"), "first\n");
+    const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const release = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+    const original = fs.open.bind(fs);
+    let opens = 0;
+    const spy = spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === join(h.repo, "gate.txt") && opens < 2) {
+        const index = opens++;
+        entered[index]!.resolve();
+        await release[index]!.promise;
+      }
+      return original(...args);
+    });
+    try {
+      const first = h.service.gitScopes.ensure(key);
+      await entered[0]!.promise;
+      // ls-files already ran for the first pass: only the follow-up sees late.txt.
+      writeFileSync(join(h.repo, "late.txt"), "late\n");
+      let joinedSettled = false;
+      const joined = h.service.gitScopes.ensure(key).then(() => {
+        joinedSettled = true;
+      });
+      release[0]!.resolve();
+      await entered[1]!.promise;
+      expect(joinedSettled).toBe(false);
+      expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(1);
+      release[1]!.resolve();
+      await joined;
+      await first;
+      expect(h.service.projections.selectedMeasurement(key)?.totals.changedFiles).toBe(2);
+    } finally {
+      for (const gate of release) gate.resolve();
+      spy.mockRestore();
+      await h.service.gitScopes.idle();
+    }
+  });
+
   test("a pinned scope is not refreshed or reset by scans", async () => {
     const h = createHarness();
     harnesses.push(h);

@@ -360,46 +360,72 @@ test("a scan reads an unchanged settled untracked file once, and a fresh one eve
 });
 
 describe("container status", () => {
-  const framed = (body: string) =>
-    [
-      "\u001eORKESTRATOR_DIFF\u001f",
-      Buffer.from(body).toString("base64"),
-      "\u001eORKESTRATOR_UNTRACKED\u001f",
-      "",
-      "\u001eORKESTRATOR_END\u001f",
-    ].join("");
   const fetches = {
     observe: () => undefined as never,
     recover: async () => false,
   };
 
-  test("does the exclude housekeeping once per container with a repository", async () => {
-    const scripts: string[] = [];
-    let response = "";
+  test("repairs excludes after same-container replacement, deletion, rewrite and failed housekeeping", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-container-excludes-"));
+    const repo = path.join(root, "repo");
+    const git = (...args: string[]) =>
+      runCommand(
+        "git",
+        ["-c", "user.email=test@example.invalid", "-c", "user.name=Test", ...args],
+        { cwd: repo },
+      );
+    const init = async () => {
+      await fs.mkdir(repo, { recursive: true });
+      await git("init", "-b", "main");
+      await git("commit", "--allow-empty", "-m", "initial");
+      await fs.mkdir(path.join(repo, ".orkestrator"), { recursive: true });
+      await fs.mkdir(path.join(repo, ".claude"), { recursive: true });
+      await fs.writeFile(path.join(repo, ".orkestrator/state"), "internal\n");
+      await fs.writeFile(path.join(repo, ".claude/settings.local.json"), "{}\n");
+      await fs.writeFile(path.join(repo, "visible.txt"), "visible\n");
+    };
+    let failHousekeeping = false;
     const deps = {
-      exec: async (_id: string, script: string) => {
-        scripts.push(script);
-        return response;
+      exec: async (id: string, script: string) => {
+        expect(id).toBe("same-container");
+        return (
+          await runCommand(
+            "bash",
+            ["-c", (failHousekeeping ? "mkdir() { return 1; }\n" : "") + script],
+            { cwd: repo },
+          )
+        ).stdout;
       },
       fetches,
-      ensuredExcludes: new Set<string>(),
     };
-    const status = () => getContainerGitStatusDetailed("box", "main", true, deps);
-    const housekeeping = (script?: string) => script?.includes("--git-path info/exclude");
+    const scan = () => getContainerGitStatusDetailed("same-container", "main", true, deps);
+    const repaired = async () => {
+      expect((await scan()).changes.map((change) => change.path)).toEqual(["visible.txt"]);
+      const contents = await fs.readFile(path.join(repo, ".git/info/exclude"), "utf8");
+      expect(contents).toContain(".orkestrator\n");
+      expect(contents).toContain(".claude/settings.local.json\n");
+    };
+    try {
+      await init();
+      await repaired();
+      const exclude = path.join(repo, ".git/info/exclude");
+      await fs.rm(exclude);
+      await repaired();
+      await fs.writeFile(exclude, "# user rewrite without final newline");
+      await repaired();
+      await fs.rm(repo, { recursive: true, force: true });
+      await init();
+      await repaired();
 
-    // No repository yet: the script exits before the housekeeping, so it is still owed.
-    await status();
-    expect(housekeeping(scripts[0])).toBe(true);
-    expect(deps.ensuredExcludes.has("box")).toBe(false);
-
-    response = framed("");
-    await status();
-    expect(housekeeping(scripts[1])).toBe(true);
-    expect(deps.ensuredExcludes.has("box")).toBe(true);
-
-    await status();
-    expect(housekeeping(scripts[2])).toBe(false);
-    await getContainerGitStatusDetailed("other", "main", true, deps);
-    expect(housekeeping(scripts[3])).toBe(true);
+      // Refuse the housekeeping mkdir while leaving Git's exclude readable.
+      // The next request must retry after that transient failure clears.
+      await fs.writeFile(exclude, "# no internal patterns\n");
+      failHousekeeping = true;
+      expect((await scan()).changes.map((change) => change.path)).toContain(".orkestrator/state");
+      failHousekeeping = false;
+      await repaired();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

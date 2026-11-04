@@ -537,14 +537,10 @@ const CONTAINER_MAINTAIN_GIT_EXCLUDE = `
  * decide whether a fetch is worth running. A baseline that resolves to neither
  * is the framed missing-target marker, never an empty diff.
  *
- * `maintainExclude: false` leaves out the exclude housekeeping, for a clone whose
- * exclude file an earlier status read already ensured.
+ * Exclude housekeeping runs on every read so replaced clones and edited or
+ * previously unwritable exclude files are repaired without restarting the backend.
  */
-export function buildContainerGitStatusScript(
-  ref: string,
-  includeWorkingTree: boolean,
-  { maintainExclude = true }: { maintainExclude?: boolean } = {},
-): string {
+export function buildContainerGitStatusScript(ref: string, includeWorkingTree: boolean): string {
   const branch = quoteShell(ref);
   const untrackedScanner = `node -e ${quoteShell(CONTAINER_UNTRACKED_STATS_SCANNER)} -- ${MAX_BINARY_FILE_BYTES} ${UNTRACKED_SCAN_MAX_FILES}`;
   return `
@@ -561,7 +557,7 @@ export function buildContainerGitStatusScript(
         set +e
         exit 0
       fi
-      ${maintainExclude ? CONTAINER_MAINTAIN_GIT_EXCLUDE : ""}
+      ${CONTAINER_MAINTAIN_GIT_EXCLUDE}
       ${CONTAINER_REPO_IDENTITY_SNIPPET}
       ref=${branch}
       if base_oid="$(git rev-parse --verify --quiet "origin/$ref^{commit}")"; then
@@ -796,11 +792,6 @@ export interface ContainerGitStatusDeps {
   /** Runs a script in the container (`dockerExec`). */
   exec: (containerId: string, script: string) => Promise<string>;
   fetches: Pick<ContainerGitFetchPolicy, "observe" | "recover">;
-  /**
-   * Containers whose exclude file a status read already ensured. Without it,
-   * every read does the housekeeping.
-   */
-  ensuredExcludes?: { has(containerId: string): boolean; add(containerId: string): void };
 }
 
 /**
@@ -827,15 +818,11 @@ export async function getContainerGitStatusDetailed(
   ambiguousPaths?: string[];
 }> {
   const ref = validateGitRefName(targetBranch, "target branch");
-  const script = buildContainerGitStatusScript(ref, includeWorkingTree, {
-    maintainExclude: !deps.ensuredExcludes?.has(containerId),
-  });
+  const script = buildContainerGitStatusScript(ref, includeWorkingTree);
   let envelope = parseContainerGitStatusEnvelope(
     await deps.exec(containerId, script),
     includeWorkingTree,
   );
-  // A workspace with no repository yet exits before the housekeeping.
-  if (envelope.kind !== "not-repo") deps.ensuredExcludes?.add(containerId);
   if (envelope.kind === "missing") {
     // Distinguishes "the requested baseline is not in this container" - which
     // happens when a container is recreated from a different clone - from a

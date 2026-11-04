@@ -226,7 +226,7 @@ test("sync retains fetch state only for current running container generations", 
     expect(policy.freshness(containerId, "main")).toEqual(retained.get(containerId));
 });
 
-test("what scans remember about a worktree or container goes with its environment", async () => {
+test("local scan caches go with their environment", async () => {
   const { h, tracking } = await harness();
   const { projectPath } = await h.createRepository("scan-caches");
   const local = {
@@ -242,16 +242,12 @@ test("what scans remember about a worktree or container goes with its environmen
   };
   await h.storage.addEnvironment(local);
   await h.storage.addEnvironment(container);
-  const ensured = (tracking as unknown as { ensuredContainerExcludes: Set<string> })
-    .ensuredContainerExcludes;
-  ensured.add("live").add("gone");
   const exec = spyOn(containerExec, "dockerExec").mockResolvedValue("");
   const track = spyOn(tracking.service, "track").mockImplementation(() => undefined);
   try {
     await tracking.sync(h.context);
     await countUntrackedFileLines(projectPath, "README.md");
     expect(localGitScanCacheStats(projectPath)).not.toBeNull();
-    expect([...ensured]).toEqual(["live"]);
 
     // Still an environment: kept across a reconcile.
     await tracking.sync(h.context);
@@ -261,7 +257,6 @@ test("what scans remember about a worktree or container goes with its environmen
     await h.storage.removeEnvironment(container.id);
     await tracking.sync(h.context);
     expect(localGitScanCacheStats(projectPath)).toBeNull();
-    expect([...ensured]).toEqual([]);
   } finally {
     exec.mockRestore();
     track.mockRestore();

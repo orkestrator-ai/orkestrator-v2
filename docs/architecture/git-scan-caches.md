@@ -67,10 +67,10 @@ diff and `status`. It used to run seven or eight.
 
 A container scan is one `docker exec` running one script, with the same changes
 inside it: one combined diff against the commit it resolved, and the resolution
-reused. The exclude housekeeping runs until a read finds a repository in that
-container, then not again (`ensuredExcludes`, per backend, kept for running
-containers). Unlike the local memo this one does not notice a later edit: a clone
-replaced inside a running container keeps no excludes until the backend restarts.
+reused. Exclude housekeeping runs inside that script on every scan. This repairs
+patterns after repository replacement or exclude deletion/rewrites in the same
+running container, and retries best-effort failures on the next scan. Container
+excludes deliberately have no memo until a repairable validity check is available.
 
 ### Untracked line counts
 

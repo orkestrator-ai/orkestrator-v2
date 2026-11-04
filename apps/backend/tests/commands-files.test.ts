@@ -241,9 +241,6 @@ describe("Electron backend command registry", () => {
       expect(script.match(/\bdiff --/g)).toHaveLength(1);
       expect(script).toContain("--raw --numstat -z -M");
       expect(script).toContain("maintain_git_exclude");
-      expect(
-        commandTesting.buildContainerGitStatusScript("main", true, { maintainExclude: false }),
-      ).not.toContain("exclude");
 
       await withGnuBase64Shim(async (env) => {
         const result = spawnSync("bash", ["-c", script], { cwd: repo, encoding: "utf8", env });

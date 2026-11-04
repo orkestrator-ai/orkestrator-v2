@@ -2,12 +2,12 @@
 
 ## Task analysis
 
-Analysed 2026-11-03 against `main` at `7b48c23f`.
+Analysed 2026-11-03 against `main` at `7b48c23f`. Acted on 2026-11-04 against `main` at `96ee1eb3e`; see Assumptions and decisions.
 
 ### Tasks
 
-1. **Refuse queued operations from a revoked socket**: an input or resize that a terminal WebSocket queued before a credential rotation or gateway stop must not reach the backend afterwards. Status: open.
-2. **Regression test**: assert that a second write queued behind a blocked one is refused after rotation, and that the operation gauges still return to zero. Status: open (depends on 1).
+1. **Refuse queued operations from a revoked socket**: an input or resize that a terminal WebSocket queued before a credential rotation or gateway stop must not reach the backend afterwards. Status: done (2026-11-04).
+2. **Regression test**: assert that a second write queued behind a blocked one is refused after rotation, and that the operation gauges still return to zero. Status: done (2026-11-04).
 
 ### 1. Refuse queued operations from a revoked socket
 
@@ -51,6 +51,35 @@ The backend received two `terminal_write` calls, where one was expected. The exp
     - Pros: covers the result path.
     - Cons: the socket is already closed when the write is refused, so there is no frame to read; it would need a socket that stays open, which rotation never leaves.
 
+## Assumptions and decisions
+
+### Task 1: cleared the flag at both recommended sites
+
+Took the recommended option. `revokeConnections()` sets `state.authenticated = false` before terminating each socket, which covers rotation and gateway stop, and the credential-expiry timer's close branch sets it too. An expired browser session already cleared the flag, because `BrowserSessions.matches()` revokes the session and fires its listener; the timer's own assignment is what covers an expiring client grant. The guard in `enqueueOperation` and its "Terminal credential revoked" path are unchanged.
+
+### Task 1: extended revocation to sockets that disconnected first
+
+The recommended sites do not reach a socket that disconnected before the revocation, because `dispose` removes it from `sockets` while its input is still waiting on the session's tail. A test on the old code showed all of that input reaching the backend. Since the task covers any input queued before a rotation or stop, the gateway now also tracks sockets with queued operations (`operationSockets`, counted by `SocketState.pendingOperations`), and `revokeConnections()` clears the flag on those as well. Each entry leaves when its last operation settles. The closures on the tail already held these states, so this adds no retention and stays within the existing operation bounds.
+
+### Task 1: left a disconnected socket's own expiry or revocation to a new file
+
+A socket that disconnects and whose own credential then expires or is revoked still runs its queue, because `dispose` drops its timer and revocation subscription. That needs a different mechanism, so it is filed as [4480](4480-terminal-operations-after-disconnected-credential-expiry.md).
+
+### Task 2: tested at the backend boundary, with deterministic expiry
+
+Took the recommended option: the tests record each `terminal_write` and `terminal_resize` the backend receives and check the operation gauges drain to zero. They are in `apps/backend/tests/gateway-events.test.ts`, next to the bounded-queue test, and queue two inputs and a resize behind a blocked write.
+
+- **Rotation and stop** run through a real gateway, each with an open socket and with one that disconnected first.
+- **Expiry** drives `TerminalWebSocketGateway` directly. Its `credentialExpiresAt` keeps the timer re-arming while `tokenMatches` holds, so the test picks the moment of expiry rather than waiting out a deadline.
+- **A plain disconnect** has its own test, which pins that all three operations still run. "preserves accepted input order across a socket reconnect" passes unchanged.
+
+Before the fix, all five revocation cases failed with `["terminal_write", "terminal_write", "terminal_resize"]` reaching the backend, while the plain-disconnect and reconnect-order tests passed.
+
+### Kept this file after finishing it
+
+`docs/README.md` says a finished file is normally deleted once its durable behaviour has moved. The ticket requires this file to record the outcome, so it stays, marked Finished. The durable behaviour is in [`remote-gateway.md`](../../architecture/remote-gateway.md#compression-and-terminal-transport).
+
 ## Related
 
 - [0052-remote-client-bandwidth.md](0052-remote-client-bandwidth.md), task 4.
+- [4480-terminal-operations-after-disconnected-credential-expiry.md](4480-terminal-operations-after-disconnected-credential-expiry.md): the case this file leaves open.

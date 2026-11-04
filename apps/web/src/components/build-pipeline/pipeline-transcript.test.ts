@@ -1595,6 +1595,19 @@ describe("toPipelineTranscript tool runs", () => {
 
     expect(first.map((message) => message.id)).toEqual(["a"]);
     expect(trimmed.map((message) => message.id)).toEqual(["a"]);
+    const singleton = toPipelineTranscript(entries.slice(2), "codex", FALLBACK, [], aliases);
+    expect(singleton.map((message) => message.id)).toEqual(["a"]);
+    expect(singleton[0]!.earliestSourceMessageId).toBe("c");
+    expect(singleton[0]!.latestSourceMessageId).toBe("c");
+    const grown = toPipelineTranscript(
+      [...entries.slice(2), toolEntry("d", at(4))],
+      "codex",
+      FALLBACK,
+      [],
+      aliases,
+    );
+    expect(grown.map((message) => message.id)).toEqual(["a"]);
+    expect(toolCallIds(grown[0]!)).toEqual(["c-call", "d-call"]);
   });
 
   test("keeps a mail call out of the collapsed tool group and mail rows out of the run", () => {

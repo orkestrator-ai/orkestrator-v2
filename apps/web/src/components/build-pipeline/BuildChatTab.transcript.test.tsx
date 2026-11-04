@@ -14,6 +14,9 @@ import {
 } from "@/lib/build-pipeline-persistence";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
+import { useGraphRunStore, graphRunCacheKey } from "@/stores/graphRunStore";
+import { act as activationOf, agentSession } from "@/components/graph-run/graph-run.test-fixtures";
+
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 
@@ -23,12 +26,23 @@ const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
  */
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState, header, footer }: any) => (
+  VirtualizedMessageList: ({
+    messages,
+    renderMessage,
+    computeItemKey,
+    emptyState,
+    header,
+    footer,
+  }: any) => (
     <div>
       {header}
       {messages.length === 0 ? emptyState : null}
       {messages.map((message: unknown, index: number) => (
-        <div key={index} data-testid="transcript-row">
+        <div
+          key={computeItemKey(index, message)}
+          data-testid="transcript-row"
+          data-row-id={computeItemKey(index, message)}
+        >
           {renderMessage(index, message, null)}
         </div>
       ))}
@@ -50,6 +64,8 @@ mock.module("@/lib/backend", () => ({
 
 const { BuildChatTab } = await import("./BuildChatTab");
 const { PipelineSessionTranscript } = await import("./PipelineSessionTranscript");
+const { GraphActivationTranscript } =
+  await import("@/components/graph-run/GraphActivationTranscript");
 
 afterEach(cleanup);
 
@@ -370,4 +386,127 @@ describe("BuildChatTab referenced transcripts", () => {
       logs.restore();
     }
   });
+});
+
+const adjacentTool = (id: string) => ({
+  id,
+  role: "assistant",
+  content: "",
+  parts: [
+    {
+      type: "tool-invocation",
+      content: "",
+      toolName: "Read",
+      toolUseId: `${id}-call`,
+      toolArgs: { file_path: `${id}.ts` },
+      toolState: "success",
+    },
+  ],
+});
+
+test("graph activation reads retain the merged row through singleton trimming and regrowth", () => {
+  const activation = activationOf(
+    { nodeId: "builder" },
+    { session: agentSession({ agent: "codex" }) },
+  );
+  const entries = [adjacentTool("a"), adjacentTool("b"), adjacentTool("c")];
+  const publish = (messages: unknown[], revision: number) =>
+    act(() => {
+      useGraphRunStore.setState({
+        transcripts: new Map([
+          [
+            graphRunCacheKey("run-alias", activation.key),
+            {
+              status: "ready",
+              error: null,
+              revision,
+              view: {
+                status: "found",
+                messages,
+                startIndex: 0,
+                messageCount: messages.length,
+                revision,
+                complete: true,
+              },
+            },
+          ],
+        ]),
+      });
+    });
+  publish(entries, 1);
+  const element = (
+    <GraphActivationTranscript
+      runId="run-alias"
+      environmentId="env-alias"
+      containerId={undefined}
+      activation={activation}
+      isActive={false}
+      ownsGlobalShortcuts={false}
+    />
+  );
+  const view = render(element);
+  const original = screen.getByTestId("transcript-row");
+  expect(original.getAttribute("data-row-id")).toBe("a");
+  expect(original.textContent).toContain("3");
+  for (const [index, messages] of [
+    entries.slice(1),
+    entries.slice(2),
+    [...entries.slice(2), adjacentTool("d")],
+  ].entries()) {
+    publish(messages, index + 2);
+    expect(screen.getAllByTestId("transcript-row")).toHaveLength(1);
+    expect(screen.getByTestId("transcript-row")).toBe(original);
+    expect(original.getAttribute("data-row-id")).toBe("a");
+  }
+  view.unmount();
+  useGraphRunStore.setState({ transcripts: new Map() });
+});
+
+test("pipeline row aliases survive acceptance revealing and hiding a document", () => {
+  const document = JSON.stringify({ complete: true, rationale: "All checks pass." });
+  const entries = [
+    adjacentTool("a"),
+    {
+      id: "verdict",
+      role: "assistant",
+      content: document,
+      parts: [{ type: "text", content: document }],
+    },
+    adjacentTool("b"),
+    adjacentTool("c"),
+  ];
+  const element = (accepted: boolean, messages = entries) => {
+    const session = {
+      ...pipeline.sessions[1]!,
+      transcript: undefined,
+      messages,
+      structuredResultStatus: accepted ? ("accepted" as const) : ("pending" as const),
+    };
+    return (
+      <PipelineSessionTranscript
+        pipeline={{ ...pipeline, sessions: [session] }}
+        session={session}
+        visible
+        isActive={false}
+        ownsGlobalShortcuts={false}
+        environmentId="env-alias"
+        containerId={undefined}
+        composer={false}
+      />
+    );
+  };
+  const view = render(element(false));
+  const original = screen.getByTestId("transcript-row");
+  expect(original.getAttribute("data-row-id")).toBe("a");
+  view.rerender(element(true));
+  expect(
+    screen.getAllByTestId("transcript-row").map((row) => row.getAttribute("data-row-id")),
+  ).toEqual(["a", "verdict", "b"]);
+  expect(screen.getAllByTestId("transcript-row")[0]).toBe(original);
+  view.rerender(element(false));
+  expect(screen.getByTestId("transcript-row")).toBe(original);
+  view.rerender(element(false, entries.slice(3)));
+  expect(screen.getByTestId("transcript-row")).toBe(original);
+  view.rerender(element(false, [...entries.slice(3), adjacentTool("d")]));
+  expect(screen.getByTestId("transcript-row")).toBe(original);
 });

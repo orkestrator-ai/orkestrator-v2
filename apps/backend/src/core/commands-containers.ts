@@ -750,6 +750,7 @@ export async function startContainerServer(
   // would start the bridge before this boot's configuration exists.
   await ensureCurrentBootReady(containerId);
   await dockerExecDetached(containerId, command, redactValues);
+  dockerLog.info("bridge.launched", { provider: processName, containerPort: port });
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
     const logFile = containerServerLogFile(processName);
     const log = await dockerExec(

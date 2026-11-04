@@ -10,7 +10,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 | Part | Criticality | Covers |
 | --- | --- | --- |
-| [0750](#0750-an-always-on-essential-event-log) | Medium | R6's always-on tier and control, plus L4's uncaught exception gap. |
+| [0750](#0750-an-always-on-essential-event-log) | Done | R6's always-on tier and control, plus L4's uncaught exception gap. Built; see [Application logging](../../architecture/logging.md#the-essential-event-log). |
 | [0820](#0820-persist-a-small-rolling-health-summary) | Medium | R12 (M1): a rolling health row and a clean shutdown marker. |
 | [0810](#0810-database-observability) | Medium | R19 (M6): database size, waits, top tables and a panel. |
 | [0880](#0880-consolidate-metric-primitives) | Low | R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives. |
@@ -22,10 +22,10 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Decide the stance**: confirm that a small content-free log may be written with saving off. Status: open.
-2. **Add the sink**: a bounded store written whatever **Save Logs to Disk** says. Status: open (depends on 1).
-3. **Choose what enters it**: errors and a curated list of lifecycle events. Status: open (depends on 2).
-4. **Say so in Settings**: a read-only note. Status: open (depends on 2).
+1. **Decide the stance**: confirm that a small content-free log may be written with saving off. Status: done; the user agreed it.
+2. **Add the sink**: a bounded store written whatever **Save Logs to Disk** says. Status: done.
+3. **Choose what enters it**: errors and a curated list of lifecycle events. Status: done.
+4. **Say so in Settings**: a read-only note. Status: done.
 
 #### 1. Decide the stance
 
@@ -114,21 +114,84 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 ### Current state
 
-The events it needs partly exist. [0720](0720-e13-silent-failures.md#0720-log-the-failures-that-are-still-silent) adds the rest. Nothing here has been built.
+Built. [Application logging](../../architecture/logging.md#the-essential-event-log) is the guide: the bounds, the full list of events and each one's fields, who writes the file in each setup, and what Bun does with an uncaught exception.
 
 ### Constraints and rationale
 
-- Entries must hold no prompts, tokens, paths or file contents. A message from `formatLogError` is not safe enough here: use `{ message: false }`.
+- Entries hold no prompts, tokens, paths or file contents. A message from `formatLogError` is not safe enough here, and `log-essential.ts` drops it wherever an error is attached.
 - [0780](#0780-an-export-diagnostics-bundle) reads this log, and [0790](0790-e16-log-controls.md#0790-renderer-diagnostics-a-user-can-turn-on) may write to it.
 
 ### Open questions
 
-- Task 1 is the user's call, because it changes a privacy stance.
+None. Task 1 was the user's call, and they agreed the stance.
 
 ### Needs verification
 
-- What Bun does with an uncaught exception after a handler returns was not run.
-- The report's tens of KB a day is an estimate.
+- The report's tens of KB a day is an estimate, and no long-running installation has been sampled. What is bounded is the worst case: 4 MiB in total, and about 36 KB a day from any one event.
+- That a real packaged app writes the file in its packaged paths needs a packaged build. The writer runs in every runtime flavor, and `renderer-log-boundary-electron.spec.ts` covers it through a real Electron main process and backend.
+
+### Assumptions and decisions
+
+#### Task 2: 4 files of 1 MiB
+
+The ticket left the exact cap to the build. `essential.jsonl` plus 3 rotated files gives a hard 4 MiB. Fewer files would evict a larger share of the history at each rotation, and more would add files for no gain.
+
+#### Task 2: always JSON lines
+
+The file ignores `ORKESTRATOR_LOG_FORMAT`. Each line is the record shape `parseLogRecordLine` already reads, so a later reader has one format and a change of format between launches cannot mix two in one file.
+
+#### Task 2: it runs in every runtime flavor
+
+Unlike the saved log, the desktop installs it in development and agent-test profiles too. It holds nothing a profile could not keep, and `userData` is the profile's own directory, so this reaches no real data. It is also what lets a real Electron test read it. A standalone backend in an agent-test profile installs none, as it does for the saved log.
+
+#### Task 2: a stop and a start bracket a run
+
+The writer records `essential.started` and `essential.stopped` itself. A start with no stop before it means the last writer died, which is how the desktop-crash limitation can be read off the file. It is not the R12 clean shutdown marker in [0820](#0820-persist-a-small-rolling-health-summary), which also covers the backend in the app and sits in a store.
+
+#### Task 3: fields are declared per event, and undeclared errors keep no free strings
+
+The flag alone would have reviewed the event's name but not what a call site passes, so each definition lists its fields and only those are written. An `error` nobody flagged keeps numbers, booleans, an error's identity and a short list of fixed labels. Stripping only `message` from those entries would have kept any string field, such as a path, that an unreviewed site logs.
+
+#### Task 3: what the curated list holds
+
+Every event the ticket names exists and is flagged, with these new ones: `local-server` `bridge.started`, `docker` `bridge.launched`, `storage` `migration.failed` and the `process` area's `rejection.unhandled` and `uncaught-exception`. `session.resume-fell-back` keeps no session id, because it can be the provider's. There is no regained lease event because a lost lease cannot be regained in a process. `snapshot.skipped-low-disk` stays out as a skip rather than a failure. Stalls are flagged with `minLevel: "error"`, because the same event at `warn` is a routine short stall.
+
+#### Task 3: `bridge.launched` covers a first start as well as a relaunch
+
+The host cannot tell the two apart without another `docker exec`, and that one line is what the ticket's "Docker bridge relaunch" needs. The previous log, which `keepPreviousLogCommand` keeps, says which it was.
+
+#### Task 3: the desktop's exit error now carries its code and signal as fields
+
+`Backend service exited (code, signal)` held them only in its message, which this log strips. They were added as `exitCode` and `signal` on the error. The message and every reader of it are unchanged, and a saved line gains those two fields.
+
+#### Task 3: a monitor, not an `uncaughtException` listener
+
+A real run under Bun 1.4.4 showed a returning `uncaughtException` listener keeps the process alive, so the handler as the report described it could not preserve the behaviour. `uncaughtExceptionMonitor` does: the same dump, `exit` with code 1, and exit 1. It is shipped on that basis, and an integration test pins it against the runtime.
+
+#### Task 3: the writer limits each event as well
+
+`log.throttled` only helps sites that use it, and a plain `log.error` in a loop or an imitated record would still have evicted everything. So the writer gives each event a burst of 10 and one entry per 10 minutes. `rejection.unhandled` also uses `log.throttled`, as the ticket asks.
+
+#### Task 3: a filtered entry crosses a relay marked
+
+A level-filtered entry has to reach the owning process without reaching its normal log, so it crosses with `essentialOnly`. Having the receiver apply its own level instead would be wrong for a bridge whose override differs from the desktop's, and the relay's rule is that it never filters.
+
+#### Task 2: an agent-test profile's backend now relays records
+
+A live run in a `dev:test` profile found that the profile's environment allowlist removed `ORKESTRATOR_DESKTOP_SUPERVISED`, so its backend logged text and none of its entries could reach this log. Production was not affected. The flag now survives the allowlist, as it holds no secret, so a profile matches production. Its backend's lines in the desktop's console lose their `[Backend]` prefix as a result.
+
+#### Task 3: a stale assertion in the Electron spec
+
+`renderer-log-boundary-electron.spec.ts` refused a `Log level for terminal` control, but `logDetailAreas` keeps that shared area on purpose, as this guide says, so the spec failed on `main` whatever this work did. Its pattern now names `terminal.` only, which is what the setting actually excludes.
+
+#### Task 4: the size is shown too
+
+The ticket asks for the sentence, and for `get_log_storage_stats` to report the size separately. Settings also shows that size under **Stored logs**, and the **Clean up logs** dialog now says the event log stays. An older backend reports no such field, so the line is left out.
+
+#### Out of this work
+
+- A container bridge has no hop, so its `session.resume-fell-back` is not in this file. Reading it would mean the backend tailing container logs.
+- The bug report prompt (`packages/protocol/src/bug-report.ts`) still asks for **Save Logs to Disk** to be turned on and does not mention this log. Pointing it here is a small follow-up, and fits [0780](#0780-an-export-diagnostics-bundle).
 
 ## 0820: Persist a small rolling health summary
 

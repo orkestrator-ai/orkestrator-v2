@@ -128,7 +128,7 @@ Already done from report L4's table, so not tasks here:
 ### Constraints and rationale
 
 - Every new event goes in `packages/protocol/src/log-vocabulary/`, content-free. `error.message` can quote a provider, so use `{ message: false }` where it might.
-- These lines reach disk only while **Save Logs to Disk** is on. Capturing a first occurrence is [0750](0750-e15-health-and-diagnostics.md#0750-an-always-on-essential-event-log), which depends on these events existing.
+- Most of these lines reach disk only while **Save Logs to Disk** is on. The writer lease events, `bridge.exited` and `session.resume-fell-back` are also always kept in the [essential log](../../architecture/logging.md#the-essential-event-log) that [0750](0750-e15-health-and-diagnostics.md#0750-an-always-on-essential-event-log) built, and so is any of them at `error`.
 
 ## 0830: Stop inherited vendor debug variables reaching local bridges
 

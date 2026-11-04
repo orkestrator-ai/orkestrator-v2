@@ -321,6 +321,10 @@ export function createBackendProcessEnvironment(
     const inherited = { ...parentEnv };
     const inheritedHome = inherited.HOME?.trim();
     retainSafeAgentTestEnvironment(env);
+    // Not a secret, and what makes this backend relay records as it does in
+    // production. Without it a profile's backend logs text the desktop cannot
+    // re-emit, so the essential log would never see its entries.
+    env[DESKTOP_SUPERVISED_ENV] = "1";
     env.ORKESTRATOR_AGENT_TEST_ISOLATED = "1";
     if (runtime.isolatedCredentialRoot) {
       const isolatedHome = path.join(runtime.isolatedCredentialRoot, "home");
@@ -1002,7 +1006,13 @@ export class BackendProcess {
     child.once("error", (error) => childFailure(error));
     child.once("exit", (code, signal) =>
       childFailure(
-        new Error(`Backend service exited (code ${code ?? "unknown"}, signal ${signal ?? "none"})`),
+        // As fields too: the essential log keeps these and never the message.
+        Object.assign(
+          new Error(
+            `Backend service exited (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
+          ),
+          { exitCode: code ?? undefined, signal: signal ?? undefined },
+        ),
       ),
     );
 

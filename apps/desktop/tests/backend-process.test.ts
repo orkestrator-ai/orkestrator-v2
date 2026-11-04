@@ -16,7 +16,7 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MAX_GATEWAY_EVENT_FRAME_BYTES } from "@orkestrator/protocol/gateway-event-stream";
-import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
+import { configureLogger, formatLogError, resetLogger } from "@orkestrator/protocol/logger";
 import { applyPiHostCredentialEnvironment } from "../../backend/src/core/host-agent-credentials";
 import type { CommandContext } from "../../backend/src/core/commands-context";
 import { defaultConfig } from "../../backend/src/core/storage";
@@ -143,6 +143,14 @@ describe("Electron backend process supervisor", () => {
       "ORKESTRATOR_RENDERER_DEV_SERVER_URL",
     );
     expect(parent.ORKESTRATOR_RENDERER_DEV_SERVER_URL).toBe("http://127.0.0.1:9999");
+  });
+
+  test("every flavor's backend is told it is supervised, so its records cross the relay", () => {
+    for (const flavor of ["production", "development", "agent-test"] as const) {
+      expect(createBackendProcessEnvironment({}, "2.8.2", { flavor })).toMatchObject({
+        ORKESTRATOR_DESKTOP_SUPERVISED: "1",
+      });
+    }
   });
 
   test("only the installed app asks for the fixed gateway port", () => {
@@ -1869,6 +1877,10 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       }
       expect(backendProcess.getInfo()).toBeNull();
       expect(onUnexpectedExit).toHaveBeenCalledTimes(1);
+      // The essential log keeps these fields and drops the message that also says them.
+      const failure = (onUnexpectedExit.mock.calls as unknown as Array<[Error]>)[0]![0];
+      expect(formatLogError(failure, { message: false })).toMatchObject({ exitCode: 0 });
+      expect(failure.message).toContain("code 0");
     },
     SPAWN_TIMEOUT_MS,
   );

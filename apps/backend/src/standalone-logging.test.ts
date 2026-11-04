@@ -38,7 +38,9 @@ describe("standalone backend logging", () => {
       await stopStandaloneBackendLogging(logging);
     }
 
-    const files = await readdir(path.join(dataDir, "logs"));
+    const files = (await readdir(path.join(dataDir, "logs"))).filter(
+      (name) => name !== "essential",
+    );
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^orkestrator-backend-\d{4}-\d{2}-\d{2}\.log$/);
     const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
@@ -94,5 +96,29 @@ describe("standalone backend logging", () => {
       20,
     );
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test("owns the essential log, which follows no setting", async () => {
+    const dataDir = await dataDirWithDebugLogging(false);
+    const logging = installStandaloneBackendLogging({ dataDir, runtimeFlavor: "production" }, {});
+    await stopStandaloneBackendLogging(logging);
+
+    const lines = await readFile(
+      path.join(dataDir, "logs", "essential", "essential.jsonl"),
+      "utf8",
+    );
+    expect(lines).toContain('"event":"essential.started"');
+    expect(lines).toContain('"owner":"backend"');
+    expect(lines).toContain('"event":"essential.stopped"');
+  });
+
+  test("leaves the essential log to the desktop when it supervises this process", async () => {
+    const dataDir = await dataDirWithDebugLogging(true);
+    const logging = installStandaloneBackendLogging(
+      { dataDir, runtimeFlavor: "production" },
+      { ORKESTRATOR_DESKTOP_SUPERVISED: "1" },
+    );
+    expect(logging).toBeNull();
+    await expect(readdir(path.join(dataDir, "logs"))).rejects.toThrow();
   });
 });

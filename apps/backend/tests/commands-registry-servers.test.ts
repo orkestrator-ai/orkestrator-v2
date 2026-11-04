@@ -2093,14 +2093,22 @@ exit 0
 
       try {
         await withFakeDocker(dockerScript, async (logs) => {
+          const captured = captureLogs();
           const result = (await commands.get("start_codex_server")?.(
             { containerId: "container-codex-legacy" },
             context,
           )) as { hostPort: number; wasRunning: boolean; authToken: string };
+          const launches = captured
+            .records()
+            .filter((record) => record.event === "bridge.launched");
+          captured.restore();
 
           expect(result).toMatchObject({ hostPort, wasRunning: false });
           expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
           expect(await fs.readFile(tokenFile, "utf8")).toBe(result.authToken);
+          expect(launches.map((record) => record.fields)).toEqual([
+            { provider: "codex", containerPort: 4098 },
+          ]);
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
@@ -2164,16 +2172,21 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
+        const captured = captureLogs();
         const result = (await commands.get("start_codex_server")?.(
           { containerId: "container-codex-late" },
           context,
         )) as { hostPort: number; wasRunning: boolean; authToken: string };
+        const launches = captured.records().filter((record) => record.event === "bridge.launched");
+        captured.restore();
 
         expect(result).toEqual({ hostPort, wasRunning: true, authToken: persistedToken });
         expect(await fs.readFile(tokenFile, "utf8")).toBe(persistedToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).not.toContain("exec -d ");
+        // Nothing was launched, so no relaunch is recorded.
+        expect(launches).toEqual([]);
       });
     } finally {
       await bridge.close();

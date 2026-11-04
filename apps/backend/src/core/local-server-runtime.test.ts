@@ -18,6 +18,16 @@ afterEach(() => {
   logs.restore();
 });
 
+describe("reportBridgeStart", () => {
+  test("names the bridge and its process, and nothing else", () => {
+    runtime().reportBridgeStart(KEY, fakeChild(100));
+    const started = logs.records().filter((record) => record.event === "bridge.started");
+    expect(started).toHaveLength(1);
+    expect(started[0]?.level).toBe("info");
+    expect(started[0]?.fields).toEqual({ key: KEY, pid: 100 });
+  });
+});
+
 describe("reportBridgeExit", () => {
   test("a bridge that crashes on its own warns with its code and signal", () => {
     const child = fakeChild(101);

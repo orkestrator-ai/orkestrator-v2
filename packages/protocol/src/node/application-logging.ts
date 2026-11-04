@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatWithOptions } from "node:util";
 
 import { normalizeDebugLogRetentionDays } from "../debug-logging.js";
+import { ESSENTIAL_LOG_DIRECTORY_NAME } from "./essential-log.js";
 import { defaultLogDetail, resolveLogDetail, type LogDetail } from "../log-policy.js";
 import {
   createLogger,
@@ -149,6 +150,11 @@ export function readApplicationLogSettings(dataDir: string): ApplicationLogSetti
  */
 const BENIGN_RMDIR_CODES = new Set(["ENOENT", "ENOTEMPTY", "EEXIST", "ERR_FS_EISDIR"]);
 
+/** The essential log has its own byte cap and is outside retention and the budget. */
+function isEssentialLogDirectory(entry: { name: string; isDirectory(): boolean }): boolean {
+  return entry.name === ESSENTIAL_LOG_DIRECTORY_NAME && entry.isDirectory();
+}
+
 async function removeIfEmpty(directory: string): Promise<void> {
   const children = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return [];
@@ -176,6 +182,7 @@ async function removeExpiredEntries(
     },
   );
   for (const entry of entries) {
+    if (directory === root && isEssentialLogDirectory(entry)) continue;
     const entryPath = path.join(directory, entry.name);
     // Each entry is isolated: one unreadable file or locked directory must not
     // stop the sweep, or a single bad entry silently disables retention for
@@ -203,6 +210,7 @@ type LogFileRecord = { path: string; size: number; mtimeMs: number };
 
 async function collectLogFiles(
   directory: string,
+  root: string,
   collected: LogFileRecord[],
   failures: unknown[],
 ): Promise<void> {
@@ -227,11 +235,12 @@ async function collectLogFiles(
       );
       return;
     }
+    if (directory === root && isEssentialLogDirectory(entry)) continue;
     const entryPath = path.join(directory, entry.name);
     try {
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        await collectLogFiles(entryPath, collected, failures);
+        await collectLogFiles(entryPath, root, collected, failures);
         continue;
       }
       if (!entry.isFile()) continue;
@@ -259,7 +268,7 @@ async function enforceDirectoryBudget(
 ): Promise<void> {
   if (!Number.isFinite(maxDirectoryBytes) || maxDirectoryBytes <= 0) return;
   const files: LogFileRecord[] = [];
-  await collectLogFiles(logDirectory, files, failures);
+  await collectLogFiles(logDirectory, logDirectory, files, failures);
   let total = files.reduce((sum, file) => sum + file.size, 0);
   if (total <= maxDirectoryBytes) return;
   files.sort((a, b) => a.mtimeMs - b.mtimeMs || a.path.localeCompare(b.path));
@@ -276,7 +285,7 @@ async function enforceDirectoryBudget(
 
 /**
  * Removes logs older than `retentionDays`, then trims the directory to
- * `maxDirectoryBytes`. Individual failures are collected rather than thrown
+ * `maxDirectoryBytes`, leaving `essential/` alone. Individual failures are collected rather than thrown
  * mid-traversal, so one bad entry cannot skip the rest; the aggregate is thrown
  * at the end so a genuine problem still surfaces.
  */

@@ -21,6 +21,8 @@
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
     "./node/application-logging": "./src/node/application-logging.ts",
+    "./node/essential-log": "./src/node/essential-log.ts",
+    "./node/process-failure-log": "./src/node/process-failure-log.ts",
     "./node/log-policy": "./src/node/log-policy.ts",
     "./node/bridge-log-policy": "./src/node/bridge-log-policy.ts",
     "./logger": "./src/logger.ts",

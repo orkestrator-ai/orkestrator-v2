@@ -2287,6 +2287,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           </div>
         </button>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          A small event log of errors and key lifecycle events is always kept, even with this off.
+          It holds no prompts, paths or file contents, and has a fixed 4 MiB size limit.
+        </p>
         <div className="max-w-xs space-y-2">
           <Label htmlFor="debug-log-retention" className="text-sm">
             Keep logs for
@@ -2329,6 +2333,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                     ? `${formatLogBytes(logStorageStats.totalBytes)} across ${logStorageStats.fileCount} ${logStorageStats.fileCount === 1 ? "file" : "files"}`
                     : "Storage usage unavailable"}
               </p>
+              {!isLoadingLogStorage && logStorageStats?.essentialBytes !== undefined ? (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {`Event log, not removed by clean up: ${formatLogBytes(logStorageStats.essentialBytes)}`}
+                </p>
+              ) : null}
             </div>
             <Button
               type="button"
@@ -2378,8 +2387,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This permanently deletes every file in the application log directory. If logging
-                  is active, a new daily log may be created immediately afterward.
+                  This permanently deletes every file in the application log directory except the
+                  small event log, which stays. If logging is active, a new daily log may be created
+                  immediately afterward.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

@@ -73,6 +73,7 @@ export function configureLoggerFromEnvironment(
     ...(levels.level ? { level: levels.level } : {}),
     areaLevels: levels.areaLevels,
     format,
+    relayEssential: options.relayToSupervisor === true,
   });
   const log = createLogger("logging");
   if (levels.invalid.length > 0) {

@@ -115,6 +115,33 @@ for (const machine of [null, "other"]) {
   });
 }
 
+test("Debug says the event log is always kept, with its size apart from what cleaning removes", async () => {
+  spyOn(backend, "getAppVersion").mockResolvedValue("2.28.0");
+  spyOn(backend, "getLogStorageStats").mockResolvedValue({
+    fileCount: 2,
+    totalBytes: 100,
+    essentialBytes: 2048,
+    essentialFileCount: 1,
+  } as never);
+  mount("debug");
+  await screen.findByText(/always kept, even with this off/);
+  expect(
+    screen.getByText(/holds no prompts, paths or file contents, and has a fixed 4 MiB size limit/),
+  ).toBeTruthy();
+  await screen.findByText("Event log, not removed by clean up: 2 KB");
+});
+
+test("a backend older than the event log shows no line for it", async () => {
+  spyOn(backend, "getAppVersion").mockResolvedValue("2.28.0");
+  spyOn(backend, "getLogStorageStats").mockResolvedValue({
+    fileCount: 2,
+    totalBytes: 100,
+  } as never);
+  mount("debug");
+  await screen.findByText(/across 2 files/);
+  expect(screen.queryByText(/not removed by clean up/)).toBeNull();
+});
+
 test("a different selected backend never changes this window's web server", async () => {
   const save = spyOn(backend, "patchGlobalConfig").mockImplementation(
     async (patch) => (selected = { ...selected, global: { ...selected.global, ...patch } }),

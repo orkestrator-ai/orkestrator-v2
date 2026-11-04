@@ -43,6 +43,10 @@ import {
 } from "@orkestrator/protocol/node/application-logging";
 import { applyLogDetail } from "@orkestrator/protocol/node/log-policy";
 import { configureLoggerFromEnvironment } from "@orkestrator/protocol/node/logger-environment";
+import {
+  installUncaughtExceptionLog,
+  logUnhandledRejection,
+} from "@orkestrator/protocol/node/process-failure-log";
 
 const log = createLogger("backend");
 const previewLog = createLogger("preview");
@@ -60,7 +64,8 @@ startEventLoopStallMonitor();
 // Before any other startup work: a rejection thrown while the backend is still
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.
-installFatalRejectionGuard({ label: "[Backend]" });
+installFatalRejectionGuard({ label: "[Backend]", onRejection: logUnhandledRejection });
+installUncaughtExceptionLog();
 // Login-shell profiles are child processes too; sanitize before discovering PATH.
 dropInheritedAgentToolConnection();
 fixPath();

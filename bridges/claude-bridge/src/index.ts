@@ -30,6 +30,7 @@ import {
   startParentWatchdog,
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import { serve } from "@hono/node-server";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
@@ -241,7 +242,7 @@ app.get("/", (c) => {
 // process and exit on EOF when it goes away.
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[claude-bridge]" });
+installFatalRejectionGuard({ label: "[claude-bridge]", onRejection: logUnhandledRejection });
 
 const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {

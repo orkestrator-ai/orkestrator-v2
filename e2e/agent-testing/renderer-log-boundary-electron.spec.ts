@@ -4,7 +4,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication, Page } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -201,9 +201,23 @@ test("a real window sends its startup markers to the main process and none of it
     await expect(
       window.getByRole("combobox", { name: "Log level for backend.activity", exact: true }),
     ).toHaveCount(1);
+    // The shared `terminal` area stays: its backend sites follow live policy.
     await expect(
-      window.getByRole("combobox", { name: /^Log level for (web\.|terminal(?:\.|$))/ }),
+      window.getByRole("combobox", { name: /^Log level for (web\.|terminal\.)/ }),
     ).toHaveCount(0);
+
+    // The essential log, through the real relay: this profile has saving off, the
+    // desktop owns the file and the backend's own line reached it over stdio.
+    await expect(window.getByText(/always kept, even with this off/)).toBeVisible();
+    const essentialFile = path.join(profile.dataDir, "logs", "essential", "essential.jsonl");
+    const essential = () => readFile(essentialFile, "utf8").catch(() => "");
+    await expect.poll(essential, { timeout: 30_000 }).toContain('"event":"starting"');
+    expect(await essential()).toContain('"owner":"desktop"');
+    expect((await stat(essentialFile)).mode & 0o777).toBe(0o600);
+    await closeElectronWithin(launchedApp);
+    launchedApp = null;
+    await expect.poll(essential, { timeout: 10_000 }).toContain('"event":"essential.stopped"');
+    expect(await essential()).toContain('"event":"shutdown.finished"');
   } finally {
     await closeElectronWithin(launchedApp).catch(() => undefined);
     if (vite) await stopProcessGroup(vite).catch(() => undefined);

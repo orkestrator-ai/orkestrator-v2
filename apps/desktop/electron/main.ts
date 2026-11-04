@@ -161,7 +161,9 @@ import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
   registerApplicationLoggingShutdown,
+  registerWillQuitHold,
 } from "./application-logging.js";
+import { installEssentialLog } from "@orkestrator/protocol/node/essential-log";
 import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
@@ -249,6 +251,10 @@ protocol.registerSchemesAsPrivileged([ARTIFACT_SHELL_SCHEME_PRIVILEGES]);
 // Before the writer's first line. The backend's settings changes reach this
 // process through `applyStoredLogPolicy`, so none of this waits for a restart.
 applyLogDetail(readApplicationLogPolicy(app.getPath("userData")).detail);
+const ESSENTIAL_LOG_STOP_WAIT_MS = 2_000;
+// Every flavor: unlike the saved log it holds nothing a profile could not keep, and
+// `userData` is already the profile's own directory.
+const essentialLog = installEssentialLog({ dataDir: app.getPath("userData"), owner: "desktop" });
 const applicationLogging =
   runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
@@ -1732,3 +1738,11 @@ registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
   settled: backendShutdown.stopped,
   timeoutMs: BACKEND_EXIT_WAIT_MS,
 });
+registerWillQuitHold(
+  app,
+  async () => {
+    await backendShutdown.stopped().catch(() => undefined);
+    await essentialLog.stop();
+  },
+  BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
+);

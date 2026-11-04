@@ -1,11 +1,10 @@
+import { loadTerminalPortalHost } from "@/lib/lazy-view-loaders";
 import { lazy, memo, useState } from "react";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { isTerminalTab } from "./terminal-tab-types";
 
-const LoadedTerminalPortalHost = lazy(async () => ({
-  default: (await import("./TerminalPortalHost")).TerminalPortalHost,
-}));
+const LoadedTerminalPortalHost = lazy(loadTerminalPortalHost);
 
 /**
  * Loads `TerminalPortalHost`, and xterm.js with it, the first time this

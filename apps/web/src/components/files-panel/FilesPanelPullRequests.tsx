@@ -5,6 +5,7 @@ import {
   type GitHubPullRequestRef,
 } from "@orkestrator/protocol/github-pull-requests";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+import { loadPullRequestList, loadPullRequestView } from "@/lib/lazy-view-loaders";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
@@ -13,12 +14,8 @@ import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
 import type { FilesPanelPullRequestTab } from "@/stores/filesPanelStore";
 
 // The panel mounts at startup; the pull request views and their Markdown wait for these tabs.
-const LazyPullRequestView = lazy(async () => ({
-  default: (await import("@/components/pull-requests/PullRequestView")).PullRequestView,
-}));
-const LazyPullRequestList = lazy(async () => ({
-  default: (await import("@/components/pull-requests/PullRequestList")).PullRequestList,
-}));
+const LazyPullRequestView = lazy(loadPullRequestView);
+const LazyPullRequestList = lazy(loadPullRequestList);
 
 const EMPTY_TABS: FilesPanelPullRequestTab[] = [];
 

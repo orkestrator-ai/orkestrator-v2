@@ -1,28 +1,20 @@
-import { lazy } from "react";
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
-import * as realList from "@/components/pull-requests/PullRequestList";
-import * as realView from "@/components/pull-requests/PullRequestView";
 import { useFilesPanelStore, useUIStore } from "@/stores";
-const listSnapshot = { ...realList };
-const viewSnapshot = { ...realView };
 const filesState = useFilesPanelStore.getState();
 const uiState = useUIStore.getState();
-mock.module("@/components/pull-requests/PullRequestList", () => ({
-  PullRequestList: lazy(async () => {
-    throw new Error("Failed to fetch dynamically imported module");
-  }),
-}));
-mock.module("@/components/pull-requests/PullRequestView", () => ({
-  PullRequestView: lazy(async () => {
-    throw new Error("Failed to fetch dynamically imported module");
-  }),
+import * as realLoaders from "@/lib/lazy-view-loaders";
+const snapshot = { ...realLoaders };
+const rejectImport = mock(async () => {
+  throw new Error("Failed to fetch dynamically imported module");
+});
+mock.module("@/lib/lazy-view-loaders", () => ({
+  ...snapshot,
+  loadPullRequestList: rejectImport,
+  loadPullRequestView: rejectImport,
 }));
 const { FilesPanelPullRequests } = await import("./FilesPanelPullRequests");
-afterAll(() => {
-  mock.module("@/components/pull-requests/PullRequestList", () => listSnapshot);
-  mock.module("@/components/pull-requests/PullRequestView", () => viewSnapshot);
-});
+afterAll(() => mock.module("@/lib/lazy-view-loaders", () => snapshot));
 afterEach(() => {
   cleanup();
   useFilesPanelStore.setState(filesState, true);
@@ -44,6 +36,9 @@ test.each([false, true])(
     );
     expect(screen.getByText("Loading…")).toBeTruthy();
     expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText("This part of the app failed to load")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry view" })).toBeNull();
+    expect(rejectImport).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Reload application" })).toBeTruthy();
     expect(screen.getByText("Files shell")).toBeTruthy();
   },

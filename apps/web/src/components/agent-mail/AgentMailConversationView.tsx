@@ -1,3 +1,4 @@
+import { loadAgentMailMarkdown } from "@/lib/lazy-view-loaders";
 import { lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, RotateCcw, Send, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,9 +34,7 @@ import {
 } from "./agent-mail-ui";
 
 // The mail panel is mounted at startup; the Markdown renderer is not needed until mail is read.
-const LazyAgentMailMarkdown = lazy(async () => ({
-  default: (await import("./AgentMailMarkdown")).AgentMailMarkdown,
-}));
+const LazyAgentMailMarkdown = lazy(loadAgentMailMarkdown);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

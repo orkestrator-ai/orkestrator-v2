@@ -1,17 +1,18 @@
-import { lazy } from "react";
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { cleanup, render, screen } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import * as realHost from "./TerminalPortalHost";
-const snapshot = { ...realHost };
 const state = usePaneLayoutStore.getState();
-mock.module("./TerminalPortalHost", () => ({
-  TerminalPortalHost: lazy(async () => {
-    throw new Error("Failed to fetch dynamically imported module");
-  }),
+import * as realLoaders from "@/lib/lazy-view-loaders";
+const snapshot = { ...realLoaders };
+const rejectImport = mock(async () => {
+  throw new Error("Failed to fetch dynamically imported module");
+});
+mock.module("@/lib/lazy-view-loaders", () => ({
+  ...snapshot,
+  loadTerminalPortalHost: rejectImport,
 }));
 const { LazyTerminalPortalHost } = await import("./LazyTerminalPortalHost");
-afterAll(() => mock.module("./TerminalPortalHost", () => snapshot));
+afterAll(() => mock.module("@/lib/lazy-view-loaders", () => snapshot));
 afterEach(() => {
   cleanup();
   usePaneLayoutStore.setState(state, true);
@@ -40,6 +41,9 @@ test("failed host import is contained in the inline fallback", async () => {
     </main>,
   );
   expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.getByText("This part of the app failed to load")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Retry view" })).toBeNull();
+  expect(rejectImport).toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Reload application" })).toBeTruthy();
   expect(screen.getByText("Shell")).toBeTruthy();
 });

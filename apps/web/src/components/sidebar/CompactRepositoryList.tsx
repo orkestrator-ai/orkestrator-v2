@@ -71,6 +71,27 @@ function useCompactStatuses(
       }
       return {
         coordinator: coordinators.get(projectId) ?? null,
+        working: own.some(
+          (environment) =>
+            !environment.projectHome &&
+            !gone(environment) &&
+            (activeBuilds.has(environment.id) ||
+              resolveEnvironmentAgentActivity(
+                environment,
+                containerStates,
+                containerStateUpdatedAt,
+              ) === "working"),
+        ),
+        waiting: own.some(
+          (environment) =>
+            !environment.projectHome &&
+            !gone(environment) &&
+            resolveEnvironmentAgentActivity(
+              environment,
+              containerStates,
+              containerStateUpdatedAt,
+            ) === "waiting",
+        ),
         home: home
           ? {
               deleting: deletingProjects.has(projectId),

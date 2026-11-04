@@ -112,6 +112,8 @@ export interface CompactMemberFacts {
     activity: "idle" | "working" | "waiting";
     hasUnreadWork: boolean;
   } | null;
+  working?: boolean;
+  waiting?: boolean;
   /** An environment other than its home has work the user has not seen. */
   unreadWork: boolean;
   unreadMail: number;
@@ -134,6 +136,16 @@ export function remoteMemberFacts(
   );
   return {
     coordinator: null,
+    working: environments.some(
+      (environment) =>
+        !environment.isProjectHome &&
+        !environment.deleting &&
+        (environment.activity === "working" || environment.buildActive === true),
+    ),
+    waiting: environments.some(
+      (environment) =>
+        !environment.isProjectHome && !environment.deleting && environment.activity === "waiting",
+    ),
     home: home
       ? {
           deleting: home.deleting,
@@ -169,8 +181,10 @@ export function compactRepositoryStatus(
   let failedMail = false;
   for (const member of members) {
     const home = member.home ? projectHomeStatus(member.home) : null;
-    working ||= member.coordinator === "working" || home?.working === true;
+    working ||=
+      member.working === true || member.coordinator === "working" || home?.working === true;
     waiting ||=
+      member.waiting === true ||
       member.coordinator === "waiting" ||
       (member.home !== null && !member.home.deleting && member.home.activity === "waiting");
     unreadWork ||= member.unreadWork || (home !== null && member.home?.hasUnreadWork === true);

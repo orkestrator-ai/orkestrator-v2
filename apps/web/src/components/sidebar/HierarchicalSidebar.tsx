@@ -541,10 +541,12 @@ export function HierarchicalSidebar() {
   );
 
   // "By project" and "by repository" change nothing until another machine is shown.
-  const mergedModesAvailable = federation.enabled && remoteMachinesVisible.length > 0;
+  const mergedModesAvailable = federation.enabled && remoteMachinesVisible.some(isMachineShown);
   useEffect(
     () =>
       onAppShortcut("rotate-sidebar-grouping", () => {
+        const ui = useUIStore.getState();
+        if (!isMobile && !ui.sidebarOpen) ui.toggleSidebar();
         const views = useMachineViewStore.getState();
         const next = nextSidebarView(
           {

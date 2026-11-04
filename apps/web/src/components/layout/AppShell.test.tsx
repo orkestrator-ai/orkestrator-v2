@@ -75,7 +75,9 @@ function selectState<TState, TResult>(
 mock.module("@/components/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ResizableHandle: () => <div data-testid="resize-handle" />,
+  ResizableHandle: ({ disabled }: { disabled?: boolean }) => (
+    <div data-testid="resize-handle" data-disabled={String(disabled ?? false)} />
+  ),
 }));
 
 mock.module("@/components/files-panel", () => ({
@@ -596,6 +598,15 @@ describe("AppShell", () => {
     cleanup();
     render(<AppShell>Workspace</AppShell>);
     expect(screen.queryByTestId("project-search-dialog") === null).toBe(true);
+  });
+
+  test("compact disables the sidebar resize handle", () => {
+    isMobile = false;
+    useMachineViewStore.setState({ grouping: "compact" });
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("true");
+    act(() => useMachineViewStore.setState({ grouping: "machine" }));
+    expect(screen.getByTestId("resize-handle").dataset.disabled).toBe("false");
   });
 
   test("in compact, search stays closed and is not delivered when compact is left", async () => {

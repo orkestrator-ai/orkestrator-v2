@@ -87,7 +87,9 @@ export function useSidebarPanelMotion(input: {
         sidebarMotionPins({
           sidebarFrom: sidebarElement.getBoundingClientRect().width,
           sidebarTo: target,
-          mainFrom: mainElement.getBoundingClientRect().width,
+          // The content may still be pinned by an interrupted transition.
+          // Its panel is the authoritative available width.
+          mainFrom: (mainElement.parentElement ?? mainElement).getBoundingClientRect().width,
         }),
       );
       settleTimer.current = setTimeout(settle, SETTLE_MS);

@@ -223,6 +223,8 @@ describe("another machine's facts", () => {
         environment({ agentMailUnread: 1, agentMailFailed: true }),
       ]),
     ).toEqual({
+      working: false,
+      waiting: false,
       coordinator: null,
       home: { deleting: false, buildActive: true, activity: "working", hasUnreadWork: false },
       unreadWork: true,
@@ -238,6 +240,8 @@ describe("another machine's facts", () => {
         environment({ deleting: true, hasUnreadWork: true }),
       ]),
     ).toEqual({
+      working: false,
+      waiting: false,
       coordinator: null,
       home: null,
       unreadWork: false,
@@ -246,3 +250,13 @@ describe("another machine's facts", () => {
     });
   });
 });
+
+for (const activity of ["working", "waiting"] as const) {
+  test("remote ordinary environment " + activity + " contributes unless deleting", () => {
+    const environment = { isProjectHome: false, deleting: false, activity } as FederatedEnvironment;
+    expect(compactRepositoryStatus([remoteMemberFacts([environment])]).ring).toBe(activity);
+    expect(
+      compactRepositoryStatus([remoteMemberFacts([{ ...environment, deleting: true }])]).ring,
+    ).toBeNull();
+  });
+}

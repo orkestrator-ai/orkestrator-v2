@@ -273,6 +273,30 @@ describe("opening a repository", () => {
 });
 
 describe("status on an icon", () => {
+  for (const activity of ["working", "waiting"] as const) {
+    test("ordinary local environment " + activity + " survives remount", async () => {
+      useEnvironmentStore.getState().setEnvironments([
+        localHome,
+        {
+          ...localHome,
+          id: "feature",
+          projectHome: false,
+          agentActivityState: activity,
+          agentActivityUpdatedAt: new Date().toISOString(),
+        },
+      ]);
+      renderSidebar();
+      let [icon] = await findCompactIcons(1);
+      await waitFor(() =>
+        expect(within(icon!).getByTestId("coordinator-activity-icon").dataset.state).toBe(activity),
+      );
+      cleanup();
+      renderSidebar();
+      [icon] = await findCompactIcons(1);
+      expect(within(icon!).getByTestId("coordinator-activity-icon").dataset.state).toBe(activity);
+    });
+  }
+
   test("another machine's working home and unread work", async () => {
     installTwoMachines();
     renderSidebar();
@@ -334,6 +358,46 @@ describe("status on an icon", () => {
 });
 
 describe("the keyboard", () => {
+  test("rotation reopens a hidden sidebar whose handler is still mounted", async () => {
+    renderSidebar();
+    await findCompactIcons(1);
+    act(() => useUIStore.setState({ sidebarOpen: false }));
+    act(() => requestAppShortcut("rotate-sidebar-grouping"));
+    expect(useUIStore.getState().sidebarOpen).toBe(true);
+    expect(useMachineViewStore.getState().grouping).toBe("machine");
+  });
+
+  test("an unreachable saved machine adds no rotation stops", async () => {
+    installDesktopFake({
+      list: connectionList([
+        remoteConnection("leaf", "leaf", "teal", { transport: "unreachable" }),
+      ]),
+      datasets: {},
+    });
+    renderSidebar();
+    await findCompactIcons(1);
+    act(() => requestAppShortcut("rotate-sidebar-grouping"));
+    expect(useMachineViewStore.getState().grouping).toBe("machine");
+    act(() => requestAppShortcut("rotate-sidebar-grouping"));
+    expect(useMachineViewStore.getState().grouping).toBe("compact");
+  });
+
+  test("activity rotation preserves sorting and restores grouping through both stores", async () => {
+    installTwoMachines();
+    useMachineViewStore.setState({ groupingBeforeCompact: "repository" });
+    useUIStore.setState({ environmentSortMode: "activity" });
+    renderSidebar();
+    await findCompactIcons(2);
+    act(() => requestAppShortcut("rotate-sidebar-grouping"));
+    expect(useMachineViewStore.getState().grouping).toBe("repository");
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    expect(await screen.findByTestId("federated-activity-list")).toBeTruthy();
+    act(() => requestAppShortcut("rotate-sidebar-grouping"));
+    expect(useMachineViewStore.getState().grouping).toBe("compact");
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    await findCompactIcons(2);
+  });
+
   test("Up, Down, Home and End move focus; Enter opens", async () => {
     installTwoMachines();
     renderSidebar();

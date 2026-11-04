@@ -150,6 +150,19 @@ describe("animating a width change", () => {
   });
 });
 
+test("reversal measures the panel, not the pinned content", () => {
+  const parent = element(900);
+  const main = element(900, parent);
+  const sidebar = element(344);
+  const { rerender } = render(<Harness mode="full" sidebar={sidebar} main={main} />);
+  rerender(<Harness mode="compact" sidebar={sidebar} main={main} />);
+  main.getBoundingClientRect = () => ({ width: 1188 }) as DOMRect;
+  parent.getBoundingClientRect = () => ({ width: 1100 }) as DOMRect;
+  sidebar.getBoundingClientRect = () => ({ width: 144 }) as DOMRect;
+  rerender(<Harness mode="full" sidebar={sidebar} main={main} />);
+  expect(motion.pins).toEqual({ sidebar: 344, main: 1100 });
+});
+
 describe("the sidebar's content", () => {
   test("stays until a hidden panel has finished closing", async () => {
     const props = { sidebar: element(344), main: element(900) };

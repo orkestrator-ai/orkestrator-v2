@@ -6,6 +6,8 @@ import {
   isDraftRevisionConflict,
 } from "@/lib/draft-conflict";
 
+const desktopClients = new WeakMap<DraftRevisionState, string>();
+
 const writeChains = new Map<string, Promise<void>>();
 const defaultRevisionStates = new Map<string, DraftRevisionState>();
 const clientRevisionStates = new Map<string, DraftRevisionState>();
@@ -77,9 +79,51 @@ export async function loadFileDraft(
   await (writeChains.get(draftKey) ?? Promise.resolve()).catch(() => undefined);
   const draft = await backend.getFileDraft(draftKey);
   const state = revisionStateFor(draftKey, revisionState);
+  desktopClients.delete(state);
   state.revision = draft?.revision ?? 0;
   state.conflictRevision = null;
   return draft;
+}
+
+/** Hand off immediately: main owns ordering even if this renderer disappears. */
+function desktopWrite(
+  command: "save_file_draft" | "delete_file_draft",
+  draftKey: string,
+  state: DraftRevisionState,
+  args: Record<string, unknown>,
+): Promise<void> | null {
+  const host = typeof window !== "undefined" ? window.orkestratorDesktopHost : undefined;
+  if (!host) return null;
+  if (state.conflictRevision !== null) {
+    return Promise.reject(new DraftRevisionConflictError(draftKey, state.conflictRevision));
+  }
+  let clientId = desktopClients.get(state);
+  if (!clientId) {
+    clientId = crypto.randomUUID();
+    desktopClients.set(state, clientId);
+  }
+  const write = host.api
+    .invoke<{ revision: number } | null>("desktop_file_draft_write", {
+      ...args,
+      command,
+      draftKey,
+      clientId,
+      expectedRevision: state.revision,
+    })
+    .then((saved) => {
+      state.revision = saved?.revision ?? 0;
+    })
+    .catch((error: unknown) => {
+      desktopClients.delete(state);
+      return recordFileConflict(draftKey, state, error);
+    });
+  writeChains.set(draftKey, write);
+  void write
+    .finally(() => {
+      if (writeChains.get(draftKey) === write) writeChains.delete(draftKey);
+    })
+    .catch(() => undefined);
+  return write;
 }
 
 export function persistFileDraft(
@@ -91,6 +135,13 @@ export function persistFileDraft(
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
+  const handedOff = desktopWrite("save_file_draft", draftKey, state, {
+    environmentId,
+    filePath,
+    content,
+    originalContent,
+  });
+  if (handedOff) return handedOff;
   return enqueue(draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
@@ -120,6 +171,8 @@ export function discardFileDraft(
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
+  const handedOff = desktopWrite("delete_file_draft", draftKey, state, {});
+  if (handedOff) return handedOff;
   return enqueue(draftKey, async () => {
     if (state.conflictRevision !== null) {
       throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
@@ -143,6 +196,7 @@ export function resolveFileDraftSaveConflict(
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
   if (state.conflictRevision !== null) {
+    desktopClients.delete(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
@@ -157,6 +211,7 @@ export function resolveFileDraftDiscardConflict(
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
   if (state.conflictRevision !== null) {
+    desktopClients.delete(state);
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }

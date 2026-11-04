@@ -230,7 +230,11 @@ gateway itself instead:
   `orkestratorDesktopHost` instead of `orkestrator`, because a context-bridge
   property cannot be replaced. `installLocalDesktopGateway` composes
   `window.orkestrator` from that host and a gateway client, so commands and events
-  cross no bridge. Native APIs and events main raises itself (menus, connection
+  cross no bridge. File-draft saves and deletes are an exception: they are
+  handed immediately to a bounded main-owned IPC queue with per-client CAS
+  revision tracking. Queued writes survive renderer reload or close, including
+  payloads above fetch keepalive limits; a failed revision fences its successors.
+  Native APIs and events main raises itself (menus, connection
   lists, `local-backend-unavailable`) stay on IPC. The window sets no
   `orkestratorGateway`: it is still a local client.
 - It talks to the control listener, the origin main already uses, which never

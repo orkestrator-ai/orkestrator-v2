@@ -1601,3 +1601,30 @@ describe("useNativeComposeDraftPersistence", () => {
     });
   }
 });
+
+test("direct desktop hands off both file revisions before the first response", async () => {
+  const originalHost = window.orkestratorDesktopHost;
+  const pending = deferred<{ revision: number }>();
+  const invoke = mock(() => pending.promise);
+  window.orkestratorDesktopHost = {
+    api: { invoke },
+    baseUrl: "http://127.0.0.1",
+  } as unknown as NonNullable<Window["orkestratorDesktopHost"]>;
+  try {
+    const state = files.createDraftRevisionState();
+    const first = files.persistFileDraft("desktop", "large.txt", "first", "base", state);
+    const second = files.persistFileDraft(
+      "desktop",
+      "large.txt",
+      "latest".repeat(20000),
+      "base".repeat(20000),
+      state,
+    );
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(saveFileDraft).not.toHaveBeenCalled();
+    pending.resolve({ revision: 2 });
+    await Promise.all([first, second]);
+  } finally {
+    window.orkestratorDesktopHost = originalHost;
+  }
+});

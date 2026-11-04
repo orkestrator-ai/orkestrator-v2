@@ -121,6 +121,7 @@ export type CaptureStoreLike = Pick<
   | "hasCapacity"
   | "create"
   | "list"
+  | "readWire"
   | "read"
   | "replaceImage"
   | "acknowledge"

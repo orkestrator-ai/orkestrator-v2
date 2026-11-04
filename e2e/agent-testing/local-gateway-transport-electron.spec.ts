@@ -1,7 +1,7 @@
 import type { ElectronApplication, Page } from "playwright";
 import { _electron as electron } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -296,7 +296,6 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         await expect(entry).toBeVisible({ timeout: 2_000 });
       }).toPass({ timeout: 30_000 });
       await window.mouse.move(0, 0);
-      await window.keyboard.press("Escape");
       await entry.click();
     };
     const focusTerminal = async () => {
@@ -306,13 +305,28 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     };
     const runInTerminal = async (line: string) => {
       await focusTerminal();
-      // Control+C first: Escape, which opening an environment presses, would
-      // otherwise combine with the first typed character at the shell's prompt.
-      await window.keyboard.press("Control+C");
-      await window.keyboard.insertText(line);
+      await window.keyboard.type(line, { delay: 15 });
       await window.keyboard.press("Enter");
     };
 
+    const renderedOutput = () =>
+      window.evaluate(
+        async ({ environmentId }) => {
+          const module = await import(
+            /* @vite-ignore */ String("/src/stores/terminalPortalStore.ts")
+          );
+          const data = module.useTerminalPortalStore
+            .getState()
+            .getTerminal(environmentId, "tab-shell");
+          const buffer = data?.terminal.buffer.active;
+          if (!buffer) return "";
+          return Array.from(
+            { length: buffer.length },
+            (_, i) => buffer.getLine(i)?.translateToString(true) ?? "",
+          ).join("\n");
+        },
+        { environmentId: target.id },
+      );
     await openEnvironment(target.name);
     await runInTerminal("echo READY-$((40+2))");
     const mainState = () =>
@@ -334,6 +348,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
         (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
       );
     await expect.poll(output, { timeout: 30_000 }).toContain("READY-42");
+    await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("READY-42");
     await window.evaluate((session) => {
       const state = globalThis as typeof globalThis & {
         __frames?: { count: number; desynced: number };
@@ -360,6 +375,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       `for i in $(seq 1 ${LINE_COUNT}); do echo LINE-$i; sleep 0.01; done; echo LOAD-$((40+2))`,
     );
     await expect.poll(output, { timeout: 60_000 }).toContain("LOAD-42");
+    await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("LOAD-42");
     await expect.poll(async () => (await frames()).count, { timeout: 30_000 }).toBeGreaterThan(0);
     await mkdir(previewDir, { recursive: true });
     await window.screenshot({ path: path.join(previewDir, `local-transport-${mode}.png`) });
@@ -443,6 +459,7 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       const afterDrop = (await frames()).count;
       await runInTerminal("echo AFTER-RECONNECT-$((40+2))");
       await expect.poll(output, { timeout: 30_000 }).toContain("AFTER-RECONNECT-42");
+      await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("AFTER-RECONNECT-42");
       await expect
         .poll(async () => (await frames()).count, { timeout: 30_000 })
         .toBeGreaterThan(afterDrop);
@@ -455,8 +472,52 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await expect.poll(output, { timeout: 30_000 }).toContain("BACKGROUND-42");
     await openEnvironment(target.name);
     await focusTerminal();
+    await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("BACKGROUND-42");
     await runInTerminal("echo BACK-ACTIVE-$((40+2))");
     await expect.poll(output, { timeout: 30_000 }).toContain("BACK-ACTIVE-42");
+    await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("BACK-ACTIVE-42");
+
+    if (mode === "gateway") {
+      // Delay main's first save so pagehide queues a newer, large revision
+      // while the old IPC response is still pending. No renderer promise is
+      // awaited by the unload listener.
+      await electronApp.evaluate(() => {
+        const original = globalThis.fetch;
+        let delayed = false;
+        globalThis.fetch = (async (input, init) => {
+          if (
+            !delayed &&
+            typeof init?.body === "string" &&
+            JSON.parse(init.body).command === "save_file_draft"
+          ) {
+            delayed = true;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+          return original(input, init);
+        }) as typeof fetch;
+      });
+      await window.evaluate(async (environmentId) => {
+        const drafts = await import(
+          /* @vite-ignore */ String("/src/lib/file-draft-persistence.ts")
+        );
+        const state = drafts.createDraftRevisionState();
+        await drafts.loadFileDraft(environmentId, "teardown.txt", state);
+        void drafts.persistFileDraft(environmentId, "teardown.txt", "earlier", "baseline", state);
+        window.addEventListener(
+          "pagehide",
+          () => {
+            void drafts.persistFileDraft(
+              environmentId,
+              "teardown.txt",
+              "latest".repeat(20000),
+              "baseline".repeat(20000),
+              state,
+            );
+          },
+          { once: true },
+        );
+      }, target.id);
+    }
 
     // A reload rehydrates from the backend, on the same transport.
     await window.reload();
@@ -466,7 +527,21 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
     await expect
       .poll(() => window.evaluate(() => "orkestratorDesktopHost" in window))
       .toBe(mode === "gateway");
+    if (mode === "gateway") {
+      await expect
+        .poll(
+          async () => {
+            const saved = await invoke<{ content: string } | null>("get_file_draft", {
+              draftKey: `file:${target.id}:${encodeURIComponent("teardown.txt")}`,
+            });
+            return saved?.content === "latest".repeat(20000);
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+    }
     expect(await output()).toContain("BACK-ACTIVE-42");
+    await expect.poll(renderedOutput, { timeout: 30_000 }).toContain("BACK-ACTIVE-42");
     await window.screenshot({
       path: path.join(previewDir, `local-transport-${mode}-after-reload.png`),
     });
@@ -541,6 +616,84 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
           environment.id,
         )
         .catch(() => undefined);
+    }
+    if (mode === "gateway") {
+      // Relaunch in non-development mode: a Vite-mode process correctly refuses
+      // IPC from file://. Disposable resources use the production renderer,
+      // backend bundle, preload and trust rules, without installing a package.
+      await closeElectronWithin(app);
+      app = null;
+      const resources = path.join(root, "file-resources");
+      await mkdir(path.join(resources, "bin"), { recursive: true });
+      const bunPath = spawnSync("bun", ["-e", "process.stdout.write(process.execPath)"], {
+        encoding: "utf8",
+      });
+      expect(bunPath.status).toBe(0);
+      await symlink(bunPath.stdout, path.join(resources, "bin", "bun"));
+      await symlink(
+        path.join(repositoryRoot, "apps", "backend", "dist"),
+        path.join(resources, "backend"),
+      );
+      await symlink(path.join(webRoot, "dist"), path.join(resources, "web"));
+      const bootstrap = path.join(root, "file-main.cjs");
+      await writeFile(
+        bootstrap,
+        `Object.defineProperty(process, "resourcesPath", {value: ${JSON.stringify(resources)}}); import(${JSON.stringify(path.join(packageRoot, "dist", "electron", "main.js"))});`,
+      );
+      app = await electron.launch({
+        executablePath: electronExecutable,
+        args: [...ELECTRON_TEST_SWITCHES, bootstrap],
+        cwd: repositoryRoot,
+        env: { ...process.env, ELECTRON_DEV: "0", ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath },
+      });
+      recordElectronDiagnostics(app);
+      dismissStartupDialogs(app);
+      const fileWindow = await app.firstWindow();
+      await expect.poll(() => fileWindow.url(), { timeout: 60_000 }).toMatch(/^file:/);
+      await expect
+        .poll(() => fileWindow.evaluate(() => Boolean(window.orkestrator?.eventStreamConnection)), {
+          timeout: 60_000,
+        })
+        .toBe(true);
+      const fileInvoke = <T>(command: string, args: Record<string, unknown> = {}) =>
+        fileWindow.evaluate(({ command, args }) => window.orkestrator!.invoke<T>(command, args), {
+          command,
+          args,
+        });
+      expect(await fileInvoke("get_config")).toBeTruthy();
+      await fileInvoke("start_environment", { environmentId: target.id });
+      const terminal = await fileInvoke<{ sessionId: string }>("create_local_terminal_session", {
+        environmentId: target.id,
+        cols: 80,
+        rows: 24,
+        terminalKey: "file-smoke",
+      });
+      await fileWindow.evaluate((sessionId) => {
+        (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal = false;
+        let received = "";
+        window.orkestrator!.listen(`terminal-output-${sessionId}`, (payload: unknown) => {
+          if (payload && typeof payload === "object" && "text" in payload)
+            received = (received + String(payload.text)).slice(-8192);
+          if (received.includes("FILE-ORIGIN-42"))
+            (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal = true;
+        });
+      }, terminal.sessionId);
+      await fileInvoke("start_local_terminal_session", { sessionId: terminal.sessionId });
+      await expect
+        .poll(
+          async () => {
+            await fileInvoke("local_terminal_write", {
+              sessionId: terminal.sessionId,
+              data: "echo FILE-ORIGIN-42\n",
+            });
+            return fileWindow.evaluate(
+              () => (globalThis as typeof globalThis & { __fileTerminal?: boolean }).__fileTerminal,
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
+      await fileInvoke("stop_environment", { environmentId: target.id });
     }
     return counts;
   } finally {

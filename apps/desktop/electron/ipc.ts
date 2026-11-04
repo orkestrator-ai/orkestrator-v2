@@ -1,3 +1,4 @@
+import { DesktopFileDraftWrites } from "./desktop-file-draft-writes.js";
 import type { BrowserWindow } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
@@ -64,6 +65,8 @@ type IpcEventLike = {
   senderFrame?: { url: string } | null;
   sender?: {
     id: number;
+    once?(event: string, listener: () => void): unknown;
+    on?(event: string, listener: () => void): unknown;
     capturePage?(): Promise<{ isEmpty(): boolean; toPNG(): Uint8Array }>;
   };
 };
@@ -294,6 +297,9 @@ export function registerMainIpc({
     });
   };
 
+  const fileDraftWrites = new DesktopFileDraftWrites();
+  const draftSenders = new Set<number>();
+
   handle("orkestrator:invoke", async (event, command: unknown, args?: unknown) => {
     const backend = getBackend(event);
     if (!backend) throw new Error("Backend is not initialized");
@@ -302,6 +308,20 @@ export function registerMainIpc({
       args && typeof args === "object" && !Array.isArray(args)
         ? (args as Record<string, unknown>)
         : {};
+    if (command === "desktop_file_draft_write") {
+      const sender = event.sender;
+      if (!sender) throw new Error("Draft sender is unavailable");
+      if (!draftSenders.has(sender.id)) {
+        draftSenders.add(sender.id);
+        const release = () => {
+          draftSenders.delete(sender.id);
+          fileDraftWrites.releaseSender(sender.id);
+        };
+        sender.once?.("destroyed", release);
+        sender.on?.("did-navigate", () => fileDraftWrites.releaseSender(sender.id));
+      }
+      return fileDraftWrites.write(sender.id, safeArgs, backend);
+    }
     return backend.invoke(command, safeArgs);
   });
 

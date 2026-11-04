@@ -3,6 +3,7 @@ import { describe, expect, mock, spyOn, test, setDefaultTimeout } from "bun:test
 import * as dockerImage from "../src/core/docker-image";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
 import * as githubCredential from "../src/core/container-github-credential";
+import { lowPriorityCommand } from "../src/core/process-priority";
 import * as shell from "../src/core/shell";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -725,9 +726,11 @@ exit 1
       ) as Promise<Environment>;
       await waitForPtyProcessCount(1);
 
-      expect(ptySpawn.mock.calls[0]?.[0]).toBe(expectedLocalShellPath());
-      expect(ptySpawn.mock.calls[0]?.[1]?.[0]).toBe("-ilc");
-      expect(ptySpawn.mock.calls[0]?.[1]?.[1]).toContain("bun install && bun run prepare");
+      const setupArgs = ptySpawn.mock.calls[0]?.[1] ?? [];
+      const lowered = lowPriorityCommand(expectedLocalShellPath(), ["-ilc", setupArgs.at(-1)!]);
+      expect(ptySpawn.mock.calls[0]?.[0]).toBe(lowered.command);
+      expect(setupArgs).toEqual(lowered.args);
+      expect(setupArgs.at(-1)).toContain("bun install && bun run prepare");
       expect(ptySpawn.mock.calls[0]?.[2]).toMatchObject({
         cwd: worktreePath,
         cols: 80,
@@ -814,7 +817,7 @@ exit 1
         approval.hash,
       );
       await waitForPtyProcessCount(1);
-      expect(ptySpawn.mock.calls[0]?.[1]?.[1]).toContain("curl https://example.invalid/x | sh");
+      expect(ptySpawn.mock.calls[0]?.[1]?.at(-1)).toContain("curl https://example.invalid/x | sh");
       expect(await context.storage.getEnvironment(environment.id)).toMatchObject({
         setupPhase: "running",
         setupApprovalRequired: false,

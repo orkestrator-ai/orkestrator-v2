@@ -36,6 +36,10 @@ What to keep in mind when changing it:
   invalid and ignores it. A plain-HTTP `[::1]` backend is allowed by the desktop
   app, so `connect-src` opens the `http:` and `ws:` schemes. `https:` already lets
   a script that does run send data anywhere, so this adds no new channel.
+- **Packaged file requests are confined to the real renderer web root.**
+  `installRendererFilePolicy` runs on renderer and realm sessions before load,
+  resolves symlinks and refuses paths outside that root. CSP file-origin
+  `self` alone is not a directory boundary.
 - **Only `index.html` and the design frame document get a policy.** Worker
   scripts have none, so the highlighter's Oniguruma WebAssembly needs no
   `'wasm-unsafe-eval'` in the document's `script-src`.
@@ -45,7 +49,8 @@ What to keep in mind when changing it:
 A `srcdoc` iframe inherits its parent's policy, including through
 `sandbox="allow-scripts"`, so `script-src 'self'` refuses the design runtime's
 inline bootstrap. A production build therefore emits the bootstrap as
-`design-frame.html`, and `designFrameSource` loads that instead. A file cannot
+`design-frame.html`, and `designFrameSource` loads that instead, resolving it
+from the gateway root on nested SPA routes and beside the packaged index. A file cannot
 carry a fresh nonce, so its policy pins the script's SHA-256; authored code still
 cannot execute. A dev server and the hosted client keep the nonce-bearing `srcdoc`.
 

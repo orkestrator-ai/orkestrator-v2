@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { installRendererPermissionPolicy } from "../electron/renderer-permissions";
 
+import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
+
 const RENDERER = "file:///app/web/index.html";
 
 function install(trusted = RENDERER) {
@@ -8,6 +10,7 @@ function install(trusted = RENDERER) {
   let request: ((...args: any[]) => void) | undefined;
   installRendererPermissionPolicy(
     {
+      webRequest: { onBeforeRequest: mock(() => undefined) } as never,
       setPermissionCheckHandler: (handler: any) => {
         check = handler;
       },
@@ -79,4 +82,23 @@ describe("renderer permission policy", () => {
       policy.request("fullscreen", { isMainFrame: true, requestingUrl: "http://127.0.0.1:3000/" }),
     ).toBe(false);
   });
+});
+
+test("checks and requests share one denial diagnostic per permission", () => {
+  const lines: string[] = [];
+  configureLogger({ sink: ({ line }) => lines.push(line) });
+  try {
+    const policy = install();
+    policy.check("media", mainFrame);
+    policy.check("media", mainFrame);
+    policy.request("media", mainFrame);
+    policy.request("geolocation", mainFrame);
+    policy.check("geolocation", mainFrame);
+    policy.check("fullscreen", mainFrame);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("media");
+    expect(lines[1]).toContain("geolocation");
+  } finally {
+    resetLogger();
+  }
 });

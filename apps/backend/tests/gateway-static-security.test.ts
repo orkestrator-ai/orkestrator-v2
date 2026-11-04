@@ -18,6 +18,9 @@ async function servedGateway() {
   const rendererRoot = await createRendererRoot(dataDir, "<!doctype html><title>index</title>");
   await writeRendererAsset(rendererRoot, "assets/app-12345678.js", "console.log('asset');");
   await writeRendererAsset(rendererRoot, DESIGN_FRAME_DOCUMENT, "<!doctype html>");
+  // Uppercase fixture names also exercise this on case-sensitive CI filesystems.
+  await writeRendererAsset(rendererRoot, "INDEX.HTML", "<!doctype html>");
+  await writeRendererAsset(rendererRoot, "DESIGN-FRAME.HTML", "<!doctype html>");
   const { info } = await startGateway({ dataDir, rendererRoot, compression: "off" });
   const get = (pathname: string, headers: Record<string, string> = {}) =>
     requestUrl(`${info.url}${pathname}`, {
@@ -29,7 +32,7 @@ async function servedGateway() {
 describe("gateway document Content Security Policy", () => {
   test("the renderer document carries the policy on every path that serves it", async () => {
     const { get } = await servedGateway();
-    for (const pathname of ["", "index.html", "dashboard"]) {
+    for (const pathname of ["", "index.html", "INDEX.HTML", "dashboard"]) {
       const response = await get(pathname);
       expect(response.status).toBe(200);
       expect(response.headers["content-security-policy"]).toBe(
@@ -57,7 +60,7 @@ describe("gateway document Content Security Policy", () => {
 
   test("the design frame document is sandboxed instead of carrying the renderer's policy", async () => {
     const { get } = await servedGateway();
-    const response = await get(DESIGN_FRAME_DOCUMENT);
+    const response = await get(DESIGN_FRAME_DOCUMENT.toUpperCase());
     expect(response.status).toBe(200);
     expect(response.headers["content-security-policy"]).toBe(
       GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,

@@ -1,5 +1,6 @@
 import type { Session } from "electron";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { installRendererFilePolicy } from "./renderer-file-policy.js";
 import { isTrustedRendererUrl } from "./trusted-renderer-url.js";
 
 const log = createLogger("desktop.permissions");
@@ -24,9 +25,13 @@ const GRANTED_PERMISSIONS: ReadonlySet<string> = new Set([
  * handlers are replaced on every call. Their inputs are the same each time.
  */
 export function installRendererPermissionPolicy(
-  session: Pick<Session, "setPermissionCheckHandler" | "setPermissionRequestHandler">,
+  session: Pick<
+    Session,
+    "setPermissionCheckHandler" | "setPermissionRequestHandler" | "webRequest"
+  >,
   trustedRendererUrl: string,
 ): void {
+  installRendererFilePolicy(session.webRequest, trustedRendererUrl);
   const granted = (permission: string, requestingUrl: string | undefined, isMainFrame: boolean) =>
     isMainFrame &&
     GRANTED_PERMISSIONS.has(permission) &&
@@ -35,15 +40,18 @@ export function installRendererPermissionPolicy(
 
   // A refused permission fails silently in the page, so name each one once.
   const reported = new Set<string>();
-  session.setPermissionCheckHandler((_contents, permission, _origin, details) =>
-    granted(permission, details.requestingUrl, details.isMainFrame),
-  );
-  session.setPermissionRequestHandler((_contents, permission, callback, details) => {
-    const allow = granted(permission, details.requestingUrl, details.isMainFrame);
+  const decide = (permission: string, requestingUrl: string | undefined, isMainFrame: boolean) => {
+    const allow = granted(permission, requestingUrl, isMainFrame);
     if (!allow && !reported.has(permission)) {
       reported.add(permission);
       log.info("denied", { permission });
     }
-    callback(allow);
+    return allow;
+  };
+  session.setPermissionCheckHandler((_contents, permission, _origin, details) =>
+    decide(permission, details.requestingUrl, details.isMainFrame),
+  );
+  session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    callback(decide(permission, details.requestingUrl, details.isMainFrame));
   });
 }

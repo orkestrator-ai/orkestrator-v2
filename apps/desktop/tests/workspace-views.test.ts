@@ -100,7 +100,15 @@ function harness(overrides: Partial<WorkspaceViewsOptions> = {}) {
 
 describe("workspace realms in a desktop window", () => {
   test("a realm is bound before its document loads, on IDs only, with its own storage", async () => {
-    const { views, bound, registered } = harness();
+    const installed: unknown[] = [];
+    const { views, bound, registered } = harness({
+      installPermissionPolicy: (contents) => {
+        expect(
+          (contents as unknown as ReturnType<typeof fakeContents>).loadURL,
+        ).not.toHaveBeenCalled();
+        installed.push(contents);
+      },
+    });
     const parent = fakeParent();
     const { viewId } = await views.open(parent as never, {
       nodeId: "bk_leaf",
@@ -112,6 +120,7 @@ describe("workspace realms in a desktop window", () => {
       nodeIntegration: false,
       sandbox: true,
     });
+    expect(installed).toEqual([view.webContents]);
     expect(bound).toEqual([`realm:${viewId}`]);
     expect(registered).toEqual([view.webContents.id]);
     expect(view.options.webPreferences.partition).toBe(

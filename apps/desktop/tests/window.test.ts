@@ -29,6 +29,7 @@ function createHarness() {
     readonly webContents = {
       mainFrame: {},
       session: {
+        webRequest: { onBeforeRequest: mock(() => undefined) },
         setPermissionCheckHandler: mock((_handler: unknown) => undefined),
         setPermissionRequestHandler: mock((_handler: unknown) => undefined),
       },
@@ -41,7 +42,8 @@ function createHarness() {
     readonly loadFile = mock(async (_filePath: string) => {
       listenersAtLoad.push(Array.from(webContentsListeners.keys()));
       permissionPolicyAtLoad.push(
-        this.webContents.session.setPermissionRequestHandler.mock.calls.length === 1 &&
+        this.webContents.session.webRequest.onBeforeRequest.mock.calls.length === 1 &&
+          this.webContents.session.setPermissionRequestHandler.mock.calls.length === 1 &&
           this.webContents.session.setPermissionCheckHandler.mock.calls.length === 1,
       );
     });

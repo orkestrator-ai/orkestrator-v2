@@ -1,22 +1,21 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { designFrameSource } from "./design-frame-source";
 
-const env = import.meta.env as Record<string, string | undefined>;
+test("production design document resolves beside file index and at the gateway root from SPA routes", () => {
+  for (const [page, expected] of [
+    ["file:///app/web/index.html?realm=workspace", "file:///app/web/design-frame.html"],
+    [
+      "https://gateway.example/projects/123?tab=design",
+      "https://gateway.example/design-frame.html",
+    ],
+    ["https://gateway.example/", "https://gateway.example/design-frame.html"],
+  ] as const)
+    expect(designFrameSource("design-frame.html", page)).toEqual({ src: expected });
+});
 
-describe("designFrameSource", () => {
-  afterEach(() => {
-    delete env.ORKESTRATOR_DESIGN_FRAME_DOCUMENT;
-  });
-
-  test("uses a fresh nonce-bearing srcdoc where no document was built", () => {
-    const source = designFrameSource();
-    if (!("srcDoc" in source)) throw new Error("Expected a srcdoc frame");
-    expect(source.srcDoc).toContain("script-src 'nonce-");
-    expect(designFrameSource()).not.toEqual(source);
-  });
-
-  test("loads the document a production build emitted", () => {
-    env.ORKESTRATOR_DESIGN_FRAME_DOCUMENT = "design-frame.html";
-    expect(designFrameSource()).toEqual({ src: "design-frame.html" });
-  });
+test("development still gets fresh nonce-bearing srcdoc documents", () => {
+  const first = designFrameSource("", "https://gateway.example/");
+  if (!("srcDoc" in first)) throw new Error("Expected srcdoc");
+  expect(first.srcDoc).toContain("script-src 'nonce-");
+  expect(designFrameSource("", "https://gateway.example/")).not.toEqual(first);
 });

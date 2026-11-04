@@ -77,7 +77,7 @@ const log = createLogger("gateway");
 
 /** Only the renderer's own documents carry a policy; a worker script has its own. */
 function staticDocumentContentSecurityPolicy(root: string, filePath: string): string | null {
-  const relativePath = path.relative(root, filePath);
+  const relativePath = path.relative(root, filePath).toLowerCase();
   if (relativePath === "index.html") return GATEWAY_RENDERER_CONTENT_SECURITY_POLICY;
   if (relativePath === DESIGN_FRAME_DOCUMENT) return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
   return null;

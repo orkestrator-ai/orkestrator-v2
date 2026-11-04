@@ -242,11 +242,11 @@ When one of these becomes ready, it joins the lane shown.
 | ST-11 | Done | `store_rows_position` index, `storage-database.ts:361-365` (381b26f90). |
 | ST-12 | No action | Maintainer decided 2026-11-01 to leave pragmas unchanged unless fsync cost still shows (1202 task 2); still as described, `storage-database.ts:291-293`, `:1309`. |
 | ST-13 | Done | Hourly copy and check run in a child process, `storage-backups.ts:223`, `:555` (8a6bc2f84); only the pre-migration snapshot stays synchronous, deliberately, `storage-database.ts:1060-1066`. |
-| ST-14 | Open | Two diffs with `-M`, `commands-files.ts:1005-1029`; exclude per scan, `:979`; see 0440. |
-| ST-15 | Open | Counts every untracked file per scan, `commands-files.ts:1078-1082`; serial in `git-scopes.ts:389-396`; see 0450. |
+| ST-14 | Done 2026-11-04 | One combined diff, the base's commit reused, the exclude file ensured once; see 0440 and [git-scan-caches.md](../../architecture/git-scan-caches.md). |
+| ST-15 | Done 2026-11-04 | Per-worktree stat-keyed counts for local scans; bounded concurrency in `git-scopes.ts`; see 0450. |
 | ST-16 | Open | No gap, `diff-stats-service.ts:929`, `:1089-1097`, `:1126`; see 0420. |
 | ST-17 | Open | Recursive root watch, `worktree-watcher.ts:149-150`, `:233`; fsmonitor option is gone; see 0570. |
-| ST-18 | Open | `demanded` only cleared by `forget`, `git-scopes.ts:168`, `:231-233`; see 0460. |
+| ST-18 | Done 2026-11-04 | Demand lasts 2 min from the last read, then a `reset` event; see 0460. |
 | ST-19 | Partly done | Measurement pruning, `change-ledger.ts:1144`, `measurement-service.ts:213`, `retention.ts:122` (8a6bc2f84); `NOT IN` scan at `change-ledger.ts:931-936` remains, see 0540. |
 | ST-20 | Open | Two `storedBytes` walks, `retention.ts:95`, `:102`; sweep holds the mutex, `object-store.ts:194`; see 0550. |
 | ST-21 | Open | Base64 commands, `commands-registry-terminal.ts:940`, `:960`; two spawns, `commands-files.ts:2335-2361`; see 0580. |

@@ -60,12 +60,14 @@ export const BASELINE_SCHEMA_VERSION = 1;
 export const PHYSICAL_COST = {
   /**
    * `getLocalGitStatusDetailed(…, includeUncommitted=true)` against a branch
-   * baseline: exclude-file lookup (1 git + 1 read), `origin/<ref>` existence
-   * (1 git), name-status + numstat + porcelain (3 git), one read per untracked
-   * file. The fetch goes through the real {@link GitFetchScheduler}.
+   * baseline: `origin/<ref>`'s commit (1 git), filter configuration (1 git), one
+   * combined diff (1 git), porcelain (1 git). The fetch goes through the real
+   * {@link GitFetchScheduler}.
    */
-  localScanGitSpawns: 5,
-  localScanFileReads: 1,
+  localScanGitSpawns: 4,
+  /** A worktree's first scan: its exclude file (1 git + 1 read), each untracked file once. */
+  localFirstScanGitSpawns: 1,
+  localFirstScanFileReads: 1,
   /**
    * One `docker exec` running the framed status script. Until step 04 that
    * script also attempted `git fetch` on every scan; it now reads local refs
@@ -342,12 +344,18 @@ export async function runScenario(
     },
   });
 
+  const scannedWorktrees = new Set<string>();
   const scanLocal = async (worktreePath: string) => {
     metrics.work("git-spawn", PHYSICAL_COST.localScanGitSpawns);
-    metrics.work(
-      "file-read",
-      PHYSICAL_COST.localScanFileReads + input.untrackedFilesPerEnvironment,
-    );
+    // Later scans reuse settled untracked counts and only stat the exclude file.
+    if (!scannedWorktrees.has(worktreePath)) {
+      scannedWorktrees.add(worktreePath);
+      metrics.work("git-spawn", PHYSICAL_COST.localFirstScanGitSpawns);
+      metrics.work(
+        "file-read",
+        PHYSICAL_COST.localFirstScanFileReads + input.untrackedFilesPerEnvironment,
+      );
+    }
     await fetches.ensureFetched(worktreePath, "main");
     return [];
   };

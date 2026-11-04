@@ -251,7 +251,7 @@ describe("git fsmonitor", () => {
       ensureFetched: async () => undefined,
     });
     expect(status.changes).toMatchObject([{ path: "new.txt", status: "?" }]);
-    expect(reads).toHaveLength(3);
+    expect(reads).toHaveLength(2);
     for (const args of reads) {
       expect(args.slice(0, HARDENED_GIT_CONFIG.length)).toEqual([...HARDENED_GIT_CONFIG]);
     }

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { readdirSync } from "node:fs";
+import * as captureFs from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +14,7 @@ import {
 } from "./shell.js";
 
 const posixOnly = process.platform === "win32" ? test.skip : test;
+const darwinOnly = process.platform === "darwin" ? test : test.skip;
 
 function isRunning(pid: number): boolean {
   try {
@@ -93,7 +96,7 @@ describe("runCommand timeout", () => {
             groupPidFile,
             pidFile,
           ],
-          { timeoutMs: 400 },
+          { timeoutMs: 400, waitForDescendants: true },
         ).catch((error: unknown) => error);
 
         expect(failure).toBeInstanceOf(CommandFailedError);
@@ -144,7 +147,7 @@ describe("runCommand timeout", () => {
       const failure = await runCommand(
         "sh",
         ["-c", 'echo $$ > "$1"; while :; do sleep 0.01 & wait; done', "sh", groupPidFile],
-        { timeoutMs: 400 },
+        { timeoutMs: 400, waitForDescendants: true },
       ).catch((error: unknown) => error);
       expect((failure as CommandFailedError).timedOut).toBe(true);
       const rootPid = Number(await readFile(groupPidFile, "utf8"));
@@ -172,7 +175,7 @@ describe("runCommand timeout", () => {
         const failure = await runCommand(
           "sh",
           ["-c", 'echo $$ > "$1"; sleep 30 & exit 0', "sh", groupPidFile],
-          { timeoutMs: 400 },
+          { timeoutMs: 400, waitForDescendants: true },
         ).catch((error: unknown) => error);
         expect(failure).toBeInstanceOf(CommandFailedError);
         expect((failure as CommandFailedError).timedOut).toBe(true);
@@ -441,43 +444,6 @@ describe("runCommand capture", () => {
     });
   }
 
-  posixOnly("applies the overall deadline to a surviving git descendant", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
-    try {
-      const pidFile = path.join(tempDir, "descendant.pid");
-      const started = Date.now();
-      const failure = await runCommand(
-        "git",
-        ["-c", `alias.hold=!sleep 30 & echo $! > '${pidFile}'`, "hold"],
-        { timeoutMs: 300, outputCloseGraceMs: 20 },
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(CommandFailedError);
-      expect((failure as CommandFailedError).timedOut).toBe(true);
-      expect(Date.now() - started).toBeLessThan(10_000);
-      expect(await waitUntilGone(Number((await readFile(pidFile, "utf8")).trim()))).toBe(true);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  posixOnly("keeps git output that arrives within the grace after exit", async () => {
-    const { stdout } = await runCommand(
-      "git",
-      ["-c", "alias.late=!(sleep 0.2; echo late) & exit 0", "late"],
-      {
-        outputCloseGraceMs: 20,
-      },
-    );
-    expect(stdout).toBe("late\n");
-  });
-
-  posixOnly("does not bound other commands' output by the git grace", async () => {
-    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.3; echo late) & exit 0"], {
-      outputCloseGraceMs: 50,
-    });
-    expect(stdout).toBe("late\n");
-  });
-
   test("preserves the missing executable outcome", async () => {
     const failure = await runCommand("orkestrator-nonexistent-shell-test-command").catch(
       (error: unknown) => error,
@@ -485,6 +451,163 @@ describe("runCommand capture", () => {
     expect(failure).toBeInstanceOf(CommandFailedError);
     expect((failure as CommandFailedError).executableMissing).toBe(true);
     expect((failure as CommandFailedError).timedOut).toBe(false);
+  });
+
+  // Bun's pipe readers can miss EOF, through Bun.spawn and child_process alike, so a
+  // child that already exited looked unfinished until its timeout (flake case 1537).
+  test("captures output through files, so completion needs no pipe reader", async () => {
+    const launch = spyOn(Bun, "spawn");
+    try {
+      expect((await runCommand(process.execPath, ["-e", "console.log('ok')"])).stdout).toBe("ok\n");
+      const [, options] = launch.mock.calls[0] as unknown as [string[], Record<string, unknown>];
+      expect(options.stdout).toBeTypeOf("number");
+      expect(options.stderr).toBeTypeOf("number");
+    } finally {
+      launch.mockRestore();
+    }
+  });
+
+  posixOnly("keeps no capture file on disk and no descriptor open", async () => {
+    const original = process.env.TMPDIR;
+    const directory = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
+    process.env.TMPDIR = directory;
+    try {
+      const before = readdirSync("/dev/fd").length;
+      const listed = await runCommand("sh", ["-c", 'ls -A "$1"; echo done', "sh", directory]);
+      expect(listed.stdout).toBe("done\n");
+      for (let index = 0; index < 8; index += 1) {
+        await runCommand("sh", ["-c", "exit 3"]).catch(() => undefined);
+        await runCommand("orkestrator-nonexistent-shell-test-command").catch(() => undefined);
+        await runCommand("sh", ["-c", "sleep 5"], { timeoutMs: 20 }).catch(() => undefined);
+      }
+      expect(readdirSync("/dev/fd").length).toBe(before);
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  posixOnly("does not report an unusable temporary directory as a missing executable", async () => {
+    const original = process.env.TMPDIR;
+    process.env.TMPDIR = path.join(os.tmpdir(), "orkestrator-shell-test-missing-directory");
+    try {
+      const failure = await runCommand("sh", ["-c", "true"]).catch((error: unknown) => error);
+      expect((failure as Error).message).toContain("temporary directory: ENOENT");
+      expect((failure as CommandFailedError).executableMissing).toBeFalsy();
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = original;
+    }
+  });
+
+  posixOnly("keeps each concurrent command's streams apart", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 32 }, (_, index) =>
+        runCommand("sh", ["-c", 'echo "out $1"; echo "err $1" >&2', "sh", String(index)]),
+      ),
+    );
+    results.forEach((result, index) => {
+      expect(result).toEqual({ stdout: `out ${index}\n`, stderr: `err ${index}\n` });
+    });
+  });
+
+  // Bun can lose a macOS child's exit and leave it a zombie (flake case 1537). This
+  // keeps `exited` pending and answers `ps` as that zombie would. The timer is scaled.
+  for (const [status, expectedCode] of [
+    ["0", 0],
+    ["300", 3],
+  ] as const) {
+    darwinOnly(`settles a lost exit from the zombie's status (${status})`, async () => {
+      let nativeChild: ReturnType<typeof Bun.spawn>;
+      const realSpawn = Bun.spawn;
+      const realSpawnSync = Bun.spawnSync;
+      const realSetTimeout = globalThis.setTimeout;
+      const spawned = spyOn(Bun, "spawn").mockImplementation(
+        ((...launch: [string[], object]) =>
+          new Proxy((nativeChild = realSpawn(...launch)), {
+            get(target, key) {
+              if (key === "exited") return new Promise(() => undefined);
+              const value = Reflect.get(target, key) as unknown;
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          })) as unknown as typeof Bun.spawn,
+      );
+      const spawnedSync = spyOn(Bun, "spawnSync").mockImplementation(((
+        command: string[],
+        ...rest: []
+      ) =>
+        command.includes("stat=,xstat=")
+          ? {
+              stdout: Buffer.from(nativeChild.exitCode === null ? "" : `Z ${status}\n`),
+              success: true,
+            }
+          : realSpawnSync(command, ...rest)) as unknown as typeof Bun.spawnSync);
+      const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: Parameters<typeof setTimeout>[0],
+        delay: Parameters<typeof setTimeout>[1],
+        ...args: unknown[]
+      ) => realSetTimeout(callback, delay === 1_000 ? 1 : delay, ...args)) as typeof setTimeout);
+      try {
+        const outcome = await runCommand("sh", ["-c", "echo captured"]).catch(
+          (error: unknown) => error,
+        );
+        if (expectedCode === 0) {
+          expect(outcome).toEqual({ stdout: "captured\n", stderr: "" });
+        } else {
+          expect(outcome).toBeInstanceOf(CommandFailedError);
+          expect((outcome as CommandFailedError).exitCode).toBe(expectedCode);
+          expect((outcome as CommandFailedError).timedOut).toBe(false);
+          expect((outcome as CommandFailedError).stdout).toBe("captured\n");
+        }
+      } finally {
+        timer.mockRestore();
+        spawnedSync.mockRestore();
+        spawned.mockRestore();
+      }
+    });
+  }
+
+  posixOnly("gives a command with no payload a closed pipe, not /dev/null", async () => {
+    const { stdout } = await runCommand("sh", [
+      "-c",
+      "if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then echo pipe; fi; cat; echo eof",
+    ]);
+    expect(stdout).toBe("pipe\neof\n");
+  });
+
+  posixOnly("waits for a descendant holding the pipes and keeps its output", async () => {
+    const { stdout } = await runCommand("sh", ["-c", "(sleep 0.2; echo late) & echo early"], {
+      waitForDescendants: true,
+    });
+    expect(stdout).toBe("early\nlate\n");
+  });
+
+  posixOnly("reports a fatal signal without an exit code", async () => {
+    const failure = await runCommand("sh", ["-c", "kill -KILL $$"]).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).exitCode).toBeNull();
+    expect((failure as CommandFailedError).signal).toBe("SIGKILL");
+    expect((failure as CommandFailedError).timedOut).toBe(false);
+  });
+
+  test("leaves an undefined environment value unset and refuses a NUL argument", async () => {
+    const { stdout } = await runCommand("sh", ["-c", 'echo "[${SHELL_TEST_VALUE-unset}]"'], {
+      env: { PATH: process.env.PATH, SHELL_TEST_VALUE: undefined },
+    });
+    expect(stdout).toBe("[unset]\n");
+    await expect(runCommand("sh", ["-c", "true", "a\0b"])).rejects.toThrow("null bytes");
+  });
+
+  test("reports a missing working directory as a failure to start", async () => {
+    const failure = await runCommand("sh", ["-c", "true"], {
+      cwd: path.join(os.tmpdir(), "orkestrator-shell-test-missing-directory"),
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).executableMissing).toBe(true);
   });
 });
 
@@ -507,8 +630,153 @@ posixOnly("AbortSignal cancels a command without waiting for its independent tim
   }
 });
 
+posixOnly("applies the overall deadline to a surviving git descendant", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-shell-test-"));
+  try {
+    const pidFile = path.join(tempDir, "descendant.pid");
+    const started = Date.now();
+    const failure = await runCommand(
+      "git",
+      ["-c", `alias.hold=!sleep 30 & echo $! > '${pidFile}'`, "hold"],
+      { timeoutMs: 300, waitForDescendants: true },
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(CommandFailedError);
+    expect((failure as CommandFailedError).timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(await waitUntilGone(Number((await readFile(pidFile, "utf8")).trim()))).toBe(true);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+posixOnly("captures late git descendant output when explicitly requested", async () => {
+  const { stdout } = await runCommand(
+    "git",
+    ["-c", "alias.late=!(sleep 0.2; echo late) & exit 0", "late"],
+    {
+      waitForDescendants: true,
+    },
+  );
+  expect(stdout).toBe("late\n");
+});
+
+posixOnly("captures late non-git output when explicitly requested", async () => {
+  const { stdout } = await runCommand("sh", ["-c", "(sleep 0.3; echo late) & exit 0"], {
+    waitForDescendants: true,
+  });
+  expect(stdout).toBe("late\n");
+});
+
+describe("capture filesystem failures", () => {
+  for (const stage of [
+    "second open",
+    "unlink",
+    "read",
+    "read on failure",
+    "read on timeout",
+    "stat",
+    "stat while running",
+  ] as const) {
+    test(`rejects and closes all descriptors after ${stage} failure`, async () => {
+      const opened: number[] = [];
+      const paths: string[] = [];
+      const closed: number[] = [];
+      const originalOpen = captureFs.openSync;
+      const originalClose = captureFs.closeSync;
+      const open = spyOn(captureFs, "openSync").mockImplementation((...args) => {
+        if (stage === "second open" && opened.length === 1) throw new Error("injected EMFILE");
+        const fd = originalOpen(...args);
+        opened.push(fd);
+        paths.push(String(args[0]));
+        return fd;
+      });
+      const close = spyOn(captureFs, "closeSync").mockImplementation((fd) => {
+        closed.push(fd);
+        originalClose(fd);
+      });
+      const fault =
+        stage === "unlink"
+          ? spyOn(captureFs, "unlinkSync").mockImplementation(() => {
+              throw new Error("injected unlink");
+            })
+          : stage.startsWith("read")
+            ? spyOn(captureFs, "readSync").mockImplementation(() => {
+                throw new Error("injected EIO");
+              })
+            : stage.startsWith("stat")
+              ? spyOn(captureFs, "fstatSync").mockImplementation(() => {
+                  throw new Error("injected EIO");
+                })
+              : undefined;
+      try {
+        const script =
+          stage.endsWith("timeout") || stage.endsWith("running")
+            ? "echo output; exec sleep 30"
+            : stage.endsWith("failure")
+              ? "echo output; exit 1"
+              : "echo output";
+        await expect(runCommand("sh", ["-c", script], { timeoutMs: 500 })).rejects.toThrow();
+        expect(opened.length).toBeGreaterThan(0);
+        expect(closed.sort()).toEqual(opened.sort());
+      } finally {
+        fault?.mockRestore();
+        close.mockRestore();
+        open.mockRestore();
+        for (const file of paths) await rm(file, { force: true });
+      }
+    });
+  }
+});
+
+posixOnly("returns at leader exit and leaves a redirected same-group helper alive", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ork-helper-"));
+  const pidFile = path.join(directory, "pid");
+  let pid = 0;
+  try {
+    await runCommand("sh", ["-c", 'sleep 30 >/dev/null 2>&1 & echo $! > "$1"', "sh", pidFile], {
+      timeoutMs: 500,
+    });
+    pid = Number(await readFile(pidFile, "utf8"));
+    expect(isRunning(pid)).toBe(true);
+  } finally {
+    if (pid) process.kill(pid, "SIGKILL");
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+darwinOnly(
+  "unknown group inspection retains explicit waiting until the command deadline",
+  async () => {
+    const original = Bun.spawnSync;
+    const inspection = spyOn(Bun, "spawnSync").mockImplementation(((
+      args: string[],
+      options: object,
+    ) => {
+      if (args[0] === "/bin/ps" && args.includes("-A"))
+        return { success: false, stdout: Buffer.alloc(0) };
+      return original(args, options);
+    }) as typeof Bun.spawnSync);
+    const realKill = process.kill;
+    const kill = spyOn(process, "kill").mockImplementation(((
+      pid: number,
+      signal?: NodeJS.Signals | number,
+    ) => (signal === 0 ? true : realKill(pid, signal))) as typeof process.kill);
+    try {
+      const failure = await runCommand("sh", ["-c", "exit 0"], {
+        waitForDescendants: true,
+        timeoutMs: 50,
+      }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(CommandFailedError);
+      expect((failure as CommandFailedError).timedOut).toBe(true);
+    } finally {
+      kill.mockRestore();
+      inspection.mockRestore();
+    }
+  },
+);
+
 posixOnly(
-  "worktree add preserves a background post-checkout hook writer beyond grace",
+  "worktree add captures a background post-checkout writer when explicitly requested",
   async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "ork-shell-hook-"));
     try {
@@ -534,7 +802,7 @@ posixOnly(
       const result = await runCommand(
         "git",
         ["-C", repo, "worktree", "add", "-b", "feature", path.join(root, "tree")],
-        { outputCloseGraceMs: 10, timeoutMs: 5000 },
+        { waitForDescendants: true, timeoutMs: 5000 },
       );
       expect(result.stderr).toContain("hook-finished");
     } finally {

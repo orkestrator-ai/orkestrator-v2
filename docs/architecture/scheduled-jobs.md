@@ -357,8 +357,9 @@ since it always runs as the owner.
 
 The tool form takes `everyMinutes`; the public action takes `everySeconds`.
 Agent schedule tools also accept a caller `tabId`, required when an
-environment credential has several pull-capable mailboxes. A tab credential
-cannot claim another tab.
+environment credential has several mailboxes it may act as (OpenCode turns
+are told theirs). A tab credential cannot claim another tab, and an
+environment credential cannot claim a native tab that has its own.
 
 ```text
 create_schedule {

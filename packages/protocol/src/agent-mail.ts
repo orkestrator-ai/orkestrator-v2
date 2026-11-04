@@ -964,6 +964,18 @@ export function agentMailCapabilities(
   return { canPull: false, canSend: false, canInject: false };
 }
 
+/**
+ * Whether a call on an environment-wide Orkestrator connection may act as
+ * this mailbox. Every native agent tab except OpenCode's is handed its own
+ * tab-scoped connection, so a call on the shared one naming such a tab comes
+ * from some other session (another tab's agent, a reviewer, a subork) and
+ * must not read or send as it. OpenCode's connection is the shared one, and
+ * terminal agents use whatever the environment exports.
+ */
+export function sharedConnectionMayActAs(tabType: string, agent: AgentPlatform | null): boolean {
+  return tabType !== "agent-native" || agent === "opencode";
+}
+
 /** Compile-time/runtime guard: every provider has an intentional native entry. */
 export const NATIVE_AGENT_MAIL_CAPABILITIES: Readonly<Record<AgentPlatform, MailboxCapabilities>> =
   Object.freeze(

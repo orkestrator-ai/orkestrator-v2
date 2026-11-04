@@ -23,6 +23,7 @@ import {
   openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
   openCodeWorkflowResultTurnTools,
+  openCodeTabMailInstruction,
   openCodeWorkerMailInstruction,
 } from "./opencode-provider-helpers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -204,6 +205,36 @@ describe("OpenCode provider dispatch", () => {
     } finally {
       await provider.dispose?.();
     }
+  });
+
+  test("names the turn's own tab, so the agent never guesses its mailbox", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const tabMail = { environmentId: "env-1", tabId: "tab-opencode" };
+    try {
+      await provider.send("owned-session", "Check my mail", {
+        requestId: "request-tab-mail",
+        tabMail,
+      });
+      const [call] = fake.promptCalls as Array<Record<string, unknown>>;
+      expect(call?.system).toBe(
+        `${agentSystemInstructions()}\n\n${openCodeTabMailInstruction(tabMail)}`,
+      );
+      expect(String(call?.system)).toContain('pass tabId "tab-opencode"');
+      expect(String(call?.system)).toContain('fromTabId "tab-opencode"');
+    } finally {
+      await provider.dispose?.();
+    }
+    // A pipeline worker's signed identity wins over the tab it is shown in.
+    const both = openCodePromptToolOptions(
+      {
+        tabMail,
+        workerMail: { environmentId: "env-1", tabId: "pipeline-worker:p:b:0:b", capability: "c" },
+      },
+      false,
+    ).system;
+    expect(both).toContain('mailCapability set exactly to "c"');
+    expect(both).not.toContain("tab-opencode");
   });
 
   test("a read-only coordinator prompt carries no shared agent instructions", () => {

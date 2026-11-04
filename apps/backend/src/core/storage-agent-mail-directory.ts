@@ -10,6 +10,7 @@ import {
   agentMailboxId,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
+  sharedConnectionMayActAs,
   type AgentMailMailboxSnapshot,
   type AgentMailMailboxBatchSnapshot,
   type AgentMailInboxSnapshot,
@@ -348,10 +349,12 @@ export class AgentMailboxDirectory {
    * The environment's live pull-capable mailboxes. Pipeline workers are left
    * out unless asked for: an environment-wide credential may not claim one,
    * and a send naming only the environment never resolves to one.
+   * `sharedConnection` keeps only the mailboxes an environment-wide
+   * connection may act as (`sharedConnectionMayActAs`).
    */
   async listAgentMailPullTabIds(
     environmentId: string,
-    options: { includePipelineWorkers?: boolean } = {},
+    options: { includePipelineWorkers?: boolean; sharedConnection?: boolean } = {},
   ): Promise<string[]> {
     if (!environmentId.trim()) return [];
     const store = await this.store.snapshot();
@@ -362,6 +365,8 @@ export class AgentMailboxDirectory {
           !mailbox.tombstonedAt &&
           (options.includePipelineWorkers === true || mailbox.kind !== "pipeline") &&
           !(mailbox.pipelineWorker && pipelineWorkerEnded(mailbox.pipelineWorker.status)) &&
+          (options.sharedConnection !== true ||
+            sharedConnectionMayActAs(mailbox.tabType, mailbox.agent)) &&
           agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canPull,
       )
       .sort((a, b) => (a.tabOrdinal ?? 0) - (b.tabOrdinal ?? 0) || a.tabId.localeCompare(b.tabId))

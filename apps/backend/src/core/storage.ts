@@ -1721,7 +1721,7 @@ export class StorageService {
 
   listAgentMailPullTabIds(
     environmentId: string,
-    options: { includePipelineWorkers?: boolean } = {},
+    options: { includePipelineWorkers?: boolean; sharedConnection?: boolean } = {},
   ): Promise<string[]> {
     return this.repos.agentMailboxes.listAgentMailPullTabIds(environmentId, options);
   }

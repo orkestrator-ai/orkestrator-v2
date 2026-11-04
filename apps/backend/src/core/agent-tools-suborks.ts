@@ -59,6 +59,16 @@ export function registerSuborkTools(
       try {
         resolved = await assertCallerMailbox(storage, scope, tabId);
       } catch (error) {
+        // A live tab the shared connection may not act as has its own
+        // credential, so this call is not that tab's own turn: it may be a
+        // subork, and is told so.
+        if (
+          error instanceof AgentMailError &&
+          !scope.tabId &&
+          tabId &&
+          (await storage.listAgentMailPullTabIds(scope.environmentId)).includes(tabId)
+        )
+          throw new Error(REFUSAL);
         if (error instanceof AgentMailError) throw new Error(error.message);
         throw error;
       }

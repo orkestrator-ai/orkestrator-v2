@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 
 import { promises as fs } from "node:fs";
 
@@ -1497,6 +1498,46 @@ describe("NativeAgentService", () => {
           );
           const options = stub.send.mock.calls[0]?.[2] as { artifactGrant?: string };
           expect(options.artifactGrant).toBe(expectGrant ? "artifact-grant-secret" : undefined);
+        },
+      );
+    }
+  });
+
+  test("tells an environment-wide provider's turn which tab's mailbox it is", async () => {
+    for (const [agent, messaging, expectTabMail] of [
+      ["opencode", true, true],
+      ["opencode", false, false],
+      ["cursor", true, false],
+    ] as const) {
+      const stub = createProviderStub(agent, { prepareDispatch: async () => undefined });
+      await withService(
+        {
+          prefix: `orkestrator-native-dispatch-tab-mail-${agent}-`,
+          provider: async () => stub.provider,
+        },
+        async ({ storage, service }) => {
+          const config = await storage.loadConfig();
+          await storage.saveConfig({
+            ...config,
+            global: {
+              ...config.global,
+              agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: messaging },
+            },
+          });
+          await expect(
+            service.dispatchIntent({
+              environmentId: "env-1",
+              agent,
+              logicalSessionKey: "env-env-1:tab-1",
+              prompt: "Check my mail",
+              requestId: `tab-mail-${agent}`,
+              owner: { kind: "environment", projectId: "project-1", environmentId: "env-1" },
+            }),
+          ).resolves.toEqual({ outcome: "accepted", requestId: `tab-mail-${agent}` });
+          const options = stub.send.mock.calls[0]?.[2] as { tabMail?: unknown };
+          expect(options.tabMail).toEqual(
+            expectTabMail ? { environmentId: "env-1", tabId: "tab-1" } : undefined,
+          );
         },
       );
     }

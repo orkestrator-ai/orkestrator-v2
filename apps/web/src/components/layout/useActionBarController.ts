@@ -180,6 +180,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   cleanupTargetRef.current = cleanupTarget;
   const [deletingEnvironmentId, setDeletingEnvironmentId] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
+  // The trash button's confirmation stays with the environment it was opened
+  // for, so a selection change underneath it cannot retarget the deletion.
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const deleteTarget = useEnvironmentStore((state) =>
+    deleteTargetId
+      ? (state.environments.find((environment) => environment.id === deleteTargetId) ?? null)
+      : null,
+  );
   const [mergeDialogOpenState, setMergeDialogOpenState] = useState(false);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   // A row's "Merge PR" menu item selects its environment and asks for the
@@ -391,6 +399,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     !selectedEnvironment.cleanupAfterMergeError &&
     (selectedEnvironment.lifecycleOperation === "deleting" ||
       selectedEnvironment.deletionRequestedAt),
+  );
+  // In flight from this window only. A deletion that failed keeps its record's
+  // marker, and deleting again retries it, as it does from a row.
+  const isSelectedEnvironmentDeleteInFlight = useEnvironmentStore((state) =>
+    selectedEnvironmentId ? state.deletingEnvironments.has(selectedEnvironmentId) : false,
   );
 
   const releaseCreatePrLaunch = useCallback((environmentId: string) => {
@@ -2128,6 +2141,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     deleteEnvironment,
   ]);
 
+  // The trash button: the same deletion a row's Delete runs, which leaves the
+  // environment's workspace itself and reports a failure as a toast.
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTargetId) return;
+    setDeleteTargetId(null);
+    try {
+      await deleteEnvironment(deleteTargetId);
+    } catch (err) {
+      log.error("environment.delete-failed", { error: formatLogError(err) });
+    }
+  }, [deleteEnvironment, deleteTargetId]);
+
   // Handler for merging a PR, optionally deleting its environment after GitHub
   // confirms that the merge completed.
   const handleMergePR = useCallback(
@@ -2316,6 +2341,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     isPRClosed,
     isPRFinished,
     isSelectedEnvironmentDeleting,
+    isSelectedEnvironmentDeleteInFlight,
+    deleteTarget,
+    setDeleteTargetId,
+    handleConfirmDelete,
     canCreateTab,
     canLaunchBackendJob,
     canLaunchResolve,

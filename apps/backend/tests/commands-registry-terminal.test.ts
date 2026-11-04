@@ -1519,10 +1519,7 @@ exit 1
         expect(dockerExec).toContain("tail -c 1");
         expect(dockerExec).toContain("export GIT_OPTIONAL_LOCKS=0");
         expect(dockerExec).toContain(
-          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
-        );
-        expect(dockerExec).toContain(
-          'git -c diff.autoRefreshIndex=false diff --numstat -z -M "$base" $end_ref',
+          'git -c diff.autoRefreshIndex=false diff --raw --numstat -z -M "$base_oid" $end_ref',
         );
       },
     );
@@ -1659,7 +1656,7 @@ exit 1
         const dockerExec = await fs.readFile(logs.exec, "utf8");
         expect(dockerExec).toContain("end_ref=HEAD");
         expect(dockerExec).toContain(
-          'git -c diff.autoRefreshIndex=false diff --name-status -z -M "$base" $end_ref',
+          'git -c diff.autoRefreshIndex=false diff --raw --numstat -z -M "$base_oid" $end_ref',
         );
         expect(dockerExec).not.toContain("git status --porcelain");
         expect(dockerExec).not.toContain("node -e");
@@ -1740,12 +1737,10 @@ exit 1
       });
       const commands = createCommandRegistry();
       const malformedResponses = [
-        "\u001eORKESTRATOR_NAME_STATUS\u001f",
+        "\u001eORKESTRATOR_DIFF\u001f",
         [
-          "\u001eORKESTRATOR_NAME_STATUS\u001f",
+          "\u001eORKESTRATOR_DIFF\u001f",
           "%%%",
-          "\u001eORKESTRATOR_NUMSTAT\u001f",
-          "",
           "\u001eORKESTRATOR_UNTRACKED\u001f",
           "",
           "\u001eORKESTRATOR_END\u001f",
@@ -1785,7 +1780,7 @@ exit 1
       status: "running",
     });
     const commands = createCommandRegistry();
-    const markerPath = "src/\u001eORKESTRATOR_NUMSTAT\u001f.txt";
+    const markerPath = "src/\u001eORKESTRATOR_UNTRACKED\u001f.txt";
     const framedStatus = framedContainerGitStatus(`M\0${markerPath}\0`, `3\t1\t${markerPath}\0`);
 
     await withFakeDocker(

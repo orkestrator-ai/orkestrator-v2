@@ -43,8 +43,8 @@ export function ConnectionStatusBanner({
       data-testid="connection-status-banner"
       className="pointer-events-none fixed inset-x-0 top-2 z-[85] flex justify-center px-4"
     >
-      <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-950/95 px-3 py-1.5 text-xs text-amber-100 shadow-lg">
-        <WifiOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <div className="flex items-center gap-2 rounded-md border border-border bg-popover/95 px-3 py-1.5 text-xs text-popover-foreground shadow-lg backdrop-blur-sm">
+        <WifiOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span>
           Connection to the backend lost. Reconnecting; views show the last data received.
         </span>

@@ -1648,7 +1648,7 @@ describe("build pipeline protocol", () => {
         error: "Build cancelled",
         failureContext: { phase: "building", kind: "prompt-dispatch" },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("validates bounded start requests at the gateway boundary", () => {
@@ -2647,4 +2647,18 @@ test("cancellation timestamp is optional for old snapshots and must be an ISO da
   expect(isBuildPipeline(snapshot())).toBe(true);
   expect(isBuildPipeline({ ...snapshot(), cancelledAt: "2026-11-03T15:00:00.000Z" })).toBe(true);
   expect(isBuildPipeline({ ...snapshot(), cancelledAt: "yesterday" })).toBe(false);
+});
+
+test("validates bounded durable coordinator restart history", () => {
+  const entry = { key: "a".repeat(64), intent: "b".repeat(64), step: { phase: "build", round: 1 } };
+  expect(isBuildPipeline({ ...snapshot(), coordinatorRestarts: [entry] })).toBe(true);
+  for (const coordinatorRestarts of [
+    null,
+    [{}],
+    [{ ...entry, key: "raw-request" }],
+    [{ ...entry, step: { phase: "build", round: 0 } }],
+    [{ ...entry, step: { phase: "build", round: 1, sessionKey: "s".repeat(1025) } }],
+    Array(1025).fill(entry),
+  ])
+    expect(isBuildPipeline({ ...snapshot(), coordinatorRestarts })).toBe(false);
 });

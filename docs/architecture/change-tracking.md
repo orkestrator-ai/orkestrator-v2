@@ -32,10 +32,21 @@ do not add up to `thread-net`.
 | `commit` | the commit's first parent (or the empty tree) → the commit | `changes.scope.commit` |
 | `pull-request` | merge base of the PR base branch and `HEAD` → `HEAD` (local policy, labelled) | `changes.scope.pull-request` |
 
-The Git scopes (`git-scopes.ts`) are computed on first demand through the
-shared admission pool and recomputed after each settled environment scan
-while someone has asked for them. Their resource keys are
+The Git scopes (`git-scopes.ts`) are computed through the shared admission pool
+on every read of a live resource and on the first read of a pinned one, and live
+ones are recomputed after each settled environment scan for
+`gitScopeDemandTtlMs` (2 min) after the last read. Their resource keys are
 `<scope>/environment/<environmentId>/live` (`commit/environment/<id>@<sha>/pinned`).
+
+A view reads a resource once and then follows its events, so reads say nothing
+about whether it is still open. The first scan past the window therefore does
+not recompute: it marks the resource stale and sends a `reset` event
+(`ChangeProjectionEvent`). A view still open reads again, which recomputes and
+renews the demand; if nothing is open, nothing answers and no later scan pays for
+the scope. A view opened later recomputes on its read, as a first read does. A
+missed `reset` is recovered like any other event: a resync re-reads every
+registered key. A request that arrives while the scope is computing starts one
+more pass after it, because the running pass may have read the tree first.
 
 A thread endpoint includes external changes that survive between its
 endpoints. A turn endpoint excludes idle changes because its start is captured
@@ -288,7 +299,7 @@ version `change-tracking-policy-v1`. Starting values: shared admission is the
 existing `git-docker-scan` pool (4 jobs, 1 per target) with at most 2 remote
 captures; 10 s foreground boundary; 100,000 candidates; 16 MiB/file and
 256 MiB/capture retained; 1 s/5 s provisional spacing; 250 ms live-body
-coalescing; 200 rows / 256 KiB pages; 1 GiB soft / 4 GiB hard snapshot
+coalescing; 2 min Git-scope demand; 200 rows / 256 KiB pages; 1 GiB soft / 4 GiB hard snapshot
 storage; 90-day archived retention (a maximum subject to quota, not a
 guarantee). Changing a policy affects future work only.
 
@@ -308,6 +319,17 @@ active turns, open windows, pending captures and in-flight readers. Objects
 are swept only after `orphanGraceMs`. Soft-budget pressure releases the
 oldest archived turn endpoints; the hard budget refuses new captures with an
 explicit reason. A removed body answers `body-expired` with retained counts.
+
+An object's mtime is its orphan fence: it protects an object a capture has
+adopted but no ledger row names yet. `ObjectStore.reuse` reads the fence with
+one `lstatSync` and leaves it alone while it is younger than half the grace,
+which leaves at least the other half for the capture's deadline and the sweep's
+walk of the ledger. An older fence is renewed under the store lock, so a renewal
+can never land between a sweep's `lstat` and its `rm`. The capture's closure
+check skips objects it wrote or proved present in the same pass, unless
+`removedObjects` shows a sweep removed something since the pass began.
+`capture-orphan-fence.test.ts` races retention against a capture on both sides
+of the half-grace boundary.
 
 Measurements are pruned too. Every re-measurement stores its whole file list
 (an environment's net diff against its base can be thousands of files), so

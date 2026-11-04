@@ -33,6 +33,7 @@ export interface CoreFieldsSnapshot {
   envFilePatterns: string[];
   allowedDomains: string[];
   useHostGitHubCredentials: boolean;
+  containerGitHubCredential: NonNullable<GlobalConfig["containerGitHubCredential"]>;
   sshAgentSocketPath: string;
   autoMergeRequireChecks: boolean;
   autoSteer: boolean;
@@ -57,6 +58,7 @@ export interface CoreFieldsSnapshot {
   terminalHistoryRetentionDays: number;
   experimentalCodexRawEventLogging: boolean;
   experimentalScheduling: boolean;
+  localWindowGatewayTransport: boolean;
   experimentalGraphs: boolean;
   debugLogging: boolean;
   debugLogRetentionDays: number;
@@ -75,6 +77,7 @@ const STORED_AS_IS = [
   "envFilePatterns",
   "allowedDomains",
   "useHostGitHubCredentials",
+  "containerGitHubCredential",
   "autoMergeRequireChecks",
   "useHostClaudeCredentials",
   "preferredEditor",
@@ -93,6 +96,7 @@ const STORED_AS_IS = [
   "terminalHistoryRetentionDays",
   "experimentalCodexRawEventLogging",
   "experimentalScheduling",
+  "localWindowGatewayTransport",
   "experimentalGraphs",
   "debugLogging",
   "debugLogRetentionDays",

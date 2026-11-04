@@ -9,10 +9,17 @@ application port in one environment. It does not preview a host port. The tab
 follows the service when a container is recreated or its host binding changes,
 and it never follows a reused port to another application.
 
-Every new transport ships **disabled by default**. The service registry,
-service tabs and terminal-link intents are always on; with every transport
-off, a desktop service tab loads the service's current host port over the
-legacy gateway loopback route ("compatibility" mode).
+The desktop tunnel and the container relay are **on by default**; private
+origins need an operator's domain and certificate, so they stay off. The
+service registry, service tabs and terminal-link intents are always on; with
+the transport turned off, a desktop service tab loads the service's current
+host port over the legacy gateway loopback route ("compatibility" mode), which
+needs a published port.
+
+The defaults apply only to a backend with no saved preview settings. Saved
+settings keep their values, because a saved off cannot be told apart from a
+deliberate one, so an install that ever saved these settings with the switch off
+stays off until it is turned on.
 
 ## Components
 
@@ -23,11 +30,13 @@ legacy gateway loopback route ("compatibility" mode).
 | Backend | `core/preview-readiness.ts` | TCP/TLS/HTTP readiness layers, bounded probing |
 | Backend | `core/preview-access.ts` | Scoped attachments, one-use grants, sessions, revocation |
 | Backend | `preview-tunnel-server.ts` | Desktop tunnel (`/__orkestrator/preview/tunnel`) |
+| Backend | `preview-tunnel-mux-server.ts` | Tunnel v2 sessions: many connections per socket |
 | Backend | `preview-publication.ts` | Private HTTPS origins, bootstrap host |
 | Backend | `preview-relay-supervisor.ts` | Optional in-container relay |
 | Backend | `core/commands-registry-previews.ts` | Trusted control commands |
 | Protocol | `packages/protocol/src/preview-*.ts` | Contracts, HTTP/1.1 and WebSocket codecs, header policy |
 | Desktop | `electron/preview-transport-manager.ts` | Per-service loopback ingress over the tunnel |
+| Desktop | `electron/preview-tunnel-session.ts` | Tunnel v2 sessions and streams, v1 fallback |
 | Desktop | `electron/preview-external-handoff.ts` | External-browser handoff without a credential in a URL |
 | Desktop | `electron/preview-external-forward.ts` | `localhost` forward for the user's own browser (remote backends without a private origin) |
 | Web | `lib/preview-link-external.ts` | Routes Cmd/Ctrl-clicked terminal and agent loopback links to a service |
@@ -109,6 +118,18 @@ restarted server on the same port gets a new endpoint generation and old
 attachments are revoked. A `user-registered` target shows whatever listens on
 the port, and route details say so.
 
+A full check is reused for the registry's 5-second verification window, but a
+`managed-process` target also keeps the listener pids it was verified against.
+Every new upstream connection inside the window repeats step 1 alone (coalesced
+per port and family, no `ps` walk) and compares them. Different pids, no
+listener, or a lookup that cannot answer send it through the full check, so a
+fast restart gets a new generation, and another environment's server on the
+freed port is refused, before the connection opens. Passing the lookup does not
+extend the window. Taking an idle socket from the upstream pool opens nothing
+and looks nothing up: it stays on the process it was opened to.
+`user-registered` and container targets are reused for the window with no
+lookup, as before.
+
 A generated local service waits for its own server. While refused for
 `none`, `unattributed` or `other-environment` it is re-resolved on the
 readiness backoff schedule (1, 2, 4, 8, 16, 30 s), and **Retry** restarts it.
@@ -169,14 +190,32 @@ same endpoint generation, keeping the path, query and fragment
 Ownership is never inferred from the port alone or from the active
 environment, so ambiguous tabs get no offer.
 
+On the desktop with the tunnel available, a matching tab converts by itself when
+it becomes active, so stored legacy tabs migrate without a click. Web clients
+and desktops with the tunnel off keep the button: a web client's service tab
+needs publication, and a tunnel-less conversion would load the same route. A
+`localhost` URL never matches, because the snapshot does not establish which
+address family the legacy view used, so those tabs stay URL tabs. A migrated tab
+moves to the service's own partition, so its cookies and storage from the shared
+legacy partition do not come with it.
+
 ### Desktop tunnel
 
 For each service it previews, Electron opens a loopback ingress
-(`127.0.0.1:<random>`). Each browser connection becomes one WebSocket to the
-backend using subprotocol `orkestrator.preview-tunnel.v1`. The WebSocket
+(`127.0.0.1:<random>`). Each browser connection becomes one stream on a
+WebSocket to the backend using subprotocol `orkestrator.preview-tunnel.v2`:
+one authenticated WebSocket per attachment carries every connection of that
+service (`preview-tunnel-session.ts`, `preview-tunnel-mux-server.ts`; the wire
+contract is in `packages/protocol/src/preview-tunnel-mux.ts`). The WebSocket
 authenticates with a scoped attachment credential in the first frame, never in
 a URL or header. The backend connects only to that service's current target.
 The client never names a host, port, or container.
+
+v2 is negotiated. A backend that speaks it advertises `multiplexSubprotocol`
+in the attachment's tunnel descriptor, and the desktop then offers v2 before
+v1. Against a backend that predates v2 (no advertisement), or one that answers
+v1 anyway, the desktop opens one `orkestrator.preview-tunnel.v1` WebSocket per
+connection, as before. Backends serve both.
 
 - The ingress accepts only requests carrying the per-listener
   `x-orkestrator-preview-ingress` header. Electron injects that header for the
@@ -389,7 +428,7 @@ Tailscale Serve) listens on a different port than `port`.
 
 ### Optional container relay
 
-When the relay is enabled, a container service whose port is **not published**
+While the relay is on (the default), a container service whose port is **not published**
 resolves to `container-relay` instead of `target-unmapped`. The backend runs
 one relay per owned container through `docker exec -i -u node`, preferring
 `node` and falling back to `bun`. The relay:
@@ -470,18 +509,35 @@ sequenceDiagram
   M->>V: load http://127.0.0.1:p/<path> (webRequest adds S for this origin only)
   V->>I: GET /path + S + application Authorization/cookies
   I->>I: verify S, strip S, map Host/Origin to the private authority
-  I->>G: WS /__orkestrator/preview/tunnel (orkestrator.preview-tunnel.v1)
+  I->>G: WS /__orkestrator/preview/tunnel (offers v2, then v1), once per attachment
   I->>G: HELLO {attachmentId, credential}
   G->>A: authenticate (surface, expiry, revocation, generation)
-  I->>G: OPEN
+  G-->>I: READY
+  I->>G: OPEN {stream}, once per browser connection
   G->>U: TCP connect to the verified binding for that generation
-  G-->>I: OPEN_OK, then bounded binary frames both ways
+  G-->>I: OPEN_OK {stream}, then bounded binary frames tagged with the stream, both ways
 ```
 
 ### Connections through the tunnel
 
-Each upstream TCP connection is one outer WebSocket. Idle connections are
-pooled per service; nothing is replayed after a reconnect.
+Each upstream TCP connection is one stream. On v2, a service's streams share
+one outer WebSocket per attachment (up to 32; more open a second session), so
+a page's first burst of parallel requests pays one WebSocket handshake and one
+HELLO, and each further connection costs one OPEN round trip. A session with
+no streams closes after 30 seconds. On v1 each connection is its own
+WebSocket. Idle connections are pooled per service on both; nothing is
+replayed after a reconnect.
+
+Each stream holds its own admission slot (the "Tunnels" limit below counts
+upstream connections on both versions); a v2 session also holds one slot of a
+separate session budget with the same limits. Flow control is per stream: each
+direction may have 256 KiB sent and not yet credited, and the receiver returns
+credit once its consumer has taken the bytes. A stream whose reader stopped
+(paused media) therefore stalls at its window without stalling the other
+streams on the socket. An `OPEN` refused for capacity fails that stream only.
+Revocation, lease expiry and shutdown close the WebSocket and every stream on
+it. A new attachment retires the old one's sessions: they take no new streams
+and close once their current ones end.
 
 A connection refused with `access-expired` or `generation-changed` is retried
 before any application bytes are sent. If a reused replacement is also refused,
@@ -500,7 +556,7 @@ after its attachment was replaced follows the same rule.
 | --- | --- | --- |
 | Definition, endpoint generation, readiness | Backend `PreviewServiceRegistry` | Definitions persist; runtime state is rebuilt on restart under a new epoch |
 | Attachment and credential hash | Backend `PreviewAccessService` | Release (by the client, on the issuing backend, including after a connection change or window close), lease expiry, generation change, service removal, credential rotation, kill switch, shutdown |
-| Tunnel sockets and upstream TCP | Backend `PreviewTunnelServer` | Closing either leg closes both; revocation closes everything tracked for the attachment |
+| Tunnel sockets, streams and upstream TCP | Backend `PreviewTunnelServer` | Closing a stream's upstream releases the stream; closing the socket closes every stream on it; revocation closes everything tracked for the attachment |
 | Idle upstream connections (private origins) | Backend `PreviewUpstreamPool`, per attachment | Revocation, expiry or generation change of the attachment, registry revocation of the service, 2 s idle, publication shutdown |
 | Local ingress listener and ingress secret | Electron `PreviewTransportManager` | Last attachment release plus a short retirement lease, connection change, window close, app quit |
 | Service partition cookies and storage | Electron session | **Reset site data** for that service only; cleared once its service is gone from the backend's list or its connection is forgotten, directory removed on the next start (shared legacy partitions of live connections: see [0042-service-preview-rollout.md](../todo/previews-and-annotations/0042-service-preview-rollout.md)) |
@@ -569,8 +625,8 @@ stored in the `preview-settings` store:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `transport` | off | **Kill switch for new access.** Off: no new attachments of any kind; existing access continues until revoked or expired. |
-| `relay` | off | Enables the container relay; turning it off stops all relays and re-resolves services |
+| `transport` | on | **Kill switch for new access.** Off: no new attachments of any kind; existing access continues until revoked or expired. |
+| `relay` | on | Enables the container relay; turning it off stops all relays and re-resolves services |
 | `publication.enabled` + fields | off | Private HTTPS origins |
 | `publication.upstreamCaFile` | none | Extra CA for HTTPS upstreams (added to, never replacing, system roots) |
 
@@ -587,11 +643,13 @@ token also revokes all preview access.
 ### Rollback
 
 1. Turn **transport** off. Capabilities now report the reason and no new access
-   is issued.
+   is issued. Turn the **relay** off with it: compatibility mode needs a host
+   port, and a service the relay resolves has none, so its tab has nothing to
+   load until it re-resolves as unmapped and offers **Publish port (auto)**.
 2. **Revoke all.** Open tunnels close with 4410 and sessions stop working.
 3. Service definitions, applications, and layouts are kept. The legacy gateway
    route keeps working for old clients.
-4. Turn off publication or the relay if needed. This affects only
+4. Turn off publication if needed. This and the relay switch affect only
    Orkestrator's own listener and relay processes, not Tailscale settings.
 5. Re-enable when ready. Clients get fresh access to the same `serviceId`.
    Nothing that was in flight is replayed.
@@ -645,11 +703,11 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 | Resource | Limit |
 | --- | --- |
 | Service definitions | 32 per environment, 1,024 per backend |
-| Tunnels | 16 per service, 128 per backend, 32 pending handshakes |
+| Tunnels (upstream connections) | 16 per service, 128 per backend, 32 pending handshakes; v2 sessions have the same per-service and per-backend budget, and carry at most 32 streams each |
 | HTTP requests (publication) | 32 active per service, 128 per backend |
 | Upgrades (publication) | 8 per service, 128 per backend |
 | Idle upstream connections (publication) | 8 per access, 64 per backend, 2 s idle |
-| Tunnel queues | 256 KiB per direction, 64 MiB aggregate |
+| Tunnel queues | 256 KiB per direction, 64 MiB aggregate; on v2 also 256 KiB of uncredited data per stream and direction |
 | Headers | 32 KiB, 100 fields; 30 s to first response header |
 | Idle body | 60 s |
 | Upload / download | 128 MiB / 512 MiB per request |
@@ -659,7 +717,9 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 When a limit is exceeded, the request fails with `capacity-exceeded`: HTTP 503
 with `x-orkestrator-preview-error`, or tunnel close code 4429.
 
-A full tunnel queue is backpressure, not a failure. When the queue toward the
+A full tunnel queue is backpressure, not a failure. On v2 a stream out of
+credit pauses its own upstream the same way, and the shared socket is never
+paused, so the backend's pings are always read. When the queue toward the
 client reaches 256 KiB, the backend pauses the upstream and returns the rest of
 the current read to the upstream's buffer. It resumes once the queue drains,
 so the queue never exceeds the limit by more than one frame. Liveness is
@@ -790,7 +850,11 @@ the private `Host` instead. Inbound forwarding headers are always discarded.
   generated local services wait for confirmation. A listener owned by another
   OS user cannot be attributed. Servers started through `orkestrator environment exec` run
   under detached exec workers, which are not managed roots, so they are
-  `unattributed`. An attribution is reused for the 5-second verification
-  window, as container bindings are.
+  `unattributed`. Inside the verification window only the listener's pid is
+  rechecked, so a pid reused within those 5 seconds would pass, and a server
+  replaced between the lookup and the connect (milliseconds, or the length of a
+  lookup already in flight that the connection joined) is not caught until the
+  next connection. Each cold connection burst to a `managed-process` target
+  costs one `lsof` or `ss`, typically tens of milliseconds.
 - Only HTTP/1.1 and WebSockets are carried. HTTP/2-only features, HTTP/3,
   WebTransport, and UDP are not.

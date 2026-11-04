@@ -1136,9 +1136,9 @@ detected by a guard, and the activation records which (P2.9, D4, D12;
   | OpenCode | nothing: one `opencode serve` per directory | every session |
   | Cursor | nothing: the SDK runs in the bridge process | every session |
 
-  Everywhere, SSH keys, a container's runtime credential file and Git's
-  `insteadOf` rewrite stay readable, and a command can read an ancestor
-  process's environment. The remote axis therefore stays advisory on every
+  Everywhere, SSH keys, a container's runtime credential file and, on an image
+  older than `github-git-credential`, Git's token-bearing `insteadOf` rewrite
+  stay readable, and a command can read an ancestor process's environment. The remote axis therefore stays advisory on every
   provider; its reason names the withheld credential only where it is
   withheld and states the gap otherwise.
 - **The inspector** reads `activation.enforcement`, `enforcementReason` and
@@ -1849,8 +1849,9 @@ environment is away, and a wait surviving a backend restart).
   `shell_environment_policy`), and Pi from the session's shell tools and the
   MCP servers the bridge starts. The shared Codex app-server, Pi extensions
   (in the bridge process) and both OpenCode and Cursor (one process per
-  environment) keep it. SSH keys, a container's runtime credential file and
-  Git's `insteadOf` rewrite stay readable everywhere. The remote-ref guard
+  environment) keep it. SSH keys, a container's runtime credential file and, on
+  an image older than `github-git-credential`, Git's token-bearing `insteadOf`
+  rewrite stay readable everywhere. The remote-ref guard
   detects pushes, not other GitHub writes, so the remote axis stays advisory.
 - **Per-node MCP** (item 404). Grok cannot select MCP servers (advisory);
   Cursor read-only turns load only Orkestrator's server, and a selecting Cursor

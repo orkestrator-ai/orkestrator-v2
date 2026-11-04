@@ -6,9 +6,12 @@ import {
   type StoredLayoutKind,
   type StoredRow,
 } from "@orkestrator/protocol/node/storage-database";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+const log = createLogger("storage");
 
 /**
  * The backend's single SQLite database.
@@ -296,8 +299,20 @@ export class StorageDatabase {
       const migrations = [SCHEMA, ...(options.migrations ?? [])];
       const target = migrations.reduce((max, migration) => Math.max(max, migration.version), 0);
       const existing = this.schemaVersion();
-      if (existing > 0 && existing < target) options.beforeMigrate?.(this, existing, target);
-      this.migrate(dataDir, migrations);
+      let step = "snapshot";
+      try {
+        if (existing > 0 && existing < target) options.beforeMigrate?.(this, existing, target);
+        step = "migrate";
+        this.migrate(dataDir, migrations);
+      } catch (error) {
+        log.error("migration.failed", {
+          fromVersion: existing,
+          toVersion: target,
+          step,
+          error: formatLogError(error, { message: false }),
+        });
+        throw error;
+      }
       this.ensureIndexes();
       this.instanceId = (
         this.db.query("SELECT value FROM storage_meta WHERE key = 'instance'").get() as {
@@ -711,18 +726,21 @@ export class StorageDatabase {
 
   /**
    * Synchronous read-modify-write of ONE row, in one IMMEDIATE transaction:
-   * a key of a `record` store, or a key of one collection of an `envelope`
-   * store. Unlike {@link updateStore} it neither parses nor rewrites the other
-   * rows, so writers holding different keys' leases can commit concurrently
-   * without overwriting each other, and a write costs O(row), not O(store).
+   * a key of a `record` store, an item of a keyed `array` store, or a key of
+   * one collection of an `envelope` store. Unlike {@link updateStore} it
+   * neither parses nor rewrites the other rows, so writers holding different
+   * keys' leases can commit concurrently without overwriting each other, and a
+   * write costs O(row), not O(store).
    *
    * `mutate` receives the row's current value (`undefined` when absent) and
    * returns `{ result }` to leave it, `{ result, value }` to write it, or
    * `{ result, delete: true }` to remove it. An absent store is created (an
-   * envelope as `{ [collection]: { [key]: value } }`). A store held whole as a
-   * document falls back to a full read-modify-write; if that document is
-   * unreadable, `unreadable: "throw"` raises {@link StoreCorruptError} instead
-   * of replacing it.
+   * envelope as `{ [collection]: { [key]: value } }`). An array item keeps its
+   * position when updated, a new one goes last, and its value must carry `key`
+   * in the layout's key field, since a row and its item cannot name different
+   * keys. A store held whole as a document falls back to a full
+   * read-modify-write; if that document is unreadable, `unreadable: "throw"`
+   * raises {@link StoreCorruptError} instead of replacing it.
    */
   updateStoreRow<T>(
     store: string,
@@ -737,8 +755,14 @@ export class StorageDatabase {
   ): T {
     const layout = this.layoutFor(store);
     const collection = options.collection ?? "";
-    if (layout.kind === "record" ? collection !== "" : layout.kind !== "envelope" || !collection) {
-      throw new Error(`updateStoreRow requires a record store or an envelope collection: ${store}`);
+    if (
+      layout.kind === "record" || layout.kind === "array"
+        ? collection !== ""
+        : layout.kind !== "envelope" || !collection
+    ) {
+      throw new Error(
+        `updateStoreRow requires a record store, a keyed array store or an envelope collection: ${store}`,
+      );
     }
     if (layout.kind === "envelope" && !layout.collections.includes(collection)) {
       throw new Error(`Store ${store} has no collection ${collection}`);
@@ -747,6 +771,12 @@ export class StorageDatabase {
       const header = this.readStoreHeader(store);
       if (!header || header.mode === "document") {
         const whole = this.readStoreValueInTransaction(store, options);
+        if (layout.kind === "array") {
+          const items = Array.isArray(whole?.value) ? (whole.value as unknown[]) : [];
+          const applied = applyArrayRowUpdate(store, layout, items, key, mutate);
+          if (applied.changed) this.writeStoreInTransaction(store, items);
+          return applied.result;
+        }
         const value = isPlainRecord(whole?.value) ? { ...whole.value } : { ...options.initial?.() };
         const records = collection
           ? isPlainRecord(value[collection])
@@ -777,6 +807,9 @@ export class StorageDatabase {
         throw new StoreCorruptError(store);
       }
       const update = mutate(current);
+      if (layout.kind === "array" && !update.delete && "value" in update) {
+        assertArrayRowKey(store, layout, key, update.value);
+      }
       let document = header.document;
       let nextRow: StoreRow | null = null;
       if (update.delete) {
@@ -798,7 +831,10 @@ export class StorageDatabase {
               .get(store, collection) as { next: number }
           ).next;
         }
-        const owner = layout.kind === "record" ? layout.owner?.(update.value) : undefined;
+        const owner =
+          layout.kind === "record" || layout.kind === "array"
+            ? layout.owner?.(update.value)
+            : undefined;
         this.db
           .query(
             `INSERT INTO store_rows (store, collection, key, position, owner, value)
@@ -917,16 +953,24 @@ export class StorageDatabase {
    * Makes deleted content unrecoverable from the WAL. `secure_delete` zeroes
    * freed pages in the main file; a truncating checkpoint moves the deleting
    * transaction there and discards the old frames. Busy readers can defer
-   * truncation, so this is best effort and never throws.
+   * truncation, so this is best effort and never throws. SQLite reports that
+   * deferral in the checkpoint's result row rather than as an error.
    */
   scrubDeletedContent(): void {
     try {
       // Return a bounded number of freed pages to the filesystem first, so a
       // large delete shrinks the file without one long blocking vacuum.
       this.db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_PAGES})`);
-      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
+      const { busy } = this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number };
+      if (busy === 0) log.recovered("scrub.checkpoint-failed", "scrub");
+      else log.throttled("warn", "scrub.checkpoint-failed", { scope: "scrub", kind: "busy" });
+    } catch (error) {
       // A concurrent reader keeps the WAL alive; the next checkpoint scrubs it.
+      log.throttled("warn", "scrub.checkpoint-failed", {
+        scope: "scrub",
+        error,
+        fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+      });
     }
   }
 
@@ -1311,11 +1355,17 @@ export class StorageDatabase {
     const heartbeat = setInterval(() => {
       if (this.closed) return;
       try {
-        this.db
+        const renewed = this.db
           .query("UPDATE leases SET heartbeat_at = ? WHERE name = ? AND owner = ?")
           .run(Date.now(), name, owner);
-      } catch {
+        if (renewed.changes > 0) log.recovered("lease.heartbeat-failed", name);
+      } catch (error) {
         // A missed heartbeat only shortens the lease; the next one retries.
+        log.throttled("warn", "lease.heartbeat-failed", {
+          scope: name,
+          error,
+          fields: () => ({ error: formatLogError(error, { message: false, stack: false }) }),
+        });
       }
     }, heartbeatMs);
     heartbeat.unref?.();
@@ -1346,6 +1396,50 @@ function isUnchanged(
 
 function rowId(collection: string, key: string): string {
   return `${collection}\u0000${key}`;
+}
+
+type ArrayStoreLayout = Extract<StoreLayout, { kind: "array" }>;
+
+function assertArrayRowKey(
+  store: string,
+  layout: ArrayStoreLayout,
+  key: string,
+  value: unknown,
+): void {
+  const field = layout.key ?? "id";
+  if (!key || !isPlainRecord(value) || value[field] !== key) {
+    throw new Error(`Array store ${store} row ${field} must equal its non-blank key`);
+  }
+}
+
+/**
+ * {@link StorageDatabase.updateStoreRow} on an array value that is held whole,
+ * in place: the first item carrying `key` is the row, and a delete removes
+ * every item carrying it, since a value held whole may repeat a key.
+ */
+export function applyArrayRowUpdate<T>(
+  store: string,
+  layout: ArrayStoreLayout,
+  items: unknown[],
+  key: string,
+  mutate: (current: unknown) => RowUpdate<T>,
+): { result: T; changed: boolean } {
+  const field = layout.key ?? "id";
+  const matches = (item: unknown) => isPlainRecord(item) && item[field] === key;
+  const index = items.findIndex(matches);
+  const update = mutate(index < 0 ? undefined : items[index]);
+  if (update.delete) {
+    if (index < 0) return { result: update.result, changed: false };
+    for (let at = items.length - 1; at >= index; at -= 1) {
+      if (matches(items[at])) items.splice(at, 1);
+    }
+    return { result: update.result, changed: true };
+  }
+  if (!("value" in update)) return { result: update.result, changed: false };
+  assertArrayRowKey(store, layout, key, update.value);
+  if (index < 0) items.push(update.value);
+  else items[index] = update.value;
+  return { result: update.result, changed: true };
 }
 
 /**

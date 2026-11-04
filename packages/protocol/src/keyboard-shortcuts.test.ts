@@ -99,6 +99,21 @@ describe("matchAppShortcut", () => {
     }
   });
 
+  test("⌘⇧D and Ctrl+Shift+D rotate the sidebar's group-by mode; ⌘⇧G stays the run-script dialog's", () => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(matchAppShortcut(chord({ ...modifier, key: "D", code: "KeyD" }))).toBe(
+        "rotate-sidebar-grouping",
+      );
+      expect(matchAppShortcut(chord({ ...modifier, key: "G", code: "KeyG" }))).toBeNull();
+      expect(
+        matchAppShortcut(chord({ ...modifier, shiftKey: false, key: "d", code: "KeyD" })),
+      ).toBeNull();
+    }
+    const rotate = appShortcut("rotate-sidebar-grouping");
+    expect(rotate.owner).toBe("window");
+    expect(rotate.fromPreviews).toBe(false);
+  });
+
   test("needs exactly one of ⌘ and Ctrl, and no Alt", () => {
     expect(matchAppShortcut(chord({ shiftKey: false }))).toBeNull();
     expect(matchAppShortcut(chord({ metaKey: true, ctrlKey: true, shiftKey: false }))).toBeNull();

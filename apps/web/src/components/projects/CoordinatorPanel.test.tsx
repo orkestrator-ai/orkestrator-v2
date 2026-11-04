@@ -875,6 +875,22 @@ describe("CoordinatorPanel", () => {
       expect(mergeDialog() === null).toBe(true);
     });
 
+    test("a fast-forward the backend made after a slow fetch is not synced again", async () => {
+      prepareUnassignedLaunch();
+      checkUpstream.mockImplementation(async () => ({
+        offer: false,
+        reason: "fast-forwarded",
+        status: behindGit({ behind: 0, headCommit: firstUpstreamTip }),
+      }));
+      render(<CoordinatorPanel projectId="project-1" />);
+      await screen.findByTestId("native-agent");
+      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+      expect(syncGit).not.toHaveBeenCalled();
+      expect(screen.queryByText(/commits? behind/)).toBeNull();
+      expect(mergeDialog() === null).toBe(true);
+    });
+
     test.each(["turn-running", "declined", "blocked"] as const)(
       "sends without merging when the backend answers %s",
       async (reason) => {
@@ -1881,8 +1897,8 @@ describe("CoordinatorPanel", () => {
     await screen.findByText("Clear failed once");
     fireEvent.click(screen.getByRole("button", { name: /Clear 1 finished/ }));
     await waitFor(() => {
-      expect(screen.queryByText("Clear failed once")).toBeNull();
-      expect(screen.queryByText("PR #420")).toBeNull();
+      expect(screen.queryByText("Clear failed once") === null).toBe(true);
+      expect(screen.queryByText("PR #420") === null).toBe(true);
     });
     expect(hideWork).toHaveBeenLastCalledWith("project-1", ["finished-follow"]);
   });

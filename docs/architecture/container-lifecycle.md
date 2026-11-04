@@ -393,11 +393,12 @@ re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserve
 | Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
 | OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions, console accounts and selected organization) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), `storage/` (the legacy-migration index and each session's saved change list, `session_diff/`), the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
-| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, re-imported on every start), other `~/.cursor` auxiliaries |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor/mcp.json` (a staged input: snapshotted at creation, brought back in step on every start), other `~/.cursor` auxiliaries |
 | Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
 
-Provider MCP configuration is never preserved in the container: the
-entrypoint copies it from the staged inputs on every boot. A container
+Provider MCP configuration is never preserved in the container: on every boot
+the entrypoint makes it match the staged inputs again
+([Input stamps](#input-stamps-staged-inputs5)). A container
 environment's own MCP changes live in the backend's environment overlay
 (`mcp-environment-overlays` state root, keyed by environment id), which the
 backend writes back over the fresh copies after every boot, so they survive
@@ -542,7 +543,7 @@ one any more.
 | --- | --- | --- | --- |
 | `ORKESTRATOR_CONTAINER_REPLACEMENT=paused` | Permanent | New rebuilds and migrations refused; recovery unaffected | Container lifecycle. Kept: it only ever refuses new work |
 | `ORKESTRATOR_CONTAINER_STORAGE=legacy-layer` | Removed 2026-10-25 | Ignored | It kept new runtimes on the writable layer as a fallback until volume storage passed on every platform; the rootless Linux run on 2026-10-25 was the last ([container qualification](../development/container-qualification.md#rootless-linux-host-2026-10-25)). A backend up to 2.30.0-beta still honours it and reports `disabled-by-configuration`, which the protocol and the rebuild section keep for that reason. `scripts/qualify-backend-upgrade-rollback.ts` sets it on its old release (v2.21.0) |
-| `ORKESTRATOR_EGRESS=in-container` | Egress gateway rollout cap, not a legacy path | A gateway-capable image's restricted runtime keeps its firewall inside, with `NET_ADMIN`, where a root terminal can change it | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)). Remove once the gateway has been qualified on Linux Engine and rootless |
+| `ORKESTRATOR_EGRESS=in-container` | Removed 2026-11-04 | Ignored; a gateway-capable image's restricted runtime always gets a gateway | It kept the firewall inside the runtime, with `NET_ADMIN`, where a root terminal can change it. There is no longer a switch back if the gateway fails on a host; see [0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2 for what is still unproved on rootless. The runtime's own `ORKESTRATOR_EGRESS=gateway` value, which its root entrypoint records, is a different thing and stays |
 | `ORKESTRATOR_NETWORK_POLICY=2` | Policy 3 rollout cap, not a legacy path | A policy 3 image gets policy 2: every port of an allowed address stays open, still on the environment's own network | Network isolation ([0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)) |
 | `ORKESTRATOR_PORTABLE_INPUTS=host-mounts` | Removed 2026-10-25 | Ignored | It bound whole host agent homes read-only and put the Anthropic key in `docker inspect` |
 | `ORKESTRATOR_NETWORK_POLICY=1` | Removed 2026-10-25 | Ignored; a capable image gets at least policy 2 | It joined the shared bridge, where the legacy firewall allows the whole gateway `/24`, siblings included. Exhausted address pools are fixed by widening Docker's `default-address-pools`, as the error says |
@@ -552,7 +553,7 @@ What still exists in the legacy shapes, and what handles it:
 | Resource | Handled by |
 | --- | --- |
 | Current runtime on the writable layer | "Rebuild (keeps files)" or `orkestrator environment recreate` (a `migrate`); never migrated by a start, read or status refresh |
-| Current runtime with host mounts or policy 1 (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy. Any rebuild creates the new runtime from the current image |
+| Current runtime with host mounts, policy 1 or an in-container firewall (an older image, or created while a removed switch was set) | Kept until rebuilt; `get_environment_inputs` reports `host-mounts`, the network status reports the policy and `enforcement`. Any rebuild creates the new runtime from the current image |
 | Recovery copy of a legacy runtime | Listed, restored (swapped back as it was) and discarded like any copy; removed with the environment by the cleanup ledger |
 | `legacy-unadopted` container (from before owner labels) | Offered for reattachment in the cleanup review, never removed by it |
 
@@ -845,6 +846,57 @@ and the environment's inputs section says to rebuild (`unreadableOnRootless`,
 - Unreferenced input revisions are pruned only after 30 minutes, so a staging
   or container creation still in progress keeps its revision.
 
+### Input stamps (`staged-inputs=5`)
+
+The entrypoint used to copy every input into the home on every start. From
+`staged-inputs=5`, `import_agent_input` in `docker/entrypoint.sh` skips an input
+when copying it would change nothing. The result of a start is the same as a
+full copy's, apart from the removal below.
+
+- **What counts as unchanged.** A tree's content digests and listing match its
+  stamp, and the home still holds those bytes at real paths, with no link at any
+  listed file or directory. A single file only has to match the home byte for
+  byte. So an edited or deleted import comes back, and a damaged or forged stamp
+  can only cause a copy. The check reads contents because neither the revision
+  name nor file times say what changed: the backend rewrites a revision in place
+  (the logins before every start, a revocation's scrub, a refreshed MCP default)
+  and the relay's `tar` keeps whole seconds.
+- **Copying.** Anything else runs the same copy helpers as before, with the same
+  bounds and link rules. A copy that warned is not stamped as complete, so it
+  runs again and warns again. Ownership is recorded only after a helper succeeds;
+  a refused entry never grants deletion authority over local files. Previously
+  owned paths remain tracked across failed imports. If the tools fail, the input is copied.
+- **Removal.** A stamp also lists the paths its input imported, so one that has
+  left the mounts leaves the home: a file, a directory it emptied, or a whole
+  provider's inputs after a revocation. Nothing else is removed, so a CLI's own
+  files beside the imports stay. A path through a link or `..` is refused, and a
+  mount `node` cannot open (a failed relay) removes nothing. Failed file removals
+  warn and keep their ownership history so the next start retries them.
+- **Logins** (`.credentials.json`, Codex's, Grok's, OpenCode's and Pi's
+  `auth.json`) are never skipped, and go through `restrict_imported_login` on every
+  start as before. Their stamp is a digest of the home's copy after the import. If
+  the mount no longer has the login and the copy is still exactly that one, it is
+  removed. A copy that differs was pushed by the backend or made in the container,
+  and stays with the backend's own paths, which race the entrypoint and must keep
+  winning. Claude startup cleanup, publication and digest attribution share an
+  exclusive `flock` on `.credentials.json.orkestrator-lock` with both backend
+  publication commands. The lock file stays in place so concurrent writers always
+  lock the same inode. For Claude a pushed copy is therefore stripped of its refresh tokens
+  but not removed after a host sign-out, as before
+  ([4580](../todo/containers-and-environments/4580-input-stamp-follow-ups.md)).
+- **Where it lives.** `~/.orkestrator-inputs`, mode `0700`, in the container
+  layer, so a new runtime starts with a full copy. It holds names and digests,
+  never contents. The workload can write it, so it is not a security boundary, and
+  it does not need to be: the workload can already rewrite the imports themselves.
+  A link there is replaced, never written through.
+- **Older images** have no stamps and keep their full copy. The backend stages and
+  binds the same either way, so there is no gate to check.
+
+The entrypoint reports counts only (`Agent inputs: N unchanged, M copied`). The
+relay in `network-policy-entrypoint.sh` still runs in full on every boot where it
+applies. Timings are in
+[1202](../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 15.
+
 ### Project seed files
 
 The project folder's own `.env`, `.env.local` and `opencode.json` are copied
@@ -1027,7 +1079,8 @@ the network namespace, and the runtime joins it (`--network
 container:<gateway id>`) with no added capability, so nothing in the runtime,
 `orkroot` terminals included, can change the rules. Before this, the
 firewall ran inside the runtime, which needed `NET_ADMIN`; that remains for
-older images and under the `ORKESTRATOR_EGRESS=in-container` rollout cap.
+older images, and for runtimes created under the removed
+`ORKESTRATOR_EGRESS=in-container` rollout cap, until they are rebuilt.
 The network status reports `enforcement` (`gateway`, `container`, `none`)
 and the Network section says whether a root terminal can change the rules.
 
@@ -1258,7 +1311,8 @@ not keep answering for a container that just ended. A memory update below curren
 | --- | --- | --- |
 | Container stdout/stderr | `local` driver, 10 MiB × 3 (new runtimes, when the daemon offers `local`) | `logDriverArguments` |
 | Bridge/server output | 5 MiB × 3 per file, lines cut at the file size | `orkestrator-log-writer` |
-| Startup failure tail | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
+| Previous run's bridge/server log | One file, up to 5 MiB, the active file at the last relaunch | `keepPreviousLogCommand` |
+| Startup failure tail, `get_*_server_log` | 64 KiB and 200 lines | `boundedTailCommand` / `boundDiagnosticTail` |
 | `get_container_logs` | ≤ 2,000 lines and 512 KiB | registry |
 | Follow record | 16 KiB, UTF-8 decoded incrementally | `ContainerLogService` |
 | Replay ring | 1 MiB and 2,000 records per source | `ContainerLogService` |
@@ -1281,6 +1335,39 @@ output whatever `stdbuf` asks, and mawk exited when the file could not be
 opened. Only a line still waiting for its newline is held, and at most 64 KiB
 of it before it is split, so output without newlines stays bounded. An image
 built before the rewrite keeps the old behaviour until it is rebuilt.
+
+### The previous run
+
+A relaunch used to delete the bridge log, so the log that explained a crash went
+exactly when it was needed. Every launch script now runs `keepPreviousLogCommand`
+first, which moves the log to its `.prev.log` name:
+
+| Server | Active log | Previous run |
+| --- | --- | --- |
+| OpenCode | `/tmp/opencode-serve.log` | `/tmp/opencode-serve.prev.log` |
+| Claude | `/tmp/claude-bridge.log` | `/tmp/claude-bridge.prev.log` |
+| Codex | `/tmp/codex-bridge.log` | `/tmp/codex-bridge.prev.log` |
+| Cursor | `/tmp/cursor-bridge.log` | `/tmp/cursor-bridge.prev.log` |
+| Grok | `/tmp/grok-acp-bridge.log` | `/tmp/grok-acp-bridge.prev.log` |
+| Pi | `/tmp/pi-bridge.log` | `/tmp/pi-bridge.prev.log` |
+
+- **It works on every image.** The move is launch-script shell, not image content,
+  so it applies at the next bridge start whichever image the container runs, with
+  or without the rotating writer.
+- **The new run's log starts clean,** so a startup failure's attached tail reads
+  only that attempt. A rename keeps the file's 0600 mode.
+- **Keeping output never stops a start.** The OpenCode script runs under `set -e`,
+  so a first start with no log and a move that fails must both leave status 0. A
+  failed move removes the log, as the relaunch always did.
+- **An empty log moves nothing,** so a run that wrote nothing cannot displace the
+  log of the crash before it. Otherwise only the last relaunch is kept: a run of
+  relaunches leaves one previous log, and rotated `.1` and `.2` files are not moved.
+
+`get_*_server_log` takes an optional `previous: true` to read that file, under the
+same 64 KiB and 200 line bounds and the same redaction. Only an explicit `true`
+selects it, a call without it reads the active log as before, and no previous log
+reads as empty. The web client's getters do not pass it, and it has none for Cursor,
+Grok or Pi; a diagnostics export is the likely first consumer.
 
 `open_container_logs` / `read_container_logs` / `close_container_logs` share
 one `docker logs -f` per container among subscribers; a read renews the lease,

@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/parent-watchdog";
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
+import { logUnhandledRejection } from "@orkestrator/protocol/node/process-failure-log";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
 import { CredentialError } from "./acp-credentials.js";
@@ -13,7 +14,6 @@ import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } fr
 import {
   HttpError,
   PARENT_WATCHDOG_INTERVAL_MS,
-  cursorToolReplayProcesses,
   hostname,
   port,
   provider,
@@ -22,8 +22,7 @@ import {
 } from "./acp-context.js";
 import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
-import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.acp");
 
@@ -51,6 +50,13 @@ export const server = createServer((request, response) => {
         return;
       }
       const status = error instanceof HttpError ? error.status : 500;
+      // A client that hung up aborted this route; nobody is waiting on the answer.
+      if (status === 500 && !controller.signal.aborted) {
+        log.warn("http.route-failed", {
+          method: request.method,
+          error: formatLogError(error, { message: false }),
+        });
+      }
       json(response, status, { error: error instanceof Error ? error.message : String(error) });
     })
     .finally(stopWatchingClient);
@@ -65,12 +71,8 @@ export function shutdown(): Promise<void> {
   shutdownPromise = (async () => {
     for (const state of sessions.values()) {
       for (const approval of Array.from(state.approvals.values())) approval.respond();
-      cancelCursorToolMetadataReconcile(state);
     }
-    await Promise.allSettled([
-      ...[...sessions.values()].map((state) => state.child?.close()),
-      ...[...cursorToolReplayProcesses].map((child) => child.close()),
-    ]);
+    await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
     await flushStreamingPersist();
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();
@@ -79,7 +81,7 @@ export function shutdown(): Promise<void> {
 
 // A dropped promise must not take this bridge — and every session it is
 // serving — down with it.
-installFatalRejectionGuard({ label: "[acp-bridge]" });
+installFatalRejectionGuard({ label: "[acp-bridge]", onRejection: logUnhandledRejection });
 
 export const parentPid = parseParentPid(process.env[PARENT_PID_ENV]);
 if (parentPid !== null) {

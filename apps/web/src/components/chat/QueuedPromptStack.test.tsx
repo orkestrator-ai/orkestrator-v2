@@ -402,7 +402,31 @@ describe("QueuedPromptStack without a queue manager", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /View queued prompts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /View queued prompts/ }) === null).toBe(true);
     expect(screen.getByText("1 queued").getAttribute("aria-hidden")).toBeNull();
+  });
+
+  test("shows why a row waits for the turn under its text", () => {
+    render(
+      <QueuedPromptStack
+        queue={{
+          length: 1,
+          items: [
+            {
+              id: "q1",
+              text: "First queued",
+              note: "Claude cannot be steered here, so this is sent when the turn ends.",
+              onEdit: () => {},
+            },
+          ],
+        }}
+        onExit={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("compose-queue-item-note").textContent).toBe(
+      "Claude cannot be steered here, so this is sent when the turn ends.",
+    );
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ })).toBeNull();
   });
 });

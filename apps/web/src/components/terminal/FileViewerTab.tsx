@@ -32,6 +32,10 @@ const LazyMarkdownEditorTab = lazy(async () => ({
   default: (await import("@/components/markdown/MarkdownEditorTab")).MarkdownEditorTab,
 }));
 
+const LazyHtmlFileTab = lazy(async () => ({
+  default: (await import("@/components/html/HtmlFileTab")).HtmlFileTab,
+}));
+
 const LazyDiffViewerTab = lazy(async () => ({
   default: (await import("./DiffViewerTab")).DiffViewerTab,
 }));
@@ -55,6 +59,8 @@ const IMAGE_EXTENSIONS = new Set([
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 
+const HTML_EXTENSIONS = new Set(["html", "htm"]);
+
 /** Get the file extension from a path */
 function getFileExtension(filePath: string): string {
   const lastDot = filePath.lastIndexOf(".");
@@ -72,7 +78,12 @@ export function isMarkdownFile(filePath: string): boolean {
   return MARKDOWN_EXTENSIONS.has(getFileExtension(filePath));
 }
 
-export type FileViewerKind = "diff" | "image" | "markdown" | "text";
+/** Check if a file opens on a rendered preview of its markup. */
+export function isHtmlFile(filePath: string): boolean {
+  return HTML_EXTENSIONS.has(getFileExtension(filePath));
+}
+
+export type FileViewerKind = "diff" | "image" | "markdown" | "html" | "text";
 
 export function getFileViewerKind(
   filePath: string,
@@ -83,6 +94,7 @@ export function getFileViewerKind(
   if (options.showDiff && options.hasDiffData) return "diff";
   if (isImageFile(filePath)) return "image";
   if (isMarkdownFile(filePath)) return "markdown";
+  if (isHtmlFile(filePath)) return "html";
   return "text";
 }
 
@@ -293,6 +305,7 @@ export function FileViewerTab({
   const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
 
   const isMarkdown = isMarkdownFile(filePath);
+  const isHtml = isHtmlFile(filePath);
   const viewerKind = getFileViewerKind(filePath, {
     showDiff,
     hasDiffData: hasDiffTarget,
@@ -680,6 +693,28 @@ export function FileViewerTab({
         renderError={renderEditorError}
       >
         <LazyMarkdownEditorTab
+          tabId={tabId}
+          filePath={filePath}
+          initialContent={content}
+          language={detectedLanguage}
+          lineNumber={lineNumber}
+          columnNumber={columnNumber}
+          navigationRequestId={navigationRequestId}
+          isActive={isActive}
+          isSaving={isSaving}
+          onSave={saveFile}
+        />
+      </LazyLoadBoundary>
+    );
+  }
+
+  if (isHtml && content !== null) {
+    return (
+      <LazyLoadBoundary
+        loadingFallback={renderEditorFallback("Loading HTML view...")}
+        renderError={renderEditorError}
+      >
+        <LazyHtmlFileTab
           tabId={tabId}
           filePath={filePath}
           initialContent={content}

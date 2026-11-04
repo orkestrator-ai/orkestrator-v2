@@ -679,12 +679,6 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
   expect(sessionId, "the Run Commands tab's terminal session").toBeTruthy();
   await invoke("local_terminal_write", { sessionId, data: "\u0003" });
   await expect.poll(() => alive(pidOf(before)), { timeout: 30_000 }).toBe(false);
-  // Nothing can verify the old process once it is gone. A connection opened
-  // within the registry's verification window (5 s) of the last verified one
-  // reuses that binding without re-checking the listener, so a restart faster
-  // than that reaches the new process at the old generation (D3; todo 3230).
-  // Wait the window out from here, so the first request re-verifies.
-  const stoppedAt = Date.now();
   await invoke("local_terminal_write", { sessionId, data: `${s().runCommand}\r` });
 
   // A new process holds the entry port.
@@ -702,8 +696,6 @@ test("3. a restarted dev server is reached from the open tab without a reload, a
   expect(after).not.toBe(before);
   s().devServerPids.add(pidOf(after));
   record(testInfo, "restart", `${before} -> ${after}`);
-
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, stoppedAt + 6_000 - Date.now())));
 
   // The fixture client reconnects and visibly renders the new process.
   await expectShown(markerOf("a"), { previous: before });
@@ -769,9 +761,8 @@ test("6. fast restart refuses the old generation inside the verification window 
     .toBe(true);
   s().devServerPids.add(pidOf(after as string));
   const current = await seeded("a");
-  // A slow setup is a failure, not evidence of the known bug.
+  // Slower than this and the verification window would have expired anyway.
   expect(Date.now() - startedAt).toBeLessThan(5_000);
-  test.fail(true, "3230: cached process binding survives a fast restart; remove when fixed");
   expect(current.endpoint.endpointGeneration).toBeGreaterThan(generation);
 });
 

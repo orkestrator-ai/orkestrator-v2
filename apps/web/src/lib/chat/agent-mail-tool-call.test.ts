@@ -22,6 +22,31 @@ function toolPart(
 }
 
 describe("agentMailToolCall", () => {
+  test("a send names its images by file name, then by what it recorded", () => {
+    const args = {
+      toEnvironmentId: "e1",
+      body: "See this.",
+      attachments: ["/data/coordinator-attachments/c/conv/shot.png"],
+    };
+    expect(
+      agentMailToolCall(toolPart("mcp__orkestrator__send_message", args))?.attachments,
+    ).toEqual([{ name: "shot.png" }]);
+    const recorded = {
+      name: "shot.png",
+      path: "/workspace/.orkestrator/mail-attachments/abc/shot.png",
+      mediaType: "image/png",
+      bytes: 12,
+      sha256: "a".repeat(64),
+    };
+    expect(
+      agentMailToolCall(
+        toolPart("mcp__orkestrator__send_message", args, {
+          toolOutput: JSON.stringify({ message: { id: "m1", attachments: [recorded] } }),
+        }),
+      )?.attachments,
+    ).toEqual([{ name: "shot.png", bytes: 12 }]);
+  });
+
   test("reads a sent message from its arguments, before any result", () => {
     expect(
       agentMailToolCall(

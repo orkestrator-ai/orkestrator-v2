@@ -1,3 +1,5 @@
+import { AGENT_MAIL_MAX_ATTACHMENTS, isAgentMailAttachmentName } from "./agent-mail.js";
+
 /**
  * A main coordinator's message to the project home, the user's own writable
  * checkout, held for the user's approval (node action request kind
@@ -26,6 +28,8 @@ export interface ProjectHomeMessage {
   replyToMessageId?: string;
   /** The coordinator asked for deliverNow; it steers only once approved. */
   deliverNow?: boolean;
+  /** Its own attachments to send with it; copied only once approved. */
+  attachments?: string[];
 }
 
 function boundedText(value: unknown, max: number): string | undefined {
@@ -59,6 +63,13 @@ export function parseProjectHomeMessage(value: unknown): ProjectHomeMessage | nu
       return null;
   }
   if (raw.deliverNow !== undefined && typeof raw.deliverNow !== "boolean") return null;
+  if (
+    raw.attachments !== undefined &&
+    (!Array.isArray(raw.attachments) ||
+      raw.attachments.length > AGENT_MAIL_MAX_ATTACHMENTS ||
+      !raw.attachments.every(isAgentMailAttachmentName))
+  )
+    return null;
   const toTabId = boundedText(raw.toTabId, PROJECT_HOME_MESSAGE_LIMITS.idChars);
   const subject = boundedText(raw.subject, PROJECT_HOME_MESSAGE_LIMITS.subjectChars);
   const replyToMessageId = boundedText(raw.replyToMessageId, 300);
@@ -69,5 +80,8 @@ export function parseProjectHomeMessage(value: unknown): ProjectHomeMessage | nu
     body,
     ...(replyToMessageId ? { replyToMessageId } : {}),
     ...(raw.deliverNow === true ? { deliverNow: true } : {}),
+    ...(Array.isArray(raw.attachments) && raw.attachments.length
+      ? { attachments: raw.attachments as string[] }
+      : {}),
   };
 }

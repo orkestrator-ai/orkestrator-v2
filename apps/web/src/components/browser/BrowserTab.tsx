@@ -103,6 +103,17 @@ function ManualBrowserTab({
       return true;
     }
   })();
+  // Migration belongs to the restored address only. Once the user or another
+  // client navigates, returning to that address must not re-arm it.
+  const [restoredNavigation] = useState({ url: data.url, requestId: data.navigationRequestId });
+  const [migrationEligible, setMigrationEligible] = useState(true);
+  if (
+    migrationEligible &&
+    (data.url !== restoredNavigation.url ||
+      data.navigationRequestId !== restoredNavigation.requestId)
+  ) {
+    setMigrationEligible(false);
+  }
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
   // A native preview's latest navigation (`BrowserPreviewState.navigation`),
@@ -225,6 +236,7 @@ function ManualBrowserTab({
       // reports the page being left (main sends one as the load starts). Adopting
       // it would re-attach that page and cancel the load.
       if (state.navigation !== undefined && state.navigation === urlBasis) return;
+      setMigrationEligible(false);
       setAddress(navigatedDisplayUrl);
       setCurrentUrl(navigatedDisplayUrl);
       setUrlBasis(state.navigation);
@@ -394,6 +406,22 @@ function ManualBrowserTab({
     tabId,
     updateTabBrowserUrl,
   ]);
+  // Stored legacy tabs migrate on their own once the tunnel can carry them. A
+  // browser client or a disabled tunnel keeps the offer instead: converting
+  // there would replace a working view with a setup message or the same route.
+  // Keyed on the conversion state, not a ref, so StrictMode's cancelled first
+  // attempt retries and a "changed" or "error" outcome waits for the user.
+  const migrateToService =
+    isActive &&
+    nativeBrowserPreview &&
+    migrationEligible &&
+    currentUrl === restoredNavigation.url &&
+    serviceMatch !== null &&
+    conversionState === null &&
+    previewCapabilities?.surfaces.desktopTunnel.available === true;
+  useEffect(() => {
+    if (migrateToService) openAsService();
+  }, [migrateToService, openAsService]);
 
   const visibleError = error ?? resolution.error;
   const visibleLoading = isLoading && resolved !== null;
@@ -418,6 +446,7 @@ function ManualBrowserTab({
       }
 
       conversionAttempt.current += 1;
+      setMigrationEligible(false);
       stopAnnotationForPageChange();
       setError(null);
       setAddress(next.displayUrl);

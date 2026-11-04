@@ -87,12 +87,12 @@ The material risks are concentrated in four themes:
 
 | ID | Severity | Area | Title | Status |
 | --- | --- | --- | --- | --- |
-| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Fixed (see §3) |
+| H1 | High | Gateway | Auth cookie is the durable token and leaks to other ports on the same host | Partly fixed: the token is out of the cookie; a leaked session is accepted, and the `__Host-` name waits on iOS (see §3) |
 | H2 | High | Container | `node` can get code executed as root (PATH hijack of root scripts, `node`-owned runtime-env sourced by root) | Fixed (see §3) |
 | H3 | High | Container | `.env` / `.env.local` / `opencode.json` symlinks bind-mount arbitrary host paths into the container | Fixed (see §3) |
 | H4 | High\* | Bridges | Agent can read its own bridge token, then self-approve or widen its execution policy | Partly fixed (see §3) |
 | H5 | High (design) | Container | Host GitHub CLI token injected into every container by default | Reported |
-| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flip open (see §4) |
+| M1 | Medium | Previews | Legacy loopback previews serve agent content on the gateway origin, CSP stripped, no server-side sandbox | Fixed (sandbox); default flipped on the branch, route retirement open (see §4) |
 | M2 | Medium | Previews | Legacy loopback route reaches any host loopback port; credentialed CORS for `Origin: null` | Fixed (see §4) |
 | M3 | Medium | Secrets | `update_agent_messaging_settings` returns unredacted config (GitHub PAT, API keys) | Fixed (see §4) |
 | M4 | Medium | Coordinator | Claude coordinator git allowlist admits `--git-dir` / `--work-tree` and similar | Fixed (see §4) |
@@ -116,15 +116,20 @@ grants nothing new.
 
 ### H1. The gateway auth cookie is the durable token and is sent to every port on the host
 
-**Status:** Fixed (2026-11-03). The cookie now holds an opaque, in-memory
+**Status:** Partly fixed (2026-11-03). The cookie now holds an opaque, in-memory
 session id (`apps/backend/src/gateway-sessions.ts`) with a 12-hour idle and
 7-day absolute lifetime, revoked by logout, token rotation and a backend
 restart; it is `Secure` over HTTPS. A cookie holding the durable token is
 refused and expired, and the browser gets the login page. `gateway-settings`
 reveals or rotates the token only for the token sent as a bearer header. A
-leaked cookie still authenticates as that session until it ends. The
-`__Host-` name is read and stripped but not issued yet, because older iOS
-builds look the cookie up by its plain name (todo 2960).
+leaked cookie still authenticates as that session until it ends; this was
+accepted on 2026-11-04, because a restricted container was refused at the
+gateway's port on Docker Desktop and binding a session to its peer address would
+not help (`docs/architecture/remote-gateway.md`, Security notes). Linux Engine
+is still to check
+([0260](security/0260-live-checks-on-other-platforms.md)). The `__Host-` name is
+read and stripped but not issued yet, because older iOS builds look the cookie
+up by its plain name (todo 2960).
 **Actors:** A1 (container agent), A5
 
 **Where**
@@ -167,10 +172,11 @@ before and after the fix: `docker/tests/root-boundary-smoke.sh` planted
 zsh `compinit` and a trusted `mise.toml` as `node`. On the old image root ran
 11 of them, through the stop drain, `update-firewall.sh` and a root terminal.
 On the new image it ran none, and npm globals still install and run for
-`node`. In-container firewall enforcement is not retired: images without the
-egress gateway, and policy 1 runtimes, still depend on it until they are
-rebuilt. Removing the `ORKESTRATOR_EGRESS=in-container` cap stays with
-[todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md).
+`node`. The `ORKESTRATOR_EGRESS=in-container` cap was removed on 2026-11-04
+([todo 0018 task 4](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md)).
+In-container firewall enforcement is not gone: images without the egress
+gateway, policy 1 runtimes and runtimes created under the cap still depend on
+it until they are rebuilt.
 See [`docker/AGENTS.md`](../../docker/AGENTS.md). The original finding
 follows.
 **Actor:** A1
@@ -315,9 +321,10 @@ explicit opt-in with a scope warning. Avoid persisting the token in
 carries `Content-Security-Policy: sandbox allow-scripts allow-forms
 allow-pointer-lock allow-presentation` in place of the upstream policy, so a
 preview opened top-level is an opaque origin and cannot call gateway routes.
-Turning the isolated transport on by default is not yet low risk (its
-two-machine, Windows and threshold gates are open) and stays with
-`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7.
+The isolated transport defaults on since 2026-11-04, on the maintainer's
+sign-off and without the two-machine run or its thresholds
+(`docs/todo/previews-and-annotations/0042-service-preview-rollout.md` task 7).
+Retiring the route stays with task 8 and the support window.
 
 **Where**
 - `apps/backend/src/gateway-proxy.ts:204-211`: for browser previews the proxy deletes upstream `x-frame-options`, `content-security-policy` and `content-security-policy-report-only`, and adds no `Content-Security-Policy: sandbox` of its own.
@@ -672,7 +679,7 @@ write and terminal calls when the policy denies them.
 | L7 | Project `gitUrl` reaches `git ls-remote`/`fetch` without `--`; `add_project` skips URL validation | `commands-environment-fork.ts:127, 141`, `commands-agent-support.ts:275`, `commands-registry-projects.ts:421` | Argument injection if a stored URL starts with `-`. Clone already uses `--`. | Fixed: the fork publish check (`ls-remote`, `fetch`) and the remote branch lookup pass the URL after `--`, and `addExistingProject` (behind `add_project`, `start_project_clone` and the public `project.add`) refuses a URL starting with `-` (`git-url-option-injection.test.ts`) |
 | L8 | `read_local_file`/`write_local_file` accept any client-supplied root | `commands-registry-terminal.ts:896, 938-960` | Relative paths are confined, but the root is not tied to a registered environment. Resolve the root as `read_file_base64` does. | Fixed (2026-11-03): both commands accept only the worktree of a registered local environment (`requireRegisteredLocalRoot`) and do their I/O under that environment's stored root; any other directory is refused before reading or writing |
 | L9 | Host-side git scans of local worktrees inherit worktree config | `commands-files.ts:977`, `1268-1295` | Use the hardened `-c` set from `change-tracking/capture.ts`. | Fixed: diff-stats scans (`getLocalGitStatusDetailed`) pass `HARDENED_GIT_CONFIG` (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, in `git-fsmonitor.ts`), which capture's `SAFE_GIT_CONFIG` now extends; the `core.fsmonitor=true` write at `1268-1295` was already removed (`commands-files-local-scan.test.ts`) |
-| L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Reported |
+| L10 | No Host-header allowlist (DNS rebinding) and no login throttling | `gateway-auth.ts:263, 737-776` | Brute force is infeasible against the default 256-bit token, but a weak user-chosen token (min 16 chars) is at risk. | Fixed (2026-11-04): `gateway-host-policy.ts` answers `421` to a name that could be rebound, and `gateway-credential-throttle.ts` pauses new wrong tokens across the login form, bearer headers, the terminal socket and the cookie migration check. |
 | L11 | `--tailscale-serve` / `--desktop-web-client` disable the Tailscale-only bind guard | `apps/backend/src/main.ts:127-128` | `--tailscale-serve --host 0.0.0.0` serves plain HTTP on the LAN. Relax the guard only for loopback binds. | Fixed (2026-11-03): the two mode flags no longer turn the bind guard off. Without `--allow-non-tailscale-bind` they relax it for a loopback bind only (`gateway-bind-policy.ts`), so `--host 127.0.0.1` or `--host ::1` starts and `0.0.0.0` or a LAN address is refused at startup with `Refusing to bind gateway to non-Tailscale address`. Tailscale Serve now proxies to whichever loopback address the listener bound (`http://[::1]:<port>` for `::1`). A Tailscale or allowed LAN host is still refused, because Serve can only front loopback. `--allow-non-tailscale-bind` is unchanged, and the desktop, which passes it, is unaffected. |
 | L12 | CLI trusts the instance descriptor (owner/mode unchecked; `EPERM` counted as alive) | `packages/cli/src/client/targets.ts:120-184` | A local co-tenant on a stale port could receive the bearer token. | Partially fixed (2026-11-03): `readDescriptor` checks the opened file (`O_NOFOLLOW`) and refuses one owned by another user or with any group/other permission bits, naming the file and the reason; a refused profile descriptor no longer falls back to the manifest endpoint. `processIsAlive` no longer counts `EPERM` as alive. This closes the cross-user PID case; reuse by another process of the same user remains undetected because the descriptor is not bound to the original process start time or port listener. Tests: `packages/cli/tests/client-descriptor-trust.test.ts` |
 | L13 | A `javascript:` href hidden by a tab or control character passes the markdown URL transform | `apps/web/.../markdown-plugins.ts:112-117`, `file-url.ts:74, 83` | Not exploitable today, because `MarkdownLink` calls `preventDefault()`. Strip control characters, or check `new URL().protocol`. | Fixed (2026-11-03): `parseLocalFileLinkTarget` returns null for any destination containing a C0 control character (U+0000–U+001F) or DEL, so such an href is no longer treated as a local path and falls through to `defaultUrlTransform`, which blanks the unsafe scheme. Tests: `apps/web/src/lib/chat/file-url.test.ts`, `apps/web/src/lib/chat/rich-markdown/markdown-plugins.test.ts` |
@@ -790,13 +797,13 @@ write and terminal calls when the policy denies them.
 - `tmux-hooks` `find` invocations were not reviewed.
 - Pi's `grep`/`find` tools live in the Pi SDK, outside this repo.
 - The iOS app (`apps/ios`) was not reviewed.
-- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). Dynamic testing remains for H1/M1/M2 in Chromium and Safari and H3 against rootful and rootless Docker.
+- The initial review did no dynamic testing. H2 has since been checked against locally built before/after images with the root-boundary smoke test (see its Status above). H1, M1 and M2 pass in Chromium, Firefox and WebKit (`e2e/preview/gateway-browser-security.spec.ts`) and H3 on Docker Desktop (`docs/development/container-qualification.md`). Shipping Safari and rootless Docker remain ([0260](security/0260-live-checks-on-other-platforms.md)).
 
 ## 9. Recommended remediation order
 
 1. **H1 + M1.** Replace the token-valued cookie with an opaque session. Add a server-side `CSP: sandbox` on legacy previews and make the isolated transport the default. Together these close the cleanest container → host path.
 2. **H3.** `lstat` and realpath the `.env`/`opencode.json` sources and copy them instead of bind-mounting. This is a small change with large impact.
-3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The remaining follow-up is retiring in-container firewall enforcement, tracked in todo 0018 task 4 after gateway qualification.
+3. **H2 — completed.** Root exec PATH, root shell startup and `/usr/local/share` ownership are fixed and covered by built-image checks. The `ORKESTRATOR_EGRESS=in-container` rollout cap was removed on 2026-11-04 (todo 0018 task 4). Existing runtimes without a gateway keep in-container enforcement until rebuilt; rootless gateway qualification remains open under [todo 0018](../todo/containers-and-environments/0018-container-network-and-credential-isolation.md) task 2.
 4. **M3.** Redact the `update_agent_messaging_settings` response and add the all-commands canary test.
 5. **H4 + M13.** Move bridge-control credentials out of the agent's uid, and make policy changes narrow-only.
 6. **M4, M5, L1.** Harden the coordinator git allowlist, gate `setupLocal` on approval, and use confined writers for seeding.

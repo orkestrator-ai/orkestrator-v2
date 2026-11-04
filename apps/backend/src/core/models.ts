@@ -1147,8 +1147,10 @@ export interface AppConfig {
     /** OpenCode Zen (Go) plan key, used to read plan usage in Settings. */
     openCodeZenApiKey?: string;
     githubToken?: string;
-    /** Reuse the host's active `gh auth login` token for container GitHub access. */
+    /** The backend's own GitHub credential: the host's `gh auth login`, or else `githubToken`. */
     useHostGitHubCredentials?: boolean;
+    /** What containers receive, independent of the backend's credential. Absent means none. */
+    containerGitHubCredential?: "none" | "host-cli" | "pat";
     /**
      * The user asked not to be reminded at startup to set up the GitHub CLI.
      * Written only by `setGitHubCliReminderDismissed`; the settings form never
@@ -1234,6 +1236,7 @@ export interface AppConfig {
      * stored schedules are kept.
      */
     experimentalScheduling?: boolean;
+    localWindowGatewayTransport?: boolean;
     /**
      * Experimental gate for graphs in the web UI. Off (or absent) hides the
      * action bar's Graphs and Run graph… buttons and a ticket's Run graph…;
@@ -1259,6 +1262,12 @@ export interface AppConfig {
     agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
     /** The automatic-account ticks; see `updateAgentAccountAutoSwitchSettings`. */
     agentAccountAutoSwitch?: import("@orkestrator/protocol/agent-account-auto-switch").AgentAccountAutoSwitchSettings;
+    /**
+     * The user's standing permission for this machine's coordinators to switch
+     * accounts without asking. Machine-local, never inherited; written only by
+     * `setCoordinatorAccountSwitchGrant`, the settings form never sends it.
+     */
+    coordinatorAccountSwitchGrant?: import("@orkestrator/protocol/coordinator-account-switch-grant").CoordinatorAccountSwitchGrants;
     /**
      * Backend-owned rollout gate for tool-mode workflow results. Internal
      * operations setting rather than a user-facing transport choice; changes

@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { resolveElectronHeadless } from "./lifecycle.js";
+import { parseAgentTestArguments } from "./arguments.js";
 import {
   IMAGE_QUALIFICATION_TESTS,
   isolatedProfileArguments,
@@ -25,7 +27,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -71,6 +73,7 @@ if (task === "dev:test") {
             pid: number;
             scheduler: string;
             workers: string;
+            headless: string;
             containerApproval?: string;
             claudeTerminal?: string;
             grokLogin?: string;
@@ -145,6 +148,7 @@ test("runs the targeted spec while the foreground launcher stays alive, then sto
 test("profile flags replace the credential-free Codex defaults they name", async () => {
   expect(isolatedProfileArguments()).toEqual([
     "--fixture",
+    "--headless",
     "--no-agent-credentials",
     "--agent-platforms",
     "codex",
@@ -156,7 +160,14 @@ test("profile flags replace the credential-free Codex defaults they name", async
       "--agent-platforms",
       "codex,claude",
     ]),
-  ).toEqual(["--fixture", "--credential-source", "claude", "--agent-platforms", "codex,claude"]);
+  ).toEqual([
+    "--fixture",
+    "--headless",
+    "--credential-source",
+    "claude",
+    "--agent-platforms",
+    "codex,claude",
+  ]);
   expect(() => isolatedProfileArguments(["--profile", "other"])).toThrow("Unsupported");
   expect(() => isolatedProfileArguments(["--agent-platforms", "nope"])).toThrow("accepts");
 
@@ -169,10 +180,43 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "--profile",
     launcher.profile,
     "--fixture",
+    "--headless",
     "--no-agent-credentials",
     "--agent-platforms",
     "opencode",
   ]);
+});
+
+test("a one-shot run cannot opt out of headless", async () => {
+  expect(() => isolatedProfileArguments(["--no-headless"])).toThrow("Unsupported");
+  // Passing the flag the runner already adds is harmless.
+  expect(parseAgentTestArguments(isolatedProfileArguments(["--headless"])).headless).toBe(true);
+
+  // The flag beats an opt-out in the caller's environment; every suite goes through here.
+  const f = await fixture();
+  f.env.ORKESTRATOR_AGENT_TEST_HEADLESS = "0";
+  expect(
+    await runIsolatedBrowser({
+      ...f,
+      profileArgs: ["--credential-source", "claude", "--agent-platforms", "claude"],
+      suite: { label: "live", config: "e2e/agent-testing/playwright.goals.config.ts" },
+    }),
+  ).toBe(0);
+  const launcher = (await f.events()).find((event) => event.task === "dev:test")!;
+  expect(launcher.args).toContain("--headless");
+  const events = await f.events();
+  expect(events.every((event) => event.headless === "1")).toBe(true);
+  const tests = events.find((event) => event.task === "playwright")!;
+  // A restarted launcher without flags resolves from the test process environment.
+  expect(
+    resolveElectronHeadless({
+      flavor: "agent-test",
+      platform: "linux",
+      interactive: true,
+      env: { ORKESTRATOR_AGENT_TEST_HEADLESS: tests.headless },
+    }).headless,
+  ).toBe(true);
+  expect(f.env.ORKESTRATOR_AGENT_TEST_HEADLESS).toBe("0");
 });
 
 test("another suite runs its own config and opt-in in a profile the caller names", async () => {
@@ -205,6 +249,7 @@ test("another suite runs its own config and opt-in in a profile the caller names
   expect(tests.coordinator).toBe("1");
   expect(events.find((event) => event.task === "dev:test")!.args.slice(4)).toEqual([
     "--fixture",
+    "--headless",
     "--credential-source",
     "claude",
     "--agent-platforms",

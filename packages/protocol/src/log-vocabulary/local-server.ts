@@ -11,6 +11,23 @@ export const LOCAL_SERVER_LOG_AREAS = defineLogAreas({
       "opencode.database-lost-retrying":
         "OpenCode lost its shared database at startup, so it is retried.",
       "server.stopping": "A local server is being stopped, for the fixed `reason` given.",
+      "bridge.started": {
+        description: "A local bridge process was spawned; `key` names its kind and environment.",
+        essential: true,
+        fields: { key: "label", pid: "number" },
+      },
+      "bridge.exited": {
+        description:
+          "A local bridge process exited, with its `code` and `signal`. `warn` when nothing asked it to, whatever the code; `info` when the backend stopped it, which `server.stopping` explains.",
+        essential: true,
+        fields: {
+          key: "label",
+          pid: "number",
+          code: "number",
+          signal: "label",
+          requested: "boolean",
+        },
+      },
       "reaper.tmux-list-failed": "Orphaned claude-tmux sessions could not be listed.",
       "reaper.tmux-kill-failed": "An orphaned tmux session could not be killed.",
       "reaper.tmux-reaped": "Orphaned claude-tmux sessions of a deleted environment were killed.",

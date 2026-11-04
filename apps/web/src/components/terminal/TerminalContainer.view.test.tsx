@@ -1518,7 +1518,7 @@ describe("TerminalContainer", () => {
       expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
       expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
     });
-    expect(screen.getByText("Environment setup failed.")).toBeTruthy();
+    expect(await screen.findByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
   });

@@ -650,7 +650,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
     await waitFor(() => expect(box.value).toBe(""));
     expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
-    expect(screen.queryByTestId("compose-queue-strip")).toBeNull();
+    expect(screen.queryByTestId("compose-queue-strip") === null).toBe(true);
   });
 
   test("reports queued steering without claiming the running agent is idle", async () => {

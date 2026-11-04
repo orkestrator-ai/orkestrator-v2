@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { lowPriorityCommand } from "./process-priority.js";
 import { spawnCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
@@ -77,6 +78,12 @@ export type LocalServerLaunch = {
   loginless?: boolean;
 };
 
+/** Everything a bridge runs inherits this priority: agent CLIs, tools, builds. */
+const spawnLowPriority: typeof spawnCommand = (command, args, options) => {
+  const lowered = lowPriorityCommand(command, args);
+  return spawnCommand(lowered.command, lowered.args, options);
+};
+
 export type LocalServerRuntimeOptions = {
   /** Launches bridge and probe processes; tests substitute a fake child. */
   spawn?: typeof spawnCommand;
@@ -113,6 +120,8 @@ export class LocalServerRuntime {
 
   private readonly terminateTree: typeof terminateProcessTree;
   private readonly processes = new Map<string, ChildProcessWithoutNullStreams>();
+  /** Children the backend asked to stop, so their exit is not reported as a surprise. */
+  private readonly stopRequests = new WeakSet<ChildProcessWithoutNullStreams>();
   private readonly workingDirectories = new Map<string, string>();
   /** Per-process renderer credentials (bearer tokens; OpenCode's Basic password). */
   private readonly bridgeTokens = new Map<LocalServerKind, Map<string, string>>(
@@ -142,7 +151,7 @@ export class LocalServerRuntime {
   private shutdownPromise: Promise<void> | null = null;
 
   constructor(options: LocalServerRuntimeOptions = {}) {
-    this.spawn = options.spawn ?? spawnCommand;
+    this.spawn = options.spawn ?? spawnLowPriority;
     this.terminateTree = options.terminateProcessTree ?? terminateProcessTree;
     this.openCodeAgentTools = new OpenCodeAgentToolsReconciler(options.openCodeAgentTools);
     this.openCodeHostStart = new OpenCodeHostStartGate(options.openCodeLockedStartRetryDelaysMs);
@@ -232,6 +241,7 @@ export class LocalServerRuntime {
     child: ChildProcessWithoutNullStreams,
     reason?: string,
   ): Promise<void> {
+    this.stopRequests.add(child);
     if (reason) {
       log[reason === BACKEND_SHUTTING_DOWN ? "info" : "warn"]("server.stopping", {
         key,
@@ -249,6 +259,32 @@ export class LocalServerRuntime {
       throw new Error(`Local server process tree did not exit: ${key}`);
     }
     this.releaseOwnership(key, child);
+  }
+
+  reportBridgeStart(key: string, child: ChildProcessWithoutNullStreams): void {
+    log.info("bridge.started", { key, pid: child.pid ?? null });
+  }
+
+  /**
+   * Records how a bridge ended. Ownership plays no part: a replaced child no
+   * longer owns its key, and its exit still explains what happened to it. An
+   * exit nothing asked for warns even with code 0, because a bridge that stops
+   * cleanly on its own is as lost to its session as one that crashed.
+   */
+  reportBridgeExit(
+    key: string,
+    child: ChildProcessWithoutNullStreams,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    const requested = this.stopRequests.has(child);
+    log[requested ? "info" : "warn"]("bridge.exited", {
+      key,
+      pid: child.pid ?? null,
+      code,
+      signal,
+      requested,
+    });
   }
 
   // Renderer credentials

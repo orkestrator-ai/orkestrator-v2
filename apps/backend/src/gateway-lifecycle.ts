@@ -37,6 +37,19 @@ export type GatewayRequestRouter = Pick<GatewayAuth, "handle"> &
 /** The loopback client gateway binds IPv4 loopback only. */
 const LOOPBACK_CLIENT_BIND_ADDRESS = "127.0.0.1";
 
+/**
+ * How long an idle keep-alive connection stays open. It must outlast the idle
+ * timeout of a reverse proxy in front, so the proxy is always the side that
+ * closes. Tailscale Serve keeps idle upstream connections for 90 s (`getTransport`
+ * in ipn/ipnlocal/serve.go). If the gateway closes first, a POST that Serve has
+ * just put on that connection fails, Go will not replay it, and the client gets
+ * an empty-bodied 502. Bun closes about a second after this value.
+ *
+ * `headersTimeout` is left alone: on Bun 1.4 it neither ends an idle connection
+ * at its default 60 s nor limits a slow request.
+ */
+export const GATEWAY_KEEP_ALIVE_TIMEOUT_MS = 120_000;
+
 /** Listeners, the durable gateway token, and shutdown. */
 export class GatewayLifecycle {
   constructor(
@@ -228,12 +241,17 @@ export class GatewayLifecycle {
         }
       });
     });
+    server.keepAliveTimeout = GATEWAY_KEEP_ALIVE_TIMEOUT_MS;
     server.on("connection", (socket) => {
       this.ctx.sockets.add(socket);
       socket.once("close", () => this.ctx.sockets.delete(socket));
     });
     server.on("upgrade", (request, socket, head) => {
       try {
+        if (!this.ctx.hostPolicy.allows(request.headers.host)) {
+          socket.end("HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n");
+          return;
+        }
         // Exact-path routing: the preview tunnel claims only its own path and
         // never steals terminal upgrades; everything unclaimed is destroyed.
         if (this.ctx.previewTunnel?.handleUpgrade(request, socket, head)) return;
@@ -311,6 +329,7 @@ export class GatewayLifecycle {
       this.ctx.token = token;
       this.ctx.authFile = authFile;
       this.ctx.agentTestBootstraps.clear();
+      this.ctx.credentialThrottle.reset();
       // Every browser session was signed in under the previous token.
       this.ctx.browserSessions.revokeAll();
       // Authentication is latched when a WebSocket becomes ready. Rotating

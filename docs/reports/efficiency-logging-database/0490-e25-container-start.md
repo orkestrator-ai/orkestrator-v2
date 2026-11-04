@@ -19,7 +19,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Skip the start copy with a stamp**: skip the copy into `$HOME` when the inputs revision has not changed. Status: open.
+1. **Skip the start copy with a stamp**: skip the copy into `$HOME` when the inputs have not changed. Status: done (2026-11-04, `staged-inputs=5`; the choice and timings are in [1202](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 15).
 2. **Shared host cache for staging**: avoid a full copy per environment on the host. Status: open.
 3. **Bounded parallel copy**: copy with bounded parallelism. Status: open.
 
@@ -31,15 +31,20 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 **Investigation.** The container carries the revision as a label (`DOCKER_LABEL_INPUTS_REVISION`, `apps/backend/src/core/commands-containers.ts:489`). `docker/network-policy-entrypoint.sh:172-203` relays staged inputs, and `docker/entrypoint.sh` copies them (`:708-748` for Claude, through `copy_agent_file` and `copy_agent_directory`). None of the entrypoint or portable-input code reads or writes a stamp. A label is fixed when the container is created, so it cannot by itself show that a running container's inputs moved.
 
+On 2026-11-04 this was found to be incomplete: the backend rewrites a revision in place (`refreshStagedAgentAccountLogins` before every start, `scrubStagedProvider`, the MCP defaults writer), so the revision name does not change when its contents do.
+
 **Decisions.**
 
 - **What makes the skip safe?**
-  - **A stamp file in `$HOME` holding the revision, checked before the copy and written only after a complete one, with the revision reaching the entrypoint in the environment (recommended).**
+  - **A content digest of each input, compared with the stamp and with the bytes the home holds (taken 2026-11-04, replacing the recommendation below).**
+    - Pros: skips only when the copy would change nothing, so a removed file is restored as it is today and a stale stamp can only cause a copy; survives in-place rewrites of the revision.
+    - Cons: reads every input on each start; logins still need their own handling.
+  - **A stamp file in `$HOME` holding the revision, checked before the copy and written only after a complete one, with the revision reaching the entrypoint in the environment (recommended on 2026-11-03).**
     - Pros: the report's fix; a failed copy leaves no stamp, so the next start retries.
-    - Cons: a file the agent removed from `$HOME` is not restored until the revision changes, which differs from today; credentials still need their own handling.
+    - Cons: misses every in-place rewrite of a revision, which would keep an old credential; a file the agent removed from `$HOME` is not restored until the revision changes, which differs from today.
   - **Compare per-file sizes and times before each copy.**
     - Pros: restores a removed file.
-    - Cons: still walks every input on each start.
+    - Cons: still walks every input on each start; the relay keeps only whole seconds.
 
 #### 2. Shared host cache for staging
 
@@ -76,7 +81,7 @@ Container storage rules in `docs/architecture/container-lifecycle.md` apply, as 
 ### Needs verification
 
 - Input sizes on real hosts; the report rates its size confidence Medium and measured nothing.
-- Whether anything in the image relies on the copy recreating a removed file on start.
+- Whether anything in the image relies on the copy recreating a removed file on start. No longer a question: the stamp restores one, because the home is checked as well.
 
 ## 0500: Each environment clones from the remote again
 

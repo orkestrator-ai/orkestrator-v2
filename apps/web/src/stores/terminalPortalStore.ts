@@ -1,11 +1,10 @@
 import { create } from "zustand";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SerializeAddon } from "@xterm/addon-serialize";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { openLinkExternally } from "@/lib/preview-link-external";
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SerializeAddon } from "@xterm/addon-serialize";
+import type { WebLinksAddon } from "@xterm/addon-web-links";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
-import { createTerminalLinkActivator } from "@/lib/terminal-links";
+import type { CreateXtermTerminal } from "@/lib/terminal-xterm";
 
 /**
  * Data for a persistent terminal instance that survives tab moves.
@@ -86,8 +85,15 @@ interface TerminalPortalState {
   /** Get a pane host element */
   getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
 
-  /** Create a new persistent terminal instance */
-  createTerminal: (options: CreateTerminalOptions) => PersistentTerminalData;
+  /**
+   * Create a new persistent terminal instance. The caller passes the xterm
+   * factory so that this store, which the pane layout loads at startup, does
+   * not bring xterm.js with it.
+   */
+  createTerminal: (
+    options: CreateTerminalOptions,
+    createXterm: CreateXtermTerminal,
+  ) => PersistentTerminalData;
 
   /** Get a terminal by environment and tab ID */
   getTerminal: (environmentId: string, tabId: string) => PersistentTerminalData | undefined;
@@ -114,88 +120,11 @@ interface TerminalPortalState {
   setTerminalContainer: (environmentId: string, tabId: string, element: HTMLDivElement) => void;
 
   /** Recreate a terminal when its DOM structure is lost (e.g., after being detached too long) */
-  recreateTerminal: (environmentId: string, tabId: string) => PersistentTerminalData | null;
-}
-
-/**
- * Create xterm.js Terminal with all addons configured.
- */
-function createXtermTerminal(
-  appearance: {
-    fontFamily?: string;
-    fontSize?: number;
-    backgroundColor?: string;
-  },
-  scrollback: number | undefined,
-  linkSource: Pick<CreateTerminalOptions, "environmentId" | "tabId">,
-): {
-  terminal: Terminal;
-  fitAddon: FitAddon;
-  serializeAddon: SerializeAddon;
-  webLinksAddon: WebLinksAddon;
-} {
-  const {
-    fontFamily = DEFAULT_TERMINAL_APPEARANCE.fontFamily,
-    fontSize = DEFAULT_TERMINAL_APPEARANCE.fontSize,
-    backgroundColor = DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
-  } = appearance;
-
-  const scrollbackLines =
-    typeof scrollback === "number" && scrollback > 0 ? scrollback : DEFAULT_TERMINAL_SCROLLBACK;
-
-  const activateLink = createTerminalLinkActivator({
-    environmentId: linkSource.environmentId,
-    sourceTabId: linkSource.tabId,
-    openExternal: (url) =>
-      openLinkExternally({
-        environmentId: linkSource.environmentId,
-        sourceTabId: linkSource.tabId,
-        url,
-      }),
-  });
-
-  const terminal = new Terminal({
-    linkHandler: { activate: activateLink },
-    cursorBlink: true,
-    cursorStyle: "block",
-    fontFamily: `"${fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`,
-    fontSize,
-    lineHeight: 1.2,
-    scrollback: scrollbackLines,
-    theme: {
-      background: backgroundColor,
-      foreground: "#e4e4e7",
-      cursor: "#e4e4e7",
-      cursorAccent: backgroundColor,
-      selectionBackground: "#4b4b4b",
-      black: "#1e1e1e",
-      red: "#f87171",
-      green: "#4ade80",
-      yellow: "#facc15",
-      blue: "#60a5fa",
-      magenta: "#c084fc",
-      cyan: "#22d3ee",
-      white: "#e4e4e7",
-      brightBlack: "#71717a",
-      brightRed: "#fca5a5",
-      brightGreen: "#86efac",
-      brightYellow: "#fde047",
-      brightBlue: "#93c5fd",
-      brightMagenta: "#d8b4fe",
-      brightCyan: "#67e8f9",
-      brightWhite: "#f4f4f5",
-    },
-  });
-
-  const fitAddon = new FitAddon();
-  const serializeAddon = new SerializeAddon();
-  const webLinksAddon = new WebLinksAddon(activateLink);
-
-  terminal.loadAddon(fitAddon);
-  terminal.loadAddon(serializeAddon);
-  terminal.loadAddon(webLinksAddon);
-
-  return { terminal, fitAddon, serializeAddon, webLinksAddon };
+  recreateTerminal: (
+    environmentId: string,
+    tabId: string,
+    createXterm: CreateXtermTerminal,
+  ) => PersistentTerminalData | null;
 }
 
 export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => ({
@@ -224,7 +153,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     return get().paneHosts.get(createPortalTargetKey(environmentId, paneId));
   },
 
-  createTerminal: (options: CreateTerminalOptions) => {
+  createTerminal: (options: CreateTerminalOptions, createXterm: CreateXtermTerminal) => {
     const { tabId, containerId, environmentId, appearance = {} } = options;
     const terminalKey = createTerminalKey(environmentId, tabId);
 
@@ -234,7 +163,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
       return existing;
     }
 
-    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXtermTerminal(
+    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXterm(
       appearance,
       options.scrollback,
       {
@@ -369,7 +298,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     });
   },
 
-  recreateTerminal: (environmentId: string, tabId: string) => {
+  recreateTerminal: (environmentId: string, tabId: string, createXterm: CreateXtermTerminal) => {
     const terminalKey = createTerminalKey(environmentId, tabId);
     const existing = get().terminals.get(terminalKey);
 
@@ -390,7 +319,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     }
 
     // Preserve terminal settings from existing terminal
-    // Extract primary font family (before fallbacks added by createXtermTerminal)
+    // Extract primary font family (before fallbacks added by the xterm factory)
     const existingFontFamily = existing.terminal.options.fontFamily;
     const primaryFont = existingFontFamily
       ? existingFontFamily.split(",")[0]?.replace(/["']/g, "").trim() ||
@@ -398,7 +327,7 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
       : DEFAULT_TERMINAL_APPEARANCE.fontFamily;
 
     // Create new terminal preserving user's settings
-    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXtermTerminal(
+    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXterm(
       {
         fontFamily: primaryFont,
         fontSize: existing.terminal.options.fontSize ?? DEFAULT_TERMINAL_APPEARANCE.fontSize,

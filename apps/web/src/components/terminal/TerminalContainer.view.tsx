@@ -78,7 +78,7 @@ import {
   useEnvironmentTabLaunches,
 } from "@/components/pane-layout/TabLaunchShimmer";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
-import { TerminalPortalHost } from "./TerminalPortalHost";
+import { LazyTerminalPortalHost } from "./LazyTerminalPortalHost";
 import { TerminalContainerOverlays } from "./TerminalContainerOverlays";
 import {
   parseDraggableTabId,
@@ -2164,7 +2164,7 @@ export function TerminalContainer({
               dragOverPaneId={dragOverPaneId}
             />
             {/* Terminal portal host - renders all terminals via portals into pane targets */}
-            <TerminalPortalHost containerId={containerId} environmentId={environmentId} />
+            <LazyTerminalPortalHost containerId={containerId} environmentId={environmentId} />
           </div>
         </DndContext>
       )}

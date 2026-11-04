@@ -89,11 +89,9 @@ bun apps/backend/src/main.ts --data-dir "$ORK_2M/data" --host "$B_IP" --port 341
 ```
 
 This serves plain HTTP on the Tailscale address. Remote previews follow B's
-capabilities, not the client's, so the transport must be on for B: once C is
-connected, turn on **Issue new preview access** in **Settings → Previews**.
-Starting B with `ORKESTRATOR_PREVIEW_TRANSPORT=1` also works, but the
-override pins the switch, and the compatibility-mode check below needs to turn
-it off. The token is in `$ORK_2M/data/gateway-auth.json`
+capabilities, not the client's. A fresh data directory has the transport on;
+leave `ORKESTRATOR_PREVIEW_TRANSPORT` unset on B, because the override pins the
+switch and the compatibility-mode check below needs to turn it off. The token is in `$ORK_2M/data/gateway-auth.json`
 (mode 0600). Copy it to C over a private channel (for example `scp`) into a
 mode-0600 file; never paste it into chat, a ticket or the evidence log.
 

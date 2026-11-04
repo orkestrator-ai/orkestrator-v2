@@ -50,7 +50,7 @@ export function mimeTypeForFilename(filename: string): string {
  * filename. Trusting that filename would label those WebP bytes as (usually)
  * PNG when they are handed to an image-aware agent.
  */
-function detectedMimeTypeForImageData(data: string): string | undefined {
+export function detectedMimeTypeForImageData(data: string): string | undefined {
   // Eighteen decoded bytes cover the longest signature below (12 bytes)
   // without materializing a potentially multi-megabyte image payload.
   const bytes = Buffer.from(data.slice(0, 24), "base64");

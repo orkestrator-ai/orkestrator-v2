@@ -13,12 +13,19 @@ import {
 } from "@orkestrator/protocol/project-home-message";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
+import {
+  attachmentReferences,
+  placeCallerAttachments,
+  readCallerAttachments,
+  type MailAttachmentInvoker,
+} from "./coordinator-mail-attachments.js";
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   coordinatorDeliverNowResult,
   settleCoordinatorDeliverNow,
 } from "./coordinator-deliver-now.js";
+import type { OwnAttachment } from "./mail-attachments.js";
 import type { Environment } from "./models.js";
 
 /**
@@ -55,6 +62,8 @@ interface OutgoingMail {
   subject?: string;
   replyToMessageId?: string;
   steer: boolean;
+  /** Read and checked; copied for the recipient just before the message is sent. */
+  own: readonly OwnAttachment[];
 }
 
 export const PROJECT_HOME_REASON_REQUIRED =
@@ -118,6 +127,7 @@ export async function openWorkerDelegation(
 /** One coordinator message to an environment on this node, as a delegation. */
 async function sendCoordinatorWorkerMail(
   context: CommandContext,
+  invoke: MailAttachmentInvoker,
   sender: CoordinatorSender,
   destination: Environment,
   mail: OutgoingMail,
@@ -128,6 +138,11 @@ async function sendCoordinatorWorkerMail(
     conversationId: sender.conversationId,
   };
   const { requestId, toTabId: requestedTabId, steer } = mail;
+  // Before admission: a copy takes as long as it takes and holds no mail lock.
+  // If it fails the message does not exist and the caller is told why.
+  const attachments = await placeCallerAttachments(context, invoke, scope, requestId, mail.own, {
+    environmentId: destination.id,
+  });
   const admit = <T>(work: () => Promise<T>) =>
     context.storage.withAgentMailWorkerAdmission(destination.id, work);
   const admitted = await admit(async () => {
@@ -153,6 +168,7 @@ async function sendCoordinatorWorkerMail(
         body: mail.body,
         ...(mail.subject !== undefined ? { subject: mail.subject } : {}),
         ...(mail.replyToMessageId !== undefined ? { replyToMessageId: mail.replyToMessageId } : {}),
+        ...(attachments.length ? { attachments } : {}),
       },
       { newDelegation: !joining, steer },
     );
@@ -259,6 +275,10 @@ export function registerCoordinatorWorkerMailCommands(
     if (!handler) throw new Error(`Backend command is unavailable: ${command}`);
     return (await handler(args, context)) as T;
   };
+  const invokerFor =
+    (context: CommandContext): MailAttachmentInvoker =>
+    (command, args) =>
+      run(context, command, args);
 
   /**
    * Hold a main coordinator's project-home message for the user's approval,
@@ -285,11 +305,20 @@ export function registerCoordinatorWorkerMailCommands(
         body: mail.body,
         ...(mail.subject !== undefined ? { subject: mail.subject } : {}),
         ...(mail.replyToMessageId !== undefined ? { replyToMessageId: mail.replyToMessageId } : {}),
+        // Matched by content, wherever the first attempt put the files.
+        ...(mail.own.length
+          ? { attachments: mail.own.map(({ data: _data, ...file }) => ({ ...file, path: "" })) }
+          : {}),
       }))
     )
       return { sent: true };
-    // Before the first request exists, a recent sent message lets this one through.
-    if (!existing && (await projectHomeWindowOpen(context, sender.coordinatorId, home.id)))
+    // The recent-message window permits text only. Every new image for the
+    // project home needs its own approval.
+    if (
+      !existing &&
+      !mail.own.length &&
+      (await projectHomeWindowOpen(context, sender.coordinatorId, home.id))
+    )
       return { sent: true };
     const projectHomeMessage: ProjectHomeMessage | null = parseProjectHomeMessage({
       mailRequestId: mail.requestId,
@@ -298,6 +327,7 @@ export function registerCoordinatorWorkerMailCommands(
       body: mail.body,
       ...(mail.replyToMessageId !== undefined ? { replyToMessageId: mail.replyToMessageId } : {}),
       ...(mail.steer ? { deliverNow: true } : {}),
+      ...(mail.own.length ? { attachments: mail.own.map((file) => file.name) } : {}),
     });
     if (!projectHomeMessage) throw new Error("That message cannot be held for approval.");
     const self = await run<JsonRecord>(context, "get_node_status", {});
@@ -350,6 +380,7 @@ export function registerCoordinatorWorkerMailCommands(
         replyToMessageId,
         deliverNow,
         projectHomeReason,
+        attachments,
       },
       context,
     ) => {
@@ -375,19 +406,40 @@ export function registerCoordinatorWorkerMailCommands(
       };
       const stableRequestId = asNonBlankString(requestId, "requestId");
       const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");
+      // Checked before anything happens, whoever the message is for.
+      const own = await readCallerAttachments(context, sender, attachmentReferences(attachments));
       // Main ↔ side agent mail. Not a delegation: nothing to wait on, and the
       // mail store decides which of the two may talk to which.
       if (
         target === COORDINATOR_MAIL_ADDRESS ||
         coordinatorIdFromRuntimeId(target) === coordinator
       ) {
-        const message = await context.storage.sendAgentMail(sender, {
+        const outgoing = {
           requestId: stableRequestId,
           toEnvironmentId: target,
           toTabId: typeof toTabId === "string" ? toTabId : "",
           body: asNonBlankString(body, "body"),
           ...(typeof subject === "string" ? { subject } : {}),
           ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
+        };
+        // Into the other conversation's own attachment directory, which its
+        // read-only rules let it read.
+        const placed = own.length
+          ? await placeCallerAttachments(
+              context,
+              invokerFor(context),
+              sender,
+              stableRequestId,
+              own,
+              {
+                environmentId: (await context.storage.resolveAgentMailRecipient(sender, outgoing))
+                  .environmentId,
+              },
+            )
+          : [];
+        const message = await context.storage.sendAgentMail(sender, {
+          ...outgoing,
+          ...(placed.length ? { attachments: placed } : {}),
         });
         return {
           ...message,
@@ -413,9 +465,10 @@ export function registerCoordinatorWorkerMailCommands(
         ...(typeof subject === "string" ? { subject } : {}),
         ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
         steer,
+        own,
       };
       if (destination.projectHome !== true)
-        return sendCoordinatorWorkerMail(context, sender, destination, mail);
+        return sendCoordinatorWorkerMail(context, invokerFor(context), sender, destination, mail);
       const reason =
         typeof projectHomeReason === "string" ? projectHomeReason.trim().replace(/\s+/g, " ") : "";
       if (!reason) throw new Error(PROJECT_HOME_REASON_REQUIRED);
@@ -426,7 +479,13 @@ export function registerCoordinatorWorkerMailCommands(
       const admitted = await holdProjectHomeMessage(context, sender, destination, reason, mail);
       if ("held" in admitted) return admitted.held;
       return {
-        ...(await sendCoordinatorWorkerMail(context, sender, destination, mail)),
+        ...(await sendCoordinatorWorkerMail(
+          context,
+          invokerFor(context),
+          sender,
+          destination,
+          mail,
+        )),
         projectHome: true,
         projectHomeWarning: PROJECT_HOME_WARNING,
       };
@@ -471,8 +530,16 @@ export function registerCoordinatorWorkerMailCommands(
     const home = await context.storage.getEnvironment(target.environmentId);
     if (!home || home.projectHome !== true || home.projectId !== projectId)
       return { result: "stale", reason: "The project home no longer exists." };
+    // Read again now: approving later sends what is still there, or fails saying
+    // why, rather than sending a message with a file missing.
+    const own = await readCallerAttachments(
+      context,
+      { coordinatorId, conversationId },
+      held.attachments ?? [],
+    );
     const message = await sendCoordinatorWorkerMail(
       context,
+      invokerFor(context),
       {
         kind: "coordinator",
         projectId,
@@ -489,6 +556,7 @@ export function registerCoordinatorWorkerMailCommands(
         ...(held.subject !== undefined ? { subject: held.subject } : {}),
         ...(held.replyToMessageId !== undefined ? { replyToMessageId: held.replyToMessageId } : {}),
         steer: held.deliverNow === true,
+        own,
       },
     );
     if (message.placement === "bounced" || message.placement === "undeliverable")

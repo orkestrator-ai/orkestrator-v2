@@ -48,7 +48,13 @@ import { WEB_SETTINGS_LOG_AREAS } from "./web-settings.js";
 import { WEB_SHELL_LOG_AREAS } from "./web-shell.js";
 import { WEB_SYNC_LOG_AREAS } from "./web-sync.js";
 
-export type { LogAreaSpec, ThrottleLogEvent } from "./define.js";
+export type {
+  EssentialFieldKind,
+  EssentialLogEvent,
+  LogAreaSpec,
+  LogEventSpec,
+  ThrottleLogEvent,
+} from "./define.js";
 export { COMMAND_FAILURE_REASONS, type CommandFailureReason } from "./command-failure-reasons.js";
 
 /**

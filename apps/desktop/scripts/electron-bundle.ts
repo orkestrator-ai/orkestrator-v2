@@ -1,15 +1,14 @@
 import path from "node:path";
 import process from "node:process";
 
-/**
- * Electron main-process entrypoints, relative to the desktop package root.
- * Every preload a BrowserWindow loads must be listed here.
- */
-export const ELECTRON_ENTRYPOINTS = [
-  "electron/main.ts",
+/** Every preload a BrowserWindow or WebContentsView loads must be listed here. */
+export const ELECTRON_PRELOAD_ENTRYPOINTS = [
   "electron/preload.ts",
   "electron/toolchain-bootstrap-preload.ts",
 ] as const;
+
+/** Electron main-process and preload entrypoints, relative to the desktop package root. */
+export const ELECTRON_ENTRYPOINTS = ["electron/main.ts", ...ELECTRON_PRELOAD_ENTRYPOINTS] as const;
 
 /**
  * Bundle the Electron main process and preloads into `outdir`.
@@ -25,19 +24,30 @@ export async function bundleElectron(
   packageRoot: string,
   outdir: string,
 ): Promise<Bun.BuildOutput> {
-  return Bun.build({
-    entrypoints: ELECTRON_ENTRYPOINTS.map((entrypoint) => path.join(packageRoot, entrypoint)),
-    outdir,
-    target: "node",
-    // ESM preloads require sandbox: false on BrowserWindow. A sandboxed
-    // Chromium context evaluates preloads as CommonJS and cannot load these.
-    format: "esm",
-    external: ["electron"],
-    sourcemap: "external",
-    // Report failures through `success` and `logs` so callers can write them
-    // to their own log instead of handling an AggregateError.
-    throw: false,
-  });
+  const build = (entrypoints: readonly string[], format: "esm" | "cjs") =>
+    Bun.build({
+      entrypoints: entrypoints.map((entrypoint) => path.join(packageRoot, entrypoint)),
+      outdir,
+      target: "node",
+      format,
+      external: ["electron"],
+      sourcemap: "external",
+      // Report failures through `success` and `logs` so callers can write them
+      // to their own log instead of handling an AggregateError.
+      throw: false,
+    });
+  const [main, preloads] = await Promise.all([
+    build(["electron/main.ts"], "esm"),
+    // Sandboxed Chromium evaluates a preload as a CommonJS function body whose
+    // `require` loads only "electron", so everything else is inlined here.
+    build(ELECTRON_PRELOAD_ENTRYPOINTS, "cjs"),
+  ]);
+  return {
+    ...main,
+    success: main.success && preloads.success,
+    outputs: [...main.outputs, ...preloads.outputs],
+    logs: [...main.logs, ...preloads.logs],
+  };
 }
 
 export function formatBuildLogs(result: Bun.BuildOutput): string {

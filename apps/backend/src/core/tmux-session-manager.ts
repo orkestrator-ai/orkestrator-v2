@@ -2,6 +2,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import * as shared from "./tmux-shared.js";
 import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
+import { LOW_PRIORITY_SHELL_PREFIX } from "./process-priority.js";
 import * as hooks from "./tmux-hooks.js";
 import {
   CLAUDE_TMUX_EVENT,
@@ -423,7 +424,10 @@ export class TmuxSession {
                 .map(([name, value]) => `${name}=${value}`)
                 .join(" ")}; `
             : "";
-        const wrapped = `${runtimePrefix}${pinnedPrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        // Only this pane is lowered: the tmux server stays at normal priority, so
+        // it keeps relaying input and output to every session.
+        const priorityPrefix = this.backend.kind === "local" ? LOW_PRIORITY_SHELL_PREFIX : "";
+        const wrapped = `${priorityPrefix}${runtimePrefix}${pinnedPrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",

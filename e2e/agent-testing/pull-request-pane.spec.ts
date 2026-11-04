@@ -1,3 +1,4 @@
+import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -12,6 +13,8 @@ function profileCommand(command: string) {
   if (result.status !== 0) throw new Error(`${command} failed`);
   return JSON.parse(result.stdout);
 }
+
+test.beforeEach(async ({ page }) => acknowledgeDockerReachabilityWarning(page));
 
 for (const width of [1440, 820]) {
   test(`ticket PR links preserve the board at ${width}px`, async ({ page }) => {

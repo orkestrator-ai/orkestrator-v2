@@ -58,6 +58,7 @@ import {
   FolderOpen,
   GitMerge,
   ExternalLink,
+  AlertTriangle,
   WifiOff,
   Copy,
   RefreshCw,
@@ -281,6 +282,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setShowOpenCodeZenApiKey,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
+    containerGitHubCredential,
+    setContainerGitHubCredential,
     sshAgentSocketPath,
     setSshAgentSocketPath,
     sshAgentSocketPathValidationError,
@@ -341,6 +344,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setExperimentalCodexRawEventLogging,
     experimentalScheduling,
     setExperimentalScheduling,
+    localWindowGatewayTransport,
+    setLocalWindowGatewayTransport,
     experimentalGraphs,
     setExperimentalGraphs,
     debugLogging,
@@ -703,6 +708,63 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </SettingsPageLayout>
   );
 
+  const githubTokenField = (
+    <div className="space-y-3 border-t border-zinc-800 p-4">
+      <div className="space-y-1">
+        <Label htmlFor="github-token" className="text-sm font-medium">
+          Personal access token
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          Stored securely by Orkestrator. Use a fine-grained token limited to the repositories you
+          need.
+        </p>
+      </div>
+      <div className="relative">
+        <Input
+          id="github-token"
+          aria-label="GitHub token"
+          type={showGithubToken ? "text" : "password"}
+          value={githubToken}
+          onChange={(e) => setGithubToken(e.target.value)}
+          onBlur={() => void persistCredential("github")}
+          placeholder={
+            global.githubTokenConfigured ? "Token configured — enter a replacement" : "ghp_..."
+          }
+          className="pr-10 font-mono"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+          onClick={() => setShowGithubToken(!showGithubToken)}
+          aria-label={showGithubToken ? "Hide GitHub token" : "Show GitHub token"}
+        >
+          {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </Button>
+      </div>
+      {global.githubTokenConfigured && (
+        <CredentialClearButton
+          label="Clear stored token"
+          title="Clear the stored GitHub token?"
+          description="This deletes the personal access token from Orkestrator. The token cannot be recovered from the app and must be recreated on GitHub if you need it again."
+          onConfirm={() => void clearCredential("github")}
+        />
+      )}
+      <p className="text-xs text-muted-foreground">
+        Create one at{" "}
+        <a
+          href="https://github.com/settings/tokens?type=beta"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary hover:underline"
+        >
+          github.com/settings/tokens
+        </a>
+      </p>
+    </div>
+  );
+
   const renderVersionControl = () => (
     <SettingsPageLayout title="Version control">
       <div className="space-y-3">
@@ -710,8 +772,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           icon={<GithubIcon className="h-4 w-4" />}
           title="GitHub authentication"
         >
-          Used for GitHub issues and pull requests, and by containers to clone private repositories
-          and push over HTTPS.
+          Used by Orkestrator itself for GitHub issues and pull requests. Containers have their own
+          setting below.
         </SettingsSectionHeader>
         <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
           <div className="flex items-center justify-between gap-6 p-4">
@@ -748,62 +810,78 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               <GitHubCliSetup />
             </div>
           ) : (
-            <div className="space-y-3 border-t border-zinc-800 p-4">
-              <div className="space-y-1">
-                <Label htmlFor="github-token" className="text-sm font-medium">
-                  Personal access token
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Stored securely by Orkestrator and used instead of the host CLI account.
-                </p>
-              </div>
-              <div className="relative">
-                <Input
-                  id="github-token"
-                  aria-label="GitHub token"
-                  type={showGithubToken ? "text" : "password"}
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  onBlur={() => void persistCredential("github")}
-                  placeholder={
-                    global.githubTokenConfigured
-                      ? "Token configured — enter a replacement"
-                      : "ghp_..."
-                  }
-                  className="pr-10 font-mono"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
-                  onClick={() => setShowGithubToken(!showGithubToken)}
-                  aria-label={showGithubToken ? "Hide GitHub token" : "Show GitHub token"}
-                >
-                  {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
-              {global.githubTokenConfigured && (
-                <CredentialClearButton
-                  label="Clear stored token"
-                  title="Clear the stored GitHub token?"
-                  description="This deletes the personal access token from Orkestrator. The token cannot be recovered from the app and must be recreated on GitHub if you need it again."
-                  onConfirm={() => void clearCredential("github")}
-                />
-              )}
-              <p className="text-xs text-muted-foreground">
-                Create one at{" "}
-                <a
-                  href="https://github.com/settings/tokens?type=beta"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  github.com/settings/tokens
-                </a>
+            githubTokenField
+          )}
+        </div>
+
+        <div className={cn(SETTINGS_CARD_CLASS, "overflow-hidden")}>
+          <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="container-github-credential" className="text-sm font-medium">
+                GitHub access for containers
+              </Label>
+              <p
+                id="container-github-credential-description"
+                className="text-xs leading-relaxed text-muted-foreground"
+              >
+                What agents in containers use to clone private repositories, push and open pull
+                requests. Without a credential they can only reach public repositories.
               </p>
             </div>
-          )}
+            <Select
+              value={containerGitHubCredential}
+              disabled={isSaving}
+              onValueChange={(value) => {
+                if (value === "none" || value === "host-cli" || value === "pat") {
+                  setContainerGitHubCredential(value);
+                }
+              }}
+            >
+              <SelectTrigger
+                id="container-github-credential"
+                aria-describedby="container-github-credential-description"
+                className="w-full shrink-0 sm:w-64"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No GitHub access</SelectItem>
+                <SelectItem value="pat">Personal access token</SelectItem>
+                <SelectItem value="host-cli">Share host GitHub CLI token</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {containerGitHubCredential === "host-cli" ? (
+            <div
+              role="note"
+              className="flex items-start gap-2 border-t border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground"
+            >
+              <AlertTriangle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
+                aria-hidden="true"
+              />
+              <p>
+                Every agent, and any repository code it runs, can read this token in every
+                container. A <code className="font-mono text-zinc-300">gh auth login</code> token
+                usually has the <code className="font-mono text-zinc-300">repo</code>,{" "}
+                <code className="font-mono text-zinc-300">workflow</code> and{" "}
+                <code className="font-mono text-zinc-300">gist</code> scopes across all your
+                repositories, so a compromised agent could read private code or push workflows that
+                expose CI secrets. GitHub stays reachable from restricted containers. A fine-grained
+                personal access token limited to the repositories you need is safer.
+              </p>
+            </div>
+          ) : null}
+
+          {containerGitHubCredential === "pat" && useHostGitHubCredentials
+            ? githubTokenField
+            : null}
+          {containerGitHubCredential === "pat" && !useHostGitHubCredentials ? (
+            <p className="border-t border-zinc-800 px-4 py-3 text-xs text-muted-foreground">
+              Containers use the personal access token above.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -2209,6 +2287,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             </div>
           </div>
         </button>
+        <p className="max-w-xs text-xs text-muted-foreground">
+          A small event log of errors and key lifecycle events is always kept, even with this off.
+          It holds no prompts, paths or file contents, and has a fixed 4 MiB size limit.
+        </p>
         <div className="max-w-xs space-y-2">
           <Label htmlFor="debug-log-retention" className="text-sm">
             Keep logs for
@@ -2251,6 +2333,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                     ? `${formatLogBytes(logStorageStats.totalBytes)} across ${logStorageStats.fileCount} ${logStorageStats.fileCount === 1 ? "file" : "files"}`
                     : "Storage usage unavailable"}
               </p>
+              {!isLoadingLogStorage && logStorageStats?.essentialBytes !== undefined ? (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {`Event log, not removed by clean up: ${formatLogBytes(logStorageStats.essentialBytes)}`}
+                </p>
+              ) : null}
             </div>
             <Button
               type="button"
@@ -2300,8 +2387,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This permanently deletes every file in the application log directory. If logging
-                  is active, a new daily log may be created immediately afterward.
+                  This permanently deletes every file in the application log directory except the
+                  small event log, which stays. If logging is active, a new daily log may be created
+                  immediately afterward.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -2320,6 +2408,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <LogDetailSettings value={logDetail} onChange={setLogDetail} />
     </SettingsPageLayout>
   );
+
+  // Electron reads this setting from its own data directory, so a window on
+  // another machine would be editing a config nothing reads it from.
+  const isLocalDesktopWindow =
+    window.orkestrator?.isolatedViewState === true && !window.orkestratorGateway?.enabled;
 
   const renderExperimental = () => (
     <SettingsPageLayout title="Experimental">
@@ -2357,6 +2450,20 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
               aria-label="Enable scheduling"
             />
           </SettingsRow>
+          {isLocalDesktopWindow && (
+            <SettingsRow
+              label="Direct transport for new windows"
+              htmlFor="local-window-gateway-transport"
+              description="A window opened after you turn this on sends commands and receives events and terminal output directly from this computer's backend, not through the app's main process. Windows already open keep their transport, so a window that misbehaves can be replaced by turning this off and opening a new one."
+            >
+              <Switch
+                id="local-window-gateway-transport"
+                checked={localWindowGatewayTransport}
+                onCheckedChange={setLocalWindowGatewayTransport}
+                aria-label="Use the direct transport for new windows"
+              />
+            </SettingsRow>
+          )}
         </div>
       )}
       <div className="space-y-3">

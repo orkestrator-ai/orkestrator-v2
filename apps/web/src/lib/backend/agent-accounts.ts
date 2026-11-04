@@ -15,6 +15,12 @@ import type {
   PreferredAgentIdentities,
 } from "@orkestrator/protocol/agent-accounts";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+  type CoordinatorAccountSwitchGrantState,
+} from "@orkestrator/protocol/coordinator-account-switch-grant";
+import { isUnknownBackendCommand } from "@/lib/portal/unknown-command";
 import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
@@ -110,6 +116,40 @@ export async function setAgentAccountAutoSwitchIncluded(
     });
   }
   return listAgentAccounts(machine);
+}
+
+/**
+ * The standing permission for `machine`'s coordinators to switch accounts
+ * without asking, and the switches it allowed. Each machine holds its own,
+ * for the switches its coordinators make on it and on the machines it
+ * controls. `null` from a machine that predates it, which keeps asking.
+ */
+export async function getCoordinatorAccountSwitchGrant(
+  platform: AgentAccountPlatform,
+  machine?: AccountMachine,
+): Promise<CoordinatorAccountSwitchGrantState | null> {
+  try {
+    return await machineInvoke<CoordinatorAccountSwitchGrantState>(
+      machine,
+      GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+      { platform },
+    );
+  } catch (error) {
+    if (isUnknownBackendCommand(error, GET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND)) return null;
+    throw error;
+  }
+}
+
+export async function setCoordinatorAccountSwitchGrant(
+  platform: AgentAccountPlatform,
+  enabled: boolean,
+  machine?: AccountMachine,
+): Promise<CoordinatorAccountSwitchGrantState> {
+  return machineInvoke<CoordinatorAccountSwitchGrantState>(
+    machine,
+    SET_COORDINATOR_ACCOUNT_SWITCH_GRANT_COMMAND,
+    { platform, enabled },
+  );
 }
 
 export async function renameAgentAccount(

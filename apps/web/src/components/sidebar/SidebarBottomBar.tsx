@@ -10,6 +10,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
+import { cn } from "@/lib/utils";
 
 const SETTINGS_LABEL = "Global settings";
 const REPOSITORY_SETTINGS_LABEL = "Repository settings";
@@ -45,8 +46,11 @@ function IndicatorDot({ testId }: { testId: string }) {
  *
  * The settings dot follows the connected host's updater: the snapshot behind
  * Settings → Machines, where the update is installed, and the host update toast.
+ *
+ * `stacked` is the compact sidebar's form: one icon wide, the same actions in a
+ * column.
  */
-export function SidebarBottomBar() {
+export function SidebarBottomBar({ stacked = false }: { stacked?: boolean }) {
   const settingsDescriptionId = useId();
   const bugDescriptionId = useId();
   const draftInProgress = useBugReportStore((state) => state.draftInProgress);
@@ -90,9 +94,12 @@ export function SidebarBottomBar() {
   return (
     <div
       data-sidebar-bottom-bar
-      className="flex h-9 shrink-0 items-center justify-between border-t border-border/80 bg-chrome px-2"
+      className={cn(
+        "flex shrink-0 border-t border-border/80 bg-chrome",
+        stacked ? "flex-col items-center gap-0.5 py-1" : "h-9 items-center justify-between px-2",
+      )}
     >
-      <div className="flex items-center gap-0.5">
+      <div className={cn("flex items-center gap-0.5", stacked && "flex-col")}>
         <Button
           variant="ghost"
           size="icon"

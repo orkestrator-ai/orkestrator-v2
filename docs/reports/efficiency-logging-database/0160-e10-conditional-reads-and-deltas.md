@@ -31,7 +31,7 @@ The report measured nothing, and the maintainer gated this work on numbers. Deci
 #### Tasks
 
 1. **Capture the baseline**: measure snapshot and delta rates with a lagging client and a second viewer. See [Shared baseline](#shared-baseline). Status: open.
-2. **Keep a small ring of recent views per key**: build a delta from whichever base the client holds. Status: open (depends on 1).
+2. **Keep a small ring of recent views per key**: build a delta from whichever base the client holds. Status: done 2026-11-04 without the baseline, at the ticket's request; both decisions below took the recommended option.
 
 #### 2. Keep a small ring of recent views per key
 

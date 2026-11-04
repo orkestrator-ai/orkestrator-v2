@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { lazy, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -8,7 +8,12 @@ import {
 } from "@/components/ui/context-menu";
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { InitializationLogs } from "./InitializationLogs";
-import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
+import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
+
+// Shown only after a failed setup, and it renders a transcript message.
+const LazySetupPendingOverlay = lazy(async () => ({
+  default: (await import("@/components/setup/SetupPendingOverlay")).SetupPendingOverlay,
+}));
 
 type SetupPhase = "pending" | "running" | "ready" | "failed";
 
@@ -106,11 +111,13 @@ export function TerminalContainerOverlays({
       {/* Laid-out tab content is z-10, so recovery must sit above it or a tab's own setup overlay shows through. */}
       {setupPhase === "failed" && isEnvironmentRunning && (
         <div className="absolute inset-0 z-20 bg-background">
-          <SetupPendingOverlay
-            environmentId={environmentId}
-            setupPhase={setupPhase}
-            subtext="Retry setup, or skip it to continue with the current workspace."
-          />
+          <LazyLoadBoundary renderError={(details) => <LazyLoadInlineErrorFallback {...details} />}>
+            <LazySetupPendingOverlay
+              environmentId={environmentId}
+              setupPhase={setupPhase}
+              subtext="Retry setup, or skip it to continue with the current workspace."
+            />
+          </LazyLoadBoundary>
         </div>
       )}
     </>

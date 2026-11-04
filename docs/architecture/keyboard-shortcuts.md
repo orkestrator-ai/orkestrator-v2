@@ -15,6 +15,7 @@ The app-level shortcuts are:
 | ⌘⇧/ / Ctrl+Shift+/ (⌘? / Ctrl+?) | The keyboard shortcuts dialog | the focused app document (shell or realm) |
 | ⌘, / Ctrl+, | Global settings (`GlobalSettingsHost`) | the window's shell |
 | ⌘T / Ctrl+T | A new agent tab, except while environment setup runs | the focused workspace (shell or realm) |
+| ⌘⇧D / Ctrl+Shift+D | Rotate the sidebar's group-by mode ([order](federation.md#compact-sidebar)) | the window's shell |
 
 Either modifier is accepted on every platform, but not both, and not with Alt.
 Plain Ctrl+T stays with a shell or a macOS text field, where it transposes
@@ -29,6 +30,7 @@ browser opens its own tab before the page sees the key.
 | Search | `apps/web/src/components/sidebar/ProjectSearchBar.tsx` |
 | Dialog | `apps/web/src/components/layout/KeyboardShortcutsDialog.tsx` (mounted once per renderer by `AppShell`) |
 | Settings | `apps/web/src/components/layout/GlobalSettingsHost.tsx` (mounted once per renderer by `AppShell`) |
+| Sidebar group-by rotation | `apps/web/src/components/sidebar/HierarchicalSidebar.tsx`, `apps/web/src/lib/federation/sidebar-grouping.ts` |
 | Realm → window message | `apps/web/src/lib/federation/workspace-realm.ts` (`{ type: "shortcut" }`), handled in `RemoteWorkspaceRegion.tsx` |
 | Design frame relay | `packages/protocol/src/design-runtime.ts`, `apps/web/src/components/design/frame-bridge.ts` |
 | View › Keyboard Shortcuts… and Settings… menu items | `apps/desktop/electron/application-menu.ts` |
@@ -57,7 +59,8 @@ some app document, which delivers it to the owner:
 - Otherwise the document's handlers run. If none is mounted (the sidebar is
   hidden), the window shows the sidebar and the request waits for the search
   to mount. The phone layout's drawer stays closed and the request is
-  dropped, so it never opens later by surprise.
+  dropped, so it never opens later by surprise. The compact sidebar has no
+  search, so there ⌘K is dropped too, hidden or not.
 
 The key press reaches `requestAppShortcut` from one of these entry points:
 
@@ -145,6 +148,17 @@ key:
   web pages rarely bind it. Settings are window-owned like search: a realm
   forwards ⌘, to its window, whose command node owns them. A repeat while
   Settings are open leaves them on the section shown.
+- **⌘⇧D rotates the sidebar's group-by mode.** ⌘⇧G came first but is the
+  run-script dialog on macOS, and because either modifier is accepted everywhere,
+  Ctrl+Shift+G would be taken with it. ⌘⇧L is Monaco's select-all-occurrences.
+  ⌘⇧D is bound by nothing in the app, Monaco, Tiptap or the desktop menus; a
+  browser's bookmark-all-tabs gives way to `preventDefault`. It edits no text
+  (`ctrlEditsText: false`), so like the other app-level shortcuts it works from
+  text fields and terminals. It stays with a previewed page
+  (`fromPreviews: false`), and taking it there would also move keyboard focus out
+  of the page. Window-owned: a realm forwards it. With the sidebar hidden it shows
+  the sidebar and rotates. A realm older than the shortcut leaves the key to its
+  focused surface, and a window older than it ignores the request.
 - **Ctrl+Shift+/ opens the dialog on macOS too.** Users coming from another
   platform press it, and Ctrl+Shift+/ edits nothing there.
 - **⌘⇧/ rather than ⌘⇧K.** On some Macs ⌘⇧K and Ctrl+Shift+K were swallowed

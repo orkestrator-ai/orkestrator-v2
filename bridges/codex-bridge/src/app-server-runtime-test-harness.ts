@@ -300,6 +300,7 @@ export async function harness(
     commandChangeProbe?: CommandChangeProbe;
     changeEvidence?: CodexChangeEvidence;
     watchRolloutFile?: WatchRolloutFile;
+    notificationQueueMaxDepth?: number;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -320,6 +321,9 @@ export async function harness(
       refreshEnvironment: async () => undefined,
       ...(options.fingerprintEnvironment
         ? { fingerprintEnvironment: options.fingerprintEnvironment }
+        : {}),
+      ...(options.notificationQueueMaxDepth !== undefined
+        ? { notificationQueueMaxDepth: options.notificationQueueMaxDepth }
         : {}),
       spawnProcess: (() => {
         index += 1;

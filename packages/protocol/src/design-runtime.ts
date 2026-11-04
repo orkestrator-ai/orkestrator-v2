@@ -546,8 +546,27 @@ export function installDesignRuntime(
   );
 }
 
+function designDocument(scriptSource: string, scriptAttributes: string, script: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${scriptSource}; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script${scriptAttributes}>${script}</script></body></html>`;
+}
+
+function designRuntimeScript(): string {
+  return `(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});`;
+}
+
 /** Only our nonce-bearing bootstrap executes. Authored code has no nonce. */
 export function designBootstrap(nonce: string): string {
   if (!/^[a-zA-Z0-9-]{16,80}$/.test(nonce)) throw new Error("Invalid runtime nonce");
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></head><body><script nonce="${nonce}">(${installDesignRuntime.toString()})(${matchAppShortcut.toString()}, ${JSON.stringify(APP_SHORTCUTS)}, ${appClaimsShortcut.toString()}, ${shortcutFocus.toString()});</script></body></html>`;
+  return designDocument(`'nonce-${nonce}'`, ` nonce="${nonce}"`, designRuntimeScript());
+}
+
+/**
+ * The bootstrap as a file a production build ships, for a parent whose policy a
+ * `srcdoc` frame would inherit. A file cannot carry a fresh nonce, so its policy
+ * pins the script's hash: authored code still cannot execute. The hash function
+ * is a parameter because this module also runs in the browser.
+ */
+export function designFrameDocument(sha256Base64: (script: string) => string): string {
+  const script = designRuntimeScript();
+  return designDocument(`'sha256-${sha256Base64(script)}'`, "", script);
 }

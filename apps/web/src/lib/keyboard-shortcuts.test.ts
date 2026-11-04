@@ -6,6 +6,7 @@ import {
   filterKeyboardShortcuts,
   isKeyboardShortcutsShortcut,
   isSubmitShortcut,
+  shortcutKeys,
 } from "./keyboard-shortcuts";
 
 function ids(groups: ReturnType<typeof filterKeyboardShortcuts>): string[] {
@@ -20,6 +21,42 @@ describe("keyboard shortcut catalog", () => {
   test("ids are unique", () => {
     const all = KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts.map((s) => s.id));
     expect(new Set(all).size).toBe(all.length);
+  });
+
+  test("no two surface-wide shortcuts share a chord, on either platform", () => {
+    // Keys that belong to one surface (the composer, a terminal, a dialog) can
+    // repeat across surfaces; every group but those is reachable at once.
+    const shared = new Set(["general", "tabs", "environment", "editors"]);
+    const shortcuts = KEYBOARD_SHORTCUT_GROUPS.filter((group) => shared.has(group.id)).flatMap(
+      (group) => group.shortcuts,
+    );
+    for (const platform of ["mac", "other"] as const) {
+      const seen = new Map<string, string>();
+      for (const shortcut of shortcuts) {
+        const keys = shortcutKeys(shortcut, platform);
+        if (!keys || shortcut.id === "create-environment-submit") continue;
+        const chord = keys.join("+");
+        expect({ chord, id: seen.get(chord) ?? shortcut.id }).toEqual({ chord, id: shortcut.id });
+        seen.set(chord, shortcut.id);
+      }
+    }
+  });
+
+  test("the rotate shortcut is listed, with ⌘⇧G left to the run-script dialog", () => {
+    const shortcuts = KEYBOARD_SHORTCUT_GROUPS.flatMap((group) => group.shortcuts);
+    const rotate = shortcuts.find((shortcut) => shortcut.id === "rotate-sidebar-grouping")!;
+    expect(rotate.app).toBe(true);
+    expect(rotate.mac).toEqual(["⌘", "⇧", "D"]);
+    expect(rotate.other).toEqual(["Ctrl", "Shift", "D"]);
+    expect(shortcuts.find((shortcut) => shortcut.id === "configure-scripts")?.mac).toEqual([
+      "⌘",
+      "⇧",
+      "G",
+    ]);
+    // Found by the words someone would search the dialog with.
+    expect(
+      filterKeyboardShortcuts("compact", "other").flatMap((group) => group.shortcuts),
+    ).toContainEqual(rotate);
   });
 
   test("an empty query lists every shortcut on macOS", () => {

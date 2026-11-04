@@ -41,6 +41,12 @@ export interface PreviewAttachmentRequest {
 export interface PreviewTunnelDescriptor {
   path: typeof PREVIEW_TUNNEL_PATH;
   subprotocol: typeof PREVIEW_TUNNEL_SUBPROTOCOL;
+  /**
+   * Present when the backend also speaks v2, which carries many connections
+   * over one tunnel socket (`preview-tunnel-mux.ts`). A backend that predates
+   * it omits the field and the desktop opens v1 sockets.
+   */
+  multiplexSubprotocol?: typeof PREVIEW_TUNNEL_SUBPROTOCOL_V2;
   /** Attachment-scoped secret, presented in-band in HELLO. */
   credential: string;
 }
@@ -118,7 +124,9 @@ export function isReservedPreviewCookieName(name: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Desktop tunnel wire contract (v1)
+// Desktop tunnel wire contract (v1): one WebSocket per upstream connection.
+// v2, many connections per WebSocket, is in `preview-tunnel-mux.ts`; backends
+// serve both, and desktops use v1 against a backend that does not advertise v2.
 //
 // connecting -> authenticating -> opening -> open -> closing -> closed
 //
@@ -143,6 +151,8 @@ export function isReservedPreviewCookieName(name: string): boolean {
 
 export const PREVIEW_TUNNEL_PATH = "/__orkestrator/preview/tunnel";
 export const PREVIEW_TUNNEL_SUBPROTOCOL = "orkestrator.preview-tunnel.v1";
+/** v2: many connections per socket; the contract is in `preview-tunnel-mux.ts`. */
+export const PREVIEW_TUNNEL_SUBPROTOCOL_V2 = "orkestrator.preview-tunnel.v2";
 export const PREVIEW_TUNNEL_VERSION = 1;
 export const PREVIEW_TUNNEL_HELLO_TIMEOUT_MS = 5_000;
 /** Client heartbeat: half the server's 30-second liveness interval. */

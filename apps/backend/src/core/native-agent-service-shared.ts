@@ -741,6 +741,12 @@ export const NATIVE_PROJECTION_MAX_WINDOW_MESSAGES = 4_096;
 export const NATIVE_PROJECTION_MAX_BYTES = 16 * 1024 * 1024;
 export const NATIVE_SYNC_LIVE_MESSAGES = 100;
 export const NATIVE_SYNC_LIVE_TARGET_BYTES = 512 * 1024;
+/**
+ * Rows a refresh whose result nobody reads asks for (after a dispatch, an
+ * interaction answer). It exists for the turn state and side caches, which do
+ * not depend on the transcript's length.
+ */
+export const NATIVE_PROJECTION_TAIL_REFRESH_MESSAGES = 32;
 export const NATIVE_SYNC_MAX_REVISIONS = 128;
 export const NATIVE_SYNC_MAX_REVISION_BYTES = 2 * 1024 * 1024;
 export const NATIVE_SYNC_MAX_TOTAL_REVISION_BYTES = 32 * 1024 * 1024;

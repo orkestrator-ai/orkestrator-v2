@@ -15,10 +15,10 @@ and container environments, and for pull requests outside the current project.
 
 ## Credential
 
-Every command uses the GitHub credential selected in Settings
+Every command uses the backend's GitHub credential from Settings
 (`resolveGitHubToken` in `github-credentials.ts`): the host `gh auth login`
 token by default, or the stored personal access token when host credentials
-are off. `requireGitHubToken` (in `commands-validation.ts`) and
+are off. What containers receive is a [separate setting](github-cli.md#container-credential). `requireGitHubToken` (in `commands-validation.ts`) and
 `requireGitHubProject` share the "GitHub is not configured" message. Errors
 pass through `sanitizeGitHubError` with the token, and nothing logs tokens,
 PR bodies, comments or file contents.

@@ -3,7 +3,7 @@ import type { BuildPipelineSupervisor } from "./build-pipeline-service-superviso
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
 import { VERIFICATION_SCHEMA } from "./build-pipeline-service-helpers.js";
-import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
 import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -238,7 +238,7 @@ for (const [phase, kind, tool] of [
                   : kind === "review-report"
                     ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
                     : kind === "fix-result"
-                      ? REVIEW_FIX_RESULT_JSON_SCHEMA
+                      ? REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
                       : VERIFICATION_SCHEMA,
               );
             } else {

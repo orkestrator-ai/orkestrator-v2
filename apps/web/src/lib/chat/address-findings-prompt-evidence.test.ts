@@ -7,7 +7,7 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import type { NativeMessage } from "./native-message-types";
-import { attachFixPromptEvidence } from "./fix-prompt-evidence";
+import { attachAddressFindingsPromptEvidence } from "./address-findings-prompt-evidence";
 
 function message(id: string, role: NativeMessage["role"], content: string): NativeMessage {
   return {
@@ -21,9 +21,9 @@ function message(id: string, role: NativeMessage["role"], content: string): Nati
 
 const PREPARATION_PROMPT = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
 
-describe("attachFixPromptEvidence", () => {
+describe("attachAddressFindingsPromptEvidence", () => {
   test("pins the durable report to the address prompt, not an earlier preparation turn", () => {
-    const pinned = attachFixPromptEvidence(
+    const pinned = attachAddressFindingsPromptEvidence(
       [
         message("prep", "user", PREPARATION_PROMPT),
         message("prep-reply", "assistant", "Inventory ready."),
@@ -41,7 +41,7 @@ describe("attachFixPromptEvidence", () => {
   });
 
   test("keeps the pin on the opening prompt when a later follow-up is present", () => {
-    const pinned = attachFixPromptEvidence(
+    const pinned = attachAddressFindingsPromptEvidence(
       [
         message("address", "user", STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION),
         message("reply", "assistant", "Working on it."),
@@ -55,7 +55,7 @@ describe("attachFixPromptEvidence", () => {
   });
 
   test("does not pin onto a later follow-up when the opening prompt is outside the window", () => {
-    const pinned = attachFixPromptEvidence(
+    const pinned = attachAddressFindingsPromptEvidence(
       [message("follow-up", "user", "Please also fix the tests.")],
       TEST_STRUCTURED_REVIEW_REPORT,
     );

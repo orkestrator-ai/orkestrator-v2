@@ -7,6 +7,22 @@ import {
 } from "./action-defaults.js";
 
 describe("normalizeActionDefaults", () => {
+  it("keeps a default saved under the key a later build uses for Address Findings", () => {
+    const saved = { platform: "codex" as const, model: "gpt-6.1-sol" };
+    expect(normalizeActionDefaults({ addressFindings: saved })).toEqual({
+      fixReviewIssues: saved,
+    });
+  });
+
+  it("prefers the current key when both Address Findings keys are saved", () => {
+    expect(
+      normalizeActionDefaults({
+        fixReviewIssues: { platform: "codex" },
+        addressFindings: { platform: "claude" },
+      }),
+    ).toEqual({ fixReviewIssues: { platform: "codex" } });
+  });
+
   it("returns an empty object for anything that is not a record", () => {
     for (const value of [undefined, null, "review", 7, ["review"]]) {
       expect(normalizeActionDefaults(value)).toEqual({});

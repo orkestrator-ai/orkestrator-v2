@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { MultiReviewRestartDialog } from "../../apps/web/src/components/review/MultiReviewRestartDialog";
-import { MultiReviewFixPromptDialog } from "../../apps/web/src/components/review/MultiReviewFixPromptDialog";
+import { MultiReviewAddressFindingsPromptDialog } from "../../apps/web/src/components/review/MultiReviewAddressFindingsPromptDialog";
 import { FeatureBuildFields } from "../../apps/web/src/components/environments/FeatureBuildFields";
 import type { AgentModelCatalog } from "../../apps/web/src/lib/agent-launch";
 import { defaultFeatureBuildModels } from "../../apps/web/src/lib/feature-build-launch";
@@ -62,7 +62,7 @@ export function PiLaunchDefaultsFixture() {
           promptFields={null}
         />
       ) : kind === "fix" ? (
-        <MultiReviewFixPromptDialog
+        <MultiReviewAddressFindingsPromptDialog
           open
           onOpenChange={() => undefined}
           catalog={catalog}

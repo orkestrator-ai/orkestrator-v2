@@ -28,7 +28,7 @@ afterEach(async () => {
   for (const world of worlds.splice(0)) await world.close();
 });
 
-/** Every reviewer reports one issue and one gap; consolidation cites two; the Fix completes. */
+/** Every reviewer reports one issue and one gap; consolidation cites two; Address Findings completes. */
 function scriptFindings(w: GraphReviewWorld): void {
   w.fakes.scripts.set("review", ({ port, branchKey }) =>
     port === "report"

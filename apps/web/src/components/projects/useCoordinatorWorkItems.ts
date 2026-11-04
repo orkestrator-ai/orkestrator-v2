@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import {
+  canonicalBuildPipeline,
+  canonicalMultiReview,
+} from "@orkestrator/protocol/workflow-vocabulary";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
@@ -275,7 +279,11 @@ export function useCoordinatorWorkItems(
             kind: ref.kind,
             missing: ref.kind !== "graph-run" && value === null,
             snapshot:
-              ref.kind === "graph-run" ? remoteGraphRun(value, ref.id) : remoteSnapshot(value),
+              ref.kind === "graph-run"
+                ? remoteGraphRun(value, ref.id)
+                : ref.kind === "build-pipeline"
+                  ? canonicalBuildPipeline(remoteSnapshot(value))
+                  : canonicalMultiReview(remoteSnapshot(value)),
           };
         } catch (error) {
           // A run the node says does not exist is finished; any other error

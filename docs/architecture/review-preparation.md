@@ -18,7 +18,7 @@ sends to Multi Review are held to the same split
 Later pipeline stages read that evidence rather than repeating it, and no stage
 runs extra tests to decide whether a failure is the branch's doing. Sealing
 classifies each failing test from evidence that already exists
-([failure triage](#failure-triage)). Address runs targeted checks for the files
+([failure triage](#failure-triage)). Address Findings runs targeted checks for the files
 it edits and fixes the recorded failures that relate to the ticket or the
 branch; for one it believes unrelated it cites the triage, and it never runs a
 check against the target branch. It ends by submitting a typed fix result
@@ -29,12 +29,12 @@ creates no worktrees. It judges each failing test rather than each command: a
 `related` failure blocks unless the diff shows a repair, an `unrelated` one
 never blocks unless an acceptance criterion names it, and an `undetermined` one
 blocks only when its diagnostics tie it to the change. A blocking failure sends
-the round to Fix. Verify runs one narrow check only when an acceptance criterion
+the round to Rework. Verify runs one narrow check only when an acceptance criterion
 cannot be judged by reading the code.
 
-## The Address → Verify handoff
+## The Address Findings → Verify handoff
 
-Address is a typed stage like Review and Verify. Its turn opens a `fix-result`
+Address Findings is a typed stage like Review and Verify. Its turn opens a `fix-result`
 workflow result slot, the same kind Multi Review's fix step submits
 (`build-pipeline-context.ts` `workflowResultKind`), over the tool transport
 (`submit_fix_result`) or, where the rollout keeps it off, the provider-enforced
@@ -51,23 +51,23 @@ no check still fails and `limitations` is empty.
   result the contract rejects fails the stage with the contract's error. The
   tool rejects it at submit time instead, so the model corrects it in its turn.
 - **Accepted.** `finishAddress` (`build-pipeline-service-recovery.ts`) copies
-  the result onto the Address session as `fixResult`, bounded by
-  `PIPELINE_FIX_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-report.ts`:
+  the result onto the Address Findings session as `fixResult`, bounded by
+  `PIPELINE_ADDRESS_FINDINGS_RESULT_LIMITS` (`packages/protocol/src/build-pipeline-address-findings-report.ts`:
   4,000-character summary, 48 files, 20 checks with failed checks kept first,
   10 notes, 10 limitations, cut entries counted in `omitted`), opens Verify and
   consumes the slot. An incomplete result (`complete: false`) still goes to
   Verify, which judges the round.
 - **Verify reads it** (`verificationAddressReport` in
-  `build-pipeline-address-report.ts`) as an untrusted JSON evidence frame
+  `build-pipeline-address-findings-report.ts`) as an untrusted JSON evidence frame
   (`<address-fix-result-json>`, framed by `ADDRESS_FIX_RESULT_FRAME_INSTRUCTION`
   from `review-evidence-frames.ts`), as another agent's claim to check against
-  the diff. Only this round's live Address session after its latest review
-  counts. A round whose clean review went straight to Verify, or whose Address
+  the diff. Only this round's live Address Findings session after its latest review
+  counts. A round whose clean review went straight to Verify, or whose Address Findings
   was skipped or never had a result accepted, has no report and Verify says so.
 - **The validated commit stays in history.** Verify credits a repair only when
   it comes after the commit validation ran on, and validation is not rerun. The
-  Address prompt (`validationHistoryRule`) therefore forbids rebasing,
-  amending, squashing or resetting the validated commits and has Address merge
+  Address Findings prompt (`validationHistoryRule`) therefore forbids rebasing,
+  amending, squashing or resetting the validated commits and has Address Findings merge
   the target branch when a repair needs upstream commits. Before Verify, the
   stage asks `get_environment_commit_ancestry` whether that commit is an
   ancestor of the captured HEAD and states the answer in the prompt
@@ -75,7 +75,7 @@ no check still fails and `limitations` is empty.
   answer, the section is left out and the verifier checks the ancestry itself.
   A graph's Verify node captures no HEAD, so it always checks it itself.
 - **Older sessions.** `addressReportKind: "fix-result"` on the session is the
-  recorded marker of a typed Address turn. An Address session without it was
+  recorded marker of a typed Address Findings turn. An Address Findings session without it was
   started before the typed handoff (or by a path with no result transport): it
   advances to Verify on idle as before, a resume sends it no result slot, and
   Verify reads its last assistant text, at most 16,000 characters, as it always
@@ -83,12 +83,12 @@ no check still fails and `limitations` is empty.
   (`build-pipeline.address-text-report`,
   [version compatibility](version-compatibility.md#register)).
 - **Downgrade.** An older backend ignores `addressReportKind` and `fixResult`
-  and advances an idle Address session to Verify without reading the result. A
-  pending tool-mode Address dispatch it cannot bind fails the stage with "lost
+  and advances an idle Address Findings session to Verify without reading the result. A
+  pending tool-mode Address Findings dispatch it cannot bind fails the stage with "lost
   its result-slot binding", which a retry restarts.
 
-The pipeline inspector shows an Address session's report above its transcript
-(`PipelineAddressReport.tsx`).
+The pipeline inspector shows an Address Findings session's report above its transcript
+(`PipelineAddressFindingsReport.tsx`).
 
 ## Fresh discovery for arbitrary repositories
 
@@ -192,7 +192,7 @@ they are not a security sandbox against a malicious project command.
 
 A failed aggregate command (`mise run test`, `playwright test`) says nothing
 about which of its tests failed or why. Read as one blocking failure, a test
-already failing on the target branch sent a pipeline round its loop: Fix could
+already failing on the target branch sent a pipeline round its loop: Rework could
 not repair it, spent the round proving it fails on the target branch,
 validation ran the same suites again, and Verify failed again until the
 iteration cap. Package generation (`generateReviewPackage`) therefore writes
@@ -251,10 +251,10 @@ list stops any failure being called unrelated on import evidence alone.
 fails, before the next round starts. When no acceptance criterion failed, every
 failing test is listed and no command is unattributed, and either every failure
 is `unrelated` or the round failed exactly the same tests as the previous one,
-the pipeline pauses (`pauseCause: "supervisor"`) instead of dispatching Fix. The
+the pipeline pauses (`pauseCause: "supervisor"`) instead of dispatching Rework. The
 round is queued as a `restartRequest`, so Resume runs it as it would have run;
 the pause message also offers steering the fix or cancelling. A failed
-criterion is always work for Fix, and the iteration cap still fails the
+criterion is always work for Rework, and the iteration cap still fails the
 pipeline as before.
 
 ## Read-only reviewers and the Git guard
@@ -345,26 +345,26 @@ run the same `MultiReviewService` code:
 | Step | Durable record | Recovery after restart |
 | --- | --- | --- |
 | Consolidation with findings and `autoFix` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
-| Consolidation with nothing to fix and `autoPr` | report saved with `phase: ready` and `autoPrLaunch: { basis: clean-review, state: pending }` in one save (`queueCleanReviewAutoPr`); no Fix | The supervisor launches the PR as below while the review is still `ready` on that clean report |
-| Fix runs in its ordinary interactive tab | `fixSession` observed `running` | Observation resumes from the provider session |
-| Fix turn finished on its own, `autoPr` | `fixSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
+| Consolidation with nothing to fix and `autoPr` | report saved with `phase: ready` and `autoPrLaunch: { basis: clean-review, state: pending }` in one save (`queueCleanReviewAutoPr`); no Address Findings | The supervisor launches the PR as below while the review is still `ready` on that clean report |
+| Address Findings runs in its ordinary interactive tab | `fixSession` observed `running` | Observation resumes from the provider session |
+| Address Findings turn finished on its own, `autoPr` | `fixSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
 | PR session | `autoPrLaunch: launched` with its tab, or `failed` after three attempts | A launched PR is never repeated |
 
-Only proof that a Fix completed, or a clean report, queues the PR: a complete
+Only proof that an Address Findings run completed, or a clean report, queues the PR: a complete
 structured result, an interactive handoff turn that finished on its own as its
 conversation's last turn, or a consolidated report with no issues and no
-coverage gaps. A clean report needs no Fix, so with `autoPr` on it goes
+coverage gaps. A clean report needs no Address Findings, so with `autoPr` on it goes
 straight to the PR whatever `autoFix` says, for button, coordinator and every
 other launch alike. Its intent is marked `basis: clean-review` and is
 delivered only while the review is still `ready` on that report; starting a
-Fix first drops it, and a review that moved on records `skipped`. A Fix that fails, is stopped, is superseded or cannot be confirmed
+Fix first drops it, and a review that moved on records `skipped`. An Address Findings run that fails, is stopped, is superseded or cannot be confirmed
 records `skipped` with its reason, or nothing when the session failed. The
-review stops there. A custom Fix never starts a PR, and a new Fix drops an
+review stops there. A custom Address Findings never starts a PR, and a new Address Findings drops an
 undelivered PR intent so the PR cannot race it. Every PR intent records the
-Fix attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
+Address Findings attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
 `get_multi_review` therefore never present an earlier PR as the outcome of a
-later Fix; that Fix's changes need a manual PR update. `autoPr` without `autoFix`
-means a PR after a Fix the user (or `address_multi_review`) starts. The PR
+later Address Findings; that the Address Findings step's changes need a manual PR update. `autoPr` without `autoFix`
+means a PR after an Address Findings run the user (or `address_multi_review`) starts. The PR
 session pushes the branch and opens the pull request; nothing merges.
 
 The built-in Multi Review graph template (`@orkestrator/protocol/graphs/builtins`,
@@ -373,7 +373,7 @@ plan item 108) describes these rules: `multiReviewAutoFixDue`,
 `multi-review-auto-pr.ts` decide the route, and `multi-review-steps.ts` holds
 each step's result kind and turn (`MULTI_REVIEW_STEP_TURNS`,
 `MULTI_REVIEW_INTERACTIVE_FIX`). `graph-builtin-templates.test.ts` pins the
-template to them. The template cannot express a Fix the user starts by hand
+template to them. The template cannot express an Address Findings run the user starts by hand
 after an `autoPr`-only launch; that stays an engine behaviour.
 
 ## The engine setting (item 301)
@@ -421,16 +421,16 @@ record follows within a pass. Once the run ends the record is marked
 
 What differs on the graph engine:
 
-- The automatic Fix is an unattended graph agent node that submits a fix
-  result (it may `ask_human`), not the interactive Fix tab: the review shows
+- The automatic Address Findings is an unattended graph agent node that submits a fix
+  result (it may `ask_human`), not the interactive Address Findings tab: the review shows
   `fixing`, then `completed`, or `failed` when the result is incomplete, as a
-  structured bespoke Fix does. The pull request is the `open-pull-request`
-  system node after a `describe-pr` agent; only a complete Fix result or a clean
+  structured bespoke Address Findings does. The pull request is the `open-pull-request`
+  system node after a `describe-pr` agent; only a complete Address Findings result or a clean
   report reaches them, the same rule as above.
 - Step controls (restart, stop, pause, resume, nudge, retry) are refused on a
   graph-engine review, live or settled, and the review tabs do not offer them;
   they belong to the graph run view, which the tab links to ("Open graph
-  run"). The manual Fix (`address`, custom Fix) waits until the run settles,
+  run"). The manual Address Findings (`address`, custom Address Findings) waits until the run settles,
   then runs as the ordinary interactive handoff, and its completion can still
   queue the automatic PR. The status texts (`get_multi_review`, status wakes,
   the tab's PR step) say the graph run's pull request step opened the pull
@@ -488,7 +488,7 @@ independently of panel size, up to the 32-reviewer maximum:
 | Accepted report | 1 MiB, 100 issues, 16 KiB per prose field | `packages/protocol/src/structured-review/budgets.ts` |
 | Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review-consolidation-evidence.ts` |
 | Reviewer-tab transcript snapshot | 500 messages and 2 MiB; unchanged polls carry no messages | `multi-review-reviewer-transcript.ts` |
-| Flow graph step-session tail (preparation, consolidation, Fix) | 100 messages and 256 KiB; unchanged polls carry no messages; polled only while the step is live and visible | `multi-review-step-transcript.ts` |
+| Flow graph step-session tail (preparation, consolidation, Address Findings) | 100 messages and 256 KiB; unchanged polls carry no messages; polled only while the step is live and visible | `multi-review-step-transcript.ts` |
 | Provisional findings (`report_finding`) | 50 per reviewer, 16 KiB each, so together under one report's budget; staged in memory and written with the pass's observations | `review-provisional-findings.ts` |
 | Admission queue position | No write of its own: rides on the pass's safety commits and observational flush | `review-fanout-admission.ts` |
 
@@ -605,7 +605,7 @@ after the durable write. Two rules keep a recovered record honest
 A restart notice names the request it cut short (`interruptedRequestId`, see
 [agent engines](agent-engines.md)), so a continuation the provider has
 journaled but not yet started is not failed as a second restart. The Multi Review
-preparation, consolidation and Fix steps and Build Pipeline consolidation park
+preparation, consolidation and Address Findings steps and Build Pipeline consolidation park
 an unconfirmed `dispatching` request, and re-send an `absent` one, the same way;
 they have one writer per request, so the first rule does not arise there.
 All these paths use `provider-dispatch-recovery.ts`: a saved result for the

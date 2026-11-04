@@ -1,5 +1,5 @@
 import type {
-  MultiReviewFixSession,
+  MultiReviewAddressFindingsSession,
   MultiReviewPhase,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -11,7 +11,9 @@ import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
  * passes, from exactly the same code.
  */
 
-export function reviewSession(workflow: MultiReviewWorkflow): MultiReviewFixSession | undefined {
+export function reviewSession(
+  workflow: MultiReviewWorkflow,
+): MultiReviewAddressFindingsSession | undefined {
   return (
     workflow.reviewSession ??
     (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession)
@@ -49,7 +51,7 @@ export function needsPausedStopReconciliation(workflow: MultiReviewWorkflow): bo
  */
 export function supervisionDemand(
   workflow: MultiReviewWorkflow,
-  dispatchesAddressPrompts: boolean,
+  dispatchesAddressFindingsPrompts: boolean,
 ): "none" | "fast" | "observe" {
   // A graph-engine review only projects its run until the run settles (item
   // 301); its run's own changes wake it, so observing is the safety net.
@@ -58,11 +60,11 @@ export function supervisionDemand(
   if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "fast";
   if (workflow.phase === "cancelling") return "fast";
   if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
-    return dispatchesAddressPrompts ? "fast" : "none";
+    return dispatchesAddressFindingsPrompts ? "fast" : "none";
   }
   if (needsAutoPrLaunch(workflow)) return "fast";
   if (needsPausedStopReconciliation(workflow)) return "observe";
-  if (needsInteractiveFixObservation(workflow)) return "observe";
+  if (needsInteractiveAddressFindingsObservation(workflow)) return "observe";
   if (!isSupervisedPhase(workflow.phase)) return "none";
   if (workflow.phase === "reviewing") {
     return workflow.reviewers.some(
@@ -89,7 +91,7 @@ export function isGraphEngineProjection(workflow: MultiReviewWorkflow): boolean 
 }
 
 /** The initial interactive Fix turn is observed until its durable runtime settles. */
-export function needsInteractiveFixObservation(workflow: MultiReviewWorkflow): boolean {
+export function needsInteractiveAddressFindingsObservation(workflow: MultiReviewWorkflow): boolean {
   return (
     workflow.phase === "interactive" &&
     workflow.addressPromptPending !== true &&
@@ -134,9 +136,9 @@ export type MultiReviewObligation =
 
 export function multiReviewObligation(
   workflow: MultiReviewWorkflow,
-  dispatchesAddressPrompts: boolean,
+  dispatchesAddressFindingsPrompts: boolean,
 ): MultiReviewObligation | null {
-  if (supervisionDemand(workflow, dispatchesAddressPrompts) === "none") return null;
+  if (supervisionDemand(workflow, dispatchesAddressFindingsPrompts) === "none") return null;
   if (isGraphEngineProjection(workflow)) return "graph-run";
   if ((workflow.pendingResultConsumptions?.length ?? 0) > 0) return "result-consumption";
   if (workflow.phase === "cancelling") return "cancelling";
@@ -145,7 +147,7 @@ export function multiReviewObligation(
   }
   if (needsAutoPrLaunch(workflow)) return "pr-handoff";
   if (needsPausedStopReconciliation(workflow)) return "paused-stop";
-  if (needsInteractiveFixObservation(workflow)) return "interactive-fix";
+  if (needsInteractiveAddressFindingsObservation(workflow)) return "interactive-fix";
   return workflow.phase === "reviewing" ? "reviewers" : "step";
 }
 
@@ -153,12 +155,12 @@ export function multiReviewObligation(
 export function multiReviewDiscovery(
   records: readonly { id: string; snapshot: unknown }[],
   isWorkflow: (value: unknown) => value is MultiReviewWorkflow,
-  dispatchesAddressPrompts: boolean,
+  dispatchesAddressFindingsPrompts: boolean,
 ): WorkflowDiscoveryResult<MultiReviewObligation> {
   const entries: WorkflowDiscoveryResult<MultiReviewObligation>["entries"] = [];
   for (const record of records) {
     if (!isWorkflow(record.snapshot)) continue;
-    const obligation = multiReviewObligation(record.snapshot, dispatchesAddressPrompts);
+    const obligation = multiReviewObligation(record.snapshot, dispatchesAddressFindingsPrompts);
     if (!obligation) continue;
     entries.push({ key: record.id, obligation, target: record.snapshot.environmentId });
   }

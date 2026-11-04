@@ -129,7 +129,7 @@ export function verificationFeedbackBefore(
  * superseded (restarting the current fix). A rewind from a later round ran
  * those rounds' commits in between, so its superseded fixes do not.
  */
-export function carriesFixBaseline(
+export function carriesReworkBaseline(
   pipeline: Pick<BuildPipeline, "rewinds">,
   session: Pick<PipelineSession, "supersededBy" | "iteration">,
 ): boolean {

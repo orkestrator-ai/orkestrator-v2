@@ -1,4 +1,5 @@
 import { backfillLegacyTestResults } from "@orkestrator/protocol/structured-review";
+import { canonicalBuildPipeline } from "@orkestrator/protocol/workflow-vocabulary";
 import * as backend from "@/lib/backend";
 import {
   BUILD_PIPELINE_VERSION,
@@ -52,7 +53,7 @@ function setBoundedGeneration(
 function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
   // Older remote backends cannot run the storage migration. Backfill only the
   // historical field here; strict pipeline validation still rejects bad reports.
-  const raw = persisted.snapshot;
+  const raw = canonicalBuildPipeline(persisted.snapshot);
   const snapshot: unknown =
     raw && typeof raw === "object" && raw.structuredReview
       ? { ...raw, structuredReview: backfillLegacyTestResults(raw.structuredReview) }

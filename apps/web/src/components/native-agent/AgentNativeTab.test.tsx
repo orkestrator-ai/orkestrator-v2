@@ -208,7 +208,7 @@ const defaultEnsureNativeAgentSession = async (input: {
   agent: input.agent,
 });
 const ensureNativeAgentSessionMock = mock(defaultEnsureNativeAgentSession);
-const recoverMultiReviewFixSessionMock = mock(
+const recoverMultiReviewAddressFindingsSessionMock = mock(
   async () =>
     ({
       id: "multi-1",
@@ -436,7 +436,7 @@ mock.module("@/lib/backend", () => ({
   cancelAgentAccountLogin: cancelAgentAccountLoginMock,
   openInBrowser: openInBrowserMock,
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
-  recoverMultiReviewFixSession: recoverMultiReviewFixSessionMock,
+  recoverMultiReviewAddressFindingsSession: recoverMultiReviewAddressFindingsSessionMock,
   listNativeAgentResumableSessions: listNativeAgentResumableSessionsMock,
   setNativeAgentResumableSessionArchived: setNativeAgentResumableSessionArchivedMock,
   getAgentHandoff: getAgentHandoffMock,
@@ -604,8 +604,8 @@ afterEach(() => {
   // Restored for the same reason as the adoption above: a test that parks or
   // fails session creation must not leave later tests unable to connect.
   ensureNativeAgentSessionMock.mockImplementation(defaultEnsureNativeAgentSession);
-  recoverMultiReviewFixSessionMock.mockClear();
-  recoverMultiReviewFixSessionMock.mockImplementation(
+  recoverMultiReviewAddressFindingsSessionMock.mockClear();
+  recoverMultiReviewAddressFindingsSessionMock.mockImplementation(
     async () => ({ id: "multi-1", backendRevision: 2 }) as never,
   );
   listNativeAgentResumableSessionsMock.mockClear();
@@ -8998,7 +8998,7 @@ describe("AgentNativeTab", () => {
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
   });
 
-  test("pins the consolidated review report above a Fix tab's opening prompt", async () => {
+  test("pins the consolidated review report above an Address Findings tab's opening prompt", async () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:launch-1";
     useMultiReviewStore.getState().replaceWorkflow({
@@ -9029,7 +9029,7 @@ describe("AgentNativeTab", () => {
     expect(report.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("pins the report to the address prompt in a legacy multi-message Fix transcript", async () => {
+  test("pins the report to the address prompt in a legacy multi-message Address Findings transcript", async () => {
     renderVirtualizedMessages = true;
     const tabId = "multi-review-fix:multi-1:legacy";
     const preparation = `${REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX}"main"${REVIEW_VALIDATION_DISCOVERY_BRANCH_CLAUSE}\n\n${REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE} Usually one batched inventory read`;
@@ -9168,7 +9168,7 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Structured review report") === null).toBe(true);
   });
 
-  test("reconciles and explains a replacement Multi Review Fix session", async () => {
+  test("reconciles and explains a replacement Multi Review Address Findings session", async () => {
     const tabId = "multi-review-fix:multi-1:launch-1";
     adoptNativeAgentSessionMock.mockImplementation(async (input) => {
       if (input.providerSessionId === "provider-fix") {
@@ -9212,8 +9212,10 @@ describe("AgentNativeTab", () => {
 
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
-    await waitFor(() => expect(recoverMultiReviewFixSessionMock).toHaveBeenCalledTimes(1));
-    expect(recoverMultiReviewFixSessionMock).toHaveBeenCalledWith({
+    await waitFor(() =>
+      expect(recoverMultiReviewAddressFindingsSessionMock).toHaveBeenCalledTimes(1),
+    );
+    expect(recoverMultiReviewAddressFindingsSessionMock).toHaveBeenCalledWith({
       environmentId: "env-1",
       tabId,
       expectedProviderSessionId: "provider-fix",
@@ -9221,7 +9223,7 @@ describe("AgentNativeTab", () => {
     });
     expect(
       await screen.findByText(
-        /fresh Fix session was created and seeded with the consolidated findings/i,
+        /fresh Address Findings session was created and seeded with the consolidated findings/i,
       ),
     ).toBeTruthy();
     const root = usePaneLayoutStore.getState().environments.get("env-1")?.root;

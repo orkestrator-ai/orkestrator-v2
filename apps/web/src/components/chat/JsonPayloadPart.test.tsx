@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import {
   MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
-  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   wrapSystemInstructions,
@@ -56,9 +56,9 @@ function evidencePrompt(
   return `${contract.promptPrefix} The evidence below is backend context.\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${contract.continuationPrefix}${continuationSuffix}`;
 }
 
-function customFixPrompt(evidence: string, instruction = "Fix the finding."): string {
+function customAddressFindingsPrompt(evidence: string, instruction = "Fix the finding."): string {
   const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION}`;
+  return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n${instruction}\n\n${MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION}\n\n${STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION}\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION}`;
 }
 
 function legacyCustomFixPrompt(evidence: string, instruction = "Fix the finding."): string {
@@ -504,7 +504,7 @@ describe("NativeMessage find-index alignment", () => {
   test("a fix-phase prompt renders its structured report above the instructions", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const message = makeMessage(
-      customFixPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT)),
+      customAddressFindingsPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT)),
       "user",
     );
     const view = render(<NativeMessage message={message} />);
@@ -566,7 +566,7 @@ describe("NativeMessage find-index alignment", () => {
 
   test("a malformed fix-phase report falls back to the omission in display and find", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-    const message = makeMessage(customFixPrompt('{"issues":['), "user");
+    const message = makeMessage(customAddressFindingsPrompt('{"issues":['), "user");
     const view = render(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
@@ -694,7 +694,7 @@ describe("NativeMessage find-index alignment", () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
-    const source = customFixPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
+    const source = customAddressFindingsPrompt(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
 
     const view = render(
       <TextPart content={source} truncateUserPrompt expansionKey="copy-source/custom-fix" />,

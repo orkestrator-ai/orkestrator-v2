@@ -10,8 +10,8 @@ test("duplicate warning and work summary render and update in the browser", asyn
   await expect(summary).toContainText("2 reviewer turns");
   await page.getByRole("button", { name: "Add model" }).click();
   await expect(summary).toContainText("3 reviewer turns");
-  await page.getByRole("checkbox", { name: "Auto-fix after consolidation" }).click();
-  await expect(summary).toContainText("then 1 fix turn");
+  await page.getByRole("checkbox", { name: "Auto-address findings after consolidation" }).click();
+  await expect(summary).toContainText("then 1 Address Findings turn");
   await expect(page.getByRole("button", { name: "Start 3-model review" })).toBeEnabled();
 });
 
@@ -92,7 +92,7 @@ test("auto-fix supports keyboard toggling and resets the launch override on reop
   page,
 }) => {
   await page.goto("/multi-review-launch");
-  const autoFix = page.getByRole("checkbox", { name: "Auto-fix after consolidation" });
+  const autoFix = page.getByRole("checkbox", { name: "Auto-address findings after consolidation" });
   await expect(autoFix).not.toBeChecked();
   await autoFix.scrollIntoViewIfNeeded();
   await autoFix.focus();
@@ -104,23 +104,29 @@ test("auto-fix supports keyboard toggling and resets the launch override on reop
   await expect(autoFix).not.toBeChecked();
 });
 
-test("saved auto-fix flows through launch and opens Fix after consolidation", async ({ page }) => {
+test("saved auto-fix flows through launch and opens Address Findings after consolidation", async ({
+  page,
+}) => {
   await page.goto("/multi-review-auto-fix");
 
-  await page.getByRole("checkbox", { name: "Auto-fix" }).click();
+  await page.getByRole("checkbox", { name: "Auto-address findings" }).click();
   await page.getByRole("button", { name: "Save settings" }).click();
   await page.getByRole("button", { name: "Configure Multi Review" }).click();
 
-  await expect(page.getByRole("checkbox", { name: "Auto-fix after consolidation" })).toBeChecked();
+  await expect(
+    page.getByRole("checkbox", { name: "Auto-address findings after consolidation" }),
+  ).toBeChecked();
   await page.getByRole("button", { name: "Start 2-model review" }).click();
   await page.getByRole("button", { name: "Complete consolidation" }).click();
-  await expect(page.getByRole("tab", { name: "Fix" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Address Findings" })).toBeVisible();
 });
 
-test("saved auto-PR leaves an interactive Fix for review before opening PR", async ({ page }) => {
+test("saved auto-PR leaves an interactive Address Findings for review before opening PR", async ({
+  page,
+}) => {
   await page.goto("/multi-review-auto-fix");
 
-  await page.getByRole("checkbox", { name: "Auto-fix", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Auto-address findings", exact: true }).click();
   await page.getByRole("checkbox", { name: "Auto-PR", exact: true }).click();
   await page.getByRole("button", { name: "Save settings" }).click();
   await page.getByRole("button", { name: "Configure Multi Review" }).click();

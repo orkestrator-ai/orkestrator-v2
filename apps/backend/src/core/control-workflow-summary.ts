@@ -1,4 +1,4 @@
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { pipelineWorkers } from "@orkestrator/protocol/pipeline-worker-mail";
 
@@ -53,7 +53,7 @@ export function workflowSummary(workflow: Record<string, unknown>): Record<strin
 const MAX_AUTOMATION_MESSAGE_CHARS = 400;
 
 /**
- * A Multi Review's auto-fix and auto-PR, the automatic PR launch's state, and
+ * A Multi Review's auto-address findings and auto-PR, the automatic PR launch's state, and
  * one sentence on what happens next, so a coordinator can tell whether it is
  * expected to act. Only Multi Review snapshots carry `autoFix`/`autoPr`.
  */
@@ -82,7 +82,8 @@ function automationNext(workflow: Record<string, unknown>): string {
   const recordedLaunch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
   const fix = isRecord(workflow.fixSession) ? workflow.fixSession : undefined;
   const phase = workflow.phase;
-  const customFix = isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
+  const customAddressFindings =
+    isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
   const cleanReviewPr = recordedLaunch?.basis === "clean-review";
   const launch =
     cleanReviewPr &&
@@ -95,33 +96,34 @@ function automationNext(workflow: Record<string, unknown>): string {
     recordedLaunch?.state === "launched" &&
     (cleanReviewPr ||
       recordedLaunch.fixIdentity === undefined ||
-      recordedLaunch.fixIdentity !== multiReviewFixIdentity(fix));
+      recordedLaunch.fixIdentity !== multiReviewAddressFindingsIdentity(fix));
   const manualPr = "; review its result and start or update the PR manually";
-  const thenPr = customFix
+  const thenPr = customAddressFindings
     ? manualPr
     : recordedLaunch?.state === "launched"
-      ? "; the earlier PR does not confirm inclusion of this Fix's changes, so review and update it manually"
+      ? "; the earlier PR does not confirm inclusion of this Address Findings run's changes, so review and update it manually"
       : autoPr
-        ? "; a PR session starts once that Fix completes"
+        ? "; a PR session starts once that Address Findings run completes"
         : "";
-  // A new handoff or running Fix takes precedence over a retained PR launch.
+  // A new handoff or running Address Findings takes precedence over a retained PR launch.
   if (phase === "interactive" && workflow.addressPromptPending === true)
-    return `The Fix handoff is being delivered${thenPr}.`;
-  if (phase === "interactive" && fix?.status === "running") return `The Fix is running${thenPr}.`;
+    return `The Address Findings handoff is being delivered${thenPr}.`;
+  if (phase === "interactive" && fix?.status === "running")
+    return `Address Findings is running${thenPr}.`;
   if (phase === "failed" || phase === "cancelled") return "Nothing else runs automatically.";
   if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
-  if (phase === "interactive" && customFix)
-    return `The custom Fix ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
+  if (phase === "interactive" && customAddressFindings)
+    return `The custom Address Findings ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
   // On the graph engine (item 301) a system step opens the pull request.
   const graph = workflow.engine === "graph";
   if (launch?.state === "pending")
     return graph
-      ? `${cleanReviewPr ? "Consolidation found nothing to fix" : "The Fix completed"}; the graph run is writing the description and opening the pull request.`
+      ? `${cleanReviewPr ? "Consolidation found nothing to fix" : "Address Findings completed"}; the graph run is writing the description and opening the pull request.`
       : cleanReviewPr
         ? "Consolidation found nothing to fix; the PR session is starting."
-        : "The Fix completed; the PR session is starting.";
+        : "Address Findings completed; the PR session is starting.";
   if (phase === "interactive" && earlierPr)
-    return "The Fix turn ended; the earlier PR does not confirm inclusion of this Fix's changes. Review the result and update the PR manually.";
+    return "The Address Findings turn ended; the earlier PR does not confirm inclusion of this Address Findings run's changes. Review the result and update the PR manually.";
   if (launch?.state === "launched" && graph)
     return "The graph run's pull request step pushed the branch and opened the pull request. Nothing else runs automatically.";
   if (launch?.state === "launched")
@@ -138,24 +140,24 @@ function automationNext(workflow: Record<string, unknown>): string {
   if (phase === "completed") return "Nothing else runs automatically.";
   if (phase === "ready")
     return autoFix && !hasFindings(workflow.consolidatedReport)
-      ? "Consolidation found nothing to fix, so no Fix or PR session starts."
-      : `Waiting for address_multi_review to start the Fix${thenPr}.`;
+      ? "Consolidation found nothing to fix, so no Address Findings or PR session starts."
+      : `Waiting for address_multi_review to start Address Findings${thenPr}.`;
   if (phase === "interactive") {
-    if (fix?.status === "failed") return "The Fix failed; no PR session starts.";
+    if (fix?.status === "failed") return "Address Findings failed; no PR session starts.";
     if (fix?.status === "idle")
       return autoPr
-        ? "The Fix turn ended without proof it completed, so no PR session starts."
-        : "The Fix turn ended. Nothing else runs automatically.";
-    return `The Fix is starting${thenPr}.`;
+        ? "The Address Findings turn ended without proof it completed, so no PR session starts."
+        : "The Address Findings turn ended. Nothing else runs automatically.";
+    return `Address Findings is starting${thenPr}.`;
   }
   return autoFix
-    ? `The Fix starts automatically if consolidation reports findings${autoPr ? ", then a PR session once the Fix completes; a clean report starts the PR session directly" : ""}.`
+    ? `Address Findings starts automatically if consolidation reports findings${autoPr ? ", then a PR session once Address Findings completes; a clean report starts the PR session directly" : ""}.`
     : autoPr
-      ? `Stops at ready if consolidation reports findings; address_multi_review starts the Fix${thenPr}. A clean report starts the PR session directly.`
-      : `Stops at ready; address_multi_review starts the Fix${thenPr}.`;
+      ? `Stops at ready if consolidation reports findings; address_multi_review starts Address Findings${thenPr}. A clean report starts the PR session directly.`
+      : `Stops at ready; address_multi_review starts Address Findings${thenPr}.`;
 }
 
-/** Auto-fix starts only for a report with issues or coverage gaps. */
+/** Auto-address findings starts only for a report with issues or coverage gaps. */
 function hasFindings(report: unknown): boolean {
   if (!isRecord(report)) return false;
   return [report.issues, report.testCoverageGaps].some(

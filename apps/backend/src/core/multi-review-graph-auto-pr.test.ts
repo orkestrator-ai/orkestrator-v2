@@ -1,13 +1,13 @@
 /**
- * Auto-fix and auto-PR ordering on the graph engine (item 301), against
- * `review-preparation.md` §"Auto-fix and auto-PR": only proof that a Fix
+ * Auto-address findings and auto-PR ordering on the graph engine (item 301), against
+ * `review-preparation.md` §"Auto-address findings and auto-PR": only proof that an Address Findings run
  * completed, or a clean report, queues the pull request, and the pull
  * request is the `open-pull-request` system node, never an agent.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import {
   graphReviewGap,
   graphReviewIssue,
@@ -22,7 +22,7 @@ afterEach(async () => {
   for (const world of worlds.splice(0)) await world.close();
 });
 
-async function world(findings: boolean, fixComplete = true): Promise<GraphReviewWorld> {
+async function world(findings: boolean, addressFindingsComplete = true): Promise<GraphReviewWorld> {
   const w = await graphReviewWorld();
   worlds.push(w);
   const report = graphReviewReport(
@@ -47,13 +47,13 @@ async function world(findings: boolean, fixComplete = true): Promise<GraphReview
   w.fakes.scripts.set("fix", ({ port }) =>
     port === "result"
       ? {
-          complete: fixComplete,
-          summary: fixComplete ? "Fixed" : "One finding remains",
+          complete: addressFindingsComplete,
+          summary: addressFindingsComplete ? "Fixed" : "One finding remains",
           filesChanged: ["src/a.ts"],
           commandsRun: [],
           notes: [],
           // An incomplete result must say why (the type's domain check).
-          limitations: fixComplete ? [] : ["One finding needs a design decision"],
+          limitations: addressFindingsComplete ? [] : ["One finding needs a design decision"],
         }
       : undefined,
   );
@@ -83,7 +83,7 @@ async function settleWatchingPr(
 }
 
 describe("auto-fix and auto-PR on the graph engine", () => {
-  test("a Fix that completes queues the pull request, which opens only after it", async () => {
+  test("an Address Findings run that completes queues the pull request, which opens only after it", async () => {
     const w = await world(true);
     const { settled, prStates, phases } = await settleWatchingPr(
       w,
@@ -98,7 +98,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(prStates).toEqual(["none", "pending", "launched"]);
     expect(settled.autoPrLaunch).toMatchObject({
       state: "launched",
-      fixIdentity: multiReviewFixIdentity(settled.fixSession),
+      fixIdentity: multiReviewAddressFindingsIdentity(settled.fixSession),
     });
     expect(settled.autoPrLaunch?.basis).toBeUndefined();
 
@@ -106,7 +106,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     const fix = only(run, "fix");
     const describe = only(run, "describe-pr");
     const pr = only(run, "pr");
-    // The Fix's own commit is what the pull request publishes.
+    // Address Findings's own commit is what the pull request publishes.
     expect(only(run, "fix-complete").outlet).toBe("complete");
     expect(describe.inputs.code).toBe(fix.outputs.code);
     expect(pr.inputs.code).toBe(fix.outputs.code);
@@ -117,7 +117,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(agentStarts.map((call) => call.nodeId)).not.toContain("pr");
   });
 
-  test("a Fix that does not complete fails the review and queues no pull request", async () => {
+  test("an Address Findings run that does not complete fails the review and queues no pull request", async () => {
     const w = await world(true, false);
     const { settled, prStates } = await settleWatchingPr(
       w,
@@ -125,7 +125,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     );
     expect(settled.phase).toBe("failed");
     expect(settled.error).toBe(
-      "The fix model could not address every finding: One finding remains",
+      "The Address Findings model could not address every finding: One finding remains",
     );
     expect(prStates).toEqual(["none"]);
     const run = await w.run(settled);
@@ -148,7 +148,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(only(run, "pr").inputs.code).toBe(only(run, "plan").outputs.code);
   });
 
-  test("findings without autoFix end ready; the manual Fix then runs as on any review", async () => {
+  test("findings without autoFix end ready; the manual Address Findings then runs as on any review", async () => {
     const w = await world(true);
     const { settled, prStates } = await settleWatchingPr(
       w,
@@ -159,7 +159,7 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     const run = await w.run(settled);
     expect(only(run, "fix").state).toBe("skipped");
     expect(only(run, "pr").state).toBe("skipped");
-    // The settled record is an ordinary review: the user's Fix is the bespoke
+    // The settled record is an ordinary review: the user's Address Findings is the bespoke
     // interactive handoff, and its completion may still queue the PR.
     const addressed = await w.service.address(settled.id);
     expect(addressed).toMatchObject({

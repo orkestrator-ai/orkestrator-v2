@@ -857,7 +857,7 @@ describe("BuildPipelineService", () => {
             sdkSessionId: "previous-fix",
             status: "idle",
             startedAt: new Date().toISOString(),
-            label: "Fix Session",
+            label: "Rework Session",
           });
           snapshot.verificationFeedback = "Repair the failed verification";
         });
@@ -872,7 +872,7 @@ describe("BuildPipelineService", () => {
         expect(restarted.phase).toBe("fixing");
         expect(restarted.sessions.at(-1)).toMatchObject({
           phase: "fix",
-          label: "Fix Session",
+          label: "Rework Session",
           status: "running",
         });
         expect(restarted.sessions.at(-1)?.sdkSessionId).not.toBe(session.sdkSessionId);

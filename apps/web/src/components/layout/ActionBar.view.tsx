@@ -406,14 +406,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // switching to the environment's generic agent.
   const review2LaunchDefaults = configuredLaunchDialogDefaultsFor("review2");
   const reviewPreparationLaunchDefaults = configuredLaunchDialogDefaultsFor("reviewPreparation");
-  const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
+  const addressFindingsLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const prFreshnessNotice = hydrationFreshnessNotice(monitorSyncStatus, "pull request status");
   const prLastCheckedAt = formatObservedAt(lastSuccessfulCheckAt);
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
   // Graphs are experimental: their buttons show only while they are on.
   const graphsEnabled = config.global.experimentalGraphs === true;
-  const multiReviewAutoFix = config.global.agentSettings?.multiReview?.autoFix ?? false;
+  const multiReviewAutoAddressFindings = config.global.agentSettings?.multiReview?.autoFix ?? false;
   const multiReviewAutoPr = config.global.agentSettings?.multiReview?.autoPr ?? false;
   const storedReviewerCount =
     config.global.agentSettings?.multiReview?.reviewerCount ?? DEFAULT_MULTI_REVIEW_REVIEWER_COUNT;
@@ -453,12 +453,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   const multiReviewShortcutStateRef = useRef({
     canCreateTab,
-    fixReviewIssuesLaunchDefaults,
+    addressFindingsLaunchDefaults,
     handleMultiReview,
     isRunning,
     multiReviewLaunchPending,
     multiReviewReviewerDefaults,
-    multiReviewAutoFix,
+    multiReviewAutoAddressFindings,
     multiReviewAutoPr,
     reviewLaunchDefaults,
     reviewPreparationLaunchDefaults,
@@ -471,12 +471,12 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   useLayoutEffect(() => {
     multiReviewShortcutStateRef.current = {
       canCreateTab,
-      fixReviewIssuesLaunchDefaults,
+      addressFindingsLaunchDefaults,
       handleMultiReview,
       isRunning,
       multiReviewLaunchPending,
       multiReviewReviewerDefaults,
-      multiReviewAutoFix,
+      multiReviewAutoAddressFindings,
       multiReviewAutoPr,
       reviewLaunchDefaults,
       reviewPreparationLaunchDefaults,
@@ -523,11 +523,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           preferredModels: state.reviewLaunchDefaults.preferredModels,
           preferredReasoningEfforts: state.reviewLaunchDefaults.preferredReasoningEfforts,
           preferredFastModes: state.reviewLaunchDefaults.preferredFastModes,
-          defaultAutoFix: state.multiReviewAutoFix,
+          defaultAutoAddressFindings: state.multiReviewAutoAddressFindings,
           defaultAutoPr: state.multiReviewAutoPr,
           reviewerDefaults: state.multiReviewReviewerDefaults,
           reviewModelDefaults: state.reviewPreparationLaunchDefaults,
-          fixModelDefaults: state.fixReviewIssuesLaunchDefaults,
+          addressFindingsModelDefaults: state.addressFindingsLaunchDefaults,
         }),
       );
     };
@@ -1009,11 +1009,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                             preferredReasoningEfforts:
                               reviewLaunchDefaults.preferredReasoningEfforts,
                             preferredFastModes: reviewLaunchDefaults.preferredFastModes,
-                            defaultAutoFix: multiReviewAutoFix,
+                            defaultAutoAddressFindings: multiReviewAutoAddressFindings,
                             defaultAutoPr: multiReviewAutoPr,
                             reviewerDefaults: multiReviewReviewerDefaults,
                             reviewModelDefaults: reviewPreparationLaunchDefaults,
-                            fixModelDefaults: fixReviewIssuesLaunchDefaults,
+                            addressFindingsModelDefaults: addressFindingsLaunchDefaults,
                           }),
                         );
                       }}
@@ -1634,11 +1634,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         preferredFastModes={reviewLaunchDefaults.preferredFastModes}
-        defaultAutoFix={multiReviewAutoFix}
+        defaultAutoAddressFindings={multiReviewAutoAddressFindings}
         defaultAutoPr={multiReviewAutoPr}
         reviewerDefaults={multiReviewReviewerDefaults}
         reviewModelDefaults={reviewPreparationLaunchDefaults}
-        fixModelDefaults={fixReviewIssuesLaunchDefaults}
+        addressFindingsModelDefaults={addressFindingsLaunchDefaults}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
       />

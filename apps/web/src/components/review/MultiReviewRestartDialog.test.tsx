@@ -50,12 +50,12 @@ describe("MultiReviewRestartDialog", () => {
         onSubmit={onSubmit}
       />,
     );
-    const picker = screen.getByRole("combobox", { name: "Restart fix model" });
+    const picker = screen.getByRole("combobox", { name: "Restart address findings model" });
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "pi models" }));
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(picker.textContent).toContain("Saved Pi default");
-    fireEvent.click(screen.getByRole("button", { name: "Restart Fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Address Findings" }));
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
       agent: "pi",
       model: "openai/gpt-6.1-sol",
@@ -112,6 +112,6 @@ describe("MultiReviewRestartDialog", () => {
     );
 
     expect(screen.getByRole("alert").textContent).toContain("The selected model is unavailable");
-    expect(screen.getByRole("heading", { name: "Restart Fix" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Restart Address Findings" })).toBeTruthy();
   });
 });

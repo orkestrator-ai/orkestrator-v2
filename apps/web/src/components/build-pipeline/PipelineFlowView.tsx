@@ -74,7 +74,7 @@ import { PipelineNotesView } from "./PipelineNotesView";
 import { PipelinePullRequestView, usePipelinePullRequest } from "./PipelinePullRequestView";
 import { PipelineSessionTranscript, pipelineAcceptsMessages } from "./PipelineSessionTranscript";
 import { PipelineTicketView } from "./PipelineTicketView";
-import { PipelineAddressReport } from "./PipelineAddressReport";
+import { PipelineAddressFindingsReport } from "./PipelineAddressFindingsReport";
 import { usePipelineCodeRewind } from "./PipelineCodeRewindDialog";
 import { usePipelineRestartIn } from "./PipelineRestartInDialog";
 import type { PipelineControls } from "./usePipelineControls";
@@ -362,7 +362,7 @@ export function PipelineFlowView({
     if (node.session && createTab) {
       actions.push({
         key: "open",
-        label: node.kind === "fix" ? "Open Fix session" : "Open session",
+        label: node.kind === "fix" ? "Open Rework session" : "Open session",
         icon: ExternalLink,
         onSelect: () => openSession(node),
       });
@@ -861,7 +861,7 @@ function InspectorNotes({
     );
   }
   if (session?.phase === "address" && session.fixResult) {
-    notes.push(<PipelineAddressReport key="address-report" result={session.fixResult} />);
+    notes.push(<PipelineAddressFindingsReport key="address-report" result={session.fixResult} />);
   }
   if (
     node.kind === "verify" &&
@@ -995,9 +995,9 @@ function InspectorBody({
 
 const RESTART_STEP_LABEL: Record<string, string> = {
   build: "Build",
-  fix: "Fix",
+  fix: "Rework",
   review: "Review",
-  address: "Address",
+  address: "Address Findings",
   verify: "Verify",
   pr: "Ship",
   "resolve-conflicts": "Resolve conflicts",

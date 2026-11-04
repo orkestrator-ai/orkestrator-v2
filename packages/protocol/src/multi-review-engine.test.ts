@@ -101,7 +101,7 @@ describe("stored Multi Review records", () => {
         fixSession: session,
       }),
     ).toBe(true);
-    // The graph engine's relaxations are graph-only: a bespoke Fix still needs
+    // The graph engine's relaxations are graph-only: a bespoke Address Findings still needs
     // its session and journaled request.
     expect(
       isMultiReviewWorkflow({ ...bespoke, phase: "completed", consolidatedReport: report }),
@@ -137,7 +137,7 @@ describe("stored Multi Review records", () => {
     }
   });
 
-  test("a graph Fix is fixing from admission and completes without a journaled request", () => {
+  test("a graph Address Findings is fixing from admission and completes without a journaled request", () => {
     expect(isMultiReviewWorkflow({ ...graph, phase: "fixing", consolidatedReport: report })).toBe(
       true,
     );

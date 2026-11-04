@@ -191,6 +191,91 @@ describe("--node", () => {
 });
 
 describe("review and pr commands", () => {
+  test.each([
+    {
+      name: "new aliases",
+      flags: ["--address-findings-model", "codex=gpt-6.1-sol@high", "--auto-address-findings"],
+      autoFix: true,
+    },
+    {
+      name: "explicit false",
+      flags: ["--address-findings-model", "codex=gpt-6.1-sol@high", "--no-auto-address-findings"],
+      autoFix: false,
+    },
+    {
+      name: "former aliases",
+      flags: ["--fix-model", "codex=gpt-6.1-sol@high", "--no-auto-fix"],
+      autoFix: false,
+    },
+    {
+      name: "new names win over earlier former names",
+      flags: [
+        "--fix-model",
+        "claude=opus",
+        "--auto-fix",
+        "--address-findings-model",
+        "codex=gpt-6.1-sol@high",
+        "--no-auto-address-findings",
+      ],
+      autoFix: false,
+    },
+    {
+      name: "new names win over later former names",
+      flags: [
+        "--address-findings-model",
+        "codex=gpt-6.1-sol@high",
+        "--no-auto-address-findings",
+        "--fix-model",
+        "claude=opus",
+        "--auto-fix",
+      ],
+      autoFix: false,
+    },
+  ])("review launch preserves wire compatibility for $name", async ({ flags, autoFix }) => {
+    const { box, gateway } = await fixture((request) =>
+      request.body.args.action === "review.launch"
+        ? envelope(
+            publicSuccessEnvelope(
+              "review.launch",
+              { workflowId: "review-1", phase: "reviewing", reused: false },
+              receipt("review.launch"),
+            ),
+          )
+        : undefined,
+    );
+    const run = await box.run(["review", "launch", "env-1", ...flags, "--json"]);
+    expect(run.code).toBe(0);
+    expect(requestsFor(gateway, "review.launch")[0]?.body.args.input).toEqual({
+      environmentId: "env-1",
+      fixModel: { agent: "codex", model: "gpt-6.1-sol", reasoningEffort: "high" },
+      autoFix,
+    });
+  });
+
+  test.each([
+    { name: "new alias", flags: ["--address-findings"] },
+    { name: "former alias", flags: ["--fix"] },
+    { name: "both aliases", flags: ["--fix", "--address-findings"] },
+  ])("review open keeps the former surface value for $name", async ({ flags }) => {
+    const { box, gateway } = await fixture((request) =>
+      request.body.args.action === "review.open"
+        ? envelope(
+            publicSuccessEnvelope(
+              "review.open",
+              { workflowId: "review-1", phase: "interactive", reused: true },
+              receipt("review.open"),
+            ),
+          )
+        : undefined,
+    );
+    const run = await box.run(["review", "open", "review-1", ...flags, "--json"]);
+    expect(run.code).toBe(0);
+    expect(requestsFor(gateway, "review.open")[0]?.body.args.input).toEqual({
+      workflowId: "review-1",
+      surface: "fix",
+    });
+  });
+
   test("review launch sends the reviewer rows and auto-actions", async () => {
     const { box, gateway } = await fixture((request) =>
       request.body.args.action === "review.launch"

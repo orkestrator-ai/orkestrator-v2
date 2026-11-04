@@ -53,7 +53,7 @@ const ROLE_DEFAULT_LABELS: Readonly<Record<GraphRoleDefaultSource, string>> = {
   review: "Review",
   review2: "Second review",
   reviewPreparation: "Review preparation",
-  fixReviewIssues: "Fix review issues",
+  fixReviewIssues: "Address review findings",
   verify: "Verify",
   pr: "Pull request",
   resolve: "Resolve conflicts",

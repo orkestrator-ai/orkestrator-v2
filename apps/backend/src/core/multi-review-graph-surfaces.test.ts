@@ -205,7 +205,7 @@ describe("get_multi_review on a graph-engine record", () => {
       automation: {
         autoFix: false,
         autoPr: false,
-        next: "Stops at ready; address_multi_review starts the Fix.",
+        next: "Stops at ready; address_multi_review starts Address Findings.",
       },
     });
 
@@ -217,7 +217,7 @@ describe("get_multi_review on a graph-engine record", () => {
     expect(atReady.graph).toEqual(atReady.bespoke);
     expect(atReady.graph).toMatchObject({
       phase: "ready",
-      automation: { next: "Waiting for address_multi_review to start the Fix." },
+      automation: { next: "Waiting for address_multi_review to start Address Findings." },
     });
   });
 
@@ -289,7 +289,11 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
     expect(multiReviewStatus(completed, completed.id)).toMatchObject({
       state: "completed",
       terminal: true,
-      details: ["Fix: Fixed", "Files changed: 1", "The graph run opened the pull request."],
+      details: [
+        "Address Findings: Fixed",
+        "Files changed: 1",
+        "The graph run opened the pull request.",
+      ],
     });
   });
 
@@ -307,7 +311,7 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
     });
   });
 
-  test("a Fix that does not complete wakes once, failed", async () => {
+  test("an Address Findings run that does not complete wakes once, failed", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true, complete: false });
     const workflow = await launch(c, { autoFix: true, autoPr: true });
@@ -315,7 +319,7 @@ describe("status wakes for a coordinator-launched graph-engine review", () => {
     expect(failed.phase).toBe("failed");
     expect(await c.notices()).toEqual(["failed"]);
     expect(multiReviewStatus(failed, failed.id)?.details).toEqual([
-      "Error: The fix model could not address every finding: One finding remains",
+      "Error: The Address Findings model could not address every finding: One finding remains",
     ]);
   });
 
@@ -362,14 +366,14 @@ function watchRevisions(c: GraphCoordinatorWorld, workflowId: string) {
 }
 
 describe("no saved revision of the run reads as an end the bespoke engine never shows", () => {
-  test("auto-fix: consolidation goes on to the Fix and a completed Fix to its pull request", async () => {
+  test("auto-fix: consolidation goes on to Address Findings and a completed Address Findings run to its pull request", async () => {
     const c = await world();
     scriptGraphReview(c.w, { findings: true });
     const workflow = await launch(c, { autoFix: true, autoPr: true });
     const revisions = watchRevisions(c, workflow.id);
     await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
     // Not `ready:none:ready` after consolidation, and not
-    // `completed:none:completed` (a terminal wake without the PR) after the Fix.
+    // `completed:none:completed` (a terminal wake without the PR) after Address Findings.
     expect(await revisions()).toEqual([
       "preparing:none:quiet",
       "reviewing:none:quiet",
@@ -386,7 +390,7 @@ describe("no saved revision of the run reads as an end the bespoke engine never 
     const workflow = await launch(c, { autoFix: true, autoPr: true });
     const revisions = watchRevisions(c, workflow.id);
     await c.drive(workflow.id, (current) => current.graphRun?.settled === true);
-    // Not `ready:none:ready` ("found nothing to fix ... no Fix or PR session started").
+    // Not `ready:none:ready` ("found nothing to fix ... no Address Findings or PR session started").
     expect(await revisions()).toEqual([
       "preparing:none:quiet",
       "reviewing:none:quiet",

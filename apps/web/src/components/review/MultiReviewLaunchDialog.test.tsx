@@ -93,7 +93,7 @@ describe("MultiReviewLaunchDialog speed", () => {
     expect(selection.reviewers[1]).not.toHaveProperty("fastMode");
   });
 
-  test("seeds every row, including the fix model, from the configured speed", () => {
+  test("seeds every row, including the Address Findings model, from the configured speed", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
     render(
       <MultiReviewLaunchDialog
@@ -211,7 +211,7 @@ describe("MultiReviewLaunchDialog", () => {
     expect(
       scrollRegion.contains(screen.getByLabelText("Preparation & consolidation model model")),
     ).toBe(true);
-    expect(scrollRegion.contains(screen.getByLabelText("Fix model model"))).toBe(true);
+    expect(scrollRegion.contains(screen.getByLabelText("Address Findings model model"))).toBe(true);
     expect(
       scrollRegion.contains(screen.getByRole("button", { name: "Start 3-model review" })),
     ).toBe(false);
@@ -268,7 +268,7 @@ describe("MultiReviewLaunchDialog", () => {
       "Reviewer 1 model",
       "Reviewer 2 model",
       "Preparation & consolidation model model",
-      "Fix model model",
+      "Address Findings model model",
     ]) {
       expect(screen.getByLabelText(name).closest("fieldset")?.disabled).toBe(true);
     }
@@ -345,7 +345,7 @@ describe("MultiReviewLaunchDialog", () => {
           preferredModels: { codex: "gpt-5.5" },
           preferredReasoningEfforts: { codex: "low" },
         }}
-        fixModelDefaults={{
+        addressFindingsModelDefaults={{
           defaultAgent: "opencode",
           preferredModels: { opencode: "provider/model" },
         }}
@@ -470,7 +470,7 @@ describe("MultiReviewLaunchDialog", () => {
         preferredModels: { claude: "opus" },
         preferredFastModes: { claude: false },
       },
-      fixModelDefaults: {
+      addressFindingsModelDefaults: {
         defaultAgent: "claude",
         preferredModels: { claude: "opus" },
         preferredFastModes: { claude: true },
@@ -494,7 +494,7 @@ describe("MultiReviewLaunchDialog", () => {
         preferredModels: { codex: "gpt-5.5" },
         preferredReasoningEfforts: { codex: "medium" },
       },
-      fixModelDefaults: {
+      addressFindingsModelDefaults: {
         defaultAgent: "opencode",
         preferredModels: { opencode: "provider/model" },
       },
@@ -529,7 +529,7 @@ describe("MultiReviewLaunchDialog", () => {
           preferredModels: { codex: "gpt-5.5" },
           preferredReasoningEfforts: { codex: "medium" },
         }}
-        fixModelDefaults={{
+        addressFindingsModelDefaults={{
           defaultAgent: "codex",
           preferredModels: { codex: "gpt-5.5" },
           preferredReasoningEfforts: { codex: "low" },
@@ -539,7 +539,7 @@ describe("MultiReviewLaunchDialog", () => {
     );
 
     chooseFavorite("Reviewer 2", /GPT-5\.6/);
-    chooseFavorite("Fix model", /GPT-5\.6/);
+    chooseFavorite("Address Findings model", /GPT-5\.6/);
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
@@ -683,41 +683,46 @@ describe("MultiReviewLaunchDialog auto-fix", () => {
       false,
     );
     expect(
-      defaultMultiReviewLaunchSelection({ defaultAgent: "claude", catalog, defaultAutoFix: true })
-        .autoFix,
+      defaultMultiReviewLaunchSelection({
+        defaultAgent: "claude",
+        catalog,
+        defaultAutoAddressFindings: true,
+      }).autoFix,
     ).toBe(true);
   });
 
   test.each([true, false])(
     "can override saved auto-fix %s for one launch and resets on reopen",
-    (defaultAutoFix) => {
+    (defaultAutoAddressFindings) => {
       const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
       const props = {
         defaultAgent: "claude" as const,
         catalog,
-        defaultAutoFix,
+        defaultAutoAddressFindings,
         onConfirm,
         onOpenChange: () => undefined,
       };
       const { rerender } = render(<MultiReviewLaunchDialog {...props} open />);
-      const checkbox = screen.getByRole("checkbox", { name: "Auto-fix after consolidation" });
-      expect(checkbox.getAttribute("aria-checked")).toBe(String(defaultAutoFix));
+      const checkbox = screen.getByRole("checkbox", {
+        name: "Auto-address findings after consolidation",
+      });
+      expect(checkbox.getAttribute("aria-checked")).toBe(String(defaultAutoAddressFindings));
       fireEvent.click(checkbox);
       // Catalogue/default refresh while open must not erase the user's choice.
       rerender(<MultiReviewLaunchDialog {...props} catalog={{ ...catalog }} open />);
       fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
-      expect(onConfirm.mock.calls[0]?.[0].autoFix).toBe(!defaultAutoFix);
+      expect(onConfirm.mock.calls[0]?.[0].autoFix).toBe(!defaultAutoAddressFindings);
       rerender(<MultiReviewLaunchDialog {...props} open={false} />);
       rerender(<MultiReviewLaunchDialog {...props} open />);
       expect(
         screen
-          .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+          .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
           .getAttribute("aria-checked"),
-      ).toBe(String(defaultAutoFix));
+      ).toBe(String(defaultAutoAddressFindings));
       rerender(<MultiReviewLaunchDialog {...props} open busy />);
       expect(
         screen
-          .getByRole("checkbox", { name: "Auto-fix after consolidation" })
+          .getByRole("checkbox", { name: "Auto-address findings after consolidation" })
           .hasAttribute("disabled"),
       ).toBe(true);
     },
@@ -740,7 +745,7 @@ describe("MultiReviewLaunchDialog auto-PR", () => {
     const props = {
       defaultAgent: "claude" as const,
       catalog,
-      defaultAutoFix: true,
+      defaultAutoAddressFindings: true,
       onConfirm,
       onOpenChange: () => undefined,
     };
@@ -818,8 +823,8 @@ describe("MultiReviewLaunchDialog launch value", () => {
     expect(summary.textContent).not.toMatch(/[$€£]/);
     fireEvent.click(screen.getByRole("button", { name: "Add model" }));
     expect(summary.textContent).toContain("3 reviewer turns");
-    fireEvent.click(screen.getByLabelText("Auto-fix after consolidation"));
-    expect(summary.textContent).toContain("then 1 fix turn");
+    fireEvent.click(screen.getByLabelText("Auto-address findings after consolidation"));
+    expect(summary.textContent).toContain("then 1 Address Findings turn");
   });
 });
 

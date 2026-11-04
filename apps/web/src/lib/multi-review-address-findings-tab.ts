@@ -2,7 +2,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 /** True when this pane tab is the Fix session owned by the given Multi Review. */
-export function isMultiReviewFixTabId(
+export function isMultiReviewAddressFindingsTabId(
   tabId: string,
   workflowId: string,
   fixTabId?: string,
@@ -20,14 +20,14 @@ export function isMultiReviewFixTabId(
  * the Multi Review tab already owns so the first user bubble is not a wall of
  * hidden JSON.
  */
-export function findMultiReviewFixReport(
+export function findMultiReviewAddressFindingsReport(
   workflows: Iterable<MultiReviewWorkflow>,
   tabId: string,
   environmentId: string,
 ): StructuredReviewReport | undefined {
   for (const workflow of workflows) {
     if (workflow.environmentId !== environmentId) continue;
-    if (!isMultiReviewFixTabId(tabId, workflow.id, workflow.fixTabId)) continue;
+    if (!isMultiReviewAddressFindingsTabId(tabId, workflow.id, workflow.fixTabId)) continue;
     return workflow.consolidatedReport;
   }
   return undefined;

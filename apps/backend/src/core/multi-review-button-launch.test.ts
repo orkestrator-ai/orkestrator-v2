@@ -125,3 +125,46 @@ test("refuses before starting anything when the environment cannot host the tab"
   expect(start).not.toHaveBeenCalled();
   expect(await storage.getMultiReviewWorkflow("review-1")).toBeNull();
 });
+
+test("future Address Findings choices reach the button start and override saved automation", async () => {
+  const config = await storage.loadConfig();
+  await storage.saveConfig({
+    ...config,
+    global: {
+      ...config.global,
+      agentSettings: {
+        ...config.global.agentSettings,
+        multiReview: { ...config.global.agentSettings?.multiReview, autoFix: true },
+      },
+    },
+  });
+  const addressModel = { agent: "claude", model: "address-model" };
+  const { fixModel: _formerModel, ...input } = request("future-review").input;
+  const result = (await launch(
+    {
+      reservedId: "future-review",
+      input: { ...input, addressFindingsModel: addressModel, autoAddressFindings: false },
+    },
+    context,
+  )) as MultiReviewActionResult;
+
+  expect(result.ui.status).toBe("opened");
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(start.mock.calls[0]![0]).toMatchObject({ fixModel: addressModel, autoFix: false });
+  expect(start.mock.calls[0]![0]).not.toHaveProperty("addressFindingsModel");
+  expect(start.mock.calls[0]![0]).not.toHaveProperty("autoAddressFindings");
+});
+
+for (const malformed of [
+  { addressFindingsModel: { agent: "unknown" } },
+  { addressFindingsModel: row, autoAddressFindings: "false" },
+]) {
+  test(`the button rejects malformed future choices ${JSON.stringify(malformed)} before starting`, async () => {
+    const { fixModel: _formerModel, ...input } = request("invalid-future-review").input;
+    await expect(
+      launch({ reservedId: "invalid-future-review", input: { ...input, ...malformed } }, context),
+    ).rejects.toThrow("Invalid Multi Review button action");
+    expect(start).not.toHaveBeenCalled();
+    expect(await storage.getMultiReviewWorkflow("invalid-future-review")).toBeNull();
+  });
+}

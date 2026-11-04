@@ -146,7 +146,7 @@ export const GRAPH_CAPABILITY_PROFILE_DEFINITIONS: Readonly<
       "Edits files, runs any command and commits locally. Never pushes or writes to GitHub; a system node does that.",
     deny: Object.freeze([...REMOTE_DENIALS] as const),
     allow: Object.freeze([]),
-    equivalent: "Build, Fix, Address, Prepare and conflict resolution",
+    equivalent: "Build, Rework, Address Findings, Prepare and conflict resolution",
   }),
   custom: Object.freeze({
     id: "custom",

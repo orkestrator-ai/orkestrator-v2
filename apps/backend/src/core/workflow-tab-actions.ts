@@ -97,15 +97,17 @@ export async function openMultiReviewTab(
     if (!existing && panes.some((pane) => pane.tabs.some((tab) => tab.id === tabId)))
       throw new Error("The reserved tab ID is already in use");
     if (surface === "fix" && !workflow.fixSession)
-      throw new Error("The fix session is not available yet");
+      throw new Error("The Address Findings session is not available yet");
     if (surface === "fix" && workflow.addressPromptPending)
-      throw new Error("The fix handoff is still pending; retry after dispatch is confirmed");
+      throw new Error(
+        "The Address Findings handoff is still pending; retry after dispatch is confirmed",
+      );
     if (existing && surface === "fix" && existing.type !== "agent-native")
-      throw new Error("The fix tab ID is already in use");
+      throw new Error("The Address Findings tab ID is already in use");
     if (existing && surface === "fix") {
       const data = isRecord(existing.nativeAgentData) ? existing.nativeAgentData : {};
       if (data.environmentId !== environment.id || data.platform !== workflow.fixSession!.agent)
-        throw new Error("The fix tab belongs to a different session identity");
+        throw new Error("The Address Findings tab belongs to a different session identity");
       existing.nativeAgentData = {
         ...data,
         sessionId: workflow.fixSession!.providerSessionId,
@@ -129,7 +131,7 @@ export async function openMultiReviewTab(
           : {
               id: tabId,
               type: "agent-native",
-              displayTitle: "Fix",
+              displayTitle: "Address Findings",
               isReviewTab: true,
               nativeAgentData: {
                 platform: workflow.fixSession!.agent,

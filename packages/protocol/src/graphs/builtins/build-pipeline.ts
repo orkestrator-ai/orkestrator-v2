@@ -126,7 +126,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       {
         key: "builder",
         label: "Build",
-        description: "The pipeline's build agent. Fix runs under Build's step and instructions.",
+        description: "The pipeline's build agent. Rework runs under Build's step and instructions.",
         multiplicity: "one",
       },
       {
@@ -145,7 +145,12 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         maxPanel: MAX_BUILD_PIPELINE_REVIEWERS,
         defaultsFrom: ["review", "review2", "additionalReviewers"],
       },
-      { key: "fixer", label: "Address", multiplicity: "one", defaultsFrom: ["fixReviewIssues"] },
+      {
+        key: "fixer",
+        label: "Address Findings",
+        multiplicity: "one",
+        defaultsFrom: ["fixReviewIssues"],
+      },
       {
         key: "verifier",
         label: "Verify",
@@ -213,9 +218,9 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       {
         id: "fix",
         kind: "agent",
-        label: "Fix",
+        label: "Rework",
         description:
-          "From round 2: fixes what Verify found unmet. Today a Fix that leaves the worktree unchanged pauses the pipeline for a person.",
+          "From round 2: fixes what Verify found unmet. Today a Rework that leaves the worktree unchanged pauses the pipeline for a person.",
         role: "builder",
         when: { path: "run.iteration", op: "gt", value: 1 },
         capabilities: { profile: "builder" },
@@ -308,7 +313,8 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         id: "has-issues",
         kind: "gate",
         label: "Issues?",
-        description: "Address only when the report has issues or test coverage gaps (D21).",
+        description:
+          "Address Findings only when the report has issues or test coverage gaps (D21).",
         inputs: [
           { name: "report", type: "review-report@1" },
           { name: "code", type: "workspace@1" },
@@ -321,7 +327,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       {
         id: "address",
         kind: "agent",
-        label: "Address",
+        label: "Address Findings",
         description:
           "Fixes the review's findings, validates the fix and submits a typed fix result for Verify. Today it also receives the end of the review session's transcript.",
         role: "fixer",

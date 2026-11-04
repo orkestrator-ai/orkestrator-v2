@@ -48,6 +48,9 @@ const NON_UTF8_RENAMED = Buffer.concat([
   Buffer.from([0xff]),
   Buffer.from(".txt"),
 ]);
+const UNICODE_NAME = "雪🌋.txt";
+const UNICODE_RENAMED = "旧🧪.txt";
+const UNICODE_RENAME_TARGET = "新🧪.txt";
 
 function repositoryWithEveryChange(): { repo: string; base: string } {
   const repo = mkdtempSync(path.join(tmpdir(), "ork-diff-summary-"));
@@ -68,8 +71,8 @@ function repositoryWithEveryChange(): { repo: string; base: string } {
   write("mode.sh", "#!/bin/sh\n");
   write("stat-only.txt", body("stat"));
   write("empty.txt", "");
-  writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), NON_UTF8_NAME]), body("latin1 modified"));
-  writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), NON_UTF8_RENAMED]), body("latin1 renamed"));
+  write(UNICODE_NAME, body("unicode modified"));
+  write(UNICODE_RENAMED, body("unicode renamed"));
   git(repo, "add", "-A");
   git(repo, "commit", "-qm", "base");
   const base = git(repo, "rev-parse", "HEAD").trim();
@@ -84,19 +87,8 @@ function repositoryWithEveryChange(): { repo: string; base: string } {
   write("1\t2\tlooks-numstat.txt", `${body("numstat")}edited\n`);
   write("binary.bin", Buffer.from([0, 9, 9, 9]));
   chmodSync(path.join(repo, "mode.sh"), 0o755);
-  writeFileSync(
-    Buffer.concat([Buffer.from(`${repo}/`), NON_UTF8_NAME]),
-    `${body("latin1 modified")}x\n`,
-  );
-  renameSync(
-    Buffer.concat([Buffer.from(`${repo}/`), NON_UTF8_RENAMED]),
-    Buffer.concat([
-      Buffer.from(`${repo}/`),
-      Buffer.from("réné"),
-      Buffer.from([0xfe]),
-      Buffer.from(".txt"),
-    ]),
-  );
+  write(UNICODE_NAME, `${body("unicode modified")}x\n`);
+  renameSync(path.join(repo, UNICODE_RENAMED), path.join(repo, UNICODE_RENAME_TARGET));
   write("staged new.txt", body("added"));
   git(repo, "add", "-A");
   // Unstaged on top of staged, and a file whose stat changed but whose bytes did not.
@@ -155,11 +147,10 @@ describe("one combined diff pass", () => {
     expect(byPath.get("1\t2\tlooks-numstat.txt")).toMatchObject({ status: "M", additions: 1 });
     expect(byPath.get("binary.bin")).toMatchObject({ status: "M", binary: true });
     expect(byPath.get("mode.sh")).toMatchObject({ status: "M", additions: 0, deletions: 0 });
-    // Non-UTF-8 names decode lossily, and the same way in both shapes.
-    expect(byPath.get("caf�.txt")).toMatchObject({ status: "M", additions: 1 });
-    expect(byPath.get("réné�.txt")).toMatchObject({
+    expect(byPath.get(UNICODE_NAME)).toMatchObject({ status: "M", additions: 1 });
+    expect(byPath.get(UNICODE_RENAME_TARGET)).toMatchObject({
       status: "R100",
-      originalPath: "ren�.txt",
+      originalPath: UNICODE_RENAMED,
     });
     // A stat-only change is listed by the raw records and dropped by both filters.
     expect(byPath.has("stat-only.txt")).toBe(false);
@@ -203,6 +194,66 @@ describe("one combined diff pass", () => {
 
   test("an empty diff is no changes", () => {
     expect(parseGitDiffSummary("")).toEqual({ changes: [], numstat: new Map() });
+  });
+
+  test("non-UTF-8 Git path bytes decode lossily the same way in both output shapes", () => {
+    // macOS filesystems reject these byte names with EILSEQ, so exercise the
+    // command-output boundary without asking the host filesystem to store them.
+    const renamed = Buffer.concat([Buffer.from("réné"), Buffer.from([0xfe]), Buffer.from(".txt")]);
+    const bytes = (...parts: Array<string | Buffer>) =>
+      Buffer.concat(parts.map((part) => (typeof part === "string" ? Buffer.from(part) : part)));
+    const raw = bytes(
+      ":100644 100644 aaaaaaa bbbbbbb M\0",
+      NON_UTF8_NAME,
+      "\0:100644 100644 ccccccc ccccccc R100\0",
+      NON_UTF8_RENAMED,
+      "\0",
+      renamed,
+      "\0",
+    );
+    const nameStatus = bytes(
+      "M\0",
+      NON_UTF8_NAME,
+      "\0R100\0",
+      NON_UTF8_RENAMED,
+      "\0",
+      renamed,
+      "\0",
+    );
+    const numstat = bytes(
+      "1\t0\t",
+      NON_UTF8_NAME,
+      "\x000\t0\t\0",
+      NON_UTF8_RENAMED,
+      "\0",
+      renamed,
+      "\0",
+    );
+    const summary = parseGitDiffSummary(bytes(raw, numstat).toString("utf8"));
+    const previous = parseGitFileChanges(nameStatus.toString("utf8"), numstat.toString("utf8"));
+
+    expect(summary.changes).toEqual(previous);
+    expect(summary.numstat).toEqual(parseGitNumstat(numstat.toString("utf8")));
+    expect(withoutStatOnlyModifications(summary)).toEqual([
+      {
+        path: "caf�.txt",
+        originalPath: undefined,
+        filename: "caf�.txt",
+        directory: "",
+        additions: 1,
+        deletions: 0,
+        status: "M",
+      },
+      {
+        path: "réné�.txt",
+        originalPath: "ren�.txt",
+        filename: "réné�.txt",
+        directory: "",
+        additions: 0,
+        deletions: 0,
+        status: "R100",
+      },
+    ]);
   });
 
   test("rejects malformed summaries", () => {

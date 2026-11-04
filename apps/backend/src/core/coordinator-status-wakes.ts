@@ -44,7 +44,7 @@ import {
   updateResolve,
 } from "./coordinator-pr-attempt.js";
 import { CoordinatorNoticeRouter } from "./coordinator-notice-router.js";
-import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
 import { createHash } from "node:crypto";
 import {
   agentMailStatusBudgetKey,
@@ -223,9 +223,9 @@ function stalledSession(candidates: Array<[string, unknown]>): StalledSession | 
  * `stages` the coordinator hears once when all of them are done and
  * consolidation starts.
  *
- * Auto-fix and auto-PR advance the review on their own, so a state the
+ * Auto-address findings and auto-PR advance the review on their own, so a state the
  * workflow is about to leave is not news: consolidation with findings goes
- * straight to the Fix (no `ready`), and a finished Fix with a queued PR is held
+ * straight to Address Findings (no `ready`), and a finished Address Findings with a queued PR is held
  * until the PR launch settles. A clean report with auto-PR on is held the same
  * way, then reported through the same PR states. The coordinator then hears `pr-started`, then
  * `pr-opened` once the environment reports an open pull request (URL and
@@ -249,8 +249,8 @@ export function multiReviewStatus(
   const recordedPrLaunch =
     autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
   // A clean report's PR speaks for the review only while it rests on that
-  // report. Old launched records cannot prove which Fix they contain. Other
-  // legacy states keep their existing handoff behavior until a new Fix
+  // report. Old launched records cannot prove which Address Findings they contain. Other
+  // legacy states keep their existing handoff behavior until a new Address Findings
   // supersedes them.
   const cleanReviewPr = recordedPrLaunch?.basis === "clean-review";
   const prLaunch =
@@ -261,15 +261,15 @@ export function multiReviewStatus(
         findingCounts(snapshot.consolidatedReport).total === 0
       : recordedPrLaunch.fixIdentity === undefined
         ? recordedPrLaunch.state !== "launched"
-        : recordedPrLaunch.fixIdentity === multiReviewFixIdentity(fixSession))
+        : recordedPrLaunch.fixIdentity === multiReviewAddressFindingsIdentity(fixSession))
       ? recordedPrLaunch
       : undefined;
   const prLaunchMessage = text(prLaunch?.message)
     ? boundedLine(prLaunch!.message as string)
     : undefined;
   const prUrl = text(environment.prUrl);
-  /** The PR step's own status once it settled, keyed to the Fix or clean report that queued it. */
-  const prStatus = (fixKey: string): CoordinatorStatus | null => {
+  /** The PR step's own status once it settled, keyed to Address Findings or clean report that queued it. */
+  const prStatus = (addressFindingsKey: string): CoordinatorStatus | null => {
     const finished = cleanReviewPr ? "found nothing to fix" : "fix finished";
     if (prLaunch?.state === "launched") {
       const tab = text(prLaunch.tabId);
@@ -290,7 +290,7 @@ export function multiReviewStatus(
             : "unknown";
         const noticeState = state === "open" ? "pr-opened" : `pr-${state}`;
         return {
-          key: `${noticeState}:${fixKey}`,
+          key: `${noticeState}:${addressFindingsKey}`,
           state: noticeState,
           tone: state === "open" || state === "merged" ? "success" : "attention",
           terminal: false,
@@ -306,7 +306,7 @@ export function multiReviewStatus(
         };
       }
       return {
-        key: `pr-started:${fixKey}`,
+        key: `pr-started:${addressFindingsKey}`,
         state: "pr-started",
         tone: "info",
         terminal: false,
@@ -324,7 +324,7 @@ export function multiReviewStatus(
     }
     if (prLaunch?.state === "failed")
       return {
-        key: `pr-failed:${fixKey}`,
+        key: `pr-failed:${addressFindingsKey}`,
         state: "pr-failed",
         tone: "failure",
         terminal: false,
@@ -346,7 +346,7 @@ export function multiReviewStatus(
       : fixSession;
   const reviewAttempt = `${text(reviewSession?.sessionKey) ?? ""}:${text(reviewSession?.startedAt) ?? ""}`;
   if (phase === "completed") {
-    // A structured Fix completes the review and queues its PR in the same save.
+    // A structured Address Findings completes the review and queues its PR in the same save.
     if (prLaunch?.state === "pending") return null;
     const fix = record(snapshot.fixResult) ? snapshot.fixResult : undefined;
     return {
@@ -356,7 +356,9 @@ export function multiReviewStatus(
       terminal: true,
       headline: "completed",
       details: [
-        ...(fix && text(fix.summary) ? [`Fix: ${boundedLine(fix.summary as string)}`] : []),
+        ...(fix && text(fix.summary)
+          ? [`Address Findings: ${boundedLine(fix.summary as string)}`]
+          : []),
         ...(fix ? [`Files changed: ${count(fix.filesChanged)}`] : []),
         ...(prLaunch?.state === "launched"
           ? [
@@ -445,12 +447,16 @@ export function multiReviewStatus(
         ...(cleanReviewPr && prLaunch
           ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
           : recordedPrLaunch?.state === "launched"
-            ? ["An earlier PR session started; review and update it manually after this Fix."]
+            ? [
+                "An earlier PR session started; review and update it manually after this Address Findings.",
+              ]
             : snapshot.autoFix === true && findings.total === 0
-              ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
+              ? [
+                  "Auto-address findings is on, but there was nothing to fix, so no Address Findings or PR session started.",
+                ]
               : autoPr
                 ? [
-                    "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
+                    "Auto-PR is on: once an Address Findings run started with address_multi_review completes, a PR session starts automatically.",
                   ]
                 : []),
       ],
@@ -459,23 +465,25 @@ export function multiReviewStatus(
     };
   }
   if (phase === "interactive" && snapshot.addressPromptPending !== true && fixSession) {
-    const fixKey = hash(`${text(fixSession.sessionKey) ?? ""}:${text(fixSession.startedAt) ?? ""}`);
+    const addressFindingsKey = hash(
+      `${text(fixSession.sessionKey) ?? ""}:${text(fixSession.startedAt) ?? ""}`,
+    );
     if (fixSession.status === "idle") {
-      // The PR is next; report how it went rather than a Fix the coordinator need not act on.
+      // The PR is next; report how it went rather than an Address Findings run the coordinator need not act on.
       if (prLaunch?.state === "pending") return null;
-      const pr = prStatus(fixKey);
+      const pr = prStatus(addressFindingsKey);
       if (pr) return pr;
       return {
-        key: `fix-done:${fixKey}`,
+        key: `fix-done:${addressFindingsKey}`,
         state: "fix-done",
         tone: "success",
         terminal: false,
-        headline: "fix session finished its turn",
+        headline: "Address Findings session finished its turn",
         details: [
-          "The interactive fix turn ended. Read its tab to confirm every finding was addressed.",
+          "The interactive Address Findings turn ended. Read its tab to confirm every finding was addressed.",
           ...(recordedPrLaunch?.state === "launched" && !prLaunch
             ? [
-                "An earlier PR session started; its pull request does not confirm inclusion of this Fix's changes. Review the Fix and update the PR manually.",
+                "An earlier PR session started; its pull request does not confirm inclusion of this Address Findings run's changes. Review Address Findings and update the PR manually.",
               ]
             : []),
           ...(prLaunch?.state === "skipped"
@@ -488,11 +496,11 @@ export function multiReviewStatus(
     }
     if (fixSession.status === "failed") {
       return {
-        key: `fix-failed:${fixKey}`,
+        key: `fix-failed:${addressFindingsKey}`,
         state: "fix-failed",
         tone: "failure",
         terminal: false,
-        headline: "fix session failed",
+        headline: "Address Findings session failed",
         details: [
           ...(text(fixSession.error) ? [`Error: ${boundedLine(fixSession.error as string)}`] : []),
           ...(autoPr ? ["No PR session will start."] : []),

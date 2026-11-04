@@ -204,7 +204,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
   });
 
   describe("an OpenCode turn without a workflow-result capability", () => {
-    async function workerPipeline(addressStatus: "running" | "finished" = "running") {
+    async function workerPipeline(addressFindingsStatus: "running" | "finished" = "running") {
       const address = stageSession("address", { key: "address", label: "Address Session" });
       const verify = stageSession("verify", { key: "verify", label: "Verify Session" });
       await storage.saveBuildPipeline(
@@ -212,7 +212,7 @@ describe("a pipeline worker's mail tools on its workflow-result server", () => {
         "p1",
         "e1",
         BUILD_PIPELINE_VERSION,
-        addressStatus === "running"
+        addressFindingsStatus === "running"
           ? pipelineSnapshot("e1", "p1", [address], { phase: "addressing" })
           : pipelineSnapshot("e1", "p1", [{ ...address, status: "idle" }, verify], {
               phase: "verifying",

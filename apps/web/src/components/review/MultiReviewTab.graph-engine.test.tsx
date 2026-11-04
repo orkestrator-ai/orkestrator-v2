@@ -19,7 +19,7 @@ import { MultiReviewTab } from "./MultiReviewTab";
 import {
   autoPrLaunchNotice,
   consolidationStep,
-  fixStep,
+  addressFindingsStep,
   pullRequestStep,
 } from "./multi-review-steps";
 
@@ -155,7 +155,7 @@ test("a settled graph-engine review still offers no bespoke step control", async
   expect(consolidationStep(settled)).toMatchObject({ state: "failed" });
 });
 
-test("graph-engine steps: a failed Fix, and a pull request opened by a system step", () => {
+test("graph-engine steps: a failed Address Findings, and a pull request opened by a system step", () => {
   const report = { issues: [], testCoverageGaps: [] } as unknown as NonNullable<
     MultiReviewWorkflow["consolidatedReport"]
   >;
@@ -165,7 +165,7 @@ test("graph-engine steps: a failed Fix, and a pull request opened by a system st
     consolidatedReport: report,
     stepRuntimes: { fix: { startedAt: timestamp } },
   };
-  expect(fixStep(failedFix)).toMatchObject({ state: "failed" });
+  expect(addressFindingsStep(failedFix)).toMatchObject({ state: "failed" });
   expect(
     pullRequestStep({
       autoPr: true,

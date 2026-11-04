@@ -9,7 +9,7 @@ import {
   isMultiReviewWorkflow,
   isMultiReviewStepControlInput,
   isRestartMultiReviewStepInput,
-  isStartMultiReviewCustomFixInput,
+  isStartMultiReviewCustomAddressFindingsInput,
   isStartMultiReviewInput,
   isLaunchMultiReviewActionInput,
 } from "./multi-review";
@@ -587,15 +587,19 @@ describe("multi review protocol", () => {
     ).toBe(true);
   });
 
-  test("validates a bounded custom fix intent", () => {
+  test("validates a bounded custom Address Findings intent", () => {
     const input = {
       workflowId: "multi-1",
       fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       instruction: "Fix the inactive-tab regression",
     };
-    expect(isStartMultiReviewCustomFixInput(input)).toBe(true);
-    expect(isStartMultiReviewCustomFixInput({ ...input, instruction: " " })).toBe(false);
-    expect(isStartMultiReviewCustomFixInput({ ...input, rendererOnly: true })).toBe(false);
+    expect(isStartMultiReviewCustomAddressFindingsInput(input)).toBe(true);
+    expect(isStartMultiReviewCustomAddressFindingsInput({ ...input, instruction: " " })).toBe(
+      false,
+    );
+    expect(isStartMultiReviewCustomAddressFindingsInput({ ...input, rendererOnly: true })).toBe(
+      false,
+    );
   });
 
   test("rejects unsafe branches, empty instructions, and duplicate reviewer identities", () => {

@@ -165,7 +165,7 @@ describe("MobilePaneSwitcher", () => {
       />,
     );
 
-    expect(screen.getByRole("tab", { name: "1. Fix" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "1. Address Findings" })).toBeTruthy();
     expect(
       screen.queryByRole("tab", { name: `1. ${MULTI_REVIEW_LEGACY_FIX_TAB_TITLE}` }) === null,
     ).toBe(true);

@@ -56,7 +56,7 @@ const catalog: AgentModelCatalog = {
 const STEP_LABELS = [
   "Build",
   "Review",
-  "Address issues",
+  "Address Findings",
   "Verify",
   "Pull request",
   "Resolve conflicts",
@@ -688,8 +688,8 @@ describe("BuildLaunchDialog", () => {
     });
 
     chooseFavorite("Review", /Codex A/);
-    chooseVisibleModel("Address issues", /Claude B/);
-    chooseReasoning("Address issues", /Extra high/);
+    chooseVisibleModel("Address Findings", /Claude B/);
+    chooseReasoning("Address Findings", /Extra high/);
     chooseFavorite("Verify", /OpenCode A/);
     choosePlatform("Pull request", "codex");
     submit();
@@ -1164,7 +1164,7 @@ describe("BuildLaunchDialog step instructions", () => {
       "Review preparation & consolidation",
       "Reviewer 1",
       "Reviewer 2",
-      "Address issues",
+      "Address Findings",
       "Verify",
       "Pull request",
       "Resolve conflicts",
@@ -1180,9 +1180,7 @@ describe("BuildLaunchDialog step instructions", () => {
       screen.getByRole("button", { name: "Build instructions" }).getAttribute("aria-expanded"),
     ).toBe("true");
     expect(screen.getByRole("textbox", { name: "Build instructions" })).toBeTruthy();
-    expect(screen.getByText(/0 \/ 16,384 bytes/).textContent).toContain(
-      "The fix stage uses them too.",
-    );
+    expect(screen.getByText(/0 \/ 16,384 bytes/).textContent).toContain("Rework uses them too.");
   });
 
   test("submits each card's trimmed instructions on its own step", () => {
@@ -1192,7 +1190,7 @@ describe("BuildLaunchDialog step instructions", () => {
       ["Review preparation & consolidation", "Merge duplicates."],
       ["Reviewer 1", "Security."],
       ["Reviewer 2", "Performance."],
-      ["Address issues", "Fix every nit."],
+      ["Address Findings", "Fix every nit."],
       ["Verify", "Check the help text."],
       ["Pull request", "Title it in English."],
       ["Resolve conflicts", "Keep main's lockfile."],

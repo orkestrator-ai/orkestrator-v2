@@ -4,7 +4,7 @@ import { isStructuredReviewReport, type StructuredReviewReport } from "./structu
 import { getReviewInstructionValidationError } from "./review-prompt.js";
 import {
   MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
-  MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION,
+  MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE,
   STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION,
   STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN,
@@ -41,13 +41,13 @@ export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
 export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
-export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH = 100_000;
+export const MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH = 100_000;
 export const MULTI_REVIEW_PLAN_TOOL_PROHIBITION =
   "Do not invoke CreatePlan, create_plan, EnterPlanMode, or any equivalent planning or mode-switch tool, even if the provider offers one.";
 export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION = `This is an implementation turn, not a planning turn. You are already in build mode: remain in build mode and begin editing the files now. Do not enter, propose, switch to, or imitate plan mode. ${MULTI_REVIEW_PLAN_TOOL_PROHIBITION} A plan, plan-review card, or approval request is not a valid response to this prompt. Do not ask the user to approve a plan or switch modes, and do not pause before implementation. Use the file-editing and command tools directly, complete the necessary edits, and run relevant validation in this turn.`;
 /**
  * Ends the automated preparation/consolidation contract when their session
- * becomes an ordinary, user-facing Fix conversation.
+ * becomes an ordinary, user-facing Address Findings conversation.
  *
  * Multi Review deliberately reuses that session so the model retains the
  * review context. Provider settings are per turn, but earlier prompt
@@ -55,7 +55,7 @@ export const MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION = `This is an implemen
  * model unless the interactive handoff supersedes them.
  */
 export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
-  "This is now a manual interactive Fix conversation, not an automated pipeline stage. " +
+  "This is now a manual interactive Address Findings conversation, not an automated pipeline stage. " +
   "Any JSON-only or structured-output contract from earlier turns has ended and does not apply to this turn or later replies. " +
   "Earlier review-stage instructions not to edit files, run commands, or fix findings have also ended and no longer apply. " +
   "Implement the requested fixes, run relevant validation, and commit every relevant change. " +
@@ -63,19 +63,21 @@ export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION;
 export const MULTI_REVIEW_ADDRESS_USER_INSTRUCTION =
   "Please address all the issues and coverage gaps.";
-export const MULTI_REVIEW_ADDRESS_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
+export const MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
-export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
+export const MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE = "Address Findings";
 /** Stable pane label for the shared preparation and consolidation session. */
 export const MULTI_REVIEW_REVIEW_TAB_TITLE = "Review preparation & consolidation";
 /** Former pane title retained for restored layouts and backend session metadata. */
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
-export const MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE =
-  "The original consolidation conversation was no longer available. A fresh Fix session was created and seeded with the consolidated findings.";
+/** The title Address Findings tabs carried before the rename; restored layouts still hold it. */
+export const MULTI_REVIEW_FORMER_FIX_TAB_TITLE = "Fix";
+export const MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE =
+  "The original consolidation conversation was no longer available. A fresh Address Findings session was created and seeded with the consolidated findings.";
 
-/** Build the complete prompt for a fresh custom-fix session. */
-export function multiReviewCustomFixPrompt(
+/** Build the complete prompt for a fresh custom Address Findings session. */
+export function multiReviewCustomAddressFindingsPrompt(
   report: StructuredReviewReport,
   instruction: string,
 ): string {
@@ -90,7 +92,7 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
 ${promptCarrierJson(report)}
 ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 
-${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_FIX_PROMPT_CONTINUATION)}`;
+${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION)}`;
 }
 
 /**
@@ -302,7 +304,7 @@ export type MultiReviewPhase =
 
 export type MultiReviewPausablePhase = "preparing" | "consolidating" | "fixing";
 
-/** The preparation/consolidation turns plus the separate fix turn. */
+/** The preparation/consolidation turns plus the separate Address Findings turn. */
 export type MultiReviewStepKind = "prepare" | "consolidate" | "fix";
 
 /**
@@ -356,26 +358,26 @@ export interface MultiReviewSession extends MultiReviewModelSelection {
   error?: string;
 }
 
-export type MultiReviewFixSession = MultiReviewSession;
+export type MultiReviewAddressFindingsSession = MultiReviewSession;
 
 /** Durable identity shared by every reviewer and the consolidation turn. */
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
 /**
- * Durable intent to open the ordinary PR tab after a Fix proves completion, or
+ * Durable intent to open the ordinary PR tab after an Address Findings run proves completion, or
  * after consolidation finds nothing to fix.
  *
- * Recorded atomically with the Fix completion or the clean report, so a
+ * Recorded atomically with Address Findings completion or the clean report, so a
  * restart cannot lose the handoff; the supervisor retries delivery under the
  * same request id, which the native-agent layer deduplicates.
  */
 export interface MultiReviewAutoPrLaunch {
   /**
    * `clean-review` when a consolidated report with no issues or coverage gaps
-   * authorized the launch, so no Fix ran; absent when a Fix authorized it.
+   * authorized the launch, so no Address Findings ran; absent when an Address Findings run authorized it.
    */
   basis?: "clean-review";
-  /** Fix attempt that authorized this launch; absent on legacy and clean-review records. */
+  /** Address Findings attempt that authorized this launch; absent on legacy and clean-review records. */
   fixIdentity?: string;
   state: "pending" | "launched" | "skipped" | "failed";
   requestId: string;
@@ -424,8 +426,8 @@ export function resolveMultiReviewEngine(
  * The graph run behind a graph-engine Multi Review (`engine: "graph"`).
  *
  * `settled` is set once the run ended and its final state was projected; from
- * then on the record is an ordinary settled Multi Review, so the manual Fix
- * (`address`, `customFix`) works on it as on any other.
+ * then on the record is an ordinary settled Multi Review, so the manual Address Findings
+ * (`address`, `customAddressFindings`) works on it as on any other.
  */
 export interface MultiReviewGraphRunLink {
   runId: string;
@@ -435,16 +437,16 @@ export interface MultiReviewGraphRunLink {
 }
 
 export interface MultiReviewWorkflow {
-  /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
+  /** Launch the ordinary Address Findings handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
   /**
-   * Launch the ordinary PR tab once the Fix proves completion (a complete
+   * Launch the ordinary PR tab once Address Findings proves completion (a complete
    * structured result, or an interactive handoff turn that finished on its own
    * as the conversation's last turn), or straight after a consolidation that
    * found nothing to fix; absent means off.
    */
   autoPr?: boolean;
-  /** Delivery state of the automatic PR launch; absent until a Fix completes or a clean report settles. */
+  /** Delivery state of the automatic PR launch; absent until an Address Findings run completes or a clean report settles. */
   autoPrLaunch?: MultiReviewAutoPrLaunch;
   /**
    * `graph` when a graph run of the built-in Multi Review template runs this
@@ -476,9 +478,9 @@ export interface MultiReviewWorkflow {
    */
   preparationSession?: MultiReviewSession;
   fixModel: MultiReviewModelSelection;
-  /** Durable key reserved for the next or current fix session. */
+  /** Durable key reserved for the next or current Address Findings session. */
   fixSessionKey?: string;
-  fixSession?: MultiReviewFixSession;
+  fixSession?: MultiReviewAddressFindingsSession;
   /** Per-step timing and token consumption, kept once the shared session moves on. */
   stepRuntimes?: MultiReviewStepRuntimes;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
@@ -514,20 +516,20 @@ export interface MultiReviewWorkflow {
   addressRequestId?: string;
   /** Pane tab identity reserved for the pending interactive handoff. */
   addressTabId?: string;
-  /** User-authored instructions for a fresh interactive fix session. */
+  /** User-authored instructions for a fresh interactive Address Findings session. */
   customFixInstruction?: string;
   /** Model selection paired with {@link customFixInstruction} until delivery succeeds. */
   customFixModel?: MultiReviewModelSelection;
   /** Persisted failed delivery attempts so backend restarts cannot reset the retry budget. */
   addressPromptAttempts?: number;
-  /** Tab that presents the current fix session, including provider-switch launches. */
+  /** Tab that presents the current Address Findings session, including provider-switch launches. */
   fixTabId?: string;
-  /** Non-fatal failure to publish the current fix session into the pane layout. */
+  /** Non-fatal failure to publish the current Address Findings session into the pane layout. */
   presentationError?: string;
-  /** How Fix was most recently launched, retained so an upstream restart can replay it. */
+  /** How Address Findings was most recently launched, retained so an upstream restart can replay it. */
   fixLaunch?:
     { kind: "default" } | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
-  /** Relaunch Fix after an explicitly restarted upstream step reconsolidates. */
+  /** Relaunch Address Findings after an explicitly restarted upstream step reconsolidates. */
   restartFixAfterConsolidation?: boolean;
   activeRequest?: {
     kind: MultiReviewStepKind;
@@ -562,9 +564,9 @@ export interface MultiReviewWorkflow {
 }
 
 export interface StartMultiReviewInput {
-  /** Launch the ordinary Fix handoff after successful consolidation; absent means off. */
+  /** Launch the ordinary Address Findings handoff after successful consolidation; absent means off. */
   autoFix?: boolean;
-  /** Launch the ordinary PR tab after the Fix turn completes successfully; absent means off. */
+  /** Launch the ordinary PR tab after the Address Findings turn completes successfully; absent means off. */
   autoPr?: boolean;
   environmentId: string;
   projectId: string;
@@ -578,9 +580,9 @@ export interface StartMultiReviewInput {
 
 /** Complete environment button action. Selections are the launch dialog's exact rows. */
 export interface LaunchMultiReviewActionInput {
-  /** Launch the ordinary Fix handoff after successful consolidation; omitted uses saved defaults. */
+  /** Launch the ordinary Address Findings handoff after successful consolidation; omitted uses saved defaults. */
   autoFix?: boolean;
-  /** Launch the ordinary PR tab after the Fix turn completes; omitted uses saved defaults. */
+  /** Launch the ordinary PR tab after the Address Findings turn completes; omitted uses saved defaults. */
   autoPr?: boolean;
   requestId: string;
   environmentId: string;
@@ -654,7 +656,7 @@ const DEFAULTED_SELECTION_PLACEHOLDER: MultiReviewModelSelection = {
   model: "default",
 };
 
-export interface StartMultiReviewCustomFixInput {
+export interface StartMultiReviewCustomAddressFindingsInput {
   workflowId: string;
   fixModel: MultiReviewModelSelection;
   instruction: string;
@@ -728,15 +730,15 @@ export function isStartMultiReviewInput(value: unknown): value is StartMultiRevi
   return true;
 }
 
-export function isStartMultiReviewCustomFixInput(
+export function isStartMultiReviewCustomAddressFindingsInput(
   value: unknown,
-): value is StartMultiReviewCustomFixInput {
+): value is StartMultiReviewCustomAddressFindingsInput {
   return (
     record(value) &&
     hasOnlyKeys(value, ["workflowId", "fixModel", "instruction"]) &&
     nonBlank(value.workflowId) &&
     isMultiReviewModelSelection(value.fixModel) &&
-    nonBlank(value.instruction, MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH)
+    nonBlank(value.instruction, MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH)
   );
 }
 
@@ -804,7 +806,7 @@ function optionalRepairAttempts(value: unknown): boolean {
   );
 }
 
-function isFixSession(value: unknown): boolean {
+function isAddressFindingsSession(value: unknown): boolean {
   return (
     record(value) &&
     hasOnlyKeys(value, [
@@ -936,7 +938,7 @@ function isActiveRequest(
   );
 }
 
-function isFixResult(value: unknown): boolean {
+function isAddressFindingsResult(value: unknown): boolean {
   return (
     record(value) &&
     hasOnlyKeys(value, [
@@ -1092,8 +1094,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.consolidationModel !== undefined &&
       !isMultiReviewModelSelection(value.consolidationModel)) ||
     (value.reviewSessionKey !== undefined && !nonBlank(value.reviewSessionKey)) ||
-    (value.reviewSession !== undefined && !isFixSession(value.reviewSession)) ||
-    (value.preparationSession !== undefined && !isFixSession(value.preparationSession)) ||
+    (value.reviewSession !== undefined && !isAddressFindingsSession(value.reviewSession)) ||
+    (value.preparationSession !== undefined &&
+      !isAddressFindingsSession(value.preparationSession)) ||
     !record(value.fixModel) ||
     !isMultiReviewModelSelection(value.fixModel) ||
     (value.fixSessionKey !== undefined && !nonBlank(value.fixSessionKey)) ||
@@ -1102,7 +1105,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !Number.isSafeInteger(value.backendRevision) ||
     (value.backendRevision as number) < 0 ||
     (value.controllerFence !== undefined && !nonBlank(value.controllerFence)) ||
-    (value.fixSession !== undefined && !isFixSession(value.fixSession)) ||
+    (value.fixSession !== undefined && !isAddressFindingsSession(value.fixSession)) ||
     (value.stepRuntimes !== undefined && !isStepRuntimes(value.stepRuntimes)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
       !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
@@ -1125,13 +1128,16 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
         value.pendingResultConsumptions.length > 64 ||
         !value.pendingResultConsumptions.every((key) => nonBlank(key)))) ||
     !optionalDate(value.cancellingSince) ||
-    (value.fixResult !== undefined && !isFixResult(value.fixResult)) ||
+    (value.fixResult !== undefined && !isAddressFindingsResult(value.fixResult)) ||
     (value.addressPromptPending !== undefined && typeof value.addressPromptPending !== "boolean") ||
     (value.addressSessionKey !== undefined && !nonBlank(value.addressSessionKey)) ||
     (value.addressRequestId !== undefined && !nonBlank(value.addressRequestId)) ||
     (value.addressTabId !== undefined && !nonBlank(value.addressTabId)) ||
     (value.customFixInstruction !== undefined &&
-      !nonBlank(value.customFixInstruction, MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH)) ||
+      !nonBlank(
+        value.customFixInstruction,
+        MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
+      )) ||
     (value.customFixModel !== undefined && !isMultiReviewModelSelection(value.customFixModel)) ||
     (value.addressPromptAttempts !== undefined &&
       (!Number.isSafeInteger(value.addressPromptAttempts) ||
@@ -1146,7 +1152,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
             !hasOnlyKeys(value.fixLaunch, ["kind", "instruction", "model"]) ||
             !nonBlank(
               value.fixLaunch.instruction,
-              MULTI_REVIEW_CUSTOM_FIX_INSTRUCTION_MAX_LENGTH,
+              MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_INSTRUCTION_MAX_LENGTH,
             ) ||
             !isMultiReviewModelSelection(value.fixLaunch.model)))) ||
     (value.restartFixAfterConsolidation !== undefined &&
@@ -1168,13 +1174,13 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   ) {
     return false;
   }
-  // A graph-engine Fix is a graph activation: it is `fixing` from admission,
+  // A graph-engine Address Findings is a graph activation: it is `fixing` from admission,
   // before its provider session exists, and it never journals a request here.
   const graphEngine = value.engine === "graph";
   if (
     !graphEngine &&
     (value.phase === "fixing" || value.phase === "completed") &&
-    !isFixSession(value.fixSession)
+    !isAddressFindingsSession(value.fixSession)
   ) {
     return false;
   }
@@ -1236,9 +1242,9 @@ export function isMultiReviewTerminalPhase(phase: MultiReviewPhase): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Which step owns the fix session's clock and transcript right now.
+ * Which step owns the Address Findings session's clock and transcript right now.
  *
- * Older workflows run preparation, consolidation and the fix turn in one
+ * Older workflows run preparation, consolidation and the Address Findings turn in one
  * provider session, and every dispatch resets its clock, so whatever that
  * session shows belongs to the step using it now and to no other.
  */
@@ -1246,7 +1252,7 @@ export function multiReviewSharedSessionStep(
   workflow: MultiReviewWorkflow,
 ): MultiReviewStepKind | null {
   switch (workflow.phase) {
-    // The reviewers run without the fix session, so it still holds
+    // The reviewers run without the Address Findings session, so it still holds
     // preparation's finished turn for the whole review stage.
     case "preparing":
     case "reviewing":
@@ -1274,7 +1280,7 @@ export function multiReviewSharedSessionStep(
 /**
  * The provider session a step runs in. Preparation keeps its own once
  * consolidation moves to a fresh session; workflows without a separate
- * preparation model ran every step in the fix session.
+ * preparation model ran every step in the Address Findings session.
  */
 export function multiReviewStepSession(
   workflow: MultiReviewWorkflow,
@@ -1351,7 +1357,7 @@ export function multiReviewStepSessionAccess(
 }
 
 /**
- * Read model for the transcript tail of a preparation, consolidation or Fix
+ * Read model for the transcript tail of a preparation, consolidation or Address Findings
  * session, for the flow graph's inspector. It has the reviewer transcript's
  * contract: a bounded tail, an opaque session-scoped `sourceToken`, and an
  * `unchanged` answer with no messages when that token is still current.

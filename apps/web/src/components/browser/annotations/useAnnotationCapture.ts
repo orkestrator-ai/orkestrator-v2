@@ -15,6 +15,7 @@
  * operation ids. A save that failed for a domain reason (conflict, capacity,
  * validation) waits for the user instead of retrying.
  */
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BROWSER_PREVIEW_CAPTURE_EVENT,
@@ -488,9 +489,14 @@ export function useAnnotationCapture({
   const selecting = isSelecting(selection);
   useEffect(() => {
     if (!api || !selecting) return;
-    const timer = window.setInterval(() => void refreshStatus(), SELECTION_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [api, refreshStatus, selecting]);
+    return startCoordinatedPoll({
+      resource: "annotation-selection",
+      target: tabId,
+      intervalMs: SELECTION_POLL_MS,
+      priority: "critical",
+      read: refreshStatus,
+    });
+  }, [api, refreshStatus, selecting, tabId]);
 
   const cancel = useCallback(async () => {
     const capture = apiRef.current;

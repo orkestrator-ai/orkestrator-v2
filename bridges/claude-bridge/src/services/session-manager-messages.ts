@@ -44,6 +44,19 @@ export class ToolTracker {
     }
   }
 
+  /**
+   * Note the model a sub-agent ran on. Its launch call can only say what was
+   * asked for, and usually asks for nothing, so its own responses are the one
+   * record of what actually served it. A reload reads the same records
+   * (`session-manager-subagent-rehydration.ts`).
+   */
+  setSubagentModel(toolUseId: string, modelId: string): void {
+    const existing = this.tools.get(toolUseId);
+    if (existing && existing.subagentModelId !== modelId) {
+      this.tools.set(toolUseId, { ...existing, subagentModelId: modelId });
+    }
+  }
+
   /** Update a tool with its result */
   updateToolResult(
     toolUseId: string,
@@ -701,6 +714,10 @@ export function parseMessageContent(
     typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id
       : undefined;
+  if (explicitParentTaskUseId && message.type === "assistant") {
+    const subagentModelId = normalizeBackendModelId(message.message?.model);
+    if (subagentModelId) toolTracker?.setSubagentModel(explicitParentTaskUseId, subagentModelId);
+  }
 
   const isUserRecord = message.type === "user";
   const rawContent = message.message?.content;

@@ -163,6 +163,9 @@ describe("CO-05/UP-02 coordinator mail to and from a leaf agent", () => {
     const worker = await world.addEnvironment("worker");
     const { instance, events } = coordination(world, [{ id: "bk_cmd", name: "Office desktop" }]);
 
+    // Hold the recipient's turn so the subscribed drain cannot inject between
+    // publication and the placement assertions below.
+    world.startTurn(worker);
     const delivered = await instance.deliverIncoming({
       controllerId: "bk_cmd",
       coordinatorEnvironmentId: "coordinator:c1:conv-1",
@@ -467,6 +470,9 @@ describe("UP-02/CO-05 collected leaf mail reaches the coordinator on the command
     const world = await MailWorld.create();
     worlds.push(world);
     const main = await world.main();
+    // Keep the recipient busy so this admission assertion cannot race the
+    // automatic injection drain; delivery itself has separate coverage.
+    world.startTurn(main);
     const acks: number[] = [];
     const link = {
       connected: true,

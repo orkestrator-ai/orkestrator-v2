@@ -24,7 +24,9 @@ export function OpenCodePipelineTranscriptFixture() {
       active = false;
     };
   }, []);
-  const rows = toPipelineTranscript(entries ?? [], "opencode", "2026-10-14T10:00:00.000Z");
+  const platform =
+    new URLSearchParams(window.location.search).get("agent") === "claude" ? "claude" : "opencode";
+  const rows = toPipelineTranscript(entries ?? [], platform, "2026-10-14T10:00:00.000Z");
   return (
     <main className="mx-auto max-w-3xl p-4">
       <button onClick={() => setVisible((value) => !value)}>Switch transcript</button>
@@ -40,7 +42,7 @@ export function OpenCodePipelineTranscriptFixture() {
               key={message.id}
               message={message}
               previousMessage={rows[index - 1]}
-              platform="opencode"
+              platform={platform}
             />
           ))}
         </section>

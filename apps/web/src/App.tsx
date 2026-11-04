@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import {
   agentSettingsTiers,
   resolvedActionDefault,
@@ -687,10 +688,12 @@ function ConnectedApp() {
   // slow daemon probe.
   useEffect(() => {
     if (!macOsPermissionsReady) return;
-    const interval = window.setInterval(() => {
-      void refreshDockerAvailability("poll");
-    }, DOCKER_AVAILABILITY_POLL_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+    return startCoordinatedPoll({
+      resource: "docker-availability",
+      intervalMs: DOCKER_AVAILABILITY_POLL_INTERVAL_MS,
+      priority: "auxiliary",
+      read: () => refreshDockerAvailability("poll"),
+    });
   }, [macOsPermissionsReady, refreshDockerAvailability]);
 
   // Host CLI availability is independent of Docker. Run it in parallel with

@@ -359,7 +359,8 @@ Every other conversation is a **side agent**, named Side 1, Side 2… (the lowes
 free number). A side agent reads the project and Orkestrator state (its
 credential carries only the `discovery`, `mail` and `schedules` capabilities
 (`coordinatorRoleCapabilities` in `control-mcp-tools.ts`), so it launches
-nothing, graphs included), and exchanges mail with the main coordinator only:
+nothing, graphs included; `ask_agents` is on `discovery` because a subork is
+read-only and answers only its asker), and exchanges mail with the main coordinator only:
 the mail store refuses side ↔ worker and side ↔ peer mail in both
 directions. The user may still write to it.
 
@@ -2475,6 +2476,7 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
 | `/goal` (composer) | Added `set_worker_goal`, `get_worker_goal`, `pause_worker_goal`, `clear_worker_goal`; see [Worker goals](#worker-goals). The goal service owns the loop and its limits, and the tools add ownership, a required limit, and one wake. |
+| `/subork` (composer) | Added `ask_agents`, the same tool every native tab has, on the `discovery` capability so side agents have it too. Its suborks are read-only and run in the project home (the conversation's own checkout); the answers come back as one mail to the conversation. See [suborks.md](suborks.md). |
 | Start/stop environment, ticket edits, adoption, mail | Existing backend mutations; no renderer-only workflow launch step. Mail preserves separate stored/injected/acknowledged outcomes. |
 
 Repository checkout mutation controls remain unavailable to coordinators.

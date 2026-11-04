@@ -199,12 +199,20 @@ The backend merges runtime actions into the provider list
   session. It has no `busy` policy: it neither queues nor interrupts a turn, it
   journals no request, and the composer calls it directly. See
   [goals.md](goals.md).
+- `/subork` is **reserved** on platforms with `actions.subork` (every native
+  platform). It needs a request and takes no attachments. Unlike `/goal` it is a
+  turn: a busy agent queues it, and dispatch rewrites it to a literal carrier
+  asking the current agent to call `ask_agents`, so a retry resends that text. It
+  works in environment tabs and coordinator conversations, and is refused in a
+  session Orkestrator runs itself (a pipeline worker, reviewer or subork) and
+  while a handoff waits for its first message. See [suborks.md](suborks.md).
 
 Deduplication is by identity, never by lower-cased display name.
 
 No other shortcuts are planned beyond `/goal`, which has its own plan
 (`plans/goals.md`; decided 2026-10-24 in
-[0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)).
+[0016](../todo/cli-and-slash-commands/0016-slash-command-catalogue.md#assumptions-and-decisions)),
+and `/subork`, which has its own contract ([suborks.md](suborks.md)).
 Clearing or starting a session, model and permission changes already have
 composer controls, and a `/review` alias would run a workflow whose scope
 differs from the provider's command. A new shortcut needs its own todo with

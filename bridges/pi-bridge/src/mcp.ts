@@ -10,6 +10,7 @@
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import {
@@ -188,7 +189,8 @@ export function isOrkestratorMailTool(state: SessionState, toolName: string): bo
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
     ((AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName) ||
       (ARTIFACT_TOOL_NAMES as readonly string[]).includes(toolName) ||
-      (AGENT_GOAL_TOOL_NAMES as readonly string[]).includes(toolName))
+      (AGENT_GOAL_TOOL_NAMES as readonly string[]).includes(toolName) ||
+      (AGENT_SUBORK_TOOL_NAMES as readonly string[]).includes(toolName))
   );
 }
 

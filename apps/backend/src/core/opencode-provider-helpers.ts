@@ -51,6 +51,11 @@ import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinato
 import { agentSystemInstructions } from "@orkestrator/protocol/agent-system-instructions";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
+import {
+  AGENT_SUBORK_TOOL_NAMES,
+  SUBORK_RESULT_KIND,
+  SUBORK_TOOL_NAME,
+} from "@orkestrator/protocol/suborks";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { openCodeUserMcpRules } from "./opencode-user-mcp.js";
@@ -315,9 +320,12 @@ const OPENCODE_COORDINATOR_TOOL_PERMISSIONS = Object.freeze(
  * `<server>_<tool>` naming.
  */
 const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
-  [...AGENT_MAIL_TOOL_NAMES, ...ARTIFACT_TOOL_NAMES, ...AGENT_GOAL_TOOL_NAMES].map(
-    (name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`,
-  ),
+  [
+    ...AGENT_MAIL_TOOL_NAMES,
+    ...ARTIFACT_TOOL_NAMES,
+    ...AGENT_GOAL_TOOL_NAMES,
+    ...AGENT_SUBORK_TOOL_NAMES,
+  ].map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 
 /**
@@ -410,9 +418,16 @@ export function openCodeWorkflowResultTurnTools(
     for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool, extraTools)) {
       tools[openCodeWorkflowResultToolId(tool)] = true;
     }
+    // OpenCode's Orkestrator connection is environment-wide, so this is what
+    // keeps a read-only workflow turn from starting suborks. A reviewer
+    // session (a subork's) gets no tool map: its permission rules deny it.
+    tools[OPENCODE_SUBORK_TOOL_ID] = false;
   }
   return tools;
 }
+
+/** `ask_agents` as OpenCode names it on the environment-wide Orkestrator connection. */
+export const OPENCODE_SUBORK_TOOL_ID = `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${SUBORK_TOOL_NAME}`;
 
 export function openCodeWorkflowResultPermissionRules(
   selectedTool: string,
@@ -420,11 +435,29 @@ export function openCodeWorkflowResultPermissionRules(
 ) {
   return [
     ...openCodeWorkflowResultDenyPermissionRules(),
+    // A subork elsewhere gets a result-only credential. Here the environment-wide
+    // server's tools (tickets, artifacts, mail as the environment) are denied
+    // instead; the allows below re-open this turn's own result-server tools.
+    ...(selectedTool === workflowResultToolName(SUBORK_RESULT_KIND)
+      ? [
+          {
+            permission: `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_*`,
+            pattern: "*",
+            action: "deny" as const,
+          },
+        ]
+      : []),
     ...openCodeWorkflowResultTurnToolNames(selectedTool, extraTools).map((tool) => ({
       permission: openCodeWorkflowResultToolId(tool),
       pattern: "*",
       action: "allow" as const,
     })),
+    // Depth 1. A subork runs in a reviewer session, which takes no per-turn
+    // tool map, so this rule is what removes `ask_agents` from its tool list on
+    // the environment-wide connection (a live OpenCode run showed it offered
+    // without it). Only sessions Orkestrator runs itself take workflow turns,
+    // and those cannot start suborks anyway, so the rule is not lifted at settle.
+    { permission: OPENCODE_SUBORK_TOOL_ID, pattern: "*", action: "deny" as const },
   ];
 }
 

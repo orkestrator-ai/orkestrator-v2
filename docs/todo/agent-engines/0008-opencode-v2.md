@@ -750,7 +750,8 @@ migration, which is out of proportion while the gate is closed.
 ### Task 6: live tests keep `--pure` for now
 
 `opencode-review-permissions.live.test.ts` still starts `serve --pure`, which
-1.x supports and 2.x removed. It runs against the 1.x pin, which is where it
+1.x supports and 2.x removed. So does `native-agent-suborks-opencode.live.test.ts`
+(added 2026-11-04). It runs against the 1.x pin, which is where it
 belongs. The move off `--pure` ships with the 2.x live set (task 7), not before. On 1.19.4,
 `--pure` means "run without external plugins", which keeps that fixture-model
 test independent of plugin installs. Dropping it on 1.x would gain nothing. The

@@ -138,6 +138,41 @@ quoted context
     });
   });
 
+  test("keeps Claude Agent model attribution on the normalized task", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "claude-agent",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolUseId: "toolu_agent",
+              toolArgs: { prompt: "Survey", model: "sonnet" },
+              toolState: "success",
+              subagentModelId: "claude-sonnet-4-6",
+              subagentReasoningEffort: "high",
+            },
+          ],
+        },
+      ],
+      "claude",
+      FALLBACK,
+    );
+    const task = flattenedParts(transcript).find((part) => part.type === "task-group");
+    expect(task).toMatchObject({
+      task: {
+        type: "tool-invocation",
+        toolUseId: "toolu_agent",
+        subagentModelId: "claude-sonnet-4-6",
+        subagentReasoningEffort: "high",
+      },
+    });
+  });
+
   test("keeps a backend-placed artifact part beside its publish call for every harness", () => {
     const artifact = {
       schemaVersion: 1,

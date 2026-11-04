@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { READ_RESUME_COALESCE_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { flushMicrotasks, installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { imageRedactor } from "@/lib/web-annotations/redaction";
 import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import {
@@ -48,6 +50,37 @@ describe("useAnnotationCapture", () => {
     bus.restore();
     imageRedactor.redact = originalRedact;
     invokeMock.mockImplementation(() => Promise.resolve());
+  });
+
+  test("the selection poll stops while the window is hidden and reads at once on return", async () => {
+    const { clock, document } = installFakeReadCoordinator();
+    const { result } = renderCapture();
+    await act(async () => {
+      await result.current.start("element");
+      await flushMicrotasks();
+    });
+    expect(result.current.selecting).toBe(true);
+    let reads = 0;
+    const readStatus = capture.api.getCaptureStatus;
+    capture.api.getCaptureStatus = async (tabId: string) => {
+      reads += 1;
+      return readStatus(tabId);
+    };
+    const statusReads = () => reads;
+    const before = statusReads();
+
+    await act(async () => clock.advance(800));
+    expect(statusReads()).toBe(before + 2);
+
+    act(() => document.setVisibility("hidden"));
+    await act(async () => clock.advance(60_000));
+    expect(statusReads()).toBe(before + 2);
+
+    act(() => document.setVisibility("visible"));
+    await act(async () => clock.advance(READ_RESUME_COALESCE_MS));
+    expect(statusReads()).toBe(before + 3);
+    cleanup();
+    resetReadCoordinatorForTests();
   });
 
   test("a save during redaction waits and uploads only the redacted image", async () => {

@@ -556,6 +556,12 @@ export class NativeAgentTranscriptProjection {
   private readonly options: NativeAgentServiceOptions;
   private readonly catalogs: NativeAgentCatalogCache;
 
+  /** The calls a view shows, from the service's index: a session with none costs nothing. */
+  private suborkProjectionField(session: PersistedNativeAgentSession) {
+    const suborks = this.host.options.suborks?.views(session.key);
+    return suborks ? { suborks } : {};
+  }
+
   constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
     this.storage = host.storage;
     this.resumeIdentity = new NativeAgentResumeIdentityObserver(this.storage);
@@ -3389,6 +3395,7 @@ export class NativeAgentTranscriptProjection {
           : {}),
       ...(contextUsage ? { contextUsage } : {}),
       ...goalProjectionField(resolved.session),
+      ...this.suborkProjectionField(resolved.session),
       ...(asyncQuestionResponses.size > 0
         ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
         : {}),
@@ -5343,6 +5350,7 @@ export class NativeAgentTranscriptProjection {
             ? { queue: snapshot.providerQueue }
             : {}),
         ...goalProjectionField(resolved.session),
+        ...this.suborkProjectionField(resolved.session),
         ...(asyncQuestionResponses.size > 0
           ? { asyncQuestionResponses: [...asyncQuestionResponses.values()] }
           : {}),

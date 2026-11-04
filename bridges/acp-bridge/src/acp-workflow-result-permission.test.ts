@@ -2,7 +2,12 @@ import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import { sessions, type AcpProcess, type SessionState } from "./acp-context.js";
-import { attachChild, clearApprovals, workflowResultPermissionOption } from "./acp-session.js";
+import {
+  attachChild,
+  clearApprovals,
+  orkestratorToolPermissionOption,
+  workflowResultPermissionOption,
+} from "./acp-session.js";
 
 const options = [
   { optionId: "reject", name: "Reject", kind: "reject_once" },
@@ -313,4 +318,15 @@ describe("the current turn's workflow-result attempt", () => {
       sessions.delete(state.id);
     }
   });
+});
+
+test("native ask_agents is auto-allowed; a result-only attempt cannot grant it", () => {
+  const toolCall = named("orkestrator__ask_agents", { targets: [{ agent: "codex" }] });
+  expect(orkestratorToolPermissionOption({ toolCall, options }, "ask")).toBe("allow");
+  expect(
+    workflowResultPermissionOption(
+      { toolCall, options },
+      { tool: "submit_subork_answer", resultKey: KEY },
+    ),
+  ).toBeUndefined();
 });

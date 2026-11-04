@@ -1,11 +1,19 @@
 import { beforeEach, expect, test } from "bun:test";
+import type { FileNode } from "@/lib/backend";
 import { useFilesPanelStore as store } from "@/stores/filesPanelStore";
 import { loadFileSubtree } from "./file-subtree-loads";
+
+const fresh = (children: FileNode[] = [], digest = "") => ({
+  unchanged: false,
+  digest,
+  value: { children, truncated: false },
+});
 
 beforeEach(() =>
   store.setState({
     fileSubtreeKey: "target",
     fileSubtrees: {},
+    fileSubtreeDigests: {},
     folderLoadTokens: new Map(),
     loadingFolders: [],
     failedFolders: [],
@@ -24,7 +32,7 @@ test("initial loads and refreshes share a four-read concurrency limit across mou
     maximum = Math.max(maximum, running);
     await new Promise<void>((resolve) => releases.push(resolve));
     running -= 1;
-    return { children: [], truncated: false };
+    return fresh();
   };
   const loads = paths.map((path) => loadFileSubtree("target", path, false, read));
   const refreshes = paths.map((path) => loadFileSubtree("target", path, true, read));
@@ -46,7 +54,7 @@ test("equivalent refreshes queue one follow-up and collapsed queued work never s
   const read = async () => {
     reads += 1;
     await new Promise<void>((resolve) => releases.push(resolve));
-    return { children: [], truncated: false };
+    return fresh();
   };
   const first = loadFileSubtree("target", "dir", false, read);
   const refreshes = Array.from({ length: 3 }, () => loadFileSubtree("target", "dir", true, read));
@@ -70,7 +78,7 @@ test("a collapsed branch waiting for admission never calls its reader", async ()
   const read = async () => {
     reads += 1;
     await gate;
-    return { children: [], truncated: false };
+    return fresh();
   };
   const loads = paths.map((path) => loadFileSubtree("target", path, false, read));
   expect(reads).toBe(4);
@@ -79,4 +87,83 @@ test("a collapsed branch waiting for admission never calls its reader", async ()
   await Promise.all(loads);
   expect(reads).toBe(4);
   expect(store.getState().loadingFolders).toEqual([]);
+});
+
+test("a directory re-read with its digest and found unchanged keeps what is held", async () => {
+  store.setState({ expandedFolders: ["dir"] });
+  const file: FileNode = { name: "a.txt", path: "dir/a.txt", isDirectory: false };
+  const asked: Array<string | undefined> = [];
+
+  await loadFileSubtree("target", "dir", false, async (digest) => {
+    asked.push(digest);
+    return fresh([file], "digest-1");
+  });
+  const held = store.getState().fileSubtrees;
+
+  await loadFileSubtree("target", "dir", true, async (digest) => {
+    asked.push(digest);
+    return { unchanged: true, digest: "digest-1" };
+  });
+
+  expect(asked).toEqual([undefined, "digest-1"]);
+  // Same object, so nothing that merges or renders the tree has any work to do.
+  expect(store.getState().fileSubtrees).toBe(held);
+  expect(store.getState().loadingFolders).toEqual([]);
+  expect(store.getState().folderLoadTokens.size).toBe(0);
+});
+
+test("a changed directory replaces the contents and the digest", async () => {
+  store.setState({ expandedFolders: ["dir"] });
+  const file = (name: string): FileNode => ({ name, path: `dir/${name}`, isDirectory: false });
+  await loadFileSubtree("target", "dir", false, async () => fresh([file("a.txt")], "digest-1"));
+  await loadFileSubtree("target", "dir", true, async () => fresh([file("b.txt")], "digest-2"));
+  expect(store.getState().fileSubtrees.dir?.children.map(({ name }) => name)).toEqual(["b.txt"]);
+  expect(store.getState().fileSubtreeDigests.dir).toBe("digest-2");
+});
+
+test("a backend that sends no digest is asked afresh every time", async () => {
+  store.setState({ expandedFolders: ["dir"] });
+  const asked: Array<string | undefined> = [];
+  for (const reload of [false, true]) {
+    await loadFileSubtree("target", "dir", reload, async (digest) => {
+      asked.push(digest);
+      return fresh();
+    });
+  }
+  expect(asked).toEqual([undefined, undefined]);
+});
+
+test("a failed re-read keeps the digest, and an unchanged answer then clears the failure", async () => {
+  store.setState({ expandedFolders: ["dir"] });
+  await loadFileSubtree("target", "dir", false, async () => fresh([], "digest-1"));
+  const held = store.getState().fileSubtrees.dir;
+  await loadFileSubtree("target", "dir", true, async () => {
+    throw new Error("read failed");
+  });
+  expect(store.getState().failedFolders).toEqual(["dir"]);
+  expect(store.getState().fileSubtrees.dir).toBe(held!);
+
+  await loadFileSubtree("target", "dir", true, async () => ({
+    unchanged: true,
+    digest: "digest-1",
+  }));
+  expect(store.getState().failedFolders).toEqual([]);
+  expect(store.getState().fileSubtrees.dir).toBe(held!);
+});
+
+test("a retried or collapsed directory is read without a digest", async () => {
+  store.setState({ expandedFolders: ["dir"] });
+  const asked: Array<string | undefined> = [];
+  const read = async (digest: string | undefined) => {
+    asked.push(digest);
+    return fresh([], "digest-1");
+  };
+  await loadFileSubtree("target", "dir", false, read);
+  store.getState().retryFolderLoad("dir");
+  await loadFileSubtree("target", "dir", false, read);
+  store.getState().setFolderExpanded("dir", false);
+  expect(store.getState().fileSubtreeDigests).toEqual({});
+  store.getState().setFolderExpanded("dir", true);
+  await loadFileSubtree("target", "dir", false, read);
+  expect(asked).toEqual([undefined, undefined, undefined]);
 });

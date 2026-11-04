@@ -1,3 +1,4 @@
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
 import { useEffect, useRef, useState } from "react";
 
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
@@ -65,8 +66,11 @@ export function useUserCommands(
   // otherwise freeze a live card until the next resync.
   useEffect(() => {
     if (!running) return;
-    const timer = setInterval(() => refreshRef.current(), 3_000);
-    return () => clearInterval(timer);
+    return startCoordinatedPoll({
+      resource: "user-commands",
+      intervalMs: 3_000,
+      read: () => refreshRef.current(),
+    });
   }, [running]);
 
   return { commands, refresh: () => refreshRef.current() };

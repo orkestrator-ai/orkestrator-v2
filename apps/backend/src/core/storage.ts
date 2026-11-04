@@ -6,6 +6,7 @@ export type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 export type { GraphRunsStorage } from "./storage-graph-runs.js";
 export type { GraphEffectsStorage } from "./storage-graph-effects.js";
 export type { GraphDescribeStorage } from "./storage-graph-describe.js";
+export type { SuborksStorage } from "./storage-suborks.js";
 export type { ClientStateStorage } from "./storage-client-state.js";
 export type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 export type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
@@ -35,6 +36,7 @@ import type { GraphTemplatesStorage } from "./storage-graph-templates.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphEffectsStorage } from "./storage-graph-effects.js";
 import type { GraphDescribeStorage } from "./storage-graph-describe.js";
+import type { SuborksStorage } from "./storage-suborks.js";
 import type { ClientStateStorage } from "./storage-client-state.js";
 import type { SetupApprovalsStorage } from "./storage-setup-approvals.js";
 import type { WatchedPullRequestsStorage } from "./storage-watched-pull-requests.js";
@@ -161,6 +163,7 @@ export class StorageService {
   readonly graphRuns: GraphRunsStorage;
   readonly graphEffects: GraphEffectsStorage;
   readonly graphDescribe: GraphDescribeStorage;
+  readonly suborks: SuborksStorage;
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
@@ -180,6 +183,7 @@ export class StorageService {
     this.graphRuns = this.repos.graphRuns;
     this.graphEffects = this.repos.graphEffects;
     this.graphDescribe = this.repos.graphDescribe;
+    this.suborks = this.repos.suborks;
     this.clientState = this.repos.clientState;
     this.setupApprovals = this.repos.setupApprovals;
     this.watchedPullRequests = this.repos.watchedPullRequests;
@@ -1799,6 +1803,8 @@ export class StorageService {
     sender: AgentMailSender,
     input: AgentMailSendInput,
     options: {
+      /** Backend-only cancellation fence under the mail writer lease. */
+      isStillWanted?: () => boolean;
       newDelegation?: boolean;
       nodePrefix?: string;
       nodeParent?: { id: string; threadId: string; hopCount: number };

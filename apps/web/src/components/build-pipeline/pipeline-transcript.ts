@@ -262,6 +262,8 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     ...(raw.agentUsageDisplay === "token-only" ? { agentUsageDisplay: "token-only" as const } : {}),
     toolUseId: asString(raw.toolUseId),
     parentTaskUseId: asString(raw.parentTaskUseId),
+    subagentModelId: asString(raw.subagentModelId),
+    subagentReasoningEffort: asString(raw.subagentReasoningEffort),
     isMcpTool: raw.isMcpTool === true ? true : undefined,
     mcpServerName: asString(raw.mcpServerName),
     backgroundTask: asBackgroundTask(raw.backgroundTask),
@@ -311,8 +313,6 @@ function toNativePart(value: unknown): NativeMessagePart | null {
         subagentPrompt: asString(raw.subagentPrompt),
         subagentActions: toNativeParts(raw.subagentActions),
         subagentActionCount: asNumber(raw.subagentActionCount),
-        subagentModelId: asString(raw.subagentModelId),
-        subagentReasoningEffort: asString(raw.subagentReasoningEffort),
       };
     case "tool-group": {
       const parts = toNativeParts(raw.parts);

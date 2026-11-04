@@ -118,3 +118,22 @@ Evidence: `orkestrator-test-run.jYz5SO/merge-electron.log.gz` below the host tem
 
 
 Owning-file rerun: `ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-electron-owner-dab5ea29 mise run test:logged -- --name merge-electron-owners -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts terminal-input-resume-electron.spec.ts --workers=1` reported two passed, one skipped and two failed, exit 1 in 382.8 seconds. Terminal resume passed unchanged; both independent-window and nickname cases again reached 120 seconds. Native main-window validation remains unresolved, without a new flaky classification for those test-deadline failures. Evidence: `orkestrator-test-run.pwITdf/merge-electron-owners.log.gz` below the host temporary directory and `output/agent-testing/merge-main-electron-owner-dab5ea29/electron/`.
+
+## 2026-11-04 recurrence during headless qualification
+
+The exact `mise run test:logged -- --name agent-electron -- mise run
+test:agent:electron` rerun (one Playwright worker) finished with 38 passed,
+six failed, one skipped and 15 not run in 513.5 s. Terminal resume failed at
+its 60-second startup-title assertion (`Orkestrator AI` instead of
+`Orkestrator AI — DEV [electron-resume]`), before any editor or fault injection.
+Connection outage, remote backend-exit wiring, renderer-log reload and workspace
+realm also hit title waits. Service-preview crash recovery failed separately.
+Evidence: `/tmp/orkestrator-test-run.RgYAxH/agent-electron.log.gz`.
+
+The terminal owning file then passed alone unchanged (one test, 13.3 s):
+`mise run test:logged -- --name terminal-electron-owner -- bunx playwright test
+--config e2e/agent-testing/playwright.electron.config.ts
+e2e/agent-testing/terminal-input-resume-electron.spec.ts --workers=1`.
+This supports recurrence of the existing startup symptom; it does not establish
+a root cause or excuse the other Electron failures. No title assertion or
+startup timeout was changed.

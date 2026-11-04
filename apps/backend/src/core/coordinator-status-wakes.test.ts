@@ -1487,6 +1487,18 @@ describe("status classification and bounds", () => {
         failureContext: { phase: "fixing", kind: "stage-transition" },
       }),
     ).toContain('restart_build_pipeline_step { "pipelineId": "p"');
+    expect(
+      tools({
+        error: "Build cancelled",
+        failureContext: { phase: "fixing", kind: "stage-transition" },
+      }),
+    ).not.toContain("restart_build_pipeline_step");
+    expect(
+      tools({
+        cancelledAt: new Date().toISOString(),
+        failureContext: { phase: "fixing", kind: "stage-transition" },
+      }),
+    ).not.toContain("restart_build_pipeline_step");
     expect(tools({ error: "Build cancelled" })).not.toContain("restart_build_pipeline_step");
     expect(
       tools({ failureContext: { phase: "creating-environment", kind: "stage-transition" } }),

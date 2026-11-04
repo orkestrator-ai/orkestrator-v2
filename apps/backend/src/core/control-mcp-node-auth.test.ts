@@ -363,7 +363,8 @@ test("authorized remote state changes stay on the matching project and node", as
   // Resume acts on a paused pipeline only; anything else is refused before routing.
   const running = await call("resume_build_pipeline", { nodeId: "bk_leaf", pipelineId: "own" });
   expect(running.body.result?.isError).toBe(true);
-  expect(JSON.stringify(running.body.result)).toContain("restart_build_pipeline_step");
+  expect(JSON.stringify(running.body.result)).not.toContain("restart_build_pipeline_step");
+  expect(JSON.stringify(running.body.result)).toContain("no action is needed");
   expect(routed.some((item) => item.command === "resume_build_pipeline")).toBe(false);
   workflows.set("own", { snapshot: { id: "own", projectId: "p-leaf", phase: "paused" } });
   const paused = await call("resume_build_pipeline", { nodeId: "bk_leaf", pipelineId: "own" });

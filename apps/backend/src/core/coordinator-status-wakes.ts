@@ -580,7 +580,10 @@ export function buildPipelineStatus(
       ? text(snapshot.failureContext.phase)
       : undefined;
     const restartable =
-      failure !== undefined && sessionPhaseForBuildPhase(failure as ResumableBuildPhase) !== null;
+      !snapshot.cancelledAt &&
+      !(text(snapshot.error)?.startsWith("Build cancelled") ?? false) &&
+      failure !== undefined &&
+      sessionPhaseForBuildPhase(failure as ResumableBuildPhase) !== null;
     return {
       key: "failed",
       state: "failed",

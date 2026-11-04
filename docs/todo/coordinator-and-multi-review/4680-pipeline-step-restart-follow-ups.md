@@ -8,7 +8,7 @@ continue a failed build pipeline step").
 
 ### Tasks
 
-1. **Crash between the restart and its receipt**: a retry after a backend crash in that window can restart an omitted-step request's new current step again. Status: open.
+1. **Crash between the restart and its receipt**: a retry after a backend crash in that window can restart an omitted-step request's new current step again. Status: done.
 2. **Live qualification**: restart a pipeline that really failed on a usage limit, here and on a connected node, and watch the coordinator's next status wake arrive. Status: open.
 
 ### 1. Crash between the restart and its receipt
@@ -17,12 +17,15 @@ continue a failed build pipeline step").
 
 **Context.** The receipt contract (`coordinator-action-scope.ts`, `withCoordinatorReceipt`) assumes every action is safe to repeat after a partial run, because its identity derives from the `requestId`. The restart's identity is the rewind it records (`recordRewind` in `build-pipeline-rewind.ts`), which carries no request ID. The window is the time between `ctx.mutate` saving the pipeline and `completeCoordinatorActionReceipt` writing the receipt, plus the supervisor pass in between (`restartLocatedStage` awaits `stageSupervisor.runLocked`).
 
-**Investigation.** Code reading only; not reproduced. The leaf side has the same shape under its own receipt (`restart_controller_build_pipeline_step`). A lost node answer is not affected: the leaf's receipt completed, so the retry replays.
+**Investigation.** Resolved in the review repair: a bounded coordinator restart journal is saved atomically with the pipeline restart intent, including restarts without an old session. Service tests reinitialize the service and retry the same omitted-step request; command tests retry after follow-update failure. The original investigation was code reading only. The leaf side has the same shape under its own receipt (`restart_controller_build_pipeline_step`). A lost node answer is not affected: the leaf's receipt completed, so the retry replays.
 
 **Decisions.**
 
 - **How to close the window?**
-  - **Record the request on the rewind (recommended).** Add an optional `requestId` to `PipelineRewind` (protocol type and validator) and have `restartForCoordinator` answer `alreadyRestarted` when the newest rewind carries it.
+  - **Keep a bounded restart journal on the pipeline (recommended).** Persist hashed request identity, hashed intent, and resolved step with the restart intent.
+    - Pros: replay survives receipt failure and backend restart, including a restart that supersedes no session.
+    - Cons: retains up to 1024 identities per pipeline; new requests are refused at capacity rather than evicting history.
+  - **Record the request on the rewind.** Add an optional `requestId` to `PipelineRewind` (protocol type and validator) and have `restartForCoordinator` answer `alreadyRestarted` when the newest rewind carries it.
     - Pros: exactly-once whatever the timing; the record that proves the restart is the restart itself.
     - Cons: a protocol change (`packages/protocol`), so a full test run; a restart that supersedes nothing records no rewind, so that case needs the rewind written anyway.
   - **Resolve the omitted step before admission and send it as a named step.**
@@ -49,3 +52,9 @@ continue a failed build pipeline step").
   - **Wait for a real usage limit.**
     - Pros: the exact incident.
     - Cons: not schedulable.
+
+## Assumptions and decisions
+
+### Task 1: Durable restart journal
+
+Chose a pipeline journal independent of rewind records because pre-session failures can restart without superseding any session. Identity and intent hashes plus the resolved step are persisted under the existing pipeline lock with the restart intent. Retries consult this journal before resolving an omitted step or checking current pipeline status. History is capped at 1024 entries and is never evicted. This closes the receipt crash window; live qualification in task 2 remains open.

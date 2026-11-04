@@ -837,5 +837,5 @@ export function resumeRefusal(workflow: Record<string, unknown>): string {
   if (phase === "complete") {
     return "This build pipeline is complete, not paused; there is nothing to resume.";
   }
-  return `This build pipeline is ${phase}, not paused, so resume does nothing. To restart its current step, call restart_build_pipeline_step with this pipelineId.`;
+  return `This build pipeline is ${phase}, not paused, so there is nothing to resume. It is already running; no action is needed.`;
 }

@@ -99,6 +99,7 @@ async function restartHere(
   context: CommandContext,
   projectId: string,
   input: RestartInput,
+  requestId: string,
 ): Promise<JsonRecord> {
   if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
   await requireProjectPipeline(context, projectId, input.pipelineId);
@@ -106,6 +107,7 @@ async function restartHere(
     input.pipelineId,
     input.stageId,
     input.selection,
+    requestId,
   );
   return {
     pipelineId: pipeline.id,
@@ -184,7 +186,9 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
         if (remote) {
           const launch = {
             projectId: remote.projectId,
-            ...restart,
+            pipelineId: restart.pipelineId,
+            stepId: restart.stageId,
+            selection: restart.selection,
             requestId: `coordinator-restart:${requestKey(caller, requestId)}`,
           };
           result = {
@@ -198,7 +202,12 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
             nodeId: remote.nodeId,
           };
         } else {
-          result = await restartHere(context, caller.projectId, restart);
+          result = await restartHere(
+            context,
+            caller.projectId,
+            restart,
+            requestKey(caller, requestId),
+          );
         }
         const followed = await reopenPipelineFollows(
           context,
@@ -230,7 +239,7 @@ export function registerCoordinatorPipelineStepActions(register: CommandRegistra
         conversationId: "controller",
       },
       { requestId, action: "restart-pipeline-step", payload: restart },
-      () => restartHere(context, projectId, restart),
+      () => restartHere(context, projectId, restart, requestId),
     );
   });
 }

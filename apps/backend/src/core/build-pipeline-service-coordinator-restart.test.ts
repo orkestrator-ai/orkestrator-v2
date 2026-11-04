@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { failedStepTarget } from "./build-pipeline-restart-targets.js";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
@@ -172,10 +173,14 @@ describe("restart_build_pipeline_step at the service", () => {
   test("refuses a cancelled pipeline", async () => {
     await withService(async (service, storage) => {
       const { started } = await startBuilding(service, storage);
+      await failCurrentStep(storage, started.id, "usage limit");
       await service.cancel(started.id);
+      const before = await pipeline(storage, started.id);
+      expect(before.failureContext).toBeDefined();
       await expect(service.restartForCoordinator(started.id, undefined)).rejects.toThrow(
         "was cancelled",
       );
+      expect((await pipeline(storage, started.id)).sessions).toEqual(before.sessions);
       expect((await pipeline(storage, started.id)).phase).toBe("failed");
     });
   });
@@ -203,6 +208,85 @@ describe("restart_build_pipeline_step at the service", () => {
       await expect(service.restartForCoordinator(started.id, undefined)).rejects.toThrow(
         "outside any step",
       );
+    });
+  });
+});
+
+test.each(["building", "fixing"] as const)(
+  "changes selection after a pre-session %s failure and deduplicates saved restarts",
+  async (phase) => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.sessions.forEach((session) => {
+          session.status = "idle";
+        });
+        snapshot.iteration = 1;
+        snapshot.phase = "failed";
+        snapshot.failureContext = { phase, kind: "stage-transition" };
+      });
+      const earlier = (await pipeline(storage, started.id)).sessions;
+      provider.runningPhases.add(phase === "building" ? "build" : "fix");
+      const selection = { agent: "claude" as const, model: "sonnet" };
+      const first = await service.restartForCoordinator(
+        started.id,
+        undefined,
+        selection,
+        "durable-request",
+      );
+      expect(first.pipeline.sessions.at(-1)?.model).toBe("sonnet");
+      expect(provider.created.at(-1)?.options).toMatchObject({ model: "sonnet" });
+      for (const session of earlier)
+        expect(first.pipeline.sessions.find((s) => s.sessionKey === session.sessionKey)).toEqual(
+          session,
+        );
+      const created = provider.created.length;
+      // Discard in-memory state as at a restart between the pipeline save and receipt completion.
+      await service.shutdown();
+      await service.init();
+      const retry = await service.restartForCoordinator(
+        started.id,
+        undefined,
+        selection,
+        "durable-request",
+      );
+      expect(retry.alreadyRestarted).toBe(true);
+      expect(retry.step).toEqual(first.step);
+      expect(provider.created.length).toBe(created);
+      await expect(
+        service.restartForCoordinator(
+          started.id,
+          undefined,
+          { ...selection, model: "opus" },
+          "durable-request",
+        ),
+      ).rejects.toThrow("different intent");
+    });
+  },
+);
+
+test("failed targets ignore a session from another phase and distinguish validation/package preparation", async () => {
+  await withService(async (service, storage) => {
+    const { started, session } = await startBuilding(service, storage);
+    const snapshot = await pipeline(storage, started.id);
+    snapshot.phase = "failed";
+    snapshot.failureContext = {
+      phase: "fixing",
+      kind: "stage-transition",
+      sessionId: session.sdkSessionId,
+    };
+    expect(failedStepTarget(snapshot)).toEqual({ kind: "session", phase: "fix" });
+    snapshot.failureContext = { phase: "building", kind: "stage-transition" };
+    snapshot.validationRun = {
+      id: "validation",
+      status: "failed",
+    } as BuildPipeline["validationRun"];
+    delete snapshot.reviewPackage;
+    expect(failedStepTarget(snapshot)).toEqual({ kind: "validation" });
+    snapshot.reviewRetryRequested = true;
+    expect(failedStepTarget(snapshot)).toEqual({
+      kind: "review-package",
+      implementationPhase: "build",
     });
   });
 });

@@ -150,6 +150,13 @@ export function failedStepTarget(candidate: BuildPipeline): RestartTarget {
       `This build failed while ${failure.phase.replaceAll("-", " ")}, before any step started, so there is no step to restart. Ask the user; a new build may be needed.`,
     );
   }
+  const special = reviewValidationStage(candidate, resumablePhase(failure.phase) ?? undefined);
+  if (special === "validation") return { kind: "validation" };
+  if (special === "review-package")
+    return {
+      kind: "review-package",
+      implementationPhase: failure.phase === "fixing" ? "fix" : "build",
+    };
   const session = failure.sessionId ? findStageSession(candidate, failure.sessionId) : undefined;
   return session?.phase === stagePhase
     ? {

@@ -250,12 +250,13 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     pipelineId: string,
     stageId: string | undefined,
     selection?: BuildPipelineRestartSelection,
+    requestId?: string,
   ): Promise<{
     pipeline: BuildPipeline;
     step: CoordinatorRestartedStep;
     alreadyRestarted: boolean;
   }> {
-    return this.lifecycle.restartForCoordinator(pipelineId, stageId, selection);
+    return this.lifecycle.restartForCoordinator(pipelineId, stageId, selection, requestId);
   }
 
   retryStage(pipelineId: string): Promise<BuildPipeline> {

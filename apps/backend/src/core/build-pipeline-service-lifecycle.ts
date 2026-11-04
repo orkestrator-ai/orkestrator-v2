@@ -6,7 +6,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
  * the stage supervisor.
  */
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS } from "./build-pipeline-stages.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
   BUILD_CANCELLED_ERROR,
@@ -114,6 +114,7 @@ const activityLog = createLogger("backend.activity");
  */
 function clearStageControlState(candidate: BuildPipeline): void {
   delete candidate.error;
+  delete candidate.cancelledAt;
   delete candidate.failureContext;
   delete candidate.reconnectAttempt;
   delete candidate.pendingPromptAttempt;
@@ -849,17 +850,47 @@ export class BuildPipelineLifecycle {
     pipelineId: string,
     stageId: string | undefined,
     selection?: BuildPipelineRestartSelection,
+    requestId?: string,
   ): Promise<{
     pipeline: BuildPipeline;
     step: CoordinatorRestartedStep;
     alreadyRestarted: boolean;
   }> {
+    const requestKey = requestId ? createHash("sha256").update(requestId).digest("hex") : undefined;
+    const intent = createHash("sha256")
+      .update(
+        JSON.stringify({
+          stageId,
+          selection: selection
+            ? {
+                agent: selection.agent,
+                model: selection.model,
+                reasoningEffort: selection.reasoningEffort,
+                fastMode: selection.fastMode,
+              }
+            : undefined,
+        }),
+      )
+      .digest("hex");
     // Read when located, before the restart supersedes the session it names.
     let step: CoordinatorRestartedStep = { phase: "unknown", round: 1 };
     let alreadyRestarted = false;
     const pipeline = await this.restartLocatedStage(
       pipelineId,
       (candidate) => {
+        const prior = requestKey
+          ? candidate.coordinatorRestarts?.find((entry) => entry.key === requestKey)
+          : undefined;
+        if (prior) {
+          if (prior.intent !== intent)
+            return new Error("Restart requestId was reused with different intent");
+          step = prior.step;
+          alreadyRestarted = true;
+          return { kind: "satisfied" };
+        }
+        if (requestKey && (candidate.coordinatorRestarts?.length ?? 0) >= 1024) {
+          return new Error("This pipeline has reached its coordinator restart history capacity");
+        }
         const target =
           coordinatorRestartRefusal(candidate, stageId) ??
           (stageId !== undefined
@@ -885,7 +916,14 @@ export class BuildPipelineLifecycle {
           target.kind === "satisfied" || (session ? isSupersededPipelineSession(session) : false);
         return target;
       },
-      selection ? { selection } : {},
+      {
+        ...(selection ? { selection } : {}),
+        recordRestart: requestKey
+          ? (candidate) => {
+              (candidate.coordinatorRestarts ??= []).push({ key: requestKey, intent, step });
+            }
+          : undefined,
+      },
     );
     return { pipeline, step, alreadyRestarted };
   }
@@ -1023,6 +1061,7 @@ export class BuildPipelineLifecycle {
     locate: (candidate: BuildPipeline) => RestartTarget,
     options: {
       expectedHead?: string;
+      recordRestart?: (candidate: BuildPipeline) => void;
       /** Prepares the reset intent. Git changes only after the restart is saved. */
       resetCode?: (
         candidate: BuildPipeline,
@@ -1076,7 +1115,11 @@ export class BuildPipelineLifecycle {
       }
       let selectionSlot: BuildPipelineRestartSlot | null = null;
       if (options.selection) {
-        selectionSlot = named ? pipelineRestartSlot(candidate, named) : null;
+        selectionSlot = named
+          ? pipelineRestartSlot(candidate, named)
+          : target.kind === "session" && target.phase !== "review"
+            ? pipelineRestartSlot(candidate, { phase: target.phase, label: "" })
+            : null;
         if (!selectionSlot) {
           rejection = new Error("This step cannot be restarted with a different agent or model.");
           return;
@@ -1333,6 +1376,7 @@ export class BuildPipelineLifecycle {
       clearStageControlState(candidate);
       candidate.pendingKanbanReactivation = true;
       delete candidate.kanbanReactivationRetryAt;
+      options.recordRestart?.(candidate);
     };
     await this.ctx.mutate(pipelineId, mutation, (candidate) => {
       const target = locate(candidate);

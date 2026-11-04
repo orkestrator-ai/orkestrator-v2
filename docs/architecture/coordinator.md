@@ -1693,8 +1693,8 @@ lock).
   back in the result as `phase: "failed"` with the error.
 
 `resume_build_pipeline` resumes a paused pipeline only. On any other phase
-it now refuses, naming the phase and pointing at this tool, instead of
-returning the unchanged pipeline as if it had worked. A failed pipeline's
+it refuses, naming the phase. Failed pipelines get restart guidance; active
+pipelines are told they are already running and need no action. A failed pipeline's
 status wake lists `restart_build_pipeline_step` when the failure belongs to
 a step.
 
@@ -1709,12 +1709,12 @@ Decisions:
 - **A completed pipeline is refused** even though the UI can restart its
   steps: redoing finished work, possibly reopening a pull request, is the
   user's call.
-- **Residual window.** A backend that crashes after the restart is saved and
-  before the receipt completes leaves the receipt pending; the retry then
-  resolves the step again. For a named step that is a no-op (its old
-  session is already superseded); with `stepId` omitted it restarts the new
-  current step a second time. Tracked in
-  [4680](../todo/coordinator-and-multi-review/4680-pipeline-step-restart-follow-ups.md).
+- **Durable restart identity.** The pipeline stores hashed request identity,
+  intent, and resolved step with the restart intent under its mutation lock.
+  Retries reconcile this record before resolving an omitted step, including
+  after a backend crash or follow-update failure. The journal retains up to
+  1024 entries; at capacity new requests are refused rather than evicting
+  evidence of an earlier restart.
 
 ## Scheduled wakes and actions
 

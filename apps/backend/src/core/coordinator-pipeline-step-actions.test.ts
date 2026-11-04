@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
@@ -30,22 +30,32 @@ const tool = (name: string, input: Record<string, unknown>) =>
 
 function fakePipelines(node: string, storage: () => StorageService) {
   return {
-    restartForCoordinator: async (pipelineId: string, stageId?: string, selection?: unknown) => {
+    restartForCoordinator: async (
+      pipelineId: string,
+      stageId?: string,
+      selection?: unknown,
+      requestId?: string,
+    ) => {
+      const record = (await storage().getBuildPipeline(pipelineId))!;
+      const snapshot = record.snapshot as Record<string, unknown>;
+      const saved = snapshot.restartIdentity as { requestId: string; result: unknown } | undefined;
+      if (saved && saved.requestId === requestId) return saved.result;
       if (stageId === "missing") {
         throw new Error('This build pipeline has no step "missing".');
       }
       restarts.push({ node, pipelineId, stageId, selection });
       // The restarted pipeline is running its step again, as the service leaves it.
-      const record = (await storage().getBuildPipeline(pipelineId))!;
-      await storage().saveBuildPipeline(pipelineId, record.projectId, "", 1, {
-        ...(record.snapshot as Record<string, unknown>),
-        phase: "fixing",
-      });
-      return {
+      const result = {
         pipeline: { id: pipelineId, phase: "fixing" },
         step: { phase: "fix", round: 2, sessionKey: stageId ?? "fix-key" },
         alreadyRestarted: false,
       };
+      await storage().saveBuildPipeline(pipelineId, record.projectId, "", 1, {
+        ...(record.snapshot as Record<string, unknown>),
+        phase: "fixing",
+        restartIdentity: { requestId, result },
+      });
+      return result;
     },
   };
 }
@@ -300,4 +310,62 @@ test("resume refuses a pipeline that is not paused and points at the restart too
   const running = await tool("resume_build_pipeline", { pipelineId: "pipe-running" });
   expect(running.isError).toBe(true);
   expect(running.text).toContain("fixing, not paused");
+  expect(running.text).not.toContain("restart_build_pipeline_step");
+});
+
+test.each(["early-build-key", pipelineWorkerTabId("early-build-key")])(
+  "preserves remote named step %s and selection",
+  async (stepId) => {
+    const selection = { agent: "claude", model: "sonnet" };
+    const result = await tool("restart_build_pipeline_step", {
+      requestId: "remote-named",
+      pipelineId: "pipe-remote",
+      nodeId: "bk_leaf",
+      stepId,
+      selection,
+    });
+    expect(result.isError).toBe(false);
+    expect(restarts).toEqual([
+      { node: "leaf", pipelineId: "pipe-remote", stageId: "early-build-key", selection },
+    ]);
+  },
+);
+
+test("refuses unknown remote steps", async () => {
+  const result = await tool("restart_build_pipeline_step", {
+    requestId: "remote-unknown",
+    pipelineId: "pipe-remote",
+    nodeId: "bk_leaf",
+    stepId: "missing",
+  });
+  expect(result.isError).toBe(true);
+  expect(result.text).toContain('no step "missing"');
+  expect(restarts).toEqual([]);
+});
+
+test("a follow update failure after restart remains safe to retry", async () => {
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "retry-follow",
+    projectId: world.projectId,
+    coordinatorId: world.coordinatorId,
+    conversationId: scope.conversationId,
+    kind: "build-pipeline",
+    resourceId: "pipe-local",
+    requestId: "build",
+    createdAt: new Date().toISOString(),
+  });
+  await world.storage.coordinators.markCoordinatorWorkflowNotified("retry-follow", 1);
+  const spy = spyOn(
+    world.storage.coordinators,
+    "updateCoordinatorWorkflowAssociation",
+  ).mockRejectedValueOnce(new Error("follow storage failed"));
+  try {
+    const input = { pipelineId: "pipe-local", requestId: "follow-retry" };
+    expect((await tool("restart_build_pipeline_step", input)).isError).toBe(true);
+    expect(restarts).toHaveLength(1);
+    expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
+    expect(restarts).toHaveLength(1);
+  } finally {
+    spy.mockRestore();
+  }
 });

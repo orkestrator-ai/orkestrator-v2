@@ -3,6 +3,7 @@ import { runCommand } from "./shell.js";
 import type { AppConfig } from "./models.js";
 
 export type GitHubCredentialSource = "host-cli" | "pat";
+export type ContainerGitHubCredentialSource = GitHubCredentialSource | "none";
 
 export async function getHostGitHubToken(): Promise<string | undefined> {
   try {
@@ -25,9 +26,9 @@ export function gitHubCredentialSource(globalConfig: AppConfig["global"]): GitHu
 }
 
 /**
- * The GitHub token the user selected in Settings: the host's `gh auth login`
+ * The token for the backend's own GitHub calls: the host's `gh auth login`
  * account by default, or the stored PAT when host credentials are turned off.
- * Shared by container credential sync and the backend's own GitHub API calls.
+ * Containers have their own setting; see {@link resolveContainerGitHubToken}.
  */
 export async function resolveGitHubToken(
   globalConfig: AppConfig["global"],
@@ -38,18 +39,32 @@ export async function resolveGitHubToken(
   return globalConfig.githubToken?.trim() || undefined;
 }
 
+export function containerGitHubCredentialSource(
+  globalConfig: AppConfig["global"],
+): ContainerGitHubCredentialSource {
+  return globalConfig.containerGitHubCredential ?? "none";
+}
+
+/**
+ * The token containers receive. An agent in any container can read it and reach
+ * whatever it reaches, so the host token is read only when the user chose to
+ * share it: with sharing off it never enters this process for a container.
+ */
+export async function resolveContainerGitHubToken(
+  globalConfig: AppConfig["global"],
+): Promise<string | undefined> {
+  const source = containerGitHubCredentialSource(globalConfig);
+  if (source === "host-cli") return getHostGitHubToken();
+  if (source === "pat") return globalConfig.githubToken?.trim() || undefined;
+  return undefined;
+}
+
 export async function getContainerGitHubCredentialStatus(
   globalConfig: AppConfig["global"],
-): Promise<{ source: GitHubCredentialSource; available: boolean }> {
-  if (gitHubCredentialSource(globalConfig) === "host-cli") {
-    return {
-      source: "host-cli",
-      available: Boolean(await getHostGitHubToken()),
-    };
-  }
+): Promise<{ source: ContainerGitHubCredentialSource; available: boolean }> {
   return {
-    source: "pat",
-    available: Boolean(globalConfig.githubToken?.trim()),
+    source: containerGitHubCredentialSource(globalConfig),
+    available: Boolean(await resolveContainerGitHubToken(globalConfig)),
   };
 }
 

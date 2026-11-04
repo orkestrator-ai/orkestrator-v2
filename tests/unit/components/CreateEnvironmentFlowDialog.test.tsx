@@ -233,6 +233,34 @@ describe("CreateEnvironmentFlowDialog", () => {
     await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
   });
 
+  test("explains a container with no GitHub credential before creating it", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "none",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-no-github" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    expect(await screen.findByText("This container will have no GitHub access")).toBeTruthy();
+    expect(screen.getByText(/GitHub access for containers/)).toBeTruthy();
+    expect(createEnvironment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+    await waitFor(() => expect(createEnvironment).toHaveBeenCalledTimes(1));
+  });
+
   test("warns when PAT mode is selected without a stored token", async () => {
     getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
       source: "pat",

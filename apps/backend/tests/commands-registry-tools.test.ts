@@ -761,7 +761,9 @@ describe("Electron backend command registry", () => {
   // on every platform instead of silently depending on the developer's OS.
 
   test("reports whether the selected host GitHub CLI credential is available", async () => {
-    const { context } = createContext(createEnvironment());
+    const { context } = createContext(createEnvironment(), {
+      globalConfig: { containerGitHubCredential: "host-cli" },
+    });
     const commands = createCommandRegistry();
 
     await withFakeGh(
@@ -799,7 +801,7 @@ exit 1
 
   test("reports missing PAT credentials without reading host GitHub CLI auth", async () => {
     const { context } = createContext(createEnvironment(), {
-      globalConfig: { useHostGitHubCredentials: false },
+      globalConfig: { useHostGitHubCredentials: false, containerGitHubCredential: "pat" },
     });
     const commands = createCommandRegistry();
 
@@ -822,6 +824,7 @@ exit 0
     const configuredContext = createContext(createEnvironment(), {
       globalConfig: {
         useHostGitHubCredentials: false,
+        containerGitHubCredential: "pat",
         githubToken: "configured-pat",
       },
     }).context;

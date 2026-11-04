@@ -58,6 +58,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-worktree-signal",
     source: "docker/orkestrator-worktree-signal.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-git-credential",
+    source: "docker/orkestrator-git-credential.sh",
+  },
 ];
 
 const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;

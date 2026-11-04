@@ -361,6 +361,7 @@ publish_claude_credentials() {
 }
 
 copy_agent_file() {
+    AGENT_FILE_PUBLISHED=false
     local source_root="$1"
     # A relayed copy of a staged mount stands in for it (staged_input_path).
     case "$source_root" in
@@ -437,6 +438,7 @@ copy_agent_file() {
         rm -f "$temporary_path" 2>/dev/null || true
         agent_copy_warn "$relative_path" "Failed to copy $label file"
     else
+        AGENT_FILE_PUBLISHED=true
         if [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ]; then
             agent_input_record_copy "$source_root" "$relative_path"
         fi
@@ -778,7 +780,8 @@ agent_input_home_matches() {
 # walker can therefore retain successes without claiming a refused sibling.
 agent_input_record_copy() {
     [ -n "${AGENT_INPUT_COPIED_PATHS:-}" ] || return 0
-    (cd "$1" && find -P "$2" -printf '%y%p\0') >> "$AGENT_INPUT_COPIED_PATHS"
+    (cd "$1" && find -P "$2" -printf '%y%p\0') >> "$AGENT_INPUT_COPIED_PATHS" ||
+        agent_copy_warn "$2" "Failed to record copied input; will retry"
 }
 
 # Removes what the previous listing imported and the current one no longer has:
@@ -909,29 +912,42 @@ import_agent_input() {
     if [ -d "$stamp" ] && [ -f "$stamp/paths" ] && [ ! -L "$stamp/paths" ]; then
         if ! agent_input_forget_removed "$stamp/paths" "$fresh/paths" "$destination_root"; then
             # Keep unresolved removals in the ownership union, and force a retry.
-            cp "$stamp/paths" "$fresh/pending"
+            if ! cp "$stamp/paths" "$fresh/pending" 2>/dev/null; then
+                rm -rf -- "$fresh" 2>/dev/null || true
+                "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+                return 0
+            fi
         fi
     fi
     local AGENT_INPUT_COPIED_PATHS="$fresh/copied"
-    : > "$AGENT_INPUT_COPIED_PATHS"
+    if ! { : > "$AGENT_INPUT_COPIED_PATHS"; } 2>/dev/null; then
+        rm -rf -- "$fresh" 2>/dev/null || true
+        AGENT_INPUT_COPIED_PATHS=""
+        "$helper" "$mount" "$destination_root" "$relative_path" "$@"
+        return 0
+    fi
     "$helper" "$mount" "$destination_root" "$relative_path" "$@"
     AGENT_INPUTS_COPIED=$((${AGENT_INPUTS_COPIED:-0} + 1))
-    if [ -s "$fresh/copied" ]; then
-        printf 'd%s\0' "$relative_path" >> "$fresh/copied"
-    fi
-    # Ownership is the successful copies plus previously owned paths still in
-    # the source and any removals awaiting retry. Never claim skipped new paths.
-    if [ -f "$stamp/paths" ]; then
-        LC_ALL=C comm -z -12 --nocheck-order "$stamp/paths" "$fresh/paths" > "$fresh/retained"
-    fi
-    : >> "$fresh/retained"
-    : >> "$fresh/pending"
-    LC_ALL=C sort -zu "$fresh/copied" "$fresh/retained" "$fresh/pending" > "$fresh/owned"
-    mv "$fresh/owned" "$fresh/paths"
-    rm -f "$fresh/copied" "$fresh/retained" "$fresh/pending"
-    # A copy that warned or has pending removals cannot match next boot.
-    if [ "${AGENT_COPY_SKIPPED:-}" != "$skipped_before" ]; then
-        rm -f -- "$fresh/sums" 2>/dev/null || true
+    if ! (
+        # Persistent metadata is optional. Never follow linked stamp leaves.
+        if [ -s "$fresh/copied" ]; then
+            printf 'd%s\0' "$relative_path" >> "$fresh/copied" || exit 1
+        fi
+        if [ -f "$stamp/paths" ] && [ ! -L "$stamp/paths" ]; then
+            LC_ALL=C comm -z -12 --nocheck-order "$stamp/paths" "$fresh/paths" > "$fresh/retained" || exit 1
+        fi
+        : >> "$fresh/retained" &&
+        : >> "$fresh/pending" &&
+        LC_ALL=C sort -zu "$fresh/copied" "$fresh/retained" "$fresh/pending" > "$fresh/owned" &&
+        mv "$fresh/owned" "$fresh/paths" &&
+        rm -f "$fresh/copied" "$fresh/retained" "$fresh/pending" || exit 1
+        if [ "${AGENT_COPY_SKIPPED:-}" != "$skipped_before" ]; then
+            rm -f -- "$fresh/sums" || exit 1
+        fi
+    ) 2>/dev/null; then
+        agent_copy_warn "$relative_path" "Failed to record input ownership; will retry"
+        rm -rf -- "$fresh" 2>/dev/null || true
+        return 0
     fi
     rm -rf -- "$stamp" 2>/dev/null || true
     mv -- "$fresh" "$stamp" 2>/dev/null || rm -rf -- "$fresh" 2>/dev/null || true
@@ -965,6 +981,7 @@ forget_unchanged_agent_login() {
 
 # Call once the login is restricted, so the digest is of what the home now holds.
 remember_agent_login() {
+    [ "${4:-false}" = true ] || return 0
     local source_root="$1"
     local destination_root="$2"
     local relative_path="$3"
@@ -1120,7 +1137,7 @@ else
     fi
     if [ -f "$mounted_credentials" ] && [ ! -L "$mounted_credentials" ]; then
         if publish_claude_credentials "$mounted_credentials"; then
-            remember_agent_login /claude-config "$HOME/.claude" .credentials.json
+            remember_agent_login /claude-config "$HOME/.claude" .credentials.json true
             echo "Copied credentials from host"
         else
             echo "No credential on the mount; awaiting the backend credential sync"
@@ -1374,10 +1391,11 @@ if [ -d /opencode-data ]; then
     # the host seed cost bytes on every start and offered nothing a container uses.
     forget_unchanged_agent_login "$HOME/.local/share/opencode" auth.json
     copy_agent_file /opencode-data "$HOME/.local/share/opencode" auth.json OpenCode
+    login_published="$AGENT_FILE_PUBLISHED"
 
     chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.local/share/opencode/auth.json" opencode OpenCode /opencode-data auth.json
-    remember_agent_login /opencode-data "$HOME/.local/share/opencode" auth.json
+    remember_agent_login /opencode-data "$HOME/.local/share/opencode" auth.json "$login_published"
     report_agent_copy_skips OpenCode
     if [ -n "$DEBUG" ]; then
         echo "Copied OpenCode data files:"
@@ -1412,6 +1430,7 @@ if [ -d /codex-home ]; then
     # portable inputs a fresh Codex environment needs.
     forget_unchanged_agent_login "$HOME/.codex" auth.json
     copy_agent_file /codex-home "$HOME/.codex" auth.json Codex
+    login_published="$AGENT_FILE_PUBLISHED"
 
     for file in \
         config.toml \
@@ -1441,7 +1460,7 @@ if [ -d /codex-home ]; then
 
     chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.codex/auth.json" codex Codex
-    remember_agent_login /codex-home "$HOME/.codex" auth.json
+    remember_agent_login /codex-home "$HOME/.codex" auth.json "$login_published"
     report_agent_copy_skips Codex
     if [ -n "$DEBUG" ]; then
         echo "Copied Codex files:"
@@ -1459,6 +1478,7 @@ mkdir -p "$HOME/.grok" "$HOME/.config/grok"
 if [ -d /grok-home ]; then
     forget_unchanged_agent_login "$HOME/.grok" auth.json
     copy_agent_file /grok-home "$HOME/.grok" auth.json Grok
+    login_published="$AGENT_FILE_PUBLISHED"
 
     for file in \
         xai-api-key \
@@ -1481,7 +1501,7 @@ if [ -d /grok-home ]; then
     chmod 600 "$HOME/.grok/xai-api-key" 2>/dev/null || true
     chmod 600 "$HOME/.grok/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.grok/auth.json" grok Grok
-    remember_agent_login /grok-home "$HOME/.grok" auth.json
+    remember_agent_login /grok-home "$HOME/.grok" auth.json "$login_published"
 fi
 
 if [ -d /grok-config ]; then
@@ -1509,6 +1529,7 @@ mkdir -p "$HOME/.pi/agent"
 if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}/pi-config" ]; then
     forget_unchanged_agent_login "$HOME/.pi/agent" auth.json
     copy_agent_file /pi-config/agent "$HOME/.pi/agent" auth.json Pi
+    login_published="$AGENT_FILE_PUBLISHED"
 
     for file in \
         models.json \
@@ -1534,7 +1555,7 @@ if [ -d /pi-config ] || [ -d "${STAGED_INPUT_RELAY_DIR:-/run/orkestrator-inputs}
 
     chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
     restrict_imported_login "$HOME/.pi/agent/auth.json" pi Pi /pi-config/agent auth.json
-    remember_agent_login /pi-config/agent "$HOME/.pi/agent" auth.json
+    remember_agent_login /pi-config/agent "$HOME/.pi/agent" auth.json "$login_published"
     # The bridge's MCP client reads user servers from here; definitions can
     # carry literal header or environment values, so keep it owner-only.
     if [ -f "$HOME/.pi/agent/mcp.json" ] && [ ! -L "$HOME/.pi/agent/mcp.json" ]; then

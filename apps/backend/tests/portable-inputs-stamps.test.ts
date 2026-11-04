@@ -663,6 +663,86 @@ describe("import ownership failures", () => {
     expect(await f.read(".codex/AGENTS.md")).toBe("local agents");
   });
 
+  for (const login of LOGINS.filter((entry) => entry.name !== "Claude")) {
+    for (const failure of ["cp", "oversized"]) {
+      test(`${login.name}: ${failure} login imports never own a local credential`, async () => {
+        const f = await fixture();
+        await f.replace(login.staged, login.one);
+        const local = login.two.replace("host-refresh", "");
+        await write(f.inHome(login.home), local);
+        const prelude =
+          failure === "cp"
+            ? `cp() { case "$1" in */auth.json) return 1;; *) command cp "$@";; esac; }`
+            : "AGENT_COPY_MAX_FILE_BYTES=1";
+        const stamp = f.inHome(
+          `.orkestrator-inputs/${f.inHome(login.home).replaceAll("%", "%25").replaceAll("/", "%2F")}`,
+        );
+        for (let boot = 0; boot < 2; boot++) {
+          await f.boot({ prelude });
+          const actual = JSON.parse(await f.read(login.home));
+          delete actual.last_refresh;
+          expect(actual).toEqual(JSON.parse(local));
+          expect(
+            await fs.access(stamp).then(
+              () => true,
+              () => false,
+            ),
+          ).toBe(false);
+        }
+        await f.replace(login.staged, undefined);
+        await f.boot();
+        const actual = JSON.parse(await f.read(login.home));
+        delete actual.last_refresh;
+        expect(actual).toEqual(JSON.parse(local));
+      });
+    }
+  }
+
+  for (const leaf of ["paths", "sums"]) {
+    test(`linked ${leaf} stamp cannot block changed tree import`, async () => {
+      const f = await fixture();
+      await f.boot();
+      const stamp = f.inHome(
+        `.orkestrator-inputs/${f.inHome(".claude/skills").replaceAll("%", "%25").replaceAll("/", "%2F")}`,
+      );
+      await fs.rm(path.join(stamp, leaf));
+      await fs.symlink(path.join(f.root, "unreadable-missing"), path.join(stamp, leaf));
+      await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
+      await f.boot();
+      expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
+    });
+  }
+
+  for (const leaf of ["paths", "sums"]) {
+    test(`unreadable ${leaf} stamp cannot block changed tree import`, async () => {
+      const f = await fixture();
+      await f.boot();
+      const stamp = f.inHome(
+        `.orkestrator-inputs/${f.inHome(".claude/skills").replaceAll("%", "%25").replaceAll("/", "%2F")}`,
+      );
+      await fs.chmod(path.join(stamp, leaf), 0);
+      await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
+      await f.boot();
+      expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
+      // Clear damaged metadata as the owner, then prove a later boot retries.
+      await fs.rm(stamp, { recursive: true, force: true });
+      await f.boot();
+      expect((await f.boot()).copied).toBe(0);
+    });
+  }
+
+  test("unreadable ownership bookkeeping is retried without blocking boot", async () => {
+    const f = await fixture();
+    await f.boot();
+    await write(f.stage("claude-config/skills/review/SKILL.md"), "changed skill");
+    // Force a read failure even when the suite runs as root.
+    const prelude = `comm() { return 1; }`;
+    expect((await f.boot({ prelude })).progress).toContain("will retry");
+    expect(await f.read(".claude/skills/review/SKILL.md")).toBe("changed skill");
+    await f.boot();
+    expect((await f.boot()).copied).toBe(0);
+  });
+
   test("failed single-file removal keeps its stamp for retry", async () => {
     const f = await fixture();
     await f.boot();

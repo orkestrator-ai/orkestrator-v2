@@ -66,7 +66,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
-async function fixtureContainer(fromImage: string) {
+async function fixtureContainer(fromImage: string, forceRelay = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-input-stamps-live-"));
   roots.push(root);
   const write = async (name: string, content: string) => {
@@ -91,9 +91,43 @@ async function fixtureContainer(fromImage: string) {
   ]);
   containers.push(container);
   const inContainer = (...args: string[]) => docker(["exec", "--user", "node", container, ...args]);
+  const relayOwner = async (owner: string) => {
+    const helper = await docker([
+      "create",
+      "--network",
+      "none",
+      "--user",
+      "root",
+      "--env",
+      "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+      "--entrypoint",
+      "sh",
+      "--mount",
+      `type=bind,src=${root},dst=/staged`,
+      fromImage,
+      "-c",
+      'stat -c "%u:%g" /staged; chown -R "$1" /staged',
+      "owner",
+      owner,
+    ]);
+    containers.push(helper);
+    return (await docker(["start", "--attach", helper])).trim();
+  };
   const start = async () => {
-    await docker(["start", container]);
-    await waitForContainerBoot(container);
+    // Different ownership with owner-only modes reproduces non-1000/rootless
+    // mounts without changing the permissions the relay must preserve.
+    const owner = forceRelay ? await relayOwner("12345:12345") : undefined;
+    try {
+      await docker(["start", container]);
+      await waitForContainerBoot(container);
+      if (forceRelay) {
+        expect(
+          await inContainer("test", "-r", "/run/orkestrator-inputs/codex-home/config.toml"),
+        ).toBe("");
+      }
+    } finally {
+      if (owner) await relayOwner(owner);
+    }
   };
   const stop = () => docker(["stop", "--time", "1", container]);
   const identities = async () =>
@@ -114,58 +148,60 @@ async function fixtureContainer(fromImage: string) {
   return { root, write, start, stop, identities, counts, read, exists };
 }
 
-test.skipIf(!enabled)(
-  "first and second start show the expected inputs, and the second copies nothing",
-  async () => {
-    const f = await fixtureContainer(image!);
-    await f.start();
-    const first = await f.counts();
-    expect(Number(first?.[1])).toBe(0);
-    const copied = Number(first?.[2]);
-    expect(copied).toBeGreaterThanOrEqual(STAMPED.length);
-    const imported = await f.identities();
-    expect(await f.read(".claude/CLAUDE.md")).toBe("fixture memory");
-    expect(await f.read(".agents/skills/shared/SKILL.md")).toContain("Shared.");
-    expect(await f.read(".pi/agent/prompts/review.md")).toBe("prompt one");
-    const login = await f.read(".codex/auth.json");
-    expect(login).toContain("token-one");
-    expect(login).not.toContain("host-refresh");
+for (const forceRelay of [false, true]) {
+  test.skipIf(!enabled)(
+    `first and second start show expected inputs and copy nothing (forced relay=${forceRelay})`,
+    async () => {
+      const f = await fixtureContainer(image!, forceRelay);
+      await f.start();
+      const first = await f.counts();
+      expect(Number(first?.[1])).toBe(0);
+      const copied = Number(first?.[2]);
+      expect(copied).toBeGreaterThanOrEqual(STAMPED.length);
+      const imported = await f.identities();
+      expect(await f.read(".claude/CLAUDE.md")).toBe("fixture memory");
+      expect(await f.read(".agents/skills/shared/SKILL.md")).toContain("Shared.");
+      expect(await f.read(".pi/agent/prompts/review.md")).toBe("prompt one");
+      const login = await f.read(".codex/auth.json");
+      expect(login).toContain("token-one");
+      expect(login).not.toContain("host-refresh");
 
-    await f.stop();
-    await f.start();
-    const second = await f.counts();
-    expect(Number(second?.[1])).toBe(copied);
-    expect(Number(second?.[2])).toBe(0);
-    expect(await f.identities()).toBe(imported);
-    expect(await f.read(".claude/CLAUDE.md")).toBe("fixture memory");
-    expect(await f.read(".agents/skills/shared/SKILL.md")).toContain("Shared.");
+      await f.stop();
+      await f.start();
+      const second = await f.counts();
+      expect(Number(second?.[1])).toBe(copied);
+      expect(Number(second?.[2])).toBe(0);
+      expect(await f.identities()).toBe(imported);
+      expect(await f.read(".claude/CLAUDE.md")).toBe("fixture memory");
+      expect(await f.read(".agents/skills/shared/SKILL.md")).toContain("Shared.");
 
-    // Changing, adding and removing one input each, and a rotated login.
-    await f.stop();
-    await f.write("codex-home/config.toml", "model = 'two'\n");
-    await f.write("claude-config/skills/added/SKILL.md", "---\nname: added\n---\nAdded.\n");
-    await fs.rm(path.join(f.root, "claude-config/skills/gone"), { recursive: true });
-    await fs.rm(path.join(f.root, "codex-home/AGENTS.md"));
-    await f.write(
-      "codex-home/auth.json",
-      '{"tokens":{"access_token":"token-two","refresh_token":"host-refresh"}}',
-    );
-    await f.start();
-    expect(await f.read(".codex/config.toml")).toBe("model = 'two'");
-    expect(await f.read(".claude/skills/added/SKILL.md")).toContain("Added.");
-    expect(await f.exists(".claude/skills/gone")).toBe(false);
-    expect(await f.exists(".codex/AGENTS.md")).toBe(false);
-    expect(await f.read(".codex/auth.json")).toContain("token-two");
+      // Changing, adding and removing one input each, and a rotated login.
+      await f.stop();
+      await f.write("codex-home/config.toml", "model = 'two'\n");
+      await f.write("claude-config/skills/added/SKILL.md", "---\nname: added\n---\nAdded.\n");
+      await fs.rm(path.join(f.root, "claude-config/skills/gone"), { recursive: true });
+      await fs.rm(path.join(f.root, "codex-home/AGENTS.md"));
+      await f.write(
+        "codex-home/auth.json",
+        '{"tokens":{"access_token":"token-two","refresh_token":"host-refresh"}}',
+      );
+      await f.start();
+      expect(await f.read(".codex/config.toml")).toBe("model = 'two'");
+      expect(await f.read(".claude/skills/added/SKILL.md")).toContain("Added.");
+      expect(await f.exists(".claude/skills/gone")).toBe(false);
+      expect(await f.exists(".codex/AGENTS.md")).toBe(false);
+      expect(await f.read(".codex/auth.json")).toContain("token-two");
 
-    // A sign-out: the staged login goes, and so does the imported copy.
-    await f.stop();
-    await fs.rm(path.join(f.root, "codex-home/auth.json"));
-    await f.start();
-    expect(await f.exists(".codex/auth.json")).toBe(false);
-    expect(await f.read(".claude/skills/review/SKILL.md")).toContain("Review.");
-  },
-  300_000,
-);
+      // A sign-out: the staged login goes, and so does the imported copy.
+      await f.stop();
+      await fs.rm(path.join(f.root, "codex-home/auth.json"));
+      await f.start();
+      expect(await f.exists(".codex/auth.json")).toBe(false);
+      expect(await f.read(".claude/skills/review/SKILL.md")).toContain("Review.");
+    },
+    300_000,
+  );
+}
 
 test.skipIf(!enabled || !oldImage)(
   "an image from before the capability keeps its full copy",

@@ -24,6 +24,8 @@ describe("local preview service discovery", () => {
   let listeners: Map<number, { owner: string | "stranger"; started: string }>;
   let checks: number;
 
+  const pidsOf = (listener: { started: string }) => [Number(listener.started.slice(1))];
+
   const listenerOwnership = {
     attribute: async (environmentId: string, port: number): Promise<ListenerOwnership> => {
       checks += 1;
@@ -31,7 +33,15 @@ describe("local preview service discovery", () => {
       if (!listener) return { attribution: "none" };
       if (listener.owner === "stranger") return { attribution: "unattributed" };
       if (listener.owner !== environmentId) return { attribution: "other-environment" };
-      return { attribution: "this-environment", processKey: listener.started };
+      return {
+        attribution: "this-environment",
+        processKey: listener.started,
+        listenerPids: pidsOf(listener),
+      };
+    },
+    listenerPids: async (port: number) => {
+      const listener = listeners.get(port);
+      return listener ? pidsOf(listener) : [];
     },
     stats: () => ({ listenerChecks: checks, listenerUnchecked: 0 }),
   };

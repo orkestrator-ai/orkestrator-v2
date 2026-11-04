@@ -70,7 +70,7 @@ The second link is removed: a retarget clears `entry.inFlight` (`beginLineage`),
 
 - **Chose:** a miss count on unmodified code against the fixed code, using the same Linux container (`oven/bun:1.4.4`, aarch64, `--cpus=4`, git 2.47.3). Results are in [case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md#load-and-stress-runs-2026-11-03-to-2026-11-04).
 - **Why:** the report warned that a local pass under load would prove little. The miss appeared without any added load in this container, so before and after counts could be compared directly.
-- **Assumption:** the local miss is the same one CI sees. It has the same 30 s signature and a similar rate, but the container is aarch64 and CI is x86-64, and the runner has not yet reported a step. Needs verification below covers this.
+- **Assumption:** the local miss is the same one CI sees. It has the same 30 s signature, but its rate is lower (3.3% in the largest local run, about 10% on `main`), the container is aarch64 and CI is x86-64, and the runner has not yet reported a step. Needs verification below covers this.
 
 ### Task 2: marking case 1537 resolved while the root remains
 

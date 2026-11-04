@@ -225,3 +225,18 @@ does not establish a root cause for the still-open intermittent cases.
 - **Assessment:** recurrence of the recorded aggregate-only startup timeout;
   the cause remains unconfirmed. No owning implementation, assertion, deadline
   or skip changed. The aggregate remains non-green despite the isolated pass.
+
+## Subagent model review validation — 2026-11-04
+
+- **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`
+  at `484a44dab`; desktop used two parallel workers.
+- **Failure:** `dev:test bridge builds > a successful start records bridges before launching the runtime and accepts backend readiness`
+  timed out at 15,011.58 ms (15,000 ms limit). Workspace reported 12 successful
+  tasks out of 13; root, bridges, and protocol groups passed. Aggregate duration
+  was 1,006.2 seconds.
+- **Unchanged owner rerun:** `mise run test:logged -- --name bridge-builds-isolated -- bun test --cwd apps/desktop ./scripts/dev/bridge-builds.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed in 0.9 seconds.
+- **Evidence:** `.orkestrator/review-artifacts/review-validation-d7f27449-c867-4416-bd19-f6d8eaa84d93/validation-04.stderr.txt`;
+  aggregate artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lbuwN0`.
+- **Assessment:** recurrence of the aggregate-only startup timeout; no owning
+  code, assertions, deadlines, or skips changed. Root cause remains unconfirmed.

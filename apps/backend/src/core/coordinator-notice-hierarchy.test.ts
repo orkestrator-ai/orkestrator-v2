@@ -661,6 +661,8 @@ describe("a session stopped on a usage limit", () => {
     expect(body).toContain(kind);
     expect(body).toContain('"feature-work"');
     expect(body).toContain('"Machine A"');
+    const project = await standalone.storage.getProject(standalone.projectId);
+    expect(body).toContain(`repository ${JSON.stringify(project!.name)}`);
     expect(body).toContain("limited@example.com");
     expect(body).toContain(new Date(RESET_AT).toISOString());
     expect(body).toContain("waiting");

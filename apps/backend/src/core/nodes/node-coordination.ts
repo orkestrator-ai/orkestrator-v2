@@ -654,15 +654,15 @@ export class NodeCoordination {
               fromTabId: input.coordinatorTabId,
             }))
           : false;
-      if (spooled) {
-        await stageMailAttachments(
-          this.options.storage.getDataDir(),
-          outboxMailAttachmentBatch(input.attachments!.batch),
-          input.own!,
-        );
-      }
-      const item = await this.leafMail
-        .enqueue(destination.controllerId, {
+      try {
+        if (spooled) {
+          await stageMailAttachments(
+            this.options.storage.getDataDir(),
+            outboxMailAttachmentBatch(input.attachments!.batch),
+            input.own!,
+          );
+        }
+        const item = await this.leafMail.enqueue(destination.controllerId, {
           requestId: input.requestId,
           fromEnvironmentId: input.coordinatorEnvironmentId,
           fromTabId: input.coordinatorTabId,
@@ -691,22 +691,22 @@ export class NodeCoordination {
             : {}),
           ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
           ...(input.attachments ? { attachments: input.attachments } : {}),
-        })
-        .catch(async (error: unknown) => {
-          // Refused, so nothing will ever collect or acknowledge this copy.
-          if (spooled) {
-            await removeMailAttachmentBatch(
-              this.options.storage.getDataDir(),
-              outboxMailAttachmentBatch(input.attachments!.batch),
-            ).catch(() => undefined);
-          }
-          throw error;
         });
-      return {
-        item,
-        controllerId: destination.controllerId,
-        ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
-      };
+        return {
+          item,
+          controllerId: destination.controllerId,
+          ...(destination.controllerName ? { controllerName: destination.controllerName } : {}),
+        };
+      } catch (error: unknown) {
+        // Staging and admission both own this new batch until enqueue succeeds.
+        if (spooled) {
+          await removeMailAttachmentBatch(
+            this.options.storage.getDataDir(),
+            outboxMailAttachmentBatch(input.attachments!.batch),
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
     } finally {
       release();
     }

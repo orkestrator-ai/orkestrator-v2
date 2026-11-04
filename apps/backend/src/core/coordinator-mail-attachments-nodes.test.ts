@@ -4,7 +4,7 @@
  * node's real file and mail commands behind it, so the bytes really move
  * through the transfer framework from one data directory to the other.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -540,6 +540,90 @@ describe("a leaf's coordinator sending to the command node", () => {
     await spoolEmpties(world.leaf);
     await world.collect();
     expect(await world.inbox(world.command, world.commandMain)).toHaveLength(1);
+  });
+
+  test("acknowledged image mail refuses attachment removal and changed content", async () => {
+    const world = await link();
+    const args = {
+      requestId: "ack-conflict",
+      subject: "Original",
+      body: "Original body",
+      attachments: [await world.paste(world.leaf, world.leafMain)],
+    };
+    await world.sendUp(args);
+    await world.collect();
+    await spoolEmpties(world.leaf);
+    for (const change of [
+      { attachments: undefined },
+      { body: "Changed" },
+      { subject: "Changed" },
+    ]) {
+      await expect(world.sendUp({ ...args, ...change })).rejects.toThrow(
+        "Conflicting mail request ID.",
+      );
+    }
+    // Exercise reply and routing metadata at admission: a forged reply is refused earlier by the command.
+    const mail = world.leafCoordination.leafMail;
+    const receipt = await mail.enqueue("bk_cmd" as never, {
+      requestId: "metadata",
+      fromEnvironmentId: "env",
+      fromTabId: "tab",
+      body: "Body",
+      attachments: {
+        batch: "a".repeat(32),
+        files: [
+          { name: "image.png", bytes: PNG.length, mediaType: "image/png", sha256: "a".repeat(64) },
+        ],
+      },
+    });
+    await mail.ack("bk_cmd" as never, receipt.seq, undefined, true, true);
+    for (const change of [
+      { replyToMessageId: "new-parent" },
+      { nodeParent: { id: "parent", threadId: "thread", hopCount: 1 } },
+      { toCoordinator: { environmentId: "other", tabId: "other" } },
+      {
+        attachments: {
+          ...receipt.attachments!,
+          files: [{ ...receipt.attachments!.files[0]!, name: "renamed.png" }],
+        },
+      },
+    ]) {
+      await expect(mail.enqueue("bk_cmd" as never, { ...receipt, ...change })).rejects.toThrow(
+        "Conflicting mail request ID.",
+      );
+    }
+    expect(await mail.pending("bk_cmd" as never)).toBe(0);
+    expect(await world.inbox(world.command, world.commandMain)).toHaveLength(1);
+    await spoolEmpties(world.leaf);
+    await world.collect();
+    expect(await world.inbox(world.command, world.commandMain)).toHaveLength(1);
+  });
+
+  test("a partial staging failure removes files and allows a clean retry", async () => {
+    const world = await link();
+    const first = await world.paste(world.leaf, world.leafMain);
+    const second = path.join(path.dirname(first), "second.png");
+    await fs.writeFile(second, PNG);
+    const args = { requestId: "stage-failure", attachments: [first, second] };
+    const rename = fs.rename.bind(fs);
+    let staged = 0;
+    const failing = spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to).includes("mail-attachment-spool/outbox-") && ++staged === 2)
+        throw new Error("Injected staging rename failure");
+      return rename(from, to);
+    });
+    try {
+      await expect(world.sendUp(args)).rejects.toThrow("Injected staging rename failure");
+    } finally {
+      failing.mockRestore();
+    }
+    expect(staged).toBe(2);
+    expect(await world.leafCoordination.leafMail.pending("bk_cmd" as never)).toBe(0);
+    expect(await world.inbox(world.command, world.commandMain)).toEqual([]);
+    await spoolEmpties(world.leaf);
+    await world.sendUp(args);
+    expect(await world.collect()).toBe(true);
+    expect((await world.inbox(world.command, world.commandMain))[0]!.attachments).toHaveLength(2);
   });
 
   test("a concurrent conflicting send cannot remove the accepted image batch", async () => {

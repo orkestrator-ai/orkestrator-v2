@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
   COMMAND_NODE_COORDINATOR_MAIL_ADDRESS,
@@ -119,6 +120,39 @@ interface AcknowledgedAttachmentMail {
   createdAt: string;
   bytes: number;
   sha256: string[];
+  /** Missing on legacy receipts: refuse unverifiable retries. */
+  fingerprint?: string;
+}
+
+/** Content digest keeps acknowledged receipts bounded without retaining message bodies. */
+function mailRequestFingerprint(item: Omit<OutboxItem, "seq" | "createdAt" | "bytes">): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        item.fromCoordinator ?? false,
+        item.body,
+        item.subject ?? null,
+        item.toCoordinator?.environmentId ?? null,
+        item.toCoordinator?.tabId ?? null,
+        item.replyToMessageId ?? null,
+        item.nodeParent
+          ? [item.nodeParent.id, item.nodeParent.threadId, item.nodeParent.hopCount]
+          : null,
+        item.repositoryHint ?? null,
+        item.attachments
+          ? [
+              item.attachments.batch,
+              item.attachments.files.map((file) => [
+                file.name,
+                file.bytes,
+                file.sha256,
+                file.mediaType,
+              ]),
+            ]
+          : null,
+      ]),
+    )
+    .digest("hex");
 }
 
 function attachmentMailKey(
@@ -329,29 +363,24 @@ export class LeafNodeMail {
           entry.fromTabId === item.fromTabId,
       );
       if (duplicate) {
-        if (
-          duplicate.body !== item.body ||
-          duplicate.subject !== item.subject ||
-          JSON.stringify(duplicate.toCoordinator) !== JSON.stringify(item.toCoordinator) ||
-          duplicate.replyToMessageId !== item.replyToMessageId ||
-          JSON.stringify(duplicate.nodeParent) !== JSON.stringify(item.nodeParent) ||
-          duplicate.repositoryHint !== item.repositoryHint ||
-          JSON.stringify(duplicate.attachments) !== JSON.stringify(item.attachments)
-        )
+        if (mailRequestFingerprint(duplicate) !== mailRequestFingerprint(item))
           throw new Error("Conflicting mail request ID.");
         return { next: null, result: duplicate };
       }
-      const acknowledged = item.attachments
-        ? state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)]
-        : undefined;
+      const acknowledged =
+        state.acknowledgedAttachmentMail?.[attachmentMailKey(controllerId, item)];
       if (acknowledged) {
-        if (
-          JSON.stringify(acknowledged.sha256) !==
-          JSON.stringify(item.attachments!.files.map((file) => file.sha256))
-        )
+        if (acknowledged.fingerprint !== mailRequestFingerprint(item))
           throw new Error("Conflicting mail request ID.");
-        const { sha256: _sha256, ...recorded } = acknowledged;
-        return { next: null, result: { ...item, ...recorded } };
+        return {
+          next: null,
+          result: {
+            ...item,
+            seq: acknowledged.seq,
+            createdAt: acknowledged.createdAt,
+            bytes: acknowledged.bytes,
+          },
+        };
       }
       const attachmentBytes = current.items.reduce(
         (sum, entry) => sum + outboxAttachmentBytes(entry),
@@ -435,6 +464,7 @@ export class LeafNodeMail {
           createdAt: entry.createdAt,
           bytes: entry.bytes,
           sha256: entry.attachments.files.map((file) => file.sha256),
+          fingerprint: mailRequestFingerprint(entry),
         };
       }
       const keys = Object.keys(acknowledged);

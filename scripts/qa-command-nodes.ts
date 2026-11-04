@@ -48,7 +48,7 @@ async function main() {
   const sub = await makeNode("Sub", false);
   const nodes = [desk, leaf, middle, sub];
   try {
-    await Promise.all(nodes.map(start));
+    await Promise.all(nodes.map((node) => start(node)));
     for (const node of nodes) {
       node.id = (await invoke<{ nodeId: string }>(node, "get_node_status")).nodeId;
       const profile = await invoke<{ revision: number }>(node, "get_backend_profile");

@@ -121,12 +121,6 @@ export function pendingHandoffCommandRefusal(plan: CommandDispatchPlan): string 
 }
 
 /**
- * The prompt a dispatch sends: `prompt` with the pending handoff's carrier in
- * front, unless the journal already recorded it delivered or the prompt
- * already carries it (an older renderer prepends the history itself).
- * `deliveredId` is the handoff this send delivers, for the journal.
- */
-/**
  * Tell a coordinator where its pasted images are saved.
  *
  * A bridge turns an image attachment into inline image content, so the model
@@ -152,6 +146,12 @@ export function coordinatorPromptWithAttachmentPaths(
   );
 }
 
+/**
+ * The prompt a dispatch sends: `prompt` with the pending handoff's carrier in
+ * front, unless the journal already recorded it delivered or the prompt
+ * already carries it (an older renderer prepends the history itself).
+ * `deliveredId` is the handoff this send delivers, for the journal.
+ */
 export function promptWithPendingAgentHandoff(
   prompt: string,
   handoff: PendingAgentHandoff | undefined,

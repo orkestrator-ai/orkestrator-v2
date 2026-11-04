@@ -33,7 +33,7 @@ governs, marked "Decided".
 5. **Transcript pipeline**: delta-base ring, unlimited post-dispatch reads, memoised fingerprints and the smaller items (TX-1 to TX-3, TX-7 to TX-9, TX-11 to TX-18). Status: open (TX-1 and TX-2 done 2026-11-04, focused tests only; live before-and-after numbers stay with task 1; TX-3, TX-7 to TX-9 and TX-11 to TX-18 open).
 6. **Bridge hot paths**: Codex config reads, cached transcript measurement, tool-card fast paths, Claude part identity, stream framing and shared helpers (BR-2, BR-4 to BR-16). Status: open (BR-1 and BR-3 done, without new tests; BR-4 to BR-6 and the transcript half of BR-15 done 2026-11-02; BR-2, BR-8, BR-9 and BR-11 done 2026-11-03; BR-7, BR-10, BR-12 to BR-14 and BR-16 done 2026-11-04; BR-15's SSE replay rings open).
 7. **Change tracking and git scans**: stamp short-circuit, count memo, manifest cache, off-loop zlib and the git scan costs (ST-1 to ST-6, ST-13 to ST-21). Status: open (ST-1, ST-2 and ST-4 done on 2026-11-02; ST-3, ST-14, ST-15, ST-16 and ST-18 done 2026-11-04, warm capture over 10,000 files with one changed from 681–797 ms to 211–319 ms p50, and a warm local diff scan from 7 git processes and every untracked file read to 4 and none; ST-2's directory-handle cache deliberately not done; ST-16's dropping of hints under ignored directories not done; ST-5 and ST-6 done 2026-11-04, longest event-loop stall during a capture storing a 16 MiB blob from 107–143 ms to 12–13 ms p50 and a cold durable capture of 1,000 files from 3.3–4.1 s to 0.6–1.1 s; ST-13, ST-17 and ST-19 to ST-21 open).
-8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 and BG-15 open).
+8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
 11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-10, GW-11, GW-15 and GW-16 open).
@@ -839,7 +839,9 @@ Live on beelink with the locally built image `orkestrator-v2:dev-task8-7d4bb9536
 
 Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from that commit as `orkestrator-v2:dev-f9ed233a0aa0` (`mise run docker:build:dev --profile task8r2-7d4bb95362a6`, exit 0); its manifest declares `tmux-hook-signal: 1` and `claude-state-signal: 3`. `tmux-hook-signal-docker.test.ts` against it: four runs at 4 execs in 10 s idle, plus one through `test:logged` (`task8-image-doorbell`), all passed. Its first run at that commit counted 7 and failed the old bound of 6, because the tab had no transcript and so also ran the fallback search, and pre-idle ticks could fall inside the window. The test now seeds the transcript, starts counting inside the idle wait, and asserts at most 4 execs and no search. Older image: `orkestrator-v2:latest`'s manifest has no `tmux-hook-signal` and its `orkestrator-state-signal hook` exits 0, so it stays on the one-exec poll. `tmux-exec-count.ts --seconds 600` reproduced the table above exactly, before and after.
 
-**Investigation.** Still open: BG-14 (reopening a tab replays the whole transcript through `docker exec`, `transcriptLines()` in `tmux-session-manager.ts` and `ClaudeTmuxChatTab.tsx`) and BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
+Done 2026-11-04, BG-14: a tab reopen reads one page from the transcript's tail (`readPage` in `tmux-transcript-reader.ts`, at most 512 KiB and 500 records, one `docker exec`) and the renderer pages earlier history in (`ClaudeTmuxChatTab.tsx`, `prependTranscriptPage` in `claudeTmuxStore.ts`). Task snapshots no longer need a replay: the poll tail's one pass records each call's snapshot (`TaskSnapshotHistory`). Through a fake `docker` on PATH (`apps/backend/scripts/tmux-reopen-read-size.ts`, workload "longest session"): 36,853,890 bytes in 2 execs before, 524,306 bytes in 1 exec after. Remaining live evidence: [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md).
+
+**Investigation.** Still open: BG-15 (`dispatchMailInject` in `prompt-queue-drainer.ts` repeats the presence reads). The doorbell's network hop to a real backend is proven only where containers reach the host (the Linux Engine workflow); beelink's cannot, so its test rings a fake doorbell on the container's loopback.
 
 **Decisions.**
 
@@ -850,7 +852,7 @@ Rechecked 2026-11-03 at `70c0228d1` (after the review fixes), image rebuilt from
   - **One long-lived `docker exec -i` co-process per container.**
     - Pros: no image change.
     - Cons: a new long-lived process to supervise, bound and restart; its death must be detected.
-- **BG-14: how to stop a reopen replaying the whole transcript?**
+- **BG-14: how to stop a reopen replaying the whole transcript?** Decided and done 2026-11-04: page from the tail.
   - **Page from the tail, as native transcripts page their history (recommended).**
     - Pros: one bounded read per reopen; the renderer already has a paged history view for native tabs.
     - Cons: the tmux chat tab has to move onto paged history; renderer and backend change together.
@@ -1816,6 +1818,22 @@ A container with no terminal shell or tmux tab keeps its Claude state poll
 but at the 30 s safety read, after one read on adoption that can still correct
 a state stored before a restart. Dropping the poll entirely would lose that
 correction.
+
+### Task 8: BG-14 page size
+
+512 KiB and 500 records. On one host's 3,976 Claude transcripts (median 171 KB, 99th percentile 6.4 MiB, longest 37 MB) that holds the median file whole and costs a long one about 1.4% of a whole read. A record longer than a page grows the window, up to 32 MiB; past that it becomes a notice row, so the read stays bounded and nothing vanishes silently.
+
+### Task 8: BG-14 historical task snapshots
+
+Kept per session as `tool_use_id` to snapshot, fed by the tail's one pass, bounded to 4,096 calls and 16 MiB, oldest first. A forgotten call's row renders from its own args, as a call the backend could not parse does. The alternative of replaying from the start for each page was rejected: it would put the whole-file read back behind every older page.
+
+### Task 8: BG-14 stays one command
+
+`claude_tmux_transcript` gains an optional `page`. An older backend ignores it and answers an array, which the client reads as a whole transcript, so a new renderer needs no capability probe or failed round trip. A call without `page` is an older renderer and still gets the array, counted as `tmux-transcript.whole-read`; both are in the [compatibility register](../../architecture/version-compatibility.md#register).
+
+### Task 8: BG-14 keeps paged-in rows across a reopen
+
+A reopened tail that overlaps the loaded rows keeps the older ones and their cursor, so a reader's place survives an environment switch. Without an overlap (more than a page was missed), or on a manual refresh, the tab starts again from the tail, which repairs any gap; earlier history stays a click away.
 
 ### Task 8: the image check counts a bound idle tab
 

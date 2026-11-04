@@ -16,7 +16,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, plus the paged reopen from ef
 
 **Context.** Report 0690 ("Needs verification") asked for real transcript sizes and reopen rates. The page bound (512 KiB, 500 records) and the snapshot bound (4,096 calls, 16 MiB) were chosen from sizes alone.
 
-**Investigation.** Sizes were measured on one host on 2026-11-04, by file size only: 3,976 Claude transcripts, median 171 KB, 90th percentile 2.1 MiB, 99th percentile 6.4 MiB, longest 37 MB. That population mixes native and tmux sessions on one machine. Reopen rates were not measured: no counter records a tab reopen, and `claude_tmux_transcript` has only the `tmux-transcript.whole-read` counter for older renderers.
+**Investigation.** Sizes were measured on one host on 2026-11-04, by file size only: 3,976 Claude transcripts, median 171 KB, 90th percentile 2.1 MB, 99th percentile 6.4 MB, longest 37 MB. That population mixes native and tmux sessions on one machine. Reopen rates were not measured: no counter records a tab reopen, and `claude_tmux_transcript` has only the `tmux-transcript.whole-read` counter for older renderers.
 
 **Decisions.**
 

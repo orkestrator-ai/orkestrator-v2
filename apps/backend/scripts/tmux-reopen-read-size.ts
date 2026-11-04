@@ -22,7 +22,7 @@ export type Workload = { name: string; lines: number; lineBytes: number };
 /** One record every few KiB, like a long session of tool calls, at sizes seen on a real host. */
 export const WORKLOADS: readonly Workload[] = [
   { name: "median session (171 KB)", lines: 40, lineBytes: 4_096 },
-  { name: "p99 session (6.4 MiB)", lines: 1_600, lineBytes: 4_096 },
+  { name: "p99 session (6.4 MB)", lines: 1_600, lineBytes: 4_096 },
   { name: "longest session (37 MB)", lines: 9_000, lineBytes: 4_096 },
 ];
 

@@ -1821,7 +1821,7 @@ correction.
 
 ### Task 8: BG-14 page size
 
-512 KiB and 500 records. On one host's 3,976 Claude transcripts (median 171 KB, 99th percentile 6.4 MiB, longest 37 MB) that holds the median file whole and costs a long one about 1.4% of a whole read. A record longer than a page grows the window, up to 32 MiB; past that it becomes a notice row, so the read stays bounded and nothing vanishes silently.
+512 KiB and 500 records. On one host's 3,976 Claude transcripts (median 171 KB, 99th percentile 6.4 MB, longest 37 MB) that holds the median file whole and costs a long one about 1.4% of a whole read. A record longer than a page grows the window, up to 32 MiB; past that it becomes a notice row, so the read stays bounded and nothing vanishes silently.
 
 ### Task 8: BG-14 historical task snapshots
 

@@ -6,6 +6,7 @@ import {
   agentMailKind,
   agentMailParticipantKey,
   formatAgentMailAddressLabel,
+  normalizeAgentMailAttachments,
   normalizeAgentMailNotice,
   type AgentMailMessage,
   type MailActor,
@@ -145,7 +146,7 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
 }
 type PeerMailDisplayMessage = Pick<
   AgentMailMessage,
-  "id" | "from" | "trust" | "subject" | "body" | "createdAt" | "notice"
+  "id" | "from" | "trust" | "subject" | "body" | "createdAt" | "notice" | "attachments"
 > & { to?: { environmentId: string; tabId: string } };
 
 const PEER_MAIL_CARRIER_OPEN = '<orkestrator-peer-message version="1">';
@@ -253,6 +254,11 @@ export function createPeerMailNativeMessage(message: PeerMailDisplayMessage): Na
       warning,
       body: message.body,
       ...(notice ? { notice } : {}),
+      ...(message.attachments?.length
+        ? {
+            attachments: message.attachments.map(({ name, bytes }) => ({ name, bytes })),
+          }
+        : {}),
       ...(message.to
         ? {
             participants: [
@@ -351,6 +357,7 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
   )
     return null;
   const notice = from.kind === "system" ? normalizeAgentMailNotice(value.notice) : null;
+  const attachments = normalizeAgentMailAttachments(value.attachments);
   const to = record(value.to)
     ? { environmentId: value.to.environmentId as string, tabId: value.to.tabId as string }
     : undefined;
@@ -361,6 +368,7 @@ function peerMailFromPayload(payload: unknown, createdAt: string): NativeMessage
     trust: value.trust as AgentMailMessage["trust"],
     ...(typeof value.subject === "string" ? { subject: value.subject } : {}),
     ...(notice ? { notice } : {}),
+    ...(attachments.length ? { attachments } : {}),
     body: value.body,
     createdAt,
   });

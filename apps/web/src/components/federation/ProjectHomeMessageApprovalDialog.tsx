@@ -95,6 +95,16 @@ export function ProjectHomeMessageApprovalDialog({
           >
             {message?.body ?? "This request carries no message."}
           </pre>
+          {message?.attachments?.length ? (
+            <p
+              className="border-t border-border/60 px-3 py-2 text-xs break-words text-muted-foreground"
+              data-testid="project-home-message-attachments"
+            >
+              With {message.attachments.length === 1 ? "an image" : "images"}, copied to
+              .orkestrator/mail-attachments in your checkout if you approve:{" "}
+              {message.attachments.join(", ")}
+            </p>
+          ) : null}
         </section>
 
         <DialogFooter>

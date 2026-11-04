@@ -203,6 +203,7 @@ import { beginChangeTrackingTurn } from "./native-agent-change-tracking.js";
 import {
   NativeAgentHandoffs,
   pendingHandoffCommandRefusal,
+  coordinatorPromptWithAttachmentPaths,
   promptWithPendingAgentHandoff,
 } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
@@ -3602,7 +3603,11 @@ export class NativeAgentService {
             // The journal is re-read under this lease, so a delivery another
             // request settled while this one waited is not sent again.
             const outgoing = promptWithPendingAgentHandoff(
-              insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+              coordinatorPromptWithAttachmentPaths(
+                insertUserCommandContext(preparation.prompt ?? input.prompt, commandContextBlock),
+                durable.environmentId,
+                commandPlan.command ? undefined : input.attachments,
+              ),
               pendingHandoff,
               durable,
             );

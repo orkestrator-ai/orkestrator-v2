@@ -1817,6 +1817,13 @@ export class StorageService {
     return this.repos.agentMail.sendAgentMail(sender, input, options);
   }
 
+  resolveAgentMailRecipient(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<{ environmentId: string; tabId: string }> {
+    return this.repos.agentMail.resolveAgentMailRecipient(sender, input);
+  }
+
   startRemoteWorkerBudget(
     coordinator: { environmentId: string; tabId: string },
     worker: { nodeId: string; environmentId: string; tabId: string },

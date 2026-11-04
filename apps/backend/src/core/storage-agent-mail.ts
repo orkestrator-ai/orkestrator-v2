@@ -14,6 +14,7 @@ import {
   agentMailRouteWakes,
   agentMailboxId,
   classifyAgentMailRoute,
+  normalizeAgentMailAttachments,
   normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   type AgentMailConversation,
@@ -81,6 +82,11 @@ function sendFingerprint(input: AgentMailSendInput): string {
         subject: input.subject ?? null,
         body: input.body,
         replyToMessageId: input.replyToMessageId ?? null,
+        // By content: a retry keeps its fingerprint wherever the files landed.
+        // Absent without attachments, so older records still match.
+        ...(input.attachments?.length
+          ? { attachments: input.attachments.map(({ name, sha256 }) => ({ name, sha256 })) }
+          : {}),
       }),
     )
     .digest("hex");
@@ -189,6 +195,19 @@ export class AgentMailRepository {
       throw new AgentMailError("recipient-not-found", "The project coordinator is not open");
     const { replyToMessageId: _replyToMessageId, ...rest } = input;
     return { ...rest, toEnvironmentId: address.environmentId, toTabId: address.tabId };
+  }
+
+  /**
+   * Which mailbox a send would reach, without sending: an attachment has to be
+   * copied for its recipient before the message exists. Resolving can start a
+   * closed main coordinator, as the send itself would.
+   */
+  async resolveAgentMailRecipient(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<{ environmentId: string; tabId: string }> {
+    const resolved = await this.resolveCoordinatorAddress(sender, input);
+    return { environmentId: resolved.toEnvironmentId, tabId: resolved.toTabId };
   }
 
   /**
@@ -428,6 +447,12 @@ export class AgentMailRepository {
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
     const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
+    // Only a coordinator's backend copies files for a message; see
+    // `coordinator-mail-attachments.ts`.
+    const attachments =
+      sender.kind === "coordinator" || sender.kind === "node"
+        ? normalizeAgentMailAttachments(input.attachments)
+        : [];
     const statusBudgetKey =
       sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
@@ -808,6 +833,7 @@ export class AgentMailRepository {
           : {}),
         ...(route ? { route } : {}),
         ...(notice ? { notice } : {}),
+        ...(attachments.length ? { attachments } : {}),
         ...(statusBudgetKey ? { statusBudgetKey } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"

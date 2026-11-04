@@ -153,6 +153,26 @@ const fastForward: CoordinatorRepositoryContextEvent = {
   occurredAt: new Date(0).toISOString(),
 };
 
+describe("a coordinator's pasted images", () => {
+  test("its turn names where each one is saved, so it can pass them on", async () => {
+    await withCoordinator({ acknowledged: 3 }, async ({ service, send }) => {
+      const stored = "/data/coordinator-attachments/coordinator-1/conversation-1/1.png";
+      await service.dispatchPrompt({
+        environmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+        agent: "codex",
+        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        requestId: "request-1",
+        prompt: "Send this to the worker.",
+        attachments: [{ type: "image", path: stored, filename: "clipboard.png" }],
+      });
+      const sent = send.mock.calls[0]![1];
+      expect(sent).toContain("Send this to the worker.");
+      expect(sent).toContain('<orkestrator-attachment-paths source="orkestrator">');
+      expect(sent).toContain(stored);
+    });
+  });
+});
+
 describe("coordinator checkout-update notice", () => {
   test("the first turn after a fast-forward says what came in, once", async () => {
     await withCoordinator(

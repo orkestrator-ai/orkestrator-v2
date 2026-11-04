@@ -76,6 +76,8 @@ export const NODE_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "get_coordinator_node_mailbox",
   // A leaf coordinator's mail to its command node's coordinator is its own.
   "send_coordinator_command_node_mail",
+  // Names a coordinator conversation's own attachments, on its own node.
+  "transfer_coordinator_attachments",
   "start_coordinator_node_build_pipeline",
   "coordinator_node_ticket",
   "launch_coordinator_node_multi_review",
@@ -145,6 +147,9 @@ export function isWorkspaceExcludedCommand(command: string): boolean {
       "append_node_file_write",
       "commit_node_file_write",
       "abort_node_file_write",
+      // The receiving end of a coordinator's mailed images.
+      "prepare_node_mail_attachments",
+      "place_node_mail_attachments",
       "read_env_values",
       "apply_env_keys",
       "fingerprint_project_files",

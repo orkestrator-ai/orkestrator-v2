@@ -6,6 +6,7 @@ export { parseNodeActionApproval } from "./node-action-requests.js";
 export { coordinatorNodeContext } from "./node-context.js";
 export { NodeCoordination } from "./node-coordination.js";
 export { bridgeRemoteCoordinatorEvents, NodeCoordinatorRemote } from "./node-coordinator-remote.js";
+export type { NodeFileTransfer } from "./node-file-transfer.js";
 export { parseNodeFileScope, seedFilesDir } from "./node-files.js";
 export { NodeUnavailableError, type NodeLink } from "./node-link.js";
 export { NodePortal } from "./node-portal.js";

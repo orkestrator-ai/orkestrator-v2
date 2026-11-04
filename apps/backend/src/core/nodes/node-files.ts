@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runGitWithFsmonitorFallback } from "../git-fsmonitor.js";
+import { mailAttachmentSpoolDir } from "../mail-attachments.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
 import type { StorageService } from "../storage.js";
 
@@ -28,7 +29,9 @@ export type NodeFileScope =
   | { environmentId: string }
   | { projectId: string }
   /** The staging area for an environment's seed files (deleted after setup). */
-  | { seedEnvironmentId: string };
+  | { seedEnvironmentId: string }
+  /** A batch of mailed images between a coordinator and where they land. */
+  | { mailAttachments: string };
 
 export function seedFilesDir(dataDir: string, environmentId: string): string {
   if (!/^[A-Za-z0-9_-][A-Za-z0-9_-]{0,199}$/.test(environmentId)) {
@@ -47,6 +50,9 @@ export function parseNodeFileScope(value: unknown): NodeFileScope {
   }
   if (record && typeof record.seedEnvironmentId === "string" && record.seedEnvironmentId) {
     return { seedEnvironmentId: record.seedEnvironmentId };
+  }
+  if (record && typeof record.mailAttachments === "string" && record.mailAttachments) {
+    return { mailAttachments: record.mailAttachments };
   }
   throw new Error("Expected a file scope: an environmentId, a projectId or a seedEnvironmentId.");
 }
@@ -76,6 +82,11 @@ export class NodeFiles {
 
   /** The scope's root directory on this node. */
   async root(scope: NodeFileScope, options: { create?: boolean } = {}): Promise<string> {
+    if ("mailAttachments" in scope) {
+      const dir = mailAttachmentSpoolDir(this.storage.getDataDir(), scope.mailAttachments);
+      if (options.create) await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      return dir;
+    }
     if ("seedEnvironmentId" in scope) {
       const dir = seedFilesDir(this.storage.getDataDir(), scope.seedEnvironmentId);
       if (!(await this.storage.getEnvironment(scope.seedEnvironmentId))) {

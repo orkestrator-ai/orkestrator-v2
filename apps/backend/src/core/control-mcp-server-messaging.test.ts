@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { AGENT_MAIL_MAX_ATTACHMENTS } from "@orkestrator/protocol/agent-mail";
 import { type ControlMcpServer, readControlMcpDescriptor } from "./control-mcp-server.js";
 import { rpc, useControlMcpServerHarness } from "./control-mcp-server-test-support.js";
 
@@ -542,11 +543,68 @@ describe("Orkestrator control MCP server", () => {
     });
   }
 
+  test("coordinators are told they can pass on a pasted image, and the backend does the copying", async () => {
+    const credential = coordinatorCredential(["mail", "discovery", "environments"]);
+    const listed = await rpc(credential.url, credential.token, "tools/list");
+    const tool = (name: string) => listed.body.result?.tools?.find((entry) => entry.name === name);
+    expect(tool("send_message")?.description).toContain("image the user pasted");
+    expect(tool("send_message")?.description).toContain("name it in attachments");
+    expect(tool("send_message")?.inputSchema?.properties).toHaveProperty("attachments");
+    expect(tool("transfer_files")?.description).toContain("own pasted images");
+
+    overrides.set("send_coordinator_agent_mail", (args) => ({
+      id: "m1",
+      toEnvironmentId: args.toEnvironmentId,
+      placement: "pending-inject",
+      attachments: [{ name: "shot.png", path: "/w/shot.png" }],
+    }));
+    const sent = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "with-image",
+        toEnvironmentId: "env-1",
+        body: "See this.",
+        attachments: ["/data/coordinator-attachments/c/conv/shot.png"],
+      },
+    });
+    expect(sent.body.result?.structuredContent?.message).toMatchObject({
+      attachments: [{ name: "shot.png" }],
+    });
+    expect(
+      invocations.findLast(({ command }) => command === "send_coordinator_agent_mail")?.args,
+    ).toMatchObject({
+      attachments: ["/data/coordinator-attachments/c/conv/shot.png"],
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+    });
+  });
+
+  test("a coordinator's tool cannot ask for more images than a message carries", async () => {
+    const credential = coordinatorCredential(["mail", "discovery"]);
+    const before = invocations.length;
+    const refused = await rpc(credential.url, credential.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "too-many",
+        toEnvironmentId: "env-1",
+        body: "See these.",
+        attachments: Array.from({ length: AGENT_MAIL_MAX_ATTACHMENTS + 1 }, (_, i) => `${i}.png`),
+      },
+    });
+    const text = JSON.stringify(refused.body);
+    expect(text).toContain(`at most ${AGENT_MAIL_MAX_ATTACHMENTS} images`);
+    expect(invocations.slice(before).some(({ command }) => command.startsWith("send_"))).toBe(
+      false,
+    );
+  });
+
   test("external send_message schema omits deliverNow", async () => {
     const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
     const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
     const send = listed.body.result?.tools?.find((tool) => tool.name === "send_message");
     expect(send).toBeDefined();
     expect(send?.inputSchema?.properties).not.toHaveProperty("deliverNow");
+    // Attachments are a conversation's own; an operator has none to name.
+    expect(send?.inputSchema?.properties).not.toHaveProperty("attachments");
   });
 });

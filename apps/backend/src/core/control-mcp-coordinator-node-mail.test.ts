@@ -191,6 +191,25 @@ describe("coordinator mail between a command node and its leaves", () => {
     });
   });
 
+  test("send_message carries attachments on all three routes, for the backend to copy", async () => {
+    const attachments = ["/data/coordinator-attachments/c/conv/shot.png"];
+    await call("send_message", {
+      requestId: "a-1",
+      nodeId: "bk_leaf",
+      toEnvironmentId: "env-1",
+      body: "See this.",
+      attachments,
+    });
+    expect(sent("send_coordinator_node_mail")[0]).toMatchObject({ attachments });
+    await call("send_message", {
+      requestId: "a-2",
+      toEnvironmentId: "command-node-coordinator",
+      body: "See this.",
+      attachments,
+    });
+    expect(sent("send_coordinator_command_node_mail")[0]).toMatchObject({ attachments });
+  });
+
   test('send_message with nodeId to "coordinator" asks that node\'s coordinator', async () => {
     const result = await call("send_message", {
       requestId: "ask-1",

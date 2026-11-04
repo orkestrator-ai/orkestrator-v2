@@ -26,6 +26,14 @@ test.each([
   expect(invoke).not.toHaveBeenCalled();
 });
 
+test("a coordinator's mailed images are its own node's to send, and node-link only to receive", () => {
+  expect(isNodeExcludedCommand("transfer_coordinator_attachments")).toBe(true);
+  for (const command of ["prepare_node_mail_attachments", "place_node_mail_attachments"]) {
+    expect(isNodeExcludedCommand(command)).toBe(false);
+    expect(isWorkspaceExcludedCommand(command)).toBe(true);
+  }
+});
+
 test("controller PR publication is node-link only, never workspace-grant access", () => {
   expect(isNodeExcludedCommand("create_controller_pr")).toBe(false);
   expect(isWorkspaceExcludedCommand("create_controller_pr")).toBe(true);

@@ -123,6 +123,28 @@ describe("client-only optimistic messages", () => {
     };
   }
 
+  test("a carrier's attached images reach the tile by name and size, never by path", () => {
+    const [row] = createPeerMailNativeMessagesFromCarrier({
+      createdAt: "2026-11-04T00:00:00.000Z",
+      content: renderAgentMailCarrier(
+        mailMessage({
+          id: "mail-image",
+          attachments: [
+            {
+              name: "shot.png",
+              path: "/workspace/.orkestrator/mail-attachments/abc/shot.png",
+              mediaType: "image/png",
+              bytes: 2048,
+              sha256: "a".repeat(64),
+            },
+          ],
+        }),
+      ),
+    });
+    expect(row!.peerMail?.attachments).toEqual([{ name: "shot.png", bytes: 2048 }]);
+    expect(JSON.stringify(row!.peerMail)).not.toContain("mail-attachments");
+  });
+
   test("turns every carrier in a batched mail prompt into its own row", () => {
     const content = [
       renderAgentMailCarrier(mailMessage({ id: "mail-a", subject: "Done", body: "First report" })),

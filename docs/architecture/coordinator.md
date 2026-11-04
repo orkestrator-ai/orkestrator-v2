@@ -880,6 +880,71 @@ a request body cannot name a root of its own — and it is scoped to the one
 conversation. Deleting the project removes them with the rest of the coordinator
 runtime.
 
+A bridge turns an image attachment into inline image content, so the model sees
+the picture but no path. Each coordinator turn with an image therefore carries a
+marked block naming where it is saved
+(`coordinatorPromptWithAttachmentPaths`); it goes to the provider only, and
+transcripts remove it and draw the file.
+
+### Passing a pasted image on
+
+A coordinator is read-only, so it cannot save a pasted image somewhere another
+agent can read it. It names the image instead, and the backend does the copying
+(`coordinator-mail-attachments.ts`, `mail-attachments.ts`). There is no new write
+access, tool permission or sandbox change on the coordinator's side.
+
+- **`send_message` takes `attachments`**: the paths it was given (a bare file
+  name works too). It reaches anything `send_message` reaches, on any connected
+  node: agent tabs, build pipeline workers by address, containers, the project
+  home, side agents and coordinators. With a `nodeId` it goes across the node
+  link; a leaf's coordinator sends it upward through its outbox
+  ([command-nodes.md](command-nodes.md#images-between-nodes)).
+- **`transfer_files` takes `from: { nodeId, attachments: true }`**, with the same
+  checks and landing place and its normal receipt of sizes and hashes, for a
+  copy with no message. `toDirectory` is refused; a worker can copy the file out
+  of the Git-excluded folder if it belongs in the tree.
+- **Only this conversation's own files.** A reference must be a bare name or an
+  absolute path directly in the calling conversation's attachment directory.
+  Another conversation's file, `..`, a relative path, a symlink or a directory
+  is refused. The scope comes from the credential, never from the tool input.
+- **Images only, by content.** PNG, JPEG, GIF and WebP (what the paste flow
+  accepts), recognised from their bytes on the sending side and again on the
+  receiving side. At most 8 images a message, 8 MiB each, 32 MiB together
+  (`AGENT_MAIL_MAX_ATTACHMENTS` and its neighbours).
+- **The copy comes first.** A refused or failed copy means no message, and the
+  caller is told why, so a message never points at a missing file. A message
+  refused after its copy (a worker that has just ended, say) leaves the file in
+  the same ignored place, with nothing pointing at it.
+- **Retries are safe.** A message's files have one fixed place, derived from the
+  sender and `requestId`. A retry finds them, skips the copy and replays the
+  mail. The same `requestId` with another image is `idempotency-conflict`.
+
+Where a file lands:
+
+| Recipient | Location | Removed |
+| --- | --- | --- |
+| Environment (worktree) | `<worktree>/.orkestrator/mail-attachments/<batch>/` | With the worktree |
+| Environment (container) | `/workspace/.orkestrator/mail-attachments/<batch>/` | With its storage |
+| Project home | `<checkout>/.orkestrator/mail-attachments/<batch>/`, copied only once the user approves the message | Not automatically: it is the user's own checkout |
+| Coordinator or side agent | That conversation's attachment directory, the root its read-only rules can read | With the conversation's retention or the project |
+
+`.orkestrator` is Git-excluded in every environment, and the copy first proves
+that for the location (`ensureWorkspaceArtifactIsGitExcluded`) and fails if it
+cannot, so a sent image does not reach a commit or pull request through normal
+staging. A stopped container is refused rather than queued: there is nothing to
+write into until it starts.
+
+The message records each file as `attachments` (`AgentMailAttachment`: name,
+path on the recipient's filesystem, media type, size, hash). Its carrier and
+`read_message` give the recipient those paths, and the body stays the sender's
+own words. The mail tile shows each name and size, never the path. It draws no
+thumbnail, because the path is often on another machine or in a container the
+viewer cannot read from.
+
+Workers cannot send images: `send_message` on a worker's Agent Tools has no
+`attachments`, and every check here is about a coordinator conversation's own
+directory.
+
 ## Repository toolbar
 
 The toolbar shows the canonical path, branch, upstream freshness, ahead/behind

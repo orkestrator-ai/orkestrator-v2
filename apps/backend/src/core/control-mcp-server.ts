@@ -627,6 +627,10 @@ export class ControlMcpServer {
         "resolve_native_agent_interaction",
         // Runs only from the user's approval of a `message-project-home` request.
         "send_approved_project_home_message",
+        // A coordinator names its attachments; only the backend's own send
+        // commands write them for a recipient.
+        "prepare_node_mail_attachments",
+        "place_node_mail_attachments",
         // Setup commands run on the host; only the user approves them.
         "approve_environment_setup",
         "approve_project_setup_commands",

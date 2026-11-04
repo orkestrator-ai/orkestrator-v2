@@ -355,16 +355,20 @@ test("authorized remote state changes stay on the matching project and node", as
     });
   }
   workflows.set("own", { snapshot: { id: "own", projectId: "p-leaf", phase: "running" } });
-  for (const name of [
-    "pause_build_pipeline",
-    "resume_build_pipeline",
-    "cancel_build_pipeline",
-    "cancel_multi_review",
-  ]) {
+  for (const name of ["pause_build_pipeline", "cancel_build_pipeline", "cancel_multi_review"]) {
     const response = await call(name, { nodeId: "bk_leaf", pipelineId: "own", workflowId: "own" });
     expect(response.body.result?.isError).not.toBe(true);
     expect(routed.some((item) => item.command === name)).toBe(true);
   }
+  // Resume acts on a paused pipeline only; anything else is refused before routing.
+  const running = await call("resume_build_pipeline", { nodeId: "bk_leaf", pipelineId: "own" });
+  expect(running.body.result?.isError).toBe(true);
+  expect(JSON.stringify(running.body.result)).toContain("restart_build_pipeline_step");
+  expect(routed.some((item) => item.command === "resume_build_pipeline")).toBe(false);
+  workflows.set("own", { snapshot: { id: "own", projectId: "p-leaf", phase: "paused" } });
+  const paused = await call("resume_build_pipeline", { nodeId: "bk_leaf", pipelineId: "own" });
+  expect(paused.body.result?.isError).not.toBe(true);
+  expect(routed.some((item) => item.command === "resume_build_pipeline")).toBe(true);
   const listed = await call("list_environments", { nodeId: "bk_leaf" });
   expect(listed.body.result?.structuredContent?.environments).toEqual([
     expect.objectContaining({ id: "leaf-only", nodeId: "bk_leaf" }),

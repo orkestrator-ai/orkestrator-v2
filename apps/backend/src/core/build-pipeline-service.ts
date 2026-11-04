@@ -45,6 +45,7 @@ import { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 import { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 import { BuildPipelineLifecycle } from "./build-pipeline-service-lifecycle.js";
+import type { CoordinatorRestartedStep } from "./build-pipeline-restart-targets.js";
 import { BuildPipelineUserMessages } from "./build-pipeline-service-user-messages.js";
 import { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
 import { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
@@ -242,6 +243,19 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
 
   restartCurrentStep(pipelineId: string): Promise<BuildPipeline> {
     return this.lifecycle.restartCurrentStep(pipelineId);
+  }
+
+  /** The coordinator's restart: a named step, or the failed or current one. */
+  restartForCoordinator(
+    pipelineId: string,
+    stageId: string | undefined,
+    selection?: BuildPipelineRestartSelection,
+  ): Promise<{
+    pipeline: BuildPipeline;
+    step: CoordinatorRestartedStep;
+    alreadyRestarted: boolean;
+  }> {
+    return this.lifecycle.restartForCoordinator(pipelineId, stageId, selection);
   }
 
   retryStage(pipelineId: string): Promise<BuildPipeline> {

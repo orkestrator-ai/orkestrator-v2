@@ -1651,6 +1651,71 @@ Decisions:
   or that a node answers with "idle", removes the mark; a lost node answer
   keeps it, because the stop may have landed.
 
+### Restarting a failed pipeline step
+
+`restart_build_pipeline_step` lets a coordinator carry on a build pipeline
+that stopped for a passing reason (a usage limit, an unreachable agent)
+without the user. It is the UI's step Restart, and with `selection` its
+"Restart in…", through `BuildPipelineService.restartForCoordinator`
+(`build-pipeline-restart-targets.ts` resolves the step inside the pipeline
+lock).
+
+- **Which step.** Omit `stepId` to restart the step a failed pipeline failed
+  in (the session its `failureContext` names, or a fresh run of that step
+  when it failed before its session existed), or the current step of a
+  paused, stalled or running pipeline. Name another with its worker
+  `address` from `get_build_pipeline` (a session key or provider session ID
+  also works).
+- **What it keeps.** The pipeline rewinds to that step's own round: earlier
+  rounds stay as they are, the worktree is not reset, and the step's old
+  session and any after it stay readable as a previous attempt. `selection`
+  (agent, model, optional `reasoningEffort` and `fastMode`) becomes the
+  step's selection from then on, as the UI's does.
+- **Refusals.** A cancelled or completed pipeline, a failure in environment
+  setup (before any step), a failure with no step, an unknown step and a
+  pipeline of another project are refused before anything changes. A
+  refused request leaves no receipt, so the same `requestId` can be sent
+  again once the cause is fixed.
+- **Once per request.** The command node keeps a coordinator receipt
+  (`restart-pipeline-step`), so retrying a `requestId` replays the first
+  answer with `replayed: true`. With `nodeId` the leaf restarts the step
+  through its node-link-only `restart_controller_build_pipeline_step` under
+  its own receipt keyed from that one, so a retry after a lost answer
+  replays there rather than restarting twice. A node without that command is
+  refused with "update it, then retry" (see
+  [version-compatibility.md](version-compatibility.md)).
+- **How the coordinator hears.** A failed pipeline's follow had already sent
+  its terminal notice and stopped observing. The restart reopens this
+  coordinator's follows of the pipeline (clearing the terminal mark and the
+  last notice), so its next completion, failure or pause wakes the
+  coordinator as usual. The result says whether a follow exists and tells
+  the coordinator to finish its turn. A step that fails again at once comes
+  back in the result as `phase: "failed"` with the error.
+
+`resume_build_pipeline` resumes a paused pipeline only. On any other phase
+it now refuses, naming the phase and pointing at this tool, instead of
+returning the unchanged pipeline as if it had worked. A failed pipeline's
+status wake lists `restart_build_pipeline_step` when the failure belongs to
+a step.
+
+Decisions:
+
+- **A new tool rather than widening resume (chosen).** Resume continues the
+  paused session; a failed step needs a fresh session and a rewind to its
+  round. Keeping them apart keeps resume's contract and makes the refusal
+  point at the right call.
+- **Code rewind and skipping a step stay the user's.** Both discard or
+  bypass work, so they are not offered to a coordinator.
+- **A completed pipeline is refused** even though the UI can restart its
+  steps: redoing finished work, possibly reopening a pull request, is the
+  user's call.
+- **Residual window.** A backend that crashes after the restart is saved and
+  before the receipt completes leaves the receipt pending; the retry then
+  resolves the step again. For a named step that is a no-op (its old
+  session is already superseded); with `stepId` omitted it restarts the new
+  current step a second time. Tracked in
+  [4680](../todo/coordinator-and-multi-review/4680-pipeline-step-restart-follow-ups.md).
+
 ## Scheduled wakes and actions
 
 A coordinator turn cannot wait, so a coordinator that needs to act later
@@ -1905,7 +1970,8 @@ structured `notice` (resource kind and ids, state, tone), a subject such as
 "Multi Review api-fix is ready to address", a bounded Markdown body (at most
 eight 400-character detail lines) and the calls that read more or act —
 `get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
-`get_build_pipeline`, `resume_build_pipeline`, `get_graph_run`,
+`get_build_pipeline`, `resume_build_pipeline`, `restart_build_pipeline_step`,
+`get_graph_run`,
 `get_tab_state`, `get_tab_transcript`, `get_environment`,
 `resolve_conflicts` — written out with their arguments. In the transcript it
 is a mail tile toned by the notice.
@@ -2265,7 +2331,8 @@ authoritative reconciliation load referenced workflows before installing tabs.
 | Multi Review open / Open fix session | Added `open_multi_review` and `open_multi_review_fix`; operate entirely through backend snapshots and pane persistence. No additional provider turn. |
 | `address_multi_review` / Address findings | Upgraded to the complete action above. Existing backend handoff already owns session adoption, turn idempotency, and eventual Fix publication; it now selects that tab when published and reports queued/partial outcomes. |
 | `start_build_pipeline` / Build | Already complete: `BuildPipelineService` owns environment provisioning, workflow persistence, Kanban/feature ownership, root-tab creation and selection, with supervisor repair. Reuse it; no duplicate wrapper added. |
-| `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. |
+| `pause_build_pipeline`, `resume_build_pipeline`, `cancel_build_pipeline`, `cancel_multi_review` | Backend transitions already durable; these buttons have no required new pane or tab consequence. Resume refuses a pipeline that is not paused. |
+| Step Restart / Restart in… | Added `restart_build_pipeline_step`; see [Restarting a failed pipeline step](#restarting-a-failed-pipeline-step). Rewind code and Skip stay user actions. |
 | `launch_environment` / New environment | Existing backend operation owns creation, startup tab/initial-prompt state, and background start. Its accepted/created/error distinction already reports partial startup. |
 | `launch_job` / Agent action | Already creates a durable native tab, binds a provider session, and dispatches an idempotent initial turn. Now requests tab activation, matching the button. Later binding/retry writes preserve focus so slow launch completion cannot steal a user's newer selection. |
 | `send_prompt_to_tab` | Existing durable intent dispatcher; targets an existing native tab and creates no additional tab. |
@@ -2712,6 +2779,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator-surface-actions.test.ts`
+- `restart_build_pipeline_step`: step resolution, kept rounds, selection and
+  refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
+  local and remote restarts, receipts and replays, the older-node refusal,
+  follow reopening and the `resume_build_pipeline` refusal
+  (`coordinator-pipeline-step-actions.test.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
   launch, refusal codes, project scoping and scheduling
   (`control-mcp-graph-tools.test.ts`); no describe or authoring tool for a

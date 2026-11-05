@@ -37,7 +37,7 @@
  * `ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model (the profile's
  * default otherwise), e.g. when the account is rate limited on the default.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

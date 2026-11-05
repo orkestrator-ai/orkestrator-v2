@@ -2046,7 +2046,9 @@ Recorded 2026-11-03 for task 6's metric additions, on branch
   [0046-embedded-service-previews.md](0046-embedded-service-previews.md),
   [0045-preview-service-discovery.md](0045-preview-service-discovery.md),
   [0044-web-annotation-qualification.md](0044-web-annotation-qualification.md) (same
-  Electron harness; annotations run inside service tabs).
+  Electron harness; annotations run inside service tabs),
+  [5500-shipping-safari-gateway-security-checks.md](5500-shipping-safari-gateway-security-checks.md)
+  (the gateway security spec's cases, run in the same Safari pass as task 3).
 - [0031-live-provider-and-platform-qualification.md](../cross-cutting/0031-live-provider-and-platform-qualification.md)
   for batching the macOS, Electron, two-machine and Safari runs;
   [0019-container-platform-qualification.md](../containers-and-environments/0019-container-platform-qualification.md)

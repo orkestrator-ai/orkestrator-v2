@@ -53,7 +53,7 @@ import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
-import { EventRing, parseEventCursor } from "./event-ring.js";
+import { EventRing, parseEventCursor } from "@orkestrator/protocol/node/event-ring";
 import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,

@@ -131,4 +131,4 @@ Done, checked in code:
 - [Efficiency report, C](../2026-10-27-efficiency.md#c-bridges) (BR-16, BR-12, BR-1)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md)
 - [1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), which lists BR-1 as done
-- [0355](0130-e21-pi-bridge.md#0355-pi-persistence-serialises-every-session-on-each-write): the same pattern in Pi
+- BR-14, the same pattern in Pi, is done: `encodeStateWithinBudget` in `bridges/pi-bridge/src/persistence.ts` ([1202 task 6](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md#6-bridge-hot-paths))

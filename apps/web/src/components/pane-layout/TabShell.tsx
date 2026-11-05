@@ -30,12 +30,24 @@ interface TabShellProps extends HTMLAttributes<HTMLDivElement> {
   /** Omit to render a tab that cannot be closed. */
   onClose?: () => void;
   closeLabel?: string;
+  /** Keep the close control mounted and focused while actions are blocked. */
+  closeDisabled?: boolean;
   /** Rendered after the close button, e.g. the per-tab mail button. */
   trailing?: ReactNode;
 }
 
 export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabShell(
-  { isActive, isFocused = true, className, children, onClose, closeLabel, trailing, ...rest },
+  {
+    isActive,
+    isFocused = true,
+    className,
+    children,
+    onClose,
+    closeLabel,
+    closeDisabled = false,
+    trailing,
+    ...rest
+  },
   ref,
 ) {
   return (
@@ -60,10 +72,11 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
         <button
           type="button"
           aria-label={closeLabel}
-          className="ml-1 flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-red-400 focus-hairline md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100"
+          aria-disabled={closeDisabled || undefined}
+          className="ml-1 flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-red-400 focus-hairline aria-disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100"
           onClick={(event) => {
             event.stopPropagation();
-            onClose();
+            if (!closeDisabled) onClose();
           }}
           onMouseDown={(event) => event.stopPropagation()}
         >

@@ -403,6 +403,15 @@ export function PreviewSettings() {
             )}
           </div>
         )}
+        {detail?.warning && (
+          <div
+            role="alert"
+            className="flex items-start gap-1.5 rounded-md border border-amber-500/30 p-2 text-xs"
+          >
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+            {detail.warning}
+          </div>
+        )}
         <div className="flex gap-2">
           <Button type="submit" size="sm" disabled={saving}>
             {saving ? "Saving…" : "Save publication settings"}

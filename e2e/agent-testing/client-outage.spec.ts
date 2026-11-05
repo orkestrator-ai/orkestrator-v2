@@ -1,3 +1,5 @@
+// Not `./browser-test`: these cases are about the browser's own network path
+// through gateway and backend outages, module loads included.
 import {
   expect,
   test,

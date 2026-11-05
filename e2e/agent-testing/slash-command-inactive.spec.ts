@@ -57,7 +57,7 @@
  * Bridge restarts use the profile's own per-environment stop and start
  * commands, so only this case's bridge is touched.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";

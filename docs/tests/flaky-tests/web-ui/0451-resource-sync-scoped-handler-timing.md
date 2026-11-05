@@ -1,7 +1,7 @@
 # Scoped resource handler completion timing in the aggregate suite
 
 - **ID:** 0451
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `scoped resource reconciliation > delivers scoped changes and waits for asynchronous handlers`
 - **File:** `apps/web/src/lib/resource-sync.test.ts:953`
@@ -19,3 +19,14 @@
 worktree's aggregate run, so the workspace group took 1,019 s against about
 245 s for the previous run that day) repeated this failure (44.43 ms). The unchanged
 owner then passed alone: `bun --cwd=apps/web test src/lib/resource-sync.test.ts --parallel=1`.
+
+## Fix, 2026-11-05
+
+Git mirror review preparation repeated the empty-completion assertion at 34.16 ms;
+the unchanged owner repeated it at 38.70 ms in `resource-sync-owner`
+(`/tmp/orkestrator-test-run.XjOcvg/resource-sync-owner.log.gz`). The test used a
+30 ms delay to infer that a separately scheduled asynchronous handler had completed.
+It now awaits a promise resolved by that handler after recording delivery, keeping
+all delivery assertions. `mise run test:logged -- --name resource-sync-fixed -- bun test
+--cwd apps/web ./src/lib/resource-sync.test.ts --parallel=1 --only-failures` passed
+in 3.9 s. The repair is part of the Git mirror review-fix commit.

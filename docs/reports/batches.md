@@ -44,7 +44,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | E16 | [efficiency-logging-database/0790-e16-log-controls.md](efficiency-logging-database/0790-e16-log-controls.md) | `0790`, `0890`, `0900` |
 | E20 | [efficiency-logging-database/0240-e20-acp-bridge.md](efficiency-logging-database/0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` |
 | E21 | [efficiency-logging-database/0130-e21-pi-bridge.md](efficiency-logging-database/0130-e21-pi-bridge.md) | `0130`, `0355` |
-| E22 | [efficiency-logging-database/0600-e22-chat-rendering.md](efficiency-logging-database/0600-e22-chat-rendering.md) | `0600`, `0670` |
 | E23 | [efficiency-logging-database/0620-e23-renderer-polling.md](efficiency-logging-database/0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` |
 
 ## Lanes
@@ -73,7 +72,6 @@ These batches don't share a protected area. They only have to respect the confli
 - **S-0260 (Live checks on other platforms):** security `0260`
 - **E20 (ACP bridge):** efficiency-logging-database `0270`, `0260`, `0240`
 - **E21 (Pi bridge):** efficiency-logging-database `0130`, `0355`
-- **E22 (Chat rendering):** efficiency-logging-database `0600`, `0670`
 - **E23 (Renderer polling):** efficiency-logging-database `0620`, `0630`, `0660`
 - **E-0140 (Codex queue bound):** efficiency-logging-database `0140`
 - **E-0250 (Codex running tool cards):** efficiency-logging-database `0250`

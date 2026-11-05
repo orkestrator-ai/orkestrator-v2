@@ -42,14 +42,13 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 26 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
 | 27 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
 | 28 | [0580-st-21-file-rpc-and-usage-report.md](0580-st-21-file-rpc-and-usage-report.md) | Low | No | ST-21: Whole files cross RPC as base64, branch reads spawn twice, and usage reports parse every row | These are occasional, bounded reads. |
-| 29 | [0600-e22-chat-rendering.md](0600-e22-chat-rendering.md) | Low | No | **E22, Chat rendering.**<br>`0600`: WEB-10: With find open, the whole transcript is re-indexed on every update<br>`0670`: WEB-19: Streaming markdown rebuilds the whole message's tree per update | From `0600`: The cost exists only while find is open on a long transcript. |
-| 30 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
-| 31 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
-| 32 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
-| 33 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
-| 34 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
-| 35 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
-| 36 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
+| 29 | [0620-e23-renderer-polling.md](0620-e23-renderer-polling.md) | Low | No | **E23, Renderer polling.**<br>`0620`: WEB-12: One environment change refetches the project's whole environment list<br>`0630`: WEB-13: Expanded truncated folders are re-read every 5 s without a digest<br>`0660`: WEB-18: Some renderer polls keep running while the window is hidden | From `0620`: Bursts already collapse to one project read, so this should wait for a measurement. |
+| 30 | [0650-web-16-terminal-container-environment-subscription.md](0650-web-16-terminal-container-environment-subscription.md) | Low | No | WEB-16: `TerminalContainer` subscribes to the whole environment object | It is an unmeasured re-render, with launch-effect risk in the fix. |
+| 31 | [0680-bg-10-multi-review-snapshot-drift-checks.md](0680-bg-10-multi-review-snapshot-drift-checks.md) | Low | No | BG-10: Multi Review snapshot mode runs a drift check per reviewer | It costs a bounded number of extra git probes per review pass. |
+| 32 | [0691-dk-5-preview-capture-data-urls.md](0691-dk-5-preview-capture-data-urls.md) | Low | No | DK-5: Preview captures cross IPC as large data URLs | Captures are occasional and bounded. |
+| 33 | [0692-dk-6-preview-tunnel-multiplexing.md](0692-dk-6-preview-tunnel-multiplexing.md) | Low | No | DK-6: The preview tunnel opens a WebSocket per TCP connection | The existing connection pool already removes most repeats. |
+| 34 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 35 | [0694-dk-16-attention-follow-polling.md](0694-dk-16-attention-follow-polling.md) | Low | No | DK-16 (rest): CLI `attention --follow` re-downloads pending items on every poll | It affects only long-running followers, and pending pages are probably small. |
 
 ## Parallel running
 
@@ -83,7 +82,6 @@ This index only changes when a branch merges, so it can't show what is running n
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 4 of 4 | None | None |
 | E20 | [ACP bridge](0240-e20-acp-bridge.md) | `0270`, `0260`, `0240` | No lane | None | E13 (Silent failures) |
 | E21 | [Pi bridge](0130-e21-pi-bridge.md) | `0130`, `0355` | No lane | None | E13 (Silent failures) |
-| E22 | [Chat rendering](0600-e22-chat-rendering.md) | `0600`, `0670` | No lane | None | None |
 | E23 | [Renderer polling](0620-e23-renderer-polling.md) | `0620`, `0630`, `0660` | No lane | None | C7 (Work panel and navigation) |
 
 Why these are grouped:
@@ -108,7 +106,6 @@ Why these are grouped:
 - **E16:** Linked settings for log detail.
 - **E20:** Remove the dead code first.
 - **E21:** Same bridge.
-- **E22:** Both redo work on each transcript update.
 - **E23:** Background refetches.
 
 ### Files built on their own
@@ -142,7 +139,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-50 done, 8 partly done, 63 open, 2 no action.
+78 done, 8 partly done, 35 open, 2 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -205,7 +202,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-7 | Done | `selectActivePaneTab`, `AppShell.tsx:69`, `:176`; per-field selectors, `usePullRequest.ts:62-70` (387d1412f). |
 | WEB-8 | Done | Normalised only when a handler runs, `AgentInfoButton.tsx:475-479` (9c06cb7aa). |
 | WEB-9 | Done | Startup closure 4.23 MB to 2.55 MB, 1.28 MB to 0.80 MB gzip; guarded by `startup-closure.test.ts` (2026-11-04); see 0520 and 1202. |
-| WEB-10 | Done | `AgentChatSearchIndex`, gated on `isOpen`, `AgentChatFind.tsx` (2026-11-04); see 0600 and 1202. |
+| WEB-10 | Done | `AgentChatSearchIndex`, gated on `isOpen`, `AgentChatFind.tsx` (2026-11-04); see 1202 task 3 and the closing check of E22 below. |
 | WEB-11 | Done | On return the terminal socket is pinged and kept when the pong arrives within 2.5 s, replaced otherwise or when the server lacks the `ping` feature, `terminal-websocket-client.ts`, `terminal-websocket-server.ts` (2026-11-04); see 1202 task 3. The check on a real mobile WebView is in [5080](../../todo/cross-cutting/5080-terminal-websocket-live-evidence.md). |
 | WEB-12 | Open | Project read per change, `useEnvironmentListSync.ts:84-92`; see 0620. |
 | WEB-13 | Open | `reloadFolders` has no digest, `useFilesPanel.ts:644-663`; see 0630. |
@@ -214,7 +211,7 @@ When one of these becomes ready, it joins the lane shown.
 | WEB-16 | Open | Whole environment subscribed, `TerminalContainer.view.tsx:168-170`; see 0650. |
 | WEB-17 | Done | `LiveElapsed`, `ClaudeTmuxChatTab.tsx:1406`; `createRuntimeClock`, `MultiReviewTab.tsx:564` (387d1412f); `BuildChatTab.tsx` has no interval. |
 | WEB-18 | Open | Plain intervals at `App.tsx:683`, `useUserCommands.ts:68` and others; see 0660. |
-| WEB-19 | Open | One `Markdown` render per update, `MessageMarkdown.tsx:393-399`; see 0670. |
+| WEB-19 | Done | While a part streams, `MessageMarkdown` renders each completed segment once through `IncrementalMarkdownCache.render` (`incremental-parse.ts`) and reuses its elements, #1754 `bfac1f577`; Chromium Profiler numbers in the closing check of E22 below and in 1202 task 3. |
 | ST-1 | Done | Settled stamp skips the read, `capture.ts:321-322` (c3c899b16). |
 | ST-2 | Done | `dlopen` once per process, `confined-read.ts:28` (c3c899b16); the handle cache was deliberately not done, 1202 task 7. |
 | ST-3 | Open | Per-object `utimes` and `stat`, `object-store.ts:110-119`, `capture.ts:944-947`; see 0430. |
@@ -338,3 +335,16 @@ The outcome of every task in the E2 batch file, checked back against the code on
 | 0710 | 3. Decide the provisional spacing | Moved to a to-do | Spacing is unchanged, as the report recommended. The measurement and decision are [4962](../../todo/cross-cutting/4962-provisional-capture-spacing.md). |
 | 0710 | Needs verification: how often a dirty hint finds an unchanged tree | Moved to a to-do | [4962](../../todo/cross-cutting/4962-provisional-capture-spacing.md) task 1. |
 | 0710 | Needs verification: size swings come from one machine and date | Moved to a to-do | [4960](../../todo/cross-cutting/4960-measurement-rows-live-soak.md), "Needs verification". |
+
+## Closing check of E22 (Chat rendering)
+
+The outcome of every task in the E22 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `69a3b4ca5`; the file's last version, ending in this table, is the parent of the commit that deleted it. Both tasks had already been built by #1754 (`bfac1f577`), so no code changed in this batch and no to-do was needed. WEB-10 and WEB-19 in the table above summarise this.
+
+| Part | Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0600 | 1. Index per message object | Done | `AgentChatSearchIndex` (`components/chat/agent-chat-search-index.ts`), used by `useAgentChatFind` only while find is open and active (`AgentChatFind.tsx`). It compares content rather than keeping the report's WeakMap, because a reparsed row is a new object. Tests in `AgentChatFind.indexing.test.tsx`: `a transcript update re-reads only the rows it changed, even as new objects`; `appended rows are read once and removed rows leave the matches`; `keeps rows apart when a page of older history shifts every index`; `typing another query does not read any row again`; `a closed find bar with a query left in it costs nothing per update`. |
+| 0600 | Constraint: clear the new cache with the protected rich caches | Done | `registerProtectedRichCache` in `AgentChatFind.tsx`. Test: `clearing protected rich content drops the held text`. |
+| 0600 | Needs verification: row identity through normalisation | No longer holds | Answered 2026-11-04: a reparsed copy has new objects, which shaped the content comparison above. |
+| 0670 | 1. Reuse settled blocks while streaming | Done | The cited single whole-source `Markdown` element is gone: a live render goes through `IncrementalMarkdownCache.render` (`lib/chat/rich-markdown/incremental-parse.ts`), so only the tail renders per update. Tests: `every streamed prefix` for 16 fixtures, `a long streamed answer renders each completed segment once`, `a finished block keeps the same element while text arrives after it` (`incremental-parse.test.tsx`); `a live streaming render matches a full render at every update`, `finished blocks do not render again while the message streams` (`MessageMarkdown.incremental.test.tsx`). |
+| 0670 | Constraint: the final, non-live render always parses in full | Done | The non-live branch of `MessageMarkdown.tsx` renders the whole source and resets the cache. Test: `the final render updates the streamed blocks in place, without remounting`. |
+| 0670 | Needs verification: the real cost, with a Profiler run | Done | Playwright Chromium, React development build, `<Profiler>` around a rich `MessageMarkdown` streamed 100 characters per update, median over the last quarter of three runs, full render against the live path: 5 KB 4.8 → 1.3 ms; 10 KB 9.2 → 2.2 ms; 20 KB 18.2 → 3.9 ms; 30 KB 27.1 → 5.5 ms (wall 35.9 → 11.0 ms at 30 KB). The throwaway fixture was not committed. |

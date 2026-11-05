@@ -14,7 +14,11 @@ import { usePaneLayoutStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
-import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
+import {
+  createPaneTabElementId,
+  createTabbarDroppableId,
+  getNativeAgentData,
+} from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
 import { fileTabChangeDiffTarget } from "@/components/terminal/change-diff-target";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
@@ -175,6 +179,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     (activePaneId === pane.id
       ? launches.find((entry) => entry.focused && !entry.arrived)
       : undefined) ?? launches.find((entry) => entry.tabId === pane.activeTabId && !entry.settled);
+  const selectedTabId = launchHasPaneFocus ? shimmeringLaunch?.tabId : pane.activeTabId;
   useEffect(() => preloadAgentNativeTab(), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(() => new Map<string, number>());
@@ -274,7 +279,15 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       </div>
 
       {/* Tab content */}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden"
+        {...(selectedTabId
+          ? {
+              role: "tabpanel",
+              "aria-labelledby": createPaneTabElementId(environmentId, pane.id, selectedTabId),
+            }
+          : {})}
+      >
         {/* Portal target for terminal rendering - terminals render here via TerminalPortalHost */}
         <div ref={portalHostRef} className="absolute inset-0 pointer-events-none" />
         {shimmeringLaunch && paneIsActive && (

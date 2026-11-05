@@ -481,17 +481,24 @@ function installBrowserPreviewCaptureRuntime(
   // -- Text mode ------------------------------------------------------------
   const checkTextSelection = (): void => {
     if (status !== "selecting") return;
-    const active = document.activeElement;
+    const active = focusedElement();
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
       if (kit.isSensitiveElement(active))
         hint.textContent = "Sensitive fields can't be captured · Esc cancel";
       return;
     }
     const current = window.getSelection?.();
-    if (!current || current.rangeCount === 0 || current.isCollapsed) return;
-    const range = current.getRangeAt(0).cloneRange();
+    if (!current) return;
+    let range: Range;
     let described: ReturnType<typeof kit.describeRange>;
     try {
+      const selected = kit.selectionRange(current);
+      if (!selected) return;
+      if ("error" in selected) {
+        hint.textContent = "This text can't be captured; try Region · Esc cancel";
+        return;
+      }
+      range = selected.range;
       described = kit.describeRange(range);
     } catch {
       fail("capture-failed");

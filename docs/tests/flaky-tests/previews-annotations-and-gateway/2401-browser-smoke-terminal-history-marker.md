@@ -55,4 +55,11 @@ Not a read-path difference: the archive dropped the line. The spec prints 1,100 
 To-do 4223 changed the archive itself. A flush writes its records in one `appendFile` per segment and starts at 256 queued records or 256 KiB rather than waiting for the timer, and the queue holds 12,288 records per session and 196,608 overall. Each record now counts 80 bytes against the unchanged byte bounds of 1 MiB per session and 16 MiB overall. This burst queues about 600 KiB, so it fits whatever the timing, and the spec again requires the marker with no gap.
 
 - **Verification:** `real browser gateway exercises…` passed 3 of 3 with `--repeat-each=3 --workers=1` on a credential-free isolated profile. That profile's Claude login dialog blocks the page, so for those runs only, the case's two fixture-name visibility checks were removed and a handler for the dialog added. The checks on the terminal, the history and the diff ran unchanged. The unmodified spec on a credentialed profile was not run here.
-- **Remaining limit:** floods of very short lines can still overflow; see to-do [5660](../../../todo/cross-cutting/5660-terminal-history-short-line-floods.md).
+- **Remaining limit:** floods of very short lines could still overflow; closed below.
+
+## Raw output queue, 2026-11-05
+
+To-do 5660 changed the queue again. It now holds raw output, charged by its bytes plus 80 per chunk, and splits it into rows when writing. The byte bounds are unchanged, and the record bounds became 12,288 chunks per session and 196,608 overall. This burst still fits whatever the timing, because it queues about 530 KiB.
+
+- **Verification:** `real browser gateway exercises…` passed 3 of 3 with `--repeat-each=3 --workers=1` on a credential-free isolated profile. On that profile a startup dialog covers the page and the unmodified case fails at its first fixture-name visibility check (line 574), before the terminal step. So, for those runs only, the case's two fixture-name visibility checks before the history checks were removed. The checks on the terminal, the history and the diff ran unchanged. The unmodified spec on a credentialed profile was not run here. Separately, the same burst command in a real terminal on that profile kept all 1,100 rows and its marker with no gap, and `keeps every line of a burst over 256 lines delivered as one chunk` in `terminal-history.test.ts` covers the shape.
+- **Remaining limit:** a flood past the bound still reports `historyGap`. `seq 1 1000000` in a real terminal kept 958,924 rows; `seq 1 20000` and `seq 1 100000` kept every line.

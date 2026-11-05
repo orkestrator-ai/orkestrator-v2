@@ -1,4 +1,5 @@
-import { describe, expect, mock, test } from "bun:test";
+import * as credentialModes from "../src/core/container-credential-mode.js";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { withheldGitHubCredentialEnvironment } from "@orkestrator/protocol/native-agent";
 
 import { createCommandFixtures } from "./command-fixtures";
@@ -457,3 +458,12 @@ exit 0
     },
   );
 });
+
+// These command fixtures intentionally represent legacy token-file images.
+let credentialModeSpy: ReturnType<typeof spyOn>;
+beforeEach(() => {
+  credentialModeSpy = spyOn(credentialModes, "containerCredentialMode").mockResolvedValue(
+    "token-file",
+  );
+});
+afterEach(() => credentialModeSpy.mockRestore());

@@ -268,6 +268,18 @@ export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressive
   patchVersion?: 2;
 }
 
+export interface NativeAgentLiveUpdateInput {
+  environmentId: string;
+  agent: BuildPipelineAgent;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  transcriptToken?: string;
+  stateToken?: string;
+  /** Part-level message patches the client can apply (step 14); absent: none. */
+  patchVersion?: 2;
+}
+
 export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {
   sections: NativeAgentDiscoverySection[];
 }

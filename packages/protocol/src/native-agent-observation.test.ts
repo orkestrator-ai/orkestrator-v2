@@ -3,6 +3,7 @@ import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
   NATIVE_SESSION_INVALIDATION_CAUSES,
   isNativeSessionInvalidationCause,
+  nativeSessionInvalidationNamesDiscovery,
   NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
   orderNativeObservationStamp,
@@ -133,5 +134,25 @@ describe("native session invalidation causes", () => {
     }
     expect(isNativeSessionInvalidationCause("env-env-1:tab-1")).toBe(false);
     expect(isNativeSessionInvalidationCause(undefined)).toBe(false);
+  });
+});
+
+describe("nativeSessionInvalidationNamesDiscovery", () => {
+  test("names the causes that can move models, commands, MCP or runtime", () => {
+    const named = NATIVE_SESSION_INVALIDATION_CAUSES.filter(
+      nativeSessionInvalidationNamesDiscovery,
+    );
+    expect([...named].sort() as string[]).toEqual([
+      "command-catalog",
+      "discovery-deadline",
+      "discovery-renewal",
+      "model-catalog-load",
+      "model-catalog-refresh",
+    ]);
+  });
+
+  test("counts a change it cannot place: no cause, or one a newer backend added", () => {
+    expect(nativeSessionInvalidationNamesDiscovery(undefined)).toBe(true);
+    expect(nativeSessionInvalidationNamesDiscovery("a-newer-cause")).toBe(true);
   });
 });

@@ -3,6 +3,10 @@
 interface ImportMetaEnv {
   /** Set by a production build of `apps/web`; see `vite-plugin-renderer-security.ts`. */
   readonly ORKESTRATOR_DESIGN_FRAME_DOCUMENT?: string;
+  /** Set by a production build of `apps/web`; the static HTML presentation frame. */
+  readonly ORKESTRATOR_STATIC_HTML_FRAME_DOCUMENT?: string;
+  /** `"unavailable"` in a build whose hosting policy cannot run the frame. */
+  readonly ORKESTRATOR_STATIC_HTML_PRESENTATION?: string;
 }
 
 interface Window {

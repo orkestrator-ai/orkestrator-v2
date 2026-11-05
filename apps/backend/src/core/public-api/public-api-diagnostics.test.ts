@@ -59,9 +59,12 @@ describe("diagnostics actions", () => {
     const pieces: Buffer[] = [];
     let offset: number | null = 0;
     while (offset !== null) {
-      const read = await harness.call("diagnostics.read", { planId: plan.planId, offset });
+      const read: { ok: boolean } = await harness.call("diagnostics.read", {
+        planId: plan.planId,
+        offset,
+      });
       expect(read.ok).toBe(true);
-      const chunk = resultOf<DiagnosticsBundleChunk>(read);
+      const chunk: DiagnosticsBundleChunk = resultOf<DiagnosticsBundleChunk>(read);
       pieces.push(Buffer.from(chunk.data, "base64"));
       offset = chunk.nextOffset;
     }

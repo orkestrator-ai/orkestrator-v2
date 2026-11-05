@@ -2977,8 +2977,9 @@ export class NativeAgentTranscriptProjection {
 
   /**
    * Session state for a held conversation, from the session record alone: the
-   * turn is over and nothing is parked, because nothing can be running. Answers
-   * without resolving a provider, which is what would start a bridge.
+   * turn reads as over and nothing as parked, because the pane may not act on
+   * either while held. Answers without resolving a provider, which is what would
+   * start a bridge.
    */
   private async heldCoordinatorSessionState(
     input: NativeAgentProgressiveInput,

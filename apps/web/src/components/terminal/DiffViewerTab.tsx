@@ -10,7 +10,10 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import type { ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
+import {
+  FILE_ROWS_CAPPED_REASON,
+  type ChangeMeasurement,
+} from "@orkestrator/protocol/change-measurements";
 import type {
   ChangeDiffFileBody,
   ChangeError,
@@ -749,6 +752,11 @@ function DiffHeader({
         {unknownSide && (
           <p role="note" className="text-[11px] opacity-80">
             One side of this comparison is unknown: {changeReason(`changes.reason.${unknownSide}`)}
+          </p>
+        )}
+        {measurement?.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON) && (
+          <p role="note" className="text-[11px] opacity-80" data-testid="diff-viewer-files-capped">
+            {changeReason(`changes.reason.${FILE_ROWS_CAPPED_REASON}`)}
           </p>
         )}
       </div>

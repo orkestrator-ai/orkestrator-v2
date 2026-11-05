@@ -10,6 +10,10 @@
  */
 
 import { randomUUID } from "node:crypto";
+import {
+  FILE_ROWS_CAPPED_REASON,
+  type ChangeMeasurement,
+} from "@orkestrator/protocol/change-measurements";
 import type {
   ChangesApplyRestoreResult,
   ChangesPrepareRestoreResult,
@@ -27,6 +31,7 @@ import {
 import { validCapturePath } from "./confined-read.js";
 import type { ChangeLedger } from "./change-ledger.js";
 import type { ObjectStore } from "./object-store.js";
+import { compareManifests } from "./snapshot-diff.js";
 import type { WorktreeRegistry, WorktreeChangeOwner } from "./worktree-owner.js";
 
 interface RestoreAction {
@@ -46,6 +51,15 @@ interface RestoreTokenPayload {
   measurementId: string;
   worktreeId: string;
   actions: RestoreAction[];
+}
+
+/** What a restore plan needs of one changed file. */
+interface RestoreFile {
+  path_id: string;
+  old_path: string | null;
+  new_path: string | null;
+  status: string;
+  file_kind: string;
 }
 
 export type ConditionalWriteOutcome = "applied" | "precondition-failed" | "failed";
@@ -211,6 +225,37 @@ export class ChangeRestoreService {
     return pathId ? findManifestEntry(manifest.entries, pathId) : null;
   }
 
+  /**
+   * Every file the measurement changed. A capped measurement's rows are only
+   * some of them, so the plan comes from the same two manifests they were
+   * measured from.
+   */
+  private async changedFiles(
+    measurement: ChangeMeasurement,
+    beforeManifest: Manifest,
+    afterManifest: Manifest,
+  ): Promise<RestoreFile[]> {
+    if (measurement.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)) {
+      const comparison = await compareManifests(this.deps.store, beforeManifest, afterManifest, {
+        pathsOnly: true,
+      });
+      return comparison.files.map((file) => ({
+        path_id: file.pathId,
+        old_path: file.oldPathId,
+        new_path: file.newPathId,
+        status: file.status,
+        file_kind: file.fileKind,
+      }));
+    }
+    const { ledger } = this.deps;
+    const files: RestoreFile[] = [];
+    const total = ledger.measurementFileCount(measurement.measurementId);
+    for (let offset = 0; offset < total; offset += 500) {
+      files.push(...ledger.measurementFiles(measurement.measurementId, offset, 500));
+    }
+    return files;
+  }
+
   async prepare(input: {
     measurementId: string;
     pathIds?: readonly string[];
@@ -239,79 +284,76 @@ export class ChangeRestoreService {
     const wanted = input.pathIds ? new Set(input.pathIds) : null;
     const actions: RestoreAction[] = [];
     const preview: RestorePreviewFile[] = [];
-    const total = ledger.measurementFileCount(measurement.measurementId);
-    for (let offset = 0; offset < total; offset += 500) {
-      for (const row of ledger.measurementFiles(measurement.measurementId, offset, 500)) {
-        if (wanted && !wanted.has(row.path_id)) continue;
-        const display = displayPath(row.new_path ?? row.old_path ?? row.path_id);
-        const skip = (reasonKey: string) =>
-          preview.push({ pathId: row.path_id, pathDisplay: display, action: "skip", reasonKey });
-        if (row.status === "unknown") {
-          skip("changes.restore.before-unknown");
-          continue;
-        }
-        if (row.file_kind === "gitlink" || row.file_kind === "symlink") {
-          skip(`changes.restore.${row.file_kind}-unsupported`);
-          continue;
-        }
-        const oldEntry = this.manifestEntry(beforeManifest, row.old_path);
-        const newEntry = this.manifestEntry(afterManifest, row.new_path);
-        if (oldEntry && !(await store.has(oldEntry.o))) {
-          skip("changes.restore.before-expired");
-          continue;
-        }
-        if (row.old_path && row.new_path && row.old_path !== row.new_path) {
-          if (!safeRelativePath(row.old_path) || !safeRelativePath(row.new_path)) {
-            skip("changes.restore.path-outside-worktree");
-            continue;
-          }
-          // Both preconditions belong to one unit. Restore the old name first.
-          actions.push({
-            pathId: row.old_path,
-            expectedOid: null,
-            expectedMode: null,
-            targetBlob: oldEntry?.o ?? null,
-            mode: oldEntry?.m ?? null,
-            groupId: row.path_id,
-            previewPathId: row.path_id,
-          });
-          actions.push({
-            pathId: row.new_path,
-            expectedOid: newEntry?.o ?? null,
-            expectedMode: newEntry?.m ?? null,
-            targetBlob: null,
-            mode: null,
-            groupId: row.path_id,
-            previewPathId: row.path_id,
-          });
-          preview.push({
-            pathId: row.path_id,
-            pathDisplay: display,
-            action: "write",
-            reasonKey: "changes.restore.rename-back",
-          });
-          continue;
-        }
-        const pathId = row.new_path ?? row.old_path ?? row.path_id;
-        if (!safeRelativePath(pathId)) {
+    for (const row of await this.changedFiles(measurement, beforeManifest, afterManifest)) {
+      if (wanted && !wanted.has(row.path_id)) continue;
+      const display = displayPath(row.new_path ?? row.old_path ?? row.path_id);
+      const skip = (reasonKey: string) =>
+        preview.push({ pathId: row.path_id, pathDisplay: display, action: "skip", reasonKey });
+      if (row.status === "unknown") {
+        skip("changes.restore.before-unknown");
+        continue;
+      }
+      if (row.file_kind === "gitlink" || row.file_kind === "symlink") {
+        skip(`changes.restore.${row.file_kind}-unsupported`);
+        continue;
+      }
+      const oldEntry = this.manifestEntry(beforeManifest, row.old_path);
+      const newEntry = this.manifestEntry(afterManifest, row.new_path);
+      if (oldEntry && !(await store.has(oldEntry.o))) {
+        skip("changes.restore.before-expired");
+        continue;
+      }
+      if (row.old_path && row.new_path && row.old_path !== row.new_path) {
+        if (!safeRelativePath(row.old_path) || !safeRelativePath(row.new_path)) {
           skip("changes.restore.path-outside-worktree");
           continue;
         }
+        // Both preconditions belong to one unit. Restore the old name first.
         actions.push({
-          pathId,
-          expectedOid: newEntry?.o ?? null,
-          expectedMode: newEntry?.m ?? null,
-          previewPathId: row.path_id,
+          pathId: row.old_path,
+          expectedOid: null,
+          expectedMode: null,
           targetBlob: oldEntry?.o ?? null,
           mode: oldEntry?.m ?? null,
+          groupId: row.path_id,
+          previewPathId: row.path_id,
+        });
+        actions.push({
+          pathId: row.new_path,
+          expectedOid: newEntry?.o ?? null,
+          expectedMode: newEntry?.m ?? null,
+          targetBlob: null,
+          mode: null,
+          groupId: row.path_id,
+          previewPathId: row.path_id,
         });
         preview.push({
           pathId: row.path_id,
           pathDisplay: display,
-          action: oldEntry ? "write" : "delete",
-          reasonKey: null,
+          action: "write",
+          reasonKey: "changes.restore.rename-back",
         });
+        continue;
       }
+      const pathId = row.new_path ?? row.old_path ?? row.path_id;
+      if (!safeRelativePath(pathId)) {
+        skip("changes.restore.path-outside-worktree");
+        continue;
+      }
+      actions.push({
+        pathId,
+        expectedOid: newEntry?.o ?? null,
+        expectedMode: newEntry?.m ?? null,
+        previewPathId: row.path_id,
+        targetBlob: oldEntry?.o ?? null,
+        mode: oldEntry?.m ?? null,
+      });
+      preview.push({
+        pathId: row.path_id,
+        pathDisplay: display,
+        action: oldEntry ? "write" : "delete",
+        reasonKey: null,
+      });
     }
     // Preflight the destination against the measured after-state.
     const described = new Map<string, ReadRecord>();
@@ -344,9 +386,11 @@ export class ChangeRestoreService {
       actions.filter((action) => !matches(action)).map((action) => action.groupId ?? action.pathId),
     );
     const runnable = actions.filter((action) => !blocked.has(action.groupId ?? action.pathId));
+    const planned = new Set(runnable);
+    const previewByPath = new Map(preview.map((file) => [file.pathId, file]));
     for (const action of actions) {
-      if (runnable.includes(action)) continue;
-      const entry = preview.find((file) => file.pathId === (action.previewPathId ?? action.pathId));
+      if (planned.has(action)) continue;
+      const entry = previewByPath.get(action.previewPathId ?? action.pathId);
       if (entry) {
         entry.action = "skip";
         entry.reasonKey = "changes.restore.destination-changed";

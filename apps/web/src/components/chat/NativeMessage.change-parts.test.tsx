@@ -19,7 +19,7 @@ import { resetChangeSubscriptionsForTests } from "@/lib/changes/subscriptions";
 import { useChangeProjectionStore } from "@/stores/changeProjectionStore";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { NativeMessage } from "./NativeMessage";
-import { resetChangePartCachesForTests } from "./NativeMessage.change-parts";
+import { ChangeFileRows, resetChangePartCachesForTests } from "./NativeMessage.change-parts";
 import { NativeChangeScopeContext, type NativeChangeScope } from "./NativeMessage.change-scope";
 
 /*
@@ -273,6 +273,27 @@ afterEach(() => {
     toolPresentations: new Map(),
   });
   useMessagePartExpansionStore.getState().reset();
+});
+
+test("a capped file list without a cursor shows the omitted-files note", () => {
+  render(
+    <ChangeFileRows
+      environmentId={undefined}
+      projection={projection(EFFECT_KEY, {
+        filePage: {
+          snapshotToken: "capped",
+          rows: [fileRow("src/app.ts")],
+          nextCursor: null,
+          totalRows: 1,
+          omittedRows: 500,
+        },
+      })}
+    />,
+  );
+  expect(screen.getByText("src/app.ts")).toBeTruthy();
+  expect(screen.getByText("More files changed; the totals above include them all.")).toBeTruthy();
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(calls("changes_get_files")).toHaveLength(0);
 });
 
 describe("tool rows with a backend presentation", () => {

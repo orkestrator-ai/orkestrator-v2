@@ -200,6 +200,21 @@ describe("changes view", () => {
     expect(run.out).not.toContain("0 files");
   });
 
+  test("says how many changed files have no row past the cap", async () => {
+    const capped: PublicChangesView = {
+      ...VIEW,
+      files: { rows: ROWS, nextCursor: null, totalRows: 2, omittedRows: 40 },
+    };
+    const { box } = await fixture((request) =>
+      request.body.args.action === "changes.view"
+        ? envelope(publicSuccessEnvelope("changes.view", capped))
+        : undefined,
+    );
+    const run = await box.run(["changes", "view", "env-1"]);
+    expect(run.code).toBe(0);
+    expect(run.out).toContain("40 more changed files are not listed; the totals count them.");
+  });
+
   test("backend errors keep their code and exit class", async () => {
     const { box } = await fixture((request) => {
       const action = request.body.args.action;

@@ -140,13 +140,21 @@ const changesView: ReadActionHandler<{
         input.pageSize ?? tracking.policies.policy.filePageRows,
       );
       if (page.kind === "error") throw changeError(page.error);
-      files = { rows: page.rows, nextCursor: page.nextCursor, totalRows: page.totalRows };
+      files = {
+        rows: page.rows,
+        nextCursor: page.nextCursor,
+        totalRows: page.totalRows,
+        ...(page.omittedRows ? { omittedRows: page.omittedRows } : {}),
+      };
     } else {
       files = projection.filePage
         ? {
             rows: projection.filePage.rows,
             nextCursor: projection.filePage.nextCursor,
             totalRows: projection.filePage.totalRows,
+            ...(projection.filePage.omittedRows
+              ? { omittedRows: projection.filePage.omittedRows }
+              : {}),
           }
         : { rows: [], nextCursor: null, totalRows: null };
     }

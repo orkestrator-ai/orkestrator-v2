@@ -749,6 +749,12 @@ key information tab renders). The list comes from `pipelineFollowUps`
 - review issues still `open` or `partially-resolved`;
 - tests whose result is not `passed`.
 
+A double click on the node (Enter, or its "Open notes in a tab" action) opens
+the same reading on a full pane: the `key-information` tab with `view: "notes"`.
+A pipeline has one such tab, separate from its key information tab, which keeps
+showing the brief alone. Both keep only the pipeline id and read the record, so
+they follow every update and survive a reload.
+
 The Ship stage passes the same list to `prPrompt`, which has the description
 carry a `## Needs a look` section, so the person merging sees it. Only the
 pipeline's Ship stage does this. A graph's `pull-request-description` builder

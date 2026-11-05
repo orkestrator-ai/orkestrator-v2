@@ -95,6 +95,10 @@ const identity: NativeAgentViewIdentity = {
 
 let transcriptUpdates: Array<() => Promise<NativeAgentTranscriptUpdate<TestMessage>>> = [];
 let stateUpdates: Array<() => Promise<NativeAgentSessionStateUpdate>> = [];
+// Answers a state read that no scripted update covers. Unset, it is the
+// `unchanged` reply below. A test that withdraws authority sets it so a poll
+// landing between two scripted steps keeps the outage rather than restoring it.
+let stateFallback: (() => Promise<NativeAgentSessionStateUpdate>) | undefined;
 let transcriptReads = 0;
 let dispatched: string[] = [];
 let backgroundTaskStops: string[] = [];
@@ -156,7 +160,7 @@ mock.module("@/lib/backend", () => ({
     } satisfies NativeAgentTranscriptUpdate<TestMessage>;
   },
   getNativeAgentSessionStateUpdate: async () => {
-    const next = stateUpdates.shift();
+    const next = stateUpdates.shift() ?? stateFallback;
     if (next) return next();
     return {
       viewVersion: 1,
@@ -323,6 +327,7 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
+  stateFallback = undefined;
   transcriptReads = 0;
   dispatched = [];
   backgroundTaskStops = [];
@@ -625,17 +630,19 @@ describe("AgentNativeTab progressive controller", () => {
 
       if (transition !== "runtime-restart") {
         transcriptUpdates = [];
-        stateUpdates = [
-          async () =>
-            transition === "failed-read"
-              ? Promise.reject(new Error("status endpoint timed out"))
-              : {
-                  viewVersion: 1,
-                  status: "unavailable",
-                  retryable: true,
-                  error: "status endpoint timed out",
-                },
-        ];
+        // Every state read reports the outage until the held recovery below is
+        // scripted. An `unchanged` reply to a poll in between would restore
+        // authority, which a real bridge cannot do once the client dropped its
+        // token, and Stop would return before the assertions run.
+        stateFallback = async () =>
+          transition === "failed-read"
+            ? Promise.reject(new Error("status endpoint timed out"))
+            : {
+                viewVersion: 1,
+                status: "unavailable",
+                retryable: true,
+                error: "status endpoint timed out",
+              };
         await waitFor(
           () =>
             expect(
@@ -669,6 +676,7 @@ describe("AgentNativeTab progressive controller", () => {
           }),
       ];
       stateUpdates = [() => heldState];
+      stateFallback = undefined;
       try {
         await waitFor(() => expect(screen.getByText("Newer work")).toBeTruthy(), {
           timeout: 5_000,

@@ -48,7 +48,8 @@ switches between Preview and Notes. The pane layout stores only panel
 visibility, selected annotation, filter and width.
 
 Modes: **Element** (hover, click or Enter; ↑/↓ for parent/child), **Text**
-(select text; never touches the clipboard; sensitive fields refused),
+(select text, in the document or inside one open shadow root; never touches the
+clipboard; sensitive fields refused),
 **Region** (drag; arrows move, Shift+arrows resize) and **Page** (immediate).
 Escape cancels selection only. Selection listeners ignore events whose
 `isTrusted` is not true, so page script cannot choose, confirm or cancel a
@@ -295,12 +296,28 @@ A hit a root reports outside itself (slotted light content) is not followed.
 into its open root. A closed root exposes no `shadowRoot` to page script, so
 its host is the target, as it always was. A host is an ordinary element in its
 own root: selecting one records that root's scope, not `unsupported`.
-Desktop clients send a `shadow` scope only to a backend that advertises
-`operations.shadowTargets`; any other backend receives the older
-`{ kind: "unsupported", reason: "shadow-root" }` for the same target.
+Desktop clients send a `shadow` scope, on an element or a text range's
+container, only to a backend that advertises `operations.shadowTargets`; any
+other backend receives the older `{ kind: "unsupported", reason: "shadow-root" }`
+for the same target.
 
 A text range stores its quote with context plus the anchor of its containing
-element.
+element, whose scope says which tree the quote is in. Text mode reads a selection
+with `Selection.getComposedRanges`, because `getRangeAt` retargets a selection in
+a shadow tree to a position around its host. That call reveals only the roots it
+is given, so the kit lists the open root of each host at an endpoint and reads
+again, one level per pass, at most `WEB_ANNOTATION_MAX_SHADOW_DEPTH` deep. The
+two endpoints must be in one tree, because a range and a text map each cover one:
+a selection across a light and shadow boundary, or between two roots, is
+`unsupported`. So is a document selection `getRangeAt` reports differently, since
+one endpoint is then in a closed root the kit cannot read; select all is the one
+exception, which Chromium composes as the root element's contents and which keeps
+the document's light text. A range at the top
+level of a root (text directly under it, or a range across its top-level elements)
+has no containing element in the root: its container carries the host's semantics,
+the root's scope, no stable id and the path `:host`. Sensitive-field checks follow
+the composed tree: a sensitive host refuses everything inside its root, nested
+roots included, and Text mode reads the focused field through open roots.
 
 ### Resolution rules
 
@@ -338,9 +355,11 @@ identity.
    candidate remains (including a lone uncorroborated one), `stale` when a
    disagreeing candidate was found, otherwise `missing`.
 
-Text ranges search a bounded, whitespace-normalized text map of the document.
-A text selection inside a shadow root is still refused at capture.
-A unique occurrence corroborated by its prefix or suffix (or the only
+Text ranges resolve their container's scope as in rule 1, then search a bounded,
+whitespace-normalized text map of that one tree: the document, or the innermost
+root. Neither map includes the text of a shadow root nested inside it, so a
+document quote is never found in a component or the reverse, and a quote whose
+host has become sensitive is `missing`. A unique occurrence corroborated by its prefix or suffix (or the only
 occurrence when no context was stored) matches; several are `ambiguous`; a
 contradicted one is `stale`.
 
@@ -656,9 +675,10 @@ What has actually been exercised on a real stack (details and dates in
 - Pending questions and approvals are answerable from the request card only
   when their bodies can be read from the destination session's projection;
   otherwise the card offers **Answer in chat**.
-- iframes, closed shadow roots and text selections inside shadow roots are
-  unsupported; use Region. Element targets inside open shadow roots are
-  supported. Sensitive fields inside closed shadow roots are not masked: page
+- iframes and closed shadow roots are unsupported; use Region. So is a text
+  selection that crosses a light and shadow boundary or runs between two roots.
+  Element targets and text selections inside open shadow roots are supported.
+  Sensitive fields inside closed shadow roots are not masked: page
   script cannot see them. A pin whose host is already defined but attaches its
   shadow root later on its own resolves on the next DOM change or re-send. A
   page too large to

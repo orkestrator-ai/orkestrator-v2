@@ -539,6 +539,13 @@ export class StorageContext {
     return path.join(path.dirname(filePath), `${path.basename(filePath)}.bak.${index}`);
   }
 
+  /** The backup ladder of a store that remains a file, newest first. */
+  jsonBackupPaths(filePath: string): string[] {
+    return Array.from({ length: MAX_JSON_BACKUPS }, (_, index) =>
+      this.backupPath(filePath, index + 1),
+    );
+  }
+
   private async rotateBackups(filePath: string, mode?: number): Promise<void> {
     // Never promote an empty/corrupt crash remnant over a valid recovery
     // ladder. The replacement write below can publish recovered state while

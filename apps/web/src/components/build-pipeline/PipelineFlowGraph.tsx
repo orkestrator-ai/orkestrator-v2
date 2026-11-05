@@ -303,6 +303,7 @@ export interface PipelineFlowGraphProps {
   layout?: "graph" | "stacked";
   fullscreenContainer?: HTMLElement | null;
   isActive?: boolean;
+  landOnSelection?: boolean;
 }
 
 /**
@@ -320,6 +321,7 @@ export function PipelineFlowGraph({
   layout,
   fullscreenContainer,
   isActive = true,
+  landOnSelection = false,
 }: PipelineFlowGraphProps) {
   const storedHeight = useUIStore((state) => state.pipelineGraphHeight);
   const setStoredHeight = useUIStore((state) => state.setPipelineGraphHeight);
@@ -405,6 +407,7 @@ export function PipelineFlowGraph({
       isActive={isActive}
       minHeight={PIPELINE_FLOW_MIN_HEIGHT}
       fitControl
+      landOnSelection={landOnSelection}
     />
   );
 }

@@ -247,8 +247,8 @@ export function PipelineFlowView({
   const now = useSyncExternalStore(subscribeDisplayClock, displayClock.getSnapshot);
 
   // The running step, else the last step reached; a node the user picked
-  // wins while it exists. Notes is opened by hand: it never runs, so there is
-  // nothing in it to follow.
+  // wins while it exists. Notes counts as reached only once the run completes,
+  // so a finished run lands on it and an unfinished one never does.
   const columnOf = new Map<string, number>();
   model.columns.forEach((column, index) => {
     for (const id of column.nodeIds) columnOf.set(id, index);
@@ -261,7 +261,7 @@ export function PipelineFlowView({
     pendingRetry?.id ??
     defaultFlowSelection(
       model.nodes
-        .filter((node) => !node.session?.superseded && !node.superseded && node.kind !== "notes")
+        .filter((node) => !node.session?.superseded && !node.superseded)
         .map((node) => ({
           id: node.id,
           state: node.placeholder ? "not-started" : node.state,
@@ -663,6 +663,7 @@ export function PipelineFlowView({
                 layout={layout}
                 fullscreenContainer={tabRoot}
                 isActive={isActive}
+                landOnSelection={selected.kind === "notes" && selected.id !== pinnedId}
               />
             )}
           </div>

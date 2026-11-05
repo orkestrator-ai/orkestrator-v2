@@ -634,7 +634,7 @@ describe("agent schedules", () => {
     });
     expect(ownInbox.messages).toEqual([
       expect.objectContaining({
-        from: expect.objectContaining({ kind: "system", source: "workflow" }),
+        from: expect.objectContaining({ kind: "system", source: "self-reminder" }),
         subject: expect.stringContaining("Scheduled reminder"),
         requestId: expect.stringMatching(/^sched:sch_/),
       }),
@@ -773,6 +773,7 @@ test("environment-wide schedule credentials select a caller mailbox and tab cred
     expect(refused.content?.[0]?.text).toContain("has its own Orkestrator connection");
     const created = await call(environment, "create_schedule", { ...input, tabId: b.tabId });
     expect(created.isError).not.toBe(true);
+    expect(typeof created.structuredContent?.scheduleId).toBe("string");
     const id = String(created.structuredContent!.scheduleId);
     expect(scheduler.service.get({ kind: "operator" }, id).owner).toMatchObject({
       kind: "agent",

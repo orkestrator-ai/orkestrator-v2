@@ -1796,8 +1796,14 @@ workers. An environment counts when this coordinator has, on the same node
   not, because asking an environment something does not make it yours);
 - a `build-pipeline` or local `graph-run` with `createdEnvironmentId` naming
   the environment it actually created. The completion write records this only
-  for a new environment; deferred graph provisioning records it when its
-  environment is published. Retention keeps the creation receipt while that local
+  for a new environment. Pipeline reservations also retain `createsEnvironment`
+  when requesting creation: a reclaimed admission may return before provisioning.
+  Local provisioning saves repair the receipt, including when provisioning wins
+  the race with association completion. For a remote pipeline, the next authority
+  lookup reads the node's pipeline and persists its environment ID; retention
+  keeps the unresolved remote creation intent until then. This marker alone
+  never grants access. Deferred graph provisioning records its environment when
+  published. Retention keeps the creation receipt while that local
   environment exists, and keeps remote creation receipts conservatively.
 
 Workflow membership alone grants no authority. A review, a pipeline targeting

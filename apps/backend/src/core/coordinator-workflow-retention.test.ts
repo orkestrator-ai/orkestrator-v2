@@ -86,6 +86,22 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     expect(select(records, { environments: ["live"] })).toEqual(new Set(["deleted"]));
   });
 
+  test("keeps a remote creation intent until late provisioning identifies the environment", () => {
+    const records = [
+      finished("pending-provision", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: true,
+      }),
+      finished("existing-target", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: false,
+      }),
+    ];
+    expect(select(records)).toEqual(new Set(["existing-target"]));
+  });
+
   test("clears the oldest finished records first, up to the batch", () => {
     const workflows = [
       finished("c", { createdAt: "2026-09-03T00:00:00.000Z" }),

@@ -684,6 +684,11 @@ export class BuildPipelinesRepository {
       }
       await this.settleControlCommit(saved.commit, pipelineId);
     }
+    await this.repos.coordinators.recordPipelineEnvironmentCreation(
+      saved.record.id,
+      saved.record.projectId,
+      saved.record.environmentId,
+    );
     return saved.record;
   }
 

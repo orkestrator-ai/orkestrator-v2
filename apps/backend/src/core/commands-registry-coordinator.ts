@@ -733,6 +733,7 @@ export function registerCoordinatorCommands(
           conversationId,
           kind: "build-pipeline",
           resourceId: `pending:${stableRequestId}`,
+          createsEnvironment: !input.existingEnvironmentId,
           requestId: stableRequestId,
           payloadHash,
           baseBranch: input.delegationBaseBranch,

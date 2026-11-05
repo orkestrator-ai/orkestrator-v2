@@ -568,6 +568,9 @@ export interface CoordinatorWorkflowAssociation {
   /** Environment actually created by this workflow, never an existing target.
    * Kept while that environment exists, independently of workflow history. */
   createdEnvironmentId?: string;
+  /** This build launch requested a new environment. It is not authority until
+   * provisioning publishes its ID; used to repair a reclaimed admission. */
+  createsEnvironment?: boolean;
   dependsOnResourceId?: string;
   createdAt: string;
   lastNotifiedRevision?: number;

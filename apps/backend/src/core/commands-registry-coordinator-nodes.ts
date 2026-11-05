@@ -577,6 +577,19 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       environmentId =
         typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
     }
+    if (typeof named.workflowId === "string") {
+      const review = target
+        ? await target.call<{ snapshot?: { projectId?: string; environmentId?: string } }>(
+            "get_multi_review_workflow",
+            { workflowId: named.workflowId },
+          )
+        : await context.storage.getMultiReviewWorkflow(named.workflowId);
+      const snapshot = record(review?.snapshot) ? review.snapshot : null;
+      if (snapshot?.projectId !== (target?.projectId ?? caller.projectId))
+        throw new Error("Multi Review not found in this project");
+      environmentId =
+        typeof snapshot.environmentId === "string" ? snapshot.environmentId : undefined;
+    }
     if (!environmentId) throw new Error("Workflow has no environment");
     // The project home has its own rule, and the tools refuse it by name.
     const environment = target
@@ -950,6 +963,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           ...caller,
           kind: "build-pipeline",
           resourceId: `pending:${stableRequestId}`,
+          createsEnvironment: !input.existingEnvironmentId,
           nodeId: target.nodeId,
           requestId: stableRequestId,
           payloadHash,

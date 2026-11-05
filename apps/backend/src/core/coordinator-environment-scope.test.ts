@@ -22,6 +22,7 @@ import { ControlMcpServer } from "./control-mcp-server.js";
 import { rpc } from "./control-mcp-server-test-support.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./control-mcp-tools.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { graphRunFixture } from "./graph-run-test-support.js";
 
 // Real MCP dispatch and commands over real stores. Only the node link is
 // simulated. The world starts with the project's setting at its default, off.
@@ -137,6 +138,12 @@ beforeEach(async () => {
     environmentId: handMade,
     phase: "paused",
   } as never);
+  await world.storage.saveMultiReviewWorkflow("review-target", handMade, 1, {
+    id: "review-target",
+    projectId: world.projectId,
+    environmentId: handMade,
+    phase: "reviewing",
+  });
 });
 
 afterEach(async () => {
@@ -156,6 +163,133 @@ const message = (toEnvironmentId: string, extra: Record<string, unknown> = {}) =
 
 const allowOthers = () =>
   world.storage.patchRepositorySettings(world.projectId, { coordinatorOtherEnvironments: true });
+
+for (const provisionBeforeCompletion of [false, true]) {
+  test(`a reclaimed pipeline keeps creation authority with provisioning ${provisionBeforeCompletion ? "before" : "after"} receipt completion`, async () => {
+    const ticket = await world.storage.kanban.addKanbanTask(world.projectId, "Build", "");
+    const input = {
+      projectId: world.projectId,
+      taskId: ticket.id,
+      taskTitle: "Build",
+      taskSnapshot: {
+        title: "Build",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local",
+      agentType: "codex",
+      delegationBaseBranch: "main",
+      delegationBaseCommit: BASE,
+    };
+    let attempts = 0;
+    const pipelineId = "reclaimed-build";
+    const snapshot = {
+      id: pipelineId,
+      projectId: world.projectId,
+      environmentId: "",
+      phase: "preparing",
+    };
+    rootContext.buildPipelines = {
+      start: async () => {
+        if (++attempts === 1) {
+          await world.storage.saveBuildPipeline(pipelineId, world.projectId, "", 1, snapshot);
+          throw new Error("lost admission answer");
+        }
+        if (provisionBeforeCompletion)
+          await world.storage.saveBuildPipeline(pipelineId, world.projectId, handMade, 1, {
+            ...snapshot,
+            environmentId: handMade,
+          });
+        return snapshot;
+      },
+    } as unknown as CommandContext["buildPipelines"];
+    const start = () =>
+      commands.get("start_coordinator_build_pipeline")!(
+        { scope, requestId: "reclaim", input },
+        rootContext,
+      );
+    await expect(start()).rejects.toThrow("lost admission answer");
+    expect(await start()).toMatchObject({ environmentId: "" });
+    if (!provisionBeforeCompletion)
+      await world.storage.saveBuildPipeline(pipelineId, world.projectId, handMade, 1, {
+        ...snapshot,
+        environmentId: handMade,
+      });
+    // Authority is a stored receipt and survives deletion of disposable history.
+    expect(
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId),
+    ).toContainEqual(
+      expect.objectContaining({
+        resourceId: pipelineId,
+        pending: false,
+        createdEnvironmentId: handMade,
+      }),
+    );
+    await world.storage.deleteBuildPipeline(pipelineId);
+    expect((await tool("send_message", message(handMade))).isError).toBe(false);
+    expect(await world.undelivered(handMadeActor)).toHaveLength(1);
+  });
+}
+
+for (const workflow of ["graph", "review", "remote-review"] as const) {
+  for (const authority of ["none", "opt-in", "creation"] as const) {
+    test(`${workflow} cancellation requires environment authority: ${authority}`, async () => {
+      const remote = workflow === "remote-review";
+      const storage = remote ? leaf : world.storage;
+      const environmentId = remote ? leafWorkerId : handMade;
+      const projectId = (await storage.getEnvironment(environmentId))!.projectId;
+      const cancel = mock(async () => ({
+        id: "review-target",
+        projectId,
+        environmentId,
+        phase: "cancelled",
+      }));
+      if (workflow === "graph") {
+        const run = graphRunFixture({ projectId, environmentId });
+        const cancelGraph = mock(async () => ({ ...run, status: "cancelled" as const }));
+        rootContext.graphRuns = {
+          get: async () => run,
+          cancel: cancelGraph,
+        } as unknown as CommandContext["graphRuns"];
+        if (authority === "opt-in") await allowOthers();
+        if (authority === "creation") await launched(environmentId);
+        const result = await tool("cancel_graph_run", { runId: run.id });
+        if (authority === "none") {
+          expect(result.isError).toBe(true);
+          expect(result.text).toBe(`graph-error: ${COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL}`);
+        } else {
+          expect(result.isError).toBe(false);
+          expect(cancelGraph).toHaveBeenCalledWith(run.id);
+        }
+        expect(cancelGraph).toHaveBeenCalledTimes(authority === "none" ? 0 : 1);
+      } else {
+        await storage.saveMultiReviewWorkflow("review-target", environmentId, 1, {
+          id: "review-target",
+          projectId,
+          environmentId,
+          phase: "reviewing",
+        });
+        (remote ? leafContext : rootContext).multiReviews = {
+          cancel,
+        } as unknown as CommandContext["multiReviews"];
+        if (authority === "opt-in") await allowOthers();
+        if (authority === "creation") await launched(environmentId, remote ? { nodeId: LEAF } : {});
+        const result = await tool("cancel_multi_review", {
+          workflowId: "review-target",
+          ...(remote ? { nodeId: LEAF } : {}),
+        });
+        if (authority === "none") refused(result);
+        else {
+          expect(result.isError).toBe(false);
+          expect(cancel).toHaveBeenCalledWith("review-target");
+        }
+        expect(cancel).toHaveBeenCalledTimes(authority === "none" ? 0 : 1);
+      }
+    });
+  }
+}
 
 /** What a launch records: the record that makes the coordinator the creator. */
 const launched = (environmentId: string, extra: Record<string, unknown> = {}) =>
@@ -178,6 +312,7 @@ function actions(environmentId: string): Record<string, Record<string, unknown>>
   const request = { requestId: crypto.randomUUID(), environmentId };
   const tab = { environmentId, tabId: "startup-agent" };
   return {
+    cancel_multi_review: { workflowId: "review-target" },
     pause_build_pipeline: { pipelineId: "pipeline-target" },
     cancel_build_pipeline: { pipelineId: "pipeline-target" },
     resume_build_pipeline: { pipelineId: "pipeline-target" },
@@ -303,6 +438,7 @@ test("with the setting on, each action succeeds and reaches its effect", async (
   commands.set("assert_coordinator_delegation_available", async () => ({ available: true }));
   commands.set("open_coordinator_delegation", async () => ({ opened: true }));
   const effects: Record<string, string> = {
+    cancel_multi_review: "cancel_multi_review",
     pause_build_pipeline: "pause_build_pipeline",
     cancel_build_pipeline: "cancel_build_pipeline",
     resume_build_pipeline: "resume_build_pipeline",

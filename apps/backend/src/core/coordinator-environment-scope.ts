@@ -28,6 +28,7 @@ interface CoordinatorScope {
 /** A connected node, for the workflows a coordinator ran there. */
 export interface CoordinatorEnvironmentNode {
   nodeId: string;
+  projectId: string;
   call<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
@@ -41,17 +42,53 @@ export async function coordinatorCreatedEnvironment(
   const records = await context.storage.coordinators.listCoordinatorWorkflowAssociations(
     scope.projectId,
   );
-  return records.some(
-    (association) =>
-      association.coordinatorId === scope.coordinatorId &&
-      !association.pending &&
-      association.nodeId === node?.nodeId &&
-      (((association.kind === "build-pipeline" || association.kind === "graph-run") &&
-        association.createdEnvironmentId === environmentId) ||
-        (association.kind === "environment" &&
-          association.resourceId === environmentId &&
-          Boolean(association.baseCommit))),
-  );
+  if (
+    records.some(
+      (association) =>
+        association.coordinatorId === scope.coordinatorId &&
+        !association.pending &&
+        association.nodeId === node?.nodeId &&
+        (((association.kind === "build-pipeline" || association.kind === "graph-run") &&
+          association.createdEnvironmentId === environmentId) ||
+          (association.kind === "environment" &&
+            association.resourceId === environmentId &&
+            Boolean(association.baseCommit))),
+    )
+  )
+    return true;
+  // The command node cannot observe a leaf's later provisioning save. Repair
+  // only receipts explicitly requesting creation, never a followed workflow
+  // or a launch into an existing environment (including after opt-in revocation).
+  if (node) {
+    for (const association of records) {
+      if (
+        association.coordinatorId !== scope.coordinatorId ||
+        association.nodeId !== node.nodeId ||
+        association.pending ||
+        association.kind !== "build-pipeline" ||
+        association.createsEnvironment !== true ||
+        association.createdEnvironmentId
+      )
+        continue;
+      const pipeline = await node
+        .call<{ snapshot?: { projectId?: string; environmentId?: string } }>("get_build_pipeline", {
+          pipelineId: association.resourceId,
+        })
+        .catch(() => null);
+      if (
+        pipeline?.snapshot?.projectId !== node.projectId ||
+        pipeline.snapshot.environmentId !== environmentId
+      )
+        continue;
+      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
+        association.id,
+        association.resourceId,
+        environmentId,
+      );
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

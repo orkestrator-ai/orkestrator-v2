@@ -6,7 +6,12 @@ import type { JsonRecord } from "./control-mcp-tool-support.js";
  * environment that is in none of these lists, so a new one has to choose.
  */
 
-type EnvironmentTarget = { environmentId?: unknown; pipelineId?: unknown; nodeId?: unknown };
+type EnvironmentTarget = {
+  environmentId?: unknown;
+  pipelineId?: unknown;
+  workflowId?: unknown;
+  nodeId?: unknown;
+};
 
 const named = (input: JsonRecord): EnvironmentTarget => input;
 
@@ -15,6 +20,7 @@ export const COORDINATOR_ENVIRONMENT_ACTIONS: ReadonlyMap<
   string,
   (input: JsonRecord) => EnvironmentTarget
 > = new Map([
+  ["cancel_multi_review", (input) => ({ workflowId: input.workflowId, nodeId: input.nodeId })],
   ["pause_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
   ["cancel_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
   ["resume_build_pipeline", (input) => ({ pipelineId: input.pipelineId, nodeId: input.nodeId })],
@@ -66,7 +72,6 @@ export const COORDINATOR_ENVIRONMENT_CHECKED_BY_COMMAND: ReadonlySet<string> = n
   "send_message",
   "address_multi_review",
   "custom_fix_multi_review",
-  "cancel_multi_review",
   "cancel_graph_run",
 ]);
 

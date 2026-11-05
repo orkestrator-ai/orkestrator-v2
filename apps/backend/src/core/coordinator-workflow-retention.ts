@@ -84,6 +84,10 @@ export function selectCoordinatorWorkflowsToClear(
 
   const candidates: Array<{ id: string; createdAt: number; index: number }> = [];
   workflows.forEach((association, index) => {
+    // A leaf's late provisioning is learned on the next authority lookup.
+    // Retain that creation intent until the actual environment is known.
+    if (association.nodeId && association.createsEnvironment && !association.createdEnvironmentId)
+      return;
     // Creation provenance remains authoritative after the workflow itself is
     // pruned. Remote existence is unknown, so retain it conservatively.
     if (

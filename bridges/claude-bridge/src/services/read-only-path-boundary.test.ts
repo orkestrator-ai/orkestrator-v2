@@ -42,7 +42,7 @@ beforeAll(() => {
   home = join(dataDir, "coordinator-runtime", "c1", "conversations", "v1", "claude-home");
   attachments = join(dataDir, "coordinator-attachments", "c1", "v1");
   mkdirSync(checkout, { recursive: true });
-  seed(join(dataDir, "control-mcp.json"));
+  writeFileSync(seed(join(dataDir, "control-mcp.json")), "unique-credential-fixture-marker");
   seed(join(dataDir, "orkestrator.sqlite"));
   seed(join(dataDir, "toolchains", "claude", "claude"));
   seed(join(dataDir, "agent-accounts", "claude", "a1", "skills", "s", "SKILL.md"));
@@ -304,6 +304,27 @@ describe("createCoordinatorReadOnlyHook", () => {
       expect((await run("Bash", { command }, "unavailable"))?.permissionDecision).toBe("deny");
     }
     expect(await run("Bash", { command: "rg fixture ." }, "unavailable")).toBeUndefined();
+  });
+
+  test("hook-only commands deny clustered path operands before reading a credential fixture", async () => {
+    const credentials = join(dataDir, "control-mcp.json");
+    for (const operand of [
+      credentials,
+      "../data/control-mcp.json",
+      "innocent.json",
+      "alias/../control-mcp.json",
+    ]) {
+      for (const flags of ["-nFf", "-nf", "-Ff", "-0nFf", "-n0Ff"]) {
+        const command = `rg --no-ignore ${flags}${operand} --trace README.md`;
+        // This is the execution gate: no shell is started after a denial.
+        const answer = await run("Bash", { command }, "unavailable");
+        expect(answer?.permissionDecision).toBe("deny");
+        expect(JSON.stringify(answer)).not.toContain("unique-credential-fixture-marker");
+      }
+    }
+    expect(
+      await run("Bash", { command: "rg -nFfREADME.md --trace README.md" }, "unavailable"),
+    ).toBeUndefined();
   });
 
   test("leaves the conversation's saved tool results and memory readable", async () => {

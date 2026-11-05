@@ -466,6 +466,35 @@ export class CoordinatorsRepository {
     });
   }
 
+  /** A reclaimed pipeline admission can settle its receipt before provisioning. */
+  async recordPipelineEnvironmentCreation(
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+  ): Promise<void> {
+    if (!environmentId) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "build-pipeline" ||
+          association.nodeId ||
+          association.projectId !== projectId ||
+          association.resourceId !== pipelineId ||
+          association.createsEnvironment !== true ||
+          association.createdEnvironmentId
+        )
+          continue;
+        association.createdEnvironmentId = environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
   async saveCoordinatorWorkflowAssociation(
     association: CoordinatorWorkflowAssociation,
   ): Promise<CoordinatorWorkflowAssociation> {
@@ -601,6 +630,18 @@ export class CoordinatorsRepository {
         return owner;
       }
       association.resourceId = resourceId;
+      // Provisioning may have won the race with this completion. Look up the
+      // committed local pipeline as well as the start call's earlier snapshot.
+      if (
+        !createdEnvironmentId &&
+        association.kind === "build-pipeline" &&
+        !association.nodeId &&
+        association.createsEnvironment === true
+      ) {
+        const pipeline = await this.repos.buildPipelines.getBuildPipeline(resourceId);
+        if (pipeline?.projectId === association.projectId)
+          createdEnvironmentId = pipeline.environmentId || undefined;
+      }
       if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;
       association.pending = false;
       delete association.claimPid;

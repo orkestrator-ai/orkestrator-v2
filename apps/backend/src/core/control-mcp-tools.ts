@@ -678,7 +678,11 @@ export async function createControlMcp(
     coordinatorScope
       ? async (tool, input) => {
           const target = COORDINATOR_ENVIRONMENT_ACTIONS.get(tool)?.(isRecord(input) ? input : {});
-          if (typeof target?.environmentId !== "string" && typeof target?.pipelineId !== "string")
+          if (
+            typeof target?.environmentId !== "string" &&
+            typeof target?.pipelineId !== "string" &&
+            typeof target?.workflowId !== "string"
+          )
             return;
           await invoke("assert_coordinator_environment_scope", {
             scope: coordinatorScope,
@@ -686,6 +690,7 @@ export async function createControlMcp(
             target: {
               environmentId: target.environmentId,
               pipelineId: target.pipelineId,
+              workflowId: target.workflowId,
               ...(typeof target.nodeId === "string" ? { nodeId: target.nodeId } : {}),
             },
           });

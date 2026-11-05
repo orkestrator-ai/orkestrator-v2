@@ -204,9 +204,18 @@ export function shellCommandRefused(
     if (searches && readBoundaryRefuses(boundary, cwd, cwd, options)) return true;
   }
   return tokens.some((token) => {
-    const attached = token.startsWith("-")
-      ? [token.slice(token.indexOf("=") + 1), token.slice(2)]
-      : [];
+    const attached: string[] = [];
+    if (token.startsWith("--")) {
+      const equals = token.indexOf("=");
+      if (equals >= 0) attached.push(token.slice(equals + 1));
+    } else if (token.startsWith("-")) {
+      // A path-valued short option may follow other flags (-nFf/path).
+      // Without a per-program grammar, conservatively check every possible
+      // operand after a leading option letter, including relative paths.
+      for (let index = 1; index < token.length && /[a-zA-Z0-9]/.test(token[index]!); index++) {
+        attached.push(token.slice(index + 1));
+      }
+    }
     return [token, ...attached].some(
       (candidate) => candidate && readBoundaryRefuses(boundary, candidate, cwd, options),
     );

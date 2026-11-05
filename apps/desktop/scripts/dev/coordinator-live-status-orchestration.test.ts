@@ -39,6 +39,7 @@ async function fixture(
     startupInteraction?: AgentInteractionKind;
     reviewFails?: boolean;
     releaseFailsOnce?: boolean;
+    previousOtherEnvironments?: boolean;
   } = {},
 ) {
   const directory = await mkdtemp(path.join(tmpdir(), "status-orchestration-"));
@@ -54,6 +55,9 @@ async function fixture(
   const environments: Array<{ id: string; name: string }> = [{ id: "existing", name: "existing" }];
   const previousSettings = { defaultAgent: "pi", multiReview: { autoFix: true } };
   let global: Record<string, unknown> = { agentSettings: previousSettings, preserved: true };
+  const repository: Record<string, unknown> = { preserved: true };
+  if (options.previousOtherEnvironments !== undefined)
+    repository.coordinatorOtherEnvironments = options.previousOtherEnvironments;
   let stage = "startup";
   let reads = 0;
   let startupPending = !!options.startupInteraction;
@@ -85,7 +89,12 @@ async function fixture(
         value = [...environments];
         break;
       case "get_config":
-        value = { global };
+        value = { global, repositories: { project: { ...repository } } };
+        break;
+      case "patch_repository_settings":
+        expect(args.projectId).toBe("project");
+        Object.assign(repository, args.updates);
+        for (const key of (args.unset as string[] | undefined) ?? []) delete repository[key];
         break;
       case "update_global_config":
         global = args.global as Record<string, unknown>;
@@ -130,6 +139,9 @@ async function fixture(
         };
         break;
       case "dispatch_native_agent_intent": {
+        // Harness-created environments have no creation receipt. Match the
+        // origin policy instead of silently simulating successful delegation.
+        expect(repository.coordinatorOtherEnvironments).toBe(true);
         stage = String(args.prompt).includes("launch_multi_review") ? "review" : "waiting";
         reads = 0;
         messages.push({ role: "user", content: "scenario prompt" });
@@ -234,6 +246,7 @@ async function fixture(
     commands,
     environments,
     previousSettings,
+    repository,
     config: () => global,
     run: () => runStatusScenario({ coordinator, summary, cleanup, token, pollIntervalMs: 0 }),
     close: async () => {
@@ -281,6 +294,7 @@ test("status flow creates/starts environments, waits for review and waiting wake
   }
   expect(f.environments.map((item) => item.id)).toEqual(["existing"]);
   expect(f.config()).toEqual({ agentSettings: f.previousSettings, preserved: true });
+  expect(f.repository).toEqual({ preserved: true });
   expect(f.summary.verdict).toBe("passed");
 });
 
@@ -301,6 +315,22 @@ for (const kind of ["question", "command-approval"] as const) {
     }
     expect(f.environments.map((item) => item.id)).toEqual(["existing"]);
     expect(f.config().agentSettings).toEqual(f.previousSettings);
+    expect(f.repository).toEqual({ preserved: true });
+  });
+}
+
+for (const previousOtherEnvironments of [false, true]) {
+  test(`status scenario restores the previous origin opt-in ${previousOtherEnvironments}`, async () => {
+    const f = await fixture({ previousOtherEnvironments });
+    try {
+      expect((await f.run()).checks.every((check) => check.passed)).toBe(true);
+    } finally {
+      await f.close();
+    }
+    expect(f.repository).toEqual({
+      preserved: true,
+      coordinatorOtherEnvironments: previousOtherEnvironments,
+    });
   });
 }
 

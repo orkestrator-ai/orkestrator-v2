@@ -21,6 +21,7 @@ import {
   type CoordinatorCaller,
 } from "./coordinator-action-scope.js";
 import { graphLaunchRunId, GraphLaunchError } from "./graph-run-launch.js";
+import { assertCoordinatorMayActOnEnvironment } from "./coordinator-environment-scope.js";
 
 /**
  * The coordinator's graph commands (item 214, D6): list saved templates, read
@@ -288,6 +289,8 @@ export function registerCoordinatorGraphActions(register: CommandRegistrar): voi
   register("cancel_coordinator_graph_run", async ({ scope, runId }, context) => {
     const caller = await coordinatorCaller(scope, context);
     const run = await projectRun(context, caller, runId);
+    if (!run.environmentId) throw new Error("Workflow has no environment");
+    await assertCoordinatorMayActOnEnvironment(context, caller, run.environmentId);
     if (isGraphRunTerminal(run.status) || run.status === "cancelling") {
       return { ...coordinatorGraphRunView(run), cancelled: false };
     }

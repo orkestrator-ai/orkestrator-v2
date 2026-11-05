@@ -660,7 +660,7 @@ describe("workflows on a node", () => {
   });
 
   test("a remote pipeline in an existing environment grants no creation authority", async () => {
-    const { run, scope, associations } = await setup();
+    const { run, world, scope, associations } = await setup();
     await run("start_coordinator_node_build_pipeline", {
       scope,
       requestId: "existing-build",
@@ -675,6 +675,78 @@ describe("workflows on a node", () => {
       },
     });
     expect((await associations())[0]!.createdEnvironmentId).toBeUndefined();
+    await world.storage.patchRepositorySettings(scope.projectId, {
+      coordinatorOtherEnvironments: false,
+    });
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: "existing-mail",
+        toEnvironmentId: "leaf-env",
+        body: "hello",
+      }),
+    ).rejects.toThrow("did not create");
+  });
+
+  test("a reclaimed remote admission repairs its creation receipt after late provisioning", async () => {
+    let environmentId = "";
+    const { run, world, scope, loseNext, associations } = await setup({
+      answers: {
+        start_controller_build_pipeline: {
+          id: "pipeline-leaf",
+          projectId: "p-leaf",
+          environmentId: "",
+        },
+        get_build_pipeline: () => ({
+          snapshot: { id: "pipeline-leaf", projectId: "p-leaf", environmentId },
+        }),
+      },
+    });
+    await world.storage.patchRepositorySettings(scope.projectId, {
+      coordinatorOtherEnvironments: false,
+    });
+    const args = {
+      scope,
+      requestId: "reclaim",
+      nodeId: "bk_leaf",
+      input: {
+        projectId: scope.projectId,
+        taskId: "t1",
+        taskTitle: "Build",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: BASE,
+      },
+    };
+    loseNext("start_controller_build_pipeline");
+    await expect(run("start_coordinator_node_build_pipeline", args)).rejects.toMatchObject({
+      code: "outcome-unknown",
+    });
+    expect(await run("start_coordinator_node_build_pipeline", args)).toMatchObject({
+      environmentId: "",
+    });
+    expect((await associations())[0]).toMatchObject({ pending: false, createsEnvironment: true });
+    await expect(
+      run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: "mail-before-provisioning",
+        toEnvironmentId: "leaf-env",
+        body: "hello",
+      }),
+    ).rejects.toThrow("did not create");
+    environmentId = "leaf-env";
+    const result = await run("send_coordinator_node_mail", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "mail-after-provisioning",
+      toEnvironmentId: "leaf-env",
+      body: "hello",
+    });
+    expect(result.messageId).toBe("m1");
+    expect((await associations()).find((entry) => entry.kind === "build-pipeline")).toMatchObject({
+      createdEnvironmentId: "leaf-env",
+    });
   });
 
   test("a build pipeline is reserved here and started on the node's copy", async () => {

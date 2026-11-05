@@ -76,6 +76,8 @@ These still follow the lane and conflict rules above.
 
 18 done, 9 partly done, 40 open, 7 no action.
 
+Batch C9 (Panel split) is closed. Its task-by-task outcomes are in the [closing report](../2026-11-05-c9-closing-report.md).
+
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
 | S1: `send_message` can write through the project home | Done | Reason and approval gate at `apps/backend/src/core/coordinator-worker-mail.ts:417-432` (`5161688cf`, #1632), which supersedes the report's refusal. |

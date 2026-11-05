@@ -26,6 +26,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
   excerpt: string | undefined;
   requestPending = false;
   backgroundWorkPending = false;
+  goalRunning = false;
   collected: string[] = [];
 
   async workerState(): Promise<RemoteWorkerState> {
@@ -36,6 +37,7 @@ class FakeRemote implements CoordinatorRemoteAccess {
       name: "remote-worker",
       requestPending: this.requestPending,
       backgroundWorkPending: this.backgroundWorkPending,
+      goalRunning: this.goalRunning,
     };
   }
 
@@ -103,6 +105,42 @@ async function delegationState(world: MailWorld, id: string) {
   return associations.find((entry) => entry.id === id)?.delegation;
 }
 
+describe("remote waiting episodes", () => {
+  async function waitingOnRemote() {
+    const fixture = await remoteWorld();
+    fixture.remote.tab = "waiting";
+    await fixture.world.coordinator.reconcileWorkflowNotifications();
+    expect((await delegationState(fixture.world, fixture.association.id))?.waiting).toBeDefined();
+    return fixture;
+  }
+
+  for (const [label, leave] of [
+    ["idle", (remote: FakeRemote) => (remote.tab = "idle")],
+    ["working", (remote: FakeRemote) => (remote.tab = "working")],
+    ["a stopped tab", (remote: FakeRemote) => (remote.tab = "stopped")],
+    ["a stopped environment", (remote: FakeRemote) => (remote.environment = "stopped")],
+  ] as const) {
+    test(`${label} ends the episode`, async () => {
+      const { world, remote, association } = await waitingOnRemote();
+      leave(remote);
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect((await delegationState(world, association.id))?.waiting).toBeUndefined();
+    });
+  }
+
+  for (const [label, unreadable] of [
+    ["an unreadable tab", (remote: FakeRemote) => (remote.tab = "unknown")],
+    ["an unreachable node", (remote: FakeRemote) => (remote.available = false)],
+  ] as const) {
+    test(`${label} does not end the episode`, async () => {
+      const { world, remote, association } = await waitingOnRemote();
+      unreadable(remote);
+      await world.coordinator.reconcileWorkflowNotifications();
+      expect((await delegationState(world, association.id))?.waiting).toBeDefined();
+    });
+  }
+});
+
 describe("remote delegations", () => {
   test("close when the remote worker's turn ends, and wake the coordinator once", async () => {
     const { world, remote, main, association } = await remoteWorld();
@@ -123,6 +161,22 @@ describe("remote delegations", () => {
     expect(notice).toContain('"nodeId": "bk_leaf"');
     expect(notice).toContain("Last message: All green.");
     expect(world.wakes(main)).toBe(1);
+  });
+
+  test("an idle turn between a goal's iterations is not the worker's answer", async () => {
+    const { world, remote, main, association } = await remoteWorld();
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+
+    remote.tab = "idle";
+    remote.goalRunning = true;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("running");
+    expect(world.wakes(main)).toBe(0);
+
+    // The goal stopped: nothing will start another turn.
+    remote.goalRunning = false;
+    await world.coordinator.settleRemoteWorker("bk_leaf", "leaf-env");
+    expect((await delegationState(world, association.id))?.state).toBe("completed");
   });
 
   test("idle remote turns hold while background work runs, then close when it ends", async () => {

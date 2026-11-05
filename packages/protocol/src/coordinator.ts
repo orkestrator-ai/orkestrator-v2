@@ -283,16 +283,25 @@ export interface CoordinatorDelegation {
    *
    * Distinct from `completedAt` so a crash between observing the edge and
    * delivering the wake retries rather than losing it, and so a delivered wake
-   * is never sent twice.
+   * is never sent twice. Also stamped when no wake is owed any more: its
+   * coordinator is gone, or delivery was given up on (`wakeFailedAt`).
    */
   wokenAt?: string;
+  /**
+   * Delivering the wake kept failing, so it was given up on once one notice to
+   * the coordinator was stored. A mark on the wake, not on the work: `state`
+   * still says how the worker ended.
+   */
+  wakeFailedAt?: string;
+  /** Retirement was selected durably; retry only its notice until receipted. */
+  wakeRetirement?: { attempts: number; kind: string };
   /**
    * The worker has been waiting on input or an approval since `since`.
    *
    * Waiting does not close a delegation, but once it has lasted past a short
    * debounce the coordinator gets one status notice for it (`notifiedAt`).
-   * Cleared when the worker is seen working again, so a later wait is a new
-   * episode with its own notice.
+   * Cleared when the worker is seen idle, working or stopped, so a later wait is
+   * a new episode with its own notice. An unreadable state does not clear it.
    */
   waiting?: { since: string; notifiedAt?: string };
   /**

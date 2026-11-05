@@ -1,10 +1,27 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const COORDINATOR_LOG_AREAS = defineLogAreas({
   coordinator: {
     description: "Coordinators: delegations, status wakes and their store.",
     events: {
+      ...THROTTLE_LOG_EVENTS,
       "delegation.open-failed": "A delegation could not be opened; `source` says for what.",
+      "delegation.reconcile-failed":
+        "One delegation could not be settled; the rest of the pass still ran and the next one retries.",
+      "delegation.wake-failed":
+        "One delegation's wake could not be delivered; the rest of the pass still ran and the next one retries.",
+      "delegation.wake-held":
+        "A wake is waiting on a state the user can change (messaging off, conversation limit), and is not counted as a failure.",
+      "delegation.wake-pass-failed":
+        "A delegation wake pass could not run; the next sweep retries.",
+      "delegation.wake-retire-failed":
+        "A wake that keeps failing could not be given up on; the next pass retries.",
+      "delegation.wake-retire-notice-failed":
+        "The one notice for a wake being retired could not be sent; the wake stays owed and the next pass retries.",
+      "delegation.wake-retired":
+        "A wake kept failing and was given up on; `kind` is the last failure.",
+      "mail.reconcile-failed":
+        "One coordinator's mail could not be reconciled; the sweep carried on with the others.",
       "deliver-now.drain-failed":
         "The mail delivery pass after deliverNow failed; the next sweep delivers.",
       "mail.move-failed": "Mail could not move to the new main coordinator.",

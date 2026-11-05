@@ -1622,6 +1622,41 @@ answer on the worker's behalf. For a question it may propose an answer with
 Orkestrator (see [Worker surfaces](#worker-surfaces)); approvals stay with the
 person in the worker's tab.
 
+Whether a delegation has finished is decided in one place, `decideDelegation`
+(`coordinator-delegation-decision.ts`), for the turn-end edge, the sweep and
+workers on other nodes alike. Its comment has the table and says why those three
+differ where they do.
+
+The wake pass walks every closed delegation not yet woken. A failure costs only
+that delegation: it is logged, throttled, under the delegation's id, and the rest
+of the pass still runs, as do the later steps of the sweep. A call made while a
+pass runs starts one more pass after it, so a worker that closes during another's
+wake reports at once rather than on the next sweep. If the user closes the main
+while its wake is on the way, the delegation stays unwoken, the next main adopts
+it, and the mail already placed moves across with the rest of the closed
+conversation's inbox. Closing, selecting and pausing wait their turn with
+creating and assigning on the project's queue. A slow mail send does not hold
+that queue. Wake-kind selection shares the project queue with close: it checks
+the main is open, looks up held reports, and persists the kind together, so a
+closed mailbox cannot make a real report look missing.
+
+A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
+run on turn ends, so the time bound stops a short fault retiring every wake owed.
+The selection of retirement (`wakeRetirement`, including the attempt count and
+error kind) is persisted before sending its notice. Retries, including after a
+restart or a failed receipt write, resume that path instead of sending an ordinary
+completion notice. The retirement notice must reach the mail store before the
+final receipt. If sending fails or no main is open, the wake stays owed for a later
+pass or main. After storing the notice,
+the pass rechecks that the main is still open before stamping retirement. A report
+still held is released as ordinary mail on the next sweep, and the delegation
+records `wakeFailedAt` with `wokenAt`, keeping `state` as the
+worker's own outcome. Before retirement is selected, the count is in memory, so a
+restart restarts it. Messaging
+turned off, or no room for a new main under the conversation limit, is a state the
+user can change rather than a fault: such a wake is held, not counted, and goes out
+once that changes.
+
 Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
 and readable, held with reason `delegation-running`, and released together with
 the final report. The mail drain claims every ready message for one mailbox,
@@ -2083,7 +2118,11 @@ worker the coordinator owns its merge or close still reaches it, as a
 [worker outcome](#worker-outcomes). Notices go to the main coordinator that
 [should hear them](#who-hears-a-notice), like every other report. With no main running,
 a new event starts one. A sweep starts nothing: it waits, and sends the state current
-when one opens.
+when one opens. The one exception is the backfill rule, for work older than status
+wakes: a non-terminal status with no earlier notice, unchanged for over 24 hours, on
+an association over 14 days old is recorded without a wake
+(`coordinator-status-backfill.ts`), so a project idle for longer than that does lose
+such a notice.
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association
@@ -2108,7 +2147,7 @@ stable key; a key is sent once, recorded on the association
 | Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Worker outcome | a worker the coordinator owns: its PR merged (`pr-merged`) or closed (`pr-closed`), naming the deletion when the environment is going too, or the environment deleted (`deleted`, resource `environment`) with its PR still open or without one; once per worker, unless a PR follow reports the merge or close | `settled` |
-| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
+| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm. Reading idle, working or stopped ends the episode, so a later wait is sent again; an unreadable state does not | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
 A graph run is reduced to two statuses only (`graphRunCoordinatorStatus` in

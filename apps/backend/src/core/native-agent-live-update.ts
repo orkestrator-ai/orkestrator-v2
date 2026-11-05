@@ -1,5 +1,6 @@
 import {
   NATIVE_AGENT_LIVE_UPDATE_VERSION,
+  NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   type NativeAgentLiveUpdate,
   type NativeAgentPendingUpdate,
   type NativeAgentSessionStateUpdate,
@@ -47,7 +48,7 @@ export async function readNativeAgentLiveUpdate(
     environmentId: input.environmentId,
     agent: input.agent,
     logicalSessionKey: input.logicalSessionKey,
-    viewVersion: input.viewVersion,
+    viewVersion: NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
   };
   let transcript: NativeAgentLiveUpdate["transcript"] = PENDING;
   let state: NativeAgentLiveUpdate["state"] = PENDING;
@@ -91,7 +92,7 @@ async function settleUpdate<T>(
     return await read();
   } catch (error) {
     return {
-      viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+      viewVersion: NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
       status: "unavailable",
       retryable: true,
       error: error instanceof Error ? error.message.slice(0, 4_000) : "Session read failed",

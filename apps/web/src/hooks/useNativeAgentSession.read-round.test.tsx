@@ -467,6 +467,135 @@ describe("transcript and state in one request", () => {
     expect(liveReads()).toBe(1);
   });
 
+  for (const message of [
+    "Native agent live update response exceeded 20 MiB",
+    "Invalid native agent live update response",
+  ]) {
+    test(`falls back in the same round and disables combined reads: ${message}`, async () => {
+      liveUpdateVersions = [1];
+      const { clock } = installFakeReadCoordinator();
+      await settledSession();
+      const beforeTranscript = transcriptReads();
+      const beforeState = stateReads();
+      getNativeAgentLiveUpdateMock.mockImplementationOnce(async () => {
+        throw new Error(message);
+      });
+      await act(() => clock.advance(500));
+      await waitFor(() => expect(stateReads()).toBe(beforeState + 1));
+      expect(transcriptReads()).toBe(beforeTranscript + 1);
+      await act(() => realTick(0));
+      await act(() => clock.advance(500));
+      await waitFor(() => expect(stateReads()).toBe(beforeState + 2));
+      expect(liveReads()).toBe(1);
+    });
+  }
+
+  test("both pending parts are read separately in the same round", async () => {
+    liveUpdateVersions = [1];
+    const { clock } = installFakeReadCoordinator();
+    await settledSession();
+    const beforeTranscript = transcriptReads();
+    const beforeState = stateReads();
+    getNativeAgentLiveUpdateMock.mockImplementationOnce(async () => ({
+      viewVersion: 1,
+      transcript: { viewVersion: 1, status: "pending" },
+      state: { viewVersion: 1, status: "pending" },
+    }));
+    await act(() => clock.advance(500));
+    await waitFor(() => expect(stateReads()).toBe(beforeState + 1));
+    expect(transcriptReads()).toBe(beforeTranscript + 1);
+  });
+
+  for (const replacement of [
+    { ...identity, providerSessionId: "session-2" },
+    { ...identity, sourceGeneration: "generation-2" },
+  ]) {
+    test(`state-first replacement refreshes discovery: ${replacement.providerSessionId}/${replacement.sourceGeneration}`, async () => {
+      liveUpdateVersions = [1];
+      const { clock } = installFakeReadCoordinator();
+      const oldDiscovery = discoveryReady();
+      if (oldDiscovery.status !== "snapshot") throw new Error("expected snapshot");
+      const oldCommands = [
+        {
+          name: "/old",
+          id: "claude:/old",
+          source: "project" as const,
+          executionKind: "bridge-template" as const,
+          bindingRevision: "old",
+        },
+      ];
+      getNativeAgentDiscoveryUpdateMock.mockImplementationOnce(async () => ({
+        ...oldDiscovery,
+        value: {
+          ...oldDiscovery.value,
+          sections: { commands: { availability: "ready", revision: 1, value: oldCommands } },
+        },
+      }));
+      const view = await settledSession();
+      await waitFor(() =>
+        expect(view.result.current.projection?.slashCommands).toEqual(oldCommands),
+      );
+      const beforeDiscovery = discoveryReads();
+      const state = stateSnapshot();
+      if (state.status !== "snapshot") throw new Error("expected snapshot");
+      getNativeAgentLiveUpdateMock.mockImplementationOnce(async () => ({
+        viewVersion: 1,
+        transcript: { viewVersion: 1, status: "pending" },
+        state: {
+          ...state,
+          token: "replacement-state",
+          value: { ...state.value, identity: replacement },
+        },
+      }));
+      let release!: (value: NativeAgentTranscriptUpdate<TestMessage>) => void;
+      getNativeAgentTranscriptUpdateMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      await act(() => clock.advance(500));
+      await waitFor(() =>
+        expect(view.result.current.projection?.generation).toBe(replacement.sourceGeneration),
+      );
+      expect(view.result.current.projection?.slashCommands).toBeUndefined();
+      const transcript = transcriptSnapshot();
+      if (transcript.status !== "snapshot") throw new Error("expected snapshot");
+      await act(async () =>
+        release({
+          ...transcript,
+          token: "replacement-transcript",
+          value: { ...transcript.value, identity: replacement },
+        }),
+      );
+      getNativeAgentLiveUpdateMock.mockImplementation(async () => ({
+        viewVersion: 1,
+        transcript: {
+          ...transcriptUnchanged,
+          identity: replacement,
+          token: "replacement-transcript",
+        },
+        state: { ...stateUnchanged(), identity: replacement, token: "replacement-state" },
+      }));
+      const discovery = discoveryReady();
+      if (discovery.status !== "snapshot") throw new Error("expected snapshot");
+      getNativeAgentDiscoveryUpdateMock.mockImplementationOnce(async () => ({
+        ...discovery,
+        token: "replacement-discovery",
+        value: {
+          ...discovery.value,
+          identity: replacement,
+          sections: { commands: { availability: "ready", revision: 2, value: [] } },
+        },
+      }));
+      await act(() => realTick(0));
+      await act(() => clock.advance(500));
+      await waitFor(() => expect(discoveryReads()).toBe(beforeDiscovery + 1));
+      expect(getNativeAgentDiscoveryUpdateMock.mock.calls.at(-1)?.[0].knownToken).toBeUndefined();
+      await waitFor(() => expect(view.result.current.projection?.slashCommands).toEqual([]));
+    });
+  }
+
   test("any other failure is reported, as a failed read would be", async () => {
     liveUpdateVersions = [1];
     const { clock } = installFakeReadCoordinator();

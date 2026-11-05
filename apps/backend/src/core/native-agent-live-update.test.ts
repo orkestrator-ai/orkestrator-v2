@@ -98,6 +98,24 @@ describe("readNativeAgentLiveUpdate", () => {
     });
   });
 
+  test("inner reads use the progressive version domain", async () => {
+    const seen: number[] = [];
+    await readNativeAgentLiveUpdate(
+      reads({
+        getTranscriptUpdate: async (input) => {
+          seen.push(input.viewVersion!);
+          return transcriptUnchanged;
+        },
+        getSessionStateUpdate: async (input) => {
+          seen.push(input.viewVersion!);
+          return stateUnchanged;
+        },
+      }),
+      { ...input, viewVersion: 99 } as unknown as NativeAgentLiveUpdateInput,
+    );
+    expect(seen).toEqual([1, 1]);
+  });
+
   test("answers as soon as both parts have, without waiting for the deadline", async () => {
     const startedAt = Date.now();
     await readNativeAgentLiveUpdate(reads(), input, 60_000);

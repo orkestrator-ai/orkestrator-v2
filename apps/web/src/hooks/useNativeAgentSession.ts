@@ -412,7 +412,12 @@ async function readLiveUpdate<TMessage>(
   try {
     return await send("live-update", input, () => getNativeAgentLiveUpdate<TMessage>(input));
   } catch (error) {
-    if (!isUnsupportedBackendCommand(error, "get_native_agent_live_update")) throw error;
+    const invalidResponse =
+      error instanceof Error &&
+      (error.message === "Native agent live update response exceeded 20 MiB" ||
+        error.message === "Invalid native agent live update response");
+    if (!invalidResponse && !isUnsupportedBackendCommand(error, "get_native_agent_live_update"))
+      throw error;
     if (syncCapability) syncCapability.liveUpdate = false;
     const pending = { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, status: "pending" } as const;
     return { viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION, transcript: pending, state: pending };
@@ -1429,10 +1434,20 @@ export function useNativeAgentSession<TMessage = unknown>({
         progressiveDiscoveryTokenRef.current = undefined;
         progressiveDiscoveryRef.current = undefined;
         discoverySchedule.markDue();
+        updateProgressiveCache({ discoveryToken: undefined, discovery: undefined });
         markSessionStateAvailability("unavailable");
         setSessionStateError(null);
       }
-      const current = providerChanged ? null : projectionRef.current;
+      const heldProjection = providerChanged ? null : projectionRef.current;
+      const current =
+        identityChanged && heldProjection
+          ? {
+              ...heldProjection,
+              slashCommands: undefined,
+              slashCommandCatalogue: undefined,
+              runtime: undefined,
+            }
+          : heldProjection;
       const hasAuthoritativeState =
         !identityChanged && sessionStateAvailabilityRef.current === "current" && current !== null;
       /*
@@ -1840,6 +1855,14 @@ export function useNativeAgentSession<TMessage = unknown>({
     (value: NativeAgentSessionStateView, token: string) => {
       if (!identityBelongsToView(value.identity)) return null;
       const knownIdentity = progressiveIdentityRef.current;
+      const identityChanged =
+        knownIdentity !== undefined && !sameProgressiveIdentity(knownIdentity, value.identity);
+      if (identityChanged) {
+        progressiveDiscoveryTokenRef.current = undefined;
+        progressiveDiscoveryRef.current = undefined;
+        discoverySchedule.markDue();
+        updateProgressiveCache({ discoveryToken: undefined, discovery: undefined });
+      }
       if (knownIdentity && knownIdentity.providerSessionId !== value.identity.providerSessionId) {
         applyProjection(null);
         markTranscriptAvailability("unavailable");
@@ -1847,7 +1870,16 @@ export function useNativeAgentSession<TMessage = unknown>({
         lastTranscriptViewRef.current = null;
         progressiveHistoryEpochRef.current = undefined;
       }
-      const current = projectionRef.current;
+      const heldProjection = projectionRef.current;
+      const current =
+        identityChanged && heldProjection
+          ? {
+              ...heldProjection,
+              slashCommands: undefined,
+              slashCommandCatalogue: undefined,
+              runtime: undefined,
+            }
+          : heldProjection;
       const next: NativeAgentSessionProjection<TMessage> = {
         platform,
         environmentId,
@@ -1922,6 +1954,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [
       applyProjection,
+      discoverySchedule,
       environmentId,
       identityBelongsToView,
       markSessionStateAvailability,

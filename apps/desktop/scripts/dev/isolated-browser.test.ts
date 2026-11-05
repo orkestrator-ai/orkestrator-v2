@@ -82,6 +82,7 @@ if (task === "dev:test") {
             design?: string;
             idleObservation?: string;
             revisionTokens?: string;
+            tabRequests?: string;
           },
       );
   return { root, env, events };

@@ -386,6 +386,25 @@ describe("startResourceSync", () => {
     expect(seen).toEqual([change({ revision: 9 })]);
   });
 
+  test("batch events preserve discovery causes when coalesced", async () => {
+    const seen: ResourceChange[] = [];
+    onResourceChanged("native-agent-session", (received) => seen.push(received));
+    startResourceSync();
+    await tick(0);
+    const base = {
+      resource: "native-agent-session" as const,
+      id: "env-1",
+      agent: "claude",
+      logicalSessionKey: "key",
+    };
+    const handler = listenCalls.find((call) => call.event === "resource-changed")!.handler;
+    handler({ payload: { ...base, revision: 1, cause: "discovery-renewal" } });
+    handler({ payload: { ...base, revision: 2, cause: "projection-read" } });
+    await tick(COALESCED);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ revision: 2, cause: "discovery-renewal" });
+  });
+
   test("drops a malformed payload rather than triggering a refetch", async () => {
     let calls = 0;
     onResourceChanged("environment", () => {
@@ -1113,6 +1132,31 @@ describe("scoped reconciliation across pages", () => {
       ...overrides,
     };
   }
+
+  test("scoped batch retains discovery cause beside newer projection changes", async () => {
+    const seen: ResourceChange[] = [];
+    onResourceChanged("native-agent-session", (received) => seen.push(received));
+    const base = {
+      resource: "native-agent-session" as const,
+      id: "env-1",
+      agent: "claude",
+      logicalSessionKey: "key",
+    };
+    startResourceSync({
+      loadScopedManifest: async () =>
+        page({
+          cursor: 2,
+          highWater: 2,
+          changes: [
+            { ...base, revision: 1, cause: "discovery-renewal" },
+            { ...base, revision: 2, cause: "projection-read" },
+          ],
+        }),
+    });
+    await tick(COALESCED);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ revision: 2, cause: "discovery-renewal" });
+  });
 
   test("applies an owner change on an intermediate page through the store resync", async () => {
     const applied: Array<ReadonlySet<string> | null> = [];

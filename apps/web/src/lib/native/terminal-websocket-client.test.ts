@@ -292,6 +292,42 @@ describe("TerminalWebSocketClient cumulative input results", () => {
     expect(last.settled).toBe("resolved");
   });
 
+  test("a retired recovery channel cannot settle input on its replacement", async () => {
+    const { client, socket } = connected();
+    const retired = trackInput(client, "session-a", "before recovery");
+    client.observeSnapshot("session-a", { generation: 2, revision: 0 });
+    await tick();
+    expect(retired.settled).toBe("rejected");
+    expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 11 });
+    acceptSubscription(socket, "session-a", 33, 2, 0);
+    const replacement = trackInput(client, "session-a", "after recovery");
+    const frame = sentBinaries(socket).at(-1)!;
+    expect(frame.channelId).toBe(33);
+
+    // Cover even the newer operation's id: identity, not just the id range,
+    // must prevent the old channel from resolving this promise.
+    socket.receive(
+      JSON.stringify({
+        type: "input-results",
+        channelId: 11,
+        throughOperationId: frame.revision,
+      }),
+    );
+    await tick();
+    expect(replacement.settled).toBe("pending");
+    expect(retired.settled).toBe("rejected");
+    socket.receive(
+      JSON.stringify({
+        type: "input-results",
+        channelId: 33,
+        throughOperationId: frame.revision,
+      }),
+    );
+    await tick();
+    expect(replacement.settled).toBe("resolved");
+    expect(socket.closes).toEqual([]);
+  });
+
   test("a result for a channel it has left settles nothing", async () => {
     const { client, socket } = connected();
     const pending = trackInput(client, "session-a", "a");

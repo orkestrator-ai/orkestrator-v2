@@ -1,8 +1,10 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   encodeTerminalBinaryFrame,
   parseTerminalWebSocketServerControlFrame,
   TERMINAL_BINARY_FRAME_TYPE,
+  TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
   TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
@@ -251,6 +253,70 @@ describe("terminal WebSocket cumulative input results", () => {
     ] as typeof frames);
     socket.terminate();
   });
+
+  test.each(["flush", "sendControl"] as const)(
+    "%s closes safely when collected results exceed the hard buffer limit mid-drain",
+    async (entry) => {
+      const { backend } = gatedBackend();
+      const { gateway, info } = await startGateway({ backend });
+      const { socket, inbox } = await openTerminalSocket(info, options);
+      const channels = [];
+      for (let id = 1; id <= 3; id += 1) {
+        channels.push(await subscribe(socket, inbox, `session-${id}`, id));
+      }
+      await settleTurns();
+      type State = {
+        pendingInputResults: Map<number, number>;
+        controlQueue: Array<{ data: string; bytes: number }>;
+        queuedBytes: number;
+        channels: Map<number, unknown>;
+      };
+      const terminal = (
+        gateway as unknown as {
+          terminalWebSocket: {
+            sockets: Set<State>;
+            flush(state: State): void;
+            sendControl(state: State, frame: TerminalWebSocketServerControlFrame): void;
+          };
+        }
+      ).terminalWebSocket;
+      const state = terminal.sockets.values().next().value!;
+      expect(state.queuedBytes).toBe(0);
+      channels.forEach((channel) => state.pendingInputResults.set(channel, 1));
+      const first = JSON.stringify(inputResult(channels[0]!, 1));
+      const ws = terminalServerSocket(gateway);
+      // The first result fits exactly; the second crosses the hard limit.
+      Object.defineProperty(ws, "bufferedAmount", {
+        configurable: true,
+        value: TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES - Buffer.byteLength(first),
+      });
+      const sends = spyOn(ws, "send");
+      const closes = spyOn(ws, "close");
+      const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+      try {
+        if (entry === "flush") terminal.flush(state);
+        else terminal.sendControl(state, { type: "pong", nonce: 1 });
+        expect(closes).toHaveBeenCalledTimes(1);
+        expect(closes).toHaveBeenCalledWith(
+          TERMINAL_WEBSOCKET_CLOSE.slowConsumer,
+          "Terminal socket exceeded its hard buffer limit",
+        );
+        expect(state.pendingInputResults.size).toBe(0);
+        expect(state.controlQueue.map((frame) => frame.data)).toEqual([first]);
+        expect(state.queuedBytes).toBe(Buffer.byteLength(first));
+        expect(sends).not.toHaveBeenCalled();
+        expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.slowConsumer);
+        await waitUntil(() => terminal.sockets.size === 0, "Closed socket was not disposed");
+        expect(state.queuedBytes).toBe(0);
+        expect(state.controlQueue).toEqual([]);
+        expect(state.channels.size).toBe(0);
+      } finally {
+        sends.mockRestore();
+        closes.mockRestore();
+        socket.terminate();
+      }
+    },
+  );
 
   test("each channel has its own result", async () => {
     const { backend, open } = gatedBackend();

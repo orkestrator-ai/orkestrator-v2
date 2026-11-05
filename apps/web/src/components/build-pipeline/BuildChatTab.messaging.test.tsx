@@ -1404,6 +1404,26 @@ describe("BuildChatTab graph", () => {
     ]);
   });
 
+  test("Enter on the Notes node opens its notes tab", () => {
+    renderWithTabs(pipeline);
+    const notes = graphNode("Notes");
+    notes.focus();
+    expect(document.activeElement).toBe(notes);
+    fireEvent.keyDown(notes, { key: "Enter" });
+    expect(createTab.mock.calls).toEqual([
+      [
+        "key-information",
+        {
+          keyInformation: {
+            environmentId: pipeline.environmentId,
+            pipelineId: pipeline.id,
+            view: "notes",
+          },
+        },
+      ],
+    ]);
+  });
+
   test("opens the notes from the Notes node's context menu and inspector", async () => {
     renderWithTabs(pipeline);
     const notesTab = {

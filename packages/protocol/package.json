@@ -23,6 +23,7 @@
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
     "./node/application-logging": "./src/node/application-logging.ts",
+    "./node/bounded-line-splitter": "./src/node/bounded-line-splitter.ts",
     "./node/essential-log": "./src/node/essential-log.ts",
     "./node/process-failure-log": "./src/node/process-failure-log.ts",
     "./node/log-policy": "./src/node/log-policy.ts",

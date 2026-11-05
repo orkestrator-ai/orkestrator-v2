@@ -170,6 +170,29 @@ export function shellCommandRefused(
 ): boolean {
   const [program, ...tokens] = command.trim().split(/\s+/);
   if (options.traversal) {
+    // These programs can take filenames from file contents; their operands
+    // alone cannot prove which files they will open. GNU long options also
+    // accept unambiguous prefixes (including before '=').
+    const indirectOption =
+      program === "sort" || program === "wc"
+        ? "--files0-from"
+        : program === "file"
+          ? "--files-from"
+          : ["cksum", "md5sum", "sha1sum", "sha256sum"].includes(program ?? "")
+            ? "--check"
+            : undefined;
+    if (
+      indirectOption &&
+      tokens.some((token) => {
+        const option = token.split("=", 1)[0]!;
+        return (
+          (option.startsWith("--") && indirectOption.startsWith(option)) ||
+          (program === "file" && /^-[^-]*f/.test(token)) ||
+          (indirectOption === "--check" && /^-[^-]*c/.test(token))
+        );
+      })
+    )
+      return true;
     // A hook cannot constrain paths reached through descendant symlinks.
     // Refuse follow modes, including short-option clusters, before execution.
     if (

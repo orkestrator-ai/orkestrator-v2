@@ -571,6 +571,9 @@ export interface CoordinatorWorkflowAssociation {
   /** This build launch requested a new environment. It is not authority until
    * provisioning publishes its ID; used to repair a reclaimed admission. */
   createsEnvironment?: boolean;
+  /** Remote lookup proved no created environment (terminal/missing/foreign admission).
+   * Stops repair polling and permits retention after the replay window. */
+  environmentCreationSettledAt?: string;
   dependsOnResourceId?: string;
   createdAt: string;
   lastNotifiedRevision?: number;

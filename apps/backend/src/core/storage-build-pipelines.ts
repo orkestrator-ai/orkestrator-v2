@@ -688,6 +688,10 @@ export class BuildPipelinesRepository {
       saved.record.id,
       saved.record.projectId,
       saved.record.environmentId,
+      isRecord(saved.record.snapshot) &&
+        typeof saved.record.snapshot.coordinatorLaunchId === "string"
+        ? saved.record.snapshot.coordinatorLaunchId
+        : undefined,
     );
     return saved.record;
   }

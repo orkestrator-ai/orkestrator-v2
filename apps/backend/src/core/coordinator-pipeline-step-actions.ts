@@ -155,6 +155,7 @@ async function reopenPipelineFollows(
         if (association.statusWakeEpisode === episode) return false;
         association.statusWakeEpisode = episode;
         delete association.terminalNotifiedAt;
+        delete association.environmentCreationSettledAt;
         delete association.lastNotifiedRevision;
         delete association.statusNotice;
         return true;

@@ -454,6 +454,7 @@ test("remote restart reopens only the matching node follow and preserves its epi
       requestId: nodeId,
       createdAt: new Date().toISOString(),
       terminalNotifiedAt: new Date().toISOString(),
+      environmentCreationSettledAt: new Date().toISOString(),
     });
   }
   const input = { pipelineId: "pipe-remote", nodeId: "bk_leaf", requestId: "remote-follow" };
@@ -465,6 +466,12 @@ test("remote restart reopens only the matching node follow and preserves its epi
     statusWakeEpisode: expect.any(String),
   });
   expect(before.find((entry) => entry.id === "bk_leaf")!.terminalNotifiedAt).toBeUndefined();
+  expect(
+    before.find((entry) => entry.id === "bk_leaf")!.environmentCreationSettledAt,
+  ).toBeUndefined();
+  expect(
+    before.find((entry) => entry.id === "bk_other")!.environmentCreationSettledAt,
+  ).toBeDefined();
   expect(before.find((entry) => entry.id === "bk_other")!.terminalNotifiedAt).toBeDefined();
   expect((await tool("restart_build_pipeline_step", input)).isError).toBe(false);
   expect(

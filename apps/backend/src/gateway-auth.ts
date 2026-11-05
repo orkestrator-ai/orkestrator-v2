@@ -600,6 +600,7 @@ export class GatewayAuth {
       capabilities[BACKEND_CAPABILITIES.nodeMailSteer] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailTurnOrigin] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail] = 1;
+      capabilities[BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin] = 1;
       capabilities[BACKEND_CAPABILITIES.coordinatorNotices] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailAttachments] = 1;
       capabilities[BACKEND_CAPABILITIES.nodeMailReturn] = 1;

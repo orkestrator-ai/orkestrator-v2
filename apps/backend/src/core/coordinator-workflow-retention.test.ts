@@ -102,6 +102,23 @@ describe("selectCoordinatorWorkflowsToClear", () => {
     expect(select(records)).toEqual(new Set(["existing-target"]));
   });
 
+  test("settled terminal or deleted remote creation intents expire after their observation replay window", () => {
+    for (const terminalNotifiedAt of [undefined, OLD]) {
+      const settled = finished("remote-settled", {
+        kind: "build-pipeline",
+        nodeId: "leaf",
+        createsEnvironment: true,
+        terminalNotifiedAt,
+        environmentCreationSettledAt: OLD,
+      });
+      expect(select([settled])).toEqual(new Set([settled.id]));
+      expect(select([{ ...settled, environmentCreationSettledAt: minutesAgo(1) }])).toEqual(
+        new Set(),
+      );
+      expect(select([{ ...settled, pending: true }])).toEqual(new Set());
+    }
+  });
+
   test("clears the oldest finished records first, up to the batch", () => {
     const workflows = [
       finished("c", { createdAt: "2026-09-03T00:00:00.000Z" }),
@@ -280,6 +297,28 @@ function history(count: number): CoordinatorWorkflowAssociation[] {
 }
 
 describe("coordinator workflow store cleanup", () => {
+  test("the real store reclaims settled remote creation intents at capacity", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const rows = history(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS).map((row, index) => ({
+        ...row,
+        kind: "build-pipeline" as const,
+        nodeId: "leaf",
+        createsEnvironment: true,
+        terminalNotifiedAt: undefined,
+        ...(index === 0 ? {} : { environmentCreationSettledAt: OLD }),
+      }));
+      seedWorkflows(dataDir, rows);
+      await storage.coordinators.saveCoordinatorWorkflowAssociation(fresh("after-remote-cleanup"));
+      const ids = new Set(storedWorkflows(dataDir).map((row) => row.id));
+      expect(ids.has(rows[0]!.id)).toBe(true);
+      expect(ids.has(rows[1]!.id)).toBe(false);
+      expect(ids.has("after-remote-cleanup")).toBe(true);
+      expect(ids.size).toBe(
+        MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS - COORDINATOR_WORKFLOW_CLEANUP_BATCH + 1,
+      );
+    });
+  });
+
   test("a full store clears one batch of its oldest finished records and accepts the new one", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const finishedCount = 500;

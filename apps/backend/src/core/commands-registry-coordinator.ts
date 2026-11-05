@@ -750,7 +750,18 @@ export function registerCoordinatorCommands(
         }
         // BuildPipelineService has its own durable admission key, so reclaiming a
         // reservation after a crash returns the already-created workflow.
-        const workflow = await buildPipelines.start({ ...input, source });
+        const workflow = await buildPipelines.start({ ...input, source }, receipt.association.id);
+        if (
+          !input.existingEnvironmentId &&
+          workflow.coordinatorLaunchId !== receipt.association.id
+        ) {
+          await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+            receipt.association.id,
+          );
+          throw new Error(
+            "Build admission belongs to another caller; no creation authority granted",
+          );
+        }
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,
           workflow.id,

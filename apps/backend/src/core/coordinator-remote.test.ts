@@ -5,7 +5,10 @@
  * the leaf is simulated (`FakeRemote`).
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { AGENT_MAIL_LOOP_BUDGET_REASON } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_LOOP_BUDGET_REASON,
+  normalizeAgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 
 import { MailWorld } from "./agent-mail-world-test-support.js";
@@ -542,4 +545,102 @@ describe("remote workflow status wakes", () => {
     ]);
     expect(status.details[0]).toBe("Runs on Build box (nodeId bk_leaf).");
   });
+});
+
+for (const outcome of [
+  "missing",
+  "failed",
+  "cancelled",
+  "complete",
+  "unavailable",
+  "provisioned",
+] as const) {
+  test(`background reconciliation resolves remote creation provenance: ${outcome}`, async () => {
+    const { world, remote, main } = await remoteWorld();
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: {
+        ...normalizeAgentMessagingSettings(config.global.agentMessaging),
+        coordinatorStatusWakes: "off",
+      },
+    });
+    const association = await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: "background-origin",
+      projectId: world.projectId,
+      coordinatorId: world.coordinatorId,
+      conversationId: main.conversationId!,
+      kind: "build-pipeline",
+      resourceId: "background-build",
+      nodeId: "bk_leaf",
+      requestId: "background-build",
+      createsEnvironment: true,
+      // A delivered terminal notice must not prevent origin reconciliation.
+      terminalNotifiedAt: new Date().toISOString(),
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+    if (outcome === "unavailable") remote.available = false;
+    else if (outcome !== "missing")
+      remote.workflows.set("background-build", {
+        snapshot: {
+          id: "background-build",
+          coordinatorLaunchId: association.id,
+          phase: outcome === "provisioned" ? "complete" : outcome,
+          ...(outcome === "provisioned" ? { environmentId: "created-on-leaf" } : {}),
+        },
+        revision: 2,
+        updatedAt: new Date().toISOString(),
+      });
+    await world.coordinator.statusWakes.reconcile();
+    const updated = (
+      await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
+    ).find((record) => record.id === association.id)!;
+    if (outcome === "provisioned") {
+      expect(updated.createdEnvironmentId).toBe("created-on-leaf");
+      expect(updated.environmentCreationSettledAt).toBeUndefined();
+    } else {
+      expect(updated.createdEnvironmentId).toBeUndefined();
+      expect(Boolean(updated.environmentCreationSettledAt)).toBe(outcome !== "unavailable");
+    }
+  });
+}
+
+test("an explicitly restarted remote admission can provision after its earlier no-environment failure settled", async () => {
+  const { world, remote, main } = await remoteWorld();
+  const launch = await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "restart-origin",
+    projectId: world.projectId,
+    coordinatorId: world.coordinatorId,
+    conversationId: main.conversationId!,
+    kind: "build-pipeline",
+    resourceId: "restart-build",
+    nodeId: "bk_leaf",
+    requestId: "restart-build",
+    createsEnvironment: true,
+    environmentCreationSettledAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    // The restart's normal bookkeeping has cleared terminalNotifiedAt.
+  });
+  remote.workflows.set("restart-build", {
+    snapshot: { coordinatorLaunchId: launch.id, phase: "creating-environment" },
+    revision: 2,
+  });
+  await world.coordinator.statusWakes.reconcile();
+  let receipt = (
+    await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
+  ).find((row) => row.id === launch.id)!;
+  expect(receipt.environmentCreationSettledAt).toBeUndefined();
+  remote.workflows.set("restart-build", {
+    snapshot: {
+      coordinatorLaunchId: launch.id,
+      phase: "starting-environment",
+      environmentId: "created-after-restart",
+    },
+    revision: 3,
+  });
+  await world.coordinator.statusWakes.reconcile();
+  receipt = (
+    await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId)
+  ).find((row) => row.id === launch.id)!;
+  expect(receipt.createdEnvironmentId).toBe("created-after-restart");
 });

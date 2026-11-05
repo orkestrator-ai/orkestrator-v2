@@ -3657,3 +3657,24 @@ guarantee, not by one end-to-end scenario replayed per platform:
 
 The runs that qualify each platform, and the scenarios still to add, are in
 [0024-coordinator-live-conformance.md](../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md).
+
+### Build admission provenance
+
+A coordinator's pipeline reservation ID is persisted as `coordinatorLaunchId`
+on the pipeline at initial admission, through a backend-only start argument.
+Admission reuse preserves the original identity. A new-environment coordinator
+launch refuses an admission belonging to another caller and grants no workflow
+or environment authority. Completion and delayed provisioning repair require
+that identity to match the reservation; requesting a new environment alone is
+not evidence of creation. Leaves must advertise `node-coordinator-build-origin` before a new-environment
+start is sent. Missing capability refuses before launch; missing or mismatched
+identity in a response also fails closed.
+
+Background workflow reconciliation also records late creation or settles missing
+and terminal pipelines, even after a status notice was delivered. Remote
+receipt repair checks at most 16 cooled-down records per origin check,
+rotating oldest checks first with a 60-second cooldown. Explicit project opt-in
+skips repair. Confirmed missing or terminal pipelines without an environment,
+and foreign admissions, receive `environmentCreationSettledAt`; they stop being
+polled and can be reclaimed after the 24-hour replay window. Transport errors
+remain unresolved. Existing creation receipts remain immediately authoritative.

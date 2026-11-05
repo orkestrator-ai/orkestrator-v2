@@ -81,6 +81,7 @@ describe("authenticated hello handshake", () => {
         expect(hello.nodeMode).toBe(nodeMode);
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeMailSteer]).toBe(1);
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeCoordinatorMail]).toBe(1);
+        expect(hello.capabilities[BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin]).toBe(1);
         expect(hello.capabilities[BACKEND_CAPABILITIES.nodeMailAttachments]).toBe(1);
         expect(hello.capabilities[BACKEND_CAPABILITIES.ticketSync]).toBe(1);
       }

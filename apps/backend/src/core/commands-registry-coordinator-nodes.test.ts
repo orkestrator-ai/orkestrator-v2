@@ -61,11 +61,12 @@ async function setup(
     get_environment: { id: "leaf-env", projectId: "p-leaf", name: "leaf-env", status: "running" },
     create_controller_environment: { id: "leaf-env", status: "stopped" },
     deliver_node_mail: { messageId: "m1", toTabId: "startup-agent" },
-    start_controller_build_pipeline: {
+    start_controller_build_pipeline: (args: Record<string, unknown>) => ({
       id: "pipeline-leaf",
       projectId: "p-leaf",
       environmentId: "leaf-env",
-    },
+      coordinatorLaunchId: args.coordinatorLaunchId,
+    }),
     get_build_pipeline: { snapshot: { id: "pipeline-leaf", projectId: "p-leaf" }, revision: 1 },
     ...options.answers,
   };
@@ -77,7 +78,14 @@ async function setup(
       status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
       link: (nodeId: string) =>
         nodeId === "bk_leaf"
-          ? { hello: { capabilities: options.capabilities ?? { "node-attachment": 1 } } }
+          ? {
+              hello: {
+                capabilities: options.capabilities ?? {
+                  "node-attachment": 1,
+                  "node-coordinator-build-origin": 1,
+                },
+              },
+            }
           : null,
     },
     nodePortal: {
@@ -583,9 +591,9 @@ describe("workflows on a node", () => {
           },
         },
         buildPipelines: {
-          start: async () => {
+          start: async (_input: unknown, coordinatorLaunchId?: string) => {
             starts++;
-            return { id: "pipeline-leaf", projectId: "p-leaf" };
+            return { id: "pipeline-leaf", projectId: "p-leaf", coordinatorLaunchId };
           },
         },
       } as unknown as CommandContext;
@@ -691,15 +699,25 @@ describe("workflows on a node", () => {
 
   test("a reclaimed remote admission repairs its creation receipt after late provisioning", async () => {
     let environmentId = "";
+    let coordinatorLaunchId: unknown;
     const { run, world, scope, loseNext, associations } = await setup({
       answers: {
-        start_controller_build_pipeline: {
-          id: "pipeline-leaf",
-          projectId: "p-leaf",
-          environmentId: "",
+        start_controller_build_pipeline: (args: Record<string, unknown>) => {
+          coordinatorLaunchId = args.coordinatorLaunchId;
+          return {
+            id: "pipeline-leaf",
+            projectId: "p-leaf",
+            environmentId: "",
+            coordinatorLaunchId,
+          };
         },
         get_build_pipeline: () => ({
-          snapshot: { id: "pipeline-leaf", projectId: "p-leaf", environmentId },
+          snapshot: {
+            id: "pipeline-leaf",
+            projectId: "p-leaf",
+            environmentId,
+            coordinatorLaunchId,
+          },
         }),
       },
     });
@@ -736,13 +754,20 @@ describe("workflows on a node", () => {
       }),
     ).rejects.toThrow("did not create");
     environmentId = "leaf-env";
-    const result = await run("send_coordinator_node_mail", {
-      scope,
-      nodeId: "bk_leaf",
-      requestId: "mail-after-provisioning",
-      toEnvironmentId: "leaf-env",
-      body: "hello",
-    });
+    const originalNow = Date.now;
+    Date.now = () => originalNow() + 60_001;
+    let result: Record<string, unknown>;
+    try {
+      result = await run("send_coordinator_node_mail", {
+        scope,
+        nodeId: "bk_leaf",
+        requestId: "mail-after-provisioning",
+        toEnvironmentId: "leaf-env",
+        body: "hello",
+      });
+    } finally {
+      Date.now = originalNow;
+    }
     expect(result.messageId).toBe("m1");
     expect((await associations()).find((entry) => entry.kind === "build-pipeline")).toMatchObject({
       createdEnvironmentId: "leaf-env",
@@ -1033,4 +1058,28 @@ describe("node mail request collisions", () => {
     ).rejects.toThrow("requestId");
     expect(routed.filter((item) => item.command === "deliver_node_mail")).toHaveLength(delivered);
   });
+});
+
+test("a leaf without build-origin support is refused before a pipeline can start", async () => {
+  const { run, scope, routed, associations } = await setup({
+    capabilities: { "node-attachment": 1 },
+  });
+  await expect(
+    run("start_coordinator_node_build_pipeline", {
+      scope,
+      nodeId: "bk_leaf",
+      requestId: "old-leaf-build",
+      input: {
+        projectId: scope.projectId,
+        taskId: "leaf-ticket",
+        taskTitle: "Build",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: BASE,
+      },
+    }),
+  ).rejects.toThrow("Update this node");
+  expect(
+    routed.filter((entry) => entry.command === "start_controller_build_pipeline"),
+  ).toHaveLength(0);
+  expect(await associations()).toEqual([]);
 });

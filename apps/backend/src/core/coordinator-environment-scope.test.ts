@@ -9,6 +9,16 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 import { seedStore, readStoredValue } from "./storage-test-support.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
+import { BuildPipelineService } from "./build-pipeline-service.js";
+import {
+  coordinatorCreatedEnvironment,
+  assertCoordinatorMayActOnEnvironment,
+  MAX_REMOTE_RECEIPT_LOOKUPS,
+} from "./coordinator-environment-scope.js";
+import {
+  selectCoordinatorWorkflowsToClear,
+  COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
+} from "./coordinator-workflow-retention.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
@@ -80,7 +90,7 @@ beforeEach(async () => {
     coordinators: world.coordinator,
     nodes: {
       status: async () => ({ nodeId: "bk_command", mode: "command" }),
-      link: () => undefined,
+      link: () => ({ hello: { capabilities: { "node-coordinator-build-origin": 1 } } }),
     },
     nodePortal: {
       summaries: async () => ({
@@ -190,9 +200,11 @@ for (const provisionBeforeCompletion of [false, true]) {
       projectId: world.projectId,
       environmentId: "",
       phase: "preparing",
+      coordinatorLaunchId: "",
     };
     rootContext.buildPipelines = {
-      start: async () => {
+      start: async (_input: unknown, launchId: string) => {
+        snapshot.coordinatorLaunchId = launchId;
         if (++attempts === 1) {
           await world.storage.saveBuildPipeline(pipelineId, world.projectId, "", 1, snapshot);
           throw new Error("lost admission answer");
@@ -279,7 +291,9 @@ for (const remote of [false, true]) {
           ...(remote ? { nodeId: LEAF } : {}),
         });
       // Opt-in cannot stand in for a missing launch when there is no environment.
-      await allowOthers();
+      await world.storage.patchRepositorySettings(world.projectId, {
+        coordinatorOtherEnvironments: true,
+      });
       await world.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
       for (const wrong of [
         { pending: true },
@@ -376,7 +390,9 @@ for (const status of ["provisioning", "failed", "cancelled", "cancelling"] as co
       requestId: "launch-graph",
       createdAt: new Date().toISOString(),
     };
-    await allowOthers();
+    await world.storage.patchRepositorySettings(world.projectId, {
+      coordinatorOtherEnvironments: true,
+    });
     await world.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
     for (const wrong of [
       { pending: true },
@@ -617,7 +633,9 @@ test("mail and tools to an environment on another node are refused the same way"
 });
 
 test("with the setting on, each action succeeds and reaches its effect", async () => {
-  await allowOthers();
+  await world.storage.patchRepositorySettings(world.projectId, {
+    coordinatorOtherEnvironments: true,
+  });
   const sent = await tool("send_message", message(handMade));
   expect(sent.isError).toBe(false);
   expect(await world.undelivered(handMadeActor)).toHaveLength(1);
@@ -707,7 +725,9 @@ test("with the setting on, each action succeeds and reaches its effect", async (
 });
 
 test("turning the setting off again refuses again: nothing sticks", async () => {
-  await allowOthers();
+  await world.storage.patchRepositorySettings(world.projectId, {
+    coordinatorOtherEnvironments: true,
+  });
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
   await world.storage.patchRepositorySettings(world.projectId, {}, [
     "coordinatorOtherEnvironments",
@@ -837,7 +857,9 @@ test("an older environment with no stored origin is treated as not this coordina
   await launched(handMade, { coordinatorId: "another-coordinator" });
   refused(await tool("send_message", message(handMade)));
   // The way out the refusal names.
-  await allowOthers();
+  await world.storage.patchRepositorySettings(world.projectId, {
+    coordinatorOtherEnvironments: true,
+  });
   expect((await tool("send_message", message(handMade))).isError).toBe(false);
 });
 
@@ -1010,7 +1032,9 @@ for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
   for (const remote of kind === "graph-run" ? [false] : [false, true]) {
     test(`${kind} membership does not persist opt-in authority (${remote ? "remote" : "local"})`, async () => {
       const environmentId = remote ? leafWorkerId : handMade;
-      await allowOthers();
+      await world.storage.patchRepositorySettings(world.projectId, {
+        coordinatorOtherEnvironments: true,
+      });
       await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
         id: "opt-in-workflow",
         projectId: scope.projectId,
@@ -1070,3 +1094,186 @@ for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
     });
   }
 }
+
+for (const remote of [false, true]) {
+  test(`real ${remote ? "node" : "local"} admission reuse never grants the operator environment's creation authority`, async () => {
+    const storage = remote ? leaf : world.storage;
+    const environmentId = remote ? leafWorkerId : handMade;
+    const environment = (await storage.getEnvironment(environmentId))!;
+    const ticket = await storage.kanban.addKanbanTask(environment.projectId, "Operator build", "");
+    const input = {
+      projectId: environment.projectId,
+      taskId: ticket.id,
+      taskTitle: "Operator build",
+      taskSnapshot: {
+        title: "Operator build",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local" as const,
+      agentType: "codex" as const,
+      delegationBaseBranch: "main",
+      delegationBaseCommit: BASE,
+    };
+    let creations = 0;
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(command: string) => {
+        if (command === "create_environment") {
+          creations++;
+          return environment as T;
+        }
+        if (command === "update_kanban_task") return undefined as T;
+        if (command === "get_kanban_tasks") return [ticket] as T;
+        throw new Error(`Unexpected admission command: ${command}`);
+      },
+      { autoAdvance: false },
+    );
+    (remote ? leafContext : rootContext).buildPipelines = service;
+    try {
+      const previousCount = (await storage.listBuildPipelines(environment.projectId)).length;
+      const operator = await service.start({
+        ...input,
+        source: { type: "kanban", taskId: ticket.id },
+      });
+      expect(operator.coordinatorLaunchId).toBeUndefined();
+      const command = remote
+        ? "start_coordinator_node_build_pipeline"
+        : "start_coordinator_build_pipeline";
+      await expect(
+        commands.get(command)!(
+          {
+            scope,
+            requestId: "same-operator-admission",
+            ...(remote ? { nodeId: LEAF } : {}),
+            input: { ...input, projectId: world.projectId },
+          },
+          rootContext,
+        ),
+      ).rejects.toThrow("another caller");
+      expect(creations).toBe(1);
+      expect(await storage.listBuildPipelines(environment.projectId)).toHaveLength(
+        previousCount + 1,
+      );
+      expect(
+        await world.storage.coordinators.listCoordinatorWorkflowAssociations(world.projectId),
+      ).toEqual([]);
+      const mail = remote ? { ...message(environmentId), nodeId: LEAF } : message(environmentId);
+      refused(await tool("send_message", mail));
+      refused(
+        await tool("pause_build_pipeline", {
+          pipelineId: operator.id,
+          ...(remote ? { nodeId: LEAF } : {}),
+        }),
+      );
+      expect((await storage.getBuildPipeline(operator.id))!.snapshot).not.toHaveProperty(
+        "coordinatorLaunchId",
+      );
+    } finally {
+      await service.shutdown();
+    }
+  });
+}
+
+test("remote receipt repair settles failed and missing resources, preserves transport uncertainty, and bounds repeated lookups", async () => {
+  for (let index = 0; index < 40; index++) {
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: `repair-${index}`,
+      ...scope,
+      kind: "build-pipeline",
+      resourceId: `pipeline-${index}`,
+      requestId: `repair-${index}`,
+      nodeId: LEAF,
+      createsEnvironment: true,
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+  }
+  const calls: string[] = [];
+  const node = {
+    nodeId: LEAF,
+    projectId: (await leaf.getEnvironment(leafWorkerId))!.projectId,
+    call: async <T>(_command: string, args?: Record<string, unknown>): Promise<T> => {
+      const id = String(args?.pipelineId);
+      calls.push(id);
+      if (id === "pipeline-0") return null as T;
+      if (id === "pipeline-1")
+        return {
+          snapshot: { projectId: node.projectId, phase: "failed", coordinatorLaunchId: "repair-1" },
+        } as T;
+      if (id === "pipeline-2") throw new Error("link unavailable");
+      return {
+        snapshot: {
+          projectId: node.projectId,
+          phase: "creating-environment",
+          coordinatorLaunchId: id.replace("pipeline", "repair"),
+        },
+      } as T;
+    },
+  };
+  expect(await coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node)).toBe(false);
+  expect(calls).toHaveLength(MAX_REMOTE_RECEIPT_LOOKUPS);
+  expect(await coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node)).toBe(false);
+  expect(calls).toHaveLength(2 * MAX_REMOTE_RECEIPT_LOOKUPS);
+  expect(new Set(calls).size).toBe(calls.length);
+  await coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node);
+  await coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node);
+  expect(calls).toHaveLength(40);
+  expect(new Set(calls).size).toBe(40);
+  const records = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
+  const settled = records.filter((record) => record.environmentCreationSettledAt);
+  expect(settled.map((record) => record.id)).toEqual(["repair-0", "repair-1"]);
+  expect(
+    records.find((record) => record.id === "repair-2")!.environmentCreationSettledAt,
+  ).toBeUndefined();
+  const selectAt = (now: number) =>
+    selectCoordinatorWorkflowsToClear({
+      workflows: records,
+      now,
+      environmentExists: () => false,
+      resourceState: (record) => (record.environmentCreationSettledAt ? "finished" : "unknown"),
+    });
+  expect(selectAt(Date.now())).toEqual(new Set());
+  expect(selectAt(Date.now() + COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS + 1)).toEqual(
+    new Set(["repair-0", "repair-1"]),
+  );
+  await world.storage.patchRepositorySettings(world.projectId, {
+    coordinatorOtherEnvironments: true,
+  });
+  await assertCoordinatorMayActOnEnvironment(rootContext, scope, leafWorkerId, node);
+  expect(calls).toHaveLength(40);
+});
+
+test("remote late provisioning with a foreign admission identity cannot repair a creation receipt", async () => {
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "foreign-repair",
+    ...scope,
+    kind: "build-pipeline",
+    resourceId: "foreign-pipeline",
+    requestId: "foreign-repair",
+    nodeId: LEAF,
+    createsEnvironment: true,
+    createdAt: new Date().toISOString(),
+  });
+  const node = {
+    nodeId: LEAF,
+    projectId: "leaf-project",
+    call: async <T>() =>
+      ({
+        snapshot: {
+          projectId: "leaf-project",
+          environmentId: leafWorkerId,
+          coordinatorLaunchId: "operator-launch",
+        },
+      }) as T,
+  };
+  expect(await coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node)).toBe(false);
+  const [receipt] = await world.storage.coordinators.listCoordinatorWorkflowAssociations(
+    world.projectId,
+  );
+  expect(receipt!.createdEnvironmentId).toBeUndefined();
+  expect(receipt!.environmentCreationSettledAt).toBeDefined();
+});

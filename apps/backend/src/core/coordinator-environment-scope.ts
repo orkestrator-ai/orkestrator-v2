@@ -1,5 +1,7 @@
 import { COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
+import { reconcilePipelineCreation } from "./coordinator-pipeline-origin.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
 
 /**
  * Which environments a coordinator may send work to.
@@ -19,6 +21,10 @@ import type { CommandContext } from "./commands-context.js";
  * because a hand-made environment looks exactly the same. It gets the refusal,
  * which names the setting.
  */
+
+export const MAX_REMOTE_RECEIPT_LOOKUPS = 16;
+const REMOTE_RECEIPT_REFRESH_MS = 60_000;
+const remoteRefresh = new WeakMap<CommandContext, Map<string, { at: number; projectId: string }>>();
 
 interface CoordinatorScope {
   projectId: string;
@@ -56,36 +62,67 @@ export async function coordinatorCreatedEnvironment(
     )
   )
     return true;
-  // The command node cannot observe a leaf's later provisioning save. Repair
-  // only receipts explicitly requesting creation, never a followed workflow
-  // or a launch into an existing environment (including after opt-in revocation).
+  // Repair is bounded per check and cooled down per receipt. Rotate through
+  // the bounded store so early active records cannot starve later launches.
   if (node) {
-    for (const association of records) {
-      if (
-        association.coordinatorId !== scope.coordinatorId ||
-        association.nodeId !== node.nodeId ||
-        association.pending ||
-        association.kind !== "build-pipeline" ||
-        association.createsEnvironment !== true ||
-        association.createdEnvironmentId
+    let refresh = remoteRefresh.get(context);
+    if (!refresh) {
+      refresh = new Map();
+      remoteRefresh.set(context, refresh);
+    }
+    const eligible = records.filter(
+      (association) =>
+        association.coordinatorId === scope.coordinatorId &&
+        association.nodeId === node.nodeId &&
+        !association.pending &&
+        association.kind === "build-pipeline" &&
+        association.createsEnvironment === true &&
+        !association.createdEnvironmentId &&
+        !association.environmentCreationSettledAt,
+    );
+    const liveIds = new Set(records.map((association) => association.id));
+    for (const [id, checked] of Array.from(refresh.entries())) {
+      if (checked.projectId === scope.projectId && !liveIds.has(id)) refresh.delete(id);
+    }
+    const now = Date.now();
+    const batch = eligible
+      .filter(
+        (association) => now - (refresh.get(association.id)?.at ?? 0) >= REMOTE_RECEIPT_REFRESH_MS,
       )
-        continue;
-      const pipeline = await node
-        .call<{ snapshot?: { projectId?: string; environmentId?: string } }>("get_build_pipeline", {
-          pipelineId: association.resourceId,
-        })
-        .catch(() => null);
-      if (
-        pipeline?.snapshot?.projectId !== node.projectId ||
-        pipeline.snapshot.environmentId !== environmentId
-      )
-        continue;
-      await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-        association.id,
-        association.resourceId,
-        environmentId,
-      );
-      return true;
+      .sort((a, b) => (refresh.get(a.id)?.at ?? 0) - (refresh.get(b.id)?.at ?? 0))
+      .slice(0, MAX_REMOTE_RECEIPT_LOOKUPS);
+    // Mark before awaiting so simultaneous checks share the cooldown too.
+    for (const association of batch) {
+      refresh.delete(association.id);
+      refresh.set(association.id, { at: now, projectId: scope.projectId });
+    }
+    // The store is globally bounded; cap stale cache entries after deletion too.
+    while (refresh.size > MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
+      refresh.delete(refresh.keys().next().value!);
+    }
+    for (const association of batch) {
+      let pipeline: {
+        snapshot?: {
+          projectId?: string;
+          environmentId?: string;
+          coordinatorLaunchId?: string;
+          phase?: string;
+        };
+      } | null;
+      try {
+        pipeline = await node.call("get_build_pipeline", { pipelineId: association.resourceId });
+      } catch {
+        continue; // A transport failure is never evidence of deletion.
+      }
+      if (pipeline === null || pipeline?.snapshot?.projectId === node.projectId) {
+        const created = await reconcilePipelineCreation(
+          context.storage,
+          association,
+          pipeline === null ? null : pipeline.snapshot,
+          now,
+        );
+        if (created === environmentId) return true;
+      }
     }
   }
   return false;
@@ -101,9 +138,9 @@ export async function assertCoordinatorMayActOnEnvironment(
   environmentId: string,
   node?: CoordinatorEnvironmentNode,
 ): Promise<void> {
-  if (await coordinatorCreatedEnvironment(context, scope, environmentId, node)) return;
   const config = await context.storage.loadConfig();
   if (config.repositories[scope.projectId]?.coordinatorOtherEnvironments === true) return;
+  if (await coordinatorCreatedEnvironment(context, scope, environmentId, node)) return;
   throw new Error(COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL);
 }
 

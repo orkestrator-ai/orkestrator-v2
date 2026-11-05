@@ -23,6 +23,7 @@ import {
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
+import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { BACKEND_CAPABILITIES, hasBackendCapability } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { isUnknownCommandError } from "@orkestrator/protocol/unknown-command";
@@ -960,6 +961,15 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       ) {
         throw new Error("Invalid scoped build pipeline request");
       }
+      if (
+        !input.existingEnvironmentId &&
+        !target.supports(BACKEND_CAPABILITIES.nodeCoordinatorBuildOrigin)
+      ) {
+        compatibilityPathUsage.record("coordinator-build.origin-upgrade-required");
+        throw new Error(
+          "Update this node before launching a coordinator build: it cannot prove build creation authority",
+        );
+      }
       if (typeof input.existingEnvironmentId === "string") {
         await target.environment(input.existingEnvironmentId);
       }
@@ -1005,6 +1015,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           .call<JsonRecord>(
             "start_controller_build_pipeline",
             {
+              coordinatorLaunchId: receipt.association.id,
               input: {
                 ...input,
                 projectId: target.projectId,
@@ -1027,6 +1038,17 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
           });
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Build pipeline returned no result");
+        }
+        if (
+          !input.existingEnvironmentId &&
+          workflow.coordinatorLaunchId !== receipt.association.id
+        ) {
+          await context.storage.coordinators.releasePendingCoordinatorWorkflowAssociation(
+            receipt.association.id,
+          );
+          throw new Error(
+            "Build admission belongs to another caller; no creation authority granted",
+          );
         }
         await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
           receipt.association.id,

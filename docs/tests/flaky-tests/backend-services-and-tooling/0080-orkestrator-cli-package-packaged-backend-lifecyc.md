@@ -70,3 +70,16 @@
   and the same as `x1-cli-lifecycle-2` both passed (exit 0, 3.8 s each), with the
   aggregate's worker count. Still open: the readiness failure has not been
   reproduced outside the concurrent aggregate.
+
+## X1 preparation at e6d400a5a, 2026-11-05
+
+The preserved `review-validation-cb344dc9-16d4-4c41-980a-8b2fc2a2e3b5/validation-04.stderr.txt`
+again names both packaged-backend readiness tests (`starts and gracefully stops
+the packaged backend`; `starts when the caller's environment already sets
+NODE_ENV`) at their 20-second deadline. Original command: `mise run test:logged
+-- --name review-default-tests -- mise run test`; scheduler-selected concurrent
+workers, no reliable closing aggregate total. The unchanged owner passed with
+`mise run test:logged -- --name recorded-cli-lifecycle -- bun test --cwd
+packages/cli ./tests/cli.test.ts --parallel=1 --only-failures` in 6.6 s, exit 0.
+Passing output was removed, so no new totals are claimed. No CLI or startup
+code was repaired; this isolated pass does not replace the failed aggregate.

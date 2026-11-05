@@ -183,7 +183,8 @@ export class CoordinatorsRepository {
   private workflowResourceState(
     association: CoordinatorWorkflowAssociation,
   ): "active" | "finished" | "missing" | "unknown" {
-    if (association.nodeId) return "unknown";
+    if (association.nodeId)
+      return association.environmentCreationSettledAt ? "finished" : "unknown";
     if (association.kind === "feature-plan") return this.featurePlanResourceState(association);
     const file =
       association.kind === "multi-review"
@@ -471,14 +472,16 @@ export class CoordinatorsRepository {
     pipelineId: string,
     projectId: string,
     environmentId: string,
+    coordinatorLaunchId?: string,
   ): Promise<void> {
-    if (!environmentId) return;
+    if (!environmentId || !coordinatorLaunchId) return;
     await this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
       let changed = false;
       for (const association of store.workflows) {
         if (
           association.kind !== "build-pipeline" ||
+          association.id !== coordinatorLaunchId ||
           association.nodeId ||
           association.projectId !== projectId ||
           association.resourceId !== pipelineId ||
@@ -639,7 +642,11 @@ export class CoordinatorsRepository {
         association.createsEnvironment === true
       ) {
         const pipeline = await this.repos.buildPipelines.getBuildPipeline(resourceId);
-        if (pipeline?.projectId === association.projectId)
+        if (
+          pipeline?.projectId === association.projectId &&
+          (pipeline.snapshot as { coordinatorLaunchId?: unknown } | null)?.coordinatorLaunchId ===
+            association.id
+        )
           createdEnvironmentId = pipeline.environmentId || undefined;
       }
       if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;

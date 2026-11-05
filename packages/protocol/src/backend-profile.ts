@@ -209,6 +209,8 @@ export const BACKEND_CAPABILITIES = {
    * as an environment and refuse, so the command node checks this first.
    */
   nodeCoordinatorMail: "node-coordinator-mail",
+  /** Backend admission persists and echoes the coordinator launch receipt. */
+  nodeCoordinatorBuildOrigin: "node-coordinator-build-origin",
   /**
    * The hierarchy of coordinator notices (`@orkestrator/protocol/coordinator-notices`).
    * `collect_node_outbox` and `ack_node_outbox` take `coordinatorNotices`, and the

@@ -330,6 +330,33 @@ describe("createCoordinatorReadOnlyHook", () => {
     expect(await run("Bash", { command: "diff --rec diff-left diff-right" })).toBeUndefined();
   });
 
+  test("hook-only filename lists are refused before a protected fixture can be read", async () => {
+    writeFileSync(join(checkout, "paths.list"), `${join(dataDir, "control-mcp.json")}\0`);
+    for (const program of ["sort", "wc"]) {
+      for (let length = 3; length <= "--files0-from".length; length++) {
+        const flag = "--files0-from".slice(0, length);
+        for (const argument of [`${flag}=paths.list`, `${flag} paths.list`]) {
+          const command = `${program} ${argument}`;
+          const answer = await run("Bash", { command }, "unavailable");
+          expect(answer?.permissionDecision).toBe("deny");
+          expect(JSON.stringify(answer)).not.toContain("unique-credential-fixture-marker");
+        }
+      }
+    }
+    for (const command of [
+      "file -0fpaths.list",
+      "file --files-from=paths.list",
+      "sha256sum -bc paths.list",
+      "md5sum --chec=paths.list",
+      "cksum --check paths.list",
+    ]) {
+      expect((await run("Bash", { command }, "unavailable"))?.permissionDecision).toBe("deny");
+    }
+    expect(await run("Bash", { command: "sort paths.list" }, "unavailable")).toBeUndefined();
+    const result = join(home, "projects", "p", "s", "tool-results", "big.txt");
+    expect(await run("Bash", { command: `sort ${result}` }, "unavailable")).toBeUndefined();
+  });
+
   test("hook-only commands deny clustered path operands before reading a credential fixture", async () => {
     const credentials = join(dataDir, "control-mcp.json");
     for (const operand of [

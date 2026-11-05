@@ -21,7 +21,7 @@
  * draft is intact and is then reported as skipped with that reason; it never
  * passes on a UI path it could not observe.
  */
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";

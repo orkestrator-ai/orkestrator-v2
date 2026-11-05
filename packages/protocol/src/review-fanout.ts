@@ -150,7 +150,7 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * second restart fails the reviewer instead of looping.
    */
   restartContinuationSent?: boolean;
-  /** Times this turn was resent after the weekly limit stopped it. */
+  /** Times this turn was resent after a usage limit stopped it. */
   usageLimitResends?: number;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
@@ -222,7 +222,7 @@ export interface ReviewWorktreeSnapshotRecord {
 export interface ReviewConsolidationSession {
   /** One durable continuation after a provider restart cut the turn short. */
   restartContinuationSent?: boolean;
-  /** Times this turn was resent after the weekly limit stopped it. */
+  /** Times this turn was resent after a usage limit stopped it. */
   usageLimitResends?: number;
   /** The one durable reminder to submit a missing tool-mode report was spent. */
   resultReminderSent?: boolean;

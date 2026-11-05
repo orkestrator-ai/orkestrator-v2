@@ -169,7 +169,7 @@ function AutoSwitchControls({
           <p className="text-xs text-muted-foreground">
             {state.mode === "pinned"
               ? `A manual switch pinned ${pinned?.label ?? "this account"}${machineName ? ` on ${machineName}` : ""}, so automatic switching is off here. Tick this to turn it back on.`
-              : `Moves on at 98% of the general weekly limit, or when a fresh reading confirms it is used up, and resends the work it stopped. Applies to ${platformLabel} on every machine this one controls. Fable, other model limits and the 5-hour limit never move it. Switching by hand pins that account and turns this off until you tick it again.`}
+              : `Moves on at 98% of the general weekly or 5-hour limit, or when a fresh reading confirms one is used up, and resends the work it stopped. It comes back when that 5-hour limit resets, so accounts are used up in the order their weeks end. Applies to ${platformLabel} on every machine this one controls. Fable and other model limits never move it. Switching by hand pins that account and turns this off until you tick it again.`}
           </p>
           {state.mode === "automatic" && moved ? (
             <p className="text-xs text-muted-foreground">Last moved to {moved.label}.</p>

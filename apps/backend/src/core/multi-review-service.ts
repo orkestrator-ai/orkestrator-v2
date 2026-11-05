@@ -4431,7 +4431,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     // a result it already submitted is still accepted below, and otherwise
     // the same session continues the step once.
     const restartInterrupted = status === "error" && observation.interruption === "restart";
-    // The weekly limit stopping the turn is not the model's failure either, when
+    // A 5-hour or weekly limit stopping the turn is not the model's failure either, when
     // automatic switching moved this machine to another account.
     let usageLimitResend = false;
     if (status === "error" && !restartInterrupted) {

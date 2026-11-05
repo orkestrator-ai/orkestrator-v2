@@ -161,6 +161,15 @@ describe.each(["claude", "codex"] as const)("automatic switching on the pinned %
   );
 
   scenarioTest(
+    "a 5-hour refusal continues on the new account",
+    async () => {
+      const evidence = await runScenario(platform, "native-five-hour");
+      expectContinuedOnNewAccount(evidence);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  scenarioTest(
     "another limit moves nothing and resends nothing",
     async () => {
       const evidence = await runScenario(platform, "native-other-limit");

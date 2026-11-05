@@ -86,7 +86,7 @@ type LocalBackend = Pick<
 > & {
   /** Authenticated hello of the local backend; absent on test doubles. */
   hello?: (timeoutMs: number) => Promise<BackendHello | null>;
-};
+} & Partial<Pick<BackendHttpClient, "setRelayedEvents" | "relayedEventReady">>;
 
 export type SecureStorage = {
   isAsyncEncryptionAvailable(): Promise<boolean>;
@@ -196,6 +196,8 @@ export class ConnectionManager {
   private readonly remoteConnections = new Map<string, RemoteConnection>();
   private readonly statuses = new Map<string, MachineStatus>();
   private readonly scopeGenerations = new Map<string, number>([[DEFAULT_CONNECTION_SCOPE, 1]]);
+  /** What windows listen to on each connection; a new client for it starts with this. */
+  private readonly relayedEvents = new Map<string, readonly string[]>();
   /** Observation leases a scope holds on machines it may not be bound to. */
   private nextScopeGeneration = 1;
   private nextEpoch = 1;
@@ -1252,6 +1254,7 @@ export class ConnectionManager {
       },
       { onStreamState: (state) => this.handleStreamState(connectionId, client, state) },
     );
+    client.setRelayedEvents(this.relayedEvents.get(connectionId) ?? []);
   }
 
   rebindWorkspace(scope: string, input: { baseUrl: string; token: string }): void {
@@ -1515,6 +1518,7 @@ export class ConnectionManager {
       },
       { onStreamState: (state) => this.handleStreamState(connectionId, client, state) },
     );
+    client.setRelayedEvents(this.relayedEvents.get(connectionId) ?? []);
   }
 
   private retargetRemote(
@@ -1739,6 +1743,24 @@ export class ConnectionManager {
   /*
    * Events
    */
+
+  /** The per-node relayed events windows listen to on this connection. */
+  setRelayedEvents(connectionId: string, events: readonly string[]): void {
+    if (events.length > 0) this.relayedEvents.set(connectionId, events);
+    else this.relayedEvents.delete(connectionId);
+    this.relayedEventClient(connectionId)?.setRelayedEvents?.(events);
+  }
+
+  /** Settles once that event's stream is open, at once for a connection with no client. */
+  relayedEventReady(connectionId: string, event: string): Promise<void> {
+    return this.relayedEventClient(connectionId)?.relayedEventReady?.(event) ?? Promise.resolve();
+  }
+
+  private relayedEventClient(connectionId: string): LocalBackend | null {
+    return connectionId === LOCAL_CONNECTION_ID
+      ? this.localBackend
+      : (this.remoteConnections.get(connectionId)?.client ?? null);
+  }
 
   private handleRemoteEvent(connectionId: string, event: string, payload: unknown): void {
     if (event === BACKEND_PROFILE_CHANGED_EVENT) this.applyProfileEvent(connectionId, payload);

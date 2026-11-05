@@ -1175,6 +1175,7 @@ function registerRealm(record: WorkspaceViewRecord, parentWebContentsId: number)
 
 function unregisterRealm(record: WorkspaceViewRecord): void {
   realmContexts.unregister(record.webContents.id);
+  desktopWindows.dropRelayedListens(record.webContents.id);
 }
 
 /** A window's command node changed: its realms belonged to the previous one. */
@@ -1418,6 +1419,11 @@ function registerIpc(): void {
     },
     portalInvoke: (event, command, args) =>
       manager().invoke(command, args, controlScopeForEvent(event)),
+    addRelayedListen: (event, channel, name) =>
+      desktopWindows.addRelayedListen(event, channel, name),
+    removeRelayedListen: (event, channel, name) =>
+      desktopWindows.removeRelayedListen(event, channel, name),
+    resetRelayedListens: (event, channel) => desktopWindows.resetRelayedListens(event, channel),
   });
 }
 
@@ -1603,7 +1609,10 @@ async function startApplication(): Promise<void> {
     onEvent: () => undefined,
     onConnectionEvent: (connectionId, event, payload) =>
       desktopWindows.relayBackendEvent(connectionId, event, payload),
-    onStateChange: scheduleConnectionListPublish,
+    onStateChange: () => {
+      desktopWindows.syncRelayedEvents();
+      scheduleConnectionListPublish();
+    },
   });
   await connectionManager.initialize();
   if (backend) await backend.invoke("get_config");

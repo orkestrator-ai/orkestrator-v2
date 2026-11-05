@@ -291,7 +291,9 @@ gateway itself instead:
   it was created, so mixed windows are normal: a relay window keeps main's stream
   unfiltered, and a change restarts that stream from its cursor. Opening it again
   announces `terminal-event-stream-connected`, so a relay window reads its exact
-  snapshot.
+  snapshot. Relayed node events are never on that stream: main takes them on a
+  filtered one, for what relay windows and realms listen to
+  ([command-nodes.md](command-nodes.md)).
 
 The default became `on` on 2026-11-01, after a live probe through Tailscale
 Serve showed no held frames and no re-encoding. `--compression body` is the

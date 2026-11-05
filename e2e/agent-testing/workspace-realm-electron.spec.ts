@@ -4,8 +4,7 @@ import { ownProcessGroup, stopProcessGroup } from "../process-cleanup";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,6 +18,7 @@ import {
   withoutDisplay,
 } from "./electron-launch-switches";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
+import { startLeaf } from "./electron-leaf-backend";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 import { focusedWebContentsUrls, trackWebContentsFocus } from "./webcontents-focus";
 
@@ -52,111 +52,6 @@ async function waitForUrl(url: string): Promise<void> {
       { timeout: 30_000 },
     )
     .toBe(true);
-}
-
-function run(command: string, args: string[], cwd: string): void {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8" });
-  expect(result.status, `${command} ${args.join(" ")}: ${result.stderr}`).toBe(0);
-}
-
-/** A standalone backend from source: the leaf the desktop's command node attaches. */
-async function startLeaf(root: string) {
-  const [port] = (await reserveLoopbackPorts(1)) as [number];
-  const token = randomBytes(24).toString("base64url");
-  const dir = path.join(root, "leaf");
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const child = spawn(
-    "bun",
-    [
-      "apps/backend/src/main.ts",
-      "--data-dir",
-      path.join(dir, "data"),
-      "--host",
-      "127.0.0.1",
-      "--allow-non-tailscale-bind",
-      "--port",
-      String(port),
-      "--strict-gateway-port",
-      "--runtime-flavor",
-      "agent-test",
-      "--worktree-dir",
-      path.join(dir, "worktrees"),
-    ],
-    {
-      cwd: repositoryRoot,
-      stdio: ["ignore", "pipe", "ignore"],
-      env: {
-        ...process.env,
-        ORKESTRATOR_GATEWAY_TOKEN: token,
-        ORKESTRATOR_CONTROL_MCP_PORT: "0",
-      },
-    },
-  );
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("the leaf did not start")), 90_000);
-    let buffer = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      if (buffer.includes('"orkestrator-backend-ready"')) {
-        clearTimeout(timer);
-        child.stdout?.resume();
-        resolve();
-      }
-      buffer = buffer.slice(-4096);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`the leaf exited early (${code})`));
-    });
-  });
-  const origin = `http://127.0.0.1:${port}`;
-  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const response = await fetch(`${origin}/__orkestrator/invoke`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ command, args }),
-    });
-    const payload = (await response.json()) as { result?: T; error?: string };
-    if (!response.ok) throw new Error(`leaf ${command}: ${payload.error ?? response.status}`);
-    return payload.result as T;
-  };
-  // One project with one local environment, named so its rows are easy to find.
-  const repo = path.join(dir, "repos", "leaf-app");
-  const bare = path.join(dir, "repos", "leaf-app.git");
-  await mkdir(repo, { recursive: true });
-  run("git", ["init", "-q", "-b", "main"], repo);
-  run(
-    "git",
-    [
-      "-c",
-      "user.email=qa@example.com",
-      "-c",
-      "user.name=QA",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "init",
-    ],
-    repo,
-  );
-  run("git", ["init", "-q", "--bare", "-b", "main", bare], dir);
-  run("git", ["remote", "add", "origin", bare], repo);
-  run("git", ["push", "-q", "-u", "origin", "main"], repo);
-  const project = await invoke<Project>("add_project", { gitUrl: bare, localPath: repo });
-  const environment = await invoke<Environment>("create_environment", {
-    projectId: project.id,
-    name: "leaf-env",
-    environmentType: "local",
-  });
-  const profile = await invoke<{ revision: number }>("get_backend_profile");
-  await invoke("update_backend_profile", {
-    expectedRevision: profile.revision,
-    displayName: "Leaf",
-    colorToken: "blue",
-  });
-  const { nodeId } = await invoke<{ nodeId: string }>("get_node_status");
-  return { child, origin, token, invoke, nodeId, project, environment };
 }
 
 test.beforeAll(() => {

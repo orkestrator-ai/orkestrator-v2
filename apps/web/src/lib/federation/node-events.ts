@@ -17,9 +17,10 @@
  * on the portal channel directly.
  *
  * Frames arrive under the watched node's own name when the command node says it
- * relays that way and the transport can scope a stream to it. They arrive under
- * the one old name from an older command node, and from the desktop's main
- * process relay, so both names are listened to; a transport only uses one.
+ * relays that way, on a stream each transport scopes to what is listened to: the
+ * gateway client's own, or the desktop main process's relay. They arrive under
+ * the one old name from an older command node, so both names are listened to; a
+ * backend only uses one.
  */
 
 import type { BackendId } from "@orkestrator/protocol/federation";

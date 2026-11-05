@@ -43,6 +43,9 @@ function harness() {
     closeWorkspaceView: mock(() => undefined),
     postFromWorkspaceRealm: mock(() => undefined),
     portalInvoke: mock(async () => ({ ok: true })),
+    addRelayedListen: mock(async () => undefined),
+    removeRelayedListen: mock(() => undefined),
+    resetRelayedListens: mock(() => undefined),
   };
   registerFederationIpc(deps as never);
   const trusted = { senderFrame: { url: `${trustedRendererUrl}/` }, sender: { id: 1 } };
@@ -170,6 +173,44 @@ describe("federation IPC", () => {
     });
     expect(() => call("orkestrator:portal:invoke", "", {})).toThrow("command");
     expect(() => call("orkestrator:portal:invoke", "x", ["array"])).toThrow();
+  });
+
+  test("relayed listens reach main only from the trusted renderer", async () => {
+    const { call, deps, handlers, syncHandlers, trusted } = harness();
+    const event = "relayed-node-event:bk_leaf";
+    await call("orkestrator:relayed-events:listen", "portal", event);
+    expect(deps.addRelayedListen).toHaveBeenCalledWith(trusted, "portal", event);
+    const notify = (channel: string, sender: unknown, ...args: unknown[]) =>
+      syncHandlers.get(channel)!(sender as never, ...args);
+    notify("orkestrator:relayed-events:unlisten", trusted, "portal", event);
+    expect(deps.removeRelayedListen).toHaveBeenCalledWith(trusted, "portal", event);
+    notify("orkestrator:relayed-events:reset", trusted, "portal");
+    expect(deps.resetRelayedListens).toHaveBeenCalledWith(trusted, "portal");
+
+    const untrusted = { senderFrame: { url: "https://example.com/" }, sender: { id: 2 } };
+    expect(() =>
+      handlers.get("orkestrator:relayed-events:listen")!(untrusted, "portal", event),
+    ).toThrow("untrusted");
+    deps.removeRelayedListen.mockClear();
+    deps.resetRelayedListens.mockClear();
+    notify("orkestrator:relayed-events:unlisten", untrusted, "portal", event);
+    notify("orkestrator:relayed-events:reset", untrusted, "portal");
+    expect(deps.removeRelayedListen).not.toHaveBeenCalled();
+    expect(deps.resetRelayedListens).not.toHaveBeenCalled();
+  });
+
+  test("a one-way relayed listen message from a closing renderer cannot throw into main", () => {
+    const { deps, syncHandlers, trusted } = harness();
+    deps.removeRelayedListen.mockImplementation(() => {
+      throw new Error("The requesting window is no longer available");
+    });
+    expect(() =>
+      syncHandlers.get("orkestrator:relayed-events:unlisten")!(
+        trusted as never,
+        "portal",
+        "relayed-node-event:bk_leaf",
+      ),
+    ).not.toThrow();
   });
 
   test("feature flags accept only booleans", () => {

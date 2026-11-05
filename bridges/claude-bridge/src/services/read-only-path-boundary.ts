@@ -11,8 +11,9 @@ import {
  *
  * The backend's data directory holds the Control MCP operator credentials
  * (`control-mcp.json`, plaintext at 0600 by decision so Copy setup always
- * works), the database with provider secrets, and every account's login. A
- * coordinator runs as the same user, so nothing but this stops a read.
+ * works), the provider secrets (`config.json` and its backups), the database,
+ * and every account's login. A coordinator runs as the same user, so nothing
+ * but this stops a read.
  *
  * The whole directory is denied rather than a list of files, because a list
  * goes stale silently whenever a store adds a secret, and a stale allowance

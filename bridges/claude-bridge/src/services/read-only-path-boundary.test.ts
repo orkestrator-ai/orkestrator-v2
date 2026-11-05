@@ -116,6 +116,17 @@ describe("readBoundaryRefuses", () => {
     expect(refuses(join(dataDir, "orkestrator.sqlite-wal"))).toBe(true);
   });
 
+  test("refuses every file that stores provider secrets", () => {
+    expect(refuses(join(dataDir, "config.json"))).toBe(true);
+    expect(refuses(join(dataDir, "config.json.bak.1"))).toBe(true);
+    expect(refuses(join(dataDir, ".config.json.remnant.tmp"))).toBe(true);
+    expect(
+      refuses(
+        join(dataDir, "portable-inputs", "e1", "r1", "claude-config", ".orkestrator-anthropic-key"),
+      ),
+    ).toBe(true);
+  });
+
   test("refuses another account's login and another conversation's runtime", () => {
     expect(refuses(join(dataDir, "agent-accounts", "claude", "a2", "credentials"))).toBe(true);
     expect(

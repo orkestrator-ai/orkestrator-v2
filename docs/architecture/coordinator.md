@@ -808,8 +808,9 @@ What each enforced platform actually does:
   fail every command.
 
   A Claude coordinator also cannot read Orkestrator's data directory, which holds
-  the operator credentials (`control-mcp.json`), the database with provider
-  secrets and every account's login. The launcher names the directory in
+  the operator credentials (`control-mcp.json`), the provider secrets
+  (`config.json` and its backups), the database and every account's login. The
+  launcher names the directory in
   `ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR`; `coordinatorReadBoundary` turns it
   into `filesystem.denyRead`, with `filesystem.allowRead` carving back what the
   turn is meant to read: that conversation's own Claude home (saved tool results

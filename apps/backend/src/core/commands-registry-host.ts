@@ -78,6 +78,6 @@ export function registerHostMaintenanceCommands(register: CommandRegistrar): voi
     if (args.channel !== "pinned" && args.channel !== "latest") {
       throw new Error("channel must be pinned or latest");
     }
-    return startGhUpdate(context, args.channel, { pinned: context.pinnedGitHubCli });
+    return startGhUpdate(context, args.channel);
   });
 }

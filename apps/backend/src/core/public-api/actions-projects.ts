@@ -124,6 +124,7 @@ const projectCreate: MutationActionHandler<{ path: string }> = {
           const project = await createProjectFromScratch(
             input.path,
             context.command.storage,
+            context.command.runtime.gitHubCli,
             context.dependencies.runProjectCreationCommand,
           );
           return {

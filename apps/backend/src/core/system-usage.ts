@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import type { CpuInfo } from "node:os";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+
+const log = createLogger("host");
 
 export interface SystemUsageSnapshot {
   cpuPercent: number;
@@ -26,6 +29,8 @@ interface SystemUsageDependencies {
   ramReader: CachedRamReader;
   diskPercent: (path: string) => Promise<number | null>;
   gpuPercent: () => Promise<number | null>;
+  diskTimeoutMs: number;
+  gpuTimeoutMs: number;
   now: () => number;
   delay: (milliseconds: number) => Promise<void>;
   runCommand: (
@@ -34,6 +39,12 @@ interface SystemUsageDependencies {
     options: { timeoutMs: number },
   ) => Promise<{ stdout: string }>;
   metrics: RecurringWorkMetrics;
+}
+
+/** A probe in flight, and when the reads waiting on it stop waiting. */
+interface ProbeFlight {
+  result: Promise<number | null>;
+  deadlineAt: number;
 }
 
 interface DarwinRamDependencies {
@@ -97,6 +108,13 @@ const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
 const CPU_MIN_INTERVAL_MS = 100;
 const CPU_FRESH_SAMPLE_MS = 200;
+/** Matches the timeout on the subprocess probes. */
+export const DISK_READ_TIMEOUT_MS = 1_500;
+/**
+ * Above the slowest healthy GPU probe (two `ioreg` runs, then `nvidia-smi`, each
+ * under its own timeout), so only the sysfs reads, which have none, can reach it.
+ */
+export const GPU_READ_TIMEOUT_MS = 6_000;
 
 function clampPercent(value: number): number {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -422,6 +440,14 @@ export const hostRamReader = createCachedRamReader();
  * Keeps sampling state and probe caches in the backend. Concurrent command
  * calls share one snapshot, and a stale CPU baseline is refreshed over a
  * bounded interval before it is presented as current usage.
+ *
+ * A snapshot never waits on a hung probe. The disk and GPU reads have no timeout
+ * of their own (`statfs` and sysfs cannot be cancelled), so a read waits for them
+ * only until the probe's deadline and reports that figure as null. The probe stays
+ * in flight until it answers and later reads join it, so a long stall costs one
+ * pool thread rather than one per poll; the first read after it answers probes
+ * afresh, which is how the figure recovers. RAM needs no deadline: it is either
+ * synchronous or a `vm_stat` under its own timeout.
  */
 export function createSystemUsageReader(
   dependencies: Partial<SystemUsageDependencies> = {},
@@ -431,6 +457,8 @@ export function createSystemUsageReader(
   const freeMemory = dependencies.freeMemory ?? os.freemem;
   const diskPercent = dependencies.diskPercent ?? readDiskPercent;
   const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
+  const diskTimeoutMs = dependencies.diskTimeoutMs ?? DISK_READ_TIMEOUT_MS;
+  const gpuTimeoutMs = dependencies.gpuTimeoutMs ?? GPU_READ_TIMEOUT_MS;
   const platform = dependencies.platform ?? process.platform;
   const execute = dependencies.runCommand ?? runCommand;
   const now = dependencies.now ?? Date.now;
@@ -443,7 +471,8 @@ export function createSystemUsageReader(
   let lastCpuUsage: number | null = null;
   let pendingCpu: Promise<number> | null = null;
   let cachedGpu: { value: number | null; expiresAt: number } | null = null;
-  let pendingGpu: Promise<number | null> | null = null;
+  let pendingGpu: ProbeFlight | null = null;
+  const pendingDisks = new Map<string, ProbeFlight>();
   const pendingReads = new Map<string, Promise<SystemUsageSnapshot>>();
   const cachedRamPercent =
     dependencies.ramReader ??
@@ -484,23 +513,69 @@ export function createSystemUsageReader(
     return sample;
   };
 
+  // A read joining a probe already past its deadline answers at once, so the
+  // meters keep their cadence for as long as a stall lasts.
+  const untilDeadline = (probe: "disk" | "gpu", flight: ProbeFlight): Promise<number | null> =>
+    new Promise((resolve, reject) => {
+      const stalled = () => {
+        log.throttled("warn", "usage.probe-stalled", { scope: probe, kind: "timeout" });
+        resolve(null);
+      };
+      const remaining = flight.deadlineAt - now();
+      if (remaining <= 0) {
+        stalled();
+        return;
+      }
+      const timer = setTimeout(stalled, remaining);
+      flight.result.then(
+        (value) => {
+          clearTimeout(timer);
+          log.recovered("usage.probe-stalled", probe);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+
   const sampleGpu = (sampledAt: number): Promise<number | null> => {
     if (cachedGpu && cachedGpu.expiresAt > sampledAt) return Promise.resolve(cachedGpu.value);
-    if (pendingGpu) return pendingGpu;
+    if (pendingGpu) return untilDeadline("gpu", pendingGpu);
 
-    pendingGpu = (async () => {
-      try {
-        const value = await gpuPercent();
-        cachedGpu = {
-          value,
-          expiresAt: now() + (value === null ? GPU_UNAVAILABLE_CACHE_MS : GPU_AVAILABLE_CACHE_MS),
-        };
-        return value;
-      } finally {
-        pendingGpu = null;
-      }
-    })();
-    return pendingGpu;
+    pendingGpu = {
+      deadlineAt: now() + gpuTimeoutMs,
+      result: (async () => {
+        try {
+          const value = await gpuPercent();
+          cachedGpu = {
+            value,
+            expiresAt: now() + (value === null ? GPU_UNAVAILABLE_CACHE_MS : GPU_AVAILABLE_CACHE_MS),
+          };
+          return value;
+        } finally {
+          pendingGpu = null;
+        }
+      })(),
+    };
+    return untilDeadline("gpu", pendingGpu);
+  };
+
+  const sampleDisk = (diskPath: string): Promise<number | null> => {
+    const pending = pendingDisks.get(diskPath);
+    if (pending) return untilDeadline("disk", pending);
+
+    const flight: ProbeFlight = {
+      deadlineAt: now() + diskTimeoutMs,
+      result: diskPercent(diskPath),
+    };
+    pendingDisks.set(diskPath, flight);
+    const clearPending = () => {
+      if (pendingDisks.get(diskPath) === flight) pendingDisks.delete(diskPath);
+    };
+    void flight.result.then(clearPending, clearPending);
+    return untilDeadline("disk", flight);
   };
 
   const sampleRam = (sampledAt: number): Promise<number> =>
@@ -519,7 +594,7 @@ export function createSystemUsageReader(
       const sampledAt = now();
       const [ramUsage, diskUsage, gpuUsage] = await Promise.all([
         sampleRam(sampledAt),
-        diskPercent(diskPath),
+        sampleDisk(diskPath),
         sampleGpu(sampledAt),
       ]);
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
-import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { READ_RETRY_MAX_MS, resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import {
   flushMicrotasks,
   installFakeReadCoordinator,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/testing/read-coordinator";
 import {
   SYSTEM_USAGE_STALE_AFTER_MS,
+  USAGE_READ_TIMEOUT_MS,
   useEnvironmentProcessUsage,
   useSystemUsage,
   useMachineSystemUsage,
@@ -170,6 +171,85 @@ describe("useSystemUsage", () => {
     await advance(0);
     expect(views.get("title")!.sample).toBeNull();
     expect(views.get("title")!.failed).toBe(true);
+  });
+
+  test("a read that never returns reaches the error state and the next poll retries", async () => {
+    nextUsage = () => new Promise(() => {});
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(USAGE_READ_TIMEOUT_MS - 1);
+    expect(views.get("title")!.failed).toBe(false);
+    expect(usageCalls).toEqual([0]);
+
+    await advance(1);
+    expect(views.get("title")!.failed).toBe(true);
+    expect(views.get("title")!.sample).toBeNull();
+
+    nextUsage = async () => sample(9);
+    await advance(READ_RETRY_MAX_MS);
+    expect(usageCalls.length).toBeGreaterThan(1);
+    expect(views.get("title")!.failed).toBe(false);
+    expect(views.get("title")!.sample?.cpuPercent).toBe(9);
+  });
+
+  test("the read's timer is released when the read answers", async () => {
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(0);
+    const timers = reads.clock.pending;
+    await advance(20_000);
+    expect(usageCalls).toHaveLength(5);
+    expect(reads.clock.pending).toBe(timers);
+  });
+
+  test("an answer after the timeout is ignored", async () => {
+    let release!: (value: unknown) => void;
+    nextUsage = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(USAGE_READ_TIMEOUT_MS);
+    expect(views.get("title")!.failed).toBe(true);
+    await act(async () => {
+      release(sample(7));
+      await flushMicrotasks();
+    });
+    expect(views.get("title")!.sample).toBeNull();
+    expect(views.get("title")!.failed).toBe(true);
+  });
+
+  test("stays failed while a retry is in flight, until a read succeeds", async () => {
+    nextUsage = async () => {
+      throw new Error("backend unavailable");
+    };
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(0);
+    expect(views.get("title")!.failed).toBe(true);
+
+    let release!: (value: unknown) => void;
+    nextUsage = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const before = usageCalls.length;
+    while (usageCalls.length === before) await advance(1_000);
+    expect(views.get("title")!.failed).toBe(true);
+
+    await act(async () => {
+      release(sample(5));
+      await flushMicrotasks();
+    });
+    expect(views.get("title")!.failed).toBe(false);
+    expect(views.get("title")!.sample?.cpuPercent).toBe(5);
+  });
+
+  test("a backend without the command counts as failed", async () => {
+    nextUsage = async () => {
+      throw new Error("Unknown backend command: get_system_usage");
+    };
+    render(<Meter id="title" intervalMs={5_000} />);
+    await advance(0);
+    expect(views.get("title")!.failed).toBe(true);
+    expect(views.get("title")!.sample).toBeNull();
   });
 
   test("a server switch discards the old backend's sample and a late answer", async () => {

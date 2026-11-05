@@ -18,6 +18,7 @@ import {
   type EnvironmentProcessGroup,
   type ProcessUsageEnvironment,
 } from "./environment-process-usage.js";
+import { databaseStoreForPath } from "./storage-stores.js";
 
 function environment(
   overrides: Partial<ProcessUsageEnvironment> & Pick<ProcessUsageEnvironment, "id" | "name">,
@@ -115,6 +116,34 @@ describe("environment process usage", () => {
     expect(read).toHaveBeenCalledTimes(1);
     await expect(handler({}, context)).resolves.toMatchObject({ environments: [] });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // Why the shared read carries no deadline of its own: nothing it awaits can stay
+  // pending. Environments are a synchronous database read, and every probe has a
+  // timeout that `runCommand` honours even for a child that ignores its signals
+  // (shell.test.ts, "settles and escalates when a descendant ignores SIGTERM").
+  test("awaits nothing that can stay pending for ever", async () => {
+    expect(databaseStoreForPath("environments.json")).toBe("environments");
+    const timeouts: number[] = [];
+    await readEnvironmentProcessUsage(
+      [
+        environment({ id: "env-local", name: "local" }),
+        environment({
+          id: "env-box",
+          name: "box",
+          environmentType: "containerized",
+          containerId: "container-1",
+        }),
+      ],
+      {
+        platform: "linux",
+        runCommand: async (_command, _args, options) => {
+          timeouts.push(options.timeoutMs);
+          throw new Error("Command timed out");
+        },
+      },
+    );
+    expect(timeouts).toEqual([2_000, 2_000]);
   });
 
   test("rejects when stored environments cannot be loaded", async () => {

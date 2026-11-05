@@ -46,6 +46,14 @@ export const ENVIRONMENT_PROCESS_USAGE_READ_KEY: ReadKey = {
  */
 export const SYSTEM_USAGE_STALE_AFTER_MS = 10_000;
 
+/**
+ * How long a usage read may run before it counts as failed. A read that takes
+ * longer would deliver a sample already past {@link SYSTEM_USAGE_STALE_AFTER_MS},
+ * since a sample's age is measured from the start of its read. It covers what no
+ * backend timeout can: a backend that never answers at all.
+ */
+export const USAGE_READ_TIMEOUT_MS = SYSTEM_USAGE_STALE_AFTER_MS;
+
 export interface UsageView<T> {
   /** Last successful sample, retained across failures. */
   sample: T | null;
@@ -62,7 +70,11 @@ export interface UsageView<T> {
    * ago. A failed, paused or hung refresh never makes a sample younger.
    */
   stale: boolean;
-  /** The latest refresh failed; the retained sample is from an earlier read. */
+  /**
+   * No read has succeeded since the latest failure, including while a retry is
+   * in flight and for a command this backend does not have, which is never
+   * retried. Any retained sample is from an earlier read.
+   */
   failed: boolean;
 }
 
@@ -102,6 +114,18 @@ function useStalenessDeadline(clock: ReadCoordinatorClock, observedAt: number | 
   }, [clock, observedAt]);
 }
 
+/** Rejects when `read` runs past the bound; its late answer is ignored. */
+function withReadTimeout<T>(read: Promise<T>, clock: ReadCoordinatorClock): Promise<T> {
+  let timer: unknown;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = clock.setTimeout(
+      () => reject(new Error("The usage read timed out")),
+      USAGE_READ_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([read, timeout]).finally(() => clock.clearTimeout(timer));
+}
+
 function useUsageRead<T extends { sampledAt: string }>(options: {
   key: ReadKey;
   active: boolean;
@@ -117,7 +141,7 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     enabled: active,
     demand: { active, intervalMs, priority: "auxiliary" },
     read: async () => {
-      const sample = await read();
+      const sample = await withReadTimeout(read(), coordinator.clock);
       // A malformed answer is a failed read, never a new measurement.
       if (!isSample(sample)) throw new Error("The backend returned an invalid usage sample");
       return sample;
@@ -135,7 +159,8 @@ function useUsageRead<T extends { sampledAt: string }>(options: {
     observedAt,
     stale:
       observedAt !== null && coordinator.clock.now() - observedAt > SYSTEM_USAGE_STALE_AFTER_MS,
-    failed: state?.status === "error",
+    failed:
+      state?.status === "error" || state?.status === "unsupported" || (state?.failures ?? 0) > 0,
   };
 }
 

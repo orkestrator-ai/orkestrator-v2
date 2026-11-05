@@ -236,10 +236,10 @@ test("a same-origin page reads it with an EventSource, whose ids advance the cur
 });
 
 test("unanswered retry replaces pending connections and leaves open connections alone", async () => {
-  const { RelayedEventStream } = await import("./relayed-event-stream");
+  const { RelayedEventStream } = await import("@orkestrator/protocol/relayed-event-stream");
   const { ReconnectBackoff } = await import("@orkestrator/protocol/reconnect-backoff");
   const attempts: Array<{
-    handlers: import("./relayed-event-stream").RelayedEventConnectionHandlers;
+    handlers: import("@orkestrator/protocol/relayed-event-stream").RelayedEventConnectionHandlers;
     close: ReturnType<typeof mock>;
   }> = [];
   const stream = new RelayedEventStream({

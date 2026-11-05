@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   DesktopWindowContexts,
+  createDesktopRelayedLifecycle,
   type DesktopWindowConnections,
   type DesktopWindowContextRecord,
 } from "../electron/desktop-window-contexts";
 import { PORTAL_EVENT_CHANNEL } from "../electron/federation-ipc";
+import { MAX_NODE_EVENT_WATCHES } from "@orkestrator/protocol/node-events";
 
 type Sent = [channel: string, ...args: unknown[]];
 
@@ -48,6 +50,8 @@ function harness() {
       events.push(`release:${scope}`);
       routes.delete(scope);
     }),
+    setRelayedEvents: mock((_connectionId: string, _events: readonly string[]) => undefined),
+    relayedEventReady: mock(async (_connectionId: string, _event: string) => undefined),
   };
   let connections: DesktopWindowConnections | null =
     connectionManager as unknown as DesktopWindowConnections;
@@ -137,6 +141,247 @@ function harness() {
 }
 
 type Context = DesktopWindowContextRecord;
+
+describe("the per-node relayed events renderers listen to", () => {
+  const LEAF_EVENT = "relayed-node-event:bk_leaf";
+  const OTHER_EVENT = "relayed-node-event:bk_other";
+  const filters = (h: ReturnType<typeof harness>) =>
+    h.connectionManager.setRelayedEvents.mock.calls.map(([id, events]) => [id, [...events]]);
+  const listen = (
+    h: ReturnType<typeof harness>,
+    id: number,
+    event: string,
+    channel = "workspace",
+  ) => h.windows.addRelayedListen(h.sender(id), channel, event);
+
+  test("a connection is told the union of its windows' listens, sorted, on a change only", async () => {
+    const h = harness();
+    h.windows.register(h.context(1, "local").value);
+    h.windows.register(h.context(2, "local").value);
+    await listen(h, 1, OTHER_EVENT);
+    await listen(h, 2, LEAF_EVENT);
+    await listen(h, 2, OTHER_EVENT);
+    expect(filters(h)).toEqual([
+      ["local", [OTHER_EVENT]],
+      ["local", [LEAF_EVENT, OTHER_EVENT]],
+    ]);
+    h.connectionManager.setRelayedEvents.mockClear();
+    h.windows.removeRelayedListen(h.sender(1), "workspace", OTHER_EVENT);
+    h.windows.syncRelayedEvents();
+    expect(filters(h)).toEqual([]);
+    h.windows.removeRelayedListen(h.sender(2), "workspace", OTHER_EVENT);
+    expect(filters(h)).toEqual([["local", [LEAF_EVENT]]]);
+  });
+
+  test("the answer waits on the connection the channel is bound to", async () => {
+    const h = harness();
+    const realm = h.context(7, "workspace:leaf", { portal: "local" });
+    h.realms.set(7, realm.value);
+    await listen(h, 7, LEAF_EVENT, "portal");
+    expect(h.connectionManager.relayedEventReady).toHaveBeenCalledWith("local", LEAF_EVENT);
+    await listen(h, 7, LEAF_EVENT, "workspace");
+    expect(h.connectionManager.relayedEventReady).toHaveBeenCalledWith(
+      "workspace:leaf",
+      LEAF_EVENT,
+    );
+    expect(filters(h)).toEqual([
+      ["local", [LEAF_EVENT]],
+      ["workspace:leaf", [LEAF_EVENT]],
+    ]);
+  });
+
+  test("anything but a per-node relayed event on a known channel is refused", async () => {
+    const h = harness();
+    h.windows.register(h.context(1, "local").value);
+    for (const [channel, event] of [
+      ["workspace", "relayed-node-event"],
+      ["workspace", "relayed-node-event:"],
+      ["workspace", "terminal-output-one"],
+      ["workspace", 7],
+      ["somewhere", LEAF_EVENT],
+    ] as const) {
+      expect(() => h.windows.addRelayedListen(h.sender(1), channel, event)).toThrow(
+        "per-node relayed event",
+      );
+    }
+    expect(filters(h)).toEqual([]);
+    expect(() => h.windows.addRelayedListen(h.sender(99), "workspace", LEAF_EVENT)).toThrow(
+      "no longer available",
+    );
+  });
+
+  test("a renderer's listens are bounded, and repeating one is not another", async () => {
+    const h = harness();
+    h.windows.register(h.context(1, "local").value);
+    for (let index = 0; index < MAX_NODE_EVENT_WATCHES; index += 1) {
+      await listen(h, 1, `relayed-node-event:bk_${index}`);
+    }
+    expect(() => h.windows.addRelayedListen(h.sender(1), "workspace", LEAF_EVENT)).toThrow(
+      "Too many",
+    );
+    await listen(h, 1, "relayed-node-event:bk_0");
+  });
+
+  test("a frame goes only to the renderers listening, on the channel that asked", async () => {
+    const h = harness();
+    const listening = h.context(1, "local");
+    const idle = h.context(2, "local");
+    const realm = h.context(3, "workspace:leaf", { portal: "local" });
+    h.windows.register(listening.value);
+    h.windows.register(idle.value);
+    h.realms.set(3, realm.value);
+    await listen(h, 1, LEAF_EVENT);
+    await listen(h, 3, OTHER_EVENT, "portal");
+
+    h.windows.relayBackendEvent("local", LEAF_EVENT, { kind: "leaf" });
+    h.windows.relayBackendEvent("local", OTHER_EVENT, { kind: "other" });
+    expect(listening.sent).toEqual([["orkestrator:event", LEAF_EVENT, { kind: "leaf" }]]);
+    expect(idle.sent).toEqual([]);
+    expect(realm.sent).toEqual([[PORTAL_EVENT_CHANNEL, OTHER_EVENT, { kind: "other" }]]);
+  });
+
+  test("the old name from an older backend still goes to every renderer on it", () => {
+    const h = harness();
+    const window = h.context(1, "local");
+    const realm = h.context(3, "workspace:leaf", { portal: "local" });
+    h.windows.register(window.value);
+    h.realms.set(3, realm.value);
+    const frame = { nodeId: "bk_leaf", kind: "resync" };
+    h.windows.relayBackendEvent("local", "relayed-node-event", frame);
+    expect(window.sent).toEqual([["orkestrator:event", "relayed-node-event", frame]]);
+    expect(realm.sent).toEqual([[PORTAL_EVENT_CHANNEL, "relayed-node-event", frame]]);
+  });
+
+  test("main's realm teardown drops its portal filter and preserves the parent's", async () => {
+    const h = harness();
+    h.windows.register(h.context(1, "local").value);
+    h.realms.set(3, h.context(3, "workspace:leaf", { portal: "local" }).value);
+    await listen(h, 1, LEAF_EVENT);
+    await listen(h, 3, OTHER_EVENT, "portal");
+    const lifecycle = createDesktopRelayedLifecycle(
+      h.windows,
+      {
+        unregister: (id) => {
+          h.realms.delete(id);
+        },
+      },
+      h.publishConnectionLists,
+    );
+    h.connectionManager.setRelayedEvents.mockClear();
+    lifecycle.unregisterRealm({ webContents: { id: 3 } });
+    expect(h.realms.has(3)).toBe(false);
+    expect(filters(h)).toEqual([["local", [LEAF_EVENT]]]);
+  });
+
+  test("main's connection state callback reconciles scopes before publishing", async () => {
+    const h = harness();
+    const window = h.context(1, "local");
+    h.windows.register(window.value);
+    await listen(h, 1, LEAF_EVENT);
+    h.connectionManager.setRelayedEvents.mockClear();
+    const publish = mock(() => {
+      expect(filters(h)).toEqual([
+        ["local", []],
+        ["remote", [LEAF_EVENT]],
+      ]);
+    });
+    const lifecycle = createDesktopRelayedLifecycle(h.windows, { unregister() {} }, publish);
+    // A connection-owner update, without useConnection/followConnection doing
+    // the reconciliation for us. This is the callback main passes to the manager.
+    h.routes.set(window.value.scope, "remote");
+    lifecycle.onStateChange();
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  test("a new document's reset drops only that channel's listens", async () => {
+    const h = harness();
+    const realm = h.context(3, "workspace:leaf", { portal: "local" });
+    h.realms.set(3, realm.value);
+    await listen(h, 3, LEAF_EVENT, "portal");
+    await listen(h, 3, OTHER_EVENT, "workspace");
+    h.connectionManager.setRelayedEvents.mockClear();
+
+    h.windows.resetRelayedListens(h.sender(3), "portal");
+    expect(filters(h)).toEqual([["local", []]]);
+    h.connectionManager.setRelayedEvents.mockClear();
+    h.windows.resetRelayedListens(h.sender(3), "portal");
+    expect(filters(h)).toEqual([]);
+    h.windows.resetRelayedListens(h.sender(3), "workspace");
+    expect(filters(h)).toEqual([["workspace:leaf", []]]);
+  });
+
+  test("a closed window's listens leave the filter; so do a closed realm's", async () => {
+    const h = harness();
+    const closing = h.context(1, "local");
+    const realm = h.context(3, "workspace:leaf", { portal: "local" });
+    const closed = h.windows.register(closing.value);
+    h.realms.set(3, realm.value);
+    await listen(h, 1, OTHER_EVENT);
+    await listen(h, 3, LEAF_EVENT, "portal");
+    h.connectionManager.setRelayedEvents.mockClear();
+
+    closed();
+    expect(filters(h)).toEqual([["local", [LEAF_EVENT]]]);
+    h.connectionManager.setRelayedEvents.mockClear();
+
+    h.realms.delete(3);
+    h.windows.dropRelayedListens(3);
+    expect(filters(h)).toEqual([["local", []]]);
+    h.connectionManager.setRelayedEvents.mockClear();
+    h.windows.dropRelayedListens(3);
+    expect(filters(h)).toEqual([]);
+  });
+
+  test("a window's listens follow it to another connection", async () => {
+    const h = harness();
+    const window = h.context(1, "local");
+    h.windows.register(window.value);
+    await listen(h, 1, LEAF_EVENT);
+    h.connectionManager.setRelayedEvents.mockClear();
+
+    await h.windows.useConnection("remote", h.sender(1));
+    expect(filters(h)).toEqual([
+      ["local", []],
+      ["remote", [LEAF_EVENT]],
+    ]);
+  });
+
+  test("a window on the direct gateway transport has them from its own stream on Local only", async () => {
+    const h = harness();
+    const window = h.context(1, "local");
+    h.windows.register({ ...window.value, localGatewayTransport: true });
+    await listen(h, 1, LEAF_EVENT);
+    expect(filters(h)).toEqual([]);
+    expect(h.connectionManager.relayedEventReady).not.toHaveBeenCalled();
+    h.windows.relayBackendEvent("local", LEAF_EVENT, {});
+    expect(window.sent).toEqual([]);
+
+    await h.windows.useConnection("remote", h.sender(1));
+    expect(filters(h)).toEqual([["remote", [LEAF_EVENT]]]);
+  });
+
+  test("a scope released under a live renderer costs its listens, not the others'", async () => {
+    const h = harness();
+    const released = h.context(1, "remote");
+    const staying = h.context(2, "local");
+    h.windows.register(released.value);
+    h.windows.register(staying.value);
+    await listen(h, 1, OTHER_EVENT);
+    await listen(h, 2, LEAF_EVENT);
+    h.connectionManager.setRelayedEvents.mockClear();
+
+    h.routes.delete(released.value.scope);
+    expect(() => h.windows.syncRelayedEvents()).not.toThrow();
+    expect(filters(h)).toEqual([["remote", []]]);
+  });
+
+  test("nothing is applied before connections exist", () => {
+    const h = harness();
+    h.clearConnections();
+    expect(() => h.windows.syncRelayedEvents()).not.toThrow();
+    expect(filters(h)).toEqual([]);
+  });
+});
 
 describe("desktop window contexts", () => {
   test("a registered window takes focus and answers for its IPC sender", () => {

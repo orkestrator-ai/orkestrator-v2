@@ -100,11 +100,11 @@ describe("desktop application menu on macOS", () => {
     expect(closeTab).toHaveBeenCalledTimes(1);
   });
 
-  test("places a Window menu after View", () => {
+  test("places a Window menu after View, and Help last", () => {
     const template = createApplicationMenuTemplate(menuActions());
 
-    const labels = template.map((item) => item.label);
-    expect(labels).toEqual(["Orkestrator AI", "File", "Edit", "View", "Window"]);
+    const labels = template.map((item) => item.label ?? item.role);
+    expect(labels).toEqual(["Orkestrator AI", "File", "Edit", "View", "Window", "help"]);
   });
 
   test("keeps the macOS app menu roles and Window › Zoom", () => {
@@ -416,5 +416,27 @@ describe.each(["darwin", "linux", "win32"] as const)("shortcut menu input on %s"
       ["open"],
       ["open"],
     ]);
+  });
+});
+
+describe.each(["darwin", "linux", "win32"] as const)("Open Developer Tools on %s", (platform) => {
+  const help = (template: MenuItemConstructorOptions[]) =>
+    template.find((item) => item.label === "Help" || item.role === "help")!;
+
+  test("every platform has a Help menu, without the item by default", () => {
+    const template = createApplicationMenuTemplate(menuActions({ platform }));
+    expect(help(template)).toBeDefined();
+    expect(itemNames(allItems(template))).not.toContain("Open Developer Tools");
+    expect(allItems(template).map((item) => item.role)).not.toContain("toggleDevTools");
+  });
+
+  test("is offered under Help only while renderer debug logging is on", () => {
+    const openDeveloperTools = mock(() => {});
+    const template = createApplicationMenuTemplate(menuActions({ platform, openDeveloperTools }));
+    const items = submenu(help(template));
+    expect(items[0]?.label).toBe("Open Developer Tools");
+    expect(items[0]?.accelerator).toBeUndefined();
+    (items[0]?.click as (() => void) | undefined)?.();
+    expect(openDeveloperTools).toHaveBeenCalledTimes(1);
   });
 });

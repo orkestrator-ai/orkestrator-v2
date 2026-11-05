@@ -13,12 +13,26 @@ export const PACKAGED_APP_EXECUTABLE_ENV = "ORKESTRATOR_PACKAGED_APP_EXECUTABLE"
  *
  * Not `release/linux-unpacked/`: that build has the Node inspect fuse off, as
  * shipped, and Playwright's `_electron.launch` cannot start it
- * (`electron-builder.packaged-test.config.ts`).
+ * (`electron-builder.packaged-test.config.ts`). On macOS the same build comes
+ * from `mise run package:mac:unpacked:test`.
  */
-export function packagedAppExecutable(repositoryRoot: string, env: NodeJS.ProcessEnv): string {
+export function packagedAppExecutable(
+  repositoryRoot: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
   const override = env[PACKAGED_APP_EXECUTABLE_ENV]?.trim();
   if (override) return path.resolve(repositoryRoot, override);
-  const unpacked = process.arch === "x64" ? "linux-unpacked" : `linux-${process.arch}-unpacked`;
+  if (platform === "darwin") {
+    return path.join(
+      repositoryRoot,
+      PACKAGED_TEST_OUTPUT_DIRECTORY,
+      `mac${arch === "arm64" ? "-arm64" : ""}`,
+      "OrkestratorV2.app/Contents/MacOS/OrkestratorV2",
+    );
+  }
+  const unpacked = arch === "x64" ? "linux-unpacked" : `linux-${arch}-unpacked`;
   return path.join(repositoryRoot, PACKAGED_TEST_OUTPUT_DIRECTORY, unpacked, "orkestrator-v2");
 }
 

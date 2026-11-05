@@ -153,6 +153,9 @@ interface BoundaryProps {
 }
 
 class RichBlockErrorBoundary extends Component<BoundaryProps, { failed: boolean }> {
+  /** What the renderer error ring records as this boundary (`renderer-errors.ts`). */
+  static readonly diagnosticBoundary = "rich-block";
+
   state = { failed: false };
 
   static getDerivedStateFromError(): { failed: boolean } {

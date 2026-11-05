@@ -42,7 +42,7 @@ This index only changes when a branch merges, so it can't show what is running n
 | X1 | [Coordinator trust boundary](../security/0090-x1-coordinator-trust-boundary.md) | `0120` task 1, `0310`; also security `0090`, `0180`, `0210` | Coordinator backend, 2 of 4 | None | None |
 | C2 | [Workflow records](0080-c2-workflow-records.md) | `0080`, `0100`, `0380` | Coordinator backend, 3 of 4 | None | None |
 | C3 | [Sweep and reads](0110-c3-sweep-and-reads.md) | `0110`, `0370` | Coordinator backend, 4 of 4 | None | C6 (Errors and dead ends) |
-| C7 | [Work panel and navigation](0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` | Coordinator panel, 1 of 4 | None | E23 (Renderer polling) |
+| C7 | [Work panel and navigation](0060-c7-work-panel-and-navigation.md) | `0060`, `0260`, `0280`, `0450` | Coordinator panel, 1 of 4 | None | None |
 | C6 | [Errors and dead ends](0020-c6-errors-and-dead-ends.md) | `0020`, `0180`, `0200`, `0210`, `0250`, `0440` | Coordinator panel, 2 of 4 | None | C3 (Sweep and reads), E12 (Renderer store) |
 | C10 | [Explanations](0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` | Coordinator panel, 3 of 4 | None | None |
 

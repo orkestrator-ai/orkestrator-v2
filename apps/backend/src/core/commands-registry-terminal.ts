@@ -1158,6 +1158,7 @@ export function registerTerminalCommands(
       environment,
       context.runtime.environments.fence,
       context.storage,
+      context.runtime.gitHubCli,
     );
     // The container image ships Node; a local worktree runs on the user's own
     // machine, where the backend's inherited PATH is whatever the OS handed
@@ -1208,6 +1209,7 @@ export function registerTerminalCommands(
       environment,
       context.runtime.environments.fence,
       context.storage,
+      context.runtime.gitHubCli,
     );
     let mergeBase: string;
     try {

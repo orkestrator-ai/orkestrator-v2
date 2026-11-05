@@ -3,6 +3,7 @@ import type {
   ScheduleFire,
   ScheduledJob,
   ScheduledJobSummary,
+  SchedulerStatus,
 } from "@orkestrator/protocol/scheduled-jobs";
 import { invoke } from "@/lib/native/backend";
 
@@ -22,9 +23,10 @@ export interface ScheduledJobTimingInput {
   catchUpMinutes?: number;
 }
 
+/** `scheduler` is absent from a backend that predates it. */
 export function listScheduledJobs(
   filter: { projectId?: string; state?: string } = {},
-): Promise<{ schedules: ScheduledJobSummary[] }> {
+): Promise<{ schedules: ScheduledJobSummary[]; scheduler?: SchedulerStatus }> {
   return invoke("list_scheduled_jobs", filter);
 }
 

@@ -42,3 +42,15 @@ A public API change follows `docs/architecture/public-cli.md`. An older backend 
 
 - [Efficiency report, G](../2026-10-27-efficiency.md#g-desktop-toolchain-docker-image-protocol-and-cli)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 16
+
+## Outcome
+
+Checked item by item against this file on 2026-11-05, at `main` `69a3b4ca5`. Every line number above still holds.
+
+| Item | Outcome | Evidence |
+| --- | --- | --- |
+| Task 1, Conditional attention reads: add one? | Done, by taking the recommended option, so no product code changed | `attention.list` keeps no `knownToken` (`apps/backend/src/core/public-api/actions-attention.ts`, `packages/cli/src/client/commands/attention.ts`). The decision rests on the fixture measurement in the next row and is recorded in `docs/architecture/control-mcp-voice.md`. Test: "a full page of over-long names stays small enough to re-read on every poll" in `apps/backend/src/core/public-api/public-api-attention.test.ts`, which fails if a default page passes 32 KiB or a full page passes 80 KiB. |
+| Needs verification, typical attention page size: the ceiling | Done | Measured on the real handler with the scripted provider, no provider turn: empty 264 bytes, three approvals 1,352 bytes, default limit with 200-character ASCII titles 10,901 bytes, and largest limit with 200 3-byte characters in title and environment name 76,401 bytes, against a 1 MiB transcript page cap. Same test as above. |
+| Task 1 and Needs verification: a real follower's page size | Moved to to-do 5560 | Needs real pending interactions, which means a billed provider turn. `docs/todo/cli-and-slash-commands/5560-attention-follow-page-size.md` carries the problem, context and both options across, with a proposed threshold. |
+| Constraints: public API change follows `public-cli.md`; CLI checks capabilities first | No longer holds | No public API change was made, so nothing for older clients or nodes to rely on and no entry in `version-compatibility.md`. To-do 5560 keeps the constraint for a later build. |
+| Current state: `session transcript --follow` | No longer holds as work: already done | `packages/cli/src/client/commands/session.ts:1085` and `apps/backend/src/core/public-api/actions-transcript.ts:154` are unchanged from what this file names. |

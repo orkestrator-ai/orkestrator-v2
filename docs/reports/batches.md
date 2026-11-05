@@ -21,7 +21,6 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | C3 | [coordinator/0110-c3-sweep-and-reads.md](coordinator/0110-c3-sweep-and-reads.md) | `0110`, `0370` |
 | C10 | [coordinator/0240-c10-explanations.md](coordinator/0240-c10-explanations.md) | `0320`, `0330`, `0400`, `0240` |
 | E25 | [efficiency-logging-database/0490-e25-container-start.md](efficiency-logging-database/0490-e25-container-start.md) | `0490`, `0500` |
-| E9 | [efficiency-logging-database/0110-e9-transcript-reads.md](efficiency-logging-database/0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` |
 | E10 | [efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md](efficiency-logging-database/0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` |
 | E11 | [efficiency-logging-database/0210-e11-projection-hashing.md](efficiency-logging-database/0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` |
 | E12 | [efficiency-logging-database/0510-e12-renderer-store.md](efficiency-logging-database/0510-e12-renderer-store.md) | `0510`, `0590`, `0640` |
@@ -35,7 +34,7 @@ Worked out on 2026-11-03 against `main` at `a44641cbc`, from the 167 work files 
 | Coordinator backend | 1. X1 (Coordinator trust boundary)<br>2. C2 (Workflow records)<br>3. C3 (Sweep and reads) | `coordinator-service.ts`, `control-mcp-tools.ts`, the protocol's `coordinator.ts` and the context prompt in `native-agent-service.ts` |
 | Coordinator panel | 1. C10 (Explanations)<br>2. C-0390 (Panel re-render cost, measure first) | `CoordinatorPanel.tsx`, `CoordinatorPanelNotices.tsx`, `TabShell.tsx` |
 | Containers | 1. S-0100 (Egress SNI and DNS)<br>2. S-0170 (Agent-tools bind address)<br>3. E25 (Container start) | `commands-containers.ts`, `commands-registry-servers.ts` and the `docker/` entrypoint, setup and firewall scripts |
-| Transcript | 1. E9 (Transcript reads)<br>2. E10 (Conditional reads and deltas)<br>3. E11 (Projection hashing)<br>4. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
+| Transcript | 1. E10 (Conditional reads and deltas)<br>2. E11 (Projection hashing)<br>3. E12 (Renderer store) | `native-agent-transcript-projection.ts` (5,570 lines), `useNativeAgentSession.ts` (3,870 lines), `nativeAgentProjectionStore.ts` |
 | Gateway | 1. S-0160 (Descriptor process binding) | `gateway-auth.ts`, `gateway-events.ts`, `gateway-proxy.ts`, `gateway-support-*.ts`, `terminal-websocket-server.ts` |
 | Logging and diagnostics | 1. E15 (Health and diagnostics)<br>2. E16 (Log controls) | `application-logging.ts`, the metrics route and the logging settings |
 
@@ -54,7 +53,7 @@ No pair of batches in different lanes must avoid running together at the moment.
 
 | Finish | Before |
 | --- | --- |
-| E1 (Baseline run) | E9 and E10, on code those batches have not changed yet |
+| E1 (Baseline run) | E10, on code that batch has not changed yet |
 | `0490` in E25 | `0500` in E25 |
 
 ## Rebase with care
@@ -63,9 +62,8 @@ These files are named by several batches that can still run together. The report
 
 | File | Batches |
 | --- | --- |
-| `apps/backend/src/core/index.ts` | E9, E15, S-0170 |
+| `apps/backend/src/core/index.ts` | E15, S-0170 |
 | `native-agent-transcript-projection.ts` | E15 (`0880` task 1) with the Transcript lane |
-| `native-agent-service.ts`, `control-mcp-tools.ts` | E9 with C2, C3 and X1 |
 
 ## How this was worked out
 

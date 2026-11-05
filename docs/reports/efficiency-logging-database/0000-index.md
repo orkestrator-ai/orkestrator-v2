@@ -14,17 +14,16 @@ A batch file combines several reports as numbered parts and takes the rating of 
 
 | Rank | File | Criticality | Finished | Covers | Why this rating |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [0110-e9-transcript-reads.md](0110-e9-transcript-reads.md) | Medium | No | **E9, Transcript reads.**<br>`0150`: TX-2, TX-15: Dispatches and control changes trigger an unlimited raw transcript read<br>`0200`: TX-18: The `/messages` fallback ignores the limit it has in scope<br>`0110`: TX-8: A tool-detail cache miss cannot recreate remote references | From `0110`: An evicted summary-backed tool detail fails after a costly raw read, a functional gap that needs a cache eviction to appear. |
-| 2 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
-| 3 | [0510-e12-renderer-store.md](0510-e12-renderer-store.md) | Medium | No | **E12, Renderer store.**<br>`0510`: WEB-6: The live-head merge serialises parts with no identity shortcut<br>`0590`: WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount<br>`0640`: WEB-14: Projection store writes copy four Maps even when one changes | From `0510`: Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
-| 4 | [0750-e15-health-and-diagnostics.md](0750-e15-health-and-diagnostics.md) | Medium | No | **E15, Health and diagnostics.**<br>`0750` (done): R6's always-on tier and control, plus L4's uncaught exception gap.<br>`0820`: R12 (M1): a rolling health row and a clean shutdown marker.<br>`0810`: R19 (M6): database size, waits, top tables and a panel.<br>`0880`: R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives.<br>`0780`: R11 (M2, L7) and its control: a local diagnostics bundle. | From `0750`: First-occurrence evidence is a missing measurement rather than a defect in shipped behaviour. |
-| 5 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
-| 6 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
-| 7 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
-| 8 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
-| 9 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
-| 10 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
-| 11 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
+| 1 | [0490-e25-container-start.md](0490-e25-container-start.md) | Medium | No | **E25, Container start.**<br>`0490`: DK-14: Agent-home inputs are copied in full per environment and again on every start<br>`0500`: DK-13: Each environment clones from the remote again | From `0490`: Every container start copies inputs again, at a size nobody has measured. |
+| 2 | [0510-e12-renderer-store.md](0510-e12-renderer-store.md) | Medium | No | **E12, Renderer store.**<br>`0510`: WEB-6: The live-head merge serialises parts with no identity shortcut<br>`0590`: WEB-2 (rest): The native session hook subscribes to whole cache entries it reads only at mount<br>`0640`: WEB-14: Projection store writes copy four Maps even when one changes | From `0510`: Head-row serialisation runs on transcript updates while streaming, at a cost no Profiler run has confirmed. |
+| 3 | [0750-e15-health-and-diagnostics.md](0750-e15-health-and-diagnostics.md) | Medium | No | **E15, Health and diagnostics.**<br>`0750` (done): R6's always-on tier and control, plus L4's uncaught exception gap.<br>`0820`: R12 (M1): a rolling health row and a clean shutdown marker.<br>`0810`: R19 (M6): database size, waits, top tables and a panel.<br>`0880`: R13 (M3, M4, M5): write-only metrics, small inefficiencies and shared primitives.<br>`0780`: R11 (M2, L7) and its control: a local diagnostics bundle. | From `0750`: First-occurrence evidence is a missing measurement rather than a defect in shipped behaviour. |
+| 4 | [0790-e16-log-controls.md](0790-e16-log-controls.md) | Medium | No | **E16, Log controls.**<br>`0790`: R8's remainder (L7) and its control: a switch, DevTools and a persisted error ring.<br>`0890`: User controls: presets, auto-revert and privacy text.<br>`0900`: User controls: `--log-level` and `--log-category`. | From `0790`: Renderer bugs in the packaged app leave no trace, which is a supportability gap rather than broken behaviour. |
+| 5 | [0160-e10-conditional-reads-and-deltas.md](0160-e10-conditional-reads-and-deltas.md) | Low | No | **E10, Conditional reads and deltas.**<br>`0160`: TX-1: A transcript delta can only be built from the newest cached view<br>`0180`: TX-5: Session-state reads have no conditional path from the bridge<br>`0190`: TX-6: Bridge transcript windows are always sent whole | From `0160`: The report rates it High, but the maintainer gated it on a baseline, so it stays Low until that measurement arrives. |
+| 6 | [0210-e11-projection-hashing.md](0210-e11-projection-hashing.md) | Low | No | **E11, Projection hashing.**<br>`0210`: TX-3: The legacy commit re-serialises the whole projection to fingerprint it<br>`0220`: TX-9, TX-13: Memoise row fingerprints and hash them for the view token<br>`0320`: TX-7: Head-row recovery re-reads the raw transcript on each streaming revision<br>`0330`: TX-11: Patch building re-serialises and hashes whole rows in a JavaScript loop<br>`0340`: TX-12: Already-encoded rows are stringified again on the way out<br>`0345`: TX-14: Restart-preview checkpoints are serialised three times and cloned<br>`0350`: TX-16: Inline tool bodies are re-hashed whenever their row misses the cache<br>`0380`: TX-17: Small linear scans in the transcript projection | From `0210`: A contained optimisation with no behaviour change and no measured cost. |
+| 7 | [0385-tx-10-joined-history-pages.md](0385-tx-10-joined-history-pages.md) | Low | No | TX-10: Joined history pages read the whole transcript per page | A compatibility path that only older renderers use and that 0232 will remove, blocked on the support window. |
+| 8 | [0390-gw-7-websocket-compression.md](0390-gw-7-websocket-compression.md) | Low | No | GW-7: No WebSocket message compression | Deferred by 0052 decision D6 until the transport direction is chosen. |
+| 9 | [0560-st-9-agent-mail-store-remainder.md](0560-st-9-agent-mail-store-remainder.md) | Low | No | ST-9 (rest): Agent mail: pending injects and mailbox lists still sit on the whole store | The read cost the finding described has gone, and the rest needs a stored-format change only a measurement could justify. |
+| 10 | [0693-dk-10-second-claude-binary.md](0693-dk-10-second-claude-binary.md) | Low | No | DK-10: The image ships two Claude Code native binaries | It is an optional image-size saving that waits on a maintainer decision. |
 
 ## Parallel running
 
@@ -40,18 +39,16 @@ This index only changes when a branch merges, so it can't show what is running n
 | --- | --- | --- | --- | --- | --- |
 | E1 | Baseline run | The baseline task in `0150`, `0160`, `0180` and `0190` | No lane | None | None |
 | E25 | [Container start](0490-e25-container-start.md) | `0490`, `0500` | Containers, 3 of 3 | None | None |
-| E9 | [Transcript reads](0110-e9-transcript-reads.md) | `0150`, `0200`, `0110` | Transcript, 1 of 4 | E1 (Baseline run) | None |
-| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 2 of 4 | E1 (Baseline run) | None |
-| E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 3 of 4 | None | None |
-| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 4 of 4 | None | None |
+| E10 | [Conditional reads and deltas](0160-e10-conditional-reads-and-deltas.md) | `0160`, `0180`, `0190` | Transcript, 1 of 3 | E1 (Baseline run) | None |
+| E11 | [Projection hashing](0210-e11-projection-hashing.md) | `0210`, `0220`, `0320`, `0330`, `0340`, `0345`, `0350`, `0380` | Transcript, 2 of 3 | None | None |
+| E12 | [Renderer store](0510-e12-renderer-store.md) | `0510`, `0590`, `0640` | Transcript, 3 of 3 | None | None |
 | E15 | [Health and diagnostics](0750-e15-health-and-diagnostics.md) | `0750`, `0820`, `0810`, `0880`, `0780` | Logging and diagnostics, 1 of 2 | None | None |
 | E16 | [Log controls](0790-e16-log-controls.md) | `0790`, `0890`, `0900` | Logging and diagnostics, 2 of 2 | None | None |
 
 Why these are grouped:
 
-- **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E9 and E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
+- **E1:** The baseline task in `0150`, `0160`, `0180` and `0190`. A measurement on an isolated `dev:test` profile with no code change, and it must happen before E10. `0400`'s baseline was taken with E26; see the closing check of E26 below.
 - **E25:** `0500` depends on `0490`.
-- **E9:** `0200` and `0110` link to `0150`.
 - **E10:** Waiting on the baseline. `0190` links to `0160`.
 - **E11:** Serialising and hashing in the projection path. All Low.
 - **E12:** Same hook and projection store.
@@ -78,7 +75,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every efficiency finding
 
-94 done, 7 partly done, 19 open, 3 no action.
+97 done, 7 partly done, 16 open, 3 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -105,17 +102,17 @@ When one of these becomes ready, it joins the lane shown.
 | TX-5 | Open | State reads have no condition (`apps/backend/src/core/http-bridge-progressive.ts:217`) and the hash covers the composer (`apps/backend/src/core/native-agent-transcript-projection.ts:3418-3420`); see 0180. |
 | TX-6 | Open | A bridge answers `unchanged` or a whole snapshot only (`apps/backend/src/core/http-bridge-transcript-v2.ts:197`); see 0190. |
 | TX-7 | Open | Recovery restarts per source token with no delay (`apps/backend/src/core/native-agent-transcript-projection.ts:1901`, `:2006`), though only for a part-trimmed head or cached summary (`:1924-1929`); see 0320. |
-| TX-8 | Open | A miss runs a `sync-v1` refresh with `remote` undefined and then throws (`apps/backend/src/core/native-agent-transcript-projection.ts:4194`, `:4205`, `:5032`); see 0110. |
+| TX-8 | Done | A miss on a remote reference (prefix `r`, `apps/backend/src/core/native-agent-remote-detail-recovery.ts`) re-registers it from a cached row or page, or runs one summary read, never a raw `sync-v1` refresh (`recoverRemoteToolDetails` in `apps/backend/src/core/native-agent-transcript-projection.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-9 | Open | `valueFingerprint` memoises the JSON but hashes on each call (`apps/backend/src/core/native-agent-projection-encoding.ts:64-66`); see 0220. |
 | TX-10 | Open | Joined pages still refresh and scan with SHA-256 per row (`apps/backend/src/core/native-agent-transcript-projection.ts:3878`, `:3903-3909`), owned by 0232 task 4; see 0385. |
 | TX-11 | Open | `partsDigest` still serialises and loops per character (`packages/protocol/src/native-agent-transcript-patch.ts:71`); see 0330. |
 | TX-12 | Open | The gateway still stringifies the whole result (`apps/backend/src/gateway-handlers.ts:133`), and `revisedMessages` is not measured through the memo (`apps/backend/src/core/native-agent-projection-encoding.ts:131-138`); see 0340. |
 | TX-13 | Open | The view token still hashes every row's JSON (`apps/backend/src/core/native-agent-transcript-projection.ts:2611-2631`); see 0220. |
 | TX-14 | Open | A checkpoint is serialised for the checksum, the size check and the row, then cloned (`apps/backend/src/core/native-agent-display-tails.ts:160`, `apps/backend/src/core/native-agent-display-tail-store.ts:231`, `:258`); see 0345. |
-| TX-15 | Open | The legacy and summary paths use different row cache contexts (`apps/backend/src/core/native-agent-projection-entries.ts:40`, `apps/backend/src/core/native-agent-transcript-projection.ts:2137`, `:5032`); see 0150. |
+| TX-15 | Done | Re-checked in E9: only the 32-row dispatch tail is cached twice (100 summary-context rows and 32 inline-context rows on the fixture), within the per-session cache bounds, so no new item; see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | TX-16 | Open | Inline bodies are still serialised and hashed on a row miss (`apps/backend/src/core/native-agent-transcript-projection.ts:807-808`); see 0350. |
 | TX-17 | Open | The scans remain (`apps/backend/src/core/native-agent-transcript-projection.ts:1203`, `:2035`, `:2078`), and the report names no fix; see 0380. |
-| TX-18 | Open | The fallback still calls `this.legacy(sessionId)` without the limit (`apps/backend/src/core/http-bridge-transcript-reader.ts:66`); see 0200. |
+| TX-18 | Done | The fallback reads `this.legacy(sessionId, options.limit)` (`apps/backend/src/core/http-bridge-transcript-reader.ts`), and a cut the legacy read made itself counts as truncation (`apps/backend/src/core/http-bridge-progressive.ts`, E9); see [Closing check of E9](#closing-check-of-e9-transcript-reads). |
 | BR-1 | Done | Streaming writes are limited to one a second (`bridges/acp-bridge/src/acp-persist-writer.ts:231-241`, #1548 `12289fc56`). The report's fragment cache was not built, because a measurement at the bound was not conclusive; figures and the open questions are in [5900](../../todo/agent-engines/5900-acp-state-write-cost-at-the-cap.md). |
 | BR-2 | Done | `isSessionConfigPersisted` reads one record through `loadRecord` (`bridges/codex-bridge/src/app-server-runtime-sessions.ts:1803`, `bridges/codex-bridge/src/sessions/persistence.ts:386`, #1683 `38ac30844`). |
 | BR-3 | Done | The check interval is 1 MiB (`bridges/acp-bridge/src/acp-context.ts:961`, #1548 `12289fc56`). |
@@ -507,6 +504,24 @@ The detailed outcome evidence is retained here so it survives squash merges (his
 | 0370 | Task 2: give relayed traffic its own replay share | Done | `relayedEventReplay` (`apps/backend/src/gateway-context.ts`), 512 frames and 512 KiB (`gateway-event-replay.ts`). Test: "a busy leaf expires relayed cursors only; a main cursor still replays" in `gateway-relayed-events.test.ts`. |
 | 0370 | Decision: how to separate them | Done, as recommended | A second bounded ring with its own cursor, on its own stream rather than a merged cursor, so `Last-Event-ID` and the handshake are unchanged. Tests: the same file, plus the renderer's stream class against a real gateway. |
 | 0370 | Live evidence: two real nodes in a real browser, and real older releases | Moved to a to-do | To-do 5840, tasks 1 and 2. |
+
+## Closing check of E9 (Transcript reads)
+
+The outcome of every task in the E9 batch file, checked back against the code on 2026-11-05 before the file was deleted. Base commit `69a3b4ca5`; the file with its full outcome table is at `1fcae2160`. TX-2, TX-8, TX-15 and TX-18 in the table above summarise this. The baseline was taken on the base commit with a provider fake, not a provider turn (`apps/backend/src/core/native-agent-transcript-read-bytes.test.ts`, 400 rows, 3,292,561 bytes); live figures are [5340](../../todo/transcripts-and-observation/5340-transcript-reads-live-evidence.md).
+
+| Part | Task | Outcome | Code, evidence or to-do |
+| --- | --- | --- | --- |
+| 0150 | 1. Capture the baseline | Done with fakes; live figures moved to a to-do | Before: a send read 33 raw rows (271,676 bytes), a turn check 2 (16,466 bytes), an evicted remote detail 400 (3,292,561 bytes) and failed, the `/messages` fallback 3,292,610 bytes for 100 rows. Live: [5340](../../todo/transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 1. |
+| 0150 | 2. State-only read for `messageLimit: 1` callers | Done | The checkout-turn check, the tab close guard, the question relay and the local and remote waiting-blocker reads use `getSessionStateUpdate` / `get_native_agent_session_state_update`: 0 transcript bytes. `get_tab_state` keeps the projection, because it returns the whole state. |
+| 0150 | 3. State-only post-dispatch refresh | Done 2026-11-04 | `refreshProjectionState`. |
+| 0150 | 4. Pass `limit` through the raw read | Done 2026-11-04 | `interactiveSnapshot(sessionId, { limit })`. |
+| 0150 | 5. Re-check the duplicate row cache (TX-15) | Done, no new item | 32 inline-context duplicates of the dispatch tail beside 100 summary rows, within the cache's per-session bounds. |
+| 0150 | Needs verification: side effects of a full refresh | No longer holds | Task 3 kept a full refresh on a shorter tail. |
+| 0150 | Needs verification: share of large Claude `/messages` bodies | Moved to a to-do | [5340](../../todo/transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 2. |
+| 0200 | 1. Pass the limit to the fallback read | Done | `http-bridge-transcript-reader.ts`, `http-bridge-progressive.ts`; 823,299 bytes instead of 3,292,610. Tests in `http-bridge-transcript-reader.test.ts`. |
+| 0200 | Needs verification: bridges set `truncated` on a `?limit=` cut | Done | Pinned by `transcript-window.test.ts` (Claude, Codex), Codex `index-routes.test.ts`, Cursor and Pi `http.test.ts`; ACP's `messageWindow` in code. |
+| 0110 | 1. Recover remote details without the raw sync read | Done | `native-agent-remote-detail-recovery.ts`, `recoverRemoteToolDetails`; tests "after eviction" in `native-agent-service-summary-transcripts.test.ts`. A row held nowhere asks for a reload. |
+| 0110 | Needs verification: how often users reach the error | Moved to a to-do | [5340](../../todo/transcripts-and-observation/5340-transcript-reads-live-evidence.md) task 3. |
 
 ## Closing check of E24 (Gateway static and preview)
 

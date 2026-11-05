@@ -25,6 +25,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
       "project-seed.refused":
         "A project .env, .env.local or opencode.json was not copied into a new container: a link, not a regular file, outside the project, too large or unreadable.",
       "opencode.warm-incomplete": "OpenCode did not finish loading /workspace in a container.",
+      "log-driver.unbounded":
+        "The Docker daemon offers neither the local nor the json-file log driver, so new containers keep its default driver, whose log may be uncapped. Written once per backend.",
       "lifecycle-event.reconcile-failed":
         "Reconciling an environment after a container start or stop event failed; the next status read retries.",
       "login-keeper.pass-failed": "A Claude login keeper pass failed; the next interval retries.",
@@ -60,6 +62,8 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         essential: true,
         fields: { staleForMs: "number" },
       },
+      "writer-lease.listener-failed":
+        "The callback told about a lost registry writer lease threw, so the schedules settings learn of the loss only at their next read.",
       "writer-lease.not-acquired": {
         description:
           "This backend started without the registry writer lease, for the fixed `reason` given. A second backend on one data directory is normal: it serves reads, runs no schedules and refuses container changes.",

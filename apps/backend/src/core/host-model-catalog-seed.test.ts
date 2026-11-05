@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { CommandContext } from "./commands-context.js";
+import { HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS, HostCatalogSeeds } from "./host-catalog-seeds.js";
 import {
-  __testing,
-  HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS,
   resetHostModelCatalogSeedCooldown,
   seedEnabledHostModelCatalogs,
   seedHostModelCatalogIfMissing,
@@ -20,7 +19,9 @@ function fakeContext(
     cache[agent] = { updatedAt: "2026-01-01T00:00:00.000Z", models };
     return cache;
   });
+  // A fresh backend's seed state per context, as each backend has its own.
   const context = {
+    runtime: { localServers: { catalogSeeds: new HostCatalogSeeds() } },
     storage: {
       getAgentModelCatalogCache: async () => cache,
       cacheAgentModelCatalog,
@@ -38,7 +39,6 @@ const claudeModel = { id: "sonnet", name: "Sonnet", resolvedModel: "sonnet" };
 
 describe("seedHostModelCatalogIfMissing", () => {
   beforeEach(() => {
-    __testing.reset();
     mock.restore();
   });
 
@@ -71,7 +71,7 @@ describe("seedHostModelCatalogIfMissing", () => {
       await seedHostModelCatalogIfMissing(context, "codex", refresh as never, { now: clock }),
     ).toBe(false);
     expect(refresh).toHaveBeenCalledTimes(1);
-    resetHostModelCatalogSeedCooldown("codex");
+    resetHostModelCatalogSeedCooldown(context, "codex");
     await seedHostModelCatalogIfMissing(context, "codex", refresh as never, { now: clock });
     expect(refresh).toHaveBeenCalledTimes(2);
     now += HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS;
@@ -117,7 +117,7 @@ describe("seedHostModelCatalogIfMissing", () => {
 
     const staleSeed = seedHostModelCatalogIfMissing(context, "claude", refresh as never);
     await started;
-    resetHostModelCatalogSeedCooldown("claude");
+    resetHostModelCatalogSeedCooldown(context, "claude");
     const authenticatedSeed = seedHostModelCatalogIfMissing(context, "claude", refresh as never);
     rejectOld(new Error("old credentials"));
 

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
 import { registerProjectCommands, withDefaultBranches } from "./commands-registry-projects.js";
+import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import type { Project } from "./models.js";
 
 const projects: Project[] = [
@@ -100,8 +101,7 @@ describe("get_projects includeDefaultBranch", () => {
 
 describe("projectless bug report catalogue", () => {
   test("seeds host OpenCode models and offers only the report providers", async () => {
-    const { HOST_OPENCODE_CATALOG_SCOPE, __testing } = await import("./host-model-catalog-seed.js");
-    __testing.reset();
+    const { HOST_OPENCODE_CATALOG_SCOPE } = await import("./host-model-catalog-seed.js");
     let openCode: unknown = null;
     const refresh = mock(async () => ({
       agent: "opencode",
@@ -114,6 +114,7 @@ describe("projectless bug report catalogue", () => {
     };
     const scopes: string[] = [];
     const context = {
+      runtime: { localServers: { catalogSeeds: new HostCatalogSeeds() } },
       storage: {
         getEnvironment: async () => null,
         bugReports: { getBugReport: async () => ({ id: "r1" }) },

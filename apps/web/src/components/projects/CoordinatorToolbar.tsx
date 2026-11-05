@@ -113,6 +113,8 @@ export function CoordinatorToolbar({
   return (
     <>
       <div className="shrink-0 border-b border-border/70 bg-chrome px-3 py-2">
+        {/* On a phone the badge and the buttons keep only their icons (their
+        names stay in the accessible name), so the row rarely wraps. */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <CoordinatorIsolationBadge
             projectPath={snapshot.projectPath}
@@ -133,7 +135,7 @@ export function CoordinatorToolbar({
           >
             <SelectTrigger
               size="sm"
-              className="max-w-56"
+              className="max-w-40 sm:max-w-56"
               title={
                 activeTurnReason ??
                 (switchBlocked ? blocked : null) ??
@@ -180,7 +182,7 @@ export function CoordinatorToolbar({
                 onClick={() => void runGit("sync")}
               >
                 <RotateCcw className="size-3.5" />
-                Sync
+                <span className="max-sm:sr-only">Sync</span>
               </Button>
             </span>
           ) : null}
@@ -196,9 +198,15 @@ export function CoordinatorToolbar({
           </Button>
           {/* While paused, the banner below the header offers Resume. */}
           {paused ? null : (
-            <Button size="sm" variant="outline" disabled={conversationBusy} onClick={onPause}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={conversationBusy}
+              onClick={onPause}
+              title="Pause coordination"
+            >
               <Pause className="size-3.5" />
-              Pause
+              <span className="max-sm:sr-only">Pause</span>
             </Button>
           )}
         </div>

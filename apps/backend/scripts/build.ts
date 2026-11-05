@@ -1,5 +1,6 @@
 import { cp, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
+import { buildCommitDefine } from "@orkestrator/protocol/node/build-commit";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const output = path.join(packageRoot, "dist");
@@ -12,6 +13,7 @@ const result = await Bun.build({
   outdir: output,
   target: "bun",
   sourcemap: "external",
+  define: buildCommitDefine(),
   // Sharp resolves its platform-native @img package at runtime. Keeping the
   // package external preserves its own module location, so it resolves the
   // matching vendored binary instead of whichever version happens to be in

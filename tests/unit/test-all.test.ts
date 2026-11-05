@@ -46,6 +46,130 @@ import {
 } from "../../scripts/test-all";
 import { SLOW_TESTS, TEST_TIER_ENV } from "../../scripts/test-tiers";
 
+test("real Turbo invalidates both stamp-consuming builds and restores the matching cached artifacts", async () => {
+  const repositoryRoot = path.resolve(import.meta.dir, "../..");
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "ork-turbo-commit-"));
+  const env = {
+    PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
+    TURBO_TELEMETRY_DISABLED: "1",
+    CI: "1",
+  };
+  const run = async (command: string[], environment: NodeJS.ProcessEnv = env) => {
+    const child = Bun.spawn(command, {
+      cwd: fixture,
+      env: environment,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(exitCode, stderr + stdout).toBe(0);
+    return stdout;
+  };
+  try {
+    const config = JSON.parse(await readFile(path.join(repositoryRoot, "turbo.json"), "utf8"));
+    await writeFile(
+      path.join(fixture, "turbo.json"),
+      JSON.stringify({
+        ...config,
+        tasks: {
+          build: config.tasks.build,
+          "@orkestrator/backend#build": config.tasks["@orkestrator/backend#build"],
+        },
+      }),
+    );
+    await writeFile(
+      path.join(fixture, "package.json"),
+      JSON.stringify({
+        name: "commit-cache-fixture",
+        private: true,
+        packageManager: `bun@${Bun.version}`,
+        workspaces: ["apps/*", "packages/*"],
+      }),
+    );
+    await writeFile(
+      path.join(fixture, ".gitignore"),
+      "node_modules/\ndist/\n.turbo/\n.executions\n",
+    );
+    for (const [directory, name] of [
+      ["apps/backend", "@orkestrator/backend"],
+      ["packages/cli", "orkestrator"],
+    ]) {
+      const target = path.join(fixture, directory!);
+      await mkdir(target, { recursive: true });
+      await writeFile(
+        path.join(target, "package.json"),
+        JSON.stringify({ name, scripts: { build: "bun build.ts" } }),
+      );
+      await writeFile(
+        path.join(target, "build.ts"),
+        `
+const count = Bun.file(".executions");
+await Bun.write(".executions", String((await count.exists() ? Number(await count.text()) : 0) + 1));
+await Bun.write("dist/commit.json", JSON.stringify(process.env.ORKESTRATOR_BUILD_COMMIT ?? null));
+`,
+      );
+    }
+    await writeFile(
+      path.join(fixture, "packages/cli/turbo.json"),
+      await readFile(path.join(repositoryRoot, "packages/cli/turbo.json")),
+    );
+    await run([process.execPath, "install", "--ignore-scripts"]);
+    const turbo = [
+      path.join(repositoryRoot, "node_modules/.bin/turbo"),
+      "run",
+      "build",
+      "--cache=local:rw",
+    ];
+    const hashes = async (commit?: string) => {
+      const result = JSON.parse(
+        await run([...turbo, "--dry=json"], {
+          ...env,
+          ...(commit ? { ORKESTRATOR_BUILD_COMMIT: commit } : {}),
+        }),
+      ) as { tasks: Array<{ taskId: string; hash: string }> };
+      return Object.fromEntries(result.tasks.map((task) => [task.taskId, task.hash]));
+    };
+    const build = (commit?: string) =>
+      run(turbo, { ...env, ...(commit ? { ORKESTRATOR_BUILD_COMMIT: commit } : {}) });
+    const assertArtifacts = async (commit: string | null, executions: number) => {
+      for (const directory of ["apps/backend", "packages/cli"]) {
+        expect(
+          JSON.parse(await readFile(path.join(fixture, directory, "dist/commit.json"), "utf8")),
+        ).toBe(commit);
+        expect(await readFile(path.join(fixture, directory, ".executions"), "utf8")).toBe(
+          String(executions),
+        );
+      }
+    };
+    const first = await hashes("abc1234");
+    expect(Object.keys(first).sort()).toEqual(["@orkestrator/backend#build", "orkestrator#build"]);
+    await build("abc1234");
+    await assertArtifacts("abc1234", 1);
+    const second = await hashes("def5678");
+    for (const task of Object.keys(first)) expect(second[task]).not.toBe(first[task]);
+    await build("def5678");
+    await assertArtifacts("def5678", 2);
+    for (const directory of ["apps/backend", "packages/cli"])
+      await rm(path.join(fixture, directory, "dist"), { recursive: true });
+    await build("abc1234");
+    await assertArtifacts("abc1234", 2);
+    await build();
+    await assertArtifacts(null, 3);
+    const unstamped = await hashes();
+    await mkdir(path.join(fixture, "apps/web"));
+    await writeFile(path.join(fixture, "apps/web/renderer.ts"), "// unrelated renderer change\n");
+    expect(await hashes()).toEqual(unstamped);
+    await build();
+    await assertArtifacts(null, 3);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+}, 60_000);
+
 interface Invocation {
   name: string;
   command: string;
@@ -467,6 +591,19 @@ describe("scripts/test-all.ts", () => {
     expect(invocations.length).toBeGreaterThan(0);
     for (const invocation of invocations) expect(invocation.env.NODE_ENV).toBeUndefined();
     expect(dependencies.env.NODE_ENV).toBe("production");
+  });
+
+  test("removes an inherited build commit before the workspace build and every test group", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: { ORKESTRATOR_BUILD_COMMIT: "abc1234", TEST_ALL_MARKER: "preserved" },
+    });
+    expect(await runAllTests(dependencies)).toBe(0);
+    expect(invocations.some((invocation) => invocation.name === WORKSPACE)).toBe(true);
+    for (const invocation of invocations) {
+      expect(invocation.env).not.toHaveProperty("ORKESTRATOR_BUILD_COMMIT");
+      expect(invocation.env.TEST_ALL_MARKER).toBe("preserved");
+    }
+    expect(dependencies.env.ORKESTRATOR_BUILD_COMMIT).toBe("abc1234");
   });
 
   test("worker plan bounds aggregate Bun workers across every active package task", () => {

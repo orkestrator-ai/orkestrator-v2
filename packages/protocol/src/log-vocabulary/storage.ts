@@ -49,6 +49,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "Pruning agent handoffs that nothing references failed; a later prune retries.",
       "desktop-connections.malformed":
         "Stored desktop connection settings were malformed, so the local connection is used.",
+      "config.restrict-mode-failed":
+        "A config file holding provider secrets could not be set to owner-only; the backend carries on.",
       "legacy-json.moved":
         "JSON store files written after the SQLite migration were archived, not imported.",
       "legacy-json.archive-failed": "Imported JSON store files could not be archived.",

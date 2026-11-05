@@ -130,7 +130,7 @@ a primitive or a repository helper the facade does not expose use
   toolchain installer read them, and on first run write them, before the
   backend starts. Those run under Node, which has no `bun:sqlite`. They keep
   the atomic-rename writer and backup ladder; `config.json` is written 0600
-  because it holds API keys.
+  because it holds API keys (see [Provider secrets at rest](#provider-secrets-at-rest)).
 - Descriptor files other processes read: `backend-instance.json`,
   `control-mcp.json`, `gateway-auth.json`.
 - Design canvases (records, pending operations, intent queues, history
@@ -472,7 +472,10 @@ primitives above serialize their writes.
 - Cache sizes (`cache_size`, `mmap_size`, `temp_store`) are SQLite's defaults.
   They are revisited only with a measured read problem
   ([5181](../todo/cross-cutting/5181-sqlite-cache-sizes.md)).
-- The database file is 0600; SQLite gives `-wal` and `-shm` the same mode.
+- Every open sets the database file to 0600, along with any `-wal`, `-shm` or
+  `-journal` already beside it, because SQLite only gives the file's mode to
+  companions it creates. A new database's file exists at the default mode only
+  until that first open sets it, before any content is written.
 
 ### Snapshots
 
@@ -568,6 +571,87 @@ they are absent until one runs, and a machine with no changes takes no copy.
 holder's last heartbeat: a large one is a dead or stalled holder, and a small one a live
 holder keeping it for longer than the waiter would wait. A transaction that gives up
 with `SQLITE_BUSY` is counted as `transactionsBusy`.
+
+## Provider secrets at rest
+
+**Accepted risk (2026-11-05, security finding L17):** the stored provider secrets
+are plaintext in owner-only files. No keychain or `safeStorage` storage path
+exists for them, and none is planned while the reasoning below holds.
+
+The fields are `githubToken`, `anthropicApiKey`, `cursorApiKey` and
+`openCodeZenApiKey`, in `global` of the app config. They live here and nowhere
+else in the data directory:
+
+| File | Holds | Mode |
+| --- | --- | --- |
+| `config.json` | All four | 0600, set by every save and every backend start (`restrictConfigFileModes`) |
+| `config.json.bak.1` to `.bak.5` | Earlier values of all four | The same |
+| `.config.json.<uuid>.tmp` (also recovery and backup atomic-save remnants) | All four, if a save was interrupted | Created 0600; existing regular remnants tightened to 0600 at backend start |
+| `portable-inputs/<environment>/<revision>/claude-config/.orkestrator-anthropic-key` | `anthropicApiKey`, for a container whose image takes staged inputs | 0600 in a 0700 directory |
+
+`orkestrator.sqlite`, `change-tracking.sqlite`, their `-wal` and `-shm` and the
+snapshots in `backups/` do not hold these fields, because `config.json` is not a
+database store. They are 0600 (the directory 0700) for the other sensitive
+content they hold.
+
+**What protects them:**
+
+- The file modes above, against other users on the machine.
+- A container has no bind that reaches these files. Its binds are the project's
+  Git mirror directory, its own `portable-inputs` revision and, on an image older
+  than staged inputs, individual agent homes; none is the data directory.
+- Answers to clients leave them out. `redactGlobalConfig` reports only whether
+  each is configured, `stripRendererCredentials` ignores them in a settings save,
+  and a leaf node never inherits them from its command node.
+
+**What does not protect them:**
+
+- Anything running as the same user can read them, including an agent in a local
+  environment and any other program that user runs. So can root.
+- Backups and disk images hold them in plaintext: a Time Machine or `rsync` copy
+  of the data directory, or an image of an unencrypted disk. A copy made outside
+  the app can also lose the 0600 mode.
+- Clearing or replacing a key does not remove the old value from the backup
+  ladder until five further config saves have rotated it out. Interrupted-save
+  remnants are retained and tightened at startup, rather than deleted because
+  another backend may still be writing one. They can retain old keys indefinitely
+  until manually removed while all backends are stopped. A staged Anthropic
+  key also remains in its `portable-inputs` revision while any container of that
+  environment references it, including stopped containers and recovery copies.
+  Changing the setting does not rewrite that revision or the key already copied
+  into the container. Unreferenced revisions are eligible for pruning; a key that
+  may have leaked has to be revoked at its provider.
+- The modes guard the file, not the value. A container is deliberately given the
+  keys its settings allow: the Anthropic key as the staged file above, or an
+  environment variable on an older image; the Cursor key as an owner-only file in
+  the container, or an environment variable on an older image; `githubToken` when
+  [`containerGitHubCredential`](github-cli.md#container-credential) is `pat`. An
+  agent in that container can read what it was given. `openCodeZenApiKey` stays on
+  the host, where it reads plan usage.
+
+**Why this is accepted:**
+
+- A process running as the same user can already read the host logins and tokens
+  beside these files (`~/.claude`, `~/.codex`, `gateway-auth.json`,
+  `control-mcp.json`). Encrypting four fields would not change what it can reach,
+  and on Linux libsecret does not separate applications of one user either.
+- The backend also runs standalone. `safeStorage` belongs to Electron, and a
+  headless host has no session keyring, so a keychain would be a second storage
+  path with a migration, and either a backend that cannot start alone with its
+  config or a standalone install that gains nothing.
+- It matches Control MCP's credentials, which stay in plaintext at 0600 so Copy
+  setup works at any time
+  ([decision 2](../todo/mcp/0041-control-mcp-voice-surface.md#decisions)).
+
+Look at this again if a same-user process stops being able to read those host
+logins (for example, if every local agent runs in a sandbox that denies them), or
+if a container gains a bind on the data directory.
+
+`storage-secrets-at-rest.test.ts` checks the modes and scans a data directory to
+show that only `config.json` and its backups hold the fields.
+`container-data-directory-reach.test.ts` checks a container's binds and the staged
+key, and `commands-secret-sweep.test.ts` plants canaries and calls every
+registered command.
 
 ## Migrations
 

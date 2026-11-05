@@ -26,7 +26,7 @@ import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { readStoredValue, seedStore, writeLegacyStore } from "./storage-test-support.js";
 import { runCommand } from "./shell.js";
 import { prepareCoordinatorCodexHome } from "./commands-servers.js";
-import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { coordinatorRuntimeId, type CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -697,7 +697,12 @@ describe("project coordinator", () => {
         coordinatorId: initial.workspace.id,
       },
     });
-    await service.recordStartupError(project.id, new Error("bridge did not become healthy"));
+    // Only an older backend writes this now; a record it stored still recovers.
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => ({
+      ...current!,
+      lifecycleState: "error",
+      lastStartupError: "bridge did not become healthy",
+    }));
 
     const retried = await service.ensure(project.id);
     expect(retried.workspace).toMatchObject({
@@ -707,6 +712,66 @@ describe("project coordinator", () => {
       conversations: [{ id: conversation.id, agent: "codex" }],
     });
     expect(retried.workspace.lastStartupError).toBeUndefined();
+  });
+
+  describe("a conversation that failed to start", () => {
+    async function failedConversation() {
+      const project = await storage.addProject(
+        createProject("https://example.invalid/repo.git", checkout),
+      );
+      const service = new CoordinatorService(storage, () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }));
+      const initial = await service.ensure(project.id);
+      const main = initial.workspace.conversations[0]!;
+      const side = (await service.createConversation(project.id)).workspace.conversations.find(
+        (item) => item.id !== main.id,
+      )!;
+      await storage.coordinators.mutateCoordinatorWorkspace(project.id, (current) => ({
+        ...current!,
+        conversations: current!.conversations.map((item) =>
+          item.id === side.id ? { ...item, startupError: "bridge failed" } : item,
+        ),
+      }));
+      return { project, service, main, side };
+    }
+
+    const errorOf = (snapshot: CoordinatorSnapshot, id: string) =>
+      snapshot.workspace.conversations.find((item) => item.id === id)?.startupError;
+
+    test("Retry clears only its error, and a paused coordinator stays paused", async () => {
+      const { project, service, side } = await failedConversation();
+      await service.setPaused(project.id, true);
+      const retried = await service.retryConversation(project.id, side.id);
+      expect(errorOf(retried, side.id)).toBeUndefined();
+      expect(retried.workspace.lifecycleState).toBe("paused");
+    });
+
+    test("Retry refuses a closed or unknown conversation", async () => {
+      const { project, service, side } = await failedConversation();
+      await service.closeConversation(project.id, side.id);
+      await expect(service.retryConversation(project.id, side.id)).rejects.toThrow("not found");
+      await expect(service.retryConversation(project.id, "missing")).rejects.toThrow("not found");
+    });
+
+    test("opening the panel keeps the failure for a renderer that offers Retry", async () => {
+      const { project, service, side } = await failedConversation();
+      const ensured = await service.ensure(project.id);
+      expect(errorOf(ensured, side.id)).toBe("bridge failed");
+      expect(ensured.workspace.lifecycleState).toBe("ready");
+    });
+
+    test("an older renderer, whose only recovery is opening the panel, clears it", async () => {
+      const { project, service, side } = await failedConversation();
+      // An older renderer reads the workspace field, which no failure touches.
+      const before = await service.get(project.id);
+      expect(before?.workspace.lifecycleState).toBe("ready");
+      expect(before?.workspace.lastStartupError).toBeUndefined();
+      const ensured = await service.ensure(project.id, { clearConversationErrors: true });
+      expect(errorOf(ensured, side.id)).toBeUndefined();
+    });
   });
 
   test("a new conversation has no agent until its first prompt assigns one", async () => {

@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
-import { promisify } from "node:util";
 import { MAX_SSH_AGENT_SOCKET_PATH_CHARS } from "@orkestrator/protocol/ssh-agent-socket";
+import { runCommand } from "./core/shell.js";
 
-const execFileAsync = promisify(execFile);
 const SSH_AGENT_CONNECT_TIMEOUT_MS = 1_000;
 
 type SshAgentSocketSource = "configured" | "environment" | "session";
@@ -64,12 +62,15 @@ export async function isUsableOwnedSocket(
   return (dependencies.canConnect ?? canConnectToSocket)(candidate);
 }
 
-async function commandOutput(command: string, args: string[]): Promise<string | undefined> {
+export async function commandOutput(
+  command: string,
+  args: string[],
+  limits: { timeoutMs?: number; maxOutputBytes?: number } = {},
+): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync(command, args, {
-      encoding: "utf8",
-      timeout: 3_000,
-      maxBuffer: 256 * 1024,
+    const { stdout } = await runCommand(command, args, {
+      timeoutMs: limits.timeoutMs ?? 3_000,
+      maxOutputBytes: limits.maxOutputBytes ?? 256 * 1024,
     });
     const output = stdout.trim();
     return output || undefined;

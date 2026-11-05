@@ -1,5 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { actionHash, coordinatorLaunchIdentity } from "./coordinator-action-scope.js";
+import type { CommandContext } from "./commands-context.js";
+import {
+  actionHash,
+  coordinatorLaunchIdentity,
+  requireCoordinatorConversation,
+} from "./coordinator-action-scope.js";
+
+describe("requireCoordinatorConversation", () => {
+  const context = (lifecycleState: string) =>
+    ({
+      storage: {
+        coordinators: {
+          getCoordinatorWorkspaceById: async () => ({
+            projectId: "project-1",
+            lifecycleState,
+            conversations: [
+              { id: "main" },
+              { id: "side", startupError: "bridge failed" },
+              { id: "closed", closedAt: "2026-01-01T00:00:00Z" },
+            ],
+          }),
+        },
+      },
+    }) as unknown as CommandContext;
+  const check = (state: string, conversationId: string) =>
+    requireCoordinatorConversation(context(state), "project-1", "coordinator-1", conversationId);
+
+  test("refuses only the conversation that failed to start", async () => {
+    await expect(check("ready", "main")).resolves.toBeUndefined();
+    await expect(check("ready", "side")).rejects.toThrow("unavailable");
+    await expect(check("ready", "closed")).rejects.toThrow("unavailable");
+  });
+
+  test("a paused coordinator refuses every conversation", async () => {
+    await expect(check("paused", "main")).rejects.toThrow("unavailable");
+  });
+});
 
 describe("coordinatorLaunchIdentity", () => {
   const launch = (agent: string) => ({

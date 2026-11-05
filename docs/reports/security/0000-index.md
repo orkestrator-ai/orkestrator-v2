@@ -20,7 +20,6 @@ A batch file combines several reports as numbered parts and takes the rating of 
 | 4 | [0020-m1-isolated-preview-default.md](0020-m1-isolated-preview-default.md) | Low | No | M1: legacy route retirement, and the two-machine run the default flip went ahead without | The sandbox header already closes the top-level path. The default is flipped; retirement waits on the support window in todo 0042. |
 | 5 | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) | Low | No | L18: `undici`, `postcss-selector-parser`, Electron 45.x | The advisories are already accepted and blocked upstream in todo 0032. |
 | 6 | [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md) | Low | No | L12: pid reuse by the same user | It needs a crashed backend, pid reuse and a co-tenant on the old port all at once. |
-| 7 | [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) | Low | No | L17: provider secrets in plaintext at 0600 | The report only says to consider it, and only a same-uid process can read the file. |
 
 ## Parallel running
 
@@ -48,8 +47,7 @@ These still follow the lane and conflict rules above.
 | --- | --- | --- | --- | --- | --- |
 | S-0100 | [Egress SNI and DNS](0100-m12-egress-sni-and-dns.md) | `0100` | Containers, 1 of 3 | None | None |
 | S-0170 | [Agent-tools bind address](0170-l15-agent-tools-bind-address.md) | `0170` | Containers, 2 of 3 | None | None |
-| S-0190 | [Provider secrets at rest](0190-l17-provider-secrets-at-rest.md) | `0190` | Storage, 2 of 2 | None | None |
-| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 2 of 2 | None | None |
+| S-0160 | [Descriptor process binding](0160-l12-descriptor-process-binding.md) | `0160` | Gateway, 1 of 1 | None | None |
 
 ### Not ready to start
 
@@ -62,7 +60,7 @@ When one of these becomes ready, it joins the lane shown.
 
 ## Status of every finding
 
-33 done, 15 partly done, 5 open, 12 no action.
+36 done, 13 partly done, 4 open, 12 no action.
 
 | Finding | Disposition | Evidence |
 | --- | --- | --- |
@@ -100,7 +98,7 @@ When one of these becomes ready, it joins the lane shown.
 | L14 | Done | `apps/backend/src/preview-relay-supervisor.ts:24`, `:355-373`, `:381-382`; commit `6cdd8115e` |
 | L15 | Open | `apps/backend/src/core/index.ts:536`, `apps/backend/src/core/agent-tools.ts:977`; [0170-l15-agent-tools-bind-address.md](0170-l15-agent-tools-bind-address.md) |
 | L16 | Partly done | Cursor and Pi policy fields closed by `2d4528dc5` and `a2bba9d80`; remainder in [X1 part Security 0180](0090-x1-coordinator-trust-boundary.md#security-0180-control-mcp-confirmation-operator-token-and-self-reminder-soft-spots) |
-| L17 | Open | `apps/backend/src/core/storage-config.ts:359-365`, `apps/backend/src/core/storage-database.ts:284`; [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md) |
+| L17 | Done | Plaintext at 0600 recorded as an accepted risk in [storage.md](../../architecture/storage.md#provider-secrets-at-rest). The secrets live in `config.json` and its backups, not SQLite. Every start tightens those files (`apps/backend/src/core/storage-config.ts:326`) and every open tightens the database's companions (`apps/backend/src/core/storage-database.ts:280`); `apps/backend/src/core/storage-secrets-at-rest.test.ts`, `apps/backend/tests/container-data-directory-reach.test.ts`. No keychain or `safeStorage` path was built |
 | L18 | Open | `bun.lock:2389`, `:2117`, `:1583`; [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) |
 | I1 | Done | Grants and the relay refuse the machine's administration: `WORKSPACE_ADMINISTRATION_COMMANDS` (`apps/backend/src/core/nodes/workspace-grant-scope.ts`) in `isWorkspaceExcludedCommand` (`apps/backend/src/core/nodes/node-routing.ts`); terminals stay allowed; an older realm's unchanged settings echo is answered (`isGlobalConfigEcho`). Tests: `apps/backend/tests/gateway-workspace-grant-scope.test.ts`, `apps/backend/src/core/nodes/workspace-grant-scope.test.ts`. Live two-node and older-realm checks in [todo 5740](../../todo/cross-cutting/5740-workspace-grant-scope-live-evidence.md) |
 | I2 | Partly done | `docs/architecture/coordinator.md:352` is corrected, `README.md:19` and `docs/architecture/control-mcp.md:505` are not; [X1 part Security 0210](0090-x1-coordinator-trust-boundary.md#security-0210-correct-what-the-docs-say-a-side-agent-can-do) |
@@ -130,4 +128,4 @@ When one of these becomes ready, it joins the lane shown.
 | §9 step 6 (M4, M5, L1) | Done | See M4, M5 and L1 |
 | §9 step 7 (M6, M7, L3, L4) | Done | See M6, M7, L3 and L4 |
 | §9 step 8 (H5, M8, M9) | Done | See H5, M8 and M9; what only a running install can answer is in [todo 5860](../../todo/containers-and-environments/5860-legacy-host-mounts-live-evidence.md) |
-| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0190-l17-provider-secrets-at-rest.md](0190-l17-provider-secrets-at-rest.md); I5 is partly done (see I5) |
+| §9 step 9 (L18, remaining Low and Info) | Partly done | [0110-l18-dependency-advisories.md](0110-l18-dependency-advisories.md) to [0160-l12-descriptor-process-binding.md](0160-l12-descriptor-process-binding.md); I5 is partly done (see I5) |

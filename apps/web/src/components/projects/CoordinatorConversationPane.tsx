@@ -1,5 +1,9 @@
-import { Loader2, Plus, RotateCcw } from "lucide-react";
-import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { Loader2, Plus, RotateCcw, Settings2 } from "lucide-react";
+import {
+  AGENT_PLATFORM_LABELS,
+  normalizeAgentPlatforms,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -9,10 +13,13 @@ import { AgentMailBanner } from "@/components/agent-mail/AgentMailBanner";
 import { LazyLoadBoundary, LazyLoadInlineErrorFallback } from "@/components/LazyLoadBoundary";
 import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
 import { Button } from "@/components/ui/button";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { useConfigStore } from "@/stores";
 import {
   COORDINATOR_COMPOSER_PLACEHOLDER,
   COORDINATOR_STARTER_PROMPTS,
   CoordinatorBanner,
+  CoordinatorStartupFailure,
 } from "./CoordinatorPanelNotices";
 import type { CoordinatorLaunchOptions, PendingCoordinatorLaunch } from "./useCoordinatorLaunches";
 
@@ -40,6 +47,24 @@ interface CoordinatorConversationPaneProps {
   newConversationLabel: string;
   onCreateConversation: () => void;
   onRetry: () => void;
+  /** Clears this conversation's startup failure, so it connects again. */
+  onRetryConversation: (conversationId: string) => void;
+  onCloseConversation: (conversationId: string) => void;
+}
+
+/** Why a conversation cannot send, or undefined when it can. */
+function sendingHeldReason(
+  snapshot: CoordinatorSnapshot,
+  conversation: CoordinatorConversation,
+): string | undefined {
+  if (snapshot.workspace.lifecycleState === "paused") {
+    return "Coordination is paused. Resume to send.";
+  }
+  if (snapshot.workspace.lifecycleState === "error") {
+    return "The coordinator could not start. Retry to send.";
+  }
+  if (conversation.startupError) return "This conversation could not start. Retry to send.";
+  return undefined;
 }
 
 /**
@@ -60,7 +85,10 @@ export function CoordinatorConversationPane({
   newConversationLabel,
   onCreateConversation,
   onRetry,
+  onRetryConversation,
+  onCloseConversation,
 }: CoordinatorConversationPaneProps) {
+  const enabledPlatforms = useConfigStore((state) => state.config.global.enabledAgentPlatforms);
   if (!conversation) {
     return (
       <div className="grid h-full place-items-center text-center">
@@ -88,24 +116,46 @@ export function CoordinatorConversationPane({
   // conversation stays readable while its platform is unavailable.
   const providerUnavailable = Boolean(conversation.agent && !providerState?.available);
   const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+  const heldReason = sendingHeldReason(snapshot, conversation);
+  // A platform turned off is Platforms' to fix; anything else here is the safety level.
+  const platformOff = Boolean(
+    conversation.agent && !normalizeAgentPlatforms(enabledPlatforms).includes(conversation.agent),
+  );
   return (
     <div key={conversation.id} className="flex h-full min-h-0 flex-col">
+      {conversation.startupError ? (
+        <CoordinatorStartupFailure
+          title={conversation.title}
+          error={conversation.startupError}
+          busy={conversationBusy}
+          onRetry={() => onRetryConversation(conversation.id)}
+          onClose={() => onCloseConversation(conversation.id)}
+        />
+      ) : null}
       {providerUnavailable && conversation.agent ? (
         <CoordinatorBanner
           tone="warning"
           action={
-            <Button size="sm" variant="outline" onClick={onRetry}>
-              <RotateCcw className="size-3.5" />
-              Retry
-            </Button>
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => requestGlobalSettings(platformOff ? "platforms" : "coordinator")}
+              >
+                <Settings2 className="size-3.5" />
+                {platformOff ? "Platform settings" : "Coordinator settings"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={onRetry}>
+                <RotateCcw className="size-3.5" />
+                Retry
+              </Button>
+            </div>
           }
         >
           <span className="font-medium">
             {AGENT_PLATFORM_LABELS[conversation.agent]} is unavailable for Coordinator.
           </span>{" "}
-          <span className="text-muted-foreground">
-            {providerState?.reason ?? snapshot.workspace.lastStartupError}
-          </span>
+          <span className="text-muted-foreground">{providerState?.reason}</span>
         </CoordinatorBanner>
       ) : null}
       <AgentMailBanner
@@ -139,15 +189,24 @@ export function CoordinatorConversationPane({
             availablePlatforms={availablePlatforms}
             platformNotes={platformNotes}
             composerPlaceholder={COORDINATOR_COMPOSER_PLACEHOLDER}
-            connectionEnabled={
-              snapshot.workspace.lifecycleState === "ready" && providerState?.available !== false
-            }
+            connectionEnabled={providerState?.available !== false}
+            {...(heldReason ? { sendingHeldReason: heldReason } : {})}
             // Only the main coordinator delegates, so only it is offered work
             // that has to run in a pipeline or environment.
             {...(conversation.role === "main"
               ? { unassignedStarterPrompts: COORDINATOR_STARTER_PROMPTS }
               : {})}
             emptyPlatformsMessage="No agent platform meets this coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the coordinator safety level in Settings."
+            emptyPlatformsAction={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => requestGlobalSettings("coordinator")}
+              >
+                <Settings2 className="size-3.5" />
+                Coordinator settings
+              </Button>
+            }
             onAssignPlatform={
               conversation.agent
                 ? undefined

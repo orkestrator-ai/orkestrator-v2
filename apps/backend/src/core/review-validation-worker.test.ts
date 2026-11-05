@@ -1733,10 +1733,12 @@ fi
 `);
     // Execute the worker's exact status/path helpers with a shorter deadline.
     // This is a real spawnSync timeout, rather than an invented error object.
+    // The deadline must outlast the fake Git's startup, or it dies before it
+    // records the call this test asserts on.
     const helpers = REVIEW_VALIDATION_WORKER.slice(
       REVIEW_VALIDATION_WORKER.indexOf("function gitOptions()"),
       REVIEW_VALIDATION_WORKER.indexOf("const seenDriftPaths"),
-    ).replace("timeout: 10000", "timeout: 200");
+    ).replace("timeout: 10000", "timeout: 2000");
     const script = `const { spawnSync } = require("node:child_process");
 const root = ${JSON.stringify(root)};
 ${helpers}

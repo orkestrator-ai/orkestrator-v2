@@ -8,9 +8,10 @@ export const CHANGE_TRACKING_LOG_AREAS = defineLogAreas({
         "Importing surviving OpenCode command journals as legacy summaries failed.",
       "measurement-drain.failed":
         "Draining an owner's superseded measurements failed; the retention pass retries.",
+      "retention.failed":
+        "A retention pass failed partway; what it deleted stands and the next pass goes on.",
       "projection.failed": "Projecting a change event onto its environment failed.",
       "startup.reconcile-failed": "Reconciling change tracking at startup failed.",
-      "retention.failed": "A scheduled retention pass failed; the next one retries.",
       "turn-start.capture-failed": "Capturing a turn's start failed, so the turn is untracked.",
       "dispatch.record-failed": "Recording a turn's dispatch outcome failed.",
       "turn.finalize-failed": "Finalizing a turn failed.",

@@ -1,4 +1,7 @@
-import { ENVIRONMENT_ATTENTION_EVENT } from "@orkestrator/protocol/environment-attention";
+import {
+  COORDINATOR_WAKE_ATTENTION_EVENT,
+  ENVIRONMENT_ATTENTION_EVENT,
+} from "@orkestrator/protocol/environment-attention";
 import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { BackendEmit } from "./commands-context.js";
 import type { StorageService } from "./storage.js";
@@ -10,13 +13,17 @@ import type { StorageService } from "./storage.js";
  *   window or browser converges without polling.
  * - Attention edges (an agent stopped, failed, waits or asks) go out as
  *   `environment-attention`, so no client infers them from badge flips.
+ * - A coordinator woken for its worker goes out as `coordinator-wake-attention`.
  *
  * `emit` is read lazily by the caller's closure, which is how this survives the
  * gateway not existing yet. `onResourceChange` lets the backend observe the same
  * announcements (the node portal's self summary).
  */
 export function installStorageEventFanout(
-  storage: Pick<StorageService, "setResourceChangeListener" | "addEnvironmentAttentionListener">,
+  storage: Pick<
+    StorageService,
+    "setResourceChangeListener" | "addEnvironmentAttentionListener" | "addCoordinatorWakeListener"
+  >,
   emit: BackendEmit,
   onResourceChange: (change: ResourceChange) => void,
 ): void {
@@ -25,4 +32,5 @@ export function installStorageEventFanout(
     onResourceChange(change);
   });
   storage.addEnvironmentAttentionListener((event) => emit(ENVIRONMENT_ATTENTION_EVENT, event));
+  storage.addCoordinatorWakeListener((event) => emit(COORDINATOR_WAKE_ATTENTION_EVENT, event));
 }

@@ -98,7 +98,7 @@ function answerProblem(
 /**
  * The pending interaction `interactionId` of one worker tab, read through
  * `inv` (this node's commands, or a connected node's through the node link)
- * from the same projection the tab shows.
+ * from the same session state the tab shows.
  */
 async function readPendingInteraction(
   inv: Invoke,
@@ -109,14 +109,18 @@ async function readPendingInteraction(
   const layout = await inv<unknown>("get_pane_layout", { environmentId });
   const tab = nativeTabsOfLayout(layout).find((candidate) => candidate.tabId === tabId);
   if (!tab) throw new Error("That tab is not an agent tab of that worker; call list_tabs.");
-  const projection = await inv<unknown>("get_native_agent_projection", {
+  // The state read: the interactions without a transcript read. Every node in
+  // the support window serves it (since #670).
+  const update = await inv<unknown>("get_native_agent_session_state_update", {
     environmentId,
     agent: tab.agent,
     logicalSessionKey: nativeTabLogicalSessionKey(environmentId, tabId),
-    messageLimit: 1,
+    viewVersion: 1,
+    forceSnapshot: true,
   });
+  const state = isRecord(update) && update.status === "snapshot" ? update.value : undefined;
   const interactions =
-    isRecord(projection) && Array.isArray(projection.interactions) ? projection.interactions : [];
+    isRecord(state) && Array.isArray(state.interactions) ? state.interactions : [];
   const request = interactions.find(
     (candidate) => isRecord(candidate) && candidate.id === interactionId,
   );

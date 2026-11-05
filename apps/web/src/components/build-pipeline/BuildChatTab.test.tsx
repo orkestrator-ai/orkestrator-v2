@@ -76,6 +76,7 @@ describe("BuildChatTab backend projection", () => {
     );
 
     expect(headerText("Backend-owned build")).toBeTruthy();
+    selectNode("Verify");
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     selectNode("Build");
     expect(screen.getByText("Implementation complete")).toBeTruthy();

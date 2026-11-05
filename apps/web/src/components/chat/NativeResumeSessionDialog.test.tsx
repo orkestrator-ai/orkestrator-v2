@@ -386,6 +386,70 @@ describe("NativeResumeSessionDialog", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Failed to load sessions")).toBeTruthy());
+    expect(screen.getByText("bridge down")).toBeTruthy();
+  });
+
+  /** Opens the dialog on a list that fails with `reason`, and waits for the heading. */
+  async function renderFailure(reason: unknown) {
+    render(
+      <NativeResumeSessionDialog
+        open
+        onOpenChange={() => {}}
+        agentLabel="Test"
+        fetchSessions={() => Promise.reject(reason)}
+        onResume={() => {}}
+      />,
+    );
+    return (await screen.findByText("Failed to load sessions")).parentElement as HTMLElement;
+  }
+
+  test("shows the bridge's reason under the heading", async () => {
+    const failure = await renderFailure(new Error("Pi took too long to read its session history"));
+    expect(Array.from(failure.children).map((child) => child.textContent)).toEqual([
+      "Failed to load sessions",
+      "Pi took too long to read its session history",
+    ]);
+  });
+
+  test.each([
+    ["an empty message", new Error("")],
+    ["a blank message", new Error("  \n ")],
+    ["something that is not an error", { status: 500 }],
+    ["nothing at all", undefined],
+  ])("keeps the generic text alone for %s", async (_name, reason) => {
+    const failure = await renderFailure(reason);
+    expect(failure.children).toHaveLength(1);
+    expect(failure.textContent).toBe("Failed to load sessions");
+  });
+
+  test("renders a bridge's message as plain text", async () => {
+    const message = '<img src="x" onerror="alert(1)"> <b>bold</b> **stars** [link](http://x.test)';
+    const failure = await renderFailure(new Error(message));
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(failure.querySelector("img, b, strong, a")).toBeNull();
+  });
+
+  test("bounds a message no bridge limited", async () => {
+    const failure = await renderFailure(new Error("x".repeat(5_000)));
+    expect(failure.children[1]?.textContent).toBe("x".repeat(500));
+  });
+
+  test("a reopened dialog does not keep the last failure's reason", async () => {
+    const fetchSessions = mock()
+      .mockImplementationOnce(() => Promise.reject(new Error("first failure")))
+      .mockImplementationOnce(() => Promise.resolve([{ id: "a", title: "Listed now" }]));
+    const props = {
+      onOpenChange: () => {},
+      agentLabel: "Test",
+      fetchSessions,
+      onResume: () => {},
+    };
+    const { rerender } = render(<NativeResumeSessionDialog open {...props} />);
+    expect(await screen.findByText("first failure")).toBeTruthy();
+    rerender(<NativeResumeSessionDialog open={false} {...props} />);
+    rerender(<NativeResumeSessionDialog open {...props} />);
+    expect(await screen.findByText("Listed now")).toBeTruthy();
+    expect(screen.queryByText("first failure")).toBeNull();
   });
 
   test("renders running and error status badges", async () => {

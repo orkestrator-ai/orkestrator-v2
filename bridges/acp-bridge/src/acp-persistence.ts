@@ -28,7 +28,6 @@ import {
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_PROMPT_JOURNAL,
-  MAX_CURSOR_SETTLED_CLAIMS,
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
   MAX_PERSISTED_GROK_INTERJECTION_BYTES,
   MAX_PERSISTED_SESSION_CONFIG_BYTES,
@@ -49,7 +48,6 @@ import {
   RPC_TIMEOUT_MS,
   catalogCache,
   catalogProbe,
-  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   configuredAcpMcpServers,
   isObject,
@@ -273,7 +271,6 @@ export async function restorePersistedState(): Promise<void> {
     await loadPersistedState();
   } catch (error) {
     sessions.clear();
-    bumpCursorDiscoveryRevision();
     clientSessionKeys.clear();
     log.warn("state.discarded", { error: formatLogError(error, { stack: false }) });
     const file = stateFile;
@@ -348,7 +345,6 @@ export async function loadPersistedState(): Promise<void> {
       messages,
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
-      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
       cursorTodos: restoreCursorTodosFromMessages(messages),
@@ -631,7 +627,6 @@ export function normalizeBridgePart(
     ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
     ...(toolState ? { toolState } : {}),
     ...(agentState ? { agentState } : {}),
-    ...(value.cursorTaskPromptReported === true ? { cursorTaskPromptReported: true } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),

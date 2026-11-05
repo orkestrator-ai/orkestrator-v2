@@ -66,6 +66,22 @@ export function hydrationFreshnessNotice(
   }
 }
 
+/** One failure is left to the read's own retry, so a blip shows nothing. */
+const READ_FAILURES_BEFORE_STALE = 2;
+const READ_FAILURES_BEFORE_DEGRADED = 4;
+
+/** Notice for a background read, from its consecutive failures; null while it is healthy. */
+export function readFailuresFreshnessNotice(
+  failures: number,
+  subject: string,
+): FreshnessNotice | null {
+  if (failures < READ_FAILURES_BEFORE_STALE) return null;
+  return hydrationFreshnessNotice(
+    failures < READ_FAILURES_BEFORE_DEGRADED ? "stale" : "degraded",
+    subject,
+  );
+}
+
 const REMOTE_FAILURE_TEXT: Record<WorktreeRemoteFetchFailure, string> = {
   auth: "the remote refused the credentials",
   network: "the remote could not be reached",

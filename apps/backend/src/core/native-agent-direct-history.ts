@@ -212,6 +212,19 @@ export class DirectHistoryPageCache<V> {
   }
 
   /**
+   * The unexpired pages of a session's current history, without refreshing
+   * their recency. Bounded by the per-session limits.
+   */
+  *sessionValues(sessionKey: string, now: number): Generator<V> {
+    const history = this.observed.get(sessionKey);
+    if (!history) return;
+    for (const key of Array.from(history.pages)) {
+      const page = this.pages.get(key);
+      if (page && page.sessionKey === sessionKey && page.expiresAt > now) yield page.value;
+    }
+  }
+
+  /**
    * Read a page once for every concurrent caller of the same key, and admit
    * it when the session's history held still for the whole read.
    */

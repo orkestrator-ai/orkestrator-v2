@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
+import { portalStore } from "@/lib/portal/portal-store";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
@@ -38,6 +41,140 @@ function tile(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>("[data-mail-tile]")!;
 }
 
+describe("the Open action on a notice about a worker", () => {
+  const initialEnvironments = useEnvironmentStore.getState();
+  const initialPortal = portalStore.store.getState();
+
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+    useEnvironmentStore.setState(initialEnvironments, true);
+    portalStore.store.setState(initialPortal, true);
+  });
+
+  function workerNotice(resource: Partial<AgentMailNotice["resource"]> = {}): AgentMailNotice {
+    return {
+      resource: {
+        kind: "agent-tab",
+        id: "tab-1",
+        environmentId: "worker-env",
+        tabId: "tab-1",
+        label: "api-fix",
+        ...resource,
+      },
+      state: "completed",
+      tone: "success",
+    };
+  }
+  const noticeMail = (noticeValue: AgentMailNotice | undefined) =>
+    mail({ kind: "notice", sender: "Workflow", notice: noticeValue });
+  const openButton = () => screen.queryByRole("button", { name: /Open worker/ });
+
+  test("opens that worker's tab, beside the conversation button", () => {
+    useEnvironmentStore.setState({
+      environments: [{ id: "worker-env", projectId: "project-1", name: "api-fix" } as Environment],
+    });
+    usePaneLayoutStore.getState().hydration.set("worker-env", "done");
+    render(
+      <MailTile
+        mail={{ ...noticeMail(workerNotice()), participants: ["a", "b"] }}
+        expansionKey="k"
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Open worker api-fix" });
+    // A sibling of the header button, so no control nests in another.
+    expect(button.closest("button[aria-expanded]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
+    fireEvent.click(button);
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
+    expect(useUIStore.getState().selectedProjectId).toBe("project-1");
+  });
+
+  test("opening does not expand the tile", () => {
+    useEnvironmentStore.setState({
+      environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
+    });
+    const { container } = render(<MailTile mail={noticeMail(workerNotice())} expansionKey="k" />);
+    fireEvent.click(openButton()!);
+    expect(tile(container).dataset.expanded).toBe("false");
+  });
+
+  test("an environment notice opens the environment, with no tab to aim for", () => {
+    useEnvironmentStore.setState({
+      environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
+    });
+    render(
+      <MailTile
+        mail={noticeMail({
+          resource: { kind: "environment", id: "worker-env", label: "api-fix" },
+          state: "pr-merged",
+          tone: "success",
+        })}
+        expansionKey="k"
+      />,
+    );
+    fireEvent.click(openButton()!);
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");
+  });
+
+  test("a worker on another node opens through that node", () => {
+    portalStore.store.setState({
+      nodes: [
+        {
+          nodeId: "bk_leaf",
+          available: true,
+          environments: [
+            {
+              ref: { backendId: "bk_leaf", environmentId: "worker-env" },
+              projectId: "leaf-project",
+              deleting: false,
+            },
+          ],
+        },
+      ] as never,
+    });
+    render(<MailTile mail={noticeMail(workerNotice({ nodeId: "bk_leaf" }))} expansionKey="k" />);
+    expect(openButton()).toBeTruthy();
+  });
+
+  test("a notice with no worker it can reach offers no Open", () => {
+    // An environment this client does not know: deleted, or an older notice
+    // about another node's worker that names no node.
+    const unknown = render(<MailTile mail={noticeMail(workerNotice())} expansionKey="a" />);
+    expect(openButton()).toBeNull();
+    unknown.unmount();
+
+    // A node this client has no link to.
+    const noNode = render(
+      <MailTile mail={noticeMail(workerNotice({ nodeId: "bk_gone" }))} expansionKey="b" />,
+    );
+    expect(openButton()).toBeNull();
+    noNode.unmount();
+
+    // A notice about something else, even in a known environment.
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", projectId: "project-1" } as Environment],
+    });
+    const other = render(
+      <MailTile mail={noticeMail(notice("completed", "success"))} expansionKey="c" />,
+    );
+    expect(openButton()).toBeNull();
+    other.unmount();
+
+    // No structured facts at all.
+    const bare = render(<MailTile mail={noticeMail(undefined)} expansionKey="d" />);
+    expect(openButton()).toBeNull();
+    bare.unmount();
+
+    // Mail that is not a notice never has one, whatever it carries.
+    useEnvironmentStore.setState({
+      environments: [{ id: "worker-env", projectId: "project-1" } as Environment],
+    });
+    render(<MailTile mail={mail({ notice: workerNotice() })} expansionKey="e" />);
+    expect(openButton()).toBeNull();
+  });
+});
+
 describe("MailTile", () => {
   const initialMail = useAgentMailStore.getState();
   const initialEnvironments = useEnvironmentStore.getState();
@@ -64,7 +201,7 @@ describe("MailTile", () => {
     expect(list.textContent).toContain("second.png");
     expect(container.querySelectorAll("[data-mail-attachment]")).toHaveLength(2);
     // Outside the clamped body, so a long message cannot clip it away.
-    expect(container.querySelector("[data-mail-body] [data-mail-attachments]")).toBeNull();
+    expect(container.querySelector("[data-mail-body] [data-mail-attachments]") === null).toBe(true);
     expect(container.textContent).not.toContain("mail-attachments/");
 
     fireEvent.click(screen.getByRole("button", { name: /Claude 2 · worker/ }));
@@ -73,7 +210,7 @@ describe("MailTile", () => {
 
   test("a message with no images draws no attachment row", () => {
     const { container } = render(<MailTile mail={mail()} expansionKey="k" />);
-    expect(container.querySelector("[data-mail-attachments]")).toBeNull();
+    expect(container.querySelector("[data-mail-attachments]") === null).toBe(true);
   });
 
   test("starts collapsed with the body clamped to a few lines", () => {

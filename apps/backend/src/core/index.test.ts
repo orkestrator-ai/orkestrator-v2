@@ -2279,7 +2279,8 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   const internal = backend as unknown as {
     context: { storage: StorageService };
     nativeAgents: {
-      getProjection: (input: unknown) => Promise<{ messages: unknown[]; interactions: unknown[] }>;
+      getProjection: (input: unknown) => Promise<unknown>;
+      getSessionStateUpdate: (input: unknown) => Promise<unknown>;
     };
     coordinators: {
       options: {
@@ -2293,25 +2294,32 @@ test("production waiting-blocker wiring reads the worker's pending interactions"
   ).mockResolvedValue([
     { environmentId: "e", logicalSessionKey: "env-e:tab", agent: "claude" },
   ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
-  const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({
-    messages: [],
-    interactions: [{ kind: "command-approval", state: "pending" }],
+  const projection = spyOn(internal.nativeAgents, "getProjection");
+  const state = spyOn(internal.nativeAgents, "getSessionStateUpdate").mockResolvedValue({
+    status: "snapshot",
+    value: { interactions: [{ kind: "command-approval", state: "pending" }] },
   });
   try {
     const blocker = internal.coordinators.options.waitingBlocker;
     expect(await blocker("e", "missing")).toBeUndefined();
     expect(await blocker("e", "tab")).toBe("approval");
-    expect(projection).toHaveBeenLastCalledWith({
+    // The interactions need no transcript: a state read, never a projection.
+    expect(state).toHaveBeenLastCalledWith({
       environmentId: "e",
       logicalSessionKey: "env-e:tab",
       agent: "claude",
-      messageLimit: 1,
+      viewVersion: 1,
+      forceSnapshot: true,
     });
-    projection.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(projection).not.toHaveBeenCalled();
+    state.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(await blocker("e", "tab")).toBeUndefined();
+    state.mockResolvedValueOnce({ status: "unavailable", error: "bridge offline" });
     expect(await blocker("e", "tab")).toBeUndefined();
   } finally {
     sessions.mockRestore();
     projection.mockRestore();
+    state.mockRestore();
     try {
       await backend.shutdown();
     } finally {

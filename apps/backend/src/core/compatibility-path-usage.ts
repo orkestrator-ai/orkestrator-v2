@@ -74,6 +74,11 @@ export const COMPATIBILITY_PATH_IDS = [
    */
   "coordinator-notices.older-leaf",
   /**
+   * A renderer that predates per-conversation startup errors opened the panel,
+   * which is how it recovers: `ensure_project_coordinator` cleared them.
+   */
+  "coordinator-ensure.conversation-errors-cleared",
+  /**
    * A coordinator's mail with images was refused: the node does not advertise
    * `node-mail-attachments`.
    */

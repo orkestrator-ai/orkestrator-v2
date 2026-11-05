@@ -4,6 +4,7 @@ import { isWindowMachine, useAccountMachine } from "./account-machine";
 import { DatabaseStorageCard } from "./DatabaseStorageCard";
 import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
 import { DataSavingSetting } from "./DataSavingSetting";
 import { PreviewSettings } from "./PreviewSettings";
@@ -1223,6 +1224,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </SelectContent>
         </Select>
       </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Coordinator safety level and web research are in{" "}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground focus-hairline"
+          onClick={() => requestGlobalSettings("coordinator")}
+        >
+          Coordinator settings
+        </button>
+        .
+      </p>
+    </SettingsPageLayout>
+  );
+
+  const renderCoordinator = () => (
+    <SettingsPageLayout
+      title="Coordinator"
+      description="How this machine's project coordinators are held to read-only and what they may look up."
+    >
       <div>
         <h3 className="text-sm font-medium text-foreground">Coordinator safety level</h3>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -1267,6 +1287,22 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         servers={coordinatorResearchMcpServers}
         setServers={setCoordinatorResearchMcpServers}
       />
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Messaging</h3>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          Workers report back to a coordinator through agent messaging, so delegation needs it on.
+          Coordinator status updates are set there too, with the rest of messaging.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-3"
+          onClick={() => requestGlobalSettings("messaging")}
+        >
+          Open Messaging settings
+        </Button>
+      </div>
     </SettingsPageLayout>
   );
 
@@ -2481,6 +2517,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     "version-control": renderVersionControl,
     defaults: renderDefaults,
     platforms: renderPlatforms,
+    coordinator: renderCoordinator,
     review: renderReview,
     claude: renderClaude,
     cursor: renderCursor,

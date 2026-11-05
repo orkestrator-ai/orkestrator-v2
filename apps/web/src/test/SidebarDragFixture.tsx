@@ -67,7 +67,11 @@ let alignmentActivity: CoordinatorActivityState | null = null;
 function install() {
   const params = new URLSearchParams(location.search);
   const byMachine = params.has("machines");
-  const merged = params.has("merged") || byMachine;
+  // `?cross-machine`: "By activity" over this window's rows and two connected
+  // machines', all running, plus a machine that is down. The two connected
+  // machines share an environment ID, which stays two environments.
+  const crossMachine = params.has("cross-machine");
+  const merged = params.has("merged") || byMachine || crossMachine;
   const groups = params.has("groups");
   const repository = params.has("repository");
   // A third, empty machine, so an expanded machine has a neighbour on each side.
@@ -142,7 +146,7 @@ function install() {
           projectId: project.id,
           branch: "main",
           containerId: null,
-          status: "stopped",
+          status: crossMachine ? "running" : "stopped",
           ...prFor(`${project.id}-env-${index}`),
           createdAt: "2026-10-22T00:00:00Z",
           networkAccessMode: "restricted",
@@ -194,15 +198,19 @@ function install() {
           return {
             selfId: "bk_self",
             nodes: merged
-              ? [["bk_remote", "Remote"], ...(spare ? [["bk_spare", "Spare"]] : [])].map(
-                  ([nodeId, name]) => ({
-                    nodeId,
-                    available: true,
-                    freshness: params.has("catching-up") ? "catching-up" : "current",
-                    loadedAt: 1,
-                    truncated: false,
-                    lastError: null,
-                    projects: alignment
+              ? [
+                  ["bk_remote", "Remote"],
+                  ...(spare || crossMachine ? [["bk_spare", "Spare"]] : []),
+                  ...(crossMachine ? [["bk_down", "Down"]] : []),
+                ].map(([nodeId, name]) => ({
+                  nodeId,
+                  available: nodeId !== "bk_down",
+                  freshness: params.has("catching-up") ? "catching-up" : "current",
+                  loadedAt: 1,
+                  truncated: false,
+                  lastError: null,
+                  projects:
+                    alignment || crossMachine
                       ? [
                           {
                             ref: { backendId: nodeId, projectId: "r" },
@@ -214,7 +222,21 @@ function install() {
                           },
                         ]
                       : [],
-                    environments: alignment
+                  environments: crossMachine
+                    ? ["r-env", `${name?.toLowerCase()}-env`].map((id, order) => ({
+                        ref: { backendId: nodeId, environmentId: id },
+                        key: JSON.stringify([nodeId, "environment", id]),
+                        projectId: "r",
+                        name: `${name?.toLowerCase()}-${order === 0 ? "feature" : "fix"}`,
+                        order,
+                        status: "running",
+                        environmentType: "local",
+                        activity: "idle",
+                        hasUnreadWork: false,
+                        deleting: false,
+                        isProjectHome: false,
+                      }))
+                    : alignment
                       ? [
                           {
                             ref: { backendId: nodeId, environmentId: "r-env" },
@@ -232,21 +254,26 @@ function install() {
                           },
                         ]
                       : [],
-                    view: {
-                      nodeId,
-                      enabled: true,
-                      displayName: alignment ? LONG_NAME : name,
-                      fallbackName: name,
-                      routes: [],
-                      routeOrder: [],
-                      hasCredential: true,
-                      attachment: { status: "attached" },
-                      connection: { state: "connected", epoch: 1 },
-                      addedAt: "t",
-                      source: "portal",
+                  view: {
+                    nodeId,
+                    enabled: true,
+                    displayName: alignment ? LONG_NAME : name,
+                    ...(crossMachine
+                      ? { colorToken: nodeId === "bk_remote" ? "rose" : "amber" }
+                      : {}),
+                    fallbackName: name,
+                    routes: [],
+                    routeOrder: [],
+                    hasCredential: true,
+                    attachment: { status: "attached" },
+                    connection: {
+                      state: nodeId === "bk_down" ? "unavailable" : "connected",
+                      epoch: 1,
                     },
-                  }),
-                )
+                    addedAt: "t",
+                    source: "portal",
+                  },
+                }))
               : [],
           } as T;
         case "get_backend_profile":
@@ -289,6 +316,10 @@ function install() {
           layout = { ...layout, ...args, revision: layout.revision + 1 };
           persist();
           return layout as T;
+        case "invoke_on_node":
+          if (args?.command === "changes_get_view") return { outcome: "ok", result: null } as T;
+          calls.setState((state) => ({ writes: [...state.writes, { command, args }] }));
+          return { outcome: "ok", result: {} } as T;
         case "reorder_environments":
           calls.setState((state) => ({ writes: [...state.writes, { command, args }] }));
           return undefined as T;
@@ -335,7 +366,7 @@ function install() {
     projectCollapseChoices: projects.map((p) => p.id),
     selectedProjectId: null,
     selectedEnvironmentId: null,
-    environmentSortMode: activitySort ? "activity" : "project",
+    environmentSortMode: activitySort || crossMachine ? "activity" : "project",
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });
   useMachineViewStore.setState({

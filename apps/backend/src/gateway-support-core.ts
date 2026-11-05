@@ -93,6 +93,8 @@ export interface BackendHelloIdentity {
   installationId: string;
   generation: string;
   appVersion: string;
+  /** Absent or `null` when this build has no commit to report. */
+  buildCommit?: string | null;
   profile: import("@orkestrator/protocol/backend-profile").BackendProfile;
   /** Command-node role; absent from embedded gateways without command nodes. */
   nodeMode?: "standalone" | "command" | "leaf";

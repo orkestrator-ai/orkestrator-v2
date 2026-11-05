@@ -201,6 +201,14 @@ tag for another route is not sent upstream. Reloads of a previewed dev server
 then revalidate instead of downloading, rewriting and compressing every
 module again.
 
+A static file with no precompressed sibling is compressed on the fly, up to
+`MAX_STATIC_FALLBACK_SOURCE_BYTES`. Its tags depend only on the source file and
+the coding, so a revalidation is compared with them before anything is
+compressed (`heldStaticFallbackEncoding` in `apps/backend/src/gateway-proxy.ts`).
+A match answers `304` with the variant the client holds and no coded
+`Content-Length`, which only compressing would tell us. `If-None-Match: *` and
+`If-Modified-Since` alone name no variant, so they still compress first.
+
 Streaming gzip contexts are shared by direct and proxied streams and capped at
 `MAX_CONCURRENT_STREAMING_COMPRESSIONS` (8); a stream that finds the pool full
 continues in identity and counts as declined. A browser holds two event
@@ -383,8 +391,9 @@ the installation identity.
 
 `GET /__orkestrator/hello` is the authenticated handshake on every listener
 (contract: `packages/protocol/src/backend-profile.ts`). It returns the
-installation identity, the generation, the app version, the client API range,
-capabilities, the profile and `endpointRole`. It never includes data paths,
+installation identity, the generation, the app version, the build commit when
+the build has one, the client API range, capabilities, the profile and
+`endpointRole`. It never includes data paths,
 the auth file, the token or the process ID.
 
 ## Vercel-hosted public client

@@ -2167,10 +2167,10 @@ describe("ActionBar editor and run commands", () => {
     fireEvent.click(submit);
     expect(launchNativeAgentJobMock).toHaveBeenCalledTimes(1);
     expect((submit as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("alert") === null).toBe(true);
     finish();
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Configure run script" })).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true),
     );
   });
 
@@ -7029,8 +7029,8 @@ describe("ActionBar successful cleanup and merge actions", () => {
       currentOtherEnvironments = [];
       rerender(<ActionBar />);
 
-      expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
-      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Delete" }) === null).toBe(true);
       expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     });
 
@@ -7045,13 +7045,13 @@ describe("ActionBar successful cleanup and merge actions", () => {
         const button = trashButton() as HTMLButtonElement;
         expect(button.disabled).toBe(true);
         fireEvent.click(button);
-        expect(screen.queryByTestId("alert-dialog-content")).toBeNull();
+        expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
         expect(deleteEnvironmentMock).not.toHaveBeenCalled();
 
         fireEvent.mouseEnter(button.parentElement!);
         await fireTooltipTimer(open);
         expect(screen.getByText("Merge in progress...")).toBeTruthy();
-        expect(screen.queryByText("Delete this environment")).toBeNull();
+        expect(screen.queryByText("Delete this environment") === null).toBe(true);
       });
     });
 
@@ -8775,17 +8775,28 @@ describe("ActionBar auto-merge", () => {
     const toggle = screen.getByRole("button", { name: "Auto-merge" }) as HTMLButtonElement;
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
-    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(currentEnvironment.id, true);
+    expect(setEnvironmentAutoMergeMock).toHaveBeenCalledWith(
+      currentEnvironment.id,
+      true,
+      undefined,
+    );
     expect(toggle.disabled).toBe(true);
     await act(async () => finish({ ...currentEnvironment, autoMerge: true }));
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, { autoMerge: true });
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(currentEnvironment.id, {
+      autoMerge: true,
+      autoMergeCleanup: false,
+    });
     currentEnvironment = { ...currentEnvironment, autoMerge: true };
     view.rerender(<ActionBar />);
     expect(toggle.disabled).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(toggle);
     await waitFor(() =>
-      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(currentEnvironment.id, false),
+      expect(setEnvironmentAutoMergeMock).toHaveBeenLastCalledWith(
+        currentEnvironment.id,
+        false,
+        undefined,
+      ),
     );
   });
 

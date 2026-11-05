@@ -65,6 +65,8 @@ import {
 import { OutcomeUnknownError } from "@/lib/portal/portal-store";
 import { cn } from "@/lib/utils";
 import { sidebarCollisionDetection } from "@/lib/sidebar-collision";
+import { applySidebarModifierSelection } from "@/lib/sidebar-selection";
+import { useUIStore } from "@/stores/uiStore";
 import { sidebarFolderKey, useMachineViewStore } from "@/stores/machineViewStore";
 import {
   useRemoteEnvironmentShown,
@@ -609,12 +611,13 @@ function RemoteSortableEnvironmentItem({
   sortable: boolean;
 }) {
   const shown = useRemoteEnvironmentShown(machine.connectionId, environment.ref.environmentId);
+  const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
   return (
     <SortableEnvironmentRowFrame
       sortableId={environment.key}
       // Read-only while the owner is unavailable.
       sortable={sortable}
-      selected={shown}
+      selected={shown && !multiSelecting}
       offline={machine.transport !== "connected"}
       name={environment.name}
       data={{
@@ -655,13 +658,27 @@ export function RemoteEnvironmentItem({
   const live = machine.transport === "connected";
   const requireChecks = useShimmerRequiresChecks();
   const facts = nodeEnvironmentRowFacts(machine, environment, actions, requireChecks);
+  const selectionId = environment.key;
+  const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
+  const checked = useUIStore((state) => state.selectedEnvironmentIds.includes(selectionId));
 
   return (
     <EnvironmentRow
       facts={facts}
       selected={shown}
       subtitle={subtitle}
-      onActivate={actions.open}
+      multiSelect={{
+        id: selectionId,
+        active: multiSelecting,
+        checked,
+        onToggle: () => applySidebarModifierSelection(selectionId, { metaKey: true }),
+      }}
+      onActivate={(modifiers) => {
+        if (applySidebarModifierSelection(selectionId, modifiers)) return;
+        // As on this window's rows, a plain click ends a multi-selection and opens the row.
+        useUIStore.getState().clearMultiSelection();
+        actions.open();
+      }}
       actions={{
         open: actions.open,
         copyLink: actions.copyLink,

@@ -93,6 +93,7 @@ describe("standalone backend logging", () => {
     const files = (await readdir(path.join(dataDir, "logs"))).filter(
       (name) => name !== "essential",
     );
+    expect(files).toHaveLength(1);
     const contents = await readFile(path.join(dataDir, "logs", files[0]!), "utf8");
     for (let index = 0; index < 100; index += 1) {
       expect(contents).toContain(`queued line ${index}.`);

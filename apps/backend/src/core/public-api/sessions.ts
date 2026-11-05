@@ -1,7 +1,10 @@
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorConversationRunnable,
+  coordinatorIdFromRuntimeId,
+} from "@orkestrator/protocol/coordinator";
 import {
   nativeTabLogicalSessionKey,
   type PublicSessionActivity,
@@ -63,10 +66,14 @@ async function coordinatorSession(
     );
   }
   return {
-    // A paused Coordinator reads as stopped, so prompting it is `not-ready`.
+    // A paused Coordinator, or a conversation that failed to start, reads as
+    // stopped, so prompting it is `not-ready`.
     environment: {
       ...coordinatorRuntimeEnvironment(runtimeId, { workspace, project }),
-      status: workspace.lifecycleState === "ready" && project.localPath ? "running" : "stopped",
+      status:
+        coordinatorConversationRunnable(workspace, conversation) && project.localPath
+          ? "running"
+          : "stopped",
     },
     tab: {
       tabId: conversation.tabId,

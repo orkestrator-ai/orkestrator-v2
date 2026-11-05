@@ -743,12 +743,19 @@ export async function mergeEnvironmentPr(
 /**
  * Turns the backend's auto-merge on or off: while on, it merges the open PR
  * once GitHub reports it ready and launches Resolve when it conflicts.
+ * `cleanupAfterMerge` also deletes the environment once the merge is
+ * confirmed; leaving it out turns any earlier cleanup request off.
  */
 export async function setEnvironmentAutoMerge(
   environmentId: string,
   enabled: boolean,
+  cleanupAfterMerge?: boolean,
 ): Promise<Environment> {
-  return invoke<Environment>("set_environment_auto_merge", { environmentId, enabled });
+  return invoke<Environment>("set_environment_auto_merge", {
+    environmentId,
+    enabled,
+    ...(cleanupAfterMerge === undefined ? {} : { cleanupAfterMerge }),
+  });
 }
 
 /** Submit and verify the current branch's PR merge from its container */

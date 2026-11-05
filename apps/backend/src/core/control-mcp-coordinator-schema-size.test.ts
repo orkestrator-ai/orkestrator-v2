@@ -11,8 +11,10 @@ import { rpc, useControlMcpServerHarness } from "./control-mcp-server-test-suppo
  * messaging and scheduling on) and bounds it. Raise a bound only for a real new
  * tool, and record the new figure where the tool is reviewed.
  */
-const MAX_TOOLS = 90;
-const MAX_SCHEMA_BYTES = 150_000;
+// Measured 2026-11-05: 89 tools and 125,040 bytes before the legacy node tools
+// and start_multi_review were removed, 82 tools and 115,114 bytes after.
+const MAX_TOOLS = 85;
+const MAX_SCHEMA_BYTES = 125_000;
 
 const harness = useControlMcpServerHarness();
 

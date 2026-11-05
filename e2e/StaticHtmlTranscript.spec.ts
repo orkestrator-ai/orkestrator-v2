@@ -236,6 +236,50 @@ test.describe("static documents in the virtualized transcript", () => {
     await expect.poll(() => highlighted("ork-find-match")).toEqual([]);
   });
 
+  for (const zoom of [1, 1.5]) {
+    test(`Find brings a deep document match into view at ${zoom * 100}% CSS zoom`, async ({
+      page,
+    }, testInfo) => {
+      test.slow();
+      await open(page);
+      await page.evaluate((value) => {
+        document.documentElement.style.zoom = String(value);
+      }, zoom);
+      const frame = await jumpToStatic(page, 3);
+      await expect(page.locator(staticCard(3)).locator("[data-rich-search-mirror]")).toContainText(
+        "Synthetic data for the performance gate.",
+      );
+      await page.keyboard.press("ControlOrMeta+f");
+      await page
+        .getByRole("textbox", { name: "Find in chat" })
+        .fill("Synthetic data for the performance gate.");
+      await expect
+        .poll(async () => {
+          const local = await frame.evaluate(() => {
+            const [range] = Array.from(
+              (CSS.highlights.get("ork-find-active") ?? new Highlight()).values(),
+            ) as Range[];
+            if (!range) return null;
+            const box = range.getBoundingClientRect();
+            return { top: box.top, bottom: box.bottom };
+          });
+          if (!local) return false;
+          const host = await page.locator(staticCard(3)).locator(RENDERED).boundingBox();
+          const viewport = await page.locator(SCROLLER).boundingBox();
+          return (
+            !!host &&
+            !!viewport &&
+            host.y + local.top * zoom >= viewport.y &&
+            host.y + local.bottom * zoom <= viewport.y + viewport.height
+          );
+        })
+        .toBe(true);
+      await page.screenshot({
+        path: `output/visual-previews/static-find-${zoom}-${testInfo.project.name}.png`,
+      });
+    });
+  }
+
   test("a report opened while Find is open updates the count and highlights itself", async ({
     page,
   }) => {

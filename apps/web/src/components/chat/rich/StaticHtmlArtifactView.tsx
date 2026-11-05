@@ -29,7 +29,7 @@ import {
 import { useRichViewField } from "@/stores/richContentViewStore";
 import { useStaticFrameSlot, type StaticFrameRank } from "@/stores/staticHtmlFrameSlots";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { StaticDocumentFindContext } from "../chat-find-context";
+import { ChatFindActiveContext, StaticDocumentFindContext } from "../chat-find-context";
 import {
   StaticHtmlFrame,
   type StaticFrameEvents,
@@ -212,9 +212,10 @@ export function StaticHtmlArtifactView({
   onDocumentText: (text: string | null) => void;
 }) {
   const documentFind = useContext(StaticDocumentFindContext);
+  const activeRow = useContext(ChatFindActiveContext);
   const findQuery = documentFind?.query ?? null;
   const findOccurrence =
-    documentFind?.activePublicationId === artifactRef.publicationId
+    activeRow && documentFind?.activePublicationId === artifactRef.publicationId
       ? documentFind.activeOccurrence
       : null;
   const { observe, visibility } = useRichBlockVisibility();

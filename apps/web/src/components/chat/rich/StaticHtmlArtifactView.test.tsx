@@ -33,6 +33,7 @@ import { searchRootText } from "@/lib/chat/rich-markdown/find-reveal";
 import { findAgentChatMatches } from "@/components/chat/AgentChatFind";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import {
+  ChatFindActiveContext,
   STATIC_FIND_MATCH_EVENT,
   StaticDocumentFindContext,
   staticDocumentMatchRect,
@@ -640,10 +641,14 @@ describe("StaticHtmlArtifactView", () => {
       activePublicationId: string | null = activeOccurrence === null ? null : REF.publicationId,
     ): StaticDocumentFind => ({ query, activePublicationId, activeOccurrence });
 
-    function withFind(find: StaticDocumentFind | null) {
+    function withFind(find: StaticDocumentFind | null, activeRow = true) {
       return wrap(
         <StaticDocumentFindContext value={find}>
-          <ArtifactPart part={PART} />
+          <ChatFindActiveContext value={activeRow}>
+            <RichMessageContext value={{ messageId: activeRow ? "m1" : "m2", role: "assistant" }}>
+              <ArtifactPart part={PART} />
+            </RichMessageContext>
+          </ChatFindActiveContext>
         </StaticDocumentFindContext>,
       );
     }
@@ -667,8 +672,16 @@ describe("StaticHtmlArtifactView", () => {
         occurrence: 2,
       });
 
+      fromFrame(iframe, {
+        type: "find-match",
+        generation: renderMessage.generation,
+        top: 240,
+        height: 16,
+      });
+      expect(iframe.dataset.findMatchTop).toBe("240");
       view.rerender(withFind(finding("quokka", 3)));
       await waitFor(() => expect(finds(posted).at(-1)).toEqual({ query: "quokka", occurrence: 3 }));
+      expect(iframe.dataset.findMatchTop).toBeUndefined();
 
       // The same request is not sent twice however often the card renders.
       const sent = finds(posted).length;
@@ -696,10 +709,44 @@ describe("StaticHtmlArtifactView", () => {
 
     test("a query past the channel's limit is not sent, and clears what was", async () => {
       const view = render(withFind(finding("quokka", 0)));
-      const { posted } = completeHandshake(await awaitFrame(view.container));
+      const iframe = await awaitFrame(view.container);
+      const { posted, render: message } = completeHandshake(iframe);
       await waitFor(() => expect(finds(posted)).toHaveLength(1));
+      fromFrame(iframe, {
+        type: "text",
+        generation: message.generation,
+        index: 0,
+        count: 1,
+        text: "quokka",
+      });
+      const mirror = await waitFor(() => {
+        const element = view.container.querySelector("[data-rich-search-mirror]");
+        expect(element).not.toBeNull();
+        return element!;
+      });
+      fromFrame(iframe, {
+        type: "find-match",
+        generation: message.generation,
+        top: 240,
+        height: 16,
+      });
+      expect(staticDocumentMatchRect(mirror)).not.toBeNull();
       view.rerender(withFind(finding("x".repeat(STATIC_HTML_MAX_FIND_QUERY_CHARACTERS + 1), 0)));
       await waitFor(() => expect(finds(posted).at(-1)).toEqual({ query: "", occurrence: null }));
+      expect(staticDocumentMatchRect(mirror)).toBeNull();
+    });
+
+    test("only the selected row activates a repeated publication", async () => {
+      const selected = render(withFind(finding("quokka", 1)));
+      const other = render(withFind(finding("quokka", 1), false));
+      const first = completeHandshake(await awaitFrame(selected.container));
+      const second = completeHandshake(await awaitFrame(other.container));
+      await waitFor(() =>
+        expect(finds(first.posted)).toEqual([{ query: "quokka", occurrence: 1 }]),
+      );
+      await waitFor(() =>
+        expect(finds(second.posted)).toEqual([{ query: "quokka", occurrence: null }]),
+      );
     });
 
     test("a remounted frame is told again", async () => {

@@ -76,5 +76,12 @@ export function staticDocumentMatchRect(mirror: Element): DOMRect | null {
   const frame = iframe.getBoundingClientRect();
   const top = Number(iframe.dataset.findMatchTop);
   const height = Number(iframe.dataset.findMatchHeight);
-  return new DOMRect(frame.left, frame.top + top, frame.width, height);
+  // Host rectangles include ancestor CSS zoom; frame reports use its own CSS pixels.
+  const scale = iframe.offsetHeight > 0 ? frame.height / iframe.offsetHeight : 1;
+  return new DOMRect(
+    frame.left,
+    frame.top + (iframe.clientTop + top) * scale,
+    frame.width,
+    height * scale,
+  );
 }

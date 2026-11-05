@@ -229,8 +229,8 @@ export function StaticHtmlFrame({
   useEffect(() => {
     const message = mount.session.findMessage(findQuery ?? "", findOccurrence);
     if (!message) return;
+    if (iframe.current) recordStaticFindMatch(iframe.current, null);
     iframe.current?.contentWindow?.postMessage(message, "*");
-    if (findOccurrence === null && iframe.current) recordStaticFindMatch(iframe.current, null);
   }, [mount, rendered, findQuery, findOccurrence]);
 
   return (

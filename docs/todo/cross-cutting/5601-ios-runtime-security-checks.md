@@ -6,7 +6,7 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 
 ### Tasks
 
-1. **Run the suite through Xcode's own scheme**: `mise run test:ios` could not start on the review's Mac. Status: open.
+1. **Run the suite through Xcode's own scheme**: all 66 tests passed through `mise run test:ios` on 2026-11-05, including the app host and asset catalog. Status: done.
 2. **Repeat the WebKit checks against a real gateway on a device**: the review's probes used a simulator and a stand-in scheme. Status: open.
 3. **Check Keychain behaviour on a device**: lock, restart, backup and reinstall. Status: open.
 4. **Check Password AutoFill on the token field**: whether iOS offers to save the gateway token. Status: open.
@@ -19,6 +19,19 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
 **Context.** `scripts/test-ios.ts` runs `xcodebuild test` on the project. On 2026-11-05 on a Mac with Xcode 26.6 (SDK iOS 26.5) and simulator runtimes 17.5, 18.2 and 26.2, `xcodebuild` found no eligible destination ("iOS 26.5 is not installed"), and a target build failed at the asset catalog for the same reason.
 
 **Investigation.** The review compiled the app's sources and tests with `swiftc` against the simulator SDK, skipping the asset catalog, and ran them in a throwaway ad-hoc-signed host app with `simctl`. All 66 tests in `OrkestratorMobileTests` passed on iOS 17.5, 18.2 and 26.2. That includes the Keychain tests and those that drive a real `WKWebView`, and it is the first time the H1 sign-in change ([2960](2960-host-prefixed-gateway-cookie.md) task 2) has been compiled. The stand-in is not in the repository.
+
+The review follow-up on 2026-11-05 ran the repository's shared `OrkestratorMobile` scheme successfully: **66 passed, 0 failed, 0 skipped**, exit 0, 167.7 s. Xcode 26.6 (17F113) compiled the real app target, asset catalog and hosted test bundle using the iOS simulator SDK build 23F81a, and ran the tests on an isolated iPhone 17 Pro simulator with iOS 26.2 (23C54). No source, project or scheme override was needed. The Xcode result summary was read with `xcresulttool`, rather than inferred from compilation alone.
+
+The result bundle is retained in the worktree at `output/agent-testing/ios-review-address/derived-data/Logs/Test/Test-OrkestratorMobile-2026.11.05_05-24-18-+0000.xcresult`. The successful command was:
+
+```bash
+ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 \
+ORKESTRATOR_IOS_SIMULATOR='Orkestrator S0270 Scheme c76b2b61' \
+ORKESTRATOR_IOS_TEST_DERIVED_DATA="$PWD/output/agent-testing/ios-review-address/derived-data" \
+mise run test:logged -- --name ios-project-scheme -- mise run test:ios
+```
+
+The task-specific simulator was created with `xcrun simctl create` using `com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro` and `com.apple.CoreSimulator.SimRuntime.iOS-26-2`, then deleted after the run. Reproduction needs a newly created simulator with that name, or an installed simulator selected through `ORKESTRATOR_IOS_SIMULATOR`.
 
 **Decisions.**
 
@@ -102,9 +115,19 @@ Analysed 2026-11-05 against `main` at `69a3b4ca5`.
     - Pros: no work.
     - Cons: signing and distribution can change entitlements.
 
+## Assumptions and decisions
+
+### Task 1: Use the repository's Xcode scheme
+
+The review follow-up required a hosted run through the project's own scheme, so the existing `mise run test:ios` runner was used. Keeping the temporary `swiftc` host as a second runner would leave project settings untested.
+
+Installed iOS 26.5 runtime build 23F73 with `xcodebuild -downloadPlatform iOS -buildVersion 26.5 -architectureVariant arm64`. The logged setup reached its 30-minute deadline during installation; installation subsequently registered the runtime, and a retry reported a duplicate image. The SDK's default runtime mapping expected 23F81a, so the supported temporary override `xcrun simctl runtime match set iphoneos26.5 23F73` enabled destination discovery. A subsequent asset-catalog failure showed the new image was not mounted; `xcrun simctl runtime scan-and-mount` repaired that state before the passing run. These are host tooling changes, not changes to the project's build settings.
+
+After the passing run, restored the original mapping with `xcrun simctl runtime match set iphoneos26.5 --default`, deleted both task-created simulators and the unusable duplicate image from the retry, and retained the installed runtime and result bundle. Future runs should install the build expected by their own SDK; a temporary override must be restored after qualification.
+
 ## Current state
 
-The unit suite passes on three simulator runtimes through a stand-in build. Nothing has run on a device or from a signed build.
+Task 1 is complete: the project's own hosted test scheme passes all 66 tests. The earlier stand-in runs also passed on three simulator runtimes. Nothing has run on a physical device or from a signed release build; tasks 2–5 remain open.
 
 ## Constraints and rationale
 

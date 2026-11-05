@@ -47,4 +47,15 @@ If the runner reports that the Xcode license has not been accepted, it stops bef
 
 If `xcodebuild` finds no eligible destination ("iOS 26.5 is not installed"), the simulator platform matching your Xcode's SDK is missing, even when older simulator runtimes are installed. Install it under **Xcode > Settings > Components**. This too leaves iOS validation incomplete.
 
+On an Apple silicon Mac, the equivalent command-line setup is:
+
+```bash
+xcodebuild -downloadPlatform iOS -architectureVariant arm64
+mise run test:logged -- --name ios-tests -- mise run test:ios
+```
+
+The download is several gigabytes. Check `xcrun simctl runtime match list` if a downloaded runtime still does not satisfy Xcode: its build number must satisfy the SDK's runtime mapping, and `xcrun simctl runtime scan-and-mount` can reconcile an installed image that is not mounted. See [Apple's component installation guide](https://developer.apple.com/documentation/xcode/downloading-and-installing-additional-xcode-components).
+
+This runs the repository's shared `OrkestratorMobile` scheme, including its app host and asset catalog; a separate `swiftc` host does not validate those project settings. On 2026-11-05 the scheme passed all 66 tests on iOS 26.2, built with Xcode 26.6. [To-do 5601, task 1](../../docs/todo/cross-cutting/5601-ios-runtime-security-checks.md#1-run-the-suite-through-xcodes-own-scheme) records the runtime setup, command and result bundle. Device and signed-release checks remain open.
+
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

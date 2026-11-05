@@ -1,6 +1,7 @@
 import type { GatewayContext } from "./gateway-context.js";
 import {
   DESIGN_FRAME_DOCUMENT,
+  STATIC_HTML_FRAME_DOCUMENT,
   GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY,
   GATEWAY_RENDERER_CONTENT_SECURITY_POLICY,
 } from "@orkestrator/protocol/renderer-content-security-policy";
@@ -79,7 +80,8 @@ const log = createLogger("gateway");
 function staticDocumentContentSecurityPolicy(root: string, filePath: string): string | null {
   const relativePath = path.relative(root, filePath).toLowerCase();
   if (relativePath === "index.html") return GATEWAY_RENDERER_CONTENT_SECURITY_POLICY;
-  if (relativePath === DESIGN_FRAME_DOCUMENT) return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
+  if (relativePath === DESIGN_FRAME_DOCUMENT || relativePath === STATIC_HTML_FRAME_DOCUMENT)
+    return GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY;
   return null;
 }
 
@@ -310,23 +312,16 @@ export class GatewayProxy {
 
             // A stalled rewrite would hold its decode budget indefinitely:
             // bound the time between upstream chunks, not the whole body.
-            let rewriteIdle: ReturnType<typeof setTimeout> | null = null;
-            const resetRewriteIdle = () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-              rewriteIdle = setTimeout(
-                () => abortBody(new Error("Browser preview response stalled")),
-                this.ctx.proxyBodyIdleTimeoutMs,
-              );
-              rewriteIdle.unref?.();
-            };
-            resetRewriteIdle();
-            releaseReservationOnResponseSettled(response, () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
-            proxyResponse.on("data", resetRewriteIdle);
-            proxyResponse.once("end", () => {
-              if (rewriteIdle) clearTimeout(rewriteIdle);
-            });
+            const rewriteIdle = setTimeout(
+              () => abortBody(new Error("Browser preview response stalled")),
+              this.ctx.proxyBodyIdleTimeoutMs,
+            );
+            rewriteIdle.unref?.();
+            releaseReservationOnResponseSettled(response, () => clearTimeout(rewriteIdle));
+            // A refresh after the clears below does nothing, and one after the
+            // timer fired cannot abort twice: `abortBody` has already settled.
+            proxyResponse.on("data", () => rewriteIdle.refresh());
+            proxyResponse.once("end", () => clearTimeout(rewriteIdle));
 
             if (decoder) {
               proxyResponse.on("data", (chunk: Buffer | string) => {
@@ -561,7 +556,10 @@ export class GatewayProxy {
             // client gave up, starving every other proxied response of a slot.
             const idleTimeoutMs = this.ctx.proxyBodyIdleTimeoutMs;
             const armIdleTimer = () => {
-              clearIdleTimer();
+              if (idleTimer) {
+                idleTimer.refresh();
+                return;
+              }
               idleTimer = setTimeout(() => {
                 idleTimer = null;
                 abortBody(new Error(`Proxied response stalled for ${idleTimeoutMs} ms`));

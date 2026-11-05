@@ -15,12 +15,15 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_ACTIVITY_COMMAND,
+  COORDINATOR_CHECKOUT_TURN_COMMAND,
   coordinatorActivityByProject,
   type CoordinatorActivitySnapshot,
+  type CoordinatorCheckoutTurn,
 } from "@orkestrator/protocol/coordinator-activity";
 import { randomUUID } from "node:crypto";
 import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
+import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
 import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
@@ -184,6 +187,21 @@ export function registerCoordinatorCommands(
           ),
         ),
       };
+    },
+  );
+  // Which turn is holding the project's checkout, for the panel's Git controls.
+  // The panel's own projections only cover the tabs it has mounted, so it has
+  // to ask. No liveness touch or hydration, so it can re-read on activity hints.
+  register(
+    COORDINATOR_CHECKOUT_TURN_COMMAND,
+    async ({ projectId }, context): Promise<CoordinatorCheckoutTurn | null> => {
+      const nativeAgents = context.nativeAgents;
+      if (!nativeAgents) return null;
+      return findCoordinatorCheckoutTurn(asNonBlankString(projectId, "projectId"), {
+        storage: context.storage,
+        nativeAgents,
+        confirmWithProjections: false,
+      });
     },
   );
   register(

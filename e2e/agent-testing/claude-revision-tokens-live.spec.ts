@@ -67,6 +67,7 @@ const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS === 
 const MODEL = process.env.ORKESTRATOR_AGENT_TEST_REVISION_MODEL;
 const TRANSCRIPT_COMMAND = "get_native_agent_transcript_update";
 const STATE_COMMAND = "get_native_agent_session_state_update";
+const LIVE_UPDATE_COMMAND = "get_native_agent_live_update";
 /** How often the test's own reader polls; slower than a view, so changes coalesce. */
 const READER_INTERVAL_MS = 2_000;
 /** Consecutive settled reads that must all answer `unchanged`. */
@@ -149,6 +150,8 @@ function recordBrowserReads(page: Page, logicalSessionKey: string): BrowserRead[
         args?: {
           logicalSessionKey?: string;
           knownToken?: string;
+          transcriptToken?: string;
+          stateToken?: string;
           forceSnapshot?: boolean;
         };
       };
@@ -161,12 +164,34 @@ function recordBrowserReads(page: Page, logicalSessionKey: string): BrowserRead[
       const at = Date.now();
       const response = await request.response();
       const result = (await response?.json().catch(() => null)) as {
-        result?: { status?: string };
+        result?: {
+          status?: string;
+          transcript?: { status?: string };
+          state?: { status?: string };
+        };
       } | null;
+      const fallback = `http-${response?.status() ?? "none"}`;
+      if (body.command === LIVE_UPDATE_COMMAND) {
+        // One request answers both, so the view's reads are counted as before.
+        // A `pending` part is sent again on its own and counted there.
+        const part = (command: string, status: string | undefined, token: string | undefined) => {
+          if (status === "pending") return;
+          reads.push({
+            at,
+            command,
+            status: status ?? fallback,
+            conditional: typeof token === "string",
+            forced: false,
+          });
+        };
+        part(TRANSCRIPT_COMMAND, result?.result?.transcript?.status, body.args?.transcriptToken);
+        part(STATE_COMMAND, result?.result?.state?.status, body.args?.stateToken);
+        return;
+      }
       reads.push({
         at,
         command: body.command,
-        status: result?.result?.status ?? `http-${response?.status() ?? "none"}`,
+        status: result?.result?.status ?? fallback,
         conditional: typeof body.args?.knownToken === "string",
         forced: body.args?.forceSnapshot === true,
       });

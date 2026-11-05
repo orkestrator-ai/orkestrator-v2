@@ -7,7 +7,11 @@
  * reported content, not as an applied workspace change.
  */
 
-import type { ChangeMeasurement, LineCount } from "@orkestrator/protocol/change-measurements";
+import {
+  FILE_ROWS_CAPPED_REASON,
+  type ChangeMeasurement,
+  type LineCount,
+} from "@orkestrator/protocol/change-measurements";
 import { displayPath } from "./capture.js";
 import type { ChangeLedger } from "./change-ledger.js";
 
@@ -107,7 +111,10 @@ export class ChangeHandoffSerializer {
           `  ${row.status}: ${path}${from} ${formatCount("+", additions)} ${formatCount("-", deletions)}`,
         );
       }
-      const total = this.ledger.measurementFileCount(id);
+      const stored = this.ledger.measurementFileCount(id);
+      const total = measurement.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
+        ? (totals.changedFiles ?? stored)
+        : stored;
       if (total > 20) lines.push(`  … ${total - 20} more files`);
     }
     let text = lines.join("\n");

@@ -44,3 +44,9 @@ is not classified as a flake.
 The snapshot may be published out of counter order when the shell writers run
 concurrently under host load. The isolated pass establishes intermittent
 behaviour, not its cause. No assertion, timeout or skip was changed.
+
+## 2026-11-05 E8 review recurrence
+
+Preparation at cd5b0142 again failed this owner under `mise run test` (1169.12 ms; diagnostic in review-validation-6e251f8d-c76b-469b-b389-d7b80e76ea49/validation-04.stdout.txt). The owner passed in a sequential one-worker rerun alongside three other recorded backend owners:
+`mise run test:logged -- --name recorded-backend-failures -- bun --cwd=apps/backend test tests/shell.test.ts tests/claude-state-signal-integration.test.ts tests/commands-container-exec.test.ts src/core/preview-listener-ownership.test.ts --parallel=1 --only-failures`.
+The command passed in 6.1 seconds; passing output was deleted by the logged runner. No assertion changed.

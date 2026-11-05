@@ -19,10 +19,14 @@
  * each path's owner and removal condition.
  */
 export const COMPATIBILITY_PATH_IDS = [
+  /** A container bridge's token was read from its `node`-readable `/tmp` file. */
+  "bridge-credential.token-file",
   /** A session-route 404 was rejected as an outdated bridge, without reading a legacy route. */
   "slash-catalogue.outdated-bridge",
   /** A bridge without `POST /session/:id/close` got the restart notice. */
   "bridge-close.upgrade-required",
+  /** A renderer that predates paged tmux transcripts read a whole transcript. */
+  "tmux-transcript.whole-read",
   /** A bridge without `/transcript` was read through its whole `/messages` body. */
   "bridge-transcript.messages-fallback",
   /**
@@ -84,6 +88,8 @@ export const COMPATIBILITY_PATH_IDS = [
    * on a leaf that does not advertise `ticket-sync`.
    */
   "ticket-sync.older-node",
+  /** A terminal WebSocket client offered no input-results subprotocol: a frame per input. */
+  "terminal-websocket.per-input-results",
   /**
    * `/compact` sent instructions and the bridge compacted without confirming
    * them: it predates compaction instructions and ignored the body.

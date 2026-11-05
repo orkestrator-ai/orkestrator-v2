@@ -2,6 +2,7 @@ import {
   createBridgeDiagnostics,
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
+import { loadBridgeCredential } from "@orkestrator/protocol/node/bridge-credential";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -665,12 +666,15 @@ export const provider = providerConfig.id as Provider;
 export const port = parsePort(process.env.PORT);
 export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
-export const authToken =
-  process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
-// The token authenticates callers of this bridge; nothing this process spawns
-// needs it. Captured once above and removed so the ACP agent child, and the
-// terminals it runs, cannot inherit the credential through process.env (H4).
-delete process.env.ACP_BRIDGE_TOKEN;
+// The credential authenticates callers of this bridge; nothing this process
+// spawns needs it. Captured once and removed so the ACP agent child, and the
+// terminals it runs, cannot inherit it through process.env (H4).
+export const bridgeCredential = loadBridgeCredential("ACP_BRIDGE_TOKEN");
+/** The token, when given one rather than its verifier: only test harnesses read it. */
+export const authToken = bridgeCredential.plainToken ?? "";
+// Signs external session ids for the life of this process. Not the credential:
+// the bridge holds only that token's verifier, which a reader could sign with.
+const externalSessionKey = randomBytes(32);
 export const executable = providerConfig.executable;
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
@@ -1497,7 +1501,7 @@ export const EXTERNAL_SESSION_PREFIX = "acp-session:";
 
 export function externalSessionToken(acpSessionId: string): string {
   const encoded = Buffer.from(acpSessionId).toString("base64url");
-  const signature = createHmac("sha256", authToken).update(encoded).digest("base64url");
+  const signature = createHmac("sha256", externalSessionKey).update(encoded).digest("base64url");
   return `${EXTERNAL_SESSION_PREFIX}${encoded}.${signature}`;
 }
 
@@ -1509,7 +1513,7 @@ export function parseExternalSessionToken(value: string): string | null {
   const encoded = token.slice(0, separator);
   const signature = token.slice(separator + 1);
   if (!encoded || encoded.length > 1_024 || !signature) return null;
-  const expected = createHmac("sha256", authToken).update(encoded).digest();
+  const expected = createHmac("sha256", externalSessionKey).update(encoded).digest();
   let supplied: Buffer;
   try {
     supplied = Buffer.from(signature, "base64url");

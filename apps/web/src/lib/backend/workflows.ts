@@ -64,6 +64,7 @@ import type {
   NativeAgentTranscriptUpdate,
   NativeAgentSessionStateUpdate,
   NativeAgentDiscoveryUpdate,
+  NativeAgentLiveUpdate,
   NativeAgentDiscoverySection,
   NativeAgentCommandIntent,
   NativeAgentCommandRefreshOutcome,
@@ -110,6 +111,7 @@ import {
   isNativeAgentTranscriptUpdate,
   isNativeAgentSessionStateUpdate,
   isNativeAgentDiscoveryUpdate,
+  isNativeAgentLiveUpdate,
   NATIVE_AGENT_SYNC_MAX_PAGE_BYTES,
   NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES,
 } from "@orkestrator/protocol/native-agent";
@@ -463,6 +465,8 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
   observationEventVersions?: number[];
   /** Part-level patches inside transcript deltas (efficiency step 14). */
   transcriptPatchVersions?: number[];
+  /** One request for transcript and state (`get_native_agent_live_update`). */
+  liveUpdateVersions?: number[];
 }> {
   const response = await invoke<unknown>("get_native_agent_sync_capabilities");
   if (!response || typeof response !== "object" || Array.isArray(response)) {
@@ -487,7 +491,11 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     (candidate.transcriptPatchVersions !== undefined &&
       (!Array.isArray(candidate.transcriptPatchVersions) ||
         candidate.transcriptPatchVersions.length > 16 ||
-        !candidate.transcriptPatchVersions.every(Number.isSafeInteger)))
+        !candidate.transcriptPatchVersions.every(Number.isSafeInteger))) ||
+    (candidate.liveUpdateVersions !== undefined &&
+      (!Array.isArray(candidate.liveUpdateVersions) ||
+        candidate.liveUpdateVersions.length > 16 ||
+        !candidate.liveUpdateVersions.every(Number.isSafeInteger)))
   ) {
     throw new Error("Invalid native agent sync capabilities response");
   }
@@ -497,6 +505,7 @@ export async function getNativeAgentSyncCapabilities(): Promise<{
     progressiveViewVersions?: number[];
     observationEventVersions?: number[];
     transcriptPatchVersions?: number[];
+    liveUpdateVersions?: number[];
   };
 }
 
@@ -537,6 +546,30 @@ export async function getNativeAgentSessionStateUpdate(input: {
     throw new Error("Invalid native agent session-state update response");
   }
   return response;
+}
+
+export async function getNativeAgentLiveUpdate<TMessage = unknown>(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  viewVersion: 1;
+  liveWindow: NativeAgentLiveWindow;
+  transcriptToken?: string;
+  stateToken?: string;
+  /** Ask for part-level patches; only when the backend advertised them. */
+  patchVersion?: 2;
+}): Promise<NativeAgentLiveUpdate<TMessage>> {
+  const response = await invoke<unknown>("get_native_agent_live_update", input);
+  if (
+    new TextEncoder().encode(JSON.stringify(response)).byteLength >
+    NATIVE_AGENT_SYNC_MAX_SNAPSHOT_BYTES
+  ) {
+    throw new Error("Native agent live update response exceeded 20 MiB");
+  }
+  if (!isNativeAgentLiveUpdate(response)) {
+    throw new Error("Invalid native agent live update response");
+  }
+  return response as NativeAgentLiveUpdate<TMessage>;
 }
 
 export async function getNativeAgentDiscoveryUpdate(input: {

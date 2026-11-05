@@ -4,7 +4,7 @@ import { applyBridgeLogPolicy } from "@orkestrator/protocol/node/bridge-log-poli
 import { isValidMcpFormContent } from "@orkestrator/protocol/mcp-elicitation-form";
 import { forkAcpSession } from "./acp-fork.js";
 import { humanPromptObservation } from "@orkestrator/protocol/human-prompts";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
@@ -50,7 +50,7 @@ import {
   MAX_STRUCTURED_RESULT_BYTES,
   SESSION_CLOSING_ERROR,
   HttpError,
-  authToken,
+  bridgeCredential,
   agentRuntime,
   clientSessionKeys,
   configuredAcpMcpServers,
@@ -1077,11 +1077,7 @@ export function authenticated(request: IncomingMessage): boolean {
     Array.isArray(dedicated) ? dedicated[0] : dedicated,
     request.headers.authorization?.replace(/^Bearer\s+/i, ""),
   ];
-  const right = Buffer.from(authToken);
-  return candidates.some((candidate) => {
-    const left = Buffer.from(candidate?.trim() || "");
-    return left.length === right.length && timingSafeEqual(left, right);
-  });
+  return candidates.some((candidate) => bridgeCredential.matches(candidate?.trim()));
 }
 
 export function isTrustedBridgeOrigin(origin: string | undefined): boolean {

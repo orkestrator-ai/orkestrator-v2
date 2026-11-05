@@ -1,6 +1,7 @@
 import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { RELEASE_RUNTIME_PATH } from "@orkestrator/protocol/node/standalone-service";
 import { ON_DEMAND_BRIDGES, RUNTIME_SUBDIRECTORY } from "./bridges.js";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
@@ -14,9 +15,10 @@ if (typeof manifest.version !== "string") {
 const READY_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
 
-async function run(command: string[], cwd: string): Promise<void> {
+async function run(command: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const child = Bun.spawn(command, {
     cwd,
+    env,
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -122,6 +124,7 @@ async function probePackedBridge(directory: string, name: string): Promise<void>
 // Tracked outside the try so the cleanup below can never delete the installed
 // package and its data directory out from under a still-running child.
 let backend: Bun.Subprocess | undefined;
+let lockedRelease: string | undefined;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packed-smoke-"));
 try {
   await run(
@@ -189,6 +192,63 @@ try {
     }
     await probePackedBridge(target, bridge.name);
   }
+
+  // The standalone updater installs a release's dependencies from its published
+  // lockfile (`installRelease`). Do the same from the packed files, so a lockfile
+  // the registry no longer satisfies fails here, and run the result.
+  // Keep this outside the fresh install: upward resolution must never borrow
+  // dependencies from temporaryRoot/node_modules.
+  lockedRelease = await mkdtemp(path.join(os.tmpdir(), "orkestrator-locked-smoke-"));
+  await cp(path.join(installedRoot, RELEASE_RUNTIME_PATH), lockedRelease, { recursive: true });
+  await run(
+    [
+      process.execPath,
+      "install",
+      "--frozen-lockfile",
+      "--cache-dir",
+      path.join(lockedRelease, ".cache"),
+      "--production",
+      "--linker=hoisted",
+      "--ignore-scripts",
+      "--no-progress",
+      "--no-summary",
+    ],
+    lockedRelease,
+    { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(lockedRelease, ".cache") },
+  );
+  await rm(path.join(lockedRelease, ".cache"), { recursive: true, force: true });
+  const lockedPackage = path.join(lockedRelease, "node_modules", "orkestrator");
+  await cp(await realpath(installedRoot), lockedPackage, {
+    recursive: true,
+    filter: (source) => path.basename(source) !== "node_modules",
+  });
+  for (const specifier of ["sharp", "playwright-core", "@anthropic-ai/claude-agent-sdk"]) {
+    const resolved = await realpath(Bun.resolveSync(specifier, lockedPackage));
+    const relative = path.relative(await realpath(lockedRelease), resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`Frozen release resolved ${specifier} outside its own tree: ${resolved}`);
+    }
+  }
+  const lockedProbe = path.join(lockedPackage, "locked-probe.mjs");
+  await writeFile(
+    lockedProbe,
+    `
+    const { default: sharp } = await import("sharp");
+    await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();
+    await import("playwright-core");
+    await import("@anthropic-ai/claude-agent-sdk");
+  `,
+  );
+  await run([process.execPath, lockedProbe], lockedRelease);
+  const lockedEntry = path.join(lockedPackage, "bin", "orkestrator.js");
+  const lockedVersion = Bun.spawnSync([process.execPath, lockedEntry, "version"], {
+    cwd: lockedRelease,
+    env: { ...process.env, ORKESTRATOR_CLI_CONFIG_DIR: path.join(temporaryRoot, "cli-config") },
+  });
+  if (!lockedVersion.stdout.toString().includes(manifest.version)) {
+    throw new Error("The release installed from its lockfile did not report its version");
+  }
+  console.log("release installed from its published lockfile and ran");
 
   const dataDir = path.join(temporaryRoot, "data");
   const executable = path.join(temporaryRoot, "node_modules", ".bin", "orkestrator");
@@ -423,4 +483,5 @@ try {
 } finally {
   if (backend) await stop(backend);
   await rm(temporaryRoot, { recursive: true, force: true });
+  if (lockedRelease) await rm(lockedRelease, { recursive: true, force: true });
 }

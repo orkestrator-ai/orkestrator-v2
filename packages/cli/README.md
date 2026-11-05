@@ -75,6 +75,15 @@ curl -fsSL https://orkestrator.dev/install.sh | \
   --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
 
+The installer runs the Stable release stated at the top of the script, which you
+can read before piping it into `bash`. It moves when a new Stable release is
+pinned, so it can trail `bunx orkestrator` for a short time. To start on another
+release, set `ORKESTRATOR_INSTALL_VERSION` to an npm tag or a version:
+
+```bash
+curl -fsSL https://orkestrator.dev/install.sh | ORKESTRATOR_INSTALL_VERSION=alpha bash
+```
+
 macOS and Linux are supported. Docker is required for container environments;
 Tailscale is required only for tailnet access and Tailscale Serve.
 

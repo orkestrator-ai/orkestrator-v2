@@ -34,3 +34,30 @@
   together with `graph-designer.spec.ts` and `graph-run-view.spec.ts`
   (4 passed, 2 failed, 1 skipped on each; the two failures are tracked in
   to-do 2922, task 4). The branch changes no graph code.
+
+
+## Background-message recovery review — 2026-11-05
+
+On `49f025562`, the unchanged graph editing case failed keyboard undo at
+`graph-designer-editing.spec.ts:227` (expected one edge, received two after the
+5-second poll). The broad run used one worker and credential-free profile
+`review-refusal-recovery`:
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RUN_ID=review-refusal-recovery mise run test:logged -- --name repair-browser -- mise run test:agent:browser
+```
+
+The run was intentionally interrupted for narrower validation: 34 passed,
+3 failed, 50 skipped, 1 interrupted, 58 not run (563.6 seconds).
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LOCmhO/repair-browser.log.gz`.
+
+After restarting the profile for the committed source fingerprint, the complete
+unchanged owner passed alone (one worker, 19.8 seconds):
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RUN_ID=refusal-graph-owner mise run test:logged -- --name repair-graph-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/graph-designer-editing.spec.ts
+```
+
+Artifacts: `output/agent-testing/refusal-graph-owner/browser/`.
+No graph implementation, assertion, timeout or skip was changed; the cause
+remains unconfirmed.

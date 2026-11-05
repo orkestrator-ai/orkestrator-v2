@@ -12,7 +12,11 @@ export function designFrameSource(
   pageUrl = window.location.href,
 ): { src: string } | { srcDoc: string } {
   if (!document) return { srcDoc: designBootstrap(createUuid()) };
-  // Gateway SPA routes can be nested; packaged documents are siblings of index.html.
+  return { src: emittedFrameDocumentUrl(document, pageUrl) };
+}
+
+/** Gateway SPA routes can be nested; packaged documents are siblings of index.html. */
+export function emittedFrameDocumentUrl(document: string, pageUrl: string): string {
   const base = pageUrl.startsWith("file:") ? pageUrl : new URL("/", pageUrl).href;
-  return { src: new URL(document, base).href };
+  return new URL(document, base).href;
 }

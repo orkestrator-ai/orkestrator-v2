@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ContainerLogService, LOG_LIMITS, recordCut } from "../src/core/container-log-service";
-import { boundedBackgroundLaunch } from "../src/core/container-log-bounds";
+import {
+  boundedBackgroundLaunch,
+  boundedLaunchWithPrivateEnv,
+  CONTAINER_LOG_WRITER,
+} from "../src/core/container-log-bounds";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -374,3 +378,46 @@ describe("bounded log tails", () => {
     expect(bounded).not.toContain("�");
   });
 });
+
+test.skipIf(process.platform !== "linux")(
+  "a private-environment launch gives the secret to the server alone",
+  async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ork-private-launch-"));
+    try {
+      const seen = path.join(root, "seen");
+      const writer = path.join(root, "writer");
+      const server = path.join(root, "server");
+      writeFileSync(
+        writer,
+        `#!/bin/bash\nprintf 'writer:[%s]\\n' "$SECRET" >> ${seen}\ncat >> ${seen}\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        server,
+        `#!/bin/bash\nprintf 'server:[%s]\\n' "$SECRET"\nif [ -e /proc/$$/fd/3 ]; then echo fd3:1; else echo fd3:0; fi\n`,
+        { mode: 0o755 },
+      );
+      const script = boundedLaunchWithPrivateEnv("SERVER", "LOG", "SECRET")
+        .replaceAll(CONTAINER_LOG_WRITER, writer)
+        .replace("SERVER", server)
+        .replace("LOG", path.join(root, "log"));
+      const launched = Bun.spawnSync([
+        "bash",
+        "-c",
+        `export SECRET=fake-secret\nexport -n SECRET\n${script}\nprintf 'shell:[%s]\\n' "$(env | grep -c '^SECRET=' || true)" >> ${seen}`,
+      ]);
+      expect(launched.exitCode).toBe(0);
+      let text = "";
+      for (let attempt = 0; attempt < 200 && !text.includes("fd3:"); attempt += 1) {
+        await Bun.sleep(20);
+        text = readFileSync(seen, "utf8");
+      }
+      expect(text).toContain("server:[fake-secret]");
+      expect(text).toContain("writer:[]");
+      expect(text).toContain("shell:[0]");
+      expect(text).toContain("fd3:0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

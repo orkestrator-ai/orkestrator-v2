@@ -123,6 +123,12 @@ export function changesViewLines(view: PublicChangesView): string[] {
       `${files.rows.length} of ${files.totalRows ?? "?"} files shown; next page: --cursor ${files.nextCursor}`,
     );
   }
+  if (files.omittedRows) {
+    lines.push(
+      "",
+      `${files.omittedRows} more changed files are not listed; the totals count them.`,
+    );
+  }
   return lines;
 }
 

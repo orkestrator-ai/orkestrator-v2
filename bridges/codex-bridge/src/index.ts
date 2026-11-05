@@ -1,6 +1,10 @@
 import { PolicyWideningRefusedError } from "@orkestrator/protocol/execution-policy-narrowing";
 import { BRIDGE_LOG_POLICY_ROUTE } from "@orkestrator/protocol/log-policy";
 import {
+  bridgeCredentialFromToken,
+  loadBridgeCredential,
+} from "@orkestrator/protocol/node/bridge-credential";
+import {
   applyBridgeLogPolicy,
   readBridgeLogPolicyBody,
 } from "@orkestrator/protocol/node/bridge-log-policy";
@@ -9,7 +13,6 @@ import {
   type BridgeRunDiagnostics,
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -223,12 +226,10 @@ export function boundCodexTranscriptResponse(
 }
 const BRIDGE_TOKEN_ENV = "CODEX_BRIDGE_TOKEN";
 const BRIDGE_ALLOWED_ORIGINS_ENV = "CODEX_BRIDGE_ALLOWED_ORIGINS";
-let bridgeAuthToken =
-  process.env[BRIDGE_TOKEN_ENV]?.trim() || randomBytes(32).toString("base64url");
-// The token authenticates callers of this bridge; nothing this process spawns
-// needs it. Capture it once and remove it so the app-server child, and every
-// shell the agent runs through it, cannot inherit the credential (H4).
-delete process.env[BRIDGE_TOKEN_ENV];
+// The credential authenticates callers of this bridge; nothing this process
+// spawns needs it. Captured once and removed so the app-server child, and every
+// shell the agent runs through it, cannot inherit it (H4).
+let bridgeCredential = loadBridgeCredential(BRIDGE_TOKEN_ENV);
 let bridgeAuthEnabledOverrideForTesting: boolean | null = null;
 interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
@@ -400,10 +401,7 @@ function isBridgeAuthEnabled(): boolean {
 }
 
 function tokenMatches(candidate: string | undefined): boolean {
-  if (!candidate) return false;
-  const expected = Buffer.from(bridgeAuthToken);
-  const actual = Buffer.from(candidate);
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  return bridgeCredential.matches(candidate);
 }
 
 function bearerToken(header: string | undefined): string | undefined {
@@ -950,7 +948,7 @@ export const __testing = {
       bridgeAuthEnabledOverrideForTesting = null;
       return;
     }
-    bridgeAuthToken = token;
+    bridgeCredential = bridgeCredentialFromToken(token);
     bridgeAuthEnabledOverrideForTesting = true;
   },
   isTrustedBridgeOriginForTesting: isTrustedBridgeOrigin,

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   linkedVersion,
+  RELEASE_RUNTIME_PATH,
   standaloneLayout,
   writeServiceConfig,
   type CommandRunner,
@@ -31,11 +32,16 @@ function registry(tags: Record<string, string>): typeof fetch {
 }
 
 /** `bun install`, `--version` and `toolchain install` for fake releases. */
-function runner(engines = ">=1.4.3"): { run: CommandRunner; calls: string[][] } {
+function runner(engines = ">=1.4.3", locked = false): { run: CommandRunner; calls: string[][] } {
   const calls: string[][] = [];
   const run: CommandRunner = async (_file, args, options) => {
     calls.push(args);
     if (args[0] === "install") {
+      if (args.includes("--frozen-lockfile")) {
+        expect(args).toContain("--ignore-scripts");
+        expect(await Bun.file(path.join(options.cwd!, "bun.lock")).text()).toBe("fixture lock");
+        return { stdout: "", stderr: "" };
+      }
       const manifest = JSON.parse(
         await Bun.file(path.join(options.cwd!, "package.json")).text(),
       ) as { dependencies: { orkestrator: string } };
@@ -48,6 +54,12 @@ function runner(engines = ">=1.4.3"): { run: CommandRunner; calls: string[][] } 
       );
       await writeFile(path.join(root, "bin", "orkestrator.js"), "// entry\n");
       await writeFile(path.join(root, "bin", "orkestrator-launcher.js"), "// launcher\n");
+      if (locked) {
+        const runtime = path.join(root, RELEASE_RUNTIME_PATH);
+        await mkdir(runtime, { recursive: true });
+        await writeFile(path.join(runtime, "package.json"), JSON.stringify({ dependencies: {} }));
+        await writeFile(path.join(runtime, "bun.lock"), "fixture lock");
+      }
       return { stdout: "", stderr: "" };
     }
     if (args[1] === "--version") {
@@ -62,6 +74,7 @@ function runner(engines = ">=1.4.3"): { run: CommandRunner; calls: string[][] } 
 async function setup(
   options: {
     engines?: string;
+    locked?: boolean;
     latest?: string;
     tags?: Record<string, string>;
     fetchImpl?: typeof fetch;
@@ -85,7 +98,7 @@ async function setup(
   service.init();
   service.markReady();
   const shutdown = mock(() => undefined);
-  const { run, calls } = runner(options.engines);
+  const { run, calls } = runner(options.engines, options.locked);
   const updater = createStandaloneUpdater({
     service,
     layout,
@@ -142,20 +155,24 @@ describe("createStandaloneUpdater", () => {
     });
   });
 
-  test("installs, pre-installs the toolchain, counts down, switches current and restarts", async () => {
-    const { layout, service, shutdown, calls } = await setup();
-    const job = service.requestUpdate({ requestedVersion: null });
-    await until(() => shutdown.mock.calls.length > 0);
-    expect(service.job(job.id)).toMatchObject({ state: "restarting", targetVersion: "2.22.0" });
-    expect(linkedVersion(layout.current)).toBe("2.22.0");
-    expect(existsSync(layout.restartMarker)).toBe(true);
-    expect(existsSync(layout.launcher)).toBe(true);
-    expect(
-      calls.map((args) =>
-        args[1] === "--version" ? "smoke" : args[0] === "install" ? "install" : args[1],
-      ),
-    ).toEqual(["install", "smoke", "toolchain"]);
-  });
+  test.each([false, true])(
+    "installs, smoke checks, switches and restarts (locked=%s)",
+    async (locked) => {
+      const { layout, service, shutdown, calls } = await setup({ locked });
+      const job = service.requestUpdate({ requestedVersion: null });
+      await until(() => shutdown.mock.calls.length > 0);
+      expect(service.job(job.id)).toMatchObject({ state: "restarting", targetVersion: "2.22.0" });
+      expect(calls.some((args) => args.includes("--frozen-lockfile"))).toBe(locked);
+      expect(linkedVersion(layout.current)).toBe("2.22.0");
+      expect(existsSync(layout.restartMarker)).toBe(true);
+      expect(existsSync(layout.launcher)).toBe(true);
+      expect(
+        calls.map((args) =>
+          args[1] === "--version" ? "smoke" : args[0] === "install" ? "install" : args[1],
+        ),
+      ).toEqual(["install", "install", "smoke", "toolchain"]);
+    },
+  );
 
   test("answers a check request from the registry", async () => {
     const { service } = await setup({ latest: "2.23.0" });
@@ -177,11 +194,12 @@ describe("createStandaloneUpdater", () => {
     expect(linkedVersion(layout.current)).toBeNull();
   });
 
-  test("refuses a release that needs a newer Bun than the service runs", async () => {
-    const { service, shutdown } = await setup({ engines: ">=9.0.0" });
+  test.each([false, true])("refuses a release needing newer Bun (locked=%s)", async (locked) => {
+    const { service, shutdown, calls } = await setup({ engines: ">=9.0.0", locked });
     const job = service.requestUpdate({ requestedVersion: null });
     await until(() => service.job(job.id)?.state === "failed");
     expect(service.job(job.id)?.error).toContain("needs Bun >=9.0.0");
+    expect(calls.some((args) => args[1] === "--version")).toBe(false);
     expect(shutdown).not.toHaveBeenCalled();
   });
 

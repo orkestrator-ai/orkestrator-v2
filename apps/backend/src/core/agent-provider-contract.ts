@@ -197,6 +197,18 @@ export class PromptRejectedError extends Error {
   }
 }
 
+/**
+ * A bridge refused a wider execution policy for a session live on it. Only a
+ * bridge restart applies one, which is the backend's call to make: a session
+ * loaded from disk has no live policy and takes the one it is given.
+ */
+export class BridgePolicyWideningRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgePolicyWideningRefusedError";
+  }
+}
+
 export class ProviderUnavailableError extends Error {
   /** Delay the next dispatch while a request's terminal evidence is still settling. */
   readonly retryAfterMs?: number;

@@ -1,6 +1,6 @@
 # E5: Database upkeep
 
-This file combines 4 reports into one batch to build together. `0760`, `0910` and `0920` wait on the ledger work. `0920` also has a maintainer deferral.
+This file combines 4 reports into one batch to build together. `0760`, `0910` and `0920` follow the measurement row cap, which is built. `0920` also has a maintainer deferral.
 
 For the lane, order and conflicts, see [Parallel running](0000-index.md#parallel-running) in this folder's index.
 
@@ -21,7 +21,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Separate the ledger from the hourly copy**: hourly snapshots stop copying change-tracking tables. Status: open (best after [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement) and [0710](0700-e2-measurement-rows.md#0710-prune-superseded-measurements-fully-and-skip-no-change-publishes)).
+1. **Separate the ledger from the hourly copy**: hourly snapshots stop copying change-tracking tables. Status: open (best after [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup) and [prompt pruning](../../architecture/change-tracking.md#retention-and-backup)).
 2. **Update restore instructions**: storage and change-tracking docs describe the new shape. Status: open (depends on 1).
 
 #### 1. Separate the ledger from the hourly copy
@@ -43,7 +43,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
     - Cons: a second snapshot path to build and verify; the ledger keeps sharing a page cache and WAL with the app stores, and the daily copy still writes the whole thing.
 - **Back the ledger up at all?**
   - **Daily, without `change-tracking/` objects, documented as best effort (recommended).**
-    - Pros: a real recovery point for measurements; cheap once [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement) lands.
+    - Pros: a real recovery point for measurements; cheap once [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup) lands.
     - Cons: the same mismatch with objects as today.
   - **Not at all, as the report allows.**
     - Pros: simplest.
@@ -138,7 +138,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 1. **Run `PRAGMA optimize`**: keep query plans current as tables grow. Status: open.
 2. **Remove or honour `foreign_keys=ON`**: it does nothing today. Status: open.
-3. **Decide on `cache_size` and `mmap_size`**: after the ledger shrinks. Status: open (depends on [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement)).
+3. **Decide on `cache_size` and `mmap_size`**: after the ledger shrinks. Status: open (depends on [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup)).
 
 #### 1. Run `PRAGMA optimize`
 
@@ -187,7 +187,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 **Decisions.**
 
 - **When?**
-  - **Only with a measured read problem after [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement) (recommended).**
+  - **Only with a measured read problem after [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup) (recommended).**
     - Pros: tuning against a table about to shrink tenfold wastes effort.
     - Cons: possible gains wait.
   - **Raise them now.**
@@ -208,7 +208,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 
 #### Tasks
 
-1. **Measure fsync and zero-write cost**: after the ledger work, on a real session. Status: open (depends on [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement) and [0710](0700-e2-measurement-rows.md#0710-prune-superseded-measurements-fully-and-skip-no-change-publishes)).
+1. **Measure fsync and zero-write cost**: after the ledger work, on a real session. Status: open (depends on [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup) and [prompt pruning](../../architecture/change-tracking.md#retention-and-backup)).
 2. **Decide the tiers**: with the maintainer's sign-off. Status: open (depends on 1).
 
 #### 1. Measure fsync and zero-write cost
@@ -257,7 +257,7 @@ Analysed 2026-11-03 against `main` at `a2bba9d8`.
 ## Related
 
 - [Logging and database report, R17](../2026-10-29-logging-and-database-efficiency.md#r17-take-the-ledger-out-of-hourly-snapshots-d3) and [D3](../2026-10-29-logging-and-database-efficiency.md#d3-backups-multiply-the-ledger-high-for-disk)
-- [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement), [0710](0700-e2-measurement-rows.md#0710-prune-superseded-measurements-fully-and-skip-no-change-publishes), [0920](#0920-tier-synchronous-and-secure_delete-by-data)
+- [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup), [prompt pruning](../../architecture/change-tracking.md#retention-and-backup), [0920](#0920-tier-synchronous-and-secure_delete-by-data)
 - [Backend storage](../../architecture/storage.md)
 - [Logging and database report, R18](../2026-10-29-logging-and-database-efficiency.md#r18-tier-durability-and-maintenance-settings-d5-d6) and [D6](../2026-10-29-logging-and-database-efficiency.md#d6-a-truncating-checkpoint-can-stall-the-event-loop-during-a-backup-medium-likely)
 - [0741 backend responsiveness under load](../../todo/cross-cutting/0741-backend-responsiveness-under-load.md), which tracks event-loop stalls generally

@@ -1205,6 +1205,11 @@ export class TranscriptTail {
 
   constructor(readonly filePath: string) {}
 
+  /** How far into the file this tail has read. */
+  get bytesRead(): number {
+    return this.offset;
+  }
+
   /**
    * Parses whatever has been appended since the last call.
    *

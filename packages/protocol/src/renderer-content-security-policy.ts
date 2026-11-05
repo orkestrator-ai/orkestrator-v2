@@ -52,7 +52,14 @@ export const GATEWAY_LOGIN_CONTENT_SECURITY_POLICY =
 export const DESIGN_FRAME_DOCUMENT = "design-frame.html";
 
 /**
- * Keeps the design frame document opaque on the gateway's origin even when it
+ * The transcript's static HTML presentation runtime
+ * (`static-html-presentation.ts`), emitted for the same reason as the design
+ * frame document and served under the same frame policy.
+ */
+export const STATIC_HTML_FRAME_DOCUMENT = "static-html-frame.html";
+
+/**
+ * Keeps the design and static HTML frame documents opaque on the gateway's origin even when it
  * is opened without the sandbox attribute the renderer's iframe always sets.
  */
 export const GATEWAY_DESIGN_FRAME_CONTENT_SECURITY_POLICY =

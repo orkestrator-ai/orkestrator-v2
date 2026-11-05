@@ -43,6 +43,18 @@ describe("test tier selection", () => {
     );
   });
 
+  test("real-time proxy deadline files run only in the slow tier", () => {
+    for (const [pkg, file] of [
+      ["apps/backend", "tests/gateway-proxy-idle-timers.test.ts"],
+      ["packages/protocol", "src/node/preview-forward.test.ts"],
+    ]) {
+      expect(tierArguments("slow", repositoryRoot, pkg!, ["."])).toContain(`./${file}`);
+      expect(tierArguments("default", repositoryRoot, pkg!, ["."])).toContain(
+        `--path-ignore-patterns=${file}`,
+      );
+    }
+  });
+
   test("slow discovery is sorted, deduplicated and excludes dependency directories", () => {
     const { root } = fixture({
       "apps/backend/tests/tmux-live.test.ts": "",

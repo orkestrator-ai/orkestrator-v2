@@ -130,10 +130,7 @@ export class NativeAgentDeliveries {
       }
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      let session = sessions[key];
+      let session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session) throw new Error("Native agent session was not found");
       if (session.pendingSteer) {
         throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
@@ -144,8 +141,7 @@ export class NativeAgentDeliveries {
       if (session.dispatchedRequestIds?.includes(requestId)) {
         if (session.pendingDispatch?.requestId === requestId) {
           session = { ...session, pendingDispatch: undefined, updatedAt: nowIso() };
-          sessions[key] = session;
-          await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+          await this.repos.nativeAgentSessions.saveNativeAgentSession(key, session);
           await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(
             key,
             requestId,
@@ -174,7 +170,6 @@ export class NativeAgentDeliveries {
       const controlUpdate = await admit?.(session);
       if (controlUpdate) {
         session = nativeAgentSessionWithControls(session, controlUpdate);
-        sessions[key] = session;
         await this.repos.nativeAgentSessions.saveNativeAgentSession(key, session);
         this.repos.nativeAgentSessions.announceNativeAgentRecord(session, "record-dispatch");
       }
@@ -190,10 +185,9 @@ export class NativeAgentDeliveries {
           },
           updatedAt: nowIso(),
         };
-        sessions[key] = session;
         // Persist before touching the provider. A crash or lost acknowledgement
         // can then replay this exact request through the same idempotency key.
-        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, session);
       }
 
       // Keep the cross-process lock until the provider has acknowledged this
@@ -208,10 +202,9 @@ export class NativeAgentDeliveries {
             pendingDispatch: { ...session.pendingDispatch, mailRefused: true },
             updatedAt: nowIso(),
           };
-          sessions[key] = updated;
           // Persist proof of refusal before cleanup. A restart can release this
           // fence without interpreting a missing provider journal as unsent.
-          await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+          await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
           this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
           return { session: updated, dispatched: false };
         }
@@ -226,8 +219,7 @@ export class NativeAgentDeliveries {
               pendingDispatch: undefined,
               updatedAt: nowIso(),
             };
-            sessions[key] = updated;
-            await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+            await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
             await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(
               key,
               requestId,
@@ -247,8 +239,7 @@ export class NativeAgentDeliveries {
               }),
           updatedAt: nowIso(),
         };
-        sessions[key] = updated;
-        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
         await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
         this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
         return { session: updated, dispatched: false };
@@ -279,8 +270,7 @@ export class NativeAgentDeliveries {
           : undefined,
         updatedAt: nowIso(),
       };
-      sessions[key] = updated;
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
       const supersededResend = sessionSignInResend(session);
       if (supersededResend) await this.scrubSignInResendBackups(key, supersededResend.requestId);
@@ -319,10 +309,7 @@ export class NativeAgentDeliveries {
     resend: PersistedNativeAgentSignInResend,
   ): Promise<boolean> {
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (
         !session ||
         session.providerSessionId !== resend.providerSessionId ||
@@ -332,9 +319,9 @@ export class NativeAgentDeliveries {
       ) {
         return false;
       }
-      sessions[key] = { ...session, signInResend: resend, updatedAt: nowIso() };
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+      const updated = { ...session, signInResend: resend, updatedAt: nowIso() };
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
     });
   }
@@ -349,16 +336,13 @@ export class NativeAgentDeliveries {
     requestId: string,
   ): Promise<PersistedNativeAgentSignInResend | null> {
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       const held = session ? sessionSignInResend(session) : undefined;
       if (!session || held?.requestId !== requestId) return null;
-      sessions[key] = { ...session, signInResend: undefined, updatedAt: nowIso() };
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      const updated = { ...session, signInResend: undefined, updatedAt: nowIso() };
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
       await this.scrubSignInResendBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return held;
     });
   }
@@ -381,15 +365,12 @@ export class NativeAgentDeliveries {
       throw new Error("Native agent dispatch identity must not be blank");
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session || session.pendingDispatch?.requestId !== requestId) {
         return false;
       }
       const carriedHandoffId: unknown = session.pendingDispatch.agentHandoffId;
-      sessions[key] = {
+      const updated: PersistedNativeAgentSession = {
         ...session,
         lastDispatchedTurn: {
           requestId,
@@ -411,9 +392,9 @@ export class NativeAgentDeliveries {
           : {}),
         updatedAt: nowIso(),
       };
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
     });
   }
@@ -427,10 +408,7 @@ export class NativeAgentDeliveries {
       throw new Error("Pending native agent dispatch identity must not be blank");
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (
         !session ||
         session.pendingDispatch?.requestId !== requestId ||
@@ -438,14 +416,14 @@ export class NativeAgentDeliveries {
       ) {
         return false;
       }
-      sessions[key] = {
+      const updated: PersistedNativeAgentSession = {
         ...session,
         pendingDispatch: undefined,
         updatedAt: nowIso(),
       };
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
     });
   }
@@ -467,22 +445,19 @@ export class NativeAgentDeliveries {
       throw new Error("Native agent dispatch identity must not be blank");
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session || session.pendingDispatch?.requestId !== requestId) {
         return false;
       }
-      sessions[key] = {
+      const updated: PersistedNativeAgentSession = {
         ...session,
         pendingDispatch: undefined,
         retiredDispatch: { requestId, retiredAt: nowIso() },
         updatedAt: nowIso(),
       };
-      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+      await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
       await this.repos.nativeAgentSessions.scrubPendingNativeAgentDispatchBackups(key, requestId);
-      this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+      this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
       return true;
     });
   }
@@ -497,9 +472,7 @@ export class NativeAgentDeliveries {
     expectedRunId: string,
   ): Promise<PersistedNativeAgentPendingSteer | null> {
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session) throw new Error("Native agent session was not found");
       if (session.pendingDispatch)
         throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
@@ -660,9 +633,7 @@ export class NativeAgentDeliveries {
     readStatus: () => Promise<"dispatched" | "absent" | "unknown">,
   ): Promise<"dispatched" | "absent" | undefined> {
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session || session.pendingSteer?.requestId !== requestId) return undefined;
       if (session.pendingSteer.queueSettlement) {
         const settlement = session.pendingSteer.queueSettlement;
@@ -681,9 +652,7 @@ export class NativeAgentDeliveries {
    */
   async recoverPromptQueueSteer(key: string, requestId: string): Promise<void> {
     await this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = loaded.sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session) return;
       if (session.pendingSteer?.requestId === requestId) {
         const settlement = session.pendingSteer.queueSettlement;
@@ -736,10 +705,7 @@ export class NativeAgentDeliveries {
     }
 
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      let session = sessions[key];
+      let session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session) throw new Error("Native agent session was not found");
       if (session.pendingDispatch) {
         throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
@@ -768,9 +734,8 @@ export class NativeAgentDeliveries {
           pendingSteer,
           updatedAt: nowIso(),
         };
-        sessions[key] = session;
         // The record must be durable before a provider can queue the text.
-        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
+        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, session);
       }
 
       pendingSteer = session.pendingSteer ?? pendingSteer;
@@ -791,13 +756,13 @@ export class NativeAgentDeliveries {
       }
 
       if (outcome.outcome === "unknown") {
-        sessions[key] = {
+        const updated: PersistedNativeAgentSession = {
           ...session,
           pendingSteer: { ...pendingSteer, state: "unknown" },
           updatedAt: nowIso(),
         };
-        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, sessions[key]);
-        this.repos.nativeAgentSessions.announceNativeAgentRecord(sessions[key]!, "record-dispatch");
+        await this.repos.nativeAgentSessions.saveNativeAgentSession(key, updated);
+        this.repos.nativeAgentSessions.announceNativeAgentRecord(updated, "record-dispatch");
         return { ...outcome, requestId: pendingSteer.requestId };
       }
 
@@ -814,10 +779,7 @@ export class NativeAgentDeliveries {
       throw new Error("Native agent steer identity must not be blank");
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session || session.pendingSteer?.requestId !== requestId) {
         return false;
       }
@@ -835,10 +797,7 @@ export class NativeAgentDeliveries {
       throw new Error("Native agent steer identity must not be blank");
     }
     return this.repos.nativeAgentSessions.enqueueNativeAgentSessionMutation(key, async () => {
-      const loaded = await this.repos.nativeAgentSessions.loadNativeAgentSessions();
-      const { sessions } = loaded;
-      this.repos.nativeAgentSessions.assertReadableNativeAgentSession(loaded, key);
-      const session = sessions[key];
+      const session = await this.repos.nativeAgentSessions.readNativeAgentSessionUnderLease(key);
       if (!session || session.pendingSteer?.requestId !== requestId) {
         return false;
       }

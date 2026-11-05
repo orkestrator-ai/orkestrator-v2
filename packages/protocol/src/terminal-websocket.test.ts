@@ -8,7 +8,9 @@ import {
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
   TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
@@ -690,6 +692,36 @@ describe("terminal WebSocket protocol constants", () => {
     expect(TERMINAL_WEBSOCKET_PROTOCOL_VERSION).toBe(1);
     expect(TERMINAL_WEBSOCKET_SUBPROTOCOL).toBe("orkestrator-terminal.v1");
     expect(TERMINAL_WEBSOCKET_PATH).toBe("/__orkestrator/terminal");
+  });
+
+  test("a client offers input results first and keeps v1 for an older server", () => {
+    expect(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL).toBe(
+      "orkestrator-terminal.v1.input-results",
+    );
+    expect(TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS).toEqual([
+      "orkestrator-terminal.v1.input-results",
+      "orkestrator-terminal.v1",
+    ]);
+  });
+
+  test("parses a cumulative input result and refuses a malformed one", () => {
+    expect(
+      parseTerminalWebSocketServerControlFrame(
+        encodeJson({ type: "input-results", channelId: 3, throughOperationId: 17 }),
+      ),
+    ).toEqual({ type: "input-results", channelId: 3, throughOperationId: 17 });
+    for (const malformed of [
+      { type: "input-results", channelId: 3 },
+      { type: "input-results", channelId: 3, throughOperationId: -1 },
+      { type: "input-results", channelId: 3, throughOperationId: 1.5 },
+      { type: "input-results", channelId: 65_536, throughOperationId: 1 },
+    ]) {
+      expectControlError(
+        parseTerminalWebSocketServerControlFrame,
+        encodeJson(malformed),
+        "malformed-frame",
+      );
+    }
   });
 
   test("pins every close code the specification assigns", () => {

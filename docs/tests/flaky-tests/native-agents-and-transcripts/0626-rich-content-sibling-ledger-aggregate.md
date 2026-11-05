@@ -129,3 +129,10 @@ Aggregate evidence is in `/tmp/orkestrator-test-run.1hUmLu/workspace-web-backend
 (compressed on completion), with the outer result under
 `/tmp/orkestrator-test-run.d2pMF8/`. The cause of the sibling-ledger flake
 remains unknown. No rich-content implementation or assertions changed.
+
+## Bridge credential repair validation — 2026-11-05
+
+- Original command: `mise run test:logged -- --name review-default-tests -- mise run test`; default workspace group reserved six worker slots.
+- Failure: 139.88 ms: sibling ledger expected length 1, received 0. Evidence: `/tmp/orkestrator-test-run.8nVKRg/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log` (compressed on aggregate completion).
+- Complete unchanged owner: `NODE_ENV=test mise run test:logged -- --name triage-rich-revocation -- bun test --cwd apps/web ./src/lib/chat/rich-conversation-revocation.test.tsx --parallel=1 --only-failures` passed, exit 0, in 2.4 s. Passing output was removed by the logged runner.
+- Owning code and assertions were unchanged. This repeats the open case; no new root cause established. Aggregate totals were not yet available when the owner reran.

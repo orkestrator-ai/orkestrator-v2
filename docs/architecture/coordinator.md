@@ -619,7 +619,11 @@ not yet reached a provider, so a failed start does not strand the conversation.
 
 There is no silent fallback and no silent provider substitution. Control MCP may
 be disabled globally; chat remains read-only and usable, while the page shows
-that delegation controls are unavailable.
+that delegation controls are unavailable. Agent messaging may be off too, and
+then every wake a delegation would need is held until it returns: the context
+tells the coordinator delegation is unavailable, and the toolbar says "Delegation
+unavailable: agent messaging is off" from the snapshot's `agentMessaging`
+([Delegation round trip](#delegation-round-trip)).
 
 ## Provider qualification
 
@@ -1255,6 +1259,33 @@ and `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
 knows it hides its toggle. A browser's own copy of the declines is deleted on
 the first check.
 
+### Branch switch and Sync while a turn runs
+
+The backend refuses to change the checkout while any turn holds it: a turn in
+any open conversation or in the project home
+(`findCoordinatorCheckoutTurn`, `coordinator-checkout-turn.ts`). The toolbar
+disables the branch picker and Sync for the same reason and names who holds it
+("Coordinator is running a turn…", or "Home"), so a user with a side agent
+focused is not refused only after confirming a discard. Refresh stays enabled,
+because a fetch does not touch the checkout.
+
+The panel cannot work this out alone. Only the front tab of each group is
+mounted, and only a mounted tab keeps its projection current, so a stored
+projection misses a turn that started behind another tab and keeps saying
+`running` after one that finished there. The panel therefore asks the backend
+(`get_coordinator_checkout_turn`), which answers from the activity observer
+with no liveness touch or hydration, and adds the projections of the
+conversations it has mounted, which can be ahead of the observer
+(`useCoordinatorActiveTurn`). It reads again on every mount, on an activity or
+session hint for those conversations or the home, on a resync or safety check,
+and every 30 seconds while a turn is held. Against a backend without the
+command, or before its first answer, it goes by every projection it has.
+
+The panel's Git actions and conversation actions keep separate busy flags
+(`useCoordinatorActions`), since the backend serializes Git per repository root
+and conversations per project: a fetch does not disable New side agent, and
+closing a conversation does not disable Refresh.
+
 ## Work panel
 
 The **Work** panel on the right of the Coordinator panel lists everything this
@@ -1416,6 +1447,14 @@ JSON result includes `delivery: "async"`, a wake sentence, and
 exported `COORDINATOR_ASYNC_CONTRACT` used in the coordinator context prompt
 and the mailbox poll guard.
 
+`list_workflows` carries each worker association's `delegation`: its `state`,
+`bucket` (`needs-you`, `running` or `finished`), `workerTabId`, `requestedAt`,
+`completedAt`, `waitingSince` and `stopRequestedAt`. With `openOnly` it lists only
+the workers still being waited on, filtered before the 200-row cap, so it answers
+"what am I waiting on?" without polling `list_environments` and `list_agents`.
+`coordinatorDelegationBucket` (`packages/protocol/src/coordinator.ts`) is the one
+definition of a delegation's bucket, shared with the [Work panel](#work-panel).
+
 Repeated unchanged reads of `read_messages`, `get_message_status` or
 `list_environments` return the authorized page with `repeatedRead: true` and
 the contract attached, after three identical answers inside 120 seconds. The
@@ -1460,13 +1499,35 @@ The main coordinator's context carries a short routing section,
 | Work | Route |
 | --- | --- |
 | Fully specified: it can be written up as a ticket with acceptance criteria | `create_ticket`, then `start_build_pipeline` for it |
-| Smaller or interactive | `launch_environment` with a prompt, then back and forth with that worker |
+| Smaller or interactive | An idle worker that already fits, through `send_prompt_to_tab` or `launch_job`; otherwise `launch_environment` with a prompt, then back and forth with that worker |
 | Anything that would run in the project home | Exceptional circumstances only, after telling the user why an environment will not do |
 
 All work runs in an environment with its own worktree or container. The
 project home is the user's own checkout, and an agent working there conflicts
 with the user's own work in it. The role line says the coordinator gets the
 project's work done through workers and never alters the checkout itself.
+
+### The context block
+
+Every coordinator turn, including mail wakes, starts with a context block built
+by the pure `buildCoordinatorContext`
+(`packages/protocol/src/coordinator-context.ts`). The service does the reads
+(`coordinator-context-reads.ts` and the existing helpers) and passes the answers
+in, so a test can check the block's content and size without a service. A test
+holds a main coordinator's block, before the research, node and checkout lines,
+under 9,000 characters: it is paid on every turn, so raising that limit is a
+decision about cost.
+
+The block names the project (`Project: <name> at <checkout> (id <id>)`), falling
+back to the id when the project cannot be read. A main coordinator that can
+delegate gets a last line, omitted when nothing is open: `Waiting on 5 workers:
+"a", "b", "c" and 2 more.`. It is what a model that has lost its history through
+compaction has left of what it launched. It counts each worker once, reads one
+environment per name it spells out (never more than
+`COORDINATOR_WAITING_ON_NAMES`), and costs the turn nothing when a read fails.
+It sits last so the changing line does not disturb the cached text ahead of it.
+Names, paths and titles from outside the backend go through
+`inlineCoordinatorContextText`, so none can add a line or close the block.
 
 ### Messaging the project home
 
@@ -1523,6 +1584,16 @@ and `{canPull,canSend,canInject}=true`: Claude, Codex, OpenCode, Pi, Cursor,
 and Grok. Cursor and Grok receive a per-tab `agentMcp` on create/prompt;
 the process-env token is only the fallback. Grok still needs the host
 safety setting to admit `advisory`.
+
+**It also needs agent messaging on.** `coordinatorDelegationAvailable`
+(`coordinator-context-reads.ts`) reads the setting on each turn. With it off, no
+surface promises a wake: the context prompt drops the delegation rules and says
+why (`COORDINATOR_MESSAGING_OFF_NOTE`), the Control MCP instructions carry that
+note instead of the contract, and `withoutWakePromise` replaces the `wake` field
+and `nextStep` of any coordinator tool result, and the poll guard's restated
+contract, with the same note. The tools themselves stay listed and still run; a
+wake they earn is held until messaging returns. Tool descriptions are static and
+may still mention being woken.
 
 Worker creation records an explicit base branch and commit. Uncommitted root
 changes are not copied, stashed, or committed into a worker, unless the user
@@ -1621,6 +1692,41 @@ answer on the worker's behalf. For a question it may propose an answer with
 `answer_worker_question`, which the user confirms, edits or declines in
 Orkestrator (see [Worker surfaces](#worker-surfaces)); approvals stay with the
 person in the worker's tab.
+
+Whether a delegation has finished is decided in one place, `decideDelegation`
+(`coordinator-delegation-decision.ts`), for the turn-end edge, the sweep and
+workers on other nodes alike. Its comment has the table and says why those three
+differ where they do.
+
+The wake pass walks every closed delegation not yet woken. A failure costs only
+that delegation: it is logged, throttled, under the delegation's id, and the rest
+of the pass still runs, as do the later steps of the sweep. A call made while a
+pass runs starts one more pass after it, so a worker that closes during another's
+wake reports at once rather than on the next sweep. If the user closes the main
+while its wake is on the way, the delegation stays unwoken, the next main adopts
+it, and the mail already placed moves across with the rest of the closed
+conversation's inbox. Closing, selecting and pausing wait their turn with
+creating and assigning on the project's queue. A slow mail send does not hold
+that queue. Wake-kind selection shares the project queue with close: it checks
+the main is open, looks up held reports, and persists the kind together, so a
+closed mailbox cannot make a real report look missing.
+
+A wake that fails 10 passes across at least 10 minutes is given up on. Passes also
+run on turn ends, so the time bound stops a short fault retiring every wake owed.
+The selection of retirement (`wakeRetirement`, including the attempt count and
+error kind) is persisted before sending its notice. Retries, including after a
+restart or a failed receipt write, resume that path instead of sending an ordinary
+completion notice. The retirement notice must reach the mail store before the
+final receipt. If sending fails or no main is open, the wake stays owed for a later
+pass or main. After storing the notice,
+the pass rechecks that the main is still open before stamping retirement. A report
+still held is released as ordinary mail on the next sweep, and the delegation
+records `wakeFailedAt` with `wokenAt`, keeping `state` as the
+worker's own outcome. Before retirement is selected, the count is in memory, so a
+restart restarts it. Messaging
+turned off, or no room for a new main under the conversation limit, is a state the
+user can change rather than a fault: such a wake is held, not counted, and goes out
+once that changes.
 
 Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
 and readable, held with reason `delegation-running`, and released together with
@@ -2083,7 +2189,11 @@ worker the coordinator owns its merge or close still reaches it, as a
 [worker outcome](#worker-outcomes). Notices go to the main coordinator that
 [should hear them](#who-hears-a-notice), like every other report. With no main running,
 a new event starts one. A sweep starts nothing: it waits, and sends the state current
-when one opens.
+when one opens. The one exception is the backfill rule, for work older than status
+wakes: a non-terminal status with no earlier notice, unchanged for over 24 hours, on
+an association over 14 days old is recorded without a wake
+(`coordinator-status-backfill.ts`), so a project idle for longer than that does lose
+such a notice.
 
 **What wakes it.** Each resource is reduced to one settled status with a
 stable key; a key is sent once, recorded on the association
@@ -2108,7 +2218,7 @@ stable key; a key is sent once, recorded on the association
 | Pull request | opened (`pr-opened`, with the URL), conflicts with its base (`pr-conflicts`), a required check failed (`pr-checks-failed`; any failing check when GitHub does not say which are required), ready to merge (`pr-ready`), merged (`pr-merged`) or closed (`pr-closed`); keyed per state and PR URL | `settled` |
 | Pull request | its Resolve tab finished (`resolve-finished`), with the PR's state after the PR monitor's recheck | `settled` |
 | Worker outcome | a worker the coordinator owns: its PR merged (`pr-merged`) or closed (`pr-closed`), naming the deletion when the environment is going too, or the environment deleted (`deleted`, resource `environment`) with its PR still open or without one; once per worker, unless a PR follow reports the merge or close | `settled` |
-| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm | `settled` |
+| Delegated tab | `waiting` for 20 s: on an approval, a question, or both when its pending interactions say which (otherwise "input or an approval"), with its last message; for a question, a line that the coordinator may propose an answer with `answer_worker_question` for the user to confirm. Reading idle, working or stopped ends the episode, so a later wait is sent again; an unreadable state does not | `settled` |
 | Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
 
 A graph run is reduced to two statuses only (`graphRunCoordinatorStatus` in

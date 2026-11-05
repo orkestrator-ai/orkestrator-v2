@@ -33,6 +33,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
     events: {
       "idle-sweep.failed": "An idle sweep threw; the next tick retries.",
       "shutdown.failed": "Releasing the bridge failed during shutdown; it still exits.",
+      "credential.not-hardened":
+        "The bridge could not mark itself non-dumpable, so a same-uid process can read its memory; `reason` says why.",
     },
   },
   "bridge.acp": {

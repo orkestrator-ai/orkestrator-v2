@@ -145,6 +145,10 @@ const RichTranscriptPerfFixture = lazy(async () => ({
   default: (await import("./RichTranscriptPerfFixture")).RichTranscriptPerfFixture,
 }));
 
+const StaticHtmlArtifactFixture = lazy(async () => ({
+  default: (await import("./StaticHtmlArtifactFixture")).StaticHtmlArtifactFixture,
+}));
+
 const DesignLibraryPerfFixture = lazy(async () => ({
   default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
 }));
@@ -2086,6 +2090,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <RichTranscriptPerfFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/static-html-artifact")
+    return (
+      <Suspense fallback={null}>
+        <StaticHtmlArtifactFixture />
       </Suspense>
     );
   if (window.location.pathname === "/design-library-perf")

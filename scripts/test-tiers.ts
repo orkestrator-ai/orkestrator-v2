@@ -95,6 +95,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/worktree-snapshots-git.test.ts",
     "src/preview-publication.test.ts",
     "src/remote-bandwidth-baseline.test.ts",
+    "tests/gateway-proxy-idle-timers.test.ts",
     "tests/commands-environment-fork.test.ts",
     "tests/commands-integration.test.ts",
     "tests/commands-io-coverage.test.ts",
@@ -154,7 +155,10 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "tests/client-waits.test.ts",
     "tests/launcher.test.ts",
   ],
-  "packages/protocol": ["src/node/workspace-change-probe.test.ts"],
+  "packages/protocol": [
+    "src/node/workspace-change-probe.test.ts",
+    "src/node/preview-forward.test.ts",
+  ],
 };
 
 export function testTier(env: NodeJS.ProcessEnv): TestTier {

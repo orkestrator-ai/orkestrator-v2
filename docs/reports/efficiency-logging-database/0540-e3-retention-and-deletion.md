@@ -217,7 +217,7 @@ Superseded measurements are pruned, both per publish and in hourly retention (`p
 
 - [Logging and database report, R16](../2026-10-29-logging-and-database-efficiency.md#r16-retain-the-rest-of-the-ledger-by-age-and-environment-d4) and [D4](../2026-10-29-logging-and-database-efficiency.md#d4-the-rest-of-the-ledger-never-shrinks-medium-growing)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md) task 7 (ST-19)
-- [0700](0700-e2-measurement-rows.md#0700-bound-the-file-rows-stored-per-net-measurement), [0840](#0840-decide-what-happens-to-a-removed-projects-kanban-notes-and-plans)
+- [the measurement row cap](../../architecture/change-tracking.md#retention-and-backup), [0840](#0840-decide-what-happens-to-a-removed-projects-kanban-notes-and-plans)
 - [Efficiency report, E](../2026-10-27-efficiency.md#e-storage-change-tracking-git-and-files)
 - [1202 efficiency follow-ups](../../todo/cross-cutting/1202-efficiency-review-follow-ups.md), task 7
 - [Logging and database report, D4](../2026-10-29-logging-and-database-efficiency.md#d4-the-rest-of-the-ledger-never-shrinks-medium-growing)

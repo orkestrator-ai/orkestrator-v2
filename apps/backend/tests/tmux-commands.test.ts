@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { compatibilityPathUsage } from "../src/core/compatibility-path-usage";
 import path from "node:path";
+import { TmuxBackend } from "../src/core/tmux-backend";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +17,36 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux hooks and transcripts", () => {
+  test("stopped history uses the recreated container backend", async () => {
+    const handlers = createHandlers();
+    const environment = {
+      id: "history-env",
+      environmentType: "containerized",
+      containerId: "old-container",
+    };
+    const context = { storage: { getEnvironment: async () => environment } };
+    const targets: string[] = [];
+    const window = spyOn(TmuxBackend.prototype, "readTranscriptWindow").mockImplementation(
+      async function (this: TmuxBackend) {
+        targets.push(this.containerId!);
+        return { size: 0, start: 0, bytes: Buffer.alloc(0) };
+      },
+    );
+    try {
+      const args = {
+        environmentId: environment.id,
+        tabId: "stopped",
+        page: { sessionId: "saved-session" },
+      };
+      await invoke(handlers, "claude_tmux_transcript", args, context);
+      environment.containerId = "new-container";
+      await invoke(handlers, "claude_tmux_transcript", args, context);
+      expect(targets).toEqual(["old-container", "new-container"]);
+    } finally {
+      window.mockRestore();
+    }
+  });
+
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
 
@@ -954,6 +986,116 @@ describe("Electron tmux hooks and transcripts", () => {
         { tabId: "tab-tail", environmentId: environment.id },
         context,
       );
+    });
+  });
+
+  test("serves a bounded page to a caller that asks for one, and the whole file to one that does not", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-pages", environmentId: environment.id };
+
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+        session_id: string;
+      };
+
+      // No transcript yet: an empty page, not an error.
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", { ...args, page: {} }, context),
+      ).resolves.toEqual(expect.objectContaining({ lines: [], earlierCursor: null }));
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      const lines = Array.from({ length: 4_000 }, (_, n) => ({
+        type: "assistant",
+        uuid: `line-${n}`,
+        message: { role: "assistant", content: `${n} ${"x".repeat(500)}` },
+      }));
+      await fs.writeFile(
+        path.join(transcriptDir, `${status.session_id}.jsonl`),
+        lines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+      );
+
+      type Page = { lines: Array<{ uuid: string }>; earlierCursor: string | null; expired?: true };
+      const tail = (await invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { ...args, page: {} },
+        context,
+      )) as Page & { permissionMode: string };
+      expect(tail.lines.length).toBeLessThan(lines.length);
+      expect(tail.lines.at(-1)?.uuid).toBe("line-3999");
+      expect(tail.permissionMode).toBe("bypassPermissions");
+      expect(tail.earlierCursor).toEqual(expect.any(String));
+
+      // Walking back reaches the first line, with nothing lost at the seams.
+      const seen = [...tail.lines];
+      let before = tail.earlierCursor;
+      while (before) {
+        const page = (await invoke(
+          handlers,
+          "claude_tmux_transcript",
+          { ...args, page: { before } },
+          context,
+        )) as Page;
+        seen.unshift(...page.lines);
+        before = page.earlierCursor;
+      }
+      expect(seen.map((line) => line.uuid)).toEqual(lines.map((line) => line.uuid));
+
+      // A cursor from another session names nothing here.
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_transcript",
+          { ...args, page: { before: "other:5" } },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ lines: [], expired: true }));
+
+      // A renderer that predates paging still gets every line as an array, counted.
+      const countBefore =
+        compatibilityPathUsage.snapshot().paths["tmux-transcript.whole-read"]?.count ?? 0;
+      const whole = (await invoke(handlers, "claude_tmux_transcript", args)) as unknown[];
+      expect(whole).toHaveLength(lines.length);
+      expect(compatibilityPathUsage.snapshot().paths["tmux-transcript.whole-read"]?.count).toBe(
+        countBefore + 1,
+      );
+
+      // Removing the live session must not strand the remaining history.
+      // The fallback uses no retained reader or session-registry state, just
+      // as after a backend restart.
+      await invoke(handlers, "claude_tmux_stop", args, context);
+      await expect(invoke(handlers, "claude_tmux_status", args, context)).resolves.toBeNull();
+      const stoppedSeen = [...tail.lines];
+      let stoppedBefore = tail.earlierCursor;
+      while (stoppedBefore) {
+        const page = (await invoke(
+          handlers,
+          "claude_tmux_transcript",
+          { ...args, page: { before: stoppedBefore } },
+          context,
+        )) as Page;
+        stoppedSeen.unshift(...page.lines);
+        stoppedBefore = page.earlierCursor;
+      }
+      expect(stoppedSeen.map((line) => line.uuid)).toEqual(lines.map((line) => line.uuid));
+      const reloaded = (await invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { ...args, page: { sessionId: status.session_id } },
+        context,
+      )) as Page;
+      expect(reloaded.lines).toEqual(tail.lines);
+      await invoke(handlers, "claude_tmux_stop", args, context);
     });
   });
 

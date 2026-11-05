@@ -18,7 +18,7 @@ import { configureLogger } from "@orkestrator/protocol/logger";
  *   body       main SSE stream + one shared terminal SSE stream, compression `body`
  *   on         the same two streams, compression `on` (streaming gzip)
  *   websocket  main SSE stream (`body`) + the terminal WebSocket, no message
- *              compression; output ACKs coalesced for 50 ms like the browser
+ *              compression; output ACKs coalesced for 1 s like the browser
  *
  * Every client but the slow one reads normally. The slow client opens the same
  * streams and never reads them, so the gateway's slow-consumer limits decide
@@ -63,7 +63,7 @@ export const BASELINE_SCHEMA = "orkestrator.remote-bandwidth-baseline.v1";
 export const TRANSPORTS = ["body", "on", "websocket"] as const;
 export type Transport = (typeof TRANSPORTS)[number];
 
-const ACK_DELAY_MS = 50;
+const ACK_DELAY_MS = 1_000;
 const TERMINAL_PREFIX = "terminal-output-";
 const AGENT_EVENT = "native-agent-session-activity";
 

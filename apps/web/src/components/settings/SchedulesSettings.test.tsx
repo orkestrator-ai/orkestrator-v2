@@ -147,6 +147,89 @@ describe("SchedulesSettings", () => {
     expect(within(nightly).getByTestId("schedule-next").textContent).toBe("—");
   });
 
+  test("a timer carrying the user's account-switch permission is marked, and when it lapses", async () => {
+    const grant = {
+      kind: "switch-agent-account",
+      platforms: ["claude"],
+      userInstruction: "check in 2 hours and switch if they are limited",
+      grantedIn: "user-turn",
+      grantedAt: "2099-10-25T10:00:00.000Z",
+    };
+    const timer = job({
+      id: "sch_timer",
+      name: "Self-timer: check usage limits",
+      action: {
+        kind: "action",
+        action: "send_message",
+        input: { toEnvironmentId: "coordinator", body: "Check", grant },
+      },
+    });
+    schedules = [timer, failed];
+    render(<SchedulesSettings />);
+    const [row] = await screen.findAllByTestId("schedule-row");
+    const badge = within(row!).getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe("May switch Claude accounts when it fires");
+    expect(badge.getAttribute("title")).toContain(
+      "You asked: “check in 2 hours and switch if they are limited”",
+    );
+    expect(badge.getAttribute("title")).toContain("for 2 hours after this timer fires");
+    // Only the timer that carries it is marked.
+    expect(
+      within(screen.getAllByTestId("schedule-row")[1]!).queryByTestId(
+        "schedule-account-switch-permission",
+      ),
+    ).toBeNull();
+  });
+
+  test("the permission badge counts its window from the fire", async () => {
+    const { AccountSwitchPermissionBadge } = await import("./SchedulesSettings");
+    const action = {
+      kind: "action" as const,
+      action: "send_message",
+      input: {
+        toEnvironmentId: "coordinator",
+        body: "Check",
+        grant: {
+          kind: "switch-agent-account",
+          platforms: ["claude", "codex"],
+          nodeIds: ["bk_leaf"],
+          userInstruction: "switch if limited",
+          grantedIn: "user-turn",
+          grantedAt: "2099-10-25T10:00:00.000Z",
+        },
+      },
+    };
+    const lastFire = {
+      fireId: "f",
+      kind: "scheduled" as const,
+      scheduledFor: "2099-10-25T12:00:00.000Z",
+      finishedAt: "2099-10-25T12:00:00.000Z",
+      state: "succeeded" as const,
+      attempts: 1,
+    };
+    const fired = Date.parse("2099-10-25T12:00:00.000Z");
+    const { rerender } = render(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 60_000}
+      />,
+    );
+    const badge = screen.getByTestId("schedule-account-switch-permission");
+    expect(badge.textContent).toBe(
+      "May switch Claude and Codex accounts until 2099-10-25 14:00 UTC",
+    );
+    expect(badge.getAttribute("title")).toContain("on this machine and 1 other");
+    rerender(
+      <AccountSwitchPermissionBadge
+        job={{ action, lastFire, timeZone: "UTC" }}
+        now={fired + 3 * 3_600_000}
+      />,
+    );
+    expect(screen.getByTestId("schedule-account-switch-permission").textContent).toBe(
+      "Claude and Codex switch permission lapsed",
+    );
+  });
+
   test("run now, pause and resume go to the backend and reload the list", async () => {
     render(<SchedulesSettings />);
     await screen.findAllByTestId("schedule-row");

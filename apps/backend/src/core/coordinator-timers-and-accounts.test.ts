@@ -29,6 +29,10 @@ import { ControlMcpServer, type ControlMcpInvoker } from "./control-mcp-server.j
 import { coordinatorRoleCapabilities } from "./control-mcp-tools.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { executeAgentAccountSwitch } from "./nodes/node-account-switch.js";
+import {
+  accountSwitchGrantState,
+  runTimerAccountSwitch,
+} from "./nodes/node-account-switch-grant.js";
 import { NodeActionRequests, type NodeActionRequest } from "./nodes/node-action-requests.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { ScheduledJobService } from "./scheduled-jobs/service.js";
@@ -59,6 +63,7 @@ let currentWorkspace: CoordinatorWorkspace;
 const mail: Array<{ sender: unknown; input: Record<string, unknown> }> = [];
 const switches: Array<{ machine: string; platform: string; accountId: string }> = [];
 const notified: NodeActionRequest[] = [];
+const switchEvents: Array<{ event: string; payload: unknown }> = [];
 let accounts: Record<string, AgentAccountSummary[]>;
 let usage: Record<string, Record<string, PlanUsageSnapshot>>;
 let environments: Environment[];
@@ -216,6 +221,7 @@ beforeEach(async () => {
   mail.length = 0;
   switches.length = 0;
   notified.length = 0;
+  switchEvents.length = 0;
   autoSwitch = {};
   accounts = {
     [SELF]: [
@@ -334,6 +340,16 @@ beforeEach(async () => {
         )) as T;
       case "create_node_action_request":
         return (await actions.create(args as Parameters<typeof actions.create>[0])) as T;
+      case "run_timer_agent_account_switch":
+        return (await runTimerAccountSwitch(
+          {
+            actions,
+            loadGlobalConfig: async () => ({}),
+            projectName: async () => "Project",
+            emit: (event, payload) => switchEvents.push({ event, payload }),
+          },
+          args,
+        )) as T;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -993,6 +1009,44 @@ test("scenario: check in 2 hours, find usage limits, switch to an account with a
   expect(switches).toEqual([{ machine: SELF, platform: "claude", accountId: "acct-work" }]);
   // No approval was needed, and none is left waiting.
   expect(await actions.list({ pendingOnly: true })).toHaveLength(0);
+  // It is recorded as a switch that ran without asking, with the timer and
+  // the user's words, so the user sees it under the provider's accounts.
+  const [record] = await actions.list();
+  expect(record).toMatchObject({
+    kind: "switch-agent-account",
+    state: "executed",
+    authorizedBy: "self-timer",
+    selfTimer: { scheduleId, userInstruction: instruction },
+    reason: instruction,
+    targets: [{ nodeId: SELF, platform: "claude", accountId: "acct-work" }],
+  });
+  expect(notified).toHaveLength(0);
+  expect(switchEvents).toEqual([
+    {
+      event: "coordinator-account-switched",
+      payload: expect.objectContaining({
+        authorizedBy: "self-timer",
+        scheduleId,
+        userInstruction: instruction,
+        toAccountId: "acct-work",
+        fromAccountId: "default",
+        state: "executed",
+      }),
+    },
+  ]);
+  expect(
+    (await accountSwitchGrantState({ loadGlobalConfig: async () => ({}), actions })).recentSwitches,
+  ).toEqual([expect.objectContaining({ authorizedBy: "self-timer", toAccountId: "acct-work" })]);
+  // A retry with the same requestId reports the same switch and runs nothing.
+  const again = await call("main", "switch_provider_account", {
+    requestId: "scenario-switch",
+    platform: "claude",
+    accountId: "acct-work",
+    reason: instruction,
+    scheduleId,
+  });
+  expect(again.structuredContent).toMatchObject({ state: "already-active" });
+  expect(switches).toHaveLength(1);
 
   // The permission covers the machines the user named only.
   const elsewhere = await call("main", "switch_provider_account", {

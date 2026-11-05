@@ -10,6 +10,7 @@ import {
   normalizeScheduleTrigger,
   normalizeTimeZone,
   SCHEDULED_JOB_LIMITS,
+  scheduleAccountSwitchGrant,
   type ScheduleAction,
   type ScheduleFire,
   type ScheduledJob,
@@ -85,6 +86,55 @@ function OutcomeBadge({ fire }: { fire: ScheduleFire | null }) {
     >
       {fire.state}
       {fire.kind !== "scheduled" ? ` (${fire.kind})` : ""}
+    </span>
+  );
+}
+
+/**
+ * A self-timer that carries the user's permission to switch accounts: which
+ * providers and machines, what the user asked, and whether it still applies
+ * (it does for a while after the timer fires, and then lapses).
+ */
+export function AccountSwitchPermissionBadge({
+  job,
+  now = Date.now(),
+}: {
+  job: Pick<ScheduledJobSummary, "action" | "lastFire" | "timeZone">;
+  now?: number;
+}) {
+  const grant = scheduleAccountSwitchGrant(job.action);
+  if (!grant) return null;
+  const providers = grant.platforms
+    .map((platform) => (platform === "codex" ? "Codex" : "Claude"))
+    .join(" and ");
+  const fired =
+    job.lastFire?.state === "succeeded" && job.lastFire.finishedAt
+      ? Date.parse(job.lastFire.finishedAt)
+      : Number.NaN;
+  const until = fired + SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs;
+  const status = !Number.isFinite(fired)
+    ? "when it fires"
+    : until > now
+      ? `until ${formatInstantInZone(until, job.timeZone)}`
+      : "lapsed";
+  const machines = grant.nodeIds?.length
+    ? `this machine and ${grant.nodeIds.length} other${grant.nodeIds.length === 1 ? "" : "s"}`
+    : "this machine";
+  const hours = SCHEDULED_JOB_LIMITS.selfTimerGrantWindowMs / 3_600_000;
+  return (
+    <span
+      className={cn(
+        "max-w-full rounded border px-1.5 py-0.5 text-[11px]",
+        status === "lapsed"
+          ? "border-zinc-600 text-zinc-400"
+          : "border-amber-500/40 text-amber-300",
+      )}
+      data-testid="schedule-account-switch-permission"
+      title={`You asked: “${grant.userInstruction}”. The coordinator may switch the active ${providers} account on ${machines} without asking, for ${hours} hours after this timer fires. Cancel the timer to withdraw it.`}
+    >
+      {status === "lapsed"
+        ? `${providers} switch permission lapsed`
+        : `May switch ${providers} accounts ${status}`}
     </span>
   );
 }
@@ -210,8 +260,9 @@ export function SchedulesSettings() {
               data-testid="schedule-row"
             >
               <div className="min-w-0 flex-[1_1_16rem]">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium">{job.name}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="max-w-full truncate font-medium">{job.name}</span>
+                  <AccountSwitchPermissionBadge job={job} />
                   {job.state !== "active" ? (
                     <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-300">
                       {job.state}

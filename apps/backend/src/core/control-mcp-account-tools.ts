@@ -66,19 +66,19 @@ function accountName(account: AgentAccountSummary): string {
   return account.identity.email ? `${account.label} (${account.identity.email})` : account.label;
 }
 
-/** `run_granted_agent_account_switch`'s answer; the request is a `NodeActionRequest`. */
+/** A recorded switch request, as the account switch commands return it (a `NodeActionRequest`). */
+interface GrantedRequest {
+  requestId: string;
+  state: string;
+  authorizedBy?: string;
+  result?: { code: string; message: string };
+}
+
+/** `run_granted_agent_account_switch`'s answer. */
 type GrantedSwitch =
   | { outcome: "not-granted" }
   | { outcome: "over-limit"; recent: number; limit: number; windowMinutes: number }
-  | {
-      outcome: "ran" | "existing";
-      request: {
-        requestId: string;
-        state: string;
-        authorizedBy?: string;
-        result?: { code: string; message: string };
-      };
-    };
+  | { outcome: "ran" | "existing"; request: GrantedRequest };
 
 const NO_ACCOUNTS_NOTE =
   "Only Claude and Codex keep switchable accounts. Grok, Pi, OpenCode and Cursor use one login per machine; signing in another is the user's job in Settings.";
@@ -262,8 +262,13 @@ async function refuseExhausted(
   );
 }
 
-function grantedResult(
-  request: { requestId: string; state: string; result?: { code: string; message: string } },
+/**
+ * The answer for a switch that ran without asking, under the standing
+ * permission or a self-timer's. Either way it is recorded where the user sees
+ * it, and there is nothing for the user to approve.
+ */
+function unattendedResult(
+  request: GrantedRequest,
   view: {
     machineView: JsonRecord;
     platform: AgentAccountPlatform;
@@ -271,10 +276,13 @@ function grantedResult(
     accountId: string;
     accountLabel: string;
   },
+  authorizedBy: JsonRecord,
 ) {
+  const permission =
+    request.authorizedBy === "self-timer" ? "the timer's permission" : "the standing permission";
   if (request.state === "failed") {
     throw new Error(
-      `The switch under the standing permission failed: ${request.result?.message ?? "no reason given"}.`,
+      `The switch under ${permission} failed: ${request.result?.message ?? "no reason given"}.`,
     );
   }
   const base = {
@@ -283,7 +291,7 @@ function grantedResult(
     previousAccountId: view.previousAccountId,
     accountId: view.accountId,
     accountLabel: view.accountLabel,
-    authorizedBy: { setting: "standing-grant", recordId: request.requestId },
+    authorizedBy,
     scope: "machine",
   };
   if (request.state === "outcome-unknown") {
@@ -297,7 +305,7 @@ function grantedResult(
     return toolResult({
       ...base,
       state: "switching",
-      note: "This switch is already running under the standing permission. Check list_provider_accounts before calling again.",
+      note: `This switch is already running under ${permission}. Check list_provider_accounts before calling again.`,
     });
   }
   return toolResult({
@@ -305,7 +313,31 @@ function grantedResult(
     state: "switched",
     effect: agentAccountSwitchEffect(view.platform),
     nextStep:
-      "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
+      request.authorizedBy === "self-timer"
+        ? "It already ran under the permission the user gave this timer; it is listed for them with the account. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again."
+        : "It already ran: the user allowed coordinators to switch without asking, so there is nothing for them to approve. Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
+  });
+}
+
+/** The answer when the `requestId` already named a request the user was asked about. */
+function existingRequestResult(
+  request: GrantedRequest,
+  requestId: string,
+  machineView: JsonRecord,
+  platform: AgentAccountPlatform,
+  accountId: string,
+) {
+  return toolResult({
+    state: request.state,
+    approvalRequestId: request.requestId,
+    machine: machineView,
+    platform,
+    accountId,
+    ...(request.result ? { result: request.result } : {}),
+    note:
+      request.state === "pending"
+        ? `requestId ${requestId} already asked the user to approve this switch. Nothing has changed yet; you will be told the outcome by mail.`
+        : `requestId ${requestId} was already used for this switch, which is ${request.state}. Use a new requestId for a new switch.`,
   });
 }
 
@@ -622,31 +654,6 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
           `“${account.label}” is not signed in on ${machine.nodeName}; ask the user to sign it in under Settings → Agent accounts first.`,
         );
       }
-      if (scheduleId) {
-        const grant = await timerPermission(scheduleId, platform, machine);
-        await machine.call(
-          "set_active_agent_account",
-          { platform, accountId },
-          `switch-account:${scope.coordinatorId}:${requestId}`,
-        );
-        return toolResult({
-          state: "switched",
-          machine: machineView,
-          platform,
-          previousAccountId,
-          accountId,
-          accountLabel: account.label,
-          authorizedBy: {
-            scheduleId,
-            userInstruction: grant.userInstruction,
-            grantedAt: grant.grantedAt,
-          },
-          scope: "machine",
-          effect: agentAccountSwitchEffect(platform),
-          nextStep:
-            "Tell the user which account you switched from and to, on which machine, and why. Tabs stopped on a usage limit need a new prompt to run again.",
-        });
-      }
       const switchRequestId = `switch-account:${scope.coordinatorId}:${requestId}`;
       const requestedBy = { ...(await mailbox()), projectId: scope.projectId };
       const target = {
@@ -656,6 +663,50 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
         accountId,
         accountLabel: accountName(account),
       };
+      const previous = snapshot.accounts.find(
+        (entry) => entry.platform === platform && entry.id === previousAccountId,
+      );
+      const previousTarget = {
+        ...(previousAccountId ? { previousAccountId } : {}),
+        ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
+      };
+      if (scheduleId) {
+        const grant = await timerPermission(scheduleId, platform, machine);
+        // Recorded as a request that ran without asking, so the user sees it
+        // with the switches the standing permission made.
+        const run = await invoke<{ request: GrantedRequest }>("run_timer_agent_account_switch", {
+          requestId: switchRequestId,
+          ...target,
+          ...previousTarget,
+          requestedBy,
+          reason,
+          selfTimer: {
+            scheduleId,
+            userInstruction: grant.userInstruction,
+            grantedAt: grant.grantedAt,
+          },
+        });
+        if (run.request.authorizedBy !== "self-timer") {
+          // The same requestId already asked the user; report that request.
+          return existingRequestResult(run.request, requestId, machineView, platform, accountId);
+        }
+        return unattendedResult(
+          run.request,
+          {
+            machineView,
+            platform,
+            previousAccountId,
+            accountId,
+            accountLabel: account.label,
+          },
+          {
+            scheduleId,
+            userInstruction: grant.userInstruction,
+            grantedAt: grant.grantedAt,
+            recordId: run.request.requestId,
+          },
+        );
+      }
       let askedBecause: string | undefined;
       // A permission that cannot be read is not a permission: ask instead.
       const granted = await invoke<{ grants?: Partial<Record<AgentAccountPlatform, boolean>> }>(
@@ -667,41 +718,30 @@ export function registerAccountTools(server: McpServer, context: AccountToolCont
       );
       if (granted) {
         await refuseExhausted(machine, platform, account, now());
-        const previous = snapshot.accounts.find(
-          (entry) => entry.platform === platform && entry.id === previousAccountId,
-        );
         const run = await invoke<GrantedSwitch>("run_granted_agent_account_switch", {
           requestId: switchRequestId,
           ...target,
-          ...(previousAccountId ? { previousAccountId } : {}),
-          ...(previous ? { previousAccountLabel: accountName(previous) } : {}),
+          ...previousTarget,
           requestedBy,
           reason,
         });
         if (run.outcome === "ran" || run.outcome === "existing") {
           const { request } = run;
-          if (request.authorizedBy === "standing-grant") {
-            return grantedResult(request, {
-              machineView,
-              platform,
-              previousAccountId,
-              accountId,
-              accountLabel: account.label,
-            });
+          if (request.authorizedBy) {
+            return unattendedResult(
+              request,
+              {
+                machineView,
+                platform,
+                previousAccountId,
+                accountId,
+                accountLabel: account.label,
+              },
+              { setting: "standing-grant", recordId: request.requestId },
+            );
           }
           // The same requestId already asked the user; report that request.
-          return toolResult({
-            state: request.state,
-            approvalRequestId: request.requestId,
-            machine: machineView,
-            platform,
-            accountId,
-            ...(request.result ? { result: request.result } : {}),
-            note:
-              request.state === "pending"
-                ? `requestId ${requestId} already asked the user to approve this switch. Nothing has changed yet; you will be told the outcome by mail.`
-                : `requestId ${requestId} was already used for this switch, which is ${request.state}. Use a new requestId for a new switch.`,
-          });
+          return existingRequestResult(request, requestId, machineView, platform, accountId);
         }
         if (run.outcome === "over-limit") {
           askedBecause = `Coordinators already switched the active ${PLATFORM_NAMES[platform]} account on ${machine.nodeName} ${run.recent} times in the last ${run.windowMinutes} minutes, the most Settings allows without asking.`;

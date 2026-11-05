@@ -16,6 +16,8 @@ import {
 export function TerminalLinksFixture() {
   const hostRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
+  const [input, setInput] = useState<string[]>([]);
+  const [selection, setSelection] = useState("");
   const [external, setExternal] = useState<string[]>([]);
   const [services, setServices] = useState<BrowserPreviewServiceTarget[]>([]);
   const [resolutions, setResolutions] = useState<unknown[]>([]);
@@ -93,15 +95,22 @@ export function TerminalLinksFixture() {
     const terminal = data.terminal;
     terminal.open(hostRef.current!);
     terminal.resize(30, 5);
+    const stopData = terminal.onData((data) => setInput((current) => [...current, data]));
+    const stopSelection = terminal.onSelectionChange(() => setSelection(terminal.getSelection()));
     // The label is deliberately not a URL: only OSC 8 can make it clickable.
     const url =
       resolution || search.get("local") === "true"
         ? "http://localhost:3000/start?x=1"
         : "https://example.com/osc-target";
-    terminal.write(`\x1b]8;;${url}\x07OSC link\x1b]8;;\x07`, () => {
+    const content = search.has("selection")
+      ? `abcdefghij\r\nklmnopqrst\r\nuvwxyz\x1b[1;1H${search.get("selection") === "mouse" ? "\x1b[?1000h\x1b[?1006h" : ""}`
+      : `\x1b]8;;${url}\x07OSC link\x1b]8;;\x07`;
+    terminal.write(content, () => {
       setReady(true);
     });
     return () => {
+      stopData.dispose();
+      stopSelection.dispose();
       stopListening();
       store.disposeTerminal("osc-environment", "osc-source-tab");
       window.orkestrator = originalBackend;
@@ -118,6 +127,8 @@ export function TerminalLinksFixture() {
   return (
     <main>
       <div ref={hostRef} data-testid="osc-terminal" style={{ width: 360, height: 150 }} />
+      <output data-testid="terminal-input">{JSON.stringify(input)}</output>
+      <output data-testid="terminal-selection">{selection}</output>
       <output data-testid="osc-ready">{String(ready)}</output>
       <output data-testid="external-opens">{JSON.stringify(external)}</output>
       <output data-testid="service-opens">{JSON.stringify(services)}</output>

@@ -315,3 +315,20 @@ accelerators, and invokes the built menu callbacks. With
 to navigate View, checks repeated selection, accelerator registration,
 the real About panel, and resumed typing. The native-menu workflow runs this
 on Linux/Xvfb and Windows and retains menu defaults and About screenshots.
+
+## Terminal mouse selection
+
+In both workspace terminals and Claude tmux terminals, macOS Option-drag selects
+text locally even when tmux or a TUI has mouse reporting enabled. On other
+platforms, Shift-drag bypasses mouse reporting. Unmodified drags still reach the
+running program when it requests mouse reporting.
+
+We deliberately enable xterm's `macOptionClickForcesSelection` at construction:
+Option-drag uses linear selection, including in a plain shell, instead of xterm's
+rectangular column selection. We also disable `altClickMovesCursor` in both
+constructors. Otherwise an Option-click or a very short Option-drag can synthesize
+arrow keys and send them to the running program. This trades shell Alt-click
+cursor positioning and macOS Option-drag column selection for a consistent local
+selection gesture that sends no input. Tracking mouse modes to change these
+options dynamically would preserve more shell gestures but adds lifecycle state
+to both terminal implementations.

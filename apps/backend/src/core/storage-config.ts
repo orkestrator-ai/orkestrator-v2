@@ -33,6 +33,7 @@ import {
   firstEnabledAgentPlatform,
   fs,
   getUnscopedLegacyOpenCodeModelCatalog,
+  isMissingFileError,
   isRecord,
   normalizeAcpModelCatalogEntries,
   normalizeAgentPlatforms,
@@ -56,7 +57,7 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("storage");
 type AgentInteractionOrigin = shared.AgentInteractionOrigin;
@@ -314,6 +315,24 @@ export class ConfigRepository {
             },
           },
         };
+  }
+
+  /**
+   * `config.json` holds the provider secrets and each backup copies them. Saves
+   * write both 0600, but a file left wider by an older build or a restore would
+   * stay that way until the next save, so every start tightens them. A mode that
+   * cannot be changed is logged rather than stopping the backend.
+   */
+  async restrictConfigFileModes(): Promise<void> {
+    const config = this.files.configFile();
+    for (const file of [config, ...this.context.jsonBackupPaths(config)]) {
+      await fs.chmod(file, 0o600).catch((error: unknown) => {
+        if (isMissingFileError(error)) return;
+        log.warn("config.restrict-mode-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      });
+    }
   }
 
   /**

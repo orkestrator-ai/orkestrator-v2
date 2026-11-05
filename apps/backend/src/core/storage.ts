@@ -196,6 +196,7 @@ export class StorageService {
   async init(): Promise<void> {
     await this.context.open();
     this.context.startSnapshots();
+    await this.repos.config.restrictConfigFileModes();
     await this.repos.config.migrateConfigSchema();
     await this.repos.nativeAgentSessions.migrateNativeAgentSessionOwners();
   }

@@ -277,6 +277,18 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function restrictCompanionFiles(databasePath: string): void {
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const companion = `${databasePath}${suffix}`;
+    try {
+      if (fs.lstatSync(companion).isFile()) fs.chmodSync(companion, 0o600);
+    } catch (error) {
+      // Another backend closing the database removes its WAL and SHM.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export class StorageDatabase {
   readonly path: string;
   readonly db: Database;
@@ -314,8 +326,10 @@ export class StorageDatabase {
     this.db = new Database(this.path, { create: true, strict: true });
     try {
       // Sensitive stores (agent mail, prompt queues, credentials) share this
-      // file. SQLite creates -wal/-shm with the database file's mode.
+      // file. SQLite creates -wal/-shm with the database file's mode, but keeps
+      // the mode of ones already there.
       fs.chmodSync(this.path, 0o600);
+      restrictCompanionFiles(this.path);
       this.busyTimeoutMs = Math.max(0, options.busyTimeoutMs ?? 10_000);
       this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
       // Only takes effect before the first table exists (a new database);

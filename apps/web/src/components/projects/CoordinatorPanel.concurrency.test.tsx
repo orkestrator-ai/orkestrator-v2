@@ -472,7 +472,7 @@ describe("Git and conversation actions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close Side 1" }));
     await waitFor(() => expect(closeConversation).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByText("fetch went wrong")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("fetch went wrong") === null).toBe(true));
   });
 });
 

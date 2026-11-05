@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on 2026-11-05 against `main` at `6e796ca32`. Task 4, and task 5's held files outside `change-tracking/`, re-checked and acted on 2026-11-05 against `main` at `0194a0675`.
+Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on 2026-11-05 against `main` at `6e796ca32`. Task 4, and task 5's held files outside `change-tracking/`, re-checked and acted on 2026-11-05 against `main` at `0194a0675`. The captures that had not fitted task 5 re-checked and acted on 2026-11-05 against `main` at `41f9eb638`.
 
 ### Tasks
 
@@ -10,7 +10,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on
 2. **Find a reduced case**: reproduce the lost event without this repository's code. Status: open.
 3. **Decide on a bound in `runCommand`**: stop a backend command waiting out its whole timeout for a child that has exited. Status: done (2026-11-04), through file capture and a macOS exit watchdog rather than a bound.
 4. **Unblock readers parked on a superseded scan**: a read already waiting when a retarget arrives still waits for that scan. Status: done (2026-11-05). The reader is released when the attempt is aborted; a read it then makes on the same worktree still queues in admission until the old scan settles.
-5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05) for every site not held for running work. The files held for E-0580 and S-0080 were re-checked on 2026-11-05 after both merged: nothing to move. Everything in `apps/backend/src/core/change-tracking/` stays held for E3 (#1833); re-check it when that lands. Captures that did not fit are in [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md).
+5. **Move the backend's other pipe captures off Bun's readers**: `node:child_process` captures outside `runCommand` can still stall. Status: done (2026-11-05) for every site not held for running work. The files held for E-0580 and S-0080 were re-checked on 2026-11-05 after both merged: nothing to move. Everything in `apps/backend/src/core/change-tracking/` stays held for E3 (#1833); re-check it when that lands. The one-shot captures that did not fit at first were moved or decided on 2026-11-05; see [Task 5: the captures that did not fit at first](#task-5-the-captures-that-did-not-fit-at-first).
 6. **Reap children whose exit Bun lost**: on macOS such a child stays a zombie after its command settles. Status: open.
 
 ### 1. Report the defect upstream
@@ -128,6 +128,12 @@ Production code and files outside the test suites:
 | `apps/backend/src/core/transcript-artifacts/preview-supervisor.ts` | Moved | `runDocker` moved. The import stays for the worker child, a live follower that talks over stdin and stdout. |
 | `apps/backend/src/ssh-agent-socket.ts` | Moved | Agent socket lookup command. No import left. |
 | `apps/backend/src/tailscale-serve.ts` | Moved | `tailscale` commands. No import left. |
+| `apps/backend/src/core/review-worktree-fingerprint.ts` | Moved | Still self-contained script text run inside the environment, so it cannot import `runCommand`. It now captures `git` into unlinked files itself. |
+| `apps/backend/src/core/storage-backups.ts` | Moved | The database copy keeps stdin as its liveness pipe, which `runCommand` would close, and takes stdout and stderr through unlinked files from `openCaptureFile`. Settles on exit or at its own deadline. |
+| `apps/backend/src/core/web-annotation-evidence-files.ts` | Moved | `runContainerEvidenceScript`. No import left. Now has a 60 s deadline. |
+| `apps/backend/src/core/web-annotation-source-checks.ts` | Moved | `runContainerPathCheck`. No import left. |
+| `packages/protocol/src/node/standalone-service.ts` | Moved | `runFile`. No import left. |
+| `packages/protocol/src/node/workspace-change-probe.ts` | Moved | `runGit`. No import left. |
 | `apps/backend/src/core/agent-accounts-login.ts` | Live follower | Interactive login: parses the prompt from output while the child runs. |
 | `apps/backend/src/core/codex-host-login-refresh.ts` | Live follower | JSON-RPC over stdin and stdout with `codex app-server`; success comes from a response, and exit before it is a failure. |
 | `apps/backend/src/core/commands-servers.ts` | Live follower | Type only. Long-running local bridge servers, spawned through `local-server-runtime.ts`. |
@@ -137,6 +143,7 @@ Production code and files outside the test suites:
 | `apps/backend/src/core/transcript-artifacts/media-stream-container.ts` | Live follower | Type only. Starts the container media reader through `spawnCommand` for streaming. |
 | `apps/backend/src/core/transcript-artifacts/media-stream.ts` | Live follower | Type only. Streams a media reader's output as it arrives. |
 | `apps/backend/src/preview-relay-supervisor.ts` | Live follower | Long-running `docker exec` relay carrying framed traffic in both directions. |
+| `packages/protocol/src/node/ssh/context.ts` | Live follower | The injectable `spawn` starts the tunnel in `tunnel-starter.ts`. The one-shot `runBoundedCommand` moved to the context's `capture`. |
 | `apps/backend/src/core/change-tracking/ (every other file)` | Held | E3. Importers in that folder have their own rows. |
 | `apps/backend/src/core/change-tracking/capture.ts` | Held | E3. Synchronous `execFileSync` inside a `node -e` container helper. |
 | `apps/backend/src/core/change-tracking/git-scopes.ts` | Held | E3 (#1833). No `node:child_process` import; uses `runCommandBuffer`. E-0580 has merged. |
@@ -146,26 +153,19 @@ Production code and files outside the test suites:
 | `apps/backend/src/core/diff-stats-service.ts` | Nothing to move | Re-checked 2026-11-05 after E-0580 merged. Starts no process; scans and reads are injected. |
 | `docker/image-manifest.ts` | Not fitting | Re-checked 2026-11-05 after S-0080 merged; the only importer under `docker/`. Synchronous `spawnSync` of `--version` in an image-build script outside the backend; `runCommand` is async. |
 | `apps/backend/src/core/agent-credential-files.ts` | Not fitting | No import: a comment names the module. |
-| `apps/backend/src/core/command-capture.ts` | Not fitting | No import: a comment names the module. This is `runCommand`'s new home, and it uses `Bun.spawn` with file capture. |
-| `apps/backend/src/core/design/export-writer.ts` | Not fitting | Also imported by Node-based browser tests, where `Bun` is undefined, and its spawn seam lets tests withhold a payload. 6060 task 3. |
+| `packages/protocol/src/node/command-capture.ts` | Not fitting | This is `runCommand`, with file capture, and the backend re-exports it. Under Bun it uses `Bun.spawn`; the import is for where `Bun` is absent. |
+| `apps/backend/src/core/design/export-writer.ts` | Not fitting | Its spawn seam lets tests withhold a payload from a real child. Shared capture supports Node, so runtime compatibility no longer requires pipes. Left on pipes until a stall is seen; its deadline settles the call. |
 | `apps/backend/src/core/fix-path.ts` | Not fitting | Synchronous `execFileSync` of the login shell in a synchronous startup path; `runCommand` is async. |
 | `apps/backend/src/core/process-tree.ts` | Not fitting | Type only. Signals a child it is given and captures nothing. |
 | `apps/backend/src/core/public-api/exec-worker.ts` | Not fitting | Self-contained script text run inside the environment, so it cannot import `runCommand`. It supervises a detached command and follows its output. |
 | `apps/backend/src/core/review-validation-worker.ts` | Not fitting | Self-contained script text run inside the environment, so it cannot import `runCommand`. It supervises project commands live and makes synchronous `git` reads. |
-| `apps/backend/src/core/review-worktree-fingerprint.ts` | Not fitting | Self-contained script text run inside the environment, so it cannot import `runCommand`. [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md) task 1. |
-| `apps/backend/src/core/storage-backups.ts` | Not fitting | The database copy needs stdin held open as its liveness pipe, and `runCommand` closes stdin at once. 6060 task 2. |
 | `apps/backend/src/core/transcript-artifacts/fixtures/fake-preview-worker.ts` | Not fitting | Test fixture. Its child has stdio ignored and captures nothing. |
 | `apps/backend/src/core/transcript-artifacts/preview-worker-prepare.ts` | Not fitting | `stageContext` runs with stdio ignored, so there is no capture to move. |
 | `apps/backend/src/core/validation-failure-classifier.ts` | Not fitting | Function source serialised and run inside the environment, with `require` passed in. Its child calls are synchronous. |
-| `apps/backend/src/core/web-annotation-evidence-files.ts` | Not fitting | Type only. The child comes from `spawnCommand` through an injected `SpawnPipe`, which this ticket leaves alone. It is a one-shot exchange, not a follower. 6060 task 5. |
-| `apps/backend/src/core/web-annotation-source-checks.ts` | Not fitting | Type only. Same `spawnCommand` seam as the evidence script; this one has its own deadline. 6060 task 5. |
 | `apps/backend/src/preview-browser-harness.ts` | Not fitting | Test-only entrypoint: synchronous certificate setup plus long-running dev servers. |
 | `apps/backend/src/preview-test-pki.ts` | Not fitting | Test-only: synchronous `openssl` calls. |
 | `packages/protocol/src/node/claude-linux-sandbox.ts` | Not fitting | Protocol cannot import the backend, and this probe is synchronous (`spawnSync`). |
 | `packages/protocol/src/node/host-test-scheduler.ts` | Not fitting | Protocol cannot import the backend, and this `ps` is a synchronous call in the scheduler factory. |
-| `packages/protocol/src/node/ssh/context.ts` | Not fitting | Protocol cannot import the backend. The injectable spawn seam is used by `process-runner.ts` (one-shot, 6060 task 4) and `tunnel-starter.ts`. |
-| `packages/protocol/src/node/standalone-service.ts` | Not fitting | Protocol cannot import the backend. `runFile` stays on `execFile`. 6060 task 4. |
-| `packages/protocol/src/node/workspace-change-probe.ts` | Not fitting | Protocol cannot import the backend. `runGit` stays on `execFile` and `spawn`. 6060 task 4. |
 
 Test files and helpers under `apps/backend/tests/`. None moved. The task covers the backend's captures, and these are the tests' own fixtures. Whether one could stall on the same defect was not measured; a stall would show as a test timeout and belongs in the [flake register](../../tests/flaky-tests/0000-index.md).
 
@@ -362,9 +362,42 @@ Took `runCommand`'s single timeout behaviour rather than adding a kill-signal op
 
 Put the table in task 5's subsection rather than a new file, because the ticket forbids new report files under `docs/` and a later worker re-checking the held files needs it next to their list. It covers test files as well as production code because the acceptance criterion says every importing file.
 
-### Task 5: one-shot exchanges through `spawnCommand` stay put
+### Task 5: the captures that did not fit at first
 
-`web-annotation-evidence-files.ts` and `web-annotation-source-checks.ts` import only a type, and their child comes from `spawnCommand`. They are one-shot exchanges rather than followers, but the ticket leaves `spawnCommand` and its callers alone, so they are classified as not fitting and recorded in [6060](6060-pipe-captures-that-could-not-move-to-runcommand.md) task 5 with the other callers found while classifying. Moving them here would have changed code the ticket says to leave unchanged.
+These were split out of task 5 and finished on 2026-11-05 (to-do 6060, now deleted). None had been seen to stall. Each decision took the recommended option unless it says otherwise.
+
+**Fingerprint script.** Chose to capture into unlinked files inside the script over relying on the caller's bound, which would keep reporting a stall as a failed validation guard. It keeps its reason codes, and it now settles at `git`'s exit, so a helper holding the output no longer delays it. The cost is a second copy of the capture idea in script text, size limits that are polled, and hashing after exit.
+
+**Database copy.** Chose to keep stdin as the liveness pipe and take stdout and stderr through unlinked files, over a "keep stdin open" option on `runCommand` that only this caller would use. The backend now has its own deadline, past the supervisor's, and a result with no exit status is a failure even when the verdict was written.
+
+**Design export helper.** Left on pipes until a stall is seen. Its deadline already settles the call, so it cannot hang, and it is imported by Node-based browser tests whose `DesignExportSpawn` seam withholds a payload from a real child. A stall would report a completed write as an unknown outcome after 30 s. Injecting a `runCommand` transport would have stopped production using pipes but left tests exercising a transport production does not use.
+
+**Protocol captures.** Moved `command-capture.ts` and `shell-process-state.ts` to `packages/protocol/src/node/`, with the backend re-exporting the capture and charging its metrics through `setCommandCaptureMetrics`. `runGit`, `runFile` and SSH `runBoundedCommand` use it. Leaving them would have avoided a change to a package every bridge depends on, but kept SSH's deadline signalling without settling.
+
+The re-check changed one thing. The to-do took it that these all run under Bun, but Electron's main process runs the SSH adapter and a bridge bundle can start under `node`, so `Bun.spawn` alone would have broken SSH in the desktop app. The capture starts a child through `node:child_process` where `Bun` is absent, with the same file capture and classification; a test bundles it for Node and runs it under a real `node`. The alternative of leaving SSH on `context.spawn` with capture files would have left two capture paths. SSH gained a `capture` seam beside the tunnel's `spawn`, and its tests' fake answers that seam.
+
+Results that change: the bridges' `runGit` with a stdin payload fails past its output limit, where it truncated, and SSH helpers stop once stderr passes 1 MiB, where they kept running, keeping `maxStderrBytes` of it as before. In the backend, the protocol captures now count towards its recurring-work metrics.
+
+**`spawnCommand` callers.** Every production caller on 2026-11-05, with what became of it. "One payload" callers moved to `runCommand`; an output limit now fails where they truncated.
+
+| Caller | Kind | Outcome |
+| --- | --- | --- |
+| `runContainerEvidenceScript`, writer and remover (`web-annotation-evidence-files.ts`, through `commands-registry-terminal.ts`) | One payload, no deadline | Moved, with a 60 s deadline. |
+| `runContainerPathCheck` (`web-annotation-source-checks.ts`) | One payload | Moved. |
+| `write_container_file` (`commands-registry-terminal.ts`) | One payload, no deadline | Moved through `runContainerWrite` (`container-write.ts`), with a 120 s deadline. |
+| `write_initial_prompt_attachments` (`commands-registry-terminal.ts`) | One payload, no deadline | Moved the same way. |
+| `writeEnvironmentReviewPackage` (`commands-review.ts`) | One payload | Moved through `writeContainerReviewPackage`. |
+| `GraphArtifactStore` write (`graph-artifacts.ts`) | One payload | Moved through `writeContainerReviewPackage`. |
+| `copyOutBounded` (`docker-copy-out.ts`) | One payload, raw bytes | Moved to `runCommandBuffer`. `maxOutputBytes` covers `oversized`, and `maxStderrBytes` was added so Docker's own message cannot read as an oversized file. |
+| `pipeContainerPath` (`container-replacement.ts`) | Streams between two children | Stays on pipes: a whole workspace has to flow while both run, so a file does not fit. Its deadline only signalled them, so it now also settles the step as failed. |
+| `ContainerLogService` (`container-log-service.ts`) | Live follower | Unchanged. `docker logs -f`. |
+| `LocalServerRuntime` (`local-server-runtime.ts`) | Live follower | Unchanged. Long-running local bridge servers. |
+| `media-stream-container.ts` | Live follower | Unchanged. Streams a media reader as it arrives. |
+| `spawnParentBoundCommand` (`shell.ts`), used by `container-oom-events.ts` | Live follower | Unchanged. `docker events`. |
+
+Chose to move the one-payload callers over only adding a deadline to `runContainerEvidenceScript`, because a deadline alone would still report a stalled command that succeeded as failed. Their tests moved to a `run` seam or a fake `docker` on `PATH`.
+
+**Lost-exit tests.** `@orkestrator/protocol/testing/lost-exit` makes `Bun.spawn`'s `exited` never settle while the real child runs, which is the lost event as far as a capture can tell. On Linux a lost exit fails at the deadline rather than being recovered. Only macOS has a readable status, as before.
 
 ### Task 5 review repair: descendant completion and credential failures
 
@@ -408,7 +441,7 @@ E-0580 and S-0080 merged, so their held files were re-checked against the task 5
 ## Needs verification
 
 - Whether the lost event happens on x86-64 Linux. All Linux evidence is aarch64 in a container; CI's misses suggest it does, but no CI run has reported a step.
-- How often it reaches users through the remaining pipe captures ([6060](6060-pipe-captures-that-could-not-move-to-runcommand.md)).
+- How often it reaches users through the remaining pipe captures: the design export helper, `pipeContainerPath`, and whatever `change-tracking/` holds until E3.
 - Whether a Bun canary build still has it.
 
 ## Related
@@ -416,7 +449,6 @@ E-0580 and S-0080 merged, so their held files were re-checked against the task 5
 - [Flake case 1537](../../tests/flaky-tests/environments-and-containers/1537-diff-base-override-scan-timeout.md)
 - [CI shard report 0010](../../reports/ci-shard-validation/0010-backend-shard-diff-base-override-timeout.md)
 - [0030 test suite and CI health](0030-test-suite-and-ci-health.md)
-- [6060 pipe captures that could not move to `runCommand`](6060-pipe-captures-that-could-not-move-to-runcommand.md)
 
 ## Replaces
 

@@ -63,6 +63,8 @@ const remoteEnvironment = (id: string, name: string, status = "running") => ({
   environmentType: "local",
   agentActivityState: "idle",
   lifecycleOperation: "" as string,
+  deletionRequestedAt: undefined as string | undefined,
+  cleanupAfterMergeError: undefined as string | undefined,
 });
 
 const dataset = (...environments: ReturnType<typeof remoteEnvironment>[]) => ({
@@ -534,7 +536,7 @@ describe("bulk action admission", () => {
     await waitFor(() => expect(selected()).toEqual([keyOn("b", "shared")]));
     const deleting = await row("On A");
     expect(rowIdsOnScreen()).not.toContain(keyOn("a", "shared"));
-    expect(within(deleting.parentElement!).queryByRole("checkbox")).toBeNull();
+    expect(within(deleting.parentElement!).queryByRole("checkbox") === null).toBe(true);
     fireEvent.click(deleting, { metaKey: true });
     fireEvent.click(deleting, { shiftKey: true });
     fireEvent.keyDown(deleting, { key: "Enter", ctrlKey: true });
@@ -542,6 +544,32 @@ describe("bulk action admission", () => {
     fireEvent.click(screen.getByTitle("Stop selected"));
     await waitFor(() => expect(fake.callsTo("b", "stop_environment")).toHaveLength(1));
     expect(writesTo(fake, "a")).toEqual([]);
+  });
+
+  test("a failed cleanup on another machine can be selected and bulk deleted to retry it", async () => {
+    const { fake, datasets } = setup();
+    Object.assign(datasets.a.environments.rp[0]!, {
+      lifecycleOperation: "deleting",
+      deletionRequestedAt: "2026-11-05T00:00:00.000Z",
+      cleanupAfterMergeError: "delete failed",
+    });
+    await act(() => portalStore.refresh());
+    await everyRowDrawn();
+    await waitFor(() => expect(rowIdsOnScreen()).toContain(keyOn("a", "shared")));
+
+    fireEvent.click(await row("On A"), { metaKey: true });
+    expect(selected()).toEqual([keyOn("a", "shared")]);
+    expect(within((await row("On A")).parentElement!).getByRole("checkbox")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Delete selected"));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete All" }));
+
+    await waitFor(() =>
+      expect(fake.callsTo("a", "delete_environment").map((call) => call.args)).toEqual([
+        { environmentId: "shared" },
+      ]),
+    );
   });
 
   test("a machine filter limits ranges while later-hidden selections still receive bulk actions", async () => {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -369,5 +369,55 @@ describe("WorkspaceChangeProbe baseline mode", () => {
     const change = await subject.end("call-1");
     expect(change?.additions).toBe(1);
     expect(change?.approximate).toBe(true);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("runGit capture", () => {
+  // A pipe capture waits for this child to close its copy of the pipe, or misses
+  // the end of the stream when Bun loses it; file capture needs neither.
+  test("settles at git's exit while a background child holds its output", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "ork-probe-fake-git-"));
+    try {
+      await writeFile(join(bin, "git"), "#!/bin/sh\nprintf output\nsleep 5 &\nexit 0\n", {
+        mode: 0o755,
+      });
+      const started = Date.now();
+      const { stdout } = await runGit(["status"], { cwd: bin, env: { PATH: bin } });
+      expect(stdout).toBe("output");
+      expect(Date.now() - started).toBeLessThan(4_000);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("delivers stdin and rejects a failing exit", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "ork-probe-fake-git-"));
+    try {
+      await writeFile(join(bin, "git"), '#!/bin/sh\ncat\nexit "${FAKE_GIT_EXIT:-0}"\n', {
+        mode: 0o755,
+      });
+      const env = { PATH: `${bin}:${process.env.PATH}` };
+      expect(await runGit(["add"], { cwd: bin, env, stdin: "a\0b\0" })).toEqual({
+        stdout: "a\0b\0",
+      });
+      await expect(
+        runGit(["add"], { cwd: bin, env: { ...env, FAKE_GIT_EXIT: "3" }, stdin: "x" }),
+      ).rejects.toThrow();
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("past its output limit fails instead of returning a truncated answer", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "ork-probe-fake-git-"));
+    try {
+      await writeFile(join(bin, "git"), "#!/bin/sh\nhead -c 17000000 /dev/zero\n", { mode: 0o755 });
+      const env = { PATH: `${bin}:${process.env.PATH}` };
+      await expect(runGit(["status"], { cwd: bin, env })).rejects.toMatchObject({
+        outputLimitExceeded: true,
+      });
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
   });
 });

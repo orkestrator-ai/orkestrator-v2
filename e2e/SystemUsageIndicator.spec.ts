@@ -84,3 +84,37 @@ test("environment header stays on one row without overflowing the panel", async 
   expect(geometry.rowSingleLine).toBe(true);
   expect(geometry.pageOverflow).toBe(false);
 });
+
+for (const unsupported of [false, true]) {
+  test(`reopening preserves process failure without a sample (unsupported=${unsupported})`, async ({
+    page,
+  }) => {
+    await page.goto("/system-usage");
+    await expect(page.getByRole("img", { name: "Disk storage usage: 63%" })).toBeVisible();
+    await page.evaluate((unsupported) => {
+      const invoke = window.orkestrator!.invoke;
+      window.orkestrator!.invoke = async (command, args) => {
+        if (command === "get_environment_process_usage") {
+          throw new Error(
+            unsupported ? "Unknown backend command: get_environment_process_usage" : "offline",
+          );
+        }
+        return invoke(command, args);
+      };
+    }, unsupported);
+    await page.getByRole("button", { name: "Open environment process usage" }).click();
+    await expect(page.getByText("Couldn't read processes")).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "Environment process usage" })
+      .getByRole("button", { name: "Close environment process usage" })
+      .click();
+    await page.getByRole("button", { name: "Open environment process usage" }).click();
+    await expect(page.getByText("Couldn't read processes")).toBeVisible();
+    await expect(page.getByText("Loading processes…")).toHaveCount(0);
+    if (unsupported) {
+      await page.screenshot({
+        path: `output/visual-previews/usage-reopened-unavailable-${test.info().project.name}.png`,
+      });
+    }
+  });
+}

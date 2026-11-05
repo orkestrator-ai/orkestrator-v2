@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import type { CpuInfo } from "node:os";
+import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+
+const log = createLogger("host");
 
 export interface SystemUsageSnapshot {
   cpuPercent: number;
@@ -34,6 +37,7 @@ interface SystemUsageDependencies {
     options: { timeoutMs: number },
   ) => Promise<{ stdout: string }>;
   metrics: RecurringWorkMetrics;
+  sourceTimeoutMs: number;
 }
 
 interface DarwinRamDependencies {
@@ -97,9 +101,62 @@ const DARWIN_GPU_SAMPLE_GAP_MS = 80;
 const CPU_BASELINE_MAX_AGE_MS = 5_000;
 const CPU_MIN_INTERVAL_MS = 100;
 const CPU_FRESH_SAMPLE_MS = 200;
+/** How long a filesystem read may hold up a sample; the same bound as the spawned probes. */
+export const USAGE_SOURCE_TIMEOUT_MS = 1_500;
 
 function clampPercent(value: number): number {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
+}
+
+/**
+ * Answers `unavailable` when `read` has not settled in time, so a stalled
+ * source costs its own figure rather than the whole sample. Filesystem calls
+ * cannot be cancelled: a hung one holds a worker thread until the kernel
+ * answers. So it stays in flight, one per key, and later reads wait on it
+ * rather than adding another.
+ */
+export function createBoundedRead<K, T>(
+  source: string,
+  read: (key: K) => Promise<T>,
+  unavailable: T,
+  timeoutMs: number = USAGE_SOURCE_TIMEOUT_MS,
+): (key: K) => Promise<T> {
+  const inFlight = new Map<K, Promise<T>>();
+  const stalled = new Set<K>();
+  return (key) => {
+    let pending = inFlight.get(key);
+    if (!pending) {
+      const started = read(key);
+      pending = started;
+      inFlight.set(key, started);
+      const settled = () => {
+        inFlight.delete(key);
+        // The log scope is the source: only the last stalled key ends the fault.
+        if (stalled.delete(key) && stalled.size === 0) {
+          log.recovered("usage.source-stalled", source);
+        }
+      };
+      void started.then(settled, settled);
+    }
+    const answer = pending;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        stalled.add(key);
+        log.throttled("warn", "usage.source-stalled", { scope: source, kind: "timeout" });
+        resolve(unavailable);
+      }, timeoutMs);
+      answer.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  };
 }
 
 export function cpuTimes(cpus: CpuInfo[]): CpuTimeSnapshot {
@@ -325,10 +382,18 @@ export async function readDarwinGpuPercent(
   return clampPercent(Math.max(...samples));
 }
 
+// The only GPU source with no timeout of its own: a sysfs read wakes the device
+// and waits on its driver.
+const boundedLinuxGpuPercent = createBoundedRead<void, number | null>(
+  "gpu-sysfs",
+  () => readLinuxGpuPercent(),
+  null,
+);
+
 export async function readGpuPercent(
   dependencies: Partial<GpuDependencies> = {},
 ): Promise<number | null> {
-  const linuxGpuPercent = dependencies.linuxGpuPercent ?? readLinuxGpuPercent;
+  const linuxGpuPercent = dependencies.linuxGpuPercent ?? boundedLinuxGpuPercent;
   const darwinGpuPercent = dependencies.darwinGpuPercent ?? readDarwinGpuPercent;
   const execute = dependencies.runCommand ?? runCommand;
   const sysfsPercent = await linuxGpuPercent();
@@ -429,7 +494,12 @@ export function createSystemUsageReader(
   const cpus = dependencies.cpus ?? os.cpus;
   const totalMemory = dependencies.totalMemory ?? os.totalmem;
   const freeMemory = dependencies.freeMemory ?? os.freemem;
-  const diskPercent = dependencies.diskPercent ?? readDiskPercent;
+  const diskPercent = createBoundedRead(
+    "disk",
+    dependencies.diskPercent ?? readDiskPercent,
+    null,
+    dependencies.sourceTimeoutMs,
+  );
   const gpuPercent = dependencies.gpuPercent ?? readGpuPercent;
   const platform = dependencies.platform ?? process.platform;
   const execute = dependencies.runCommand ?? runCommand;

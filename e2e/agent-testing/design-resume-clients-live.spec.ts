@@ -257,7 +257,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
               await client.goto(status.browserUrl!, { waitUntil: "domcontentloaded" });
               await sidebarNavigator(client, fixture!.name)(target.name);
               await client
-                .getByRole("button", { name: /^Design \d+ Close Design \d+$/ })
+                .getByRole("tab", { name: /^Design \d+$/ })
                 .first()
                 .click({ timeout: 30_000 });
               await client

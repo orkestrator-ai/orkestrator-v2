@@ -715,6 +715,13 @@ through the tab's menu (right-click, the context-menu key or Shift+F10): **Move
 to new group** and **Move to group N** call the same layout functions a drop
 does (`splitCoordinatorPaneAtEdge`, `moveCoordinatorConversation`).
 
+An environment's strip (`DraggableTabBar`, `DraggableTab`) is also a `tablist`
+over a `tabpanel`, built differently: the draggable shell is itself the
+`role="tab"` element, with its close button out of the tab order, and it keeps
+the keyboard drag sensor. Arrow keys, Home and End move between tabs, Enter
+selects, Space picks the tab up to drag it, Delete closes it and the context-menu
+key or Shift+F10 opens its menu.
+
 The arrangement is presentation, edited by the renderer
 (`apps/web/src/lib/coordinator-pane-layout.ts`) and stored by the backend per
 project (`get/save_coordinator_pane_layout`, `@orkestrator/protocol/coordinator-pane-layout`),

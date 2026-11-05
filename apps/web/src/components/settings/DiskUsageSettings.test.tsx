@@ -97,7 +97,7 @@ test("a failed mirror read shows why, and a refresh recovers and re-measures", a
   ]);
   fireEvent.click(screen.getByRole("button", { name: "Refresh project Git mirrors" }));
   await screen.findByText(/1 GB across 1 mirror\./);
-  expect(screen.queryByText("unknown command")).toBeNull();
+  expect(screen.queryByText("unknown command") === null).toBe(true);
   expect(list).toHaveBeenCalledTimes(2);
 });
 
@@ -108,7 +108,7 @@ test("a mirror read that lands after unmounting is ignored", async () => {
   await screen.findByText("Measuring mirrors…");
   view.unmount();
   await act(async () => pending.resolve([]));
-  expect(screen.queryByText(/mirror/i)).toBeNull();
+  expect(screen.queryByText(/mirror/i) === null).toBe(true);
 });
 
 test("picks, saves and resets both locations; cancelled picks make no write", async () => {
@@ -320,14 +320,14 @@ test("switching machines clears rows and ignores a late previous-machine refresh
       <DiskUsageSettings />
     </AccountMachineProvider>,
   );
-  expect(screen.queryByText("Old mirror")).toBeNull();
+  expect(screen.queryByText("Old mirror") === null).toBe(true);
   await screen.findByText("New mirror");
   await act(async () =>
     pending.resolve([
       { projectId: "stale", projectName: "Stale mirror", path: "/stale", bytes: GB },
     ]),
   );
-  expect(screen.queryByText("Stale mirror")).toBeNull();
+  expect(screen.queryByText("Stale mirror") === null).toBe(true);
   expect(screen.getByText("New mirror")).toBeTruthy();
   expect(list).toHaveBeenLastCalledWith("new");
 });

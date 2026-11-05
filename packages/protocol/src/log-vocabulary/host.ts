@@ -1,4 +1,4 @@
-import { defineLogAreas } from "./define.js";
+import { defineLogAreas, THROTTLE_LOG_EVENTS } from "./define.js";
 
 export const HOST_LOG_AREAS = defineLogAreas({
   host: {
@@ -11,6 +11,9 @@ export const HOST_LOG_AREAS = defineLogAreas({
       "maintenance.listener-failed": "A host maintenance listener threw; the others still run.",
       "suspend.reconcile-failed": "Reconciling due work after a host suspension failed.",
       "load.sample-failed": "Sampling machine load failed; the next sample retries.",
+      "usage.source-stalled":
+        "A usage source (scope: disk or gpu-sysfs) did not answer in time; its figure is missing from the sample until it does.",
+      ...THROTTLE_LOG_EVENTS,
     },
   },
 });

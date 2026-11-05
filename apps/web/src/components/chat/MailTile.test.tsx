@@ -83,7 +83,7 @@ describe("the Open action on a notice about a worker", () => {
     );
     const button = screen.getByRole("button", { name: "Open worker api-fix" });
     // A sibling of the header button, so no control nests in another.
-    expect(button.closest("button[aria-expanded]")).toBeNull();
+    expect(button.closest("button[aria-expanded]") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Open conversation" })).toBeTruthy();
     fireEvent.click(button);
     expect(useUIStore.getState().selectedEnvironmentId).toBe("worker-env");

@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import { toast } from "sonner";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -21,7 +21,7 @@ import {
 } from "@/lib/compose-draft-persistence";
 import { DraggableTab } from "./DraggableTab";
 import { TabLaunchPlaceholder, useEnvironmentTabLaunches } from "./TabLaunchShimmer";
-import { TAB_STRIP_CLASS } from "./TabShell";
+import { moveTabFocus, TAB_STRIP_CLASS } from "./TabShell";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -208,6 +208,8 @@ export function DraggableTabBar({
     [],
   );
 
+  const keyboardClosedTabRef = useRef<{ tabId: string; index: number } | null>(null);
+
   const closeTabs = useCallback(
     async (tabIds: string[]) => {
       const uniqueTabIds = Array.from(new Set(tabIds));
@@ -237,6 +239,7 @@ export function DraggableTabBar({
       try {
         await Promise.all(idsInPane.map(discardTabDraft));
       } catch (error) {
+        keyboardClosedTabRef.current = null;
         log.warn("draft.discard-failed", {
           environmentId,
           tabCount: idsInPane.length,
@@ -258,6 +261,9 @@ export function DraggableTabBar({
       }
 
       const failedTabIds = await closeParentMultiReviews(idsInPane);
+      if (keyboardClosedTabRef.current && failedTabIds.has(keyboardClosedTabRef.current.tabId)) {
+        keyboardClosedTabRef.current = null;
+      }
       const closableTabIds = idsInPane.filter((tabId) => !failedTabIds.has(tabId));
 
       for (let i = closableTabIds.length - 1; i >= 0; i--) {
@@ -283,6 +289,37 @@ export function DraggableTabBar({
     },
     [closeTabs],
   );
+
+  // Closing a tab from the keyboard removes the element holding focus. Focus
+  // goes to the tab now in its place rather than falling back to the page.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const handleKeyboardClose = useCallback(
+    (tabId: string) => {
+      keyboardClosedTabRef.current = {
+        tabId,
+        index: pane.tabs.findIndex((tab) => tab.id === tabId),
+      };
+      closeTabs([tabId]);
+    },
+    [closeTabs, pane.tabs],
+  );
+  const restoreKeyboardCloseFocus = useCallback(
+    (dialogDismissed = false) => {
+      const closed = keyboardClosedTabRef.current;
+      if (!closed || pane.tabs.some((tab) => tab.id === closed.tabId)) return;
+      // The dialog owns focus until its close autofocus lifecycle runs.
+      if (pendingCloseTabIds.length > 0 && !dialogDismissed) return;
+      const active = document.activeElement;
+      if (active?.closest('[role="alertdialog"]') && !dialogDismissed) return;
+      keyboardClosedTabRef.current = null;
+      // A surface that took focus for itself, such as a terminal, keeps it.
+      if (active && active !== document.body && !active.closest('[role="alertdialog"]')) return;
+      const tabs = stripRef.current?.querySelectorAll<HTMLElement>('[role="tab"]');
+      tabs?.[Math.min(closed.index, tabs.length - 1)]?.focus();
+    },
+    [pane.tabs, pendingCloseTabIds.length],
+  );
+  useEffect(() => restoreKeyboardCloseFocus(), [restoreKeyboardCloseFocus]);
 
   const handleCloseAll = useCallback(() => {
     closeTabs(pane.tabs.map((tab) => tab.id));
@@ -316,12 +353,13 @@ export function DraggableTabBar({
       return;
     }
     const confirmedTabIds = pendingCloseTabIds;
-    setPendingCloseTabIds([]);
-    setPendingCloseTabNames([]);
 
     try {
       await Promise.all(confirmedTabIds.map(discardTabDraft));
     } catch (error) {
+      keyboardClosedTabRef.current = null;
+      setPendingCloseTabIds([]);
+      setPendingCloseTabNames([]);
       log.warn("draft.discard-failed", {
         environmentId,
         tabCount: confirmedTabIds.length,
@@ -331,6 +369,9 @@ export function DraggableTabBar({
     }
 
     const failedTabIds = await closeParentMultiReviews(confirmedTabIds);
+    if (keyboardClosedTabRef.current && failedTabIds.has(keyboardClosedTabRef.current.tabId)) {
+      keyboardClosedTabRef.current = null;
+    }
     const closableTabIds = confirmedTabIds.filter((tabId) => !failedTabIds.has(tabId));
 
     for (const tabId of closableTabIds) {
@@ -340,6 +381,8 @@ export function DraggableTabBar({
     for (let i = closableTabIds.length - 1; i >= 0; i--) {
       removeTab(pane.id, closableTabIds[i]!, environmentId);
     }
+    setPendingCloseTabIds([]);
+    setPendingCloseTabNames([]);
   }, [
     clearDirty,
     closeParentMultiReviews,
@@ -351,6 +394,7 @@ export function DraggableTabBar({
   ]);
 
   const handleCancelClose = useCallback(() => {
+    keyboardClosedTabRef.current = null;
     setPendingCloseTabIds([]);
     setPendingCloseTabNames([]);
   }, []);
@@ -365,6 +409,12 @@ export function DraggableTabBar({
   return (
     <>
       <div
+        ref={stripRef}
+        role="tablist"
+        aria-label="Environment tabs"
+        aria-orientation="horizontal"
+        // During a keyboard drag the arrow keys move the tab, not focus.
+        onKeyDown={activeDragId ? undefined : moveTabFocus}
         className={cn(
           // The rule below the row is the same declaration the action bar uses
           // above it, so the tab strip is bounded by one hairline on each side
@@ -392,6 +442,7 @@ export function DraggableTabBar({
                     : undefined
                 }
                 onClose={() => handleClose(tab.id)}
+                onKeyboardClose={() => handleKeyboardClose(tab.id)}
                 onCloseAll={() => handleCloseAll()}
                 onCloseOthers={() => handleCloseOthers(tab.id)}
                 onCloseToRight={() => handleCloseToRight(tab.id)}
@@ -407,6 +458,7 @@ export function DraggableTabBar({
           <TabLaunchPlaceholder
             key={launch.tabId}
             environmentId={environmentId}
+            paneId={pane.id}
             launch={launch}
             isPaneFocused={isPaneFocused}
           />
@@ -418,7 +470,17 @@ export function DraggableTabBar({
         open={pendingCloseTabIds.length > 0}
         onOpenChange={(open) => !open && handleCancelClose()}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            if (
+              keyboardClosedTabRef.current &&
+              !pane.tabs.some((tab) => tab.id === keyboardClosedTabRef.current?.tabId)
+            ) {
+              event.preventDefault();
+              restoreKeyboardCloseFocus(true);
+            }
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
             <AlertDialogDescription>
@@ -429,7 +491,10 @@ export function DraggableTabBar({
           <AlertDialogFooter>
             <AlertDialogCancel onClick={handleCancelClose}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleConfirmClose}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleConfirmClose();
+              }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Close Without Saving

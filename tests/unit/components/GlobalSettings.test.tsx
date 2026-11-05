@@ -1379,7 +1379,7 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Limit resources of new containers")).toBeTruthy();
     rerender(<GlobalSettings activeSection="experimental" />);
     expect(screen.getByRole("switch", { name: "Enable scheduling" })).toBeTruthy();
-    expect(screen.queryByText("Codex Raw Event Logging")).toBeNull();
+    expect(screen.queryByText("Codex Raw Event Logging") === null).toBe(true);
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("App version")).toBeTruthy();
     expect(screen.getByText("Save Logs to Disk")).toBeTruthy();

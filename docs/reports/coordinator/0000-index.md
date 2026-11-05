@@ -72,8 +72,8 @@ What it left is in to-dos
 Batch C8 (Tab strip) is closed. Its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
 `git show "$(git log -1 --format=%H --grep='close coordinator batch C8')"`.
-What it left is in to-do
-[5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md).
+What it left, tab semantics on the environment strip, is done and to-do 5200
+is closed.
 
 Batch C6 (Errors and dead ends) is closed. Its task-by-task outcome table ends the last
 version of its deleted report, which the deletion commit's diff shows in full:
@@ -135,7 +135,7 @@ Every task was done, so it left no to-do.
 | U8: side agents never explained | Done | New side agent's tooltip, and a side composer's own placeholder and hint (`COORDINATOR_SIDE_AGENT_EXPLANATION`, `CoordinatorPanel.tsx`, `CoordinatorConversationPane.tsx`), tested in `CoordinatorPanel.tabs.test.tsx` and `CoordinatorPanel.outcome.test.tsx`. Batch C10. |
 | U9: dead-end states and scattered settings | Done | Buttons on the provider banner, empty-platform message and no-checkout card, and a Coordinator section in Settings: `CoordinatorConversationPane.tsx`, `CoordinatorPanel.tsx`, `GlobalSettings.sections.tsx`, tested in `CoordinatorPanel.outcome.test.tsx` and `GlobalSettings.coordinator-section.test.tsx`. |
 | U10: first sends in two groups | Done | One held prompt per conversation: `useCoordinatorLaunches.ts`. |
-| U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left: [5200](../../todo/coordinator-and-multi-review/5200-c8-tab-strip-follow-ups.md). |
+| U11: accessibility | Done | Tab semantics, keyboard tab moves and a labelled spinner: `CoordinatorPaneTree.tsx`, `CoordinatorConversationTab.tsx`, tested in `CoordinatorPaneTree.test.tsx` and `CoordinatorPanel.tabs.test.tsx`. The environment strip, deliberately left, followed in to-do 5200, now closed: `DraggableTab.tsx`, `DraggableTabBar.tsx`. |
 | U12: re-render cost | Done | Measured, then narrowed: `CoordinatorWorkArea.tsx` owns the Work panel's and prompts banner's store subscriptions with the conversations as its children, `useCoordinatorActiveTurn.ts` selects only home environment ids, and `CoordinatorConversationPane.tsx` gives the memoized agent tab stable props; tested in `CoordinatorPanel.render-cost.test.tsx` and `useCoordinatorActiveTurn.test.tsx`. Batch C-0390, below. |
 | U13: `Context rN` jargon | Done | Moved into the badge's details (`e5245dfd6`, #1644), a menu since C10 (`CoordinatorIsolationBadge`, `CoordinatorPanelNotices.tsx`). |
 | U13: `!` commands | Done | A hint under every coordinator composer, a footer about the coordinator's own work, and the first-message rule shown inline under the composer (`COORDINATOR_COMMAND_HINT`, `FIRST_MESSAGE_COMMAND_RULE` in `AgentNativeTab.helpers.tsx`), tested in `CoordinatorPanel.outcome.test.tsx`. Batch C10. |

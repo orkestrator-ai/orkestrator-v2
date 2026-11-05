@@ -49,12 +49,12 @@ describe("TranscriptPromptNavigator", () => {
     ]);
     cleanup();
     setup([row("only", "assistant", "No prompt here")]);
-    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(screen.queryByRole("navigation") === null).toBe(true);
   });
 
   test("the hovered line is the longest and brightest, and previews its prompt", () => {
     setup();
-    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-preview") === null).toBe(true);
 
     fireEvent.pointerEnter(lines()[0]!);
 
@@ -69,7 +69,7 @@ describe("TranscriptPromptNavigator", () => {
     expect(preview.textContent).toContain("I read the diff.");
 
     fireEvent.pointerLeave(screen.getByRole("navigation"));
-    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-preview") === null).toBe(true);
   });
 
   test("a prompt with no reply yet previews only itself", () => {
@@ -102,10 +102,10 @@ describe("TranscriptPromptNavigator", () => {
     expect(matches).toHaveBeenCalledWith(":focus-visible");
     expect(screen.getByTestId("transcript-prompt-preview").textContent).toContain("Explain");
     fireEvent.blur(button);
-    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-preview") === null).toBe(true);
     matches.mockReturnValue(false);
     fireEvent.focus(button);
-    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-preview") === null).toBe(true);
     matches.mockRestore();
   });
 
@@ -148,6 +148,6 @@ describe("TranscriptPromptNavigator", () => {
       />,
     );
     expect(lines()).toHaveLength(1);
-    expect(screen.queryByTestId("transcript-prompt-preview")).toBeNull();
+    expect(screen.queryByTestId("transcript-prompt-preview") === null).toBe(true);
   });
 });

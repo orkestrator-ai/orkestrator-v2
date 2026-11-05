@@ -79,6 +79,37 @@ describe("resolveSelectedEnvironments", () => {
     ).toEqual([key("a", "ready")]);
   });
 
+  test("keeps a failed merge cleanup selectable until a delete retries it", () => {
+    const failed = {
+      deletionRequestedAt: "2026-11-05T00:00:00Z",
+      cleanupAfterMergeError: "failed",
+    };
+    const environments = [
+      local("merge-path", failed),
+      // The PR monitor's recovery path leaves the lifecycle marker in place.
+      local("recovery-path", { ...failed, lifecycleOperation: "deleting" }),
+      local("retrying", failed),
+    ];
+    const machines = [
+      machine("a", [
+        { id: "failed", extra: { deleting: true, deletionRetryable: true } },
+        { id: "removing", extra: { deleting: true } },
+      ]),
+    ];
+    expect(
+      resolveSelectedEnvironments(
+        ["merge-path", "recovery-path", "retrying", key("a", "failed"), key("a", "removing")],
+        environments,
+        machines,
+        new Set(["retrying"]),
+      ).map((entry) => entry.selectionId),
+    ).toEqual(["merge-path", "recovery-path", key("a", "failed")]);
+  });
+
+  test("a delete running here leaves the selection before its record says so", () => {
+    expect(resolveSelectedEnvironments(["o"], [local("o")], [], new Set(["o"]))).toEqual([]);
+  });
+
   test("drops rows that no longer exist on any machine", () => {
     expect(
       resolveSelectedEnvironments(

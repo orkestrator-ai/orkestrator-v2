@@ -102,7 +102,12 @@ async function expectNoticed(
     await write(worktree, name);
     await new Promise((resolve) => setTimeout(resolve, 150));
     for (const candidate of seen) {
-      if (path.posix.dirname(candidate) === directory) return candidate;
+      if (path.posix.dirname(candidate) === directory) {
+        // Keeps a loaded Mac's run from looking stalled to the runner's watchdog.
+        if (process.platform === "darwin")
+          process.stderr.write(`noticed after ${attempt + 1} write(s)\n`);
+        return candidate;
+      }
     }
   }
   throw new Error(`no change noticed in ${directory}`);

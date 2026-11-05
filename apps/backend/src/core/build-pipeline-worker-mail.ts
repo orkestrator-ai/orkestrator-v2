@@ -316,3 +316,31 @@ export async function dispatchWorkerMailTurn(
   await dispatchPending();
   return true;
 }
+
+/** One port over several owners of worker mailboxes: the first that knows the worker answers. */
+export function combineWorkerMailPorts(
+  ports: readonly (PipelineWorkerMailPort & Partial<Pick<PipelineWorkerMailPort, "state">>)[],
+): PipelineWorkerMailPort {
+  const owner = async (environmentId: string, tabId: string) => {
+    for (const port of ports) {
+      if ((await port.state(environmentId, tabId)) !== null) return port;
+    }
+    return null;
+  };
+  return {
+    state: async (environmentId, tabId) => {
+      const port = await owner(environmentId, tabId);
+      return port ? port.state(environmentId, tabId) : null;
+    },
+    steer: async (input) => {
+      const port = await owner(input.environmentId, input.tabId);
+      return port ? port.steer(input) : { outcome: "refused", reason: "steer-refused" };
+    },
+    reconcileDelivery: async (environmentId, tabId, requestId) =>
+      (await owner(environmentId, tabId))?.reconcileDelivery(environmentId, tabId, requestId) ??
+      "unknown",
+    reconcileSteer: async (environmentId, tabId, requestId) =>
+      (await owner(environmentId, tabId))?.reconcileSteer(environmentId, tabId, requestId) ??
+      "unknown",
+  };
+}

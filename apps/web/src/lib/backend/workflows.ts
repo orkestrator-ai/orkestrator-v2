@@ -33,6 +33,9 @@ import {
   type MultiReviewStepTranscript,
   type StartMultiReviewCustomAddressFindingsInput,
   type StartMultiReviewInput,
+  type MultiReviewModelSelection,
+  type MultiReviewRewindStep,
+  type MultiReviewSkippableStep,
 } from "@orkestrator/protocol/multi-review";
 import type {
   Environment,
@@ -240,13 +243,48 @@ export async function stopMultiReviewValidation(
   return invoke<BackendMultiReviewWorkflow>("stop_multi_review_validation", { workflowId });
 }
 
+/** A `model` is "Restart in…": the reviewer runs on it from now on. */
 export async function restartMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
+  model?: MultiReviewModelSelection,
 ): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("restart_multi_review_reviewer", {
     workflowId,
     reviewerId,
+    ...(model ? { model } : {}),
+  });
+}
+
+/** Moves on without a step's result: the reviewers still working, or Address Findings. */
+export async function skipMultiReviewStep(
+  workflowId: string,
+  step: MultiReviewSkippableStep,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("skip_multi_review_step", { workflowId, step });
+}
+
+/** What "Rewind code to here" on a step would drop, and why it cannot run now, if it cannot. */
+export async function previewMultiReviewCodeRewind(
+  workflowId: string,
+  step: MultiReviewRewindStep,
+): Promise<BuildPipelineCodeRewindPreview> {
+  return invoke<BuildPipelineCodeRewindPreview>("preview_multi_review_code_rewind", {
+    workflowId,
+    step,
+  });
+}
+
+/** Resets the worktree to the commit a step started from and restarts that step. */
+export async function rewindMultiReviewCode(
+  workflowId: string,
+  step: MultiReviewRewindStep,
+  expectedHead: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("rewind_multi_review_code", {
+    workflowId,
+    step,
+    expectedHead,
   });
 }
 
@@ -1086,6 +1124,28 @@ export async function retryBuildPipelineReviewer(
   reviewerId: string,
 ): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("retry_build_pipeline_reviewer", { pipelineId, reviewerId });
+}
+
+/**
+ * Runs one reviewer again whatever state it is in, keeping the rest of the panel.
+ * `reviewerId` names a live reviewer, or the session of one whose pass has ended.
+ */
+export async function restartBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("restart_build_pipeline_reviewer", {
+    pipelineId,
+    reviewerId,
+  });
+}
+
+/** Stops one reviewer of the running review, keeping the rest of the panel. */
+export async function stopBuildPipelineReviewer(
+  pipelineId: string,
+  reviewerId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("stop_build_pipeline_reviewer", { pipelineId, reviewerId });
 }
 
 /**

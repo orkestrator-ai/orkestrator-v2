@@ -38,7 +38,7 @@ governs, marked "Decided".
 8. **tmux and container polling**: the rest of BG-1, BG-2 and BG-8, plus BG-7, BG-14 and BG-15. Status: open (BG-1, BG-2, BG-7 and BG-8 done 2026-11-03, image proven locally; BG-14 done 2026-11-04, its remaining live evidence in [5120](../transcripts-and-observation/5120-tmux-transcript-reopen-live-evidence.md); BG-15 open).
 9. **PR monitor cost**: batched queries, then activity backoff (BG-6, BG-13). Status: done (2026-11-03; live before-and-after numbers stay with task 1).
 10. **Other background jobs**: the rest of BG-3, plus BG-9, BG-11 and BG-12. Status: done (2026-11-02; live before-and-after numbers stay with task 1).
-11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-10, GW-11 and GW-15 open).
+11. **Gateway and preview proxy**: GW-5, GW-6, GW-8 to GW-12 and GW-14 to GW-16. Status: open (GW-8 and GW-9 done; GW-4 done; GW-2 done in 0052; GW-5, GW-6, GW-12 and GW-14 done 2026-11-04, a flooding terminal channel no longer desyncs a quiet one; GW-16 done 2026-11-04, live checks beyond loopback Chromium are in [5080](5080-terminal-websocket-live-evidence.md); GW-11 done 2026-11-05, its live checks are in [5840](5840-relayed-events-live-evidence.md) and the desktop's own stream in [5841](5841-desktop-main-relayed-stream.md); GW-10 and GW-15 open).
 12. **Local desktop transport**: local windows on the filtered gateway transport, and the IPC payload costs (DK-1, DK-2, DK-5, DK-6). Status: done (DK-1, DK-2 and DK-5 on 2026-11-04 behind a setting that is off by default; DK-6 fixed on 2026-11-04 by tunnel v2, [4500](4500-preview-tunnel-one-socket-per-connection.md); the default flip is [4501](4501-local-window-transport-default.md)).
 13. **Toolchain startup and downloads**: stamp-based verification and resumable downloads (DK-3, DK-4). Status: done (2026-11-03; Electron launch-to-ready 10.2–13.8 s before, 1.6–1.9 s after; a cold-cache run still needs live evidence).
 14. **Docker image size**: layer order, the second Bun, npm caches, the leftover apt layer and the second Claude binary (DK-7 to DK-11). Status: open (DK-7, DK-8, DK-9 and DK-11 done 2026-11-02; amd64 image smoke and Docker qualification passed; DK-10 left for a maintainer decision).
@@ -1064,7 +1064,7 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 
 ### 11. Gateway and preview proxy
 
-**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-11, GW-15). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14) and the small per-chunk and per-frame costs (GW-16) are fixed.
+**Problem.** Per-frame and per-request costs remain in the gateway (GW-10, GW-15). The preview proxy's missing upstream connection reuse (GW-8) and stripped ETags (GW-9), the terminal socket back-pressure (GW-6), the event frame costs (GW-5, GW-12, GW-14), the small per-chunk and per-frame costs (GW-16) and the shared name and window of relayed events (GW-11) are fixed.
 
 **Context.** Done: the shared SSE decoder is linear (GW-4). GW-2 is done in 0052 (D14). Done on 2026-11-02:
 
@@ -1074,6 +1074,8 @@ Tests: `commands-pr-monitor-batch.test.ts` (reader rules, and the `gh` boundary 
 - GW-5, done 2026-11-04: a frame is UTF-8 encoded once (`encodeGatewayFrame` in `gateway-event-replay.ts`), the replay ring holds that `Buffer` instead of the string, every client is written the same `Buffer`, and writers take the byte count as an argument (`EventClientWriter.write(chunk, byteLength?)`). Only short fixed strings such as keepalives are still measured by the writer.
 - GW-12, done 2026-11-04: `GatewayEvents.writeReplayFrames` writes one cursor frame per run of skipped events, just before the next matching frame or at the end of the window. The cursor it carries is the newest skipped revision. `gateway.connected`'s `replayed` count and the replay metrics still count the whole window.
 - GW-14, done 2026-11-04: `since()` finds the range with `slice(revision + 1 - oldest)`, and `replay.ring.oversizedAppends` in `/__orkestrator/metrics` counts frames larger than the ring's byte bound. Such a frame still empties the window, which keeps the gap detectable.
+- GW-11, done 2026-11-05 (batch E18): relayed events are named `relayed-node-event:<nodeId>` and kept in their own ring (`relayedEventReplay`, 512 frames, 512 KiB). A renderer reads them on one stream filtered to its watched nodes, with its own cursor (`RelayedEventStream`, `apps/web/src/lib/native/relayed-event-stream.ts`), and its main stream asks for none. A stream that does not ask keeps getting the old name, with a `resync` per node on reconnect; both directions are in the [register](../../architecture/version-compatibility.md#register). Tests: `apps/backend/tests/gateway-relayed-events.test.ts`, `apps/web/src/lib/native/web-gateway-relayed-stream.test.ts`, the per-node cases in `node-events.test.ts`. Live checks: [5840](5840-relayed-events-live-evidence.md). The desktop's main process stays on the old name: [5841](5841-desktop-main-relayed-stream.md).
+- Scoped replay budget, done 2026-11-05 (batch E18): `replayFitsClientBudget` charges a scoped client for matching frames plus one cursor per run of skips. Tests: "the replay budget of a scoped client" in `apps/backend/tests/gateway-frame-costs.test.ts`.
 - GW-16, done 2026-11-04. Idle deadlines: `gateway-proxy.ts` (`rewriteIdle`, `armIdleTimer`) and `preview-forward.ts` (`resetIdle`) refresh one timer per body. Decoders: two module-level decoders in `terminal-websocket-server.ts`. Operation results: on the `orkestrator-terminal.v1.input-results` subprotocol, input that succeeded is answered by one cumulative `input-results` frame per channel per flush; failures and resizes stay alone, and results collected so far go out ahead of any other control frame, so control frames keep their order. A client offering only v1 keeps one `operation-result` per input, and such a socket counts `terminal-websocket.per-input-results`. Acks: `DEFAULT_TERMINAL_ACKNOWLEDGEMENT_DELAY_MS` is 1 s. Tests: `apps/backend/tests/terminal-websocket-input-results.test.ts`, `terminal-websocket-client-gateway.test.ts` (the renderer's client against the real gateway), `gateway-proxy-idle-timers.test.ts`, the idle-deadline case in `preview-forward.test.ts`, and the cumulative-results and default-delay cases in `terminal-websocket-client.test.ts`.
 - Tests for these four: `apps/backend/tests/terminal-websocket-backpressure.test.ts`, `apps/backend/tests/gateway-frame-costs.test.ts`, and the window and oversized cases in `apps/backend/src/gateway-event-replay.test.ts`.
 - Tests for GW-8 and GW-9: `preview-upstream-pool.test.ts`, the reuse cases in `preview-forward.test.ts` and `preview-publication.test.ts`, `gateway-proxy-etag.test.ts`, and in `test:preview:browser` `e2e/preview/upstream-pool.spec.ts` (reuse, revocation and generation change close idle connections, legacy-route 304) plus the opt-in measurement `e2e/preview/vite-page-load.spec.ts`. The whole `test:preview:browser` suite with the Vite fixture passed twice in Chromium, Firefox and WebKit (58 passed, 2 skipped: the Chromium-only measurement). On beelink WebKit ran only with Ubuntu 24.04's `libicu74`, `libxml2` and `libflite1` libraries added to a private copy of the WebKit bundle (see 2680).
@@ -1238,10 +1240,10 @@ So on a real shell the frame count barely falls: each write finishes in its own 
   - **Only at the end of the window, as 0290 recommended.**
     - Pros: fewest frames.
     - Cons: changes what a client sees mid-window, against this ticket's constraint that semantics do not change.
-- **Should a scoped client's replay budget count only the small cursors it now receives?** Open, not done here.
+- **Should a scoped client's replay budget count only the small cursors it now receives?** Done 2026-11-05 (batch E18), as recommended.
   - **Yes, as a separate change, keeping the figure an upper bound (recommended).**
-    - Pros: `replayFitsClientBudget` sums every frame's bytes, so a scoped client can be told `replay-too-large` for a window it would barely receive.
-    - Cons: a client that reconciles today would replay instead, which this ticket ruled out by requiring the same result for every client.
+    - Pros: `replayFitsClientBudget` summed every frame's bytes, so a scoped client could be told `replay-too-large` for a window it would barely receive.
+    - Cons: a client that reconciled before replays instead, which the 2026-11-04 ticket had ruled out by requiring the same result for every client.
   - **Leave it.**
     - Pros: no behaviour change; the figure stays a safe overestimate.
     - Cons: the needless reconcile stays.
@@ -1249,7 +1251,7 @@ So on a real shell the frame count barely falls: each write finishes in its own 
   - **GW-10, one combined rewrite regex with a no-match fast path (recommended).**
     - Pros: cheaper first loads on the legacy route.
     - Cons: GW-9 already removed the rewrite from repeat loads, and the legacy route is a fallback.
-  - **GW-11, per-node federation event names.**
+  - **GW-11, per-node federation event names.** Done 2026-11-05 (batch E18).
     - Pros: less replay-window pressure for federation users.
     - Cons: federation only; touches replay invariants.
 

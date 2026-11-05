@@ -7,15 +7,16 @@
  * The frame only ever displays the verified effective HTML the host hands it.
  * It sanitizes it again with the design runtime's static rules (scripts,
  * frames, event handlers and executable URLs removed; inline SVG and CSS
- * kept), applies the application theme, reports its content height and a few
- * interaction booleans, and asks the host to open a link only after a real
- * click. Nothing here can reach a tool, the composer, a backend command, the
- * clipboard, application shortcuts or model context.
+ * kept), applies the application theme, reports its content height, a few
+ * interaction booleans and the document's bounded text for Find, and asks the
+ * host to open a link only after a real click. Nothing here can reach a tool,
+ * the composer, a backend command, the clipboard, application shortcuts or
+ * model context.
  *
  * Messages, frame to host: `ready` (carries the per-mount nonce), `rendered`,
- * `size`, `error`, `interaction`, `link-request`, `escape`. Host to frame:
- * `render` (once per mount) and `theme`. Every message after `ready` carries
- * the mount's generation; the host also checks the sender window.
+ * `text`, `size`, `error`, `interaction`, `link-request`, `escape`. Host to
+ * frame: `render` (once per mount) and `theme`. Every message after `ready`
+ * carries the mount's generation; the host also checks the sender window.
  */
 import { normalizeArtifactLink } from "./artifact-frame-channel.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
@@ -27,7 +28,7 @@ export const STATIC_HTML_FRAME_PROTOCOL_VERSION = 1;
  * identity of a displayed document; it is not part of any verification
  * receipt, so changing it never re-verifies or rewrites a publication.
  */
-export const STATIC_HTML_PRESENTATION_RUNTIME_VERSION = "static-html-presentation:v1";
+export const STATIC_HTML_PRESENTATION_RUNTIME_VERSION = "static-html-presentation:v2";
 
 /** Per-mount readiness nonce and render generation. */
 export const STATIC_HTML_MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -61,6 +62,14 @@ export type StaticHtmlFrameMessage =
       elementCount: number;
       /** The document uses `--ork-*` tokens, so it follows the application theme. */
       themed: boolean;
+    })
+  | (Envelope & {
+      type: "text";
+      generation: string;
+      /** This chunk's position among the `count` chunks of the document's text. */
+      index: number;
+      count: number;
+      text: string;
     })
   | (Envelope & { type: "size"; generation: string; height: number })
   | (Envelope & { type: "error"; generation: string; code: StaticHtmlFrameErrorCode })
@@ -97,6 +106,7 @@ export type StaticHtmlFrameRejection =
 const MESSAGE_KEYS: Record<StaticHtmlFrameMessage["type"], readonly string[]> = {
   ready: ["nonce"],
   rendered: ["generation", "height", "elementCount", "themed"],
+  text: ["generation", "index", "count", "text"],
   size: ["generation", "height"],
   error: ["generation", "code"],
   interaction: ["generation", "focused", "hasSelection", "pointerSelecting"],
@@ -105,6 +115,11 @@ const MESSAGE_KEYS: Record<StaticHtmlFrameMessage["type"], readonly string[]> = 
 };
 
 const MAX_REPORTED_HEIGHT = 100_000;
+/** The most chunks one document's text can take. */
+export const STATIC_HTML_MAX_TEXT_CHUNKS = Math.ceil(
+  STATIC_PRESENTATION_POLICY.maxSearchTextCharacters /
+    STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
+);
 
 function validHeight(value: unknown): value is number {
   return (
@@ -165,6 +180,21 @@ export function parseStaticHtmlFrameMessage(
       )
         return { ok: false, reason: "bad-shape" };
       break;
+    case "text":
+      if (
+        typeof record.text !== "string" ||
+        record.text.length === 0 ||
+        record.text.length > STATIC_PRESENTATION_POLICY.searchTextChunkCharacters ||
+        typeof record.index !== "number" ||
+        typeof record.count !== "number" ||
+        !Number.isInteger(record.index) ||
+        !Number.isInteger(record.count) ||
+        record.index < 0 ||
+        record.index >= record.count ||
+        record.count > STATIC_HTML_MAX_TEXT_CHUNKS
+      )
+        return { ok: false, reason: "bad-shape" };
+      break;
     case "size":
       if (!validHeight(record.height)) return { ok: false, reason: "bad-shape" };
       break;
@@ -212,6 +242,8 @@ export function installStaticHtmlPresentationRuntime(config: {
   maxElements: number;
   maxLinkCharacters: number;
   maxReportedHeight: number;
+  maxTextCharacters: number;
+  textChunkCharacters: number;
 }) {
   const CHANNEL = "orkestrator-static-html";
   const MOUNT_ID = /^[A-Za-z0-9_-]{16,64}$/;
@@ -367,6 +399,48 @@ export function installStaticHtmlPresentationRuntime(config: {
     }, 100);
   }
 
+  // Elements whose text sits on one line with its neighbours; anything else is
+  // a boundary a search must not match across.
+  const INLINE_TEXT =
+    /^(?:a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|label|mark|q|rp|rt|ruby|s|samp|small|span|strike|strong|sub|sup|time|tspan|tt|u|var|wbr)$/;
+  // Read from the sanitized tree, not layout: a closed disclosure's text counts,
+  // and a frame in a hidden tab reports the same text as a visible one.
+  function documentText(): string {
+    let text = "";
+    const visit = (node: Node) => {
+      if (node.nodeType === 3) text += (node.nodeValue ?? "").replace(/\s+/g, " ");
+      if (node.nodeType !== 1) return;
+      const element = node as Element;
+      if (/^(?:style|noscript)$/.test(element.localName) || element.hasAttribute("hidden")) return;
+      const boundary = INLINE_TEXT.test(element.localName) ? "" : "\n";
+      text += boundary;
+      for (const child of Array.from(element.childNodes)) visit(child);
+      text += boundary;
+    };
+    if (document.body) visit(document.body);
+    return text
+      .replace(/ *\n[ \n]*/g, "\n")
+      .trim()
+      .slice(0, config.maxTextCharacters);
+  }
+  function reportText() {
+    try {
+      const text = documentText();
+      const size = config.textChunkCharacters;
+      const count = Math.ceil(text.length / size);
+      for (let index = 0; index < count; index++)
+        post({
+          type: "text",
+          generation,
+          index,
+          count,
+          text: text.slice(index * size, (index + 1) * size),
+        });
+    } catch {
+      // Find only loses this document's body; the document itself stays on screen.
+    }
+  }
+
   function render(html: unknown, theme: unknown, verifiedAppearance: unknown): void {
     const fail = (code: string) => post({ type: "error", generation, code });
     if (typeof html !== "string") return fail("invalid-render");
@@ -407,6 +481,7 @@ export function installStaticHtmlPresentationRuntime(config: {
     if (document.body) observer.observe(document.body);
     lastHeight = measure();
     post({ type: "rendered", generation, height: lastHeight, elementCount: total, themed });
+    reportText();
   }
 
   window.addEventListener("message", (event: MessageEvent) => {
@@ -511,6 +586,8 @@ function runtimeScript(nonce: string | null): string {
     maxElements: STATIC_PRESENTATION_POLICY.maxElements,
     maxLinkCharacters: FRAME_CHANNEL_POLICY.maxLinkCharacters,
     maxReportedHeight: MAX_REPORTED_HEIGHT,
+    maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
+    textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
   };
   return `(${installStaticHtmlPresentationRuntime.toString()})(${JSON.stringify(config)});`;
 }

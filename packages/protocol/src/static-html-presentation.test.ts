@@ -4,6 +4,7 @@ import { installDesignRuntime } from "./design-runtime.js";
 import { FRAME_CHANNEL_POLICY, STATIC_PRESENTATION_POLICY } from "./rich-content-policy.js";
 import {
   STATIC_HTML_FRAME_CHANNEL,
+  STATIC_HTML_MAX_TEXT_CHUNKS,
   installStaticHtmlPresentationRuntime,
   parseStaticHtmlFrameMessage,
   staticHtmlFrameBootstrap,
@@ -47,6 +48,8 @@ async function frameWith(url = "https://frame.invalid/doc"): Promise<Frame> {
       maxElements: STATIC_PRESENTATION_POLICY.maxElements,
       maxLinkCharacters: FRAME_CHANNEL_POLICY.maxLinkCharacters,
       maxReportedHeight: 100_000,
+      maxTextCharacters: STATIC_PRESENTATION_POLICY.maxSearchTextCharacters,
+      textChunkCharacters: STATIC_PRESENTATION_POLICY.searchTextChunkCharacters,
     })})`,
   );
   return {
@@ -71,6 +74,18 @@ function renderMessage(html: string) {
     theme: THEME,
     verifiedAppearance: "light",
   };
+}
+
+function reported(frame: Frame): Posted[] {
+  return frame.posted().filter((message) => message.type === "text");
+}
+
+async function reportedText(html: string): Promise<string> {
+  const frame = await frameWith();
+  await frame.send(renderMessage(html));
+  return reported(frame)
+    .map((message) => message.text)
+    .join("");
 }
 
 describe("presentation runtime", () => {
@@ -142,7 +157,9 @@ describe("presentation runtime", () => {
     await frame.send(renderMessage(PLAIN_REPORT_HTML));
     const document = frame.window.document;
     const root = document.documentElement;
-    expect(frame.posted().at(-1)).toMatchObject({ type: "rendered", themed: false });
+    expect(frame.posted().find((message) => message.type === "rendered")).toMatchObject({
+      themed: false,
+    });
     expect(root.dataset.orkTheme).toBe("light");
     expect(root.style.colorScheme).toBe("light");
     expect(root.style.getPropertyValue("--ork-foreground")).toBe("");
@@ -157,8 +174,79 @@ describe("presentation runtime", () => {
   test("a document naming a token follows the application theme", async () => {
     const frame = await frameWith();
     await frame.send(renderMessage(ACTIVITY_REPORT_HTML));
-    expect(frame.posted().at(-1)).toMatchObject({ type: "rendered", themed: true });
+    expect(frame.posted().find((message) => message.type === "rendered")).toMatchObject({
+      themed: true,
+    });
     expect(frame.window.document.documentElement.dataset.orkTheme).toBe("dark");
+  });
+
+  test("reports the document's text for Find after it renders, including closed disclosures", async () => {
+    const frame = await frameWith();
+    await frame.send(renderMessage(ACTIVITY_REPORT_HTML));
+    const types = frame.posted().map((message) => message.type);
+    expect(types.indexOf("text")).toBeGreaterThan(types.indexOf("rendered"));
+    const text = reported(frame)
+      .map((message) => message.text)
+      .join("");
+    expect(text).toContain("Agent activity and cost");
+    for (const session of ACTIVITY_REPORT_SESSIONS) expect(text).toContain(session.label);
+    const closed = frame.window.document.querySelector("details#methodology p")?.textContent;
+    expect(closed).toBeTruthy();
+    expect(text).toContain(closed!.replace(/\s+/g, " ").trim());
+    expect(text).not.toContain("{");
+  });
+
+  test("reported text leaves out code, styles and hidden elements, in hostile documents too", async () => {
+    const text = await reportedText(
+      `<!doctype html><html><head><title>Tab title</title><style>.a{color:red}</style></head>
+       <body><style>.b{color:red}</style><p>Kept</p><script>window.__authored = "authored script"</script>
+       <noscript>No script fallback</noscript><p hidden>Hidden paragraph</p>
+       <template><p>Template content</p></template>
+       <svg><text>Axis label</text></svg></body></html>`,
+    );
+    expect(text).toBe("Kept\nAxis label");
+    const hostile = await reportedText(HOSTILE_REPORT_HTML);
+    expect(hostile).toContain("Hostile report");
+    expect(hostile).not.toContain("__authored");
+  });
+
+  test("reported text keeps inline runs together and block boundaries apart", async () => {
+    expect(
+      await reportedText(
+        "<p>Total  <b>cost</b>\n was $<span>12</span>.50&nbsp;net</p><table><tr><td>One</td><td>Two</td></tr></table>",
+      ),
+    ).toBe("Total cost was $12.50 net\nOne\nTwo");
+  });
+
+  test("a document with no text reports none", async () => {
+    const frame = await frameWith();
+    await frame.send(renderMessage("<svg><rect width='5' height='5'/></svg>"));
+    expect(frame.posted().at(-1)).toMatchObject({ type: "rendered" });
+  });
+
+  test("a refused document reports no text", async () => {
+    const frame = await frameWith();
+    await frame.send(
+      renderMessage(`<p>Words</p>${"<i></i>".repeat(STATIC_PRESENTATION_POLICY.maxElements + 1)}`),
+    );
+    expect(reported(frame)).toEqual([]);
+  });
+
+  test("reported text is bounded and split into messages the channel accepts", async () => {
+    const limit = STATIC_PRESENTATION_POLICY.maxSearchTextCharacters;
+    const frame = await frameWith();
+    await frame.send(renderMessage(`<p>${"漢".repeat(limit + 500)}</p>`));
+    const chunks = reported(frame);
+    expect(chunks).toHaveLength(STATIC_HTML_MAX_TEXT_CHUNKS);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("漢".repeat(limit));
+    chunks.forEach((chunk, index) => {
+      expect(chunk).toMatchObject({ index, count: chunks.length, generation: GENERATION });
+      expect(parseStaticHtmlFrameMessage(chunk, GENERATION).ok).toBe(true);
+      const encoded = new TextEncoder().encode(JSON.stringify(chunk)).length;
+      expect(encoded).toBeLessThanOrEqual(FRAME_CHANNEL_POLICY.maxMessageBytes);
+    });
+    // A full report, with `ready` and `rendered`, fits the channel's burst.
+    expect(STATIC_HTML_MAX_TEXT_CHUNKS + 2).toBeLessThanOrEqual(FRAME_CHANNEL_POLICY.burst);
   });
 
   test("removes authored code, frames and executable URLs", async () => {
@@ -320,6 +408,7 @@ describe("parseStaticHtmlFrameMessage", () => {
     for (const message of [
       { type: "ready", nonce: NONCE },
       { type: "rendered", generation: GENERATION, height: 400, elementCount: 12, themed: true },
+      { type: "text", generation: GENERATION, index: 0, count: 1, text: "Report" },
       { type: "size", generation: GENERATION, height: 0 },
       { type: "error", generation: GENERATION, code: "render-failed" },
       {
@@ -364,6 +453,24 @@ describe("parseStaticHtmlFrameMessage", () => {
       expect(reason({ ...envelope, type: "size", generation: GENERATION, height })).toBe(
         "bad-shape",
       );
+  });
+
+  test("rejects malformed, oversized and out-of-range text chunks", () => {
+    const chunk = { ...envelope, type: "text", generation: GENERATION, index: 0, count: 1 };
+    const size = STATIC_PRESENTATION_POLICY.searchTextChunkCharacters;
+    expect(reason({ ...chunk, text: "x".repeat(size) })).toBe("ok");
+    for (const text of ["", "x".repeat(size + 1), 5, null])
+      expect(reason({ ...chunk, text })).toBe("bad-shape");
+    for (const [index, count] of [
+      [1, 1],
+      [-1, 1],
+      [0.5, 1],
+      [0, 0],
+      [0, STATIC_HTML_MAX_TEXT_CHUNKS + 1],
+      ["0", 1],
+    ])
+      expect(reason({ ...chunk, text: "x", index, count })).toBe("bad-shape");
+    expect(reason({ ...chunk, text: "x", generation: "x".repeat(32) })).toBe("generation-mismatch");
   });
 
   test("rejects links that are not plain http(s), and unknown error codes", () => {
@@ -474,6 +581,8 @@ describe("frame documents", () => {
     expect(frame.eval("window.__posted").map((message: Posted) => message.type)).toEqual([
       "ready",
       "rendered",
+      "text",
     ]);
+    expect(frame.eval("window.__posted").at(-1).text).toBe("Rendered");
   });
 });

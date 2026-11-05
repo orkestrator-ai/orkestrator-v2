@@ -114,11 +114,11 @@ test("the database card shows both databases, backups, retention and top tables 
   await screen.findByText("Main database");
   expect(read).toHaveBeenCalledWith("other");
   expect(screen.getByText("Change-tracking database")).toBeTruthy();
-  expect(screen.getByText(/2\.0 MB · write-ahead log 4\.0 KB · free 40\.0 KB/)).toBeTruthy();
+  expect(screen.getByText(/2\.0 MiB · write-ahead log 4\.0 KiB · free 40\.0 KiB/)).toBeTruthy();
   // No connection to the ledger: the free space is unknown, not zero.
-  expect(screen.getByText(/1\.0 KB · write-ahead log 0 B$/)).toBeTruthy();
-  expect(screen.getByText(/3 backups, 3\.0 MB/)).toBeTruthy();
-  expect(screen.getByText(/1\.0 MB stored, 2\.0 KB removed/)).toBeTruthy();
+  expect(screen.getByText(/1\.0 KiB · write-ahead log 0 B$/)).toBeTruthy();
+  expect(screen.getByText(/3 backups, 3\.0 MiB/)).toBeTruthy();
+  expect(screen.getByText(/1\.0 MiB stored, 2\.0 KiB removed/)).toBeTruthy();
   const tables = screen.getByRole("list", { name: "Largest tables in Main database" });
   expect(within(tables).getByText("store_rows")).toBeTruthy();
 
@@ -244,3 +244,36 @@ test("same-length corrupted archive bytes are refused before download", async ()
   await within(dialog).findByText("The bundle did not arrive intact.");
   expect(download).not.toHaveBeenCalled();
 });
+
+for (const corrupt of [false, true]) {
+  test(`export without Web Crypto ${corrupt ? "rejects corrupted bytes" : "saves valid bytes"}`, async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+    try {
+      spyOn(backend, "planDiagnosticsBundle").mockResolvedValue(PLAN);
+      spyOn(backend, "readDiagnosticsBundle").mockResolvedValue({
+        planId: PLAN.planId,
+        fileName: PLAN.fileName,
+        archive: PLAN.archive,
+        offset: 0,
+        data: btoa(corrupt ? "abcdeg" : "abcdef"),
+        nextOffset: null,
+      });
+      const download = spyOn(downloads, "downloadBlob").mockImplementation(() => undefined);
+      mount(<DiagnosticsExportCard />);
+      fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save bundle" }));
+      if (corrupt) {
+        await within(dialog).findByText("The bundle did not arrive intact.");
+        expect(download).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+        expect(await (download.mock.calls[0]![0] as Blob).text()).toBe("abcdef");
+      }
+    } finally {
+      if (original) Object.defineProperty(globalThis, "crypto", original);
+      else Reflect.deleteProperty(globalThis, "crypto");
+    }
+  });
+}

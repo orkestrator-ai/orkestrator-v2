@@ -111,19 +111,24 @@ async function redactLines(
 
 /** The end of a file, from a line start: a cut line can hold half a credential. */
 async function readTail(file: string, maxBytes: number): Promise<string | null> {
-  const stat = await fs.lstat(file).catch(() => null);
-  if (!stat?.isFile()) return null;
-  const length = Math.min(stat.size, maxBytes);
-  const handle = await fs.open(file, "r");
   try {
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
-    if (length === stat.size) return text;
-    const firstLineEnd = text.indexOf("\n");
-    return firstLineEnd === -1 ? "" : text.slice(firstLineEnd + 1);
-  } finally {
-    await handle.close();
+    const stat = await fs.lstat(file);
+    if (!stat.isFile()) return null;
+    const length = Math.min(stat.size, maxBytes);
+    const handle = await fs.open(file, "r");
+    try {
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+      const text = buffer.subarray(0, bytesRead).toString("utf8");
+      if (length === stat.size) return text;
+      const firstLineEnd = text.indexOf("\n");
+      return firstLineEnd === -1 ? "" : text.slice(firstLineEnd + 1);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Rotation and unreadable logs must not prevent exporting other diagnostics.
+    return null;
   }
 }
 
@@ -164,7 +169,13 @@ async function collectLogs(
   }
   for (const file of essential) {
     const raw = await readTail(path.join(essentialDirectory, file.name), MAX_ESSENTIAL_FILE_BYTES);
-    if (raw === null) continue;
+    if (raw === null) {
+      absent.push({
+        name: `logs/essential/${file.name}`,
+        reason: "The log file could not be read.",
+      });
+      continue;
+    }
     const { text, redactions } = await redactLines(raw, redactor);
     const entry = finishedText(text, {
       path: `logs/essential/${file.name}`,
@@ -191,7 +202,10 @@ async function collectLogs(
   for (const file of debugFiles) {
     if (remaining <= 0) break;
     const raw = await readTail(path.join(sources.logsDir, file.name), remaining);
-    if (raw === null) continue;
+    if (raw === null) {
+      absent.push({ name: `logs/debug/${file.name}`, reason: "The log file could not be read." });
+      continue;
+    }
     remaining = Math.max(0, remaining - file.bytes);
     const { text, redactions } = await redactLines(raw, redactor);
     const entry = finishedText(text, {

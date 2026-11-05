@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -449,3 +449,45 @@ test("archives remove generated multiline private keys and truncated blocks", as
     if (!truncated) expect(log).toContain("after");
   }
 });
+
+for (const log of ["essential/essential.jsonl", "orkestrator-backend-2026-11-05.log"]) {
+  for (const failure of ["open", "read"] as const) {
+    test(`${log}: ${failure} failure omits only that file`, async () => {
+      const directory = await fixtureDirectory();
+      await writeFixtureLogs(directory);
+      const target = path.join(directory, log);
+      const originalOpen = fs.open.bind(fs);
+      let closed = false;
+      const open = spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (args[0] !== target) return originalOpen(...args);
+        if (failure === "open") throw Object.assign(new Error("private path"), { code: "ENOENT" });
+        const handle = await originalOpen(...args);
+        spyOn(handle, "read").mockRejectedValue(
+          Object.assign(new Error("private path"), { code: "EACCES" }),
+        );
+        const close = handle.close.bind(handle);
+        spyOn(handle, "close").mockImplementation(async () => {
+          closed = true;
+          await close();
+        });
+        return handle;
+      });
+      try {
+        const built = await buildDiagnosticsBundle(sources(directory));
+        const files = await untar(built.archive);
+        const manifest = JSON.parse(files.get("manifest.json")!.toString()) as DiagnosticsManifest;
+        const entry = log.startsWith("essential/") ? `logs/${log}` : `logs/debug/${log}`;
+        expect(files.has(entry)).toBe(false);
+        expect(files.has("metrics.json")).toBe(true);
+        expect(manifest.entries.some((item) => item.path.startsWith("logs/"))).toBe(true);
+        expect(manifest.absent).toContainEqual({
+          name: entry,
+          reason: "The log file could not be read.",
+        });
+        if (failure === "read") expect(closed).toBe(true);
+      } finally {
+        open.mockRestore();
+      }
+    });
+  }
+}

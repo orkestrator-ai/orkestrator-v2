@@ -13,6 +13,7 @@ import {
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { base64ToBytes, downloadBlob } from "@/lib/chat/artifact-download";
+import { sha256HexOfBytes } from "@/lib/chat/static-html-document";
 import { cn } from "@/lib/utils";
 import { useAccountMachine } from "./account-machine";
 import { formatDiagnosticsBytes } from "./DatabaseStorageCard";
@@ -42,10 +43,7 @@ async function fetchBundle(
   }
   if (received !== plan.archive.bytes) throw new Error("The bundle did not arrive intact.");
   const blob = new Blob(parts, { type: "application/gzip" });
-  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-  const sha256 = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const sha256 = await sha256HexOfBytes(new Uint8Array(await blob.arrayBuffer()));
   if (sha256 !== plan.archive.sha256) throw new Error("The bundle did not arrive intact.");
   return blob;
 }

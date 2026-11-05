@@ -12,7 +12,7 @@ import { useAccountMachine } from "./account-machine";
 
 export function formatDiagnosticsBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
+  const units = ["KiB", "MiB", "GiB", "TiB"];
   let value = bytes / 1024;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {

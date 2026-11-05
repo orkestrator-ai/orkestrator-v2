@@ -1,4 +1,10 @@
-import { forwardRef, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
+import {
+  forwardRef,
+  type CSSProperties,
+  type HTMLAttributes,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +26,23 @@ export const TAB_STRIP_CLASS = `flex ${WORKSPACE_BAR_HEIGHT_CLASS} items-center 
 /** Every brand mark or type glyph in a tab strip is drawn at this size. */
 export const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
 
+/** Arrow keys, Home and End move focus between a strip's tabs, without selecting one. */
+export function moveTabFocus(event: KeyboardEvent<HTMLElement>) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+  const current = tabs.findIndex((tab) => tab === event.target);
+  if (current < 0) return;
+  event.preventDefault();
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  tabs[next]?.focus();
+}
+
 interface TabShellProps extends HTMLAttributes<HTMLDivElement> {
   isActive: boolean;
   /** Dims the active marker when the owning pane is not the focused one. */
@@ -32,6 +55,8 @@ interface TabShellProps extends HTMLAttributes<HTMLDivElement> {
   closeLabel?: string;
   /** Keep the close control mounted and focused while actions are blocked. */
   closeDisabled?: boolean;
+  /** -1 when the shell is itself the tab, so the tab keeps a single tab stop. */
+  closeTabIndex?: number;
   /** Rendered after the close button, e.g. the per-tab mail button. */
   trailing?: ReactNode;
 }
@@ -45,6 +70,7 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
     onClose,
     closeLabel,
     closeDisabled = false,
+    closeTabIndex,
     trailing,
     ...rest
   },
@@ -73,6 +99,7 @@ export const TabShell = forwardRef<HTMLDivElement, TabShellProps>(function TabSh
           type="button"
           aria-label={closeLabel}
           aria-disabled={closeDisabled || undefined}
+          tabIndex={closeTabIndex}
           className="ml-1 flex h-7 w-7 items-center justify-center text-muted-foreground opacity-100 transition-opacity hover:text-red-400 focus-hairline aria-disabled:opacity-40 md:h-auto md:w-auto md:hover-fine:opacity-0 md:hover-fine:group-focus-within:opacity-100 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-visible:opacity-100"
           onClick={(event) => {
             event.stopPropagation();

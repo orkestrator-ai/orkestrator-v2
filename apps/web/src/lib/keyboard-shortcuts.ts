@@ -240,6 +240,12 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         mac: ["⌘", "W"],
       },
       {
+        id: "close-focused-tab",
+        description: "Close the tab focused in the tab strip",
+        mac: ["Delete"],
+        other: ["Delete"],
+      },
+      {
         id: "select-tab",
         description: "Switch to tab 1–9",
         mac: ["⌃", "1–9"],

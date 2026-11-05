@@ -225,7 +225,8 @@ therefore get their conventional layout:
 | File › Close Tab `Command+W` | File › Close Tab with no accelerator |
 | Window › Minimize, Zoom, open windows | Window › Minimize, open windows |
 
-Windows/Linux Close Tab has no key, and the catalog lists it as macOS-only.
+Windows/Linux Close Tab has no key, and the catalog lists it as macOS-only; on
+every platform, Delete closes the tab focused in an environment's tab strip.
 `Command+W` would register Super/Windows+W, which window managers and Windows
 own. Ctrl+W is the shell's delete-word. The renderer's ⌘W fallback for the
 browser client still sees Super+W as `metaKey`. New Window, the zoom items and

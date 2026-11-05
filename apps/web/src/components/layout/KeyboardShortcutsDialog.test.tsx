@@ -134,6 +134,10 @@ describe("KeyboardShortcutsDialog", () => {
     expectDomAbsent(screen.queryByTestId("keyboard-shortcut-new-terminal-tab"));
     // Close Tab is ⌘W only: Windows and Linux have no key for it.
     expectDomAbsent(screen.queryByTestId("keyboard-shortcut-close-tab"));
+    // A tab focused in the strip closes with Delete on every platform.
+    expect(screen.getByTestId("keyboard-shortcut-close-focused-tab").textContent).toContain(
+      "Delete",
+    );
     expect(screen.getByTestId("keyboard-shortcut-show-shortcuts").textContent).toBe(
       "Show keyboard shortcutsCtrlShift/",
     );

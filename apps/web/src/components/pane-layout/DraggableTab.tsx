@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, type KeyboardEvent } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -24,7 +24,11 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import type { TabInfo } from "@/types/paneLayout";
-import { createDraggableTabId, getNativeAgentData } from "@/types/paneLayout";
+import {
+  createDraggableTabId,
+  createPaneTabElementId,
+  getNativeAgentData,
+} from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { createSessionKey } from "@/lib/utils";
@@ -71,6 +75,8 @@ interface DraggableTabProps {
   /** Reload this tab from its authoritative server-side state. */
   onRefresh?: () => void;
   onClose?: () => void;
+  /** Closes the tab from the keyboard, keeping keyboard focus in the strip. */
+  onKeyboardClose?: () => void;
   onCloseAll?: () => void;
   onCloseOthers?: () => void;
   onCloseToRight?: () => void;
@@ -93,6 +99,7 @@ export function DraggableTab({
   onSelect,
   onRefresh,
   onClose,
+  onKeyboardClose,
   onCloseAll,
   onCloseOthers,
   onCloseToRight,
@@ -349,12 +356,58 @@ export function DraggableTab({
     },
     [setNodeRef],
   );
+  const closeFromKeyboard = onKeyboardClose ?? onClose;
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // The close button inside the tab answers its own keys.
+    if (event.target !== event.currentTarget) return;
+    const hasModifier = event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+    // During a keyboard drag these keys belong to the drag sensor.
+    if (!isDragging) {
+      if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+        event.preventDefault();
+        const { left, bottom } = event.currentTarget.getBoundingClientRect();
+        event.currentTarget.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: left,
+            clientY: bottom,
+          }),
+        );
+        return;
+      }
+      if (event.key === "Enter" && !hasModifier) {
+        // A real click, so the pane's own click handling runs as it does for a pointer.
+        event.preventDefault();
+        event.currentTarget.click();
+        return;
+      }
+      if (event.key === "Delete" && !hasModifier) {
+        event.preventDefault();
+        // Focus moves to the next tab, so holding the key must not close them all.
+        if (canClose && !event.repeat) closeFromKeyboard?.();
+        return;
+      }
+    }
+    // Space stays with the sortable, which announces it as the way to pick a tab up.
+    listeners?.onKeyDown?.(event);
+  };
   const tabTrigger = (
     <TabShell
       ref={setTabRefs}
+      id={createPaneTabElementId(owningEnvironmentId, paneId, tab.id)}
+      role="tab"
+      tabIndex={0}
+      aria-selected={isActive}
+      aria-label={isDirty ? `${title}, unsaved changes` : title}
+      aria-haspopup="menu"
+      aria-keyshortcuts={canClose ? "Delete" : undefined}
+      // Only the drag instructions: the rest of `attributes` names a button role
+      // and a "sortable" role description, which would be announced over the tab.
+      aria-describedby={attributes["aria-describedby"]}
       style={style}
-      {...attributes}
       {...listeners}
+      onKeyDown={handleKeyDown}
       isActive={isActive}
       isFocused={isFocused}
       className={cn("cursor-grab active:cursor-grabbing", isDragging && "opacity-50 z-50")}
@@ -365,6 +418,7 @@ export function DraggableTab({
       onBlur={tooltipContent ? tabTooltip.hide : undefined}
       onClose={canClose ? () => onClose?.() : undefined}
       closeLabel={`Close ${title}`}
+      closeTabIndex={-1}
     >
       {icon}
       {titleElement}
@@ -404,7 +458,11 @@ export function DraggableTab({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem onClick={onClose} disabled={!canClose || !onClose}>
+        <ContextMenuItem
+          // A menu item chosen with the keyboard clicks with a detail of 0.
+          onClick={(event) => (event.detail === 0 ? closeFromKeyboard : onClose)?.()}
+          disabled={!canClose || !onClose}
+        >
           Close
         </ContextMenuItem>
         <ContextMenuItem onClick={onCloseAll} disabled={!canCloseAll || !onCloseAll}>

@@ -30,7 +30,11 @@ async function openTranscript(page: Page, query = "") {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto(`/transcript-list-renders${query}`);
   await page.waitForFunction(() => window.transcriptListFixture?.ready() === true);
-  await expect(row(page, "row-99").first()).toBeVisible();
+  if (query.includes("platform=claude")) {
+    await expect(page.locator('[data-background-task-id="fixture-background"]')).toBeVisible();
+  } else {
+    await expect(row(page, "row-99").first()).toBeVisible();
+  }
   await settle(page);
 }
 
@@ -65,6 +69,56 @@ test.skip(({ hasTouch }) => hasTouch, "render counts need the one layout");
 test("a render that changes nothing the list shows causes no nested update", async ({ page }) => {
   await openTranscript(page);
   await expectNoNestedUpdates(page);
+});
+
+test("Claude background-task rows avoid unrelated updates and follow task snapshots", async ({
+  page,
+}) => {
+  await openTranscript(page, "?platform=claude");
+  const task = page.locator('[data-background-task-id="fixture-background"]');
+  await expect(task).toHaveCount(1);
+  await expect(task).toHaveAttribute("data-background-task-status", "running");
+  await expect(task).toContainText("Reading fixture files");
+  await expectNoNestedUpdates(page);
+
+  // Only session state changes: the launch message and transcript token stay put.
+  await page.evaluate(() =>
+    window.transcriptListFixture!.setBackgroundTask({
+      status: "completed",
+      summary: "Fixture background work finished",
+    }),
+  );
+  await expect(task).toHaveCount(1);
+  await expect(task).toHaveAttribute("data-background-task-status", "completed");
+  await expect(task).toContainText("Fixture background work finished");
+  await expectNoNestedUpdates(page);
+});
+
+test("Subork dialog list skips unrelated parent renders and follows a transcript revision", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto("/transcript-list-renders?subork=1");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(row(page, "row-99")).toContainText("Fixture row 99");
+  // The dialog reads stored transcripts, so it does not poll native-tab tokens.
+  await expect(async () => {
+    await page.evaluate(() => window.transcriptListFixture!.resetCommits());
+    await page.waitForTimeout(400);
+    expect((await page.evaluate(() => window.transcriptListFixture!.commits()))[0]!.nested).toBe(0);
+  }).toPass();
+  await page.evaluate(() => window.transcriptListFixture!.resetCommits());
+  await page.evaluate((writes) => window.transcriptListFixture!.writeUnrelated(writes), WRITES);
+  const [counts] = await page.evaluate(() => window.transcriptListFixture!.commits());
+  expect(counts!.update).toBeGreaterThanOrEqual(WRITES);
+  expect(counts!.nested).toBe(0);
+  await expect(page.getByRole("dialog")).toContainText(`unrelated write ${WRITES}`);
+
+  await page.evaluate(async () => {
+    window.transcriptListFixture!.stream("revised subork answer");
+    await window.transcriptListFixture!.writeUnrelated(1);
+  });
+  await expect(row(page, "row-99")).toContainText("revised subork answer");
 });
 
 test("neither of two visible tabs gets a nested update", async ({ page }) => {

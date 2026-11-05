@@ -11,13 +11,17 @@
  * `?tabs=2` renders a second tab beside the first, `?earlier=1` leaves ten rows
  * behind a "Load earlier messages" header, and `?platform=cursor` is a platform
  * with no fork action, whose rows have no per-message callback to change.
+ * `?platform=claude` joins a background task onto its launch row; `?subork=1`
+ * profiles the real Subork transcript dialog instead of a native tab.
  */
 import { Profiler, useState } from "react";
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import {
   nativeAgentCapabilities,
   type NativeAgentViewIdentity,
+  type NativeAgentBackgroundTaskSummary,
 } from "@orkestrator/protocol/native-agent";
+import { SuborkTranscriptDialog } from "../../apps/web/src/components/chat/SuborkTranscriptDialog";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
 import { disableAutoLoadEarlier } from "../../apps/web/src/components/native-agent/useAutoLoadEarlier";
 import type { NativeMessage } from "../../apps/web/src/lib/chat/native-message-types";
@@ -31,7 +35,12 @@ const TOOL_EVERY = 8;
 const USER_EVERY = 4;
 const query = new URLSearchParams(window.location.search);
 const tabCount = query.get("tabs") === "2" ? 2 : 1;
-const platform = query.get("platform") === "cursor" ? "cursor" : "codex";
+const platform =
+  query.get("platform") === "claude"
+    ? "claude"
+    : query.get("platform") === "cursor"
+      ? "cursor"
+      : "codex";
 const earlierRows = query.has("earlier") ? 10 : 0;
 const EARLIER_PAGE_DELAY_MS = 400;
 // A test drives the header's button, so paging must not start on its own.
@@ -42,6 +51,25 @@ function rowAt(index: number): NativeMessage {
   const content = `Fixture row ${index}`;
   // The fork action needs turns to place its boundary.
   const turnId = `turn-${Math.floor(index / USER_EVERY)}`;
+  if (platform === "claude" && index === ROW_COUNT - 1) {
+    return {
+      id: `row-${index}`,
+      role: "assistant",
+      content: "",
+      createdAt,
+      turnId,
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolUseId: "background-launch",
+          toolState: "success",
+          toolArgs: { description: "Fixture background task", run_in_background: true },
+        },
+      ],
+    };
+  }
   if (index % TOOL_EVERY === 6) {
     return {
       id: `row-${index}`,
@@ -85,6 +113,7 @@ interface TabState {
   messages: NativeMessage[];
   turn: Turn;
   interactions: unknown[];
+  backgroundTasks: NativeAgentBackgroundTaskSummary[];
   historyLoaded: boolean;
   stateRevision: number;
   transcriptRevision: number;
@@ -109,6 +138,18 @@ const tabs: TabState[] = Array.from({ length: tabCount }, (_, index) => {
     historyLoaded: earlierRows === 0,
     turn: { phase: "idle" },
     interactions: [],
+    backgroundTasks:
+      platform === "claude"
+        ? [
+            {
+              id: "fixture-background",
+              toolUseId: "background-launch",
+              status: "running",
+              description: "Fixture background task",
+              progressSummary: "Reading fixture files",
+            },
+          ]
+        : [],
     stateRevision: 1,
     transcriptRevision: 1,
     stateSeen: 0,
@@ -206,6 +247,11 @@ const fixture = {
     );
     tab.transcriptRevision += 1;
   },
+  setBackgroundTask: (update: Partial<NativeAgentBackgroundTaskSummary>) => {
+    const tab = tabs[0]!;
+    tab.backgroundTasks = tab.backgroundTasks.map((task) => ({ ...task, ...update }));
+    tab.stateRevision += 1;
+  },
   setTurn: (turn: Turn, tabIndex = 0) => {
     const tab = tabs[tabIndex]!;
     tab.turn = turn;
@@ -278,6 +324,14 @@ function installBackend(): void {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       let result: unknown;
       switch (command) {
+        case "native_agent_subork_transcript":
+          result = {
+            status: "found",
+            startIndex: 0,
+            messageCount: tabs[0]!.messages.length,
+            messages: tabs[0]!.messages,
+          };
+          break;
         case "get_native_agent_sync_capabilities":
           result = {
             projectionSyncVersions: [1],
@@ -305,6 +359,7 @@ function installBackend(): void {
               connection: "connected",
               turn: tab.turn,
               interactions: tab.interactions,
+              backgroundTasks: tab.backgroundTasks,
               composerControls: [],
               capabilities: nativeAgentCapabilities(platform),
               notices: [],
@@ -398,6 +453,29 @@ function installBackend(): void {
   };
 }
 
+/** Only the dialog's parent subscribes: native-tab props keep the original harness identity. */
+function SuborkRenderFixture() {
+  const unrelated = useEnvironmentStore((state) => state.environments[0]?.initialPrompt);
+  return (
+    <SuborkTranscriptDialog
+      environmentId={ENVIRONMENT_ID}
+      containerId={undefined}
+      batchId="fixture-batch"
+      subork={{
+        id: "fixture-subork",
+        name: "Fixture subork",
+        agent: "codex",
+        status: "finished",
+        tokens: unrelatedWrites,
+        modelLabel: unrelated ?? "Fixture model",
+        startedAt: "2026-11-05T00:00:00.000Z",
+        transcriptRevision: tabs[0]!.transcriptRevision,
+      }}
+      onClose={() => {}}
+    />
+  );
+}
+
 export function TranscriptListRendersFixture() {
   const [installed] = useState(() => {
     installBackend();
@@ -436,16 +514,20 @@ export function TranscriptListRendersFixture() {
                 }
               }}
             >
-              <AgentNativeTab
-                tabId={tab.tabId}
-                data={{
-                  platform,
-                  environmentId: ENVIRONMENT_ID,
-                  sessionId: tab.identity.providerSessionId,
-                  isLocal: true,
-                }}
-                isActive={!away}
-              />
+              {query.has("subork") ? (
+                <SuborkRenderFixture />
+              ) : (
+                <AgentNativeTab
+                  tabId={tab.tabId}
+                  data={{
+                    platform,
+                    environmentId: ENVIRONMENT_ID,
+                    sessionId: tab.identity.providerSessionId,
+                    isLocal: true,
+                  }}
+                  isActive={!away}
+                />
+              )}
             </Profiler>
           </section>
         ))}

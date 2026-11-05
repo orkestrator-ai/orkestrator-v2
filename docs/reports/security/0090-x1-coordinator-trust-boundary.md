@@ -260,3 +260,47 @@ Done, so not in Tasks: the report's fourth point, Cursor and Pi accepting policy
 - [0024-coordinator-live-conformance.md](../../todo/coordinator-and-multi-review/0024-coordinator-live-conformance.md)
 - [1021-coordinator-gap-tools-follow-ups.md](../../todo/coordinator-and-multi-review/1021-coordinator-gap-tools-follow-ups.md): the approval dialog's fixture
 - [Coordinator report, 4.1 (S2)](../2026-10-27-coordinator.md#41-security-and-boundary)
+
+## Outcome
+
+Built on 2026-11-05 from `main` at `af2e566e5`. The report's line numbers were recorded at `a2bba9d8` and were re-checked against that base. The claims held after C4 (#1809), though most line numbers had moved (see Line numbers below). One recommendation's detail no longer fit: the check's location, under Decisions.
+
+| Part and task | Outcome | Evidence |
+| --- | --- | --- |
+| Security 0090 task 1: limit delegation | Done, recommended option | `coordinator-environment-scope.ts`, `control-mcp-coordinator-environment-scope.ts`; setting `coordinatorOtherEnvironments` in Project Settings, Coordinator; tests in `coordinator-environment-scope.test.ts` cover mail and every checked tool, the setting on, another node, takeover, adoption and no stored origin |
+| Security 0090 open question: `send_prompt_to_tab`, worker commands | Answered: yes, they need the line | Checked along with every tool that sends work or changes an environment; reads and user-approved requests stay out. `list_worker_commands` is a read; `run_worker_command` and `stop_worker_turn` are checked. A test fails on any environment-taking tool in no list |
+| Security 0090 task 2: mark mail-originated delegations | Done, recommended option | `turnOrigin: "mail"` on the coordinator and node actors, `COORDINATOR_MAIL_ORIGIN_NOTE` in the carrier; a user-started turn's text is pinned unchanged in `agent-mail.test.ts` |
+| Security 0090 verification: how often coordinators need others | Not done, usage only | [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 6 |
+| Security 0180 task 1: operator credentials | Done for Claude, recommended option with a stated exception | `read-only-path-boundary.ts`; sandbox `denyRead`/`allowRead`; hook on `Read`, `Grep`, `Glob` and commands |
+| Security 0180 task 2: confirmation | Done, recommended option | `docs/architecture/control-mcp.md`, Confirmation |
+| Security 0180 task 3: self-reminders | Done, recommended option | `source: "self-reminder"`, `SELF_REMINDER_NOTE`, `executor.ts`; older renderers pinned in `agent-mail.test.ts` and `client-only-messages.test.ts` |
+| Security 0180 verification: `denyRead` on Seatbelt and bubblewrap | Seatbelt proven; bubblewrap not observed | `conformance-coordinator-read-boundary-live.test.ts`, 6 of 6 on this macOS host, including a control that reads the fixture without the rule; [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 2 |
+| Security 0180 verification: anything confining reading commands' paths | Answered: nothing did; the sandbox rule and the hook do now | The control case above read the fixture credentials with only the old sandbox |
+| Security 0210 task 1: `schedules` | Done | `README.md`, `docs/architecture/control-mcp.md` |
+| Coordinator 0120 task 1: label the home | Done, recommended option | `projectHome: true` in the coordinator branch of `list_environments` only; `environmentSummary` unchanged, so operator reads and `list_workflows` are too |
+| Coordinator 0120 task 2: live read-only step | Step built and checked offline; live run not done | `homeMailGateFailures`, prompt steps 9 and 10, `coordinator-live.spec.ts`, 7 cases in `coordinator-live.test.ts`; 0024's line corrected; [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 1 |
+| Coordinator 0310 task 1: refuse adoption from a side agent | Done, recommended option | `adopt_coordinator_workflow` refuses `role: "side"`; the store's `force` path is unaffected, with a test for both. The tool stays listed for side agents, as the option noted |
+
+### What the deny rule covers
+
+- **Rule:** the whole data directory is denied, with an allowance, rather than specific files. A file list goes stale silently when a store adds a secret; a missing allowance fails loudly. This covers `control-mcp.json`, `orkestrator.sqlite` and its `-wal` and `-shm` files (the provider secrets S-0190 records as an accepted risk), every account's login, and other conversations' runtimes.
+- **Allowance, only inside the directory:** that conversation's own `claude-home` (saved tool results and memory; `applyCoordinatorClaudeAccount` keeps logins out of it), its attachment directory, the user-skills directory it was given, the managed toolchains, and a checkout placed inside it. A checkout above the directory does not re-open it.
+- **Proven on Seatbelt with the pinned CLI, a fixture directory and a scripted model, no provider turn:** a command cannot read the credentials, database, a login or another conversation; a command can read its own tool results, memory and attachments; `Read`, `Grep` and `Glob` are refused on the directory, through a link and from above it; `Read` and `Grep` work on its own files; a command naming a link to the credentials is refused with no sandbox behind it.
+- **Left to [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md):** bubblewrap (task 2); OpenCode, Cursor, Pi and Grok coordinators, which have no path rule (task 3); a read-only review turn in a worker bridge (task 4). Codex's deny-by-default profile already excludes the directory by configuration, read but not run. Windows has no sandbox here, so the hook is all there is, and it was not run there.
+
+### Decisions
+
+- **Where the check lives.**
+  - **A table of tools checked before each handler, plus the two mail commands (chosen).** Pros: tools have validated input and a clear name, so reads stay readable; scheduled fires pass through it too; a test forces each new tool to choose. Cons: a command reached by another route is not checked, and today none is.
+  - **Beside the project home check in `coordinatorInvoker`, as the report suggested.** Pros: one place. Cons: it sees commands, not tools, so it cannot tell a read from an action, and it misses `toEnvironmentId`, `existingEnvironmentId`, `environment.environmentId`, `to.environmentId` and arguments nested in `invoke_on_node`. This is why the report's location no longer fits.
+- **Which records prove an origin.** An `environment` launch with `baseCommit`, or a `build-pipeline`, `multi-review` or local `graph-run` running there, on the same node and any conversation of this coordinator. The mailbox's `coordinatorOrigin` was not used even though the report pointed at it: it reads launch records only and skips other nodes, so it would refuse this coordinator's own pipelines and remote workers.
+- **Older environments with no stored origin are refused.** Nothing distinguishes one from a hand-made environment, so allowing it would leave the check nothing to refuse. Allowing them was the alternative, and it would void the fix for every environment that exists today. `version-compatibility.md` allows this safe, explicit outcome, and the refusal names the way out.
+- **Replies get no exception.** A reply carries the same authenticated framing and can carry the same instructions. It costs an agent in a hand-made environment its answer until the user opts in, so [6080](../../todo/coordinator-and-multi-review/6080-x1-coordinator-trust-boundary-follow-ups.md) task 6 measures it.
+- **The carrier keeps saying `workflow` for a self-reminder.** A renderer before this refuses any other `source` and shows the raw block, so the carrier adds `selfReminder: true` and the stored message and mail tools carry the real value. Registered in `version-compatibility.md`. After a downgrade, an older backend would write the real value into a carrier for a reminder still undelivered, which an older renderer then shows raw; that is a display fault on one message.
+- **A message the user approved is not marked as agent-originated.** The user read that exact text. `turnOrigin` would otherwise describe whichever turn came last at approval time.
+
+### Line numbers at this base
+
+- `send_coordinator_agent_mail`'s check is at `coordinator-worker-mail.ts:479-492` at this base, and the invoker's at `control-mcp-server.ts:518-543`.
+- `adopt_workflow` is still granted under `discovery`, at `control-mcp-tools.ts:150`.
+- The turn origin is written at `native-agent-service.ts:3930`, and the grant's check is at `control-mcp-coordinator-tools.ts:741`.

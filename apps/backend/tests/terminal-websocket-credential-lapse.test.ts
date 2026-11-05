@@ -280,6 +280,49 @@ describe("terminal operations after a credential lapses", () => {
     });
   }
 
+  for (const transport of ["bearer header", "cookie"] as const) {
+    for (const disconnected of [false, true]) {
+      test(`an upgrade grant in a ${transport} refuses queued work on revocation (${disconnected ? "disconnected" : "open"})`, async () => {
+        const fixture = await credentialFixture();
+        const terminal = await openTerminalSocket(fixture.info, {
+          authenticate: false,
+          headers: {
+            Origin: new URL(fixture.info.url).origin,
+            ...(transport === "bearer header"
+              ? { Authorization: `Bearer ${fixture.issued.token}` }
+              : { Cookie: `orkestrator_gateway_auth=${fixture.issued.token}` }),
+          },
+        });
+        try {
+          // No authenticate frame: the upgrade credential alone must arm the watch.
+          await nextTerminalControl(terminal.inbox, "ready");
+          await queueBehindBlockedWrite(terminal, fixture.operations, fixture.terminalWebSocket);
+          const state = onlySocket(fixture);
+          expectWatching(state);
+          expect(fixture.listeners("client grant")).toBe(1);
+          if (disconnected) await disconnect(fixture, terminal.socket);
+          const closed = disconnected
+            ? null
+            : new Promise<number>((resolve) => terminal.socket.once("close", resolve));
+
+          expect(fixture.grants.revoke(fixture.issued.grant.grantId)).toBe(true);
+          expect(state.authenticated).toBe(false);
+          expectWatchReleased(state);
+          expect(fixture.listeners("client grant")).toBe(0);
+          if (closed) expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+          expect(fixture.operations).toEqual(["terminal_write"]);
+
+          fixture.release();
+          await drained(fixture);
+          expect(fixture.operations).toEqual(["terminal_write"]);
+        } finally {
+          fixture.release();
+          terminal.socket.terminate();
+        }
+      });
+    }
+  }
+
   for (const kind of ["browser session", "client grant"] as const) {
     test(`a plain disconnect on a valid ${kind} runs its queue, then releases the watch`, async () => {
       const fixture = await credentialFixture();

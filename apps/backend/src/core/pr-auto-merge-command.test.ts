@@ -331,3 +331,19 @@ test("withdrawing automatic cleanup preserves an independent manual request", as
     );
   });
 });
+
+test("manual Resolve does not inherit a completed automatic Resolve identity", async () => {
+  await withStorage(async (storage) => {
+    const env = await storage.addEnvironment({
+      ...createEnvironment("project"),
+      prUrl: "https://github.com/o/r/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+      autoMergeResolveRequestId: "old",
+      autoMergeResolveCompletedAt: new Date().toISOString(),
+    });
+    await storage.armPrRecheckAfterAgentCompletion(env.id);
+    expect((await storage.getEnvironment(env.id))?.autoMergeResolveRequestId).toBeUndefined();
+    expect((await storage.getEnvironment(env.id))?.autoMergeResolveCompletedAt).toBeUndefined();
+  });
+});

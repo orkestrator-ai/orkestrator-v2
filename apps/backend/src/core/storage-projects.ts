@@ -1214,6 +1214,7 @@ export class ProjectsRepository {
       if (
         environment.autoMerge &&
         environment.autoMergeCleanup &&
+        environment.autoMergePrUrl === environment.prUrl &&
         environment.prState === "merged" &&
         environment.prUrl === previousPrUrl &&
         environment.branch === previousBranch &&
@@ -1510,6 +1511,12 @@ export class ProjectsRepository {
           !isEnvironmentReadyForAgents(environment))
       )
         return { environment, armedAt: null };
+      // A manual Resolve owns its own completion; an older automatic outcome
+      // must never release its armed token while that manual turn is running.
+      if (!claim?.autoMergePrUrl) {
+        environment.autoMergeResolveRequestId = undefined;
+        environment.autoMergeResolveCompletedAt = undefined;
+      }
       if (claim?.autoMergePrUrl && !environment.autoMergeResolveRequestId)
         environment.autoMergeResolveRequestId = claim.requestId;
       const previousArmedAt = environment.prRecheckAfterAgentCompletionArmedAt;

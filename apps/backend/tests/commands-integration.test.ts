@@ -1569,7 +1569,7 @@ exit 0
     );
   });
 
-  test("forwards a host-inherited Cursor API key but reports its source to the renderer", async () => {
+  test("keeps a host-inherited Cursor API key out of Docker argv but reports its source to the renderer", async () => {
     const hostCursorApiKey = "cursor_host_env_key";
     const previousCursorApiKey = process.env.CURSOR_API_KEY;
     process.env.CURSOR_API_KEY = hostCursorApiKey;
@@ -1612,8 +1612,11 @@ exit 0
             commands.get("provision_environment")?.({ environmentId: environment.id }, context),
           ).catch(() => undefined);
 
+          // The bridge reads the owner-only file the backend syncs; a value in the
+          // creation environment would show in `docker inspect`.
           const dockerCalls = await fs.readFile(logs.all, "utf8");
-          expect(dockerCalls).toContain("-e CURSOR_API_KEY");
+          expect(dockerCalls).toContain("create --name");
+          expect(dockerCalls).not.toContain("CURSOR_API_KEY");
           expect(dockerCalls).not.toContain(hostCursorApiKey);
         },
       );

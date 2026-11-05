@@ -84,7 +84,7 @@ async function fixture() {
     runtimes: {},
     agents: {},
     bridges: [],
-    capabilities: { "workspace-prepare": 1 },
+    capabilities: { "workspace-prepare": 1, "staged-inputs": 5 },
     stateFormats: {},
   };
   await fs.writeFile(path.join(dir, "image-manifest.json"), JSON.stringify(manifest));

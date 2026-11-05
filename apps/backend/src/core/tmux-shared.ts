@@ -446,7 +446,10 @@ export async function execWithRawOutput(
       cwd: options.cwd,
       env: options.env,
       stdin: options.stdin,
-      timeoutMs: options.timeoutMs ?? 0,
+      // Arbitrary launchers can leave helpers writing after their leader exits.
+      // Bound group waiting by default rather than returning incomplete success.
+      timeoutMs: options.timeoutMs ?? 60_000,
+      waitForDescendants: true,
       maxOutputBytes: options.maxOutputBytes ?? TMUX_EXEC_MAX_OUTPUT_BYTES,
     });
     return { status: 0, stdout, stderr: stderr.toString() };

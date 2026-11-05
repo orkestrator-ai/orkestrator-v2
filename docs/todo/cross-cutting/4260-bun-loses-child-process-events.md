@@ -94,7 +94,7 @@ Analysed 2026-11-04 against `main` at `a44641cb`. Task 5 re-checked and acted on
 
 **Context.** `runCommand` is the main path, and all 122 children of case 1537's test use it, but `node:child_process` was still imported by 43 non-test backend and protocol files. Most were followers, self-contained scripts, synchronous callers or type-only imports. `review-worktree-fingerprint.ts`, named when this task was written, is script text run inside the environment, so it could not move.
 
-**Investigation.** None has been seen to stall; the only measurements are of `runCommand`. Long-running followers (`spawnCommand`, `spawnParentBoundCommand`) read live output, so file capture does not fit them. Moved on 2026-11-05: `disk-usage.ts` (`du`), `process-identity.ts` (`ps`), `claude-host-credentials.ts` (`security`), `ssh-agent-socket.ts`, `tailscale-serve.ts`, `preview-process-tree.ts` (`ps`), `preview-supervisor.ts` (`runDocker`), `tmux-shared.ts` (`execWithRawOutput`) and `path-safety.ts` (`writeConfinedFile`). None of them needs `waitForDescendants`: each reads a program that writes before it exits, and none reads a background helper.
+**Investigation.** None has been seen to stall; the only measurements are of `runCommand`. Long-running followers (`spawnCommand`, `spawnParentBoundCommand`) read live output, so file capture does not fit them. Moved on 2026-11-05: `disk-usage.ts` (`du`), `process-identity.ts` (`ps`), `claude-host-credentials.ts` (`security`), `ssh-agent-socket.ts`, `tailscale-serve.ts`, `preview-process-tree.ts` (`ps`), `preview-supervisor.ts` (`runDocker`), `tmux-shared.ts` (`execWithRawOutput`) and `path-safety.ts` (`writeConfinedFile`). `execWithRawOutput` accepts arbitrary commands, so it opts into `waitForDescendants` to retain late stdout/stderr from same-group helpers. It uses a 60 s default deadline (callers can override it); a deadline expiring during descendant capture reports failure. Other moved sites retain leader-exit capture.
 
 **Held for running work, unchanged, to re-check when that work lands:**
 
@@ -163,6 +163,12 @@ Took `runCommand`'s single timeout behaviour rather than adding a kill-signal op
 ### Task 5: `writeConfinedFile`'s test hook keeps a pipe
 
 `afterDirectoriesOpened` has to act between the helper pinning its directories and receiving the payload, which needs a live read, so that path stays on `spawn`. Only tests set it. They exercise the same helper script but not `runCommand`'s delivery; `path-safety.test.ts` covers that path separately.
+
+### Task 5 review repair: descendant completion and credential failures
+
+Tmux capture now waits for its private process group and defaults to a 60 s deadline. Leader-only capture would finish earlier for background helpers but could silently omit output, so complete capture is preferred; group waiting can also wait for helpers that redirected their output. Explicit caller deadlines still apply, and explicit zero still disables the deadline.
+
+Failed Keychain reads now discard all captured output and use a fixed diagnostic while retaining failure classification. Returning partial output would aid diagnosis but could disclose credential material in error messages. Tests cover timeout, overflow and nonzero exit.
 
 ## Constraints and rationale
 

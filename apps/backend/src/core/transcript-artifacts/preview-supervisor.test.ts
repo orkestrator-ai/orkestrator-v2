@@ -261,3 +261,31 @@ test("runDocker: returns the start of a long stdout without failing the command"
     docker.remove();
   }
 });
+
+for (const stream of ["stdout", "stderr"] as const) {
+  test(`runDocker: accepts exactly the 50 MiB ${stream} bound`, async () => {
+    const docker = fakeDocker(
+      `head -c ${50 * 1024 * 1024} /dev/zero ${stream === "stderr" ? ">&2" : ""}`,
+    );
+    try {
+      const result = await runDocker(docker.command, ["ps"], 5000);
+      expect(result.code).toBe(0);
+      expect(result.stdout.length).toBe(stream === "stdout" ? 64 * 1024 : 0);
+    } finally {
+      docker.remove();
+    }
+  });
+  test(`runDocker: rejects output beyond the 50 MiB ${stream} bound`, async () => {
+    const docker = fakeDocker(
+      `printf prefix; head -c ${50 * 1024 * 1024 + 1} /dev/zero ${stream === "stderr" ? ">&2" : ""}; exec sleep 30`,
+    );
+    try {
+      const result = await runDocker(docker.command, ["ps"], 5000);
+      expect(result.code).toBeNull();
+      expect(result.stdout.startsWith("prefix")).toBe(true);
+      expect(result.stdout.length).toBe(stream === "stdout" ? 64 * 1024 : 6);
+    } finally {
+      docker.remove();
+    }
+  });
+}

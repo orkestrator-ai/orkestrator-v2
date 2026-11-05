@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
 
 const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
@@ -40,11 +40,22 @@ export function claudeLoginLookupOptions(
 }
 
 export async function readKeychainCommand(args: string[], timeoutMs = 10_000): Promise<string> {
-  const { stdout } = await runCommand("security", args, {
-    timeoutMs,
-    maxOutputBytes: MAX_HOST_AGENT_CREDENTIAL_BYTES,
-  });
-  return stdout;
+  try {
+    const { stdout } = await runCommand("security", args, {
+      timeoutMs,
+      maxOutputBytes: MAX_HOST_AGENT_CREDENTIAL_BYTES,
+    });
+    return stdout;
+  } catch (error) {
+    if (!(error instanceof CommandFailedError)) throw error;
+    // A partial Keychain answer is credential material even on failure.
+    throw new CommandFailedError("Keychain read failed", {
+      ...error,
+      stdout: "",
+      stdoutBytes: Buffer.alloc(0),
+      stderr: "",
+    });
+  }
 }
 
 const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;

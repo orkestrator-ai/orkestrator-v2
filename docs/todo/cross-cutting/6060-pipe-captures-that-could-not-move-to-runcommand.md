@@ -9,7 +9,7 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 1. **Review worktree fingerprint script**: its Git reads use pipes, and a local environment runs it under Bun. Status: open.
 2. **Database copy result**: the backend waits on `close` for the copy's verdict, with no deadline of its own. Status: open.
 3. **Design export container helper**: a stall reports a completed write as an unknown outcome once the deadline passes. Status: open.
-4. **Protocol captures**: `workspace-change-probe.ts` and `standalone-service.ts` cannot import the backend's `runCommand`. Status: open.
+4. **Protocol captures**: `workspace-change-probe.ts`, `standalone-service.ts` and SSH `process-runner.ts` cannot import the backend's `runCommand`. Status: open.
 
 ### 1. Review worktree fingerprint script
 
@@ -67,11 +67,11 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
 
 ### 4. Protocol captures
 
-**Problem.** `runGit` in `workspace-change-probe.ts` and `runFile` in `standalone-service.ts` still capture through `execFile`, and they run under Bun.
+**Problem.** `runGit` in `workspace-change-probe.ts` and `runFile` in `standalone-service.ts` still capture through `execFile`, and they run under Bun. `runBoundedCommand` in `ssh/process-runner.ts` is another one-shot pipe capture.
 
-**Context.** `packages/protocol/src/node/`. The bridges (`bridges/pi-bridge`, `bridges/cursor-bridge`) use the probe, and the backend's standalone updater (`host-standalone-updater.ts`) uses `runFile`. Protocol cannot import `apps/backend`.
+**Context.** `packages/protocol/src/node/`. The bridges (`bridges/pi-bridge`, `bridges/cursor-bridge`) use the probe, and the backend's standalone updater (`host-standalone-updater.ts`) uses `runFile`. Protocol cannot import `apps/backend`. `ssh/context.ts` imports `spawn` as an injectable transport for SSH adapters; classify that importer as the transport seam for this one-shot capture, not as a live follower.
 
-**Investigation.** None has been seen to stall. Both have `execFile`'s timeout, which only signals the child; whether a lost event then still leaves the promise waiting was not measured.
+**Investigation.** None has been seen to stall. The two `execFile` sites have timeouts which only signal the child; whether a lost event then still leaves the promise waiting was not measured. SSH `runBoundedCommand` likewise only signals on its deadline (SIGTERM, then SIGKILL after one second). Only its exit/error handlers settle the promise, so a lost completion event can leave it pending after the deadline.
 
 **Decisions.**
 
@@ -82,6 +82,12 @@ Analysed 2026-11-05 against `main` at `6e796ca32`.
   - **Leave them until one is seen to stall.**
     - Pros: no change to a package every bridge depends on.
     - Cons: the bridges' own pipe captures stay a separate question either way.
+
+## Assumptions and decisions
+
+### Task 4: SSH capture inventory
+
+Added SSH `runBoundedCommand` and its injectable `ssh/context.ts` spawn seam to the open protocol task. Moving the shared primitive into protocol remains recommended: it preserves one capture implementation; the alternative of leaving the site has less migration risk but retains an unbounded settlement risk after the signal-only deadline. This repair records the outstanding work without widening task 5 into a protocol migration.
 
 ## Constraints and rationale
 

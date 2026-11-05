@@ -362,6 +362,40 @@ describe("writeConfinedFile helper capture", () => {
     process.execPath = script;
   }
 
+  for (const exclusive of [true, false]) {
+    test(`production capture refuses an ancestor replaced after pinning (exclusive=${exclusive})`, async () => {
+      const root = await createWorktree();
+      const outside = await createWorktree();
+      const destination = path.join(root, "notes");
+      const renamed = path.join(root, "notes-renamed");
+      await fs.mkdir(destination);
+      await fs.writeFile(path.join(outside, "data.bin"), "outside-sentinel");
+      // Instrument only the helper's race boundary. The caller still delivers
+      // stdin and collects the real helper through production runCommandBuffer.
+      const wrapper = path.join(await createWorktree(), "race-helper");
+      const injection = `fs.renameSync(${JSON.stringify(destination)}, ${JSON.stringify(renamed)}); fs.symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(destination)});`;
+      await fs.writeFile(
+        wrapper,
+        `#!${realExecPath}
+const args = process.argv.slice(2);
+args[1] = args[1].replace('if (readyToken)', ${JSON.stringify(injection)} + 'if (readyToken)');
+const result = Bun.spawnSync([${JSON.stringify(realExecPath)}, ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+process.exit(result.exitCode);
+`,
+        { mode: 0o755 },
+      );
+      process.execPath = wrapper;
+      await expect(
+        writeConfinedFile(root, "notes/data.bin", Buffer.from("payload"), {
+          exclusive,
+          createAncestors: false,
+        }),
+      ).rejects.toThrow("ESTALE_DIRECTORY");
+      expect(await fs.readFile(path.join(outside, "data.bin"), "utf8")).toBe("outside-sentinel");
+      expect(await fs.readdir(renamed)).toEqual([]);
+    });
+  }
+
   test("delivers a payload far larger than a pipe buffer", async () => {
     const root = await createWorktree();
     const payload = Buffer.alloc(MAX_WRITE_FILE_BYTES, 0x61);

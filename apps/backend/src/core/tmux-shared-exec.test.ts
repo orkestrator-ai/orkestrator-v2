@@ -56,12 +56,12 @@ describe("execWithRawOutput", () => {
     expect(raw.status).toBe(-1);
   });
 
-  test("with no timeout given, no deadline is armed", async () => {
+  test("with no timeout given, a bounded default deadline is armed", async () => {
     const timers = spyOn(globalThis, "setTimeout");
     try {
       const raw = await execWithRawOutput("sh", ["-c", "printf done"]);
       expect(raw).toEqual({ status: 0, stdout: Buffer.from("done"), stderr: "" });
-      expect(timers.mock.calls.map((call) => call[1])).not.toContain(60_000);
+      expect(timers.mock.calls.map((call) => call[1])).toContain(60_000);
     } finally {
       timers.mockRestore();
     }
@@ -102,13 +102,29 @@ describe("execWithRawOutput", () => {
     ).rejects.toThrow();
   });
 
-  test("a background helper does not hold the result open", async () => {
-    const started = Date.now();
-    const raw = await execWithRawOutput("sh", ["-c", "sleep 30 >/dev/null 2>&1 & printf ok"], {
-      timeoutMs: 20_000,
+  test("captures both streams from a descendant after the leader exits", async () => {
+    const raw = await execWithRawOutput(
+      "sh",
+      [
+        "-c",
+        "(sleep 0.2; printf late; printf late-error >&2) & printf early; printf early-error >&2",
+      ],
+      { timeoutMs: 5000 },
+    );
+    expect(raw).toEqual({
+      status: 0,
+      stdout: Buffer.from("earlylate"),
+      stderr: "early-errorlate-error",
     });
-    expect(raw).toEqual({ status: 0, stdout: Buffer.from("ok"), stderr: "" });
-    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  test("a descendant that outlives the deadline cannot produce success", async () => {
+    const raw = await execWithRawOutput(
+      "sh",
+      ["-c", "(trap '' TERM; exec sleep 30) & printf early"],
+      { timeoutMs: 100 },
+    );
+    expect(raw).toEqual({ status: -1, stdout: Buffer.from("early"), stderr: "Command timed out" });
   });
 });
 

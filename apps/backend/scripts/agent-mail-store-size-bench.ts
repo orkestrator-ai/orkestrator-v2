@@ -55,13 +55,22 @@ import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail
 
 const environments = Math.max(2, option("environments", 100));
 const tabs = Math.max(1, option("tabs", 6));
-const iterations = Math.max(1, option("iterations", 20));
-const sizesArg = process.argv[process.argv.indexOf("--sizes") + 1];
-const sizes = (process.argv.includes("--sizes") && sizesArg ? sizesArg : "1,8,16,31")
+const iterations = Math.max(1, Math.floor(option("iterations", 20)));
+const sizesIndex = process.argv.indexOf("--sizes");
+const sizes = (sizesIndex === -1 ? "1,8,16,31" : (process.argv[sizesIndex + 1] ?? ""))
   .split(",")
-  .map(Number)
-  .filter((value) => Number.isFinite(value) && value > 0);
+  .map(Number);
+if (sizes.some((value) => !Number.isFinite(value) || value <= 0)) {
+  throw new Error("--sizes requires a comma-separated list of finite positive MiB values");
+}
 const PENDING_INJECTS = 1_000;
+// Both pools need one fresh target for warm-up in addition to every timed call.
+const mutationTargets = Math.floor(Math.min(environments * tabs, PENDING_INJECTS) / 2);
+if (iterations >= mutationTargets) {
+  throw new Error(
+    `--iterations must be less than ${mutationTargets} for this mailbox count (includes warm-up); increase --environments or --tabs`,
+  );
+}
 const BODY = "m".repeat(1_800);
 recurringWorkMetrics.setEnabled(true);
 
@@ -75,8 +84,8 @@ const heapUsed = () => {
   return usage.heapUsed + usage.external;
 };
 
-// Sends evict the oldest settled message once a mailbox is full; the seeded
-// mail is acknowledged, so the store stays at its seeded size.
+// Sends grow mailboxes until the 200-message limit. Report the final shape
+// alongside the seeded shape to make that growth visible.
 const fixture = await createAgentMailBenchFixture({
   prefix: "ork-mail-size-bench-",
   environments,
@@ -214,7 +223,7 @@ try {
   // Calibrate the serialised size of one seeded message with two per mailbox.
   seed(2);
   const messageBytes = storeShape().mailboxRowBytes / (2 * mailboxes);
-  for (const mib of sizes) {
+  for (const [sizeIndex, mib] of sizes.entries()) {
     const perMailbox = Math.max(
       1,
       Math.min(200, Math.floor((mib * 1024 * 1024) / mailboxes / messageBytes)),
@@ -246,6 +255,33 @@ try {
       readModelHolder.readModel = null;
       await storage.listAgentMailboxes({ limit: 200 });
     });
+    const claimable = pending.filter((_, index) => index % 2 === 0);
+    let claim = 0;
+    const injectClaimMs = await measure(async () => {
+      const target = claimable[claim++]!;
+      const claimed = await storage.beginAgentMailInject(
+        target.mailboxId,
+        target.messageId,
+        target.incarnationId,
+      );
+      if (!claimed) throw new Error("Inject claim sample did not mutate its target");
+    });
+    const backedOff = pending.filter((_, index) => index % 2 === 1);
+    let reset = 0;
+    const backoffResetMs = await measure(async () => {
+      const target = backedOff[reset++]!;
+      await storage.resetAgentMailInjectBackoff(target.mailboxId);
+    });
+    // Verify outside the timing so validation reads do not inflate write costs.
+    const afterMutations = await mailStore.snapshot();
+    for (const target of backedOff.slice(0, reset)) {
+      const entry = afterMutations.pendingInject.find(
+        (entry) => entry.mailboxId === target.mailboxId && entry.messageId === target.messageId,
+      );
+      if (!entry || entry.nextAttemptAt !== undefined) {
+        throw new Error("Backoff reset sample did not clear its target");
+      }
+    }
     const sendMs = await measure((index) => send(index));
     let listAfterWriteWall = 0;
     for (let index = 0; index < iterations; index += 1) {
@@ -257,20 +293,10 @@ try {
     const listAfterWriteMs = { ms: round(listAfterWriteWall / iterations) };
     await send(0);
     const presenceBytesAfterWrite = await presenceBytes();
-    writeFromOtherProcess(mib);
+    writeFromOtherProcess(sizeIndex);
     const presenceBytesAfterOtherProcessWrite = await presenceBytes();
-    const claimable = pending.filter((_, index) => index % 2 === 0);
-    let claim = 0;
-    const injectClaimMs = await measure(async () => {
-      const target = claimable[claim++ % claimable.length]!;
-      await storage.beginAgentMailInject(target.mailboxId, target.messageId, target.incarnationId);
-    });
-    const backedOff = pending.filter((_, index) => index % 2 === 1);
-    let reset = 0;
-    const backoffResetMs = await measure(async () => {
-      const target = backedOff[reset++ % backedOff.length]!;
-      await storage.resetAgentMailInjectBackoff(target.mailboxId);
-    });
+    const finalShape = storeShape();
+    const finalPendingInjects = (await mailStore.snapshot()).pendingInject.length;
     fixture.log(
       JSON.stringify({
         targetMiB: mib,
@@ -279,6 +305,7 @@ try {
         messagesPerMailbox: perMailbox,
         pendingInjects: pending.length,
         ...shape,
+        finalShape: { ...finalShape, pendingInjects: finalPendingInjects },
         bodyBytes,
         readModelRetainedBytes,
         iterations,

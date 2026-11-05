@@ -23,7 +23,6 @@ import type {
   BrowserPreviewCaptureMode,
   BrowserPreviewCapturePurpose,
   BrowserPreviewExpiredCaptureNotice,
-  BrowserPreviewPendingCapture,
   BrowserPreviewPendingCaptureWire,
   BrowserPreviewPendingCaptureDescriptor,
   BrowserPreviewReplaceImageInput,
@@ -82,7 +81,6 @@ import {
   BrowserPreviewCaptureSpoolError,
   createBrowserPreviewCaptureId,
   decodePngBytes,
-  pendingCaptureWithDataUrl,
   type BrowserPreviewCaptureStore,
 } from "./browser-preview-capture-store.js";
 import {
@@ -122,7 +120,6 @@ export type CaptureStoreLike = Pick<
   | "create"
   | "list"
   | "readWire"
-  | "read"
   | "replaceImage"
   | "acknowledge"
   | "discard"
@@ -827,13 +824,7 @@ export class BrowserPreviewCaptureSessions {
     return this.store().list();
   }
 
-  /** Non-consuming read; region captures include a crop derived from the current image. */
-  async readPending(captureId: string): Promise<BrowserPreviewPendingCapture | null> {
-    const pending = await this.readPendingWire(captureId);
-    return pending && pendingCaptureWithDataUrl(pending);
-  }
-
-  /** The same read with the spooled image as bytes, for IPC. */
+  /** Non-consuming byte read; region captures include a crop of the current image. */
   async readPendingWire(captureId: string): Promise<BrowserPreviewPendingCaptureWire | null> {
     const pending = await this.store().readWire(validCaptureId(captureId));
     if (!pending) return null;

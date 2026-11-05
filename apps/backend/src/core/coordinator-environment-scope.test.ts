@@ -1083,13 +1083,26 @@ for (const kind of ["build-pipeline", "multi-review", "graph-run"] as const) {
       });
       expect(allowed.isError).toBe(false);
       expect(stop).toHaveBeenCalledTimes(1);
+      const unowned = await (remote ? leaf : world.storage).addEnvironment(
+        createEnvironment(
+          remote ? (await leaf.getEnvironment(leafWorkerId))!.projectId : scope.projectId,
+          {
+            name: "not-created",
+            environmentType: "local",
+          },
+        ),
+      );
       refused(
         await tool("stop_environment", {
-          environmentId: "not-created",
+          environmentId: unowned.id,
           ...(remote ? { nodeId: LEAF } : {}),
         }),
       );
-      if (remote) refused(await tool("stop_environment", { environmentId }));
+      if (remote) {
+        const wrongNode = await tool("stop_environment", { environmentId });
+        expect(wrongNode.isError).toBe(true);
+        expect(wrongNode.text).toBe("That environment does not belong to this project.");
+      }
       expect(stop).toHaveBeenCalledTimes(1);
     });
   }
@@ -1277,3 +1290,128 @@ test("remote late provisioning with a foreign admission identity cannot repair a
   expect(receipt!.createdEnvironmentId).toBeUndefined();
   expect(receipt!.environmentCreationSettledAt).toBeDefined();
 });
+
+test("an early remote repair match leaves the next receipt eligible immediately", async () => {
+  for (const index of [1, 2]) {
+    await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+      id: `early-repair-${index}`,
+      ...scope,
+      kind: "build-pipeline",
+      resourceId: `early-pipeline-${index}`,
+      requestId: `early-repair-${index}`,
+      nodeId: LEAF,
+      createsEnvironment: true,
+      createdAt: new Date().toISOString(),
+    });
+  }
+  const calls: string[] = [];
+  const node = {
+    nodeId: LEAF,
+    projectId: "leaf-project",
+    call: async <T>(_command: string, args?: Record<string, unknown>): Promise<T> => {
+      const id = String(args?.pipelineId);
+      calls.push(id);
+      const index = id.endsWith("1") ? 1 : 2;
+      return {
+        snapshot: {
+          projectId: "leaf-project",
+          environmentId: `repaired-environment-${index}`,
+          coordinatorLaunchId: `early-repair-${index}`,
+        },
+      } as T;
+    },
+  };
+  expect(
+    await coordinatorCreatedEnvironment(rootContext, scope, "repaired-environment-1", node),
+  ).toBe(true);
+  expect(
+    await coordinatorCreatedEnvironment(rootContext, scope, "repaired-environment-2", node),
+  ).toBe(true);
+  expect(calls).toEqual(["early-pipeline-1", "early-pipeline-2"]);
+});
+
+test("overlapping authority checks share the remote repair and receipt publication", async () => {
+  await world.storage.coordinators.saveCoordinatorWorkflowAssociation({
+    id: "overlap-repair",
+    ...scope,
+    kind: "build-pipeline",
+    resourceId: "overlap-pipeline",
+    requestId: "overlap-repair",
+    nodeId: LEAF,
+    createsEnvironment: true,
+    createdAt: new Date().toISOString(),
+  });
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const lookup = mock(async () => {
+    started.resolve();
+    await release.promise;
+    return {
+      snapshot: {
+        projectId: "leaf-project",
+        environmentId: leafWorkerId,
+        coordinatorLaunchId: "overlap-repair",
+      },
+    };
+  });
+  const node = {
+    nodeId: LEAF,
+    projectId: "leaf-project",
+    call: async <T>(): Promise<T> => (await lookup()) as T,
+  };
+  const first = coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node);
+  await started.promise;
+  // Observe the second store read while the first remote lookup is blocked.
+  const read = world.storage.coordinators.listCoordinatorWorkflowAssociations.bind(
+    world.storage.coordinators,
+  );
+  const secondRead = Promise.withResolvers<void>();
+  world.storage.coordinators.listCoordinatorWorkflowAssociations = async (projectId) => {
+    const records = await read(projectId);
+    secondRead.resolve();
+    return records;
+  };
+  const second = coordinatorCreatedEnvironment(rootContext, scope, leafWorkerId, node);
+  await secondRead.promise;
+  release.resolve();
+  expect(await Promise.all([first, second])).toEqual([true, true]);
+  expect(lookup).toHaveBeenCalledTimes(1);
+  const [receipt] = await read(scope.projectId);
+  expect(receipt?.createdEnvironmentId).toBe(leafWorkerId);
+});
+
+for (const remote of [false, true]) {
+  for (const missing of [false, true]) {
+    for (const optIn of [false, true]) {
+      test(`scope preflight reports project access for ${missing ? "missing" : "foreign"} environment (${remote ? "remote" : "local"}, opt-in ${optIn})`, async () => {
+        const storage = remote ? leaf : world.storage;
+        let environmentId = "missing-environment";
+        if (!missing) {
+          const project = await storage.addProject(
+            createProject("https://github.com/other/repo.git"),
+          );
+          const environment = await storage.addEnvironment(
+            createEnvironment(project.id, {
+              name: "foreign",
+              environmentType: "local",
+            }),
+          );
+          environmentId = environment.id;
+        }
+        if (optIn) await allowOthers();
+        const result = await tool("stop_environment", {
+          environmentId,
+          ...(remote ? { nodeId: LEAF } : {}),
+        });
+        expect(result.isError).toBe(true);
+        expect(result.text).toBe(
+          remote
+            ? "That environment does not belong to this project on that node."
+            : "That environment does not belong to this project.",
+        );
+        expect(result.text).not.toContain(COORDINATOR_OTHER_ENVIRONMENTS_SETTING_LABEL);
+        expect(routed).not.toContain("stop_environment");
+      });
+    }
+  }
+}

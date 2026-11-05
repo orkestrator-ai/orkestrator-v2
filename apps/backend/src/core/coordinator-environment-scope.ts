@@ -24,7 +24,13 @@ import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-re
 
 export const MAX_REMOTE_RECEIPT_LOOKUPS = 16;
 const REMOTE_RECEIPT_REFRESH_MS = 60_000;
-const remoteRefresh = new WeakMap<CommandContext, Map<string, { at: number; projectId: string }>>();
+interface RemoteReceiptRefresh {
+  at: number;
+  projectId: string;
+  createdEnvironmentId?: string;
+  pending?: Promise<string | undefined>;
+}
+const remoteRefresh = new WeakMap<CommandContext, Map<string, RemoteReceiptRefresh>>();
 
 interface CoordinatorScope {
   projectId: string;
@@ -82,47 +88,68 @@ export async function coordinatorCreatedEnvironment(
     );
     const liveIds = new Set(records.map((association) => association.id));
     for (const [id, checked] of Array.from(refresh.entries())) {
-      if (checked.projectId === scope.projectId && !liveIds.has(id)) refresh.delete(id);
+      if (checked.projectId === scope.projectId && !liveIds.has(id) && !checked.pending)
+        refresh.delete(id);
     }
     const now = Date.now();
     const batch = eligible
       .filter(
-        (association) => now - (refresh.get(association.id)?.at ?? 0) >= REMOTE_RECEIPT_REFRESH_MS,
+        (association) =>
+          refresh.get(association.id)?.pending ||
+          refresh.get(association.id)?.createdEnvironmentId === environmentId ||
+          now - (refresh.get(association.id)?.at ?? 0) >= REMOTE_RECEIPT_REFRESH_MS,
       )
       .sort((a, b) => (refresh.get(a.id)?.at ?? 0) - (refresh.get(b.id)?.at ?? 0))
       .slice(0, MAX_REMOTE_RECEIPT_LOOKUPS);
-    // Mark before awaiting so simultaneous checks share the cooldown too.
     for (const association of batch) {
-      refresh.delete(association.id);
-      refresh.set(association.id, { at: now, projectId: scope.projectId });
-    }
-    // The store is globally bounded; cap stale cache entries after deletion too.
-    while (refresh.size > MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) {
-      refresh.delete(refresh.keys().next().value!);
-    }
-    for (const association of batch) {
-      let pipeline: {
-        snapshot?: {
-          projectId?: string;
-          environmentId?: string;
-          coordinatorLaunchId?: string;
-          phase?: string;
-        };
-      } | null;
-      try {
-        pipeline = await node.call("get_build_pipeline", { pipelineId: association.resourceId });
-      } catch {
-        continue; // A transport failure is never evidence of deletion.
+      // Another caller may have started or completed this repair since batch
+      // selection. Share its result, including the durable receipt publication.
+      let checked = refresh.get(association.id);
+      if (checked?.createdEnvironmentId === environmentId) return true;
+      if (!checked?.pending) {
+        if (checked && Date.now() - checked.at < REMOTE_RECEIPT_REFRESH_MS) continue;
+        if (!checked) {
+          // Keep pending work registered: evict only completed cache entries.
+          for (const [id, entry] of Array.from(refresh.entries())) {
+            if (refresh.size < MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) break;
+            if (!entry.pending) refresh.delete(id);
+          }
+          if (refresh.size >= MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) continue;
+        }
+        checked = { at: 0, projectId: scope.projectId };
+        refresh.delete(association.id);
+        refresh.set(association.id, checked);
+        const entry = checked;
+        entry.pending = (async () => {
+          let pipeline: {
+            snapshot?: {
+              projectId?: string;
+              environmentId?: string;
+              coordinatorLaunchId?: string;
+              phase?: string;
+            };
+          } | null;
+          try {
+            pipeline = await node.call("get_build_pipeline", {
+              pipelineId: association.resourceId,
+            });
+          } catch {
+            return; // A transport failure is never evidence of deletion.
+          }
+          if (pipeline === null || pipeline?.snapshot?.projectId === node.projectId) {
+            entry.createdEnvironmentId = await reconcilePipelineCreation(
+              context.storage,
+              association,
+              pipeline === null ? null : pipeline.snapshot,
+            );
+          }
+          return entry.createdEnvironmentId;
+        })().finally(() => {
+          entry.at = Date.now();
+          delete entry.pending;
+        });
       }
-      if (pipeline === null || pipeline?.snapshot?.projectId === node.projectId) {
-        const created = await reconcilePipelineCreation(
-          context.storage,
-          association,
-          pipeline === null ? null : pipeline.snapshot,
-          now,
-        );
-        if (created === environmentId) return true;
-      }
+      if ((await checked.pending) === environmentId) return true;
     }
   }
   return false;

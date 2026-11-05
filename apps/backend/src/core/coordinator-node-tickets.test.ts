@@ -29,7 +29,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function setup(options: { capability?: boolean } = {}) {
+async function setup(options: { capability?: boolean; buildOriginCapability?: boolean } = {}) {
   const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
   cleanups.push(() => world.close());
   await world.storage.updateProject(world.projectId, { gitUrl: REPO });
@@ -65,9 +65,13 @@ async function setup(options: { capability?: boolean } = {}) {
     storage: leaf,
     nodes: { listControllers: () => [{ controllerId: "bk_cmd", displayName: "Command" }] },
     buildPipelines: {
-      start: async (input: Record<string, unknown>) => {
+      start: async (input: Record<string, unknown>, coordinatorLaunchId?: string) => {
         started.push(input);
-        return { id: `pipeline-${started.length}`, projectId: leafProject.id };
+        return {
+          id: `pipeline-${started.length}`,
+          projectId: leafProject.id,
+          coordinatorLaunchId,
+        };
       },
     },
   } as unknown as CommandContext;
@@ -80,6 +84,7 @@ async function setup(options: { capability?: boolean } = {}) {
   const state = { connected: true };
   const capabilities: Record<string, number> = {
     "node-attachment": 1,
+    ...(options.buildOriginCapability === false ? {} : { "node-coordinator-build-origin": 1 }),
     ...(options.capability === false ? {} : { "ticket-sync": 1 }),
   };
   const link = {
@@ -348,4 +353,18 @@ test("a started build returns a warning if work location cannot be persisted", a
   const result = await f.build("work-write-failed", task.id);
   expect(result.warning).toContain("build started");
   expect(f.started).toHaveLength(1);
+});
+
+test("a leaf without build-origin capability refuses before ticket sync or build admission", async () => {
+  const f = await setup({ buildOriginCapability: false });
+  const task = await f.world.storage.kanban.addKanbanTask(f.scope.projectId, "Target", "");
+  await expect(f.build("legacy-build-origin", task.id)).rejects.toThrow(
+    "Update this node before launching a coordinator build",
+  );
+  expect(f.started).toEqual([]);
+  expect(f.routed).not.toContain("apply_ticket_sync");
+  expect(f.routed).not.toContain("start_controller_build_pipeline");
+  expect(
+    await f.world.storage.coordinators.listCoordinatorWorkflowAssociations(f.scope.projectId),
+  ).toEqual([]);
 });

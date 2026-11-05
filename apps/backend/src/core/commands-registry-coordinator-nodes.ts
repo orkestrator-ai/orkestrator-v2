@@ -611,7 +611,14 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     const environment = target
       ? await target.call<unknown>("get_environment", { environmentId })
       : await context.storage.getEnvironment(environmentId);
-    if (record(environment) && environment.projectHome === true) return { allowed: true };
+    if (!record(environment) || environment.projectId !== (target?.projectId ?? caller.projectId)) {
+      throw new Error(
+        target
+          ? "That environment does not belong to this project on that node."
+          : "That environment does not belong to this project.",
+      );
+    }
+    if (environment.projectHome === true) return { allowed: true };
     await assertCoordinatorMayActOnEnvironment(context, caller, environmentId, target ?? undefined);
     return { allowed: true };
   });

@@ -152,6 +152,29 @@ describe("get_worker_changes reader", () => {
     });
   });
 
+  test("single-file requests beyond the cap disclose omissions without claiming no match", async () => {
+    const { run, calls } = changes(
+      {
+        [environmentKey]: [row("listed.ts", 0)],
+        [uncommittedKey]: [row("listed.ts", 0)],
+      },
+      3,
+      { [environmentKey]: 1, [uncommittedKey]: 1 },
+    );
+    const result = await readWorkerChanges(
+      run,
+      environment,
+      parseWorkerChangesOptions({ file: "unlisted.ts" }),
+      null,
+    );
+    expect(result.sinceBase).toMatchObject({ available: true, files: [], unlistedFiles: 1 });
+    expect(result.sinceBase).not.toHaveProperty("matchingFiles");
+    expect(result.uncommitted).toMatchObject({ files: [], unlistedFiles: 1 });
+    expect(result.diffs).toMatchObject({ files: [] });
+    expect(calls.some((call) => call.command === "changes_resolve_live_detail")).toBe(false);
+    expect(calls.some((call) => call.command === "changes_get_diff")).toBe(false);
+  });
+
   test("reports commits, files since base with uncommitted marks, and diffs", async () => {
     const { run } = changes({
       [environmentKey]: [

@@ -789,9 +789,12 @@ export class ChangeMeasurementService {
         unknownTouched = true;
         continue;
       }
-      const rows = this.ledger.measurementFiles(contribution.measurementId, 0, 500);
-      if (rows.length === 0) unknownTouched = true;
-      for (const row of rows) touched.add(row.new_path ?? row.old_path ?? row.path_id);
+      const count = this.ledger.measurementFileCount(contribution.measurementId);
+      if (count === 0) unknownTouched = true;
+      for (let offset = 0; offset < count; offset += 500) {
+        const rows = this.ledger.measurementFiles(contribution.measurementId, offset, 500);
+        for (const row of rows) touched.add(row.new_path ?? row.old_path ?? row.path_id);
+      }
     }
     if (reasons.has("contribution-unknown")) {
       if (additions.value !== null) additions = partialCount(additions.value);

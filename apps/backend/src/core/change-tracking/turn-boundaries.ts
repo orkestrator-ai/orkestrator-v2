@@ -657,15 +657,7 @@ export class TurnBoundaryService {
       if (outcome.kind !== "published") return [];
       const advanced: string[] = [];
       for (const turn of turns) {
-        if (
-          this.sameAsPublished(
-            turn.turn_id,
-            turn.segment_id,
-            outcome.manifestId,
-            outcome.consistency,
-          )
-        )
-          continue;
+        if (this.sameAsPublished(turn.turn_id, turn.segment_id, outcome.snapshotId)) continue;
         this.deps.ledger.transaction(() => {
           this.deps.ledger.updateSegment(turn.segment_id, {
             latest_live_snapshot_id: outcome.snapshotId,
@@ -692,24 +684,38 @@ export class TurnBoundaryService {
     }
   }
 
-  private sameAsPublished(
-    turnId: string,
-    segmentId: string,
-    manifestId: string,
-    consistency: string,
-  ): boolean {
+  private sameAsPublished(turnId: string, segmentId: string, snapshotId: string): boolean {
     // Segment liveness advances before publication. Only durable measurements
     // prove that both resources published this tree, including after a restart.
+    const captured = this.snapshotRow(snapshotId);
+    if (!captured) return false;
+    const inventoryTruncated = (row: SnapshotRow) =>
+      JSON.parse(row.coverage_json).inventoryTruncated === true;
+    const turn = this.deps.ledger.turn(turnId);
+    const segment = this.deps.ledger.segment(segmentId);
     return [
-      this.deps.ledger.latestMeasurement("turn", turnId, "turn-net"),
-      this.deps.ledger.latestMeasurement("segment", segmentId, "thread-net"),
-    ].every((measurement) => {
-      const latest = this.snapshotRow(measurement?.afterSnapshotId ?? null);
+      {
+        measurement: this.deps.ledger.latestMeasurement("turn", turnId, "turn-net"),
+        hasBaseline: !!this.snapshotRow(turn?.start_snapshot_id ?? null),
+      },
+      {
+        measurement: this.deps.ledger.latestMeasurement("segment", segmentId, "thread-net"),
+        hasBaseline:
+          segment?.baseline_state === "active" && !!this.snapshotRow(segment.baseline_snapshot_id),
+      },
+    ].every(({ measurement, hasBaseline }) => {
+      if (measurement?.finality !== "provisional") return false;
+      // With no start, measureSnapshots seals an endpoint-less, row-less result.
+      // It cannot change on this pass; still compare the other resource.
+      if (!hasBaseline && measurement.completeness.reasons.includes("start-unavailable"))
+        return true;
+      const latest = this.snapshotRow(measurement.afterSnapshotId);
       return (
-        measurement?.finality === "provisional" &&
         latest !== null &&
-        latest.tree_oid === manifestId &&
-        (JSON.parse(latest.consistency_json) as { state: string }).state === consistency
+        latest.tree_oid === captured.tree_oid &&
+        (JSON.parse(latest.consistency_json) as { state: string }).state ===
+          (JSON.parse(captured.consistency_json) as { state: string }).state &&
+        inventoryTruncated(latest) === inventoryTruncated(captured)
       );
     });
   }

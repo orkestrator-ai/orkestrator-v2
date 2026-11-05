@@ -584,6 +584,44 @@ describe("recorded edit activity", () => {
     expect(volume.completeness.files).toBe("partial");
     expect(volume.completeness.reasons).toContain(FILE_ROWS_CAPPED_REASON);
   });
+  test("an uncapped 501-row contribution counts every touched file", () => {
+    const h = harness(2_000);
+    const ledger = h.service.ledger;
+    const measurements = h.service.measurements;
+    const files = Array.from({ length: 501 }, (_, i) => record(`file-${i}`));
+    const capped = measurements.capFileRows(
+      {
+        ...measurements.base({
+          scope: "tool-effect",
+          owner: { environmentId: "env-1", operationId: "op" },
+          worktreeId: "w",
+          worktreeIncarnation: "i",
+        }),
+        completeness: { files: "complete" as const, reasons: [], omittedFileCount: 0 },
+      },
+      files,
+    );
+    const owner = { kind: "operation", id: "op" };
+    const { measurement } = measurements.seal(capped.draft, owner, null, undefined, files);
+    measurements.publish({
+      measurement,
+      owner,
+      files: capped.rows,
+      identity: null,
+      resourceKey: toolResourceKeys("op").effect,
+    });
+    const key = measurements.publishOperationVolume(
+      { kind: "turn", id: "turn-1" },
+      [{ operation_id: "op", tool_kind: "file-edit", phase: "succeeded" } as OperationRow],
+      { worktreeId: "w", incarnation: "i" },
+      "env-1",
+    );
+    const volume = selected(h, key!);
+    expect(ledger.measurementFileCount(volume.measurementId)).toBe(0);
+    expect(volume.totals.touchedFiles).toBe(501);
+    expect(volume.completeness.files).toBe("complete");
+    expect(volume.completeness.reasons).not.toContain(FILE_ROWS_CAPPED_REASON);
+  });
 });
 
 describe("history written before the cap", () => {

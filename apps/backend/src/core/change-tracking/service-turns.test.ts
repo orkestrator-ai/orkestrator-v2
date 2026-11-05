@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
 import { CHANGE_PROJECTION_CHANGED_EVENT } from "@orkestrator/protocol/change-resources";
@@ -127,6 +127,78 @@ describe("turn and thread boundaries", () => {
     expect(final.finality).toBe("final");
     expect(final.measurementId).not.toBe(moved.measurementId);
   });
+
+  test("unchanged manifests republish when inventory coverage degrades and recovers", async () => {
+    const h = harness({ policy: { provisionalSpacingLocalMs: 0, captureMaxCandidates: 1 } });
+    await h.service.prepareTurnStart({
+      environmentId: "env-1",
+      logicalSessionKey: "env-env-1:tab",
+      requestId: "coverage",
+      provider: "claude",
+    });
+    h.service.markTurnDispatched("env-1", "env-env-1:tab", "coverage", "accepted");
+    const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+    const owner = h.service.registry.owner(identity!);
+    writeFileSync(join(h.repo, "a.txt"), "changed\n");
+    await h.service.turns.provisional("env-1", owner);
+    const complete = turnMeasurement(h, "coverage");
+    const tree = h.service.ledger.snapshot(complete.afterSnapshotId!)!.tree_oid;
+    expect(complete.completeness.files).toBe("complete");
+
+    writeFileSync(join(h.repo, "z-untracked.txt"), "extra\n");
+    expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+    for (const partial of [turnMeasurement(h, "coverage"), threadMeasurement(h)]) {
+      expect(h.service.ledger.snapshot(partial.afterSnapshotId!)!.tree_oid).toBe(tree);
+      expect(partial.completeness.files).toBe("partial");
+      expect(partial.completeness.reasons).toContain("inventory-limit");
+      expect(partial.totals.additions.quality).toBe("partial");
+    }
+    expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+    unlinkSync(join(h.repo, "z-untracked.txt"));
+    expect(await h.service.turns.provisional("env-1", owner)).not.toEqual([]);
+    expect(turnMeasurement(h, "coverage").completeness.files).toBe("complete");
+    expect(threadMeasurement(h).completeness.files).toBe("complete");
+    expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+  });
+
+  for (const degraded of ["turn", "thread", "both"]) {
+    test(`unchanged provisional skips with unavailable ${degraded} baseline`, async () => {
+      const h = harness({ policy: { provisionalSpacingLocalMs: 0 } });
+      await h.service.prepareTurnStart({
+        environmentId: "env-1",
+        logicalSessionKey: "env-env-1:tab",
+        requestId: "degraded",
+        provider: "claude",
+      });
+      h.service.markTurnDispatched("env-1", "env-env-1:tab", "degraded", "accepted");
+      const ledger = h.service.ledger;
+      const turnId = turnIdFor("env-1", "env-env-1:tab", "degraded");
+      const segmentId = ledger.turn(turnId)!.segment_id;
+      ledger.transaction(() => {
+        if (degraded !== "thread") ledger.updateTurn(turnId, { start_snapshot_id: null });
+        if (degraded !== "turn")
+          ledger.updateSegment(segmentId, {
+            baseline_state: "unknown",
+            baseline_snapshot_id: null,
+          });
+      });
+      const identity = await h.service.registry.resolve({ kind: "local", worktreePath: h.repo });
+      const owner = h.service.registry.owner(identity!);
+      writeFileSync(join(h.repo, "a.txt"), "changed\n");
+      await h.service.turns.provisional("env-1", owner);
+      const counts = () =>
+        ["change_measurements", "change_measurement_files"].map((table) =>
+          h.database().db.query(`SELECT COUNT(*) AS n FROM ${table}`).get(),
+        );
+      const first = counts();
+      const published = [turnMeasurement(h, "degraded"), threadMeasurement(h)];
+      expect(published[degraded === "thread" ? 1 : 0]!.afterSnapshotId).toBeNull();
+      expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+      expect(await h.service.turns.provisional("env-1", owner)).toEqual([]);
+      expect(counts()).toEqual(first);
+      expect([turnMeasurement(h, "degraded"), threadMeasurement(h)]).toEqual(published);
+    });
+  }
 
   for (const failedCall of [1, 2]) {
     test(`unchanged capture retries publication failure on call ${failedCall}`, async () => {

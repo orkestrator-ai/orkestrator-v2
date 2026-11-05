@@ -15,7 +15,7 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
 
 **Problem.** How often a dirty hint produces an unchanged tree was never measured, so it is not known how much the no-change skip saves on real work.
 
-**Context.** `TurnBoundaryService.provisional` now skips the publish when a capture's tree and consistency match the segment's latest live snapshot, but the capture and its snapshot row still happen.
+**Context.** `TurnBoundaryService.provisional` now skips the publish when a capture's tree, consistency and inventory-truncation coverage match the latest durably published provisional turn and thread endpoints (an endpoint-less result with no start remains unchanged), but the capture and its snapshot row still happen.
 
 **Investigation.** On the generated `measurement-rows` workload the 6 passes with no tree change wrote 12 fewer measurements (38 to 26 at 20,000 files). That says what a skipped pass saves, not how often one happens in real use. No counter records skipped passes today.
 
@@ -46,6 +46,12 @@ Analysed 2026-11-04 against `main` at `e198fd4a7`, with the E2 change applied.
   - **Back off while file activity continues, for example towards 5 s.**
     - Pros: fewer captures in a build or install burst.
     - Cons: the live diff lags during exactly the activity a user watches.
+
+## Assumptions and decisions
+
+### Task 1: Define an unchanged publication
+
+The churn measurement must use durable turn and thread publications, not the segment live pointer, which advances before publication succeeds. Compare inventory truncation as well as tree and consistency; a missing start produces an endpoint-less result and does not prevent checking the other resource.
 
 ## Related
 

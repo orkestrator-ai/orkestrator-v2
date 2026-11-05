@@ -1549,26 +1549,32 @@ export function SharedNativeAgentController({
    * turn, a provider-reported activity refines the default indicator:
    * compaction can take a minute with no transcript movement at all.
    */
-  const phaseStatusLabel =
-    phase === "cancelling" ? (
-      <span role="status" className="text-xs">
-        Stopping…
-      </span>
-    ) : phase === "recovering" ? (
-      <span role="status" className="text-xs">
-        Reconnecting to {label}…
-      </span>
-    ) : turnActivity?.compacting ? (
-      <span role="status" className="agent-thinking-shimmer text-xs">
-        Compacting conversation…
-      </span>
-    ) : turnActivity?.thinkingTokens ? (
-      <AgentThinkingIndicator agentName={label} thinkingTokens={turnActivity.thinkingTokens} />
-    ) : !isTurnActive && startupPromptPreview ? (
-      <span role="status" className="agent-thinking-shimmer text-xs">
-        Starting {label}…
-      </span>
-    ) : undefined;
+  const compacting = turnActivity?.compacting;
+  const thinkingTokens = turnActivity?.thinkingTokens;
+  const startingTurn = !isTurnActive && Boolean(startupPromptPreview);
+  const phaseStatusLabel = useMemo(
+    () =>
+      phase === "cancelling" ? (
+        <span role="status" className="text-xs">
+          Stopping…
+        </span>
+      ) : phase === "recovering" ? (
+        <span role="status" className="text-xs">
+          Reconnecting to {label}…
+        </span>
+      ) : compacting ? (
+        <span role="status" className="agent-thinking-shimmer text-xs">
+          Compacting conversation…
+        </span>
+      ) : thinkingTokens ? (
+        <AgentThinkingIndicator agentName={label} thinkingTokens={thinkingTokens} />
+      ) : startingTurn ? (
+        <span role="status" className="agent-thinking-shimmer text-xs">
+          Starting {label}…
+        </span>
+      ) : undefined,
+    [compacting, label, phase, startingTurn, thinkingTokens],
+  );
   const turnStartedAt =
     projection?.turn.startedAt ??
     (isTurnActive ? findLatestBackendUserTurnStartedAt(turnRows, hasBackendTurnClock) : undefined);
@@ -3200,13 +3206,124 @@ export function SharedNativeAgentController({
    * the last transcript row. Command/file/permission approvals stay pinned
    * above the composer because they gate an action that is about to run.
    */
-  const allInteractions = sessionStateAuthoritative ? (projection?.interactions ?? []) : [];
-  const transcriptInteractions = allInteractions.filter(
-    (interaction) => interaction.kind === "question" || interaction.kind === "plan-approval",
+  const projectedInteractions = projection?.interactions;
+  const allInteractions = useMemo(
+    () => (sessionStateAuthoritative ? (projectedInteractions ?? []) : []),
+    [projectedInteractions, sessionStateAuthoritative],
+  );
+  const transcriptInteractions = useMemo(
+    () =>
+      allInteractions.filter(
+        (interaction) => interaction.kind === "question" || interaction.kind === "plan-approval",
+      ),
+    [allInteractions],
   );
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
+  // The list's footer and header: a new element here renders every visible row
+  // again (see `StableVirtuoso` in VirtualizedMessageList).
+  const transcriptCards = useMemo(
+    () =>
+      transcriptInteractions.map((interaction) =>
+        interaction.kind === "question" ? (
+          <NativeAgentQuestionCard
+            key={interaction.id}
+            interaction={interaction}
+            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
+          />
+        ) : (
+          <NativeAgentInteractionCard
+            key={interaction.id}
+            interaction={interaction}
+            planContent={
+              interaction.presentation.planAvailable ? interaction.presentation.body : planContent
+            }
+            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
+          />
+        ),
+      ),
+    [holdInteraction, planContent, resolveInteraction, transcriptInteractions],
+  );
+  const messageWindow = projection?.messageWindow;
+  const showBytesNotice =
+    messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
+  const showLoadEarlier = messageWindow?.canLoadEarlier === true;
+  // The source itself lost its start (a bridge that kept only the newest
+  // messages of a transcript too large to save) and no page can bring it
+  // back. Showing the remainder as if it were the whole conversation would
+  // read as data loss.
+  const showOmittedNotice =
+    messageWindow?.truncated === true && !showBytesNotice && !showLoadEarlier;
+  const scrollController = scrollProps.controller;
+  const transcriptHeader = useMemo(
+    () =>
+      showBytesNotice || showLoadEarlier || showOmittedNotice ? (
+        <div className="relative mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+          {showBytesNotice ? (
+            <span>
+              Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
+              limit.
+            </span>
+          ) : null}
+          {showOmittedNotice ? (
+            <span>
+              Earlier messages in this conversation are not available here. The conversation itself
+              is kept.
+            </span>
+          ) : null}
+          {showLoadEarlier ? (
+            // Out of flow, so it adds no gap to the header's layout.
+            <div
+              ref={autoLoadEarlierSentinel}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-0 h-px"
+            />
+          ) : null}
+          {showLoadEarlier ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={loadingEarlier}
+              onClick={(event) => {
+                loadEarlierPlace.hold(
+                  event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                  scrollController,
+                );
+                const request = { sessionKey };
+                setEarlierRequest(request);
+                void loadEarlierMessages()
+                  .catch((error) =>
+                    toast.error(
+                      error instanceof Error ? error.message : "Failed to load earlier messages",
+                    ),
+                  )
+                  .finally(() =>
+                    setEarlierRequest((current) => (current === request ? null : current)),
+                  );
+              }}
+            >
+              {loadingEarlier ? "Loading…" : "Load earlier messages"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null,
+    [
+      autoLoadEarlierSentinel,
+      loadEarlierMessages,
+      loadEarlierPlace,
+      loadingEarlier,
+      scrollController,
+      sessionKey,
+      showBytesNotice,
+      showLoadEarlier,
+      showOmittedNotice,
+    ],
+  );
+  const openResumeDialog = useCallback(() => setResumeDialogOpen(true), []);
   /*
    * A tab has a session behind it once it was asked to resume one, or once it
    * has connected and actually produced something a user can act on or see:
@@ -3513,17 +3630,6 @@ export function SharedNativeAgentController({
     ) : null,
   ].filter(Boolean);
 
-  const messageWindow = projection?.messageWindow;
-  const showBytesNotice =
-    messageWindow?.truncated === true && messageWindow.truncationReason === "bytes";
-  const showLoadEarlier = messageWindow?.canLoadEarlier === true;
-  // The source itself lost its start (a bridge that kept only the newest
-  // messages of a transcript too large to save) and no page can bring it
-  // back. Showing the remainder as if it were the whole conversation would
-  // read as data loss.
-  const showOmittedNotice =
-    messageWindow?.truncated === true && !showBytesNotice && !showLoadEarlier;
-
   const resumeDialog =
     adapter.capabilities.resume && hasEnvironmentRecord ? (
       <NativeResumeSessionDialog
@@ -3800,59 +3906,7 @@ export function SharedNativeAgentController({
       emptyStateMessage={
         sendingHeld ? "No saved messages to show." : `Ask ${label} to work on this repository.`
       }
-      transcriptHeader={
-        showBytesNotice || showLoadEarlier || showOmittedNotice ? (
-          <div className="relative mx-auto flex max-w-3xl flex-col items-center justify-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-            {showBytesNotice ? (
-              <span>
-                Earlier messages or tool activity were omitted to stay within the 16 MiB transcript
-                limit.
-              </span>
-            ) : null}
-            {showOmittedNotice ? (
-              <span>
-                Earlier messages in this conversation are not available here. The conversation
-                itself is kept.
-              </span>
-            ) : null}
-            {showLoadEarlier ? (
-              // Out of flow, so it adds no gap to the header's layout.
-              <div
-                ref={autoLoadEarlierSentinel}
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 h-px"
-              />
-            ) : null}
-            {showLoadEarlier ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loadingEarlier}
-                onClick={(event) => {
-                  loadEarlierPlace.hold(
-                    event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
-                    scrollProps.controller,
-                  );
-                  const request = { sessionKey };
-                  setEarlierRequest(request);
-                  void loadEarlierMessages()
-                    .catch((error) =>
-                      toast.error(
-                        error instanceof Error ? error.message : "Failed to load earlier messages",
-                      ),
-                    )
-                    .finally(() =>
-                      setEarlierRequest((current) => (current === request ? null : current)),
-                    );
-                }}
-              >
-                {loadingEarlier ? "Loading…" : "Load earlier messages"}
-              </Button>
-            ) : null}
-          </div>
-        ) : null
-      }
+      transcriptHeader={transcriptHeader}
       isAtBottom={isAtBottom}
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
@@ -3873,26 +3927,7 @@ export function SharedNativeAgentController({
           />
         )),
       ]}
-      transcriptCards={transcriptInteractions.map((interaction) =>
-        interaction.kind === "question" ? (
-          <NativeAgentQuestionCard
-            key={interaction.id}
-            interaction={interaction}
-            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-            onHold={(held) => holdInteraction(interaction.id, held)}
-          />
-        ) : (
-          <NativeAgentInteractionCard
-            key={interaction.id}
-            interaction={interaction}
-            planContent={
-              interaction.presentation.planAvailable ? interaction.presentation.body : planContent
-            }
-            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-            onHold={(held) => holdInteraction(interaction.id, held)}
-          />
-        ),
-      )}
+      transcriptCards={transcriptCards}
       pinnedAccessory={pinnedCards.length > 0 ? <>{pinnedCards}</> : null}
       statusAccessory={
         sessionGoal ? <GoalPill goal={sessionGoal} onOpen={() => setGoalPanelOpen(true)} /> : null
@@ -3942,9 +3977,7 @@ export function SharedNativeAgentController({
         adapter.capabilities.fork && hasEnvironmentRecord ? renderMessageActions : undefined
       }
       onResumeClick={
-        adapter.capabilities.resume && hasEnvironmentRecord
-          ? () => setResumeDialogOpen(true)
-          : undefined
+        adapter.capabilities.resume && hasEnvironmentRecord ? openResumeDialog : undefined
       }
       resumeDialog={
         <>

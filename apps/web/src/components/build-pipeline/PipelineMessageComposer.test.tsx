@@ -546,5 +546,54 @@ describe("queuedSteerNotice", () => {
     expect(queuedSteerNotice({ delivery: "unconfirmed" }, "Claude", "auto-steer").tone).toBe(
       "error",
     );
+    for (const source of ["auto-steer", "steer-button"] as const) {
+      expect(queuedSteerNotice({ delivery: "next-turn" }, "Claude", source)).toEqual({
+        tone: "info",
+        message: "Claude has finished its turn, so your message will be sent as a new turn.",
+      });
+    }
+  });
+});
+
+describe("waiting on background work", () => {
+  const waiting: BuildPipeline = {
+    ...running,
+    sessions: [{ ...buildSession, status: "running", awaitingBackgroundWork: true }],
+  };
+
+  test("says what the agent is doing and offers no steer", () => {
+    const box = renderComposer({ ...waiting, pendingUserMessages: [queuedMessage] });
+
+    expect(screen.getByRole("status").textContent).toBe("Codex is waiting on background work…");
+    expect(screen.queryByText(/is thinking/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Steer queued prompt/ }) === null).toBe(true);
+    fireEvent.change(box, { target: { value: "use the helper" } });
+    expect(screen.getByRole("button", { name: "Send message" }).getAttribute("title")).toBe(
+      "Send message",
+    );
+  });
+
+  test("Auto-steer sends the message without trying to steer", async () => {
+    setAutoSteer(true);
+    const box = renderComposer(waiting);
+
+    sendText(box, "use the helper");
+
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith(running.id, "use the helper"));
+    expect(steerQueuedMock).not.toHaveBeenCalled();
+  });
+
+  test("the stall banner says the turn already finished", () => {
+    renderComposer({
+      ...waiting,
+      stallWarning: {
+        sessionId: buildSession.sdkSessionId,
+        detectedAt: "2026-07-29T00:03:30.000Z",
+      },
+    });
+
+    expect(
+      screen.getByText(/finished its turn and is waiting on background work, but its transcript/),
+    ).toBeTruthy();
   });
 });

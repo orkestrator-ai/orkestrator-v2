@@ -72,3 +72,31 @@ After this run's Electron annotation check had closed, the complete unchanged ow
   `output/agent-testing/qa-browser-07f55979-0cc/browser/`, with compressed logs
   in host temporary directories `orkestrator-test-run.c9Ge59` and
   `orkestrator-test-run.hBv8qd`. Both disposable profiles were stopped and reset.
+
+
+## Background-message recovery review — 2026-11-05
+
+On commit `49f025562`, the unchanged `real gateway saves a design and rehydrates another client's edits`
+case timed out after 15 seconds looking for the `UPPER.ORKDES` button at
+`design-canvas.spec.ts:248`. The broader browser run used one worker against
+credential-free profile `review-refusal-recovery`:
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RUN_ID=review-refusal-recovery mise run test:logged -- --name repair-browser -- mise run test:agent:browser
+```
+
+That run was intentionally interrupted to narrow validation: 34 passed, 3 failed,
+50 skipped, 1 interrupted, 58 not run (563.6 seconds). Its compressed evidence is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LOCmhO/repair-browser.log.gz`.
+The other failures were the persisted-diff baseline and graph keyboard-undo cases.
+
+After restarting the profile for the committed source fingerprint, the complete
+unchanged owner passed alone (3 passed, 66.7 seconds, one worker):
+
+```sh
+ORKESTRATOR_AGENT_TEST_PROFILE=review-refusal-recovery ORKESTRATOR_AGENT_TEST_RUN_ID=refusal-design-owner mise run test:logged -- --name repair-design-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/design-canvas.spec.ts
+```
+
+Artifacts: `output/agent-testing/refusal-design-owner/browser/`.
+This observation is intermittent; it does not establish a root cause or resolve
+prior deterministic observations. No assertion, timeout or skip was changed.

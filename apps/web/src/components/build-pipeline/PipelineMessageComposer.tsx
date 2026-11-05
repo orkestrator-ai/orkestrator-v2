@@ -63,6 +63,11 @@ export function queuedSteerNotice(
         tone: "error",
         message: result.notice ?? "Delivery could not be confirmed. Check the transcript.",
       };
+    case "next-turn":
+      return {
+        tone: "info",
+        message: `${label} has finished its turn, so your message will be sent as a new turn.`,
+      };
     case "gone":
       return auto
         ? {
@@ -94,6 +99,7 @@ export interface PipelineComposerState {
   sendPending: boolean;
   messageBlocked: boolean;
   recoveredTexts: string[];
+  backgroundMessageRefusal?: string;
   send: () => Promise<void>;
   sendTitle: string;
   queue: NativeComposeQueueState;
@@ -136,8 +142,12 @@ export function usePipelineMessageComposer({
   const messageBlocked = Boolean(pipeline.validationRun && !pipeline.reviewPackage);
   const [sendPending, setSendPending] = useState(false);
 
+  // A session waiting on background work stays `running`, but its turn is over:
+  // a message goes out as a new turn and there is nothing to steer.
   const turnRunning =
-    !["paused", "complete", "failed"].includes(pipeline.phase) && session?.status === "running";
+    !["paused", "complete", "failed"].includes(pipeline.phase) &&
+    session?.status === "running" &&
+    !session.awaitingBackgroundWork;
   // The same gate the backend applies before it steers. A bridge that turns out
   // not to support steering is reported by the backend, and the message stays queued.
   const steerAvailable =
@@ -267,6 +277,7 @@ export function usePipelineMessageComposer({
   const queued = pipeline.pendingUserMessages ?? [];
   const command = parseLeadingSlashCommand(draft);
   return {
+    backgroundMessageRefusal: queued.length ? session?.backgroundMessageRefusal : undefined,
     draft,
     setDraft,
     sendPending,
@@ -357,6 +368,12 @@ export function PipelineMessageComposer({ state }: { state: PipelineComposerStat
           <p className="mt-2 whitespace-pre-wrap break-words select-text">{text}</p>
         </details>
       ))}
+      {state.backgroundMessageRefusal && (
+        <p role="status" className="mb-2 text-sm text-muted-foreground">
+          Message queued: {state.backgroundMessageRefusal}. Waiting for background work to finish or
+          stop.
+        </p>
+      )}
       <QueuedPromptStack ref={queueStackRef} queue={queue} onExit={returnFromQueue} />
       <div className="rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
         <div className="flex items-end gap-2">

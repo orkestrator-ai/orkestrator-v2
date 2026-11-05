@@ -9,13 +9,19 @@ import {
   usesReviewFanout,
   type BuildPipeline,
   type PipelineQueuedSteerDelivery,
+  type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   nativeAgentSteerRejectionMessage,
   type NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
-import { PromptRejectedError } from "./build-pipeline-provider.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import {
   discardPreparationResult,
@@ -24,6 +30,95 @@ import {
   sessionForCurrentPhase,
 } from "./build-pipeline-service-helpers.js";
 import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
+
+const log = createLogger("build-pipeline");
+
+/** How long a user message the bridge refused during a background wait stays queued. */
+export const BACKGROUND_MESSAGE_RETRY_MS = 60_000;
+
+/** Whether a queued user message may go out now, as a new turn, during a background wait. */
+export function userMessageDueDuringBackgroundWork(
+  pipeline: BuildPipeline,
+  session: PipelineSession,
+): boolean {
+  return (
+    Boolean(pipeline.pendingUserMessages?.length) &&
+    !pipeline.pendingPromptAttempt &&
+    // A retry replaces this session, and the message waits for it on an idle turn too.
+    !pipeline.reviewRetryRequested &&
+    (session.backgroundMessageRetryAt === undefined ||
+      Date.parse(session.backgroundMessageRetryAt) <= Date.now())
+  );
+}
+
+/**
+ * Sends the oldest queued user message while the agent waits on background work
+ * it started. Its turn is over, so there is nothing to steer: the message is a new
+ * turn, which the bridge writes into the process that owns that work. The stage
+ * stays held, because the work is still live when that turn ends.
+ *
+ * A refusal must not fail a stage that is otherwise fine. The bridge answers 409
+ * to a prompt that changes a launch-only setting until the work finishes, which
+ * can be far past the reconnect deadline a parked attempt would run down. So a
+ * send that provably did not reach the agent puts everything back and tries again
+ * later; on the idle turn the normal path owns the message and reports a failure.
+ */
+export async function dispatchUserMessageDuringBackgroundWork(
+  ctx: BuildPipelineContext,
+  pipeline: BuildPipeline,
+  session: PipelineSession,
+  dispatchUserMessage: () => Promise<void>,
+): Promise<void> {
+  const before = pipeline.pendingPromptAttempt?.backgroundMessage;
+  if (!before) return dispatchUserMessage();
+  try {
+    await dispatchUserMessage();
+  } catch (error) {
+    // Recovery probes can fail before proving absence. Only a closed dispatch
+    // window (or an unsent preparation) proves this message is safe to requeue.
+    if (
+      error instanceof AmbiguousPromptDispatchError ||
+      !pipeline.pendingPromptAttempt ||
+      pipeline.pendingPromptAttempt?.dispatchingAt !== undefined
+    )
+      throw error;
+    if (!(error instanceof ProviderUnavailableError || error instanceof PromptRejectedError)) {
+      throw error;
+    }
+    log.warn("user-message.background-send-refused", {
+      pipelineId: pipeline.id,
+      error: formatLogError(error),
+    });
+    delete pipeline.pendingPromptAttempt;
+    delete pipeline.reconnectAttempt;
+    delete pipeline.error;
+    pipeline.pendingUserMessages = [
+      before.message,
+      ...(pipeline.pendingUserMessages ?? []).filter((message) => message.id !== before.message.id),
+    ];
+    pipeline.activePromptContext = before.context;
+    pipeline.stallWarning = before.stallWarning;
+    for (const key of [
+      "validationPlan",
+      "structuredRequestId",
+      "structuredResultStatus",
+      "structuredWaitStartedAt",
+      "turnStartedAt",
+      "completedAt",
+      "usageFinalizationPolls",
+    ] as const)
+      delete session[key];
+    Object.assign(session, before.session, {
+      awaitingBackgroundWork: true,
+      backgroundMessageRefusal: error.message,
+      backgroundMessageRetryAt: new Date(Date.now() + BACKGROUND_MESSAGE_RETRY_MS).toISOString(),
+    });
+    await ctx.save(pipeline, pipeline.backendRevision);
+    return;
+  }
+  if (!pipeline.pendingPromptAttempt)
+    ctx.settleArtifactTurn(pipeline, session, before.context?.requestId);
+}
 
 function validatedUserMessage(text: string): string {
   const trimmed = text.trim();
@@ -81,13 +176,15 @@ function removeUserMessage(pipeline: BuildPipeline, messageId: string): boolean 
 }
 
 /**
- * What became of an attempt to steer the running turn. `not-sent` and `refused`
- * are definite: nothing reached the agent. `unconfirmed` may have, so the text
- * is not safe to deliver a second time.
+ * What became of an attempt to steer the running turn. `not-sent`, `no-turn` and
+ * `refused` are definite: nothing reached the agent, and `no-turn` says that is
+ * because the turn is over. `unconfirmed` may have, so the text is not safe to
+ * deliver a second time.
  */
 type LiveSteerResult =
   | { kind: "steered" }
   | { kind: "not-sent" }
+  | { kind: "no-turn" }
   | { kind: "refused"; error: Error }
   | { kind: "unconfirmed"; error: Error };
 
@@ -159,6 +256,7 @@ export class BuildPipelineUserMessages {
           delivery = "steered";
           return;
         case "not-sent":
+        case "no-turn":
           rejection = enqueueUserMessage(candidate, trimmed);
           return;
         default:
@@ -241,6 +339,10 @@ export class BuildPipelineUserMessages {
           notice = result.error.message;
           candidate.pendingUserMessages = originalQueue;
           return;
+        case "no-turn":
+          delivery = "next-turn";
+          candidate.pendingUserMessages = originalQueue;
+          return;
         default:
           candidate.pendingUserMessages = originalQueue;
           return;
@@ -248,7 +350,9 @@ export class BuildPipelineUserMessages {
     });
     if (rejection) throw rejection;
     // The turn may have just ended, in which case this message is now next.
-    if (delivery === "queued") void this.stageSupervisor.runLocked(pipelineId);
+    if (delivery === "queued" || delivery === "next-turn") {
+      void this.stageSupervisor.runLocked(pipelineId);
+    }
     return { pipeline, delivery, ...(notice ? { notice } : {}) };
   }
 
@@ -268,8 +372,8 @@ export class BuildPipelineUserMessages {
   }
 
   /**
-   * Steers the current session's running turn. `not-sent` means there is no turn
-   * that can be steered right now.
+   * Steers the current session's running turn. `no-turn` means the turn is over;
+   * `not-sent` means one may be running but cannot be steered right now.
    */
   private async steerLiveTurn(
     pipeline: BuildPipeline,
@@ -278,9 +382,8 @@ export class BuildPipelineUserMessages {
   ): Promise<LiveSteerResult> {
     const phase = resumablePhase(pipeline.phase);
     const session = sessionForCurrentPhase(pipeline);
-    if (!phase || !session || session.status !== "running" || !pipeline.environmentId) {
-      return { kind: "not-sent" };
-    }
+    if (!phase || !session || !pipeline.environmentId) return { kind: "not-sent" };
+    if (session.status !== "running") return { kind: "no-turn" };
     // A prompt whose dispatch is unconfirmed has not started its turn; steering
     // now would target the previous one.
     if (pipeline.pendingPromptAttempt) return { kind: "not-sent" };
@@ -292,6 +395,7 @@ export class BuildPipelineUserMessages {
       return { kind: "not-sent" };
     }
     const active = await provider.activeSteerRun(session.sdkSessionId).catch(() => undefined);
+    if (active?.state === "idle") return { kind: "no-turn" };
     if (active?.state !== "running") return { kind: "not-sent" };
 
     const unconfirmed = (): LiveSteerResult => {
@@ -331,7 +435,7 @@ export class BuildPipelineUserMessages {
       default:
         // `idle` and `mismatch`: the turn ended or moved on before delivery, so
         // nothing was sent and the queue is the right place for it.
-        return { kind: "not-sent" };
+        return { kind: "no-turn" };
     }
   }
 }

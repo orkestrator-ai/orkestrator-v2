@@ -7,6 +7,10 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
 import { randomUUID } from "node:crypto";
 import { dispatchWorkerMailTurn } from "./build-pipeline-worker-mail.js";
 import {
+  dispatchUserMessageDuringBackgroundWork,
+  userMessageDueDuringBackgroundWork,
+} from "./build-pipeline-service-user-messages.js";
+import {
   type BuildPipeline,
   type BuildPipelineAgent,
   type PipelineSession,
@@ -38,6 +42,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import {
+  clearBackgroundWait,
   errorMessage,
   sessionForCurrentPhase,
   resumablePhase,
@@ -802,6 +807,9 @@ export class BuildPipelineSupervisor {
       pipeline.pendingPromptAttempt.sessionId === session.sdkSessionId
     ) {
       if (status === "running") {
+        const background = pipeline.pendingPromptAttempt.backgroundMessage;
+        if (background)
+          this.ctx.settleArtifactTurn(pipeline, session, background.context?.requestId);
         delete pipeline.pendingPromptAttempt;
         delete pipeline.reconnectAttempt;
         delete pipeline.error;
@@ -822,8 +830,18 @@ export class BuildPipelineSupervisor {
       status === "idle" &&
       (backgroundWorkLive === true || (retainedContinuationRequestIds?.length ?? 0) > 0);
     if (status === "running" || backgroundWorkPending) {
+      if (backgroundWorkPending && userMessageDueDuringBackgroundWork(pipeline, session)) {
+        await this.dispatchUserMessage(pipeline, provider, session, true);
+        return;
+      }
       const statusChanged = session.status !== "running";
       session.status = "running";
+      const waitChanged = session.awaitingBackgroundWork !== (backgroundWorkPending || undefined);
+      if (backgroundWorkPending) {
+        session.awaitingBackgroundWork = true;
+      } else {
+        clearBackgroundWait(session);
+      }
       // Viewers read the committed copy, which only a save changes, so the
       // transcript is looked at only when this pass may save it: a status
       // change, the persist boundary, or a shown stall warning that movement
@@ -832,7 +850,7 @@ export class BuildPipelineSupervisor {
       const persistDue = this.shouldPersistTranscript(session);
       const transcript = sharedTranscriptRead(provider, session.sdkSessionId);
       const transcriptChanged =
-        statusChanged || persistDue || pipeline.stallWarning !== undefined
+        statusChanged || waitChanged || persistDue || pipeline.stallWarning !== undefined
           ? await this.refreshMovedTranscript(session, provider, { read: transcript.read })
           : false;
       // Live usage, so a running node shows what the turn has cost so far.
@@ -866,7 +884,12 @@ export class BuildPipelineSupervisor {
       // and this pipeline's control row. A pass that read nothing had no
       // warning to clear, and its stall clock is younger than the persist
       // interval, so no warning can appear on it either.
-      if (statusChanged || warningChanged || ((transcriptChanged || usageChanged) && persistDue)) {
+      if (
+        statusChanged ||
+        waitChanged ||
+        warningChanged ||
+        ((transcriptChanged || usageChanged) && persistDue)
+      ) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.ctx.save(pipeline, record.revision);
       }
@@ -875,6 +898,7 @@ export class BuildPipelineSupervisor {
 
     const wasRunning = session.status === "running";
     session.status = "idle";
+    clearBackgroundWait(session);
     const completionChanged = session.completedAt === undefined;
     session.completedAt ??= new Date().toISOString();
     delete pipeline.stallWarning;
@@ -1358,11 +1382,32 @@ export class BuildPipelineSupervisor {
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
+    duringBackgroundWork = false,
   ): Promise<void> {
     const [next, ...rest] = pipeline.pendingUserMessages ?? [];
     if (!next) return;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
+    const backgroundMessage = duringBackgroundWork
+      ? {
+          message: next,
+          context: pipeline.activePromptContext,
+          stallWarning: pipeline.stallWarning,
+          session: {
+            validationPlan: session.validationPlan,
+            structuredRequestId: session.structuredRequestId,
+            structuredResultStatus: session.structuredResultStatus,
+            structuredWaitStartedAt: session.structuredWaitStartedAt,
+            turnStartedAt: session.turnStartedAt,
+            completedAt: session.completedAt,
+            usageFinalizationPolls: session.usageFinalizationPolls,
+          },
+        }
+      : undefined;
+    if (duringBackgroundWork) {
+      session.validationPlan ??= pipeline.activePromptContext?.validationPlan;
+      delete pipeline.activePromptContext;
+    }
     if (phase === "building" || phase === "fixing") discardPreparationResult(session);
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
@@ -1372,6 +1417,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
+      backgroundMessage,
       dispatchVersion: 1,
       id: next.id,
       sessionId: session.sdkSessionId,
@@ -1385,6 +1431,7 @@ export class BuildPipelineSupervisor {
     delete session.completedAt;
     delete session.usageFinalizationPolls;
     delete pipeline.stallWarning;
+    clearBackgroundWait(session);
     await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.dispatchPending(pipeline, provider);
   }
@@ -2052,6 +2099,14 @@ export class BuildPipelineSupervisor {
   }
 
   dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
+    const session = pipeline.sessions.find(
+      (s) => s.sdkSessionId === pipeline.pendingPromptAttempt?.sessionId,
+    );
+    if (session && pipeline.pendingPromptAttempt?.backgroundMessage) {
+      return dispatchUserMessageDuringBackgroundWork(this.ctx, pipeline, session, () =>
+        this.promptDispatch.dispatchPending(pipeline, provider),
+      );
+    }
     return this.promptDispatch.dispatchPending(pipeline, provider);
   }
 

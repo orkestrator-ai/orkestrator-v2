@@ -354,7 +354,9 @@ export function BuildChatTab({
             )}
             {showStallWarning && (
               <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
-                {stalledSession?.label ?? "The active stage"} is still running, but its transcript
+                {stalledSession?.awaitingBackgroundWork
+                  ? `${stalledSession.label} finished its turn and is waiting on background work, but its transcript`
+                  : `${stalledSession?.label ?? "The active stage"} is still running, but its transcript`}{" "}
                 has not changed for an extended period. It was not stopped automatically.
               </div>
             )}

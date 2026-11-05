@@ -89,8 +89,9 @@ script into `${BUN_INSTALL:-~/.bun}/bin` and refuses any archive whose SHA-256
 is not the one stated beside it. It does not edit your shell profile; add that
 directory to `PATH` to run `bun` yourself. It then installs the release with the
 dependency versions it was published with (its `bun.lock`) in a temporary
-directory, which is removed when the service stops. A release published before
-the lockfile runs through `bun x` instead.
+directory, which is removed when the first-run CLI exits. The service runs from
+its own installed release in the data directory. A release published before the
+lockfile runs through `bun x` instead.
 
 macOS and Linux are supported. Docker is required for container environments;
 Tailscale is required only for tailnet access and Tailscale Serve.

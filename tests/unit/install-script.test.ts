@@ -50,6 +50,7 @@ type InstallerRun = {
   bunDirectory: string;
   /** What the script left in its temporary directory. */
   leftInTmp: string[];
+  childPath: string;
 };
 
 type DownloadFixture = {
@@ -61,6 +62,7 @@ type DownloadFixture = {
   version?: string;
   /** curl fails instead of downloading. */
   unreachable?: boolean;
+  missingBinary?: boolean;
 };
 
 type InstallerScenario = {
@@ -78,7 +80,10 @@ type InstallerScenario = {
   useHomeDefault?: boolean;
   download?: DownloadFixture;
   /** Which SHA-256 tool the host has. */
-  hasher?: "sha256sum" | "shasum";
+  hasher?: "sha256sum" | "shasum" | "none";
+  missingUnzip?: boolean;
+  alpine?: boolean;
+  cpuinfo?: string;
   args?: string[];
   /** The caller's own choice of release. */
   installVersion?: string;
@@ -91,8 +96,14 @@ async function writeStub(file: string, body: string): Promise<void> {
   await chmod(file, 0o755);
 }
 
+const HOST_TOOL_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/usr/bin/core_perl";
+
+function defaultHasher(toolPath = HOST_TOOL_PATH): "sha256sum" | "shasum" {
+  return Bun.which("sha256sum", { PATH: toolPath }) ? "sha256sum" : "shasum";
+}
+
 function realTool(name: string): string {
-  const found = Bun.which(name, { PATH: "/usr/bin:/bin:/usr/sbin:/sbin:/usr/bin/core_perl" });
+  const found = Bun.which(name, { PATH: HOST_TOOL_PATH });
   if (!found) throw new Error(`${name} is required to run the install.sh tests`);
   return found;
 }
@@ -103,6 +114,7 @@ function bunStub(label: string, version: string, installLog: string): string {
   --version) printf '%s\\n' '${version}' ;;
   install)
     printf '%s\\n' "$*" >> '${installLog}'
+    printf '%s\\n' "$PATH" > '${installLog}.path'
     mkdir -p node_modules/orkestrator && printf '{}\\n' > node_modules/orkestrator/package.json ;;
   x) shift; printf '${label} x %s\\n' "$*" ;;
   *) printf '${label} %s\\n' "$*" ;;
@@ -123,7 +135,10 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
     bunInstalled = false,
     useHomeDefault = false,
     download,
-    hasher = "sha256sum",
+    hasher = defaultHasher(),
+    missingUnzip = false,
+    alpine = false,
+    cpuinfo = "flags : avx2",
     args = [],
     installVersion,
   } = scenario;
@@ -141,8 +156,11 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
   await mkdir(home, { recursive: true });
   await mkdir(pathDirectory, { recursive: true });
 
-  for (const tool of ["mktemp", "rm", "mkdir", "cp", "mv", "chmod", "ln", "sleep", hasher]) {
+  for (const tool of ["mktemp", "rm", "mkdir", "cp", "mv", "chmod", "ln", "sleep"]) {
     await symlink(realTool(tool), path.join(pathDirectory, tool));
+  }
+  if (hasher !== "none") {
+    await symlink(realTool(hasher), path.join(pathDirectory, hasher));
   }
   await writeStub(
     path.join(pathDirectory, "uname"),
@@ -164,7 +182,15 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
     ].join("\n"),
   );
 
-  let script = SCRIPT;
+  // Replace only the host-file reads in the fixture copy, never on the host.
+  const alpineFile = path.join(sandbox, "alpine-release");
+  const cpuinfoFile = path.join(sandbox, "cpuinfo");
+  if (alpine) await writeFile(alpineFile, "3.22.0\n");
+  await writeFile(cpuinfoFile, cpuinfo);
+  let script = SCRIPT.replaceAll("/etc/alpine-release", alpineFile).replaceAll(
+    "/proc/cpuinfo",
+    cpuinfoFile,
+  );
   if (download) {
     const archiveBytes = `fixture bun archive for ${download.target}\n`;
     const archive = path.join(sandbox, "fixture.zip");
@@ -189,19 +215,20 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
           ].join("\n"),
     );
     // Unpacks the fixture as Bun's archive layout: bun-<target>/bun.
-    await writeStub(
-      path.join(pathDirectory, "unzip"),
-      [
-        'archive=""; dir=""',
-        "while [ $# -gt 0 ]; do",
-        '  case "$1" in -d) dir="$2"; shift ;; -*) ;; *) archive="$1" ;; esac',
-        "  shift",
-        "done",
-        'name="${archive##*/}"; name="${name%.zip}"',
-        'mkdir -p "$dir/$name"',
-        `cp '${downloadedBun}' "$dir/$name/bun"`,
-      ].join("\n"),
-    );
+    if (!missingUnzip)
+      await writeStub(
+        path.join(pathDirectory, "unzip"),
+        [
+          'archive=""; dir=""',
+          "while [ $# -gt 0 ]; do",
+          '  case "$1" in -d) dir="$2"; shift ;; -*) ;; *) archive="$1" ;; esac',
+          "  shift",
+          "done",
+          'name="${archive##*/}"; name="${name%.zip}"',
+          'mkdir -p "$dir/$name"',
+          download.missingBinary ? ":" : `cp '${downloadedBun}' "$dir/$name/bun"`,
+        ].join("\n"),
+      );
     if (download.stampHash) {
       const variable = `BUN_SHA256_${download.target.toUpperCase().replaceAll("-", "_")}`;
       const hash = createHash("sha256").update(archiveBytes).digest("hex");
@@ -253,6 +280,7 @@ async function runInstaller(scenario: InstallerScenario = {}): Promise<Installer
     downloads: lines(downloadLog),
     bunDirectory,
     leftInTmp: await readdir(tmp),
+    childPath: lines(`${installLog}.path`)[0] ?? "",
   };
 }
 
@@ -361,6 +389,7 @@ describe("web-public install.sh", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(`installed-bun x ${PACKAGE} ${PUBLISHED_ARGS.join(" ")}`);
     expect(result.downloads).toEqual([]);
+    expect(result.childPath.split(":")[0]).toBe(result.bunDirectory);
   });
 
   test("defaults BUN_INSTALL to ~/.bun", async () => {
@@ -455,13 +484,65 @@ describe("web-public install.sh", () => {
     },
   );
 
+  test("selects the default hasher on a host with only shasum", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-hasher-"));
+    temporaryDirectories.push(directory);
+    await writeStub(path.join(directory, "shasum"), "exit 0");
+    expect(defaultHasher(directory)).toBe("shasum");
+    await writeStub(path.join(directory, "sha256sum"), "exit 0");
+    expect(defaultHasher(directory)).toBe("sha256sum");
+  });
+
+  for (const [label, scenario, message] of [
+    ["missing unzip", { missingUnzip: true }, "unzip is required"],
+    ["missing hash tools", { hasher: "none" }, "sha256sum or shasum is required"],
+    [
+      "missing archive binary",
+      { download: { target: "darwin-aarch64", stampHash: true, missingBinary: true } },
+      "archive has no bun-darwin-aarch64/bun",
+    ],
+  ] as const) {
+    test(`refuses ${label} without installing or launching Bun`, async () => {
+      const result = await runInstaller({
+        download: { target: "darwin-aarch64", stampHash: true },
+        ...scenario,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(result.installs).toEqual([]);
+      expect(result.stdout).toBe("");
+      expect(existsSync(path.join(result.bunDirectory, "bun"))).toBe(false);
+      expect(result.leftInTmp).toEqual([]);
+    });
+  }
+
+  test("all nine archive hashes match the published Bun checksum fixture", async () => {
+    // Captured from the release's SHASUMS256.txt on 2026-11-05:
+    // https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/SHASUMS256.txt
+    // Keep this fixture versioned; a Bun bump must capture the new release's list.
+    const checksums = await readFile(
+      path.join(root, `tests/fixtures/bun-release/SHASUMS256-${PINNED_BUN}.txt`),
+      "utf8",
+    );
+    const published = new Map(
+      checksums
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const [hash, archive] = line.trim().split(/\s+/);
+          return [archive!, hash!];
+        }),
+    );
+    const hashes = Array.from(SCRIPT.matchAll(/^BUN_SHA256_([A-Z0-9_]+)="([a-f0-9]{64})"$/gm));
+    expect(hashes).toHaveLength(9);
+    for (const [, target, hash] of hashes) {
+      const archive = `bun-${target!.toLowerCase().replaceAll("_", "-")}.zip`;
+      expect({ archive, hash }).toEqual({ archive, hash: published.get(archive) });
+    }
+  });
+
   // The archive Bun's own installer would choose. Each case stamps the hash only
   // for the expected archive, so choosing another one fails the hash check too.
-  const hostLinuxX64 = (() => {
-    const musl = existsSync("/etc/alpine-release") ? "-musl" : "";
-    const cpuinfo = existsSync("/proc/cpuinfo") ? readFileSync("/proc/cpuinfo", "utf8") : "";
-    return `linux-x64${musl}${cpuinfo.includes("avx2") ? "" : "-baseline"}`;
-  })();
   const targets: Array<[string, InstallerScenario, string]> = [
     ["Apple Silicon", { platform: "Darwin", machine: "arm64" }, "darwin-aarch64"],
     [
@@ -487,12 +568,24 @@ describe("web-public install.sh", () => {
       { platform: "Darwin", machine: "x86_64", sysctl: { "sysctl.proc_translated": "1" } },
       "darwin-aarch64",
     ],
+    ["Linux arm64", { platform: "Linux", machine: "aarch64" }, "linux-aarch64"],
     [
-      "Linux arm64",
-      { platform: "Linux", machine: "aarch64" },
-      existsSync("/etc/alpine-release") ? "linux-aarch64-musl" : "linux-aarch64",
+      "Linux arm64 musl",
+      { platform: "Linux", machine: "aarch64", alpine: true },
+      "linux-aarch64-musl",
     ],
-    ["Linux x64 (this host's CPU)", { platform: "Linux", machine: "x86_64" }, hostLinuxX64],
+    ...[false, true].flatMap((alpine): Array<[string, InstallerScenario, string]> =>
+      [false, true].map((avx2) => [
+        `Linux x64 ${alpine ? "musl" : "glibc"} ${avx2 ? "AVX2" : "baseline"}`,
+        {
+          platform: "Linux",
+          machine: "x86_64",
+          alpine,
+          cpuinfo: avx2 ? "flags : avx2" : "flags : sse2",
+        },
+        `linux-x64${alpine ? "-musl" : ""}${avx2 ? "" : "-baseline"}`,
+      ]),
+    ),
   ];
   for (const [label, scenario, target] of targets) {
     test(`downloads bun-${target} on ${label}`, async () => {

@@ -391,9 +391,12 @@ describe("useNativeAgentSession background read flags", () => {
     act(() => {
       inFlight = result.current.refresh({ manual: false });
     });
-    // Nothing authoritative is held yet, so the surface needs the flags.
-    await waitFor(() => expect(result.current.isRefreshing).toBe(true));
-    expect(result.current.sessionStateRefreshing).toBe(true);
+    // Nothing authoritative is held yet, so the surface needs the flags. The
+    // read raises them either side of its capability check, so wait for both.
+    await waitFor(() => {
+      expect(result.current.isRefreshing).toBe(true);
+      expect(result.current.sessionStateRefreshing).toBe(true);
+    });
 
     await act(async () => {
       release();

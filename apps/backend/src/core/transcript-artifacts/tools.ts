@@ -14,10 +14,19 @@
  */
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { ARTIFACT_TOOL_POLICY, utf8ByteLength } from "@orkestrator/protocol/rich-content-policy";
+import { AGENT_CHART_SPEC_SHAPES } from "@orkestrator/protocol/agent-system-instructions";
+import {
+  ARTIFACT_TOOL_POLICY,
+  STATIC_PRESENTATION_POLICY,
+  utf8ByteLength,
+} from "@orkestrator/protocol/rich-content-policy";
 import { ARTIFACT_KINDS, type ArtifactToolName } from "@orkestrator/protocol/transcript-artifacts";
 import type { ArtifactCallerScope } from "./owner.js";
-import { MAX_REQUEST_KEY_BYTES, type ArtifactResponse } from "./service-context.js";
+import {
+  MAX_REQUEST_KEY_BYTES,
+  type ArtifactAuthoringAvailability,
+  type ArtifactResponse,
+} from "./service-context.js";
 
 export interface TranscriptArtifactToolHost {
   toolsEnabled(): boolean;
@@ -27,6 +36,8 @@ export interface TranscriptArtifactToolHost {
     args: Record<string, unknown>,
     meta?: { toolCallId?: string },
   ): Promise<ArtifactResponse>;
+  /** What verification can do now; absent on hosts that do not report it. */
+  authoringAvailability?(): ArtifactAuthoringAvailability;
   /**
    * Scope of an artifact-only connection authenticated by a turn's artifact
    * grant (`/artifact-mcp`), or null when the grant does not verify.
@@ -36,8 +47,8 @@ export interface TranscriptArtifactToolHost {
 
 /** Concise guidance appended to the common server's instructions. */
 export const ARTIFACT_TOOL_INSTRUCTIONS =
-  " Artifacts: answer in Markdown by default (small code fences and Mermaid fences render inline; HTML code fences never execute). " +
-  "Use an artifact only for durable, larger or interactive output: html-static (scripts are stripped), html-interactive (runs offline in an isolated viewer; declare probes to verify behaviour), mermaid, chart (declarative ChartSpecV1 data), or workflow-snapshot (facts come from the backend; pass workflowId and runId only). " +
+  " Artifacts: answer in Markdown by default (small code fences, Mermaid fences and ```chart fences holding one ChartSpecV1 JSON object render inline; HTML code fences never execute). " +
+  `Use an artifact for durable, larger or interactive output: html-static (a custom report or layout; scripts are stripped, and its verified document is displayed in the transcript as selectable content, up to ${STATIC_PRESENTATION_POLICY.maxDocumentBytes / 1024} KiB and ${STATIC_PRESENTATION_POLICY.maxElements} elements; use fluid widths, let content set the height and colour it with --ork-* theme variables, each with a fallback because the preview defines none), html-interactive (runs offline in an isolated viewer when the reader activates it; declare probes to verify behaviour), mermaid, chart (declarative ChartSpecV1 data), or workflow-snapshot (facts come from the backend; pass workflowId and runId only). ` +
   "Flow: create_artifact → preview_artifact → get_artifact_operation (inspect diagnostics/capture) → publish_artifact with the receipt. " +
   "Repair failures with update_artifact (full replacement, expectedRevision) and preview again; at most two repairs. " +
   "Every mutation takes a requestKey you reuse only to retry the same call. Pass scopeCapability when your instructions provide one.";
@@ -53,6 +64,23 @@ export const ARTIFACT_ONLY_SERVER_INSTRUCTIONS =
     " Pass scopeCapability when your instructions provide one.",
     " This connection is already bound to this conversation; omit scopeCapability.",
   );
+
+/**
+ * What this host's verification can do, as of this connection. Instructions
+ * are read when a client connects, so this is a statement at that moment;
+ * `preview_artifact` still answers `renderer_unavailable` if it changes.
+ * Publications are not affected: they replay from stored bytes.
+ */
+export function artifactAuthoringNotice(status: ArtifactAuthoringAvailability | undefined): string {
+  if (!status) return "";
+  if (!status.preview) {
+    const reason = status.previewReason ? ` (${status.previewReason.slice(0, 200)})` : "";
+    return ` On this host HTML and Mermaid artifacts cannot currently be verified or published${reason}; explain that if it affects your answer and use Markdown, a Mermaid fence, a chart fence or a chart artifact instead. Artifacts already published still display.`;
+  }
+  if (!status.interactive)
+    return " On this host html-interactive artifacts cannot currently be prepared; html-static, mermaid and chart artifacts still work.";
+  return "";
+}
 
 const requestKey = z
   .string()
@@ -76,13 +104,11 @@ const payloadSchema = z
   })
   .loose()
   .describe(
-    'html-static: {kind, html}. html-interactive: {kind, html, dependencyIds? (from "d3@7.9.0", "chart.js@4.5.1"; classic scripts read the globals d3/Chart, module scripts import "d3", "chart.js" or "chart.js/auto"), probes?}. ' +
+    'html-static: {kind, html} (self-contained HTML, CSS and inline SVG; displayed as a document in the transcript). html-interactive: {kind, html, dependencyIds? (from "d3@7.9.0", "chart.js@4.5.1"; classic scripts read the globals d3/Chart, module scripts import "d3", "chart.js" or "chart.js/auto"), probes?}. ' +
       "probes: up to 20 of {op:'click',target} | {op:'set-number',target,value} | {op:'fill',target,text} | " +
       "{op:'expect-text',target,equals} | {op:'expect-number',target,equals,tolerance?} | {op:'wait-visible',target,timeoutMs?}; " +
       "target is the value of a unique data-artifact-test attribute. mermaid: {kind, source}. " +
-      "chart: {kind, spec} where spec = {schemaVersion:1, kind:'bar'|'line'|'area'|'scatter'|'donut', title, description, sourceNotes?, ...}; " +
-      "bar adds xAxis:{kind:'category',label}, yAxis:{label,unit?}, categories:[{id,label}], series:[{id,label,points:[{categoryId,value|null}]}] (one point per category); " +
-      "line/area/scatter add xAxis:{kind:'number'|'utc-time',label,unit?}, yAxis, series:[{id,label,points:[{x,y|null}]}]; donut adds valueLabel, unit?, slices:[{id,label,value}]. " +
+      `chart: {kind, spec} where spec = {schemaVersion:1, kind:'bar'|'line'|'area'|'scatter'|'donut', title, description, sourceNotes?, ...}; ${AGENT_CHART_SPEC_SHAPES}. ` +
       "workflow-snapshot: {kind, workflowId: multi-review|build-pipeline, runId, expectedWorkflowRevision?}.",
   );
 

@@ -31,6 +31,8 @@ export type RemoteWorkerState =
       requestPending?: boolean;
       /** Raw activity continues after the worker's turn ended (absent on older nodes). */
       backgroundWorkPending?: boolean;
+      /** A goal will start the tab's next turn, so its idle is the loop's (absent on older nodes). */
+      goalRunning?: boolean;
     };
 
 /** A workflow's persisted record on its node: what the local status reducers read. */

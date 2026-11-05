@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ProviderEvidence } from "@orkestrator/protocol/change-evidence";
 import {
   exactCount,
+  FILE_ROWS_CAPPED_REASON,
   notApplicableCount,
   unknownCount,
 } from "@orkestrator/protocol/change-measurements";
@@ -402,6 +403,17 @@ export class DiffBodyService {
     const pathId = row?.new_path ?? row?.path_id ?? input.pathId;
     if (!pathId)
       return { kind: "error", error: { code: "not-found", reasonKey: "changes.error.not-found" } };
+    // A capped Git scope has no row for most of its files, and cannot say
+    // whether this path is one of them.
+    if (
+      scope !== "environment-net" &&
+      !row &&
+      measurement?.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)
+    )
+      return {
+        kind: "error",
+        error: { code: "not-found", reasonKey: `changes.reason.${FILE_ROWS_CAPPED_REASON}` },
+      };
     // A Git scope's rows are Git's view; a path Git measures through a filter
     // program has no raw-byte body that would match it.
     if (scope !== "environment-net" && (!row || row.reason === "git-filter-unsupported"))

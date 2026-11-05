@@ -40,6 +40,8 @@ export interface ChangeTrackingPolicy {
   diffBatchBytes: number;
   filePageRows: number;
   filePageBytes: number;
+  /** File rows stored per measurement built from a whole-tree comparison or scan. */
+  measurementFileRowCap: number;
   // Caches.
   hunkCacheBytes: number;
   hunkCacheEntries: number;
@@ -84,6 +86,7 @@ export const CHANGE_TRACKING_POLICY_V1: Readonly<ChangeTrackingPolicy> = Object.
   diffBatchBytes: 1024 * 1024,
   filePageRows: 200,
   filePageBytes: 256 * 1024,
+  measurementFileRowCap: 2_000,
   hunkCacheBytes: 64 * 1024 * 1024,
   hunkCacheEntries: 128,
   summaryMemoryBytes: 16 * 1024 * 1024,

@@ -59,5 +59,9 @@ describe("public client deployment configuration", () => {
     // The user picks the backend origin at runtime, so connect-src must allow HTTPS broadly.
     expect(csp).toContain("connect-src 'self' https: wss:");
     expect(read("index.html")).toContain('<script type="module" src="/src/main.tsx"></script>');
+    // This policy cannot run the static document frame, and the build says so.
+    expect(read("vite.config.ts")).toContain(
+      '"import.meta.env.ORKESTRATOR_STATIC_HTML_PRESENTATION": JSON.stringify("unavailable")',
+    );
   });
 });

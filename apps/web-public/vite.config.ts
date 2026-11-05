@@ -5,6 +5,11 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    // `vercel.json`'s policy cannot run the static document frame; see
+    // `staticHtmlPresentationSupported`.
+    "import.meta.env.ORKESTRATOR_STATIC_HTML_PRESENTATION": JSON.stringify("unavailable"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "../web/src"),

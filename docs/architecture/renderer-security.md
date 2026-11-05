@@ -19,6 +19,7 @@ inline script or eval.
 | Gateway-served renderer | The same `<meta>`, plus a header from `serveStatic` that adds `frame-ancestors 'self'` | `GATEWAY_RENDERER_CONTENT_SECURITY_POLICY` |
 | Gateway login page | Header (`loginPageResponse`) | `GATEWAY_LOGIN_CONTENT_SECURITY_POLICY` |
 | Design frame document | Its own `<meta>`, pinned to the script's hash, plus a `sandbox allow-scripts` header on the gateway | `designFrameDocument` |
+| Static HTML frame document | The same form as the design frame document | `staticHtmlFrameDocument` |
 | Renderer dev server | None | Vite's React preamble is an inline script |
 | Hosted client | `apps/web-public/vercel.json` | Separate and stricter |
 
@@ -40,7 +41,7 @@ What to keep in mind when changing it:
   `installRendererFilePolicy` runs on renderer and realm sessions before load,
   resolves symlinks and refuses paths outside that root. CSP file-origin
   `self` alone is not a directory boundary.
-- **Only `index.html` and the design frame document get a policy.** Worker
+- **Only `index.html` and the two frame documents get a policy.** Worker
   scripts have none, so the highlighter's Oniguruma WebAssembly needs no
   `'wasm-unsafe-eval'` in the document's `script-src`.
 
@@ -53,6 +54,20 @@ inline bootstrap. A production build therefore emits the bootstrap as
 from the gateway root on nested SPA routes and beside the packaged index. A file cannot
 carry a fresh nonce, so its policy pins the script's SHA-256; authored code still
 cannot execute. A dev server and the hosted client keep the nonce-bearing `srcdoc`.
+
+### Static HTML frames
+
+The transcript's static document presentation loads the same way
+(`static-html-frame.html`, `staticHtmlFrameSource`), and adds `media-src 'none'`.
+A file has no per-mount nonce to carry, so the host appends one as the URL
+fragment; no server sees it, and it confers no authority beyond matching the
+frame's `ready` to this mount. The frame is always opaque, so the host checks the
+sender window and that identity rather than `event.origin`. Adding another frame
+document means updating `vite-plugin-renderer-security.ts`,
+`staticDocumentContentSecurityPolicy` in `gateway-proxy.ts` and the probes in
+`packaged-security-electron.spec.ts`. The hosted client emits no frame documents
+and its policy refuses a `srcdoc` bootstrap, so its build declares the static view
+unavailable (`staticHtmlPresentationSupported`) and shows saved previews.
 
 ## OS sandbox
 

@@ -329,7 +329,7 @@ measurement in a real browser, and the browser QA in the acceptance criteria.
   `apps/backend/src/terminal-websocket-server.ts`) is opt-in through the
   `terminalTransport` option or the `orkestrator-terminal-transport`
   localStorage key, has socket and channel limits, and uses no message
-  compression. Output ACKs are cumulative and coalesced for 50 ms.
+  compression. Output ACKs are cumulative and coalesced for 1 s (50 ms until 2026-11-04).
 - `apps/backend/scripts/remote-bandwidth-baseline.ts` runs the real gateway in
   process (temporary data directory, ephemeral `127.0.0.1` port, random token
   never printed) against synthetic workloads and reports aggregate bytes,

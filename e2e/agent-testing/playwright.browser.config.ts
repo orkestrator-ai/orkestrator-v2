@@ -62,6 +62,7 @@ export default defineConfig({
     "transcript-paging-live.spec.ts",
     "cold-restart-live.spec.ts",
     "claude-revision-tokens-live.spec.ts",
+    "agent-tab-requests-live.spec.ts",
     "mcp-apply-live.spec.ts",
     "mcp-overlay-recovery.spec.ts",
     "mcp-ui-matrix.spec.ts",

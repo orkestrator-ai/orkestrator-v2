@@ -60,7 +60,17 @@ export interface TranscriptArtifactCapabilities {
   liveInteractive: boolean;
   /** Dedicated content listener origin for executable documents, when serving. */
   contentOrigin: string | null;
-  rolloutFlags: { richMarkdown: boolean; artifactPublication: boolean; liveInteractive: boolean };
+  rolloutFlags: {
+    richMarkdown: boolean;
+    artifactPublication: boolean;
+    liveInteractive: boolean;
+    /**
+     * Display a published `html-static` document in the transcript. Off keeps
+     * every card on its saved preview; no publication changes. Absent on older
+     * backends, whose stored documents display the same way.
+     */
+    staticPresentation?: boolean;
+  };
   /**
    * Whether this backend can build (or pull) the isolated container preview
    * worker on demand (`transcript_artifact_prepare_worker`), and the state of

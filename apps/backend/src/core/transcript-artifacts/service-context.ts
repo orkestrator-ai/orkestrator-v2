@@ -34,10 +34,19 @@ export interface ArtifactResponse {
   image?: { data: string; mimeType: "image/png" };
 }
 
+/** What a host's verification can do now; published documents replay regardless. */
+export interface ArtifactAuthoringAvailability {
+  preview: boolean;
+  /** Content-free reason, when preview is unavailable. */
+  previewReason?: string;
+  interactive: boolean;
+}
+
 export interface ArtifactRolloutFlags {
   richMarkdown: boolean;
   artifactPublication: boolean;
   liveInteractive: boolean;
+  staticPresentation: boolean;
 }
 
 /** Resolves an already authorized attachment/upload reference to bytes. */

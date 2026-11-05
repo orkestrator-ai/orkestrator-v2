@@ -1032,11 +1032,11 @@ export class OrkestratorBackend {
           if (event.owner !== "coordinator") {
             this.wakeWorkflows(event.environmentId, "provider-transition");
           }
-          // A delegated tab blocked on input or an approval, or working again:
-          // the edges a coordinator's waiting-worker status wake hangs off.
+          // Forward readable worker activity edges so leaving waiting ends its
+          // episode immediately, including a brief idle gap before waiting again.
           if (
             event.owner !== "coordinator" &&
-            (event.state === "waiting" || event.state === "working") &&
+            (event.state === "waiting" || event.state === "working" || event.state === "idle") &&
             event.logicalSessionKey?.startsWith(`env-${event.environmentId}:`)
           ) {
             void this.coordinators

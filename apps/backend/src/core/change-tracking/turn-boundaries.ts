@@ -621,7 +621,11 @@ export class TurnBoundaryService {
    * Dirty-driven provisional net for a running turn: at most one capture per
    * spacing interval per worktree, no capture when nothing changed. One
    * capture serves every running turn on the physical worktree, including
-   * those of other environments aliasing it, each against its own start.
+   * those of other environments aliasing it, each against its own start. A
+   * turn whose tree did not move publishes nothing: every capture has a new
+   * snapshot id, so a publish would store the whole file list again. The
+   * unused snapshot row goes with retention's next sweep, and a turn's end
+   * always publishes.
    */
   async provisional(
     environmentId: string,
@@ -653,6 +657,7 @@ export class TurnBoundaryService {
       if (outcome.kind !== "published") return [];
       const advanced: string[] = [];
       for (const turn of turns) {
+        if (this.sameAsPublished(turn.turn_id, turn.segment_id, outcome.snapshotId)) continue;
         this.deps.ledger.transaction(() => {
           this.deps.ledger.updateSegment(turn.segment_id, {
             latest_live_snapshot_id: outcome.snapshotId,
@@ -677,6 +682,42 @@ export class TurnBoundaryService {
     } finally {
       this.provisionalRunning.delete(key);
     }
+  }
+
+  private sameAsPublished(turnId: string, segmentId: string, snapshotId: string): boolean {
+    // Segment liveness advances before publication. Only durable measurements
+    // prove that both resources published this tree, including after a restart.
+    const captured = this.snapshotRow(snapshotId);
+    if (!captured) return false;
+    const inventoryTruncated = (row: SnapshotRow) =>
+      JSON.parse(row.coverage_json).inventoryTruncated === true;
+    const turn = this.deps.ledger.turn(turnId);
+    const segment = this.deps.ledger.segment(segmentId);
+    return [
+      {
+        measurement: this.deps.ledger.latestMeasurement("turn", turnId, "turn-net"),
+        hasBaseline: !!this.snapshotRow(turn?.start_snapshot_id ?? null),
+      },
+      {
+        measurement: this.deps.ledger.latestMeasurement("segment", segmentId, "thread-net"),
+        hasBaseline:
+          segment?.baseline_state === "active" && !!this.snapshotRow(segment.baseline_snapshot_id),
+      },
+    ].every(({ measurement, hasBaseline }) => {
+      if (measurement?.finality !== "provisional") return false;
+      // With no start, measureSnapshots seals an endpoint-less, row-less result.
+      // It cannot change on this pass; still compare the other resource.
+      if (!hasBaseline && measurement.completeness.reasons.includes("start-unavailable"))
+        return true;
+      const latest = this.snapshotRow(measurement.afterSnapshotId);
+      return (
+        latest !== null &&
+        latest.tree_oid === captured.tree_oid &&
+        (JSON.parse(latest.consistency_json) as { state: string }).state ===
+          (JSON.parse(captured.consistency_json) as { state: string }).state &&
+        inventoryTruncated(latest) === inventoryTruncated(captured)
+      );
+    });
   }
 
   /**

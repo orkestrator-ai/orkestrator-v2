@@ -23,6 +23,7 @@ import {
   addLineCounts,
   CHANGE_MEASUREMENT_SCHEMA_VERSION,
   exactCount,
+  FILE_ROWS_CAPPED_REASON,
   measurementIssues,
   notApplicableCount,
   partialCount,
@@ -63,13 +64,14 @@ import type {
 } from "./change-ledger.js";
 import type { EvidenceBodyStore } from "./evidence-body-store.js";
 import { operationVolumeResourceKey, toolResourceKeys, turnResourceKeys } from "./identities.js";
+import { capMeasurementFiles } from "./measurement-file-cap.js";
 import type { ObjectStore } from "./object-store.js";
 import { compareManifests } from "./snapshot-diff.js";
 
 export interface PublishInput {
   measurement: ChangeMeasurement;
   owner: { kind: string; id: string };
-  files: MeasurementFileRecord[];
+  files: readonly MeasurementFileRecord[];
   identity: DiffIdentity | null;
   resourceKey: string;
   selector?: "live" | "final" | "pinned";
@@ -92,6 +94,8 @@ export interface PublishOutcome {
 export const MEASUREMENTS_KEPT_PER_OWNER = 2;
 /** Superseded measurements pruned per publication: more than one, so a backlog shrinks. */
 const MEASUREMENTS_PRUNED_PER_PUBLISH = 2;
+/** File rows deleted inside the publishing transaction; the rest drain after it commits. */
+const FILE_ROWS_PRUNED_PER_PUBLISH = 256;
 
 function digest(...parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 40);
@@ -154,6 +158,11 @@ export class ChangeMeasurementService {
     private readonly ledger: ChangeLedger,
     private readonly bodies: EvidenceBodyStore,
     private readonly store: ObjectStore,
+    private readonly options: {
+      fileRowCap: () => number;
+      /** More of this owner's superseded measurements remain than a publication prunes. */
+      onSupersededBacklog?: (owner: { kind: string; id: string; scope: string }) => void;
+    },
   ) {}
 
   // -------------------------------------------------------------------------
@@ -169,7 +178,8 @@ export class ChangeMeasurementService {
       );
     }
     const ledger = this.ledger;
-    return ledger.transaction(() => {
+    let backlog = false as boolean;
+    const outcome = ledger.transaction((): PublishOutcome => {
       input.ownerFence?.assert();
       const existing = ledger.measurement(input.measurement.measurementId);
       let created = false;
@@ -210,16 +220,33 @@ export class ChangeMeasurementService {
         });
       }
       if (created) {
-        ledger.pruneSupersededMeasurements({
+        const pruned = ledger.pruneSupersededMeasurements({
           owner: { ...input.owner, scope: input.measurement.scope },
           keepLatest: MEASUREMENTS_KEPT_PER_OWNER,
           nowIso: nowIso(),
           maxMeasurements: MEASUREMENTS_PRUNED_PER_PUBLISH,
-          maxFileRows: 256,
+          maxFileRows: FILE_ROWS_PRUNED_PER_PUBLISH,
         });
+        backlog =
+          pruned.files >= FILE_ROWS_PRUNED_PER_PUBLISH ||
+          pruned.measurements >= MEASUREMENTS_PRUNED_PER_PUBLISH;
       }
       return { measurementId: input.measurement.measurementId, revision, created };
     });
+    if (backlog)
+      this.options.onSupersededBacklog?.({ ...input.owner, scope: input.measurement.scope });
+    return outcome;
+  }
+
+  /**
+   * Apply the file row cap to a draft before {@link seal}. Seal the returned
+   * draft over the full `files`, and publish only the returned `rows`.
+   */
+  capFileRows<Draft extends { completeness: ChangeMeasurement["completeness"] }>(
+    draft: Draft,
+    files: readonly MeasurementFileRecord[],
+  ): { draft: Draft; rows: readonly MeasurementFileRecord[] } {
+    return capMeasurementFiles(draft, files, this.options.fileRowCap());
   }
 
   /** Commit an immutable measurement with no live selection (pinned detail). */
@@ -609,7 +636,8 @@ export class ChangeMeasurementService {
       additions = textual ? make(outcome.additions) : notApplicableCount();
       deletions = textual ? make(outcome.deletions) : notApplicableCount();
       changedFiles = outcome.changedFiles;
-      completeness = partial ? "partial" : "complete";
+      // The list stopped short of the totals; the counts themselves are not cut.
+      completeness = partial || outcome.filesTruncated ? "partial" : "complete";
       files = outcome.files.map((file) =>
         fileRecord({
           pathId: encodePath(new TextEncoder().encode(file.path)),
@@ -755,9 +783,18 @@ export class ChangeMeasurementService {
       deletions = addLineCounts(deletions, contribution.totals.deletions);
       origins.add(contribution.origin);
       evidenceRefs.push(...contribution.evidenceRefs);
-      const rows = this.ledger.measurementFiles(contribution.measurementId, 0, 500);
-      if (rows.length === 0) unknownTouched = true;
-      for (const row of rows) touched.add(row.new_path ?? row.old_path ?? row.path_id);
+      if (contribution.completeness.reasons.includes(FILE_ROWS_CAPPED_REASON)) {
+        // Its rows name only some of the files it touched.
+        reasons.add(FILE_ROWS_CAPPED_REASON);
+        unknownTouched = true;
+        continue;
+      }
+      const count = this.ledger.measurementFileCount(contribution.measurementId);
+      if (count === 0) unknownTouched = true;
+      for (let offset = 0; offset < count; offset += 500) {
+        const rows = this.ledger.measurementFiles(contribution.measurementId, offset, 500);
+        for (const row of rows) touched.add(row.new_path ?? row.old_path ?? row.path_id);
+      }
     }
     if (reasons.has("contribution-unknown")) {
       if (additions.value !== null) additions = partialCount(additions.value);
@@ -1016,11 +1053,18 @@ export class ChangeMeasurementService {
         }),
       );
     }
-    const { measurement, identity } = this.seal(draft, input.owner, withIdentity, undefined, files);
+    const capped = this.capFileRows(draft, files);
+    const { measurement, identity } = this.seal(
+      capped.draft,
+      input.owner,
+      withIdentity,
+      undefined,
+      files,
+    );
     return this.publish({
       measurement,
       owner: input.owner,
-      files,
+      files: capped.rows,
       identity,
       resourceKey: input.resourceKey,
       observationEpoch: input.observationEpoch,

@@ -401,4 +401,40 @@ describe("DP-03 relay through the command node", () => {
     expect(JSON.parse(firstText)).toMatchObject({ type: "ready" });
     socket.close();
   });
+
+  test("a relayed terminal WebSocket keeps the subprotocol the leaf selects", async () => {
+    const { info: leafInfo } = await startGateway({ backendHello: async () => identity });
+    const nodeHooks = {
+      ...hooks([]),
+      relayTarget: () => ({
+        baseUrl: leafInfo.url,
+        headers: { authorization: `Bearer ${leafInfo.token}`, [CONTROLLER_HEADER]: "bk_command" },
+      }),
+    };
+    const { gateway, info } = await startGateway({ backendHello: async () => identity, nodeHooks });
+    const session = (gateway as unknown as { issueBrowserSession(): string }).issueBrowserSession();
+    const { WebSocket } = await import("ws");
+    const { TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS, TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL } =
+      await import("@orkestrator/protocol/terminal-websocket");
+    const socket = new WebSocket(
+      `${info.url.replace(/^http/, "ws")}__orkestrator/nodes/bk_leaf/__orkestrator/terminal`,
+      TERMINAL_WEBSOCKET_CLIENT_SUBPROTOCOLS,
+      {
+        headers: {
+          cookie: `orkestrator_gateway_auth=${session}`,
+          origin: new URL(info.url).origin,
+        },
+      },
+    );
+    const firstText = await new Promise<string>((resolve, reject) => {
+      socket.once("message", (data) => resolve(data.toString()));
+      socket.once("error", reject);
+      socket.once("unexpected-response", (_request, response) =>
+        reject(new Error(`upgrade refused: ${response.statusCode}`)),
+      );
+    });
+    expect(JSON.parse(firstText)).toMatchObject({ type: "ready" });
+    expect(socket.protocol).toBe(TERMINAL_WEBSOCKET_INPUT_RESULTS_SUBPROTOCOL);
+    socket.close();
+  });
 });

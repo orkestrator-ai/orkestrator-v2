@@ -2,7 +2,7 @@
 
 ## Task analysis
 
-Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. The E11 batch file (efficiency report 0210) is deleted; read its last version, which ends with the outcome table, with `git log --diff-filter=D -- docs/reports/efficiency-logging-database/0210-e11-projection-hashing.md` and `git show <that commit>^:docs/reports/efficiency-logging-database/0210-e11-projection-hashing.md`.
+Analysed 2026-11-05 against `main` at `39c26627f`, plus the E11 build. The E11 batch file (efficiency report 0210) is deleted; read it as built from with `git show 39c26627f:docs/reports/efficiency-logging-database/0210-e11-projection-hashing.md`. Its outcome table is kept in the efficiency index's closing check of E11.
 
 ### Tasks
 
